@@ -1,0 +1,6 @@
+@ProcuLink.Api_HostAddress = http://localhost:5223
+
+GET {{ProcuLink.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

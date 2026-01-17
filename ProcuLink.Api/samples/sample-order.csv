@@ -1,0 +1,4 @@
+PoNumber,OrderDate,Currency,BuyerName,SupplierName,LineNumber,BuyerItemCode,SupplierItemCode,Description,Quantity,UnitPrice
+PO-2024-001,2024-01-15,USD,Acme Corp,Best Supplies Inc,1,BUYER-001,SUP-A001,Widget Type A,100,25.50
+PO-2024-001,2024-01-15,USD,Acme Corp,Best Supplies Inc,2,BUYER-002,SUP-A002,Widget Type B,50,45.00
+PO-2024-001,2024-01-15,USD,Acme Corp,Best Supplies Inc,3,BUYER-003,SUP-A003,Gadget Premium,25,120.00

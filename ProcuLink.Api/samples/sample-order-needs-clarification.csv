@@ -1,0 +1,4 @@
+PoNumber,OrderDate,Currency,BuyerName,SupplierName,LineNumber,BuyerItemCode,SupplierItemCode,Description,Quantity,UnitPrice
+PO-2024-002,2024-01-16,EUR,TechCorp,Supplier XYZ,1,TC-001,SXYZ-001,Component Alpha,200,15.75
+PO-2024-002,2024-01-16,EUR,TechCorp,Supplier XYZ,2,TC-002,,Component Beta (missing supplier code),150,22.00
+PO-2024-002,2024-01-16,EUR,TechCorp,Supplier XYZ,3,TC-003,SXYZ-003,Component Gamma,75,35.50

@@ -1,0 +1,65 @@
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.slnLaunch.user
+
+# NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+
+# Build artifacts
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# ASP.NET
+**/wwwroot/lib/
+
+# Node.js (if applicable)
+node_modules/
+package-lock.json
+
+# IDE
+.idea/
+*.swp
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# User-specific files
+*.rsuser
+*.DotSettings.user
+
+# Temporary files
+tmp*
+**/tmp*/
+
+# Claude temp files
+*claude*-cwd
+.claude/
