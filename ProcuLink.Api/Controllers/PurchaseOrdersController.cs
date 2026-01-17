@@ -3,6 +3,7 @@ using ClosedXML.Excel;
 using CsvHelper;
 using CsvHelper.Configuration;
 using Microsoft.AspNetCore.Mvc;
+using ProcuLink.Api.Contracts;
 using ProcuLink.Core.Canonical;
 using ProcuLink.Infrastructure.Repositories;
 
@@ -26,7 +27,7 @@ public class PurchaseOrdersController : ControllerBase
     /// </summary>
     [HttpPost("upload")]
     [Consumes("multipart/form-data")]
-    [ProducesResponseType(typeof(PurchaseOrder), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(UploadResultDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Upload(
         IFormFile file,
@@ -61,13 +62,17 @@ public class PurchaseOrdersController : ControllerBase
 
             var po = BuildPurchaseOrder(rawLines, supplierName, buyerName, currency);
 
+            // Set CreatedAt timestamp
+            po.CreatedAt = DateTime.UtcNow;
+
             // Validate
             var validationErrors = ValidatePurchaseOrder(po);
             if (validationErrors.Count > 0)
                 return BadRequest(new { Errors = validationErrors });
 
-            // Determine automation status
-            DetermineAutomationStatus(po);
+            // Determine automation status and collect validation messages
+            var validationMessages = new List<string>();
+            DetermineAutomationStatus(po, validationMessages);
 
             // Persist
             await _orderRepository.SaveAsync(po, ct);
@@ -75,7 +80,11 @@ public class PurchaseOrdersController : ControllerBase
             _logger.LogInformation("Purchase order {PoNumber} uploaded with ID {Id}, status: {Status}",
                 po.PoNumber, po.Id, po.AutomationStatus);
 
-            return Ok(po);
+            return Ok(new UploadResultDto
+            {
+                Order = po,
+                ValidationMessages = validationMessages
+            });
         }
         catch (Exception ex)
         {
@@ -100,14 +109,27 @@ public class PurchaseOrdersController : ControllerBase
     }
 
     /// <summary>
-    /// List all purchase orders
+    /// List all purchase orders (summary view)
     /// </summary>
     [HttpGet]
-    [ProducesResponseType(typeof(IReadOnlyList<PurchaseOrder>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(IReadOnlyList<PurchaseOrderSummaryDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> List(CancellationToken ct)
     {
         var orders = await _orderRepository.ListAsync(ct);
-        return Ok(orders);
+        var summaries = orders.Select(po => new PurchaseOrderSummaryDto
+        {
+            Id = po.Id,
+            PoNumber = po.PoNumber,
+            SupplierName = po.SupplierName,
+            BuyerName = po.BuyerName,
+            OrderDate = po.OrderDate,
+            AutomationStatus = po.AutomationStatus,
+            CreatedAt = po.CreatedAt,
+            LineCount = po.Lines.Count,
+            TotalValue = po.Lines.Sum(l => l.Quantity * l.UnitPrice),
+            Currency = po.Currency
+        }).ToList();
+        return Ok(summaries);
     }
 
     private static List<RawOrderLine> ParseCsv(Stream stream)
@@ -262,14 +284,19 @@ public class PurchaseOrdersController : ControllerBase
         return errors;
     }
 
-    private static void DetermineAutomationStatus(PurchaseOrder po)
+    private static void DetermineAutomationStatus(PurchaseOrder po, List<string> validationMessages)
     {
-        var hasMissingSupplierItemCode = po.Lines.Any(l => string.IsNullOrWhiteSpace(l.SupplierItemCode));
+        var linesWithMissingCodes = po.Lines
+            .Where(l => string.IsNullOrWhiteSpace(l.SupplierItemCode))
+            .Select(l => l.LineNumber)
+            .ToList();
 
-        if (hasMissingSupplierItemCode)
+        if (linesWithMissingCodes.Count > 0)
         {
             po.AutomationStatus = AutomationStatus.NeedsClarification;
-            po.AutomationReason = "Missing SupplierItemCode on one or more lines.";
+            var lineNumbers = string.Join(",", linesWithMissingCodes);
+            po.AutomationReason = $"Missing supplier item codes for {linesWithMissingCodes.Count} line item(s): lines {lineNumbers}. Supplier requires all item codes for automated processing.";
+            validationMessages.Add(po.AutomationReason);
         }
         else
         {

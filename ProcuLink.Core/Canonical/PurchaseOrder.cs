@@ -23,5 +23,6 @@ namespace ProcuLink.Core.Canonical
         public List<PurchaseOrderLine> Lines { get; set; } = new List<PurchaseOrderLine>();
         public AutomationStatus AutomationStatus { get; set; }
         public string? AutomationReason { get; set; }
+        public DateTime CreatedAt { get; set; }
     }
 }
