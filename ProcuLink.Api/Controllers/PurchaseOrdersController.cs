@@ -91,10 +91,15 @@ public class PurchaseOrdersController : ControllerBase
                 return BadRequest(new { Errors = validationErrors });
 
             // Apply saved mappings to fill in missing supplier item codes
-            await ApplyMappingsAsync(po, ct);
+            var validationMessages = new List<string>();
+            var autoFilledLines = await ApplyMappingsAsync(po, ct);
+            if (autoFilledLines.Count > 0)
+            {
+                var lineNumbers = string.Join(",", autoFilledLines);
+                validationMessages.Add($"Auto-filled SupplierItemCode for line(s): {lineNumbers} using saved mappings.");
+            }
 
             // Load supplier profile and determine automation status
-            var validationMessages = new List<string>();
             var profile = await _supplierProfileRepository.GetByNameAsync(supplierName, ct);
             DetermineAutomationStatus(po, profile, validationMessages);
 
@@ -225,6 +230,38 @@ public class PurchaseOrdersController : ControllerBase
         {
             Order = po,
             ValidationMessages = validationMessages
+        });
+    }
+
+    /// <summary>
+    /// Get lines missing required fields (SupplierItemCode) for a purchase order
+    /// </summary>
+    [HttpGet("{id:guid}/missing")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetMissing(Guid id, CancellationToken ct)
+    {
+        var po = await _orderRepository.GetAsync(id, ct);
+        if (po == null)
+            return NotFound();
+
+        var profile = await _supplierProfileRepository.GetByNameAsync(po.SupplierName, ct);
+
+        var missingSupplierItemCodeLines = new List<int>();
+
+        // Only check for missing codes if supplier requires them
+        if (profile?.RequiresSupplierItemCode == true)
+        {
+            missingSupplierItemCodeLines = po.Lines
+                .Where(l => string.IsNullOrWhiteSpace(l.SupplierItemCode))
+                .Select(l => l.LineNumber)
+                .ToList();
+        }
+
+        return Ok(new
+        {
+            OrderId = id,
+            MissingSupplierItemCodeLines = missingSupplierItemCodeLines
         });
     }
 
@@ -397,9 +434,12 @@ public class PurchaseOrdersController : ControllerBase
 
     /// <summary>
     /// Apply saved mappings to fill in missing supplier item codes
+    /// Returns list of line numbers that were auto-filled
     /// </summary>
-    private async Task ApplyMappingsAsync(PurchaseOrder po, CancellationToken ct)
+    private async Task<List<int>> ApplyMappingsAsync(PurchaseOrder po, CancellationToken ct)
     {
+        var autoFilledLines = new List<int>();
+
         foreach (var line in po.Lines)
         {
             if (string.IsNullOrWhiteSpace(line.SupplierItemCode) && !string.IsNullOrWhiteSpace(line.BuyerItemCode))
@@ -412,11 +452,14 @@ public class PurchaseOrdersController : ControllerBase
                 if (!string.IsNullOrWhiteSpace(mappedCode))
                 {
                     line.SupplierItemCode = mappedCode;
+                    autoFilledLines.Add(line.LineNumber);
                     _logger.LogDebug("Applied mapping for line {LineNumber}: {BuyerItemCode} -> {SupplierItemCode}",
                         line.LineNumber, line.BuyerItemCode, mappedCode);
                 }
             }
         }
+
+        return autoFilledLines;
     }
 
     private static byte[] GenerateXml(PurchaseOrder po)

@@ -73,7 +73,7 @@ public class SuppliersController : ControllerBase
     /// Create or update an item code mapping for a supplier
     /// </summary>
     [HttpPost("{supplierName}/mappings")]
-    [ProducesResponseType(typeof(IReadOnlyList<ItemCodeMapping>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ItemCodeMapping), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> UpsertMapping(
         string supplierName,
@@ -86,10 +86,12 @@ public class SuppliersController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.SupplierItemCode))
             return BadRequest("SupplierItemCode is required.");
 
-        await _itemMappingRepository.UpsertAsync(supplierName, request.BuyerItemCode, request.SupplierItemCode, ct);
+        var mapping = await _itemMappingRepository.UpsertAsync(
+            supplierName,
+            request.BuyerItemCode,
+            request.SupplierItemCode,
+            ct);
 
-        // Return updated list
-        var mappings = await _itemMappingRepository.ListAsync(supplierName, ct);
-        return Ok(mappings);
+        return Ok(mapping);
     }
 }
