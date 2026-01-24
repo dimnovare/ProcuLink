@@ -18,6 +18,7 @@ public class PurchaseOrdersController : ControllerBase
     private readonly IOrderRepository _orderRepository;
     private readonly ISupplierProfileRepository _supplierProfileRepository;
     private readonly IOutboundRepository _outboundRepository;
+    private readonly IItemMappingRepository _itemMappingRepository;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<PurchaseOrdersController> _logger;
@@ -26,6 +27,7 @@ public class PurchaseOrdersController : ControllerBase
         IOrderRepository orderRepository,
         ISupplierProfileRepository supplierProfileRepository,
         IOutboundRepository outboundRepository,
+        IItemMappingRepository itemMappingRepository,
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         ILogger<PurchaseOrdersController> logger)
@@ -33,6 +35,7 @@ public class PurchaseOrdersController : ControllerBase
         _orderRepository = orderRepository;
         _supplierProfileRepository = supplierProfileRepository;
         _outboundRepository = outboundRepository;
+        _itemMappingRepository = itemMappingRepository;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
@@ -86,6 +89,9 @@ public class PurchaseOrdersController : ControllerBase
             var validationErrors = ValidatePurchaseOrder(po);
             if (validationErrors.Count > 0)
                 return BadRequest(new { Errors = validationErrors });
+
+            // Apply saved mappings to fill in missing supplier item codes
+            await ApplyMappingsAsync(po, ct);
 
             // Load supplier profile and determine automation status
             var validationMessages = new List<string>();
@@ -159,6 +165,67 @@ public class PurchaseOrdersController : ControllerBase
         }
 
         return Ok(summaries);
+    }
+
+    /// <summary>
+    /// Resolve missing supplier item codes on a purchase order
+    /// </summary>
+    [HttpPost("{id:guid}/resolve")]
+    [ProducesResponseType(typeof(UploadResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Resolve(Guid id, [FromBody] ResolveRequest request, CancellationToken ct)
+    {
+        var po = await _orderRepository.GetAsync(id, ct);
+        if (po == null)
+            return NotFound();
+
+        // Validate request
+        if (request.LineResolutions == null || request.LineResolutions.Count == 0)
+            return BadRequest("At least one line resolution is required.");
+
+        foreach (var resolution in request.LineResolutions)
+        {
+            if (string.IsNullOrWhiteSpace(resolution.SupplierItemCode))
+                return BadRequest($"SupplierItemCode is required for line {resolution.LineNumber}.");
+
+            var line = po.Lines.FirstOrDefault(l => l.LineNumber == resolution.LineNumber);
+            if (line == null)
+                return BadRequest($"Line number {resolution.LineNumber} does not exist in this order.");
+        }
+
+        // Apply resolutions
+        foreach (var resolution in request.LineResolutions)
+        {
+            var line = po.Lines.First(l => l.LineNumber == resolution.LineNumber);
+            line.SupplierItemCode = resolution.SupplierItemCode;
+
+            // Save mapping if requested
+            if (request.SaveMappings && !string.IsNullOrWhiteSpace(line.BuyerItemCode))
+            {
+                await _itemMappingRepository.UpsertAsync(
+                    po.SupplierName,
+                    line.BuyerItemCode,
+                    resolution.SupplierItemCode,
+                    ct);
+            }
+        }
+
+        // Re-run validation
+        var validationMessages = new List<string>();
+        var profile = await _supplierProfileRepository.GetByNameAsync(po.SupplierName, ct);
+        DetermineAutomationStatus(po, profile, validationMessages);
+
+        // Save updated order
+        await _orderRepository.SaveAsync(po, ct);
+
+        _logger.LogInformation("Purchase order {Id} resolved, new status: {Status}", id, po.AutomationStatus);
+
+        return Ok(new UploadResultDto
+        {
+            Order = po,
+            ValidationMessages = validationMessages
+        });
     }
 
     /// <summary>
@@ -326,6 +393,30 @@ public class PurchaseOrdersController : ControllerBase
         _logger.LogInformation("Delivery attempt for order {OrderId}: {Status}", id, record.Status);
 
         return Ok(record);
+    }
+
+    /// <summary>
+    /// Apply saved mappings to fill in missing supplier item codes
+    /// </summary>
+    private async Task ApplyMappingsAsync(PurchaseOrder po, CancellationToken ct)
+    {
+        foreach (var line in po.Lines)
+        {
+            if (string.IsNullOrWhiteSpace(line.SupplierItemCode) && !string.IsNullOrWhiteSpace(line.BuyerItemCode))
+            {
+                var mappedCode = await _itemMappingRepository.TryGetSupplierItemCodeAsync(
+                    po.SupplierName,
+                    line.BuyerItemCode,
+                    ct);
+
+                if (!string.IsNullOrWhiteSpace(mappedCode))
+                {
+                    line.SupplierItemCode = mappedCode;
+                    _logger.LogDebug("Applied mapping for line {LineNumber}: {BuyerItemCode} -> {SupplierItemCode}",
+                        line.LineNumber, line.BuyerItemCode, mappedCode);
+                }
+            }
+        }
     }
 
     private static byte[] GenerateXml(PurchaseOrder po)

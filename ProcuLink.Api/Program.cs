@@ -20,6 +20,7 @@ var dataRoot = Path.Combine(builder.Environment.ContentRootPath, "data");
 builder.Services.AddSingleton<IOrderRepository>(new FileOrderRepository(Path.Combine(dataRoot, "orders")));
 builder.Services.AddSingleton<ISupplierProfileRepository>(new FileSupplierProfileRepository(Path.Combine(dataRoot, "suppliers")));
 builder.Services.AddSingleton<IOutboundRepository>(new FileOutboundRepository(Path.Combine(dataRoot, "outbound")));
+builder.Services.AddSingleton<IItemMappingRepository>(new FileItemMappingRepository(Path.Combine(dataRoot, "mappings")));
 
 // Add HttpClient for webhook delivery
 builder.Services.AddHttpClient();
