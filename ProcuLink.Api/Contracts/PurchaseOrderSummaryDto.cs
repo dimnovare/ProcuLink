@@ -17,4 +17,6 @@ public class PurchaseOrderSummaryDto
     public int LineCount { get; set; }
     public decimal TotalValue { get; set; }
     public string Currency { get; set; } = string.Empty;
+    public bool HasOutboundArtifact { get; set; }
+    public string? LastDeliveryStatus { get; set; }
 }

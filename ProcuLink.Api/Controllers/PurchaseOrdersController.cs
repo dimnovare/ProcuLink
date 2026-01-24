@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text;
+using System.Xml.Linq;
 using ClosedXML.Excel;
 using CsvHelper;
 using CsvHelper.Configuration;
@@ -14,11 +16,25 @@ namespace ProcuLink.Api.Controllers;
 public class PurchaseOrdersController : ControllerBase
 {
     private readonly IOrderRepository _orderRepository;
+    private readonly ISupplierProfileRepository _supplierProfileRepository;
+    private readonly IOutboundRepository _outboundRepository;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<PurchaseOrdersController> _logger;
 
-    public PurchaseOrdersController(IOrderRepository orderRepository, ILogger<PurchaseOrdersController> logger)
+    public PurchaseOrdersController(
+        IOrderRepository orderRepository,
+        ISupplierProfileRepository supplierProfileRepository,
+        IOutboundRepository outboundRepository,
+        IHttpClientFactory httpClientFactory,
+        IConfiguration configuration,
+        ILogger<PurchaseOrdersController> logger)
     {
         _orderRepository = orderRepository;
+        _supplierProfileRepository = supplierProfileRepository;
+        _outboundRepository = outboundRepository;
+        _httpClientFactory = httpClientFactory;
+        _configuration = configuration;
         _logger = logger;
     }
 
@@ -38,6 +54,9 @@ public class PurchaseOrdersController : ControllerBase
     {
         if (file == null || file.Length == 0)
             return BadRequest("File is required.");
+
+        if (string.IsNullOrWhiteSpace(supplierName))
+            return BadRequest("Supplier name is required.");
 
         var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
         if (extension != ".csv" && extension != ".xlsx")
@@ -61,18 +80,17 @@ public class PurchaseOrdersController : ControllerBase
                 return BadRequest("File must contain at least one line item.");
 
             var po = BuildPurchaseOrder(rawLines, supplierName, buyerName, currency);
-
-            // Set CreatedAt timestamp
             po.CreatedAt = DateTime.UtcNow;
 
-            // Validate
+            // Validate basic structure
             var validationErrors = ValidatePurchaseOrder(po);
             if (validationErrors.Count > 0)
                 return BadRequest(new { Errors = validationErrors });
 
-            // Determine automation status and collect validation messages
+            // Load supplier profile and determine automation status
             var validationMessages = new List<string>();
-            DetermineAutomationStatus(po, validationMessages);
+            var profile = await _supplierProfileRepository.GetByNameAsync(supplierName, ct);
+            DetermineAutomationStatus(po, profile, validationMessages);
 
             // Persist
             await _orderRepository.SaveAsync(po, ct);
@@ -116,20 +134,249 @@ public class PurchaseOrdersController : ControllerBase
     public async Task<IActionResult> List(CancellationToken ct)
     {
         var orders = await _orderRepository.ListAsync(ct);
-        var summaries = orders.Select(po => new PurchaseOrderSummaryDto
+        var summaries = new List<PurchaseOrderSummaryDto>();
+
+        foreach (var po in orders)
         {
-            Id = po.Id,
-            PoNumber = po.PoNumber,
-            SupplierName = po.SupplierName,
-            BuyerName = po.BuyerName,
-            OrderDate = po.OrderDate,
-            AutomationStatus = po.AutomationStatus,
-            CreatedAt = po.CreatedAt,
-            LineCount = po.Lines.Count,
-            TotalValue = po.Lines.Sum(l => l.Quantity * l.UnitPrice),
-            Currency = po.Currency
-        }).ToList();
+            var artifact = await _outboundRepository.GetArtifactAsync(po.Id, ct);
+            var delivery = await _outboundRepository.GetDeliveryRecordAsync(po.Id, ct);
+
+            summaries.Add(new PurchaseOrderSummaryDto
+            {
+                Id = po.Id,
+                PoNumber = po.PoNumber,
+                SupplierName = po.SupplierName,
+                BuyerName = po.BuyerName,
+                OrderDate = po.OrderDate,
+                AutomationStatus = po.AutomationStatus,
+                CreatedAt = po.CreatedAt,
+                LineCount = po.Lines.Count,
+                TotalValue = po.Lines.Sum(l => l.Quantity * l.UnitPrice),
+                Currency = po.Currency,
+                HasOutboundArtifact = artifact != null,
+                LastDeliveryStatus = delivery?.Status
+            });
+        }
+
         return Ok(summaries);
+    }
+
+    /// <summary>
+    /// Transform a purchase order to outbound format
+    /// </summary>
+    [HttpPost("{id:guid}/transform")]
+    [ProducesResponseType(typeof(OutboundArtifact), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Transform(Guid id, [FromQuery] string format = "xml", CancellationToken ct = default)
+    {
+        var po = await _orderRepository.GetAsync(id, ct);
+        if (po == null)
+            return NotFound();
+
+        if (po.AutomationStatus != AutomationStatus.Automatable)
+        {
+            return BadRequest(new
+            {
+                Message = "Order is not automatable. Resolve clarification issues before transforming.",
+                AutomationReason = po.AutomationReason,
+                Order = po
+            });
+        }
+
+        format = format.ToLowerInvariant();
+        if (format != "xml" && format != "csv")
+            return BadRequest("Format must be 'xml' or 'csv'.");
+
+        byte[] content;
+        string fileName;
+
+        if (format == "xml")
+        {
+            content = GenerateXml(po);
+            fileName = $"{po.SupplierName.Replace(" ", "_")}.xml";
+        }
+        else
+        {
+            content = GenerateCsv(po);
+            fileName = $"{po.SupplierName.Replace(" ", "_")}.csv";
+        }
+
+        var artifact = new OutboundArtifact
+        {
+            OrderId = po.Id,
+            SupplierName = po.SupplierName,
+            Format = format,
+            FileName = fileName,
+            OutputPath = $"data/outbound/{po.Id}/{fileName}",
+            SizeBytes = content.Length,
+            CreatedAtUtc = DateTime.UtcNow
+        };
+
+        await _outboundRepository.SaveArtifactAsync(artifact, content, ct);
+
+        _logger.LogInformation("Generated {Format} outbound for order {OrderId}", format, id);
+
+        return Ok(artifact);
+    }
+
+    /// <summary>
+    /// Get outbound artifact metadata
+    /// </summary>
+    [HttpGet("{id:guid}/outbound")]
+    [ProducesResponseType(typeof(OutboundArtifact), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetOutbound(Guid id, CancellationToken ct)
+    {
+        var artifact = await _outboundRepository.GetArtifactAsync(id, ct);
+        if (artifact == null)
+            return NotFound();
+
+        return Ok(artifact);
+    }
+
+    /// <summary>
+    /// Download the outbound artifact file
+    /// </summary>
+    [HttpGet("{id:guid}/outbound/download")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadOutbound(Guid id, CancellationToken ct)
+    {
+        var artifact = await _outboundRepository.GetArtifactAsync(id, ct);
+        if (artifact == null)
+            return NotFound();
+
+        var content = await _outboundRepository.GetArtifactContentAsync(id, ct);
+        if (content == null)
+            return NotFound();
+
+        var contentType = artifact.Format == "xml" ? "application/xml" : "text/csv";
+        return File(content, contentType, artifact.FileName);
+    }
+
+    /// <summary>
+    /// Send order to supplier via webhook
+    /// </summary>
+    [HttpPost("{id:guid}/send")]
+    [ProducesResponseType(typeof(DeliveryRecord), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Send(Guid id, CancellationToken ct)
+    {
+        var po = await _orderRepository.GetAsync(id, ct);
+        if (po == null)
+            return NotFound();
+
+        var artifact = await _outboundRepository.GetArtifactAsync(id, ct);
+        if (artifact == null)
+            return BadRequest("Transform required before send. No outbound artifact exists.");
+
+        var webhookUrl = _configuration["Delivery:WebhookUrl"];
+        if (string.IsNullOrWhiteSpace(webhookUrl))
+            return BadRequest("Webhook URL is not configured. Set Delivery:WebhookUrl in appsettings.");
+
+        var content = await _outboundRepository.GetArtifactContentAsync(id, ct);
+        if (content == null)
+            return BadRequest("Outbound artifact file not found.");
+
+        var record = new DeliveryRecord
+        {
+            OrderId = id,
+            AttemptedAtUtc = DateTime.UtcNow,
+            WebhookUrl = webhookUrl
+        };
+
+        try
+        {
+            using var client = _httpClientFactory.CreateClient();
+            using var formData = new MultipartFormDataContent();
+
+            formData.Add(new StringContent(id.ToString()), "orderId");
+            formData.Add(new StringContent(po.SupplierName), "supplierName");
+            formData.Add(new StringContent(po.PoNumber), "poNumber");
+
+            var fileContent = new ByteArrayContent(content);
+            fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+                artifact.Format == "xml" ? "application/xml" : "text/csv");
+            formData.Add(fileContent, "file", artifact.FileName);
+
+            var response = await client.PostAsync(webhookUrl, formData, ct);
+
+            record.HttpStatusCode = (int)response.StatusCode;
+            record.Status = response.IsSuccessStatusCode ? "Sent" : "Failed";
+
+            var responseBody = await response.Content.ReadAsStringAsync(ct);
+            record.ResponseSnippet = responseBody.Length > 2000 ? responseBody[..2000] : responseBody;
+
+            if (!response.IsSuccessStatusCode)
+            {
+                record.ErrorMessage = $"HTTP {record.HttpStatusCode}: {response.ReasonPhrase}";
+            }
+        }
+        catch (Exception ex)
+        {
+            record.Status = "Failed";
+            record.ErrorMessage = ex.Message;
+            _logger.LogError(ex, "Failed to send order {OrderId} to webhook", id);
+        }
+
+        await _outboundRepository.SaveDeliveryRecordAsync(record, ct);
+
+        _logger.LogInformation("Delivery attempt for order {OrderId}: {Status}", id, record.Status);
+
+        return Ok(record);
+    }
+
+    private static byte[] GenerateXml(PurchaseOrder po)
+    {
+        var doc = new XDocument(
+            new XElement("PurchaseOrder",
+                new XElement("Header",
+                    new XElement("BuyerName", po.BuyerName),
+                    new XElement("SupplierName", po.SupplierName),
+                    new XElement("PoNumber", po.PoNumber),
+                    new XElement("OrderDate", po.OrderDate.ToString("yyyy-MM-dd")),
+                    new XElement("Currency", po.Currency)
+                ),
+                new XElement("Lines",
+                    po.Lines.Select(line =>
+                        new XElement("Line",
+                            new XElement("LineNumber", line.LineNumber),
+                            new XElement("BuyerItemCode", line.BuyerItemCode),
+                            new XElement("SupplierItemCode", line.SupplierItemCode ?? ""),
+                            new XElement("Description", line.Description),
+                            new XElement("Quantity", line.Quantity),
+                            new XElement("UnitPrice", line.UnitPrice)
+                        )
+                    )
+                )
+            )
+        );
+
+        return Encoding.UTF8.GetBytes(doc.ToString());
+    }
+
+    private static byte[] GenerateCsv(PurchaseOrder po)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("LineNumber,BuyerItemCode,SupplierItemCode,Description,Quantity,UnitPrice");
+
+        foreach (var line in po.Lines)
+        {
+            sb.AppendLine($"{line.LineNumber},{EscapeCsv(line.BuyerItemCode)},{EscapeCsv(line.SupplierItemCode ?? "")},{EscapeCsv(line.Description)},{line.Quantity},{line.UnitPrice}");
+        }
+
+        return Encoding.UTF8.GetBytes(sb.ToString());
+    }
+
+    private static string EscapeCsv(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+        {
+            return $"\"{value.Replace("\"", "\"\"")}\"";
+        }
+        return value;
     }
 
     private static List<RawOrderLine> ParseCsv(Stream stream)
@@ -158,7 +405,6 @@ public class PurchaseOrdersController : ControllerBase
         if (rows == null || rows.Count < 2)
             return lines;
 
-        // Build header map (case-insensitive)
         var headerRow = rows[0];
         var headerMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var cell in headerRow.Cells())
@@ -168,7 +414,6 @@ public class PurchaseOrdersController : ControllerBase
                 headerMap[headerName] = cell.Address.ColumnNumber;
         }
 
-        // Parse data rows
         for (int i = 1; i < rows.Count; i++)
         {
             var row = rows[i];
@@ -208,12 +453,8 @@ public class PurchaseOrdersController : ControllerBase
         string? buyerNameParam,
         string? currencyParam)
     {
-        var po = new PurchaseOrder
-        {
-            Id = Guid.NewGuid()
-        };
+        var po = new PurchaseOrder { Id = Guid.NewGuid() };
 
-        // Extract header fields from first non-empty values
         po.PoNumber = rawLines.Select(l => l.PoNumber).FirstOrDefault(v => !string.IsNullOrEmpty(v))
                       ?? $"PO-{DateTime.UtcNow:yyyyMMddHHmmss}";
 
@@ -224,15 +465,12 @@ public class PurchaseOrdersController : ControllerBase
                       ?? rawLines.Select(l => l.Currency).FirstOrDefault(v => !string.IsNullOrEmpty(v))
                       ?? "EUR";
 
-        po.SupplierName = !string.IsNullOrEmpty(supplierNameParam)
-            ? supplierNameParam
-            : rawLines.Select(l => l.SupplierName).FirstOrDefault(v => !string.IsNullOrEmpty(v)) ?? string.Empty;
+        po.SupplierName = supplierNameParam;
 
         po.BuyerName = !string.IsNullOrEmpty(buyerNameParam)
             ? buyerNameParam
             : rawLines.Select(l => l.BuyerName).FirstOrDefault(v => !string.IsNullOrEmpty(v)) ?? string.Empty;
 
-        // Build line items
         int lineNum = 1;
         foreach (var raw in rawLines)
         {
@@ -284,29 +522,41 @@ public class PurchaseOrdersController : ControllerBase
         return errors;
     }
 
-    private static void DetermineAutomationStatus(PurchaseOrder po, List<string> validationMessages)
+    private static void DetermineAutomationStatus(PurchaseOrder po, SupplierProfile? profile, List<string> validationMessages)
     {
-        var linesWithMissingCodes = po.Lines
-            .Where(l => string.IsNullOrWhiteSpace(l.SupplierItemCode))
-            .Select(l => l.LineNumber)
-            .ToList();
-
-        if (linesWithMissingCodes.Count > 0)
+        // If no profile configured, mark as needs clarification
+        if (profile == null)
         {
             po.AutomationStatus = AutomationStatus.NeedsClarification;
-            var lineNumbers = string.Join(",", linesWithMissingCodes);
-            po.AutomationReason = $"Missing supplier item codes for {linesWithMissingCodes.Count} line item(s): lines {lineNumbers}. Supplier requires all item codes for automated processing.";
+            po.AutomationReason = $"No supplier profile configured for supplier '{po.SupplierName}'.";
             validationMessages.Add(po.AutomationReason);
+            return;
         }
-        else
+
+        // Check if supplier requires item codes
+        if (profile.RequiresSupplierItemCode)
         {
-            po.AutomationStatus = AutomationStatus.Automatable;
-            po.AutomationReason = null;
-            validationMessages.Add("All validation checks passed. Order is ready for automated processing.");
+            var linesWithMissingCodes = po.Lines
+                .Where(l => string.IsNullOrWhiteSpace(l.SupplierItemCode))
+                .Select(l => l.LineNumber)
+                .ToList();
+
+            if (linesWithMissingCodes.Count > 0)
+            {
+                po.AutomationStatus = AutomationStatus.NeedsClarification;
+                var lineNumbers = string.Join(",", linesWithMissingCodes);
+                po.AutomationReason = $"Supplier requires supplier item codes. Missing on line(s): {lineNumbers}";
+                validationMessages.Add($"Missing SupplierItemCode on line(s): {lineNumbers}. Supplier requires this field for automated processing.");
+                return;
+            }
         }
+
+        // All checks passed
+        po.AutomationStatus = AutomationStatus.Automatable;
+        po.AutomationReason = null;
+        validationMessages.Add("All validation checks passed. Order is ready for automated processing.");
     }
 
-    // Internal class for raw CSV/XLSX parsing
     private class RawOrderLine
     {
         public string? PoNumber { get; set; }

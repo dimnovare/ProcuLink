@@ -15,9 +15,14 @@ builder.Services.AddCors(options =>
               .AllowCredentials());
 });
 
-// Configure file-based order repository
-var dataDirectory = Path.Combine(builder.Environment.ContentRootPath, "data", "orders");
-builder.Services.AddSingleton<IOrderRepository>(new FileOrderRepository(dataDirectory));
+// Configure file-based repositories
+var dataRoot = Path.Combine(builder.Environment.ContentRootPath, "data");
+builder.Services.AddSingleton<IOrderRepository>(new FileOrderRepository(Path.Combine(dataRoot, "orders")));
+builder.Services.AddSingleton<ISupplierProfileRepository>(new FileSupplierProfileRepository(Path.Combine(dataRoot, "suppliers")));
+builder.Services.AddSingleton<IOutboundRepository>(new FileOutboundRepository(Path.Combine(dataRoot, "outbound")));
+
+// Add HttpClient for webhook delivery
+builder.Services.AddHttpClient();
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
