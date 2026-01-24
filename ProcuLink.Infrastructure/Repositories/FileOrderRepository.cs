@@ -59,7 +59,7 @@ public class FileOrderRepository : IOrderRepository
             }
         }
 
-        return orders.OrderByDescending(o => o.OrderDate).ToList();
+        return orders.OrderByDescending(o => o.CreatedAt).ToList();
     }
 
     private string GetFilePath(Guid id) => Path.Combine(_dataDirectory, $"{id}.json");

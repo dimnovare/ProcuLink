@@ -3,13 +3,12 @@ using Microsoft.AspNetCore.Mvc;
 namespace ProcuLink.Api.Controllers;
 
 [ApiController]
-[Route("api")]
 public class HealthController : ControllerBase
 {
     /// <summary>
     /// Health check endpoint
     /// </summary>
-    [HttpGet("health")]
+    [HttpGet("/health")]
     [ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
     public IActionResult Health()
     {

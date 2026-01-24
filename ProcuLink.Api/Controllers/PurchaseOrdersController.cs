@@ -302,6 +302,7 @@ public class PurchaseOrdersController : ControllerBase
         {
             po.AutomationStatus = AutomationStatus.Automatable;
             po.AutomationReason = null;
+            validationMessages.Add("All validation checks passed. Order is ready for automated processing.");
         }
     }
 
