@@ -1,11 +1,71 @@
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using ProcuLink.Api.Middleware;
+using ProcuLink.Api.Services;
+using ProcuLink.Core.Services;
+using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+// ── Database ───────────────────────────────────────────────────────────────
+builder.Services.AddDbContext<ProcuLinkDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// ── Authentication — Clerk JWT Bearer ─────────────────────────────────────
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.Authority = builder.Configuration["Clerk:Authority"];
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateAudience = false,
+            NameClaimType = "sub",
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+// ── Rate limiting — 20 uploads/min per authenticated user ──────────────────
+builder.Services.AddRateLimiter(options =>
+{
+    // Per-user fixed-window policy for the upload endpoint.
+    // Key: Clerk sub claim; falls back to IP for unauthenticated callers.
+    options.AddPolicy("upload", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.User.FindFirst("sub")?.Value
+                          ?? httpContext.Connection.RemoteIpAddress?.ToString()
+                          ?? "anonymous",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0   // reject immediately — no queuing
+            }));
+
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new { error = "Upload rate limit exceeded. Maximum 20 uploads per minute." }, ct);
+    };
+});
+
+// ── Tenant service ─────────────────────────────────────────────────────────
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentTenantService, CurrentTenantService>();
+
+// ── MVC / Controllers ──────────────────────────────────────────────────────
 builder.Services.AddControllers();
 
-// Configure CORS for React frontend
+// ── CORS — React frontend ──────────────────────────────────────────────────
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
@@ -15,17 +75,20 @@ builder.Services.AddCors(options =>
               .AllowCredentials());
 });
 
-// Configure file-based repositories
-var dataRoot = Path.Combine(builder.Environment.ContentRootPath, "data");
-builder.Services.AddSingleton<IOrderRepository>(new FileOrderRepository(Path.Combine(dataRoot, "orders")));
-builder.Services.AddSingleton<ISupplierProfileRepository>(new FileSupplierProfileRepository(Path.Combine(dataRoot, "suppliers")));
-builder.Services.AddSingleton<IOutboundRepository>(new FileOutboundRepository(Path.Combine(dataRoot, "outbound")));
-builder.Services.AddSingleton<IItemMappingRepository>(new FileItemMappingRepository(Path.Combine(dataRoot, "mappings")));
+// ── Repositories ──────────────────────────────────────────────────────────
+builder.Services.AddScoped<IOrderRepository, EfOrderRepository>();
+builder.Services.AddScoped<ISupplierProfileRepository, EfSupplierProfileRepository>();
+builder.Services.AddScoped<IItemMappingRepository, EfItemMappingRepository>();
 
-// Add HttpClient for webhook delivery
+// Outbound/delivery: file-backed until R2 is wired in Phase 2
+var dataRoot = Path.Combine(builder.Environment.ContentRootPath, "data");
+builder.Services.AddSingleton<IOutboundRepository>(
+    new FileOutboundRepository(Path.Combine(dataRoot, "outbound")));
+
+// ── HTTP client (webhook delivery) ────────────────────────────────────────
 builder.Services.AddHttpClient();
 
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+// ── OpenAPI — Swashbuckle for spec, Scalar for UI ──────────────────────────
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -35,21 +98,57 @@ builder.Services.AddSwaggerGen(options =>
         Version = "v1",
         Description = "Purchase Order processing API"
     });
+    options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "Paste a Clerk session JWT (without 'Bearer ' prefix)."
+    });
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
 });
 
+// ──────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
+// ──────────────────────────────────────────────────────────────────────────
 
-// Configure the HTTP request pipeline.
+// ── OpenAPI / Scalar UI — dev only ────────────────────────────────────────
 if (app.Environment.IsDevelopment())
 {
+    // Swashbuckle generates the spec at /swagger/v1/swagger.json
     app.UseSwagger();
-    app.UseSwaggerUI();
+
+    // Scalar UI at /scalar — replaces Swagger UI
+    app.MapScalarApiReference(options =>
+    {
+        options.WithTitle("ProcuLink API");
+        options.WithOpenApiRoutePattern("/swagger/v1/swagger.json");
+        options.WithDefaultHttpClient(ScalarTarget.CSharp, ScalarClient.HttpClient);
+    });
 }
 
 app.UseHttpsRedirection();
-
 app.UseCors("AllowFrontend");
 
+// Pipeline order: Authenticate → resolve tenant → rate-limit → Authorize → controllers
+app.UseAuthentication();
+app.UseMiddleware<TenantResolutionMiddleware>();
+app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapControllers();

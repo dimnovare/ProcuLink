@@ -1,9 +1,11 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProcuLink.Core.Canonical;
 using ProcuLink.Infrastructure.Repositories;
 
 namespace ProcuLink.Api.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/supplier-profiles")]
 public class SupplierProfilesController : ControllerBase

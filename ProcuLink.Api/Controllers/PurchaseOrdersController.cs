@@ -4,13 +4,17 @@ using System.Xml.Linq;
 using ClosedXML.Excel;
 using CsvHelper;
 using CsvHelper.Configuration;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Api.Helpers;
 using ProcuLink.Core.Canonical;
 using ProcuLink.Infrastructure.Repositories;
 
 namespace ProcuLink.Api.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/purchase-orders")]
 public class PurchaseOrdersController : ControllerBase
@@ -41,13 +45,21 @@ public class PurchaseOrdersController : ControllerBase
         _logger = logger;
     }
 
+    private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
+
     /// <summary>
-    /// Upload a CSV or XLSX purchase order file
+    /// Upload a CSV or XLSX purchase order file.
+    /// Rate-limited to 20 requests per minute per authenticated user.
+    /// Maximum file size: 10 MB.
     /// </summary>
     [HttpPost("upload")]
     [Consumes("multipart/form-data")]
+    [EnableRateLimiting("upload")]
+    [RequestSizeLimit(MaxUploadBytes)]
     [ProducesResponseType(typeof(UploadResultDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status413RequestEntityTooLarge)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> Upload(
         IFormFile file,
         [FromForm] string supplierName,
@@ -58,10 +70,18 @@ public class PurchaseOrdersController : ControllerBase
         if (file == null || file.Length == 0)
             return BadRequest("File is required.");
 
+        // Application-level size guard (belt-and-suspenders alongside [RequestSizeLimit])
+        if (file.Length > MaxUploadBytes)
+            return StatusCode(StatusCodes.Status413RequestEntityTooLarge,
+                "File exceeds the 10 MB upload limit.");
+
         if (string.IsNullOrWhiteSpace(supplierName))
             return BadRequest("Supplier name is required.");
 
-        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        // Sanitise filename before any use — prevents path traversal and null-byte tricks
+        var safeFileName = FileNameSanitiser.Sanitise(file.FileName);
+        var extension = FileNameSanitiser.GetExtension(file.FileName);
+
         if (extension != ".csv" && extension != ".xlsx")
             return BadRequest("Only CSV and XLSX files are supported.");
 
