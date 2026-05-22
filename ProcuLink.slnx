@@ -4,8 +4,4 @@
   <Project Path="ProcuLink.Infrastructure/ProcuLink.Infrastructure.csproj" />
   <Project Path="ProcuLink.Transform/ProcuLink.Transform.csproj" />
   <Project Path="ProcuLink.Worker/ProcuLink.Worker.csproj" />
-  <Project Path="ProcuLink.Web/ProcuLink.Web.esproj">
-    <Build />
-    <Deploy />
-  </Project>
 </Solution>
