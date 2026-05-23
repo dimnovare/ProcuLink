@@ -75,6 +75,7 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.OrgId).HasColumnName("org_id");
             b.Property(x => x.Name).HasColumnName("name").IsRequired();
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
+            b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.Suppliers)
              .HasForeignKey(x => x.OrgId);

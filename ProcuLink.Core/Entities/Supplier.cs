@@ -7,6 +7,9 @@ public class Supplier
     public string Name { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
 
+    /// <summary>Soft-delete timestamp. Null = active.</summary>
+    public DateTime? DeletedAt { get; set; }
+
     // Navigation
     public Organisation Organisation { get; set; } = null!;
     public List<SupplierProfileEntity> SupplierProfiles { get; set; } = new();
