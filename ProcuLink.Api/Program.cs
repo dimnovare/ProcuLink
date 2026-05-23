@@ -18,6 +18,15 @@ using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ── Sentry error tracking (G6) — no-op when DSN is absent ────────────────
+builder.WebHost.UseSentry(o =>
+{
+    o.Dsn = builder.Configuration["Sentry:Dsn"] ?? string.Empty;
+    o.TracesSampleRate = 0.1; // 10 % of transactions
+    o.MinimumBreadcrumbLevel = Microsoft.Extensions.Logging.LogLevel.Information;
+    o.MinimumEventLevel = Microsoft.Extensions.Logging.LogLevel.Error;
+});
+
 // ── Database ───────────────────────────────────────────────────────────────
 builder.Services.AddDbContext<ProcuLinkDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
