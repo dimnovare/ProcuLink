@@ -1,4 +1,6 @@
 using System.Threading.RateLimiting;
+using Hangfire;
+using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -60,6 +62,25 @@ builder.Services.AddRateLimiter(options =>
         await context.HttpContext.Response.WriteAsJsonAsync(
             new { error = "Upload rate limit exceeded. Maximum 20 uploads per minute." }, ct);
     };
+});
+
+// ── Hangfire (C1/C2) ───────────────────────────────────────────────────────
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")!;
+builder.Services.AddHangfire(cfg => cfg
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString)));
+builder.Services.AddHangfireServer(opts =>
+{
+    opts.WorkerCount = 4; // conservative for Phase 3 MVP
+    opts.Queues = new[] { "default" };
+});
+
+// ── HTTP client for webhook delivery ──────────────────────────────────────
+builder.Services.AddHttpClient("delivery", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
 });
 
 // ── Tenant service ─────────────────────────────────────────────────────────
@@ -164,6 +185,9 @@ if (app.Environment.IsDevelopment())
         options.WithOpenApiRoutePattern("/swagger/v1/swagger.json");
         options.WithDefaultHttpClient(ScalarTarget.CSharp, ScalarClient.HttpClient);
     });
+
+    // Hangfire dashboard — local dev only; no auth guard needed in dev
+    app.UseHangfireDashboard("/hangfire");
 }
 
 app.UseHttpsRedirection();

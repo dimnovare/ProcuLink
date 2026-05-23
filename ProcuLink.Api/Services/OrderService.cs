@@ -163,6 +163,210 @@ public sealed class OrderService : IOrderService
         return Result<PurchaseOrderEntity>.Ok(entity);
     }
 
+    // ── CreateStubAsync ───────────────────────────────────────────────────────
+
+    public async Task<Result<PurchaseOrderEntity>> CreateStubAsync(
+        Guid organisationId,
+        Guid supplierId,
+        Stream fileStream,
+        string filename,
+        string contentType,
+        CancellationToken ct)
+    {
+        var safeFilename = FileNameSanitiser.Sanitise(filename);
+        var extension    = FileNameSanitiser.GetExtension(filename);
+
+        // Validate parser exists before touching R2
+        try { _parserFactory.GetParser(extension); }
+        catch (UnsupportedFileFormatException ex) { return Result<PurchaseOrderEntity>.Fail(ex.Message); }
+
+        using var buffer = new MemoryStream();
+        await fileStream.CopyToAsync(buffer, ct);
+
+        if (buffer.Length == 0)
+            return Result<PurchaseOrderEntity>.Fail("Uploaded file is empty.");
+
+        // Upload raw file to R2
+        var orderId       = Guid.NewGuid();
+        var sourceFileKey = $"{organisationId}/{orderId}/{safeFilename}";
+
+        buffer.Position = 0;
+        await _fileStorage.UploadAsync(buffer, sourceFileKey, contentType, ct);
+        _logger.LogInformation("Uploaded source file to R2: {Key}", sourceFileKey);
+
+        // Load supplier so navigation property is set for MapToDto
+        var supplier = await _db.Suppliers.FindAsync(new object[] { supplierId }, ct);
+        if (supplier is null)
+            return Result<PurchaseOrderEntity>.Fail("Supplier not found.");
+
+        // Create stub order — no lines yet, status = "parsing"
+        var now = DateTime.UtcNow;
+        var entity = new PurchaseOrderEntity
+        {
+            Id            = orderId,
+            OrgId         = organisationId,
+            SupplierId    = supplierId,
+            Supplier      = supplier,
+            PoNumber      = $"PO-{now:yyyyMMddHHmmss}",
+            OrderDate     = DateOnly.FromDateTime(now),
+            Currency      = "EUR",
+            Status        = "parsing",
+            SourceFileKey = sourceFileKey,
+            CreatedAt     = now,
+            UpdatedAt     = now,
+        };
+
+        _db.PurchaseOrders.Add(entity);
+        _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "Created", new
+        {
+            sourceFileKey,
+            mode = "async"
+        }));
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Order stub {OrderId} created for org {OrgId}, status=parsing",
+            orderId, organisationId);
+
+        return Result<PurchaseOrderEntity>.Ok(entity);
+    }
+
+    // ── ParseStoredFileAsync ──────────────────────────────────────────────────
+
+    public async Task<Result<PurchaseOrderEntity>> ParseStoredFileAsync(
+        Guid organisationId,
+        Guid orderId,
+        CancellationToken ct)
+    {
+        var entity = await _db.PurchaseOrders
+            .Include(x => x.Lines)
+            .Include(x => x.Supplier)
+            .Where(x => x.Id == orderId && x.OrgId == organisationId)
+            .FirstOrDefaultAsync(ct);
+
+        if (entity is null)
+            return Result<PurchaseOrderEntity>.Fail("Order not found.");
+
+        // Idempotency guard — only parse if still in "parsing" state
+        if (entity.Status != "parsing")
+        {
+            _logger.LogInformation(
+                "Order {OrderId} already processed (status={Status}), skipping parse",
+                orderId, entity.Status);
+            return Result<PurchaseOrderEntity>.Ok(entity);
+        }
+
+        if (string.IsNullOrWhiteSpace(entity.SourceFileKey))
+            return Result<PurchaseOrderEntity>.Fail("Order has no source file key.");
+
+        // Download file from R2/local storage
+        Stream fileStream;
+        try
+        {
+            fileStream = await _fileStorage.DownloadAsync(entity.SourceFileKey, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to download source file {Key}", entity.SourceFileKey);
+            return Result<PurchaseOrderEntity>.Fail($"Could not download source file: {ex.Message}");
+        }
+
+        await using (fileStream)
+        {
+            using var buffer = new MemoryStream();
+            await fileStream.CopyToAsync(buffer, ct);
+
+            var extension = Path.GetExtension(entity.SourceFileKey);
+            IPurchaseOrderParser parser;
+            try { parser = _parserFactory.GetParser(extension); }
+            catch (UnsupportedFileFormatException ex)
+            {
+                entity.Status    = "failed";
+                entity.UpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync(ct);
+                return Result<PurchaseOrderEntity>.Fail(ex.Message);
+            }
+
+            buffer.Position = 0;
+            ParsedOrder parsedOrder;
+            try { parsedOrder = await parser.ParseAsync(buffer, ct); }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse file for order {OrderId}", orderId);
+                entity.Status    = "failed";
+                entity.UpdatedAt = DateTime.UtcNow;
+                _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "ParseFailed",
+                    new { error = ex.Message }));
+                await _db.SaveChangesAsync(ct);
+                return Result<PurchaseOrderEntity>.Fail($"Could not parse file: {ex.Message}");
+            }
+
+            if (parsedOrder.Lines.Count == 0)
+            {
+                entity.Status    = "failed";
+                entity.UpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync(ct);
+                return Result<PurchaseOrderEntity>.Fail("File contains no line items.");
+            }
+
+            // Auto-resolve lines against item_mappings
+            var lineEntities   = new List<PurchaseOrderLineEntity>(parsedOrder.Lines.Count);
+            bool anyUnresolved = false;
+
+            foreach (var line in parsedOrder.Lines)
+            {
+                var supplierCode = await _mappings.ResolveAsync(
+                    organisationId, entity.SupplierId, line.BuyerItemCode, ct);
+
+                bool resolved = !string.IsNullOrWhiteSpace(supplierCode);
+                if (!resolved) anyUnresolved = true;
+
+                lineEntities.Add(new PurchaseOrderLineEntity
+                {
+                    Id               = Guid.NewGuid(),
+                    LineNumber       = line.LineNumber,
+                    BuyerItemCode    = line.BuyerItemCode,
+                    SupplierItemCode = supplierCode,
+                    Description      = line.Description,
+                    Quantity         = line.Quantity,
+                    Unit             = line.Unit,
+                    UnitPrice        = line.UnitPrice ?? 0m,
+                    Confidence       = resolved ? 1.0f : 0.0f,
+                    NeedsReview      = !resolved
+                });
+            }
+
+            // Update order with parsed data
+            var now = DateTime.UtcNow;
+            entity.PoNumber   = string.IsNullOrWhiteSpace(parsedOrder.PoNumber)
+                                    ? $"PO-{now:yyyyMMddHHmmss}"
+                                    : parsedOrder.PoNumber;
+            entity.OrderDate  = parsedOrder.OrderDate.HasValue
+                                    ? DateOnly.FromDateTime(parsedOrder.OrderDate.Value)
+                                    : DateOnly.FromDateTime(now);
+            entity.Currency   = parsedOrder.Currency ?? "EUR";
+            entity.Status     = anyUnresolved ? "pending_review" : "ready";
+            entity.UpdatedAt  = now;
+            entity.Lines.AddRange(lineEntities);
+
+            _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "Parsed", new
+            {
+                lineCount       = lineEntities.Count,
+                unresolvedCount = lineEntities.Count(l => l.NeedsReview),
+                newStatus       = entity.Status
+            }));
+
+            await _db.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "Order {OrderId} parsed: {LineCount} lines, {Unresolved} unresolved, status={Status}",
+                orderId, lineEntities.Count, lineEntities.Count(l => l.NeedsReview), entity.Status);
+        }
+
+        return Result<PurchaseOrderEntity>.Ok(entity);
+    }
+
     // ── GetByIdAsync ──────────────────────────────────────────────────────────
 
     public async Task<Result<PurchaseOrderEntity>> GetByIdAsync(

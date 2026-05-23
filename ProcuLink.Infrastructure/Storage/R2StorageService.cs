@@ -72,6 +72,19 @@ public sealed class R2StorageService : IFileStorageService, IAsyncDisposable
     }
 
     /// <inheritdoc/>
+    public async Task<Stream> DownloadAsync(string key, CancellationToken ct)
+    {
+        var request = new GetObjectRequest
+        {
+            BucketName = _bucketName,
+            Key        = key,
+        };
+
+        var response = await _client.GetObjectAsync(request, ct);
+        return response.ResponseStream;
+    }
+
+    /// <inheritdoc/>
     public async Task DeleteAsync(string key, CancellationToken ct)
     {
         var request = new DeleteObjectRequest

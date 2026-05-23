@@ -1,16 +1,17 @@
+using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Helpers;
+using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
-using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Api.Controllers;
 
 /// <summary>
-/// Phase 2 order lifecycle endpoints.
+/// Phase 2/3 order lifecycle endpoints.
 /// All routes are tenant-scoped — org is resolved from the Clerk JWT by
 /// TenantResolutionMiddleware and injected via ICurrentTenantService.
 /// </summary>
@@ -19,19 +20,22 @@ namespace ProcuLink.Api.Controllers;
 [Route("api/orders")]
 public sealed class OrdersController : ControllerBase
 {
-    private readonly IOrderService         _orders;
-    private readonly ICurrentTenantService _tenant;
+    private readonly IOrderService          _orders;
+    private readonly ICurrentTenantService  _tenant;
+    private readonly IBackgroundJobClient   _jobs;
     private readonly ILogger<OrdersController> _logger;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
     public OrdersController(
-        IOrderService         orders,
-        ICurrentTenantService tenant,
+        IOrderService          orders,
+        ICurrentTenantService  tenant,
+        IBackgroundJobClient   jobs,
         ILogger<OrdersController> logger)
     {
         _orders = orders;
         _tenant = tenant;
+        _jobs   = jobs;
         _logger = logger;
     }
 
@@ -39,7 +43,8 @@ public sealed class OrdersController : ControllerBase
 
     /// <summary>
     /// Upload a CSV or XLSX purchase order file.
-    /// The file is stored to R2, parsed, and item codes auto-resolved from saved mappings.
+    /// The file is stored to R2 and a parsing job is enqueued.
+    /// Returns immediately with status "parsing" — poll GET /api/orders/{id}/status.
     /// Rate-limited to 20 uploads per minute per authenticated user.
     /// </summary>
     [HttpPost("upload")]
@@ -72,17 +77,24 @@ public sealed class OrdersController : ControllerBase
         var orgId = _tenant.OrganisationId;
 
         await using var stream = file.OpenReadStream();
-        var result = await _orders.CreateFromFileAsync(
+        var result = await _orders.CreateStubAsync(
             orgId, supplierId, stream, file.FileName, file.ContentType, ct);
 
         if (!result.IsSuccess)
             return BadRequest(new { error = result.Error });
 
-        _logger.LogInformation("Order {Id} created via upload for org {OrgId}", result.Value!.Id, orgId);
+        var stub = result.Value!;
+
+        // Enqueue async parse — returns before parsing completes
+        ParseOrderJob.Enqueue(_jobs, stub.Id, orgId);
+
+        _logger.LogInformation(
+            "Order stub {Id} created, ParseOrderJob enqueued, org {OrgId}",
+            stub.Id, orgId);
 
         return Ok(new
         {
-            order              = MapToDto(result.Value!),
+            order              = MapToDto(stub),
             validationMessages = Array.Empty<string>()
         });
     }
@@ -95,7 +107,6 @@ public sealed class OrdersController : ControllerBase
     public async Task<IActionResult> List(CancellationToken ct)
     {
         var result = await _orders.ListAsync(_tenant.OrganisationId, ct);
-        // ListAsync always succeeds — no failure path for a plain list
         return Ok(result.Value);
     }
 
@@ -113,6 +124,25 @@ public sealed class OrdersController : ControllerBase
             return NotFound();
 
         return Ok(MapToDto(result.Value!));
+    }
+
+    // ── GET /api/orders/{id}/status ───────────────────────────────────────────
+
+    /// <summary>
+    /// Lightweight endpoint returning just { status }.
+    /// Used by the frontend to poll while an order is in "parsing" or "transforming" state.
+    /// </summary>
+    [HttpGet("{id:guid}/status")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetStatus(Guid id, CancellationToken ct)
+    {
+        var result = await _orders.GetByIdAsync(_tenant.OrganisationId, id, ct);
+
+        if (!result.IsSuccess)
+            return NotFound();
+
+        return Ok(new { status = result.Value!.Status });
     }
 
     // ── POST /api/orders/{id}/resolve ─────────────────────────────────────────
@@ -133,7 +163,6 @@ public sealed class OrdersController : ControllerBase
         if (request.LineResolutions is null || request.LineResolutions.Count == 0)
             return BadRequest(new { error = "At least one line resolution is required." });
 
-        // Map the HTTP contract type to the Core service type
         var resolutions = request.LineResolutions
             .Select(r => new Core.Services.LineResolution(r.LineNumber, r.SupplierItemCode))
             .ToList();
@@ -157,12 +186,13 @@ public sealed class OrdersController : ControllerBase
     // ── POST /api/orders/{id}/transform ──────────────────────────────────────
 
     /// <summary>
-    /// Transform a fully-resolved order to XML or CSV.
+    /// Enqueue a transform job for a fully-resolved order.
+    /// Returns immediately with { status: "transforming" }.
+    /// Poll GET /api/orders/{id}/status until status changes.
     /// All lines must have NeedsReview = false — returns 422 otherwise.
-    /// Uploads the artifact to R2 and advances the order status to "delivered".
     /// </summary>
     [HttpPost("{id:guid}/transform")]
-    [ProducesResponseType(typeof(TransformResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
@@ -171,37 +201,40 @@ public sealed class OrdersController : ControllerBase
         [FromBody] TransformRequest request,
         CancellationToken ct)
     {
-        var format = request.Format?.ToLowerInvariant() switch
-        {
-            "xml" => (OutputFormat?)OutputFormat.Xml,
-            "csv" => (OutputFormat?)OutputFormat.Csv,
-            _     => null
-        };
-
-        if (format is null)
+        var formatStr = request.Format?.ToLowerInvariant();
+        if (formatStr != "xml" && formatStr != "csv")
             return BadRequest(new { error = "Format must be 'xml' or 'csv'." });
 
-        var result = await _orders.TransformAsync(_tenant.OrganisationId, id, format.Value, ct);
+        // Pre-flight: load the order to confirm it exists and is "ready"
+        var getResult = await _orders.GetByIdAsync(_tenant.OrganisationId, id, ct);
+        if (!getResult.IsSuccess)
+            return NotFound();
 
-        if (!result.IsSuccess)
-        {
-            if (result.Error == "Order not found.")
-                return NotFound();
+        var order = getResult.Value!;
+        var unresolvedLines = order.Lines.Where(l => l.NeedsReview).Select(l => l.LineNumber).ToList();
+        if (unresolvedLines.Count > 0)
+            return UnprocessableEntity(new
+            {
+                error = $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolvedLines)}."
+            });
 
-            // Unresolved lines → 422
-            if (result.Error!.StartsWith("Resolve all lines"))
-                return UnprocessableEntity(new { error = result.Error });
+        if (order.Status == "transforming")
+            return Accepted(new { status = "transforming" }); // already in progress
 
-            return BadRequest(new { error = result.Error });
-        }
+        // Enqueue transform job
+        TransformOrderJob.Enqueue(_jobs, id, _tenant.OrganisationId, formatStr!);
 
-        return Ok(result.Value);
+        _logger.LogInformation(
+            "TransformOrderJob enqueued for order {OrderId}, format={Format}",
+            id, formatStr);
+
+        return Accepted(new { status = "transforming" });
     }
 
     // ── GET /api/orders/{id}/artifacts/{artifactId}/download ─────────────────
 
     /// <summary>
-    /// Returns a 15-minute pre-signed R2 URL for the given artifact.
+    /// Returns a 15-minute pre-signed URL for the given artifact.
     /// The frontend opens this URL directly — file bytes never flow through the API.
     /// </summary>
     [HttpGet("{id:guid}/artifacts/{artifactId:guid}/download")]

@@ -8,6 +8,9 @@ public interface IFileStorageService
     /// <summary>Returns a pre-signed download URL valid for the specified duration.</summary>
     Task<string> GetSignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct);
 
+    /// <summary>Downloads the object at the given key as a stream.</summary>
+    Task<Stream> DownloadAsync(string key, CancellationToken ct);
+
     /// <summary>Deletes the object at the given key.</summary>
     Task DeleteAsync(string key, CancellationToken ct);
 }

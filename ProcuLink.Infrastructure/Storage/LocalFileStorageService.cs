@@ -34,6 +34,16 @@ public sealed class LocalFileStorageService : IFileStorageService
         return Task.FromResult(url);
     }
 
+    public Task<Stream> DownloadAsync(string key, CancellationToken ct)
+    {
+        var fullPath = GetFullPath(key);
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException($"File not found in local storage: {key}");
+
+        Stream stream = File.OpenRead(fullPath);
+        return Task.FromResult(stream);
+    }
+
     public Task DeleteAsync(string key, CancellationToken ct)
     {
         var fullPath = GetFullPath(key);

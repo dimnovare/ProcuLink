@@ -22,6 +22,28 @@ public interface IOrderService
         string contentType,
         CancellationToken ct);
 
+    /// <summary>
+    /// Upload a raw file to R2 and create an order stub with status="parsing".
+    /// Does NOT parse the file inline — enqueue <c>ParseOrderJob</c> after calling this.
+    /// </summary>
+    Task<Result<PurchaseOrderEntity>> CreateStubAsync(
+        Guid organisationId,
+        Guid supplierId,
+        Stream fileStream,
+        string filename,
+        string contentType,
+        CancellationToken ct);
+
+    /// <summary>
+    /// Parse the stored source file for an order in "parsing" status,
+    /// auto-resolve item mappings, persist lines, and advance status to
+    /// "pending_review" or "ready".  Idempotent — skips if status != "parsing".
+    /// </summary>
+    Task<Result<PurchaseOrderEntity>> ParseStoredFileAsync(
+        Guid organisationId,
+        Guid orderId,
+        CancellationToken ct);
+
     /// <summary>Load a single order with its lines and artifacts, scoped to the org.</summary>
     Task<Result<PurchaseOrderEntity>> GetByIdAsync(
         Guid organisationId,
