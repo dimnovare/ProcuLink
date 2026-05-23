@@ -2,15 +2,7 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "dotnet ProcuLink.Api.dll"
 healthcheckPath = "/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
-
-[[services]]
-name = "proculink-api"
-
-[services.variables]
-ASPNETCORE_URLS = "http://+:$PORT"
-ASPNETCORE_ENVIRONMENT = "Production"

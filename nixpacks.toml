@@ -8,4 +8,5 @@ cmds = ["dotnet restore ProcuLink.Api/ProcuLink.Api.csproj"]
 cmds = ["dotnet publish ProcuLink.Api/ProcuLink.Api.csproj --no-restore -c Release -o out"]
 
 [start]
-cmd = "cd out && dotnet ProcuLink.Api.dll"
+# PORT is injected by Railway at runtime; the shell expands it here (not in TOML variables)
+cmd = "ASPNETCORE_URLS=http://+:$PORT dotnet /app/out/ProcuLink.Api.dll"
