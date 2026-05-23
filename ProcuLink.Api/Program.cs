@@ -214,7 +214,12 @@ if (app.Environment.IsDevelopment())
     app.UseHangfireDashboard("/hangfire");
 }
 
-app.UseHttpsRedirection();
+// Railway terminates TLS at the load balancer; the container only needs HTTP.
+// Unconditional HTTPS redirect causes the Railway healthchecker to receive 307, not 200.
+if (app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 app.UseCors("AllowFrontend");
 
 // Pipeline order: Authenticate → resolve tenant → rate-limit → Authorize → controllers
