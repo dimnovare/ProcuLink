@@ -1,0 +1,8 @@
+[phases.install]
+cmds = ["dotnet restore ProcuLink.Api/ProcuLink.Api.csproj"]
+
+[phases.build]
+cmds = ["dotnet publish ProcuLink.Api/ProcuLink.Api.csproj --no-restore -c Release -o out"]
+
+[start]
+cmd = "cd out && dotnet ProcuLink.Api.dll"
