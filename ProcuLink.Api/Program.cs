@@ -85,8 +85,13 @@ builder.Services.AddScoped<IOrderRepository, EfOrderRepository>();
 builder.Services.AddScoped<ISupplierProfileRepository, EfSupplierProfileRepository>();
 builder.Services.AddScoped<IItemMappingRepository, EfItemMappingRepository>();
 
-// ── File storage (Cloudflare R2) ───────────────────────────────────────────
-builder.Services.AddSingleton<IFileStorageService, R2StorageService>();
+// ── File storage ───────────────────────────────────────────────────────────
+// Use LocalFileStorageService in dev when R2 credentials are absent.
+// Set Storage:R2AccessKeyId in user-secrets or environment to switch to R2.
+if (string.IsNullOrEmpty(builder.Configuration["Storage:R2AccessKeyId"]))
+    builder.Services.AddSingleton<IFileStorageService, LocalFileStorageService>();
+else
+    builder.Services.AddSingleton<IFileStorageService, R2StorageService>();
 
 // ── Domain services ────────────────────────────────────────────────────────
 // ItemMappingService is Scoped (DbContext is Scoped).
