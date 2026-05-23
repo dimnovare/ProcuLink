@@ -2,11 +2,13 @@ using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Helpers;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -20,22 +22,25 @@ namespace ProcuLink.Api.Controllers;
 [Route("api/orders")]
 public sealed class OrdersController : ControllerBase
 {
-    private readonly IOrderService          _orders;
-    private readonly ICurrentTenantService  _tenant;
-    private readonly IBackgroundJobClient   _jobs;
+    private readonly IOrderService             _orders;
+    private readonly ICurrentTenantService     _tenant;
+    private readonly IBackgroundJobClient      _jobs;
+    private readonly ProcuLinkDbContext        _db;
     private readonly ILogger<OrdersController> _logger;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
     public OrdersController(
-        IOrderService          orders,
-        ICurrentTenantService  tenant,
-        IBackgroundJobClient   jobs,
+        IOrderService             orders,
+        ICurrentTenantService     tenant,
+        IBackgroundJobClient      jobs,
+        ProcuLinkDbContext        db,
         ILogger<OrdersController> logger)
     {
         _orders = orders;
         _tenant = tenant;
         _jobs   = jobs;
+        _db     = db;
         _logger = logger;
     }
 
@@ -229,6 +234,41 @@ public sealed class OrdersController : ControllerBase
             id, formatStr);
 
         return Accepted(new { status = "transforming" });
+    }
+
+    // ── GET /api/orders/{id}/audit ────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns audit events for this order, newest first.
+    /// Each event: { action, payload, createdAt }
+    /// </summary>
+    [HttpGet("{id:guid}/audit")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetAudit(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+
+        // Verify the order belongs to this org
+        var exists = await _db.PurchaseOrders
+            .AnyAsync(o => o.Id == id && o.OrgId == orgId, ct);
+
+        if (!exists)
+            return NotFound();
+
+        var events = await _db.AuditEvents
+            .AsNoTracking()
+            .Where(e => e.EntityId == id && e.OrgId == orgId && e.EntityType == "Order")
+            .OrderByDescending(e => e.CreatedAt)
+            .Select(e => new
+            {
+                action    = e.Action,
+                payload   = e.Payload,
+                createdAt = e.CreatedAt,
+            })
+            .ToListAsync(ct);
+
+        return Ok(events);
     }
 
     // ── GET /api/orders/{id}/artifacts/{artifactId}/download ─────────────────

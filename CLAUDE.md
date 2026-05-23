@@ -6,32 +6,26 @@ ProcuLink is a **B2B supplier-order bridge** for Baltic/Nordic distributors,
 wholesalers, and manufacturers that receive orders in messy formats (CSV, XLSX)
 and need them transformed into supplier-ready structured documents and delivered.
 
-One-sentence value proposition:
-**Upload a buyer order file → validate → resolve mappings → transform to
-supplier format → deliver.**
+**Upload a buyer order file → validate → resolve mappings → transform → deliver.**
 
 ---
 
 ## Repository layout
 
 ```
-C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\
+C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\        ← .NET solution root
 ├── CLAUDE.md
 ├── ProcuLink.slnx
 ├── ProcuLink.Api\                   ← ASP.NET Core 8 — dev port :5223
-├── ProcuLink.Core\                  ← Domain models, service interfaces
-│   ├── Entities\
-│   ├── Repositories\                ← interfaces
-│   └── Services\                    ← interfaces + implementations
-├── ProcuLink.Infrastructure\        ← EF Core, Postgres, R2 storage
-│   ├── Persistence\                 ← ProcuLinkDbContext, migrations
-│   └── Repositories\                ← EF implementations
-├── ProcuLink.Transform\             ← ⚡ ACTIVE IN PHASE 2: parsers + transform
-│   ├── Parsing\                     ← CsvOrderParser, XlsxOrderParser
-│   └── Output\                      ← XmlTransformService, CsvTransformService
-├── ProcuLink.Worker\                ← Placeholder (Phase 3)
-└── ProcuLink.Web\                   ← Vite + React 18 (bun, git submodule)
-                                       GitHub: dimnovare/project-proculink
+├── ProcuLink.Core\                  ← Domain models, interfaces
+├── ProcuLink.Infrastructure\        ← EF Core, Postgres, R2, service impls
+├── ProcuLink.Transform\             ← Parsers (CSV/XLSX) + transform (XML/CSV)
+├── ProcuLink.Worker\                ← ⚡ ACTIVATE IN PHASE 3 — Hangfire jobs
+└── (no ProcuLink.Web — frontend is a separate repo, see below)
+
+C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink\   ← Frontend repo
+GitHub: https://github.com/dimnovare/project-proculink
+Package manager: bun
 ```
 
 ---
@@ -40,9 +34,9 @@ C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\
 
 | Task | Tool |
 |---|---|
-| New screens / layouts / UI polish | **Lovable** → git pull |
-| Auth wiring, API calls, business logic in frontend | **Claude Code** |
-| All .NET backend | **Claude Code** |
+| New screens / layouts / UI polish | **Lovable** → git pull in `project-proculink` |
+| Auth wiring, API calls, data hooks, bug fixes | **Claude Code** in `project-proculink` |
+| All .NET backend | **Claude Code** in `ProcuLink` solution |
 
 ---
 
@@ -52,12 +46,12 @@ C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\
 |---|---|
 | Frontend | Vite + React 18 + TypeScript + Tailwind + shadcn/ui |
 | Package manager | **bun** — never npm or yarn |
-| Auth | Clerk (frontend + backend JWT) |
+| Auth | Clerk (frontend `@clerk/clerk-react` + backend JWT) |
 | API | ASP.NET Core 8 — dev :5223 |
 | ORM | EF Core 9 + Npgsql |
-| Database | PostgreSQL (Neon.tech dev) |
-| File storage | Cloudflare R2 (S3-compatible, AWSSDK.S3) |
-| Background jobs | Hangfire — Phase 3 only, do not add yet |
+| Database | PostgreSQL — `Host=localhost;Port=5435;Database=proculink_dev` |
+| File storage | Cloudflare R2 (AWSSDK.S3) |
+| Background jobs | Hangfire + Hangfire.PostgreSql — Phase 3 only |
 
 ---
 
@@ -67,403 +61,293 @@ C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\
 |---|---|
 | Phase 0 — Prototype spike | ✅ Done |
 | Phase 1 — Auth + Postgres + Tenancy | ✅ Done |
-| **Phase 2 — Core loop** | 🚧 **CURRENT** |
-| Phase 3 — Sellable MVP | ⏳ Pending |
+| Phase 2 — Core loop | ✅ Done |
+| **Phase 3 — Sellable MVP** | 🚧 **CURRENT** |
 | Phase 4 — Commercial | ⏳ Pending |
 
 ---
 
-## What Phase 1 delivered (do not redo)
+## What Phase 2 delivered (authoritative — do not redo)
 
-- ✅ Clerk JWT auth on all API endpoints
-- ✅ `ICurrentTenantService` — extracts `orgId` from JWT
-- ✅ EF Core + Postgres with all schema tables
-- ✅ `EfOrderRepository`, `EfSupplierProfileRepository`, `EfItemMappingRepository`
-- ✅ Rate limiting + 10 MB upload guard + filename sanitisation
-- ✅ Scalar OpenAPI UI at `/scalar`
-- ✅ Clerk auth in frontend (`ClerkProvider`, `SignedIn`/`SignedOut` guards)
-- ✅ Auth headers on all `api-client.ts` calls
-- ✅ `index.html` cleaned up — no Lovable metadata
-- ✅ `/mappings` and `/settings` stub pages + sidebar links
+### Backend
+- ✅ `R2StorageService` — upload, signed URL, delete via AWSSDK.S3
+- ✅ `CsvOrderParser`, `XlsxOrderParser`, `OrderParserFactory` in `ProcuLink.Transform\Parsing`
+- ✅ `XmlTransformService`, `CsvTransformService` in `ProcuLink.Transform\Output`
+- ✅ `OrderService` — full lifecycle: CreateFromFile, GetById, List, Resolve, Transform, GetDownloadUrl
+- ✅ `ItemMappingService` — Resolve (exact match), Upsert, GetForSupplier, Delete
+- ✅ `OrdersController` — thin, <100 lines, all endpoints org-scoped with [Authorize]
+- ✅ `SuppliersController` — GET /api/suppliers, GET/DELETE /api/suppliers/{id}/mappings
+- ✅ All EF entities mapped in `ProcuLinkDbContext`, migration `InitialSchema` applied
+- ✅ Clerk JWT middleware, `ICurrentTenantService`, rate limiting, upload size guard, filename sanitisation
 
----
-
-## 🚧 Phase 2 — Core loop
-
-**Goal:** A real end-to-end workflow a human can complete start to finish.
-Upload CSV/XLSX → parse → auto-resolve known mappings → review unknowns → transform to XML/CSV → download.
-Everything synchronous. No background jobs.
-
-The full data flow:
-```
-[User] upload file
-  → API saves raw file to R2 (source_file_key)
-  → parse CSV/XLSX → canonical lines
-  → auto-resolve each line against item_mappings table
-  → save purchase_order + purchase_order_lines to DB
-  → return order (status: pending_review OR ready)
-
-[User] reviews unresolved lines, types supplier codes
-  → POST /api/orders/{id}/resolve
-  → lines updated, new mappings optionally saved
-  → order status → ready (if all resolved)
-
-[User] clicks Transform, picks format
-  → POST /api/orders/{id}/transform?format=xml|csv
-  → validate all lines resolved
-  → build output document
-  → save artifact to R2 (outbound_artifacts row)
-  → order status → delivered
-
-[User] clicks Download
-  → GET /api/orders/{id}/artifacts/{artifactId}/download
-  → signed R2 URL (15 min) → file opens in browser
-```
+### Frontend (`project-proculink`)
+- ✅ Clerk `ClerkProvider` in `main.tsx`, `SignedIn`/`SignedOut` guards in `App.tsx`
+- ✅ `authHeader()` helper in `api-client.ts` — all real* functions attach Bearer token
+- ✅ `index.html` — ProcuLink title/description, no Lovable metadata
+- ✅ `package.json` name: `proculink-web`
+- ✅ `OrderDetailPage` — status badge, unresolved banner, line table, artifacts list, download button
+- ✅ `ResolveSection` — wired to `POST /api/orders/{id}/resolve`, saveMappings checkbox functional
+- ✅ `OrderActions` — format picker (XML/CSV), Transform button wired, no console.log
+- ✅ `UploadPage` — navigates to `/orders/{id}` after upload
+- ✅ `MappingsPage` — supplier dropdown, mapping table with delete
+- ✅ `vercel.json` present for frontend deployment
 
 ---
 
-### Group A — File storage infrastructure
+## Known tech debt to fix in Phase 3
 
-**All in `ProcuLink.Infrastructure`**
-
-- [ ] **A1.** Add `AWSSDK.S3` NuGet package to `ProcuLink.Infrastructure.csproj`
-- [ ] **A2.** Create `IFileStorageService` in `ProcuLink.Core\Services\`:
-  ```csharp
-  Task<string> UploadAsync(Stream content, string key, string contentType, CancellationToken ct);
-  Task<string> GetSignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct);
-  Task DeleteAsync(string key, CancellationToken ct);
-  ```
-- [ ] **A3.** Create `R2StorageService` in `ProcuLink.Infrastructure\Storage\`:
-  - Use `AmazonS3Client` with `ServiceURL` set to the R2 endpoint from config
-  - `UploadAsync` → `PutObjectRequest`
-  - `GetSignedDownloadUrlAsync` → `GetPreSignedUrlRequest` with `Expires = DateTime.UtcNow + expiry`
-  - Key convention: `{orgId}/{orderId}/{filename}` for order files,
-    `{orgId}/{orderId}/artifacts/{artifactId}.{ext}` for transform output
-- [ ] **A4.** Register `R2StorageService` as `IFileStorageService` singleton in `Program.cs`
-- [ ] **A5.** Add R2 config section to `appsettings.Development.json` (see env vars section)
+- ⚠️ `OrderDetailPage`, `MappingsPage`, `UploadPage` use `useEffect` for data fetching
+  — **must be converted to TanStack Query hooks**
+- ⚠️ `SupplierProfilesController` still injects `ISupplierProfileRepository` (file-based)
+  — **must be migrated to EF Core in Phase 3**
+- ⚠️ `R2StorageService` throws `InvalidOperationException` on startup if credentials are empty
+  — **add `LocalFileStorageService` (writes to `/tmp/proculink-dev/`) for dev when R2 not configured**
+- ⚠️ Old Phase 0 types (`PurchaseOrder`, `PurchaseOrderSummary`, `AutomationStatus`) still in
+  `types/procurement.ts` — dead code, remove when safe
+- ⚠️ `lovable-tagger` still in devDependencies — harmless but remove it
 
 ---
 
-### Group B — Parsing layer (activate `ProcuLink.Transform`)
+## 🚧 Phase 3 — Sellable MVP
 
-**Port the parsing logic that is currently in the controller into proper classes.**
-
-- [ ] **B1.** Create `ParsedOrderLine` record in `ProcuLink.Transform\Parsing\`:
-  ```csharp
-  record ParsedOrderLine(
-      int LineNumber, string BuyerItemCode, string? Description,
-      decimal Quantity, string? Unit, decimal? UnitPrice
-  );
-  ```
-- [ ] **B2.** Create `ParsedOrder` record:
-  ```csharp
-  record ParsedOrder(
-      string? PoNumber, DateTime? OrderDate, string? BuyerName,
-      string? Currency, IReadOnlyList<ParsedOrderLine> Lines
-  );
-  ```
-- [ ] **B3.** Create `IPurchaseOrderParser` interface:
-  ```csharp
-  Task<ParsedOrder> ParseAsync(Stream fileStream, CancellationToken ct);
-  bool CanParse(string fileExtension);
-  ```
-- [ ] **B4.** Create `CsvOrderParser : IPurchaseOrderParser` — extract CSV parsing
-  from `PurchaseOrdersController`. Use `CsvHelper` if already referenced, else
-  plain `StreamReader`. Handles: comma and semicolon delimiters, header row
-  normalisation (lowercase, trim), `lineNumber`, `itemCode`/`buyerItemCode`,
-  `supplierItemCode`, `description`, `quantity`, `unit`, `unitPrice`/`price`.
-- [ ] **B5.** Create `XlsxOrderParser : IPurchaseOrderParser` — extract XLSX parsing
-  from controller. Use `ClosedXML` or `EPPlus` (whichever is already referenced).
-  Same column normalisation as CSV.
-- [ ] **B6.** Create `OrderParserFactory` — takes `IEnumerable<IPurchaseOrderParser>`,
-  selects by file extension (`.csv` → CsvOrderParser, `.xlsx` → XlsxOrderParser).
-  Throws `UnsupportedFileFormatException` for anything else.
-- [ ] **B7.** Register all parsers + factory in `Program.cs` DI.
+**Goal:** A pilot customer can sign up, configure a supplier, upload orders reliably,
+and receive output — without any manual intervention from us. Everything must be
+observable, retryable, and deployable.
 
 ---
 
-### Group C — Order service
+### Group A — Fix tech debt first (do this before new features)
 
-**In `ProcuLink.Core\Services\`**
-
-- [ ] **C1.** Create `IOrderService`:
-  ```csharp
-  Task<Result<PurchaseOrder>> CreateFromFileAsync(
-      Guid organisationId, Guid supplierId,
-      Stream fileStream, string filename, string contentType,
-      CancellationToken ct);
-
-  Task<Result<PurchaseOrder>> GetByIdAsync(
-      Guid organisationId, Guid orderId, CancellationToken ct);
-
-  Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(
-      Guid organisationId, CancellationToken ct);
-  ```
-- [ ] **C2.** Create `OrderService : IOrderService` implementation:
-  - `CreateFromFileAsync`:
-    1. Sanitise filename
-    2. Upload raw file to R2 via `IFileStorageService` → get `sourceFileKey`
-    3. Parse via `OrderParserFactory` → `ParsedOrder`
-    4. For each line: call `IItemMappingService.ResolveAsync(orgId, supplierId, buyerItemCode)`
-    5. Build `PurchaseOrder` entity + `PurchaseOrderLine` entities
-       - `needs_review = true` where no mapping found
-       - `confidence = 1.0` for exact matches, `0` for unresolved
-    6. Set order `status`:
-       - All resolved → `OrderStatus.Ready`
-       - Any unresolved → `OrderStatus.PendingReview`
-    7. Save via `IOrderRepository`
-    8. Write `audit_event`: `entity_type=Order, action=Created`
-    9. Return saved order
-
----
-
-### Group D — Mapping service
-
-**In `ProcuLink.Core\Services\`**
-
-- [ ] **D1.** Create `IItemMappingService`:
-  ```csharp
-  Task<string?> ResolveAsync(Guid orgId, Guid supplierId, string buyerItemCode, CancellationToken ct);
-  Task UpsertAsync(Guid orgId, Guid supplierId, string buyerItemCode,
-                   string supplierItemCode, MappingSource source, CancellationToken ct);
-  Task<IReadOnlyList<ItemMapping>> GetForSupplierAsync(Guid orgId, Guid supplierId, CancellationToken ct);
-  Task DeleteAsync(Guid orgId, Guid mappingId, CancellationToken ct);
-  ```
-- [ ] **D2.** Implement `ItemMappingService` using `IItemMappingRepository`.
-  `ResolveAsync`: exact match on `(orgId, supplierId, buyerItemCode)` — no fuzzy matching yet.
-- [ ] **D3.** `MappingSource` enum: `Manual`, `Imported`, `Suggested`
-
----
-
-### Group E — Resolve endpoint
-
-**Thin up `PurchaseOrdersController`, call services.**
-
-- [ ] **E1.** Add request DTO:
-  ```csharp
-  record ResolveOrderRequest(
-      List<LineResolution> LineResolutions,
-      bool SaveMappings
-  );
-  record LineResolution(int LineNumber, string SupplierItemCode);
-  ```
-- [ ] **E2.** Add `POST /api/orders/{id}/resolve` action:
-  1. Load order — return 404 if not found or wrong org
-  2. For each `LineResolution`: update `purchase_order_lines.supplier_item_code`,
-     set `needs_review = false`
-  3. If `SaveMappings: true` → call `IItemMappingService.UpsertAsync` for each line
-     with `source = MappingSource.Manual`
-  4. Recompute order status: if no lines have `needs_review = true` → `OrderStatus.Ready`
-  5. Save changes
-  6. Write audit event: `action=Resolved, payload={lineCount, savedMappings}`
-  7. Return updated order DTO
-- [ ] **E3.** Add `IOrderService.ResolveAsync` method and implement.
-
----
-
-### Group F — Transform service (activate `ProcuLink.Transform`)
-
-- [ ] **F1.** Create `ITransformService` in `ProcuLink.Core\Services\`:
-  ```csharp
-  Task<TransformResult> TransformAsync(
-      PurchaseOrder order,
-      IReadOnlyList<PurchaseOrderLine> lines,
-      SupplierProfile profile,
-      OutputFormat format,
-      CancellationToken ct);
-  ```
-  ```csharp
-  record TransformResult(Stream Content, string ContentType, string FileExtension);
-  enum OutputFormat { Xml, Csv }
-  ```
-- [ ] **F2.** Create `XmlTransformService` in `ProcuLink.Transform\Output\`:
-  Port the XML generation from `PurchaseOrdersController`. Output must include:
-  supplier item codes, quantities, unit prices, PO number, order date.
-  Validate: no line may have `needs_review = true` or null `supplier_item_code`.
-  Throw `TransformValidationException` if validation fails.
-- [ ] **F3.** Create `CsvTransformService` in `ProcuLink.Transform\Output\`:
-  Same validation. Output columns: `SupplierItemCode, Description, Quantity, Unit, UnitPrice, LineTotal`.
-- [ ] **F4.** Add `POST /api/orders/{id}/transform` endpoint:
-  - Body: `{ "format": "xml" | "csv" }`
-  - Load order + lines; return 422 if any line has `needs_review = true` with message
-    "Resolve all lines before transforming"
-  - Set order status → `OrderStatus.Transforming`
-  - Call `ITransformService.TransformAsync`
-  - Upload result stream to R2 → key: `{orgId}/{orderId}/artifacts/{newGuid}.{ext}`
-  - Insert `outbound_artifacts` row
-  - Set order status → `OrderStatus.Delivered` (for now; Phase 3 splits this further)
-  - Write audit event: `action=Transformed, payload={format, artifactId, fileKey}`
-  - Return `{ artifactId, format, createdAt }`
-- [ ] **F5.** Register `XmlTransformService` and `CsvTransformService` in DI.
-
----
-
-### Group G — Download endpoint
-
-- [ ] **G1.** Add `GET /api/orders/{id}/artifacts/{artifactId}/download` endpoint:
-  - Load `outbound_artifacts` row — 404 if not found or wrong org
-  - Call `IFileStorageService.GetSignedDownloadUrlAsync(fileKey, TimeSpan.FromMinutes(15))`
-  - Return `{ url, expiresAt }`
-- [ ] **G2.** Do NOT return the file bytes directly — always redirect via signed URL.
-
----
-
-### Group H — Slim down the controller
-
-- [ ] **H1.** Refactor `PurchaseOrdersController`:
-  - Upload action → delegates entirely to `IOrderService.CreateFromFileAsync`
-  - Get/list actions → delegates to `IOrderService`
-  - Remove all inline parsing, file I/O, and transform code from the controller
-  - Controller file should be under 100 lines when done
-- [ ] **H2.** Delete `FileOrderRepository` once `EfOrderRepository` is confirmed working.
-  Do not keep dead code.
-
----
-
-### Group I — Frontend: upload flow
-
-**In `ProcuLink.Web\src`**
-
-- [ ] **I1.** Update `api-client.ts` `uploadPurchaseOrder`:
-  - Expect new response shape: `{ order: PurchaseOrder, validationMessages: string[] }`
-  - After upload success, the caller should navigate to `/orders/{order.id}`
-- [ ] **I2.** Update `UploadPage.tsx`:
-  - On successful upload → `navigate(\`/orders/${result.order.id}\`)`
-  - Show toast with validation messages if any warnings returned
-  - Remove any inline order preview that was shown on the upload page
-
----
-
-### Group J — Frontend: order detail
-
-- [ ] **J1.** Update `OrderDetailPage.tsx` / `OrderLineTable.tsx`:
-  - Add status badge at the top of the page using the order's `status` field
-    - `pending_review` → amber badge "Needs Review"
-    - `ready` → green badge "Ready to Transform"
-    - `transforming` → blue badge "Transforming..."
-    - `delivered` → green badge "Delivered"
-    - `failed` → red badge "Failed"
-  - Highlight rows where `needs_review === true` — amber background or warning icon
-  - Show a count banner: "3 lines need attention" above the table when `status === pending_review`
-- [ ] **J2.** Add `artifacts` field to the `PurchaseOrder` type in `types/procurement.ts`:
+- [ ] **A1.** Add `LocalFileStorageService` to `ProcuLink.Infrastructure\Storage\`:
+  - Implements `IFileStorageService`
+  - Writes to `Path.Combine(Path.GetTempPath(), "proculink-dev", key)`
+  - `GetSignedDownloadUrlAsync` returns a local API endpoint URL, not a signed URL
+  - Register conditionally in `Program.cs`:
+    ```csharp
+    if (string.IsNullOrEmpty(config["Storage:R2AccessKeyId"]))
+        builder.Services.AddSingleton<IFileStorageService, LocalFileStorageService>();
+    else
+        builder.Services.AddSingleton<IFileStorageService, R2StorageService>();
+    ```
+- [ ] **A2.** Add `GET /api/dev/files/{**key}` endpoint (dev-only, no auth) to serve local files
+  — only registered when `app.Environment.IsDevelopment()`.
+- [ ] **A3.** Convert `UploadPage.tsx` supplier loading to TanStack Query:
   ```ts
-  artifacts?: { id: string; format: string; createdAt: string }[];
+  const { data: suppliers = [] } = useQuery({
+    queryKey: ['suppliers'],
+    queryFn: () => apiClient.getSuppliers(),
+  });
   ```
-- [ ] **J3.** Update `realGetOrderById` to request artifact list (if API includes it in response).
+- [ ] **A4.** Convert `OrderDetailPage.tsx` order loading to TanStack Query:
+  ```ts
+  const { data: order, isLoading, refetch } = useQuery({
+    queryKey: ['order', id],
+    queryFn: () => apiClient.getOrderById(id!),
+    enabled: !!id,
+  });
+  ```
+  Replace `handleOrderUpdated` with `queryClient.invalidateQueries(['order', id])`.
+- [ ] **A5.** Convert `MappingsPage.tsx` to TanStack Query:
+  - `useQuery(['suppliers'])` for supplier list
+  - `useQuery(['mappings', selectedId], ..., { enabled: !!selectedId })` for mappings
+  - `useMutation` for delete
+- [ ] **A6.** Migrate `SupplierProfilesController` to EF:
+  - Remove `ISupplierProfileRepository` injection
+  - Inject `ProcuLinkDbContext` directly (or create `EfSupplierProfileRepository`)
+  - All queries: `.Where(x => x.OrgId == _tenant.OrganisationId)`
+- [ ] **A7.** Remove dead types from `types/procurement.ts`:
+  `PurchaseOrder`, `PurchaseOrderLine`, `PurchaseOrderSummary`, `AutomationStatus`
+- [ ] **A8.** Remove `lovable-tagger` from devDependencies: `bun remove lovable-tagger`
 
 ---
 
-### Group K — Frontend: resolve section
+### Group B — Supplier management (required for onboarding)
 
-- [ ] **K1.** `ResolveSection.tsx` — wire to real endpoint:
-  - Call `POST /api/orders/{id}/resolve` with auth header
-  - Payload: `{ lineResolutions: [...], saveMappings: boolean }`
-  - On success: call `queryClient.invalidateQueries(['order', id])` to refresh
-  - Show success toast: "Mappings saved. Order is ready to transform."
-- [ ] **K2.** "Save mapping for future orders" checkbox must send `saveMappings: true`
-  in the request body — not just a UI toggle.
-- [ ] **K3.** Disable the Resolve submit button if any resolution input is empty.
+Currently there is no way to create a supplier. The upload page lists suppliers from the DB,
+but the DB is empty for a new org. Fix this before onboarding wizard.
 
----
-
-### Group L — Frontend: transform + download
-
-- [ ] **L1.** `OrderActions.tsx` — Transform button:
-  - Disable when `order.status !== 'ready'` — show tooltip "Resolve all lines first"
-  - On click: open a small popover or dialog with format picker: **XML** | **CSV**
-  - On format select: call `POST /api/orders/{id}/transform` with `{ format }`
-  - Show loading spinner on the button during the request
-  - On success: invalidate order query, show toast "Transform complete"
-  - On error (422 — unresolved lines): show the error message from the API
-- [ ] **L2.** `OrderActions.tsx` — Download button:
-  - Show only when `order.artifacts?.length > 0`
-  - On click: call `GET /api/orders/{id}/artifacts/{latestArtifact.id}/download`
-  - Open the returned `url` in a new tab: `window.open(url, '_blank')`
-  - If multiple artifacts exist, show a dropdown listing them by format + date
-- [ ] **L3.** Remove ALL `console.log(...)` from `OrderActions.tsx` — no placeholders.
+- [ ] **B1.** Add `POST /api/suppliers` — create a supplier for the org:
+  ```json
+  { "name": "Supplier Name" }
+  ```
+  Returns `{ id, name }`. Validates name is unique per org.
+- [ ] **B2.** Add `PUT /api/suppliers/{id}` — rename a supplier.
+- [ ] **B3.** Add `DELETE /api/suppliers/{id}` — soft-delete (set `deleted_at`, filter from all queries).
+  Add `deleted_at timestamptz` column + EF migration.
+- [ ] **B4.** Add `POST /api/suppliers/{id}/profiles` — create or update supplier profile for the org.
+  Body: `{ outputFormat, destinationType, destinationConfig }`.
+  This replaces the legacy `POST /api/supplier-profiles` endpoint.
+- [ ] **B5.** Frontend: Add a Suppliers page (`/suppliers`) — list, create, edit name, delete.
+  Each supplier shows its profile config if one exists.
+  Wire to the new endpoints above. Use TanStack Query throughout.
+- [ ] **B6.** Update `UploadPage.tsx` to show "Add supplier" link when the list is empty.
 
 ---
 
-### Group M — Frontend: mappings page
+### Group C — Hangfire background jobs
 
-- [ ] **M1.** `/mappings` page — build out the stub:
-  - Supplier selector (dropdown) — loads supplier list from `/api/suppliers`
-  - On supplier select: load mappings from `/api/suppliers/{supplierId}/mappings`
-    using TanStack Query with `[supplierId]` as key
-  - Show table: Buyer Item Code | Supplier Item Code | Source | Actions
-  - Inline edit of `Supplier Item Code` — save on blur / Enter key
-  - Delete row — calls `DELETE /api/suppliers/{supplierId}/mappings/{mappingId}`
-  - Show empty state: "No mappings yet for this supplier"
-- [ ] **M2.** Add `getSupplierMappings(supplierId)` and `deleteMappingById` to `api-client.ts`
+Replace the synchronous in-request parse+transform with async jobs.
+This is essential for reliability — large files should not block HTTP.
+
+- [ ] **C1.** Add NuGet packages to `ProcuLink.Worker.csproj`:
+  - `Hangfire.Core`
+  - `Hangfire.PostgreSql`
+  - `Hangfire.AspNetCore`
+- [ ] **C2.** Add Hangfire to `ProcuLink.Api\Program.cs`:
+  ```csharp
+  builder.Services.AddHangfire(cfg => cfg
+      .UsePostgreSqlStorage(connectionString));
+  builder.Services.AddHangfireServer();
+  app.UseHangfireDashboard("/hangfire"); // dev only
+  ```
+- [ ] **C3.** Create `ParseOrderJob` in `ProcuLink.Worker`:
+  - Takes `orderId` and `organisationId`
+  - Sets order status → `parsing` (add to enum)
+  - Runs `OrderParserFactory` + item resolution
+  - Updates order lines + status → `pending_review` or `ready`
+  - On failure: status → `failed`, write audit event
+- [ ] **C4.** Create `TransformOrderJob` in `ProcuLink.Worker`:
+  - Takes `orderId`, `organisationId`, `format`
+  - Runs transform + uploads artifact to R2
+  - On success: status → `ready_to_deliver`
+  - Enqueues `DeliverOrderJob` if supplier has a webhook configured
+  - On failure: status → `transform_failed`
+- [ ] **C5.** Create `DeliverOrderJob` in `ProcuLink.Worker`:
+  - Takes `orderId`, `organisationId`, `artifactId`
+  - Reads supplier profile `destination_config` for webhook URL and headers
+  - POSTs the artifact content to the webhook endpoint
+  - Writes `delivery_attempts` row with status + response_code
+  - On 2xx: order status → `delivered`
+  - On 4xx: status → `delivery_failed` (no retry — client error)
+  - On 5xx or timeout: Hangfire automatic retry (3 attempts, exponential backoff)
+  - After 3 failures: status → `delivery_failed`, write dead-letter audit event
+- [ ] **C6.** Update `OrdersController.Upload` to enqueue `ParseOrderJob` instead of parsing inline.
+  Return immediately with `{ orderId, status: "parsing" }`.
+- [ ] **C7.** Update `OrdersController.Transform` to enqueue `TransformOrderJob` instead of running inline.
+  Return immediately with `{ status: "transforming" }`.
+- [ ] **C8.** Add `parsing` and `ready_to_deliver` and `transform_failed` and `delivery_failed`
+  to the status string set. Update `OrderStatus` type in `types/procurement.ts` to match.
+- [ ] **C9.** Add `GET /api/orders/{id}/status` — lightweight endpoint returning just `{ status }`.
+  Used by the frontend to poll while an order is in `parsing` or `transforming` state.
 
 ---
 
-### Group N — New API endpoints to add (summary)
+### Group D — Frontend: async status polling
 
-These must all be added to match what the frontend expects:
-
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/orders/{id}/resolve` | Resolve lines + optionally save mappings |
-| `POST` | `/api/orders/{id}/transform` | Transform to XML or CSV |
-| `GET` | `/api/orders/{id}/artifacts/{artifactId}/download` | Signed download URL |
-| `GET` | `/api/suppliers` | List supplier names for the org (for dropdowns) |
-| `GET` | `/api/suppliers/{supplierId}/mappings` | All mappings for a supplier |
-| `DELETE` | `/api/suppliers/{supplierId}/mappings/{mappingId}` | Delete a mapping |
-
-All require `[Authorize]`. All must scope queries to `currentOrgId`.
+- [ ] **D1.** In `OrderDetailPage.tsx`: when `order.status` is `parsing` or `transforming`,
+  poll `GET /api/orders/{id}/status` every 2 seconds using TanStack Query's `refetchInterval`.
+  Stop polling when status changes to a stable state.
+  Show a spinner with appropriate message ("Parsing file…" / "Transforming…").
+- [ ] **D2.** Add `parsing`, `ready_to_deliver`, `transform_failed`, `delivery_failed` to
+  `StatusBadge` component with appropriate colours and labels.
+- [ ] **D3.** `UploadPage.tsx`: after upload, immediately navigate to order detail.
+  The polling in D1 takes care of showing progress.
+- [ ] **D4.** `OrderActions.tsx`: after clicking Transform, navigate to order detail.
+  Remove the inline loading state (job is async now).
 
 ---
 
-### Phase 2 definition of done
+### Group E — Audit trail in UI
 
-Phase 2 is complete when a user can, without touching mock data or the filesystem:
-1. Log in via Clerk
-2. Upload a real CSV or XLSX order file
-3. See the parsed order with unresolved lines highlighted
-4. Type supplier codes for unresolved lines and save (with "save for future" working)
-5. Click Transform, pick XML or CSV
-6. Click Download, get the actual file
-7. See the order status update correctly at each step
+- [ ] **E1.** Add `GET /api/orders/{id}/audit` endpoint:
+  Returns `audit_events` rows for this order, newest first:
+  `[{ action, payload, createdAt }]`
+- [ ] **E2.** Add `AuditTimeline` component in `src/components/orders/`:
+  Vertical timeline of events — Created, Resolved, Transformed, Delivered, Failed.
+  Show `createdAt` as relative time ("2 minutes ago") and absolute on hover.
+- [ ] **E3.** Add `AuditTimeline` to `OrderDetailPage` sidebar, below the Summary card.
+  Use TanStack Query: `useQuery(['order-audit', id], ...)`.
 
 ---
 
-## Phase 3 — Sellable MVP (next)
+### Group F — Onboarding wizard
 
-- Hangfire background jobs: async parse, transform, and deliver pipeline
-- Per-supplier webhook delivery with retries and dead-letter queue
-- Delivery attempt tracking visible in order detail UI
-- Audit trail timeline in order detail page
-- Onboarding wizard: org setup → add first supplier → upload first order
-- Deploy: Railway (API) + Vercel (frontend)
-- Error monitoring: Sentry
+New users land on an empty dashboard with no suppliers and no orders.
+The wizard walks them through setup the first time.
 
-## Phase 4 — Commercial
+- [ ] **F1.** Add `GET /api/onboarding/status` endpoint:
+  Returns `{ hasSupplier: bool, hasUpload: bool, hasDelivery: bool }` for the org.
+- [ ] **F2.** Create `OnboardingWizard` component — 3-step modal or full page:
+  - Step 1: Create your first supplier (name input → POST /api/suppliers)
+  - Step 2: Upload your first order (embedded FileUploadZone)
+  - Step 3: Done — "Your first order is processing"
+- [ ] **F3.** Show `OnboardingWizard` on `Dashboard` page when `!hasSupplier`.
+  Dismiss permanently once supplier + first upload are done.
+- [ ] **F4.** `Dashboard` page: replace placeholder stats with real data:
+  - Total orders this month
+  - Orders pending review
+  - Orders delivered
+  - Pull from `GET /api/dashboard/stats` (add this endpoint)
 
-- Next.js marketing site (separate repo)
-- Stripe billing + usage metering
-- PDF and email ingestion
-- ERP connectors: Erply, Directo (Estonia/Baltics first)
-- AI mapping suggestions via Claude API for unrecognised item codes
-- Peppol / Telema integration
+---
+
+### Group G — Deploy
+
+- [ ] **G1.** Backend — deploy to Railway:
+  - Create `railway.toml` in solution root
+  - Set env vars in Railway dashboard: `ConnectionStrings__DefaultConnection`,
+    `Clerk__Authority`, `Storage__R2*`
+  - Add `ASPNETCORE_URLS=http://+:$PORT` to Railway config
+- [ ] **G2.** Frontend — deploy to Vercel:
+  - `vercel.json` already exists ✅
+  - Set env vars in Vercel: `VITE_API_BASE_URL` (Railway URL), `VITE_CLERK_PUBLISHABLE_KEY`
+  - Confirm `VITE_USE_MOCK=false` in Vercel env
+- [ ] **G3.** Database — Neon.tech:
+  - Create a production database project (keep dev separate)
+  - Run `dotnet ef database update` against production connection string once
+- [ ] **G4.** CORS: update `Program.cs` to allow the Vercel production domain
+  alongside localhost origins.
+- [ ] **G5.** Health check: `app.MapHealthChecks("/health")` — Railway uses this for deploy validation.
+- [ ] **G6.** Add Sentry to the backend:
+  - `dotnet add package Sentry.AspNetCore`
+  - `builder.WebHost.UseSentry(dsn)` in `Program.cs`
+- [ ] **G7.** Add Sentry to the frontend:
+  - `bun add @sentry/react`
+  - Init in `main.tsx` with DSN from `VITE_SENTRY_DSN`
+
+---
+
+### Phase 3 definition of done
+
+Phase 3 is complete when:
+1. A new user can sign up via Clerk, land on the dashboard, and be guided through setup
+2. Upload → parse → resolve → transform → download works end-to-end without hitting the API synchronously
+3. Webhook delivery is attempted with retries and failure state is visible
+4. The audit trail is visible on every order
+5. The app is deployed and accessible at a public URL
+6. An error in either the API or frontend appears in Sentry
+
+---
+
+## Phase 4 — Commercial (after first paying customers)
+
+- Next.js marketing site (separate repo — public SEO pages, pricing, sign-up CTA)
+- Stripe billing + usage metering (orders processed per month)
+- PDF ingestion (extract line items from PDF purchase orders via document parsing)
+- Email polling (IMAP — receive order emails, attach to supplier)
+- ERP connectors: Erply and Directo (Estonia/Baltics first)
+- AI mapping suggestions: call Claude API for unrecognised buyer item codes
+- Peppol / Telema e-invoicing integration
+- Bulk mapping import (CSV upload of existing mapping tables)
 
 ---
 
 ## Coding conventions
 
-### .NET
-- Controllers: thin. Validate input → call service → return DTO.
-- Services in `ProcuLink.Core\Services\`.
-- Every service method takes `Guid organisationId` as first param.
-- Use `Result<T>` for business errors — no exceptions for expected failures.
-- All EF queries: `.Where(x => x.OrganisationId == organisationId)`.
+### .NET backend
+- Controllers: thin — validate → call service → return DTO.
+- Services in `ProcuLink.Core\Services\` or `ProcuLink.Api\Services\`.
+- Every service method: `Task<Result<T>> MethodAsync(Guid organisationId, ..., CancellationToken ct)`.
+- `Result<T>` for business errors — no exceptions for expected failures.
+- All EF queries: `.Where(x => x.OrganisationId == organisationId)` — mandatory, no exceptions.
 - No raw SQL.
-- `CancellationToken ct` on all async methods.
+- Hangfire jobs are idempotent — safe to retry.
 
-### Frontend
-- TanStack Query for all server state. No `useEffect` for data fetching.
+### Frontend (`project-proculink`)
+- **TanStack Query for ALL server state** — no `useEffect` for data fetching. Ever.
+- `useMutation` for writes (POST/PUT/DELETE).
 - All API calls via `src/lib/api-client.ts`. No direct `fetch` in components.
-- No mock data. No `console.log` placeholders.
+- No mock data after Phase 1.
 - `bun` for all package operations.
 - Tailwind only — no inline styles.
 
@@ -475,10 +359,10 @@ Phase 2 is complete when a user can, without touching mock data or the filesyste
 ```json
 {
   "ConnectionStrings": {
-    "DefaultConnection": "Host=...;Database=proculink_dev;Username=...;Password=..."
+    "DefaultConnection": "Host=localhost;Port=5435;Database=proculink_dev;Username=postgres;Password=postgres"
   },
   "Clerk": {
-    "Authority": "https://<your-clerk-domain>.clerk.accounts.dev"
+    "Authority": "https://golden-alpaca-43.clerk.accounts.dev"
   },
   "Storage": {
     "R2AccountId": "",
@@ -486,41 +370,53 @@ Phase 2 is complete when a user can, without touching mock data or the filesyste
     "R2SecretAccessKey": "",
     "R2BucketName": "proculink-dev",
     "R2Endpoint": "https://<accountid>.r2.cloudflarestorage.com"
+  },
+  "Hangfire": {
+    "ConnectionString": "Host=localhost;Port=5435;Database=proculink_dev;Username=postgres;Password=postgres"
   }
 }
 ```
+Note: If `Storage:R2AccessKeyId` is empty, `LocalFileStorageService` is used automatically.
 
-### `ProcuLink.Web\.env` (committed)
+### `project-proculink\.env` (committed)
 ```
 VITE_API_BASE_URL=http://localhost:5223
 VITE_USE_MOCK=false
 ```
 
-### `ProcuLink.Web\.env.local` (gitignored)
+### `project-proculink\.env.local` (gitignored — Clerk key goes here)
 ```
 VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
+VITE_SENTRY_DSN=          ← add when Sentry is set up
 ```
 
 ---
 
 ## Key links
 - Frontend GitHub: https://github.com/dimnovare/project-proculink
+- Frontend local: C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink
+- Backend local: C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink
 - API dev: http://localhost:5223
 - Scalar UI: http://localhost:5223/scalar
+- Hangfire dashboard (dev): http://localhost:5223/hangfire
+- Clerk dashboard: https://clerk.com (authority: golden-alpaca-43.clerk.accounts.dev)
 - Neon.tech: https://neon.tech
-- Clerk: https://clerk.com
 - Cloudflare R2: https://dash.cloudflare.com
+- Railway: https://railway.app
+- Vercel: https://vercel.com
 
 ---
 
 ## What NOT to do
 - ❌ `npm install` — use **bun**
-- ❌ EF queries without `org_id` scope
-- ❌ Hangfire or any background jobs — Phase 3 only
+- ❌ EF queries without `org_id` scope — ever
+- ❌ `useEffect` for data fetching — TanStack Query only
+- ❌ Direct `fetch` in components — use `api-client.ts`
+- ❌ Hangfire jobs that are not idempotent
 - ❌ AI/LLM calls — Phase 4 only
 - ❌ PDF or email ingestion — Phase 4 only
 - ❌ Billing or marketing pages — Phase 4 only
 - ❌ Raw SQL — EF Core only
-- ❌ Filesystem storage — R2 only
-- ❌ `console.log` placeholders in production code
-- ❌ Scaffold a new frontend — `ProcuLink.Web` is the frontend
+- ❌ Filesystem storage for new code — R2 or LocalFileStorageService only
+- ❌ Add Next.js — Phase 4 marketing site only
+- ❌ Scaffold a new frontend — `project-proculink` is the frontend

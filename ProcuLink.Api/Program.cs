@@ -93,8 +93,20 @@ builder.Services.AddControllers();
 // ── CORS — React frontend ──────────────────────────────────────────────────
 builder.Services.AddCors(options =>
 {
+    // Add VITE_FRONTEND_URL (Railway env var) for production Vercel frontend (G4)
+    var frontendUrls = new List<string>
+    {
+        "http://localhost:8080",
+        "http://localhost:8081",
+        "http://localhost:5173",
+        "http://localhost:8082",
+    };
+    var vercelUrl = builder.Configuration["Frontend:Url"];
+    if (!string.IsNullOrWhiteSpace(vercelUrl))
+        frontendUrls.Add(vercelUrl);
+
     options.AddPolicy("AllowFrontend", policy =>
-        policy.WithOrigins("http://localhost:8080", "http://localhost:8081", "http://localhost:5173", "http://localhost:8082")
+        policy.WithOrigins(frontendUrls.ToArray())
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials());
@@ -132,6 +144,9 @@ builder.Services.AddSingleton<OrderParserFactory>();
 // the correct one at runtime via IEnumerable<ITransformService> + CanTransform().
 builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
+
+// ── Health check (G5) ─────────────────────────────────────────────────────
+builder.Services.AddHealthChecks();
 
 // ── OpenAPI — Swashbuckle for spec, Scalar for UI ──────────────────────────
 builder.Services.AddEndpointsApiExplorer();
@@ -200,5 +215,6 @@ app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHealthChecks("/health");
 
 app.Run();
