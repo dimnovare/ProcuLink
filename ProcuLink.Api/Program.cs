@@ -6,8 +6,12 @@ using Microsoft.IdentityModel.Tokens;
 using ProcuLink.Api.Middleware;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Services;
+using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
+using ProcuLink.Infrastructure.Storage;
+using ProcuLink.Transform.Output;
+using ProcuLink.Transform.Parsing;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -76,17 +80,32 @@ builder.Services.AddCors(options =>
 });
 
 // ── Repositories ──────────────────────────────────────────────────────────
+// IOrderRepository / EfOrderRepository kept for SuppliersController (Phase 2 services use DbContext directly).
 builder.Services.AddScoped<IOrderRepository, EfOrderRepository>();
 builder.Services.AddScoped<ISupplierProfileRepository, EfSupplierProfileRepository>();
 builder.Services.AddScoped<IItemMappingRepository, EfItemMappingRepository>();
 
-// Outbound/delivery: file-backed until R2 is wired in Phase 2
-var dataRoot = Path.Combine(builder.Environment.ContentRootPath, "data");
-builder.Services.AddSingleton<IOutboundRepository>(
-    new FileOutboundRepository(Path.Combine(dataRoot, "outbound")));
+// ── File storage (Cloudflare R2) ───────────────────────────────────────────
+builder.Services.AddSingleton<IFileStorageService, R2StorageService>();
 
-// ── HTTP client (webhook delivery) ────────────────────────────────────────
-builder.Services.AddHttpClient();
+// ── Domain services ────────────────────────────────────────────────────────
+// ItemMappingService is Scoped (DbContext is Scoped).
+// OrderService is Scoped for the same reason.
+builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
+builder.Services.AddScoped<IOrderService, OrderService>();
+
+// ── Parsing layer (ProcuLink.Transform) ───────────────────────────────────
+// Each parser registered individually so DI can inject IEnumerable<IPurchaseOrderParser>
+// into OrderParserFactory, which selects by file extension at runtime.
+builder.Services.AddSingleton<IPurchaseOrderParser, CsvOrderParser>();
+builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
+builder.Services.AddSingleton<OrderParserFactory>();
+
+// ── Transform layer (ProcuLink.Transform) ──────────────────────────────────
+// Both implementations registered as ITransformService. OrderService resolves
+// the correct one at runtime via IEnumerable<ITransformService> + CanTransform().
+builder.Services.AddSingleton<ITransformService, XmlTransformService>();
+builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 
 // ── OpenAPI — Swashbuckle for spec, Scalar for UI ──────────────────────────
 builder.Services.AddEndpointsApiExplorer();

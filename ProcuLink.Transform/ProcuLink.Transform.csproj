@@ -10,4 +10,9 @@
     <ProjectReference Include="..\ProcuLink.Core\ProcuLink.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.104.2" />
+    <PackageReference Include="CsvHelper" Version="33.0.0" />
+  </ItemGroup>
+
 </Project>

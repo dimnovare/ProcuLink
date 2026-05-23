@@ -1,7 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Core.Canonical;
+using ProcuLink.Core.Services;
+using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
 
 namespace ProcuLink.Api.Controllers;
@@ -12,31 +15,45 @@ namespace ProcuLink.Api.Controllers;
 public class SuppliersController : ControllerBase
 {
     private readonly ISupplierProfileRepository _supplierProfileRepository;
-    private readonly IItemMappingRepository _itemMappingRepository;
+    private readonly IItemMappingService        _mappingService;
+    private readonly ProcuLinkDbContext         _db;
+    private readonly ICurrentTenantService      _tenant;
 
     public SuppliersController(
         ISupplierProfileRepository supplierProfileRepository,
-        IItemMappingRepository itemMappingRepository)
+        IItemMappingService        mappingService,
+        ProcuLinkDbContext         db,
+        ICurrentTenantService      tenant)
     {
         _supplierProfileRepository = supplierProfileRepository;
-        _itemMappingRepository = itemMappingRepository;
+        _mappingService            = mappingService;
+        _db                        = db;
+        _tenant                    = tenant;
     }
 
+    // ── GET /api/suppliers ────────────────────────────────────────────────────
+
     /// <summary>
-    /// Get list of available supplier names from configured profiles
+    /// Returns { id, name } for every supplier in the authenticated org.
+    /// Used by the upload form to populate the supplier picker.
     /// </summary>
     [HttpGet]
-    [ProducesResponseType(typeof(string[]), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> GetSuppliers(CancellationToken ct)
     {
-        var profiles = await _supplierProfileRepository.ListAsync(ct);
-        var supplierNames = profiles.Select(p => p.SupplierName).ToArray();
-        return Ok(supplierNames);
+        var orgId = _tenant.OrganisationId;
+        var suppliers = await _db.Suppliers
+            .AsNoTracking()
+            .Where(s => s.OrgId == orgId)
+            .OrderBy(s => s.Name)
+            .Select(s => new { id = s.Id, name = s.Name })
+            .ToListAsync(ct);
+        return Ok(suppliers);
     }
 
-    /// <summary>
-    /// Get all supplier profiles with full details
-    /// </summary>
+    // ── GET /api/suppliers/profiles ───────────────────────────────────────────
+
+    /// <summary>Get all supplier profiles with full details.</summary>
     [HttpGet("profiles")]
     [ProducesResponseType(typeof(IReadOnlyList<SupplierProfile>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetProfiles(CancellationToken ct)
@@ -45,55 +62,52 @@ public class SuppliersController : ControllerBase
         return Ok(profiles);
     }
 
-    /// <summary>
-    /// Get a specific supplier profile by name
-    /// </summary>
+    /// <summary>Get a specific supplier profile by name.</summary>
     [HttpGet("profiles/{supplierName}")]
     [ProducesResponseType(typeof(SupplierProfile), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetProfile(string supplierName, CancellationToken ct)
     {
         var profile = await _supplierProfileRepository.GetByNameAsync(supplierName, ct);
-        if (profile == null)
-            return NotFound();
-
+        if (profile == null) return NotFound();
         return Ok(profile);
     }
 
+    // ── GET /api/suppliers/{supplierId}/mappings ──────────────────────────────
+
     /// <summary>
-    /// Get all item code mappings for a supplier
+    /// Returns all item code mappings for the given supplier, scoped to the org.
     /// </summary>
-    [HttpGet("{supplierName}/mappings")]
-    [ProducesResponseType(typeof(IReadOnlyList<ItemCodeMapping>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetMappings(string supplierName, CancellationToken ct)
+    [HttpGet("{supplierId:guid}/mappings")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetMappings(Guid supplierId, CancellationToken ct)
     {
-        var mappings = await _itemMappingRepository.ListAsync(supplierName, ct);
-        return Ok(mappings);
+        var orgId    = _tenant.OrganisationId;
+        var mappings = await _mappingService.GetForSupplierAsync(orgId, supplierId, ct);
+
+        var result = mappings.Select(m => new
+        {
+            id               = m.Id,
+            buyerItemCode    = m.BuyerItemCode,
+            supplierItemCode = m.SupplierItemCode,
+        });
+
+        return Ok(result);
     }
 
-    /// <summary>
-    /// Create or update an item code mapping for a supplier
-    /// </summary>
-    [HttpPost("{supplierName}/mappings")]
-    [ProducesResponseType(typeof(ItemCodeMapping), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> UpsertMapping(
-        string supplierName,
-        [FromBody] CreateMappingRequest request,
+    // ── DELETE /api/suppliers/{supplierId}/mappings/{mappingId} ───────────────
+
+    /// <summary>Delete a single item code mapping, scoped to the org.</summary>
+    [HttpDelete("{supplierId:guid}/mappings/{mappingId:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> DeleteMapping(
+        Guid supplierId,
+        Guid mappingId,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(request.BuyerItemCode))
-            return BadRequest("BuyerItemCode is required.");
-
-        if (string.IsNullOrWhiteSpace(request.SupplierItemCode))
-            return BadRequest("SupplierItemCode is required.");
-
-        var mapping = await _itemMappingRepository.UpsertAsync(
-            supplierName,
-            request.BuyerItemCode,
-            request.SupplierItemCode,
-            ct);
-
-        return Ok(mapping);
+        // supplierId in the route keeps URLs consistent; the service scopes by orgId.
+        var orgId = _tenant.OrganisationId;
+        await _mappingService.DeleteAsync(orgId, mappingId, ct);
+        return NoContent();
     }
 }
