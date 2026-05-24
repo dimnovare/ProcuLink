@@ -8,8 +8,8 @@ public class ReplaceManipulator : IFieldManipulator
 
     public ReplaceManipulator(IReadOnlyList<string> @params)
     {
-        if (@params.Count < 2)
-            throw new ArgumentException("Replace requires 2 params: [find, with]", nameof(@params));
+        if (@params.Count != 2)
+            throw new ArgumentException("Replace requires exactly 2 params: [find, with]", nameof(@params));
         _find = @params[0];
         _with = @params[1];
     }
