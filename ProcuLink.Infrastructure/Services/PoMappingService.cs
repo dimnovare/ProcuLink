@@ -11,6 +11,7 @@ public class PoMappingService : IPoMappingService
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
         WriteIndented = false,
     };
 
@@ -22,6 +23,7 @@ public class PoMappingService : IPoMappingService
     public async Task<PoMappingConfig?> GetAsync(Guid organisationId, Guid supplierId, CancellationToken ct = default)
     {
         var entity = await _db.SupplierPoMappings
+            .AsNoTracking()
             .Where(x => x.OrgId == organisationId && x.SupplierId == supplierId)
             .FirstOrDefaultAsync(ct);
 
