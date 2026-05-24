@@ -1,5 +1,23 @@
 namespace ProcuLink.Transform.Mapping.Manipulators;
-public class SplitManipulator : IFieldManipulator {
-    public SplitManipulator(IReadOnlyList<string> _) { }
-    public string? Apply(string? value, IReadOnlyDictionary<string, string> row) => value;
+
+/// <summary>Params: [delimiter, zeroBasedIndex] -- splits on delimiter and returns the token at index.</summary>
+public class SplitManipulator : IFieldManipulator
+{
+    private readonly string _delimiter;
+    private readonly int _index;
+
+    public SplitManipulator(IReadOnlyList<string> @params)
+    {
+        if (@params.Count != 2)
+            throw new ArgumentException("Split requires exactly 2 params: [delimiter, index]", nameof(@params));
+        _delimiter = @params[0];
+        _index = int.Parse(@params[1]);
+    }
+
+    public string? Apply(string? value, IReadOnlyDictionary<string, string> row)
+    {
+        if (value is null) return null;
+        var parts = value.Split(_delimiter);
+        return _index >= 0 && _index < parts.Length ? parts[_index] : value;
+    }
 }

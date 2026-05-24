@@ -106,4 +106,49 @@ public class ManipulatorTests
         var m = new FallbackManipulator(new[] { "a", "b" });
         m.Apply(null, row).Should().BeNull();
     }
+
+    // Split
+    [Fact]
+    public void Split_ReturnsTokenAtIndex()
+    {
+        var m = new SplitManipulator(new[] { "/", "2" });
+        m.Apply("01/02/2024", row: null!).Should().Be("2024");
+    }
+
+    [Fact]
+    public void Split_IndexOutOfRange_ReturnsOriginal()
+    {
+        var m = new SplitManipulator(new[] { "/", "9" });
+        m.Apply("a/b", row: null!).Should().Be("a/b");
+    }
+
+    // Multiply
+    [Fact]
+    public void Multiply_ScalesNumericValue()
+    {
+        var m = new MultiplyManipulator(new[] { "1.21" });
+        m.Apply("100", row: null!).Should().Be("121");
+    }
+
+    [Fact]
+    public void Multiply_NonNumericInput_ReturnsOriginal()
+    {
+        var m = new MultiplyManipulator(new[] { "2" });
+        m.Apply("abc", row: null!).Should().Be("abc");
+    }
+
+    // Divide
+    [Fact]
+    public void Divide_ScalesNumericValueDown()
+    {
+        var m = new DivideManipulator(new[] { "100" });
+        m.Apply("1000", row: null!).Should().Be("10");
+    }
+
+    [Fact]
+    public void Divide_DivideByZero_ReturnsOriginal()
+    {
+        var m = new DivideManipulator(new[] { "0" });
+        m.Apply("100", row: null!).Should().Be("100");
+    }
 }
