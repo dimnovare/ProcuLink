@@ -36,7 +36,8 @@ public class ProcuLinkDbContext : DbContext
             b.HasIndex(x => x.ClerkOrgId).IsUnique();
             b.Property(x => x.TrialStartedAt)
              .HasColumnName("trial_started_at")
-             .HasColumnType("timestamptz");
+             .HasColumnType("timestamptz")
+             .HasDefaultValueSql("now()");
             b.Property(x => x.PilotExtendedUntil)
              .HasColumnName("pilot_extended_until")
              .HasColumnType("timestamptz");

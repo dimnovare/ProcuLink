@@ -10,7 +10,7 @@ public class Organisation
 
     // ── Pilot trial tracking ───────────────────────────────────────────────
     /// <summary>Set at org creation. Never updated. Drives Pilot time-window check.</summary>
-    public DateTime  TrialStartedAt               { get; set; } = DateTime.UtcNow;
+    public DateTime  TrialStartedAt               { get; set; }
     /// <summary>Admin-set override. When set, extends the 14-day deadline.</summary>
     public DateTime? PilotExtendedUntil           { get; set; }
     /// <summary>Set when user clicks "Request Pilot extension". Sales signal.</summary>
