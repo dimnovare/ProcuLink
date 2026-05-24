@@ -15,6 +15,7 @@ using ProcuLink.Infrastructure.Storage;
 using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
 using Scalar.AspNetCore;
+using Stripe;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -26,6 +27,9 @@ builder.WebHost.UseSentry(o =>
     o.MinimumBreadcrumbLevel = Microsoft.Extensions.Logging.LogLevel.Information;
     o.MinimumEventLevel = Microsoft.Extensions.Logging.LogLevel.Error;
 });
+
+// ── Stripe SDK ────────────────────────────────────────────────────────────
+StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"] ?? string.Empty;
 
 // ── Database ───────────────────────────────────────────────────────────────
 builder.Services.AddDbContext<ProcuLinkDbContext>(options =>
@@ -140,6 +144,7 @@ else
 // OrderService is Scoped for the same reason.
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
+builder.Services.AddScoped<IBillingService, StripeBillingService>();
 
 // ── Parsing layer (ProcuLink.Transform) ───────────────────────────────────
 // Each parser registered individually so DI can inject IEnumerable<IPurchaseOrderParser>
