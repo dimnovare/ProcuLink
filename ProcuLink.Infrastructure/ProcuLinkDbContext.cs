@@ -110,6 +110,8 @@ public class ProcuLinkDbContext : DbContext
 
             b.HasIndex(x => new { x.OrgId, x.SupplierId }).IsUnique();
 
+            // EF default: Cascade on required FK — matches pattern used for all other child tables.
+            // Soft-deleting a Supplier does NOT trigger this cascade; only a hard DELETE would.
             b.HasOne(x => x.Organisation)
                 .WithMany()
                 .HasForeignKey(x => x.OrgId);
