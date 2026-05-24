@@ -1,0 +1,10 @@
+# Claude Code ignore — excludes these paths from auto-context injection.
+# Large plan/spec docs are loaded on demand via Read tool, not automatically.
+docs/superpowers/plans/
+docs/superpowers/specs/
+docs/design-system/
+*.md
+!CLAUDE.md
+!AGENTS.md
+**/bin/
+**/obj/
