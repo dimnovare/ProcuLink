@@ -1,13 +1,13 @@
 # Stripe Billing — Design Spec
 **Date:** 2026-05-24  
 **Phase:** 4 Group C  
-**Status:** Approved (updated with 5-tier model)
+**Status:** Approved
 
 ---
 
 ## 1. Overview
 
-Add Stripe-powered subscription billing to ProcuLink. Five tiers — Starter (free), Growth, Operations, Integration, Enterprise — designed around Integration/Enterprise as the primary revenue engine. The Starter and Growth tiers serve as qualified lead generation; the real ARR target (€3M within 3 years) comes from 30–100 Integration/Enterprise accounts.
+Add Stripe-powered subscription billing to ProcuLink. Five tiers — Pilot (time/volume-limited evaluation), Growth, Operations, Integration, Enterprise — designed around Integration/Enterprise as the primary revenue engine. Pilot and Growth tiers serve as qualified lead generation; the real ARR target (€3M within 3 years) comes from 30–100 Integration/Enterprise accounts.
 
 All payment collection and subscription management for self-serve tiers uses Stripe-hosted Checkout + Customer Portal. Enterprise is a manual Stripe invoice flow triggered by a "Contact sales" path (no Checkout redirect).
 
@@ -15,28 +15,36 @@ All payment collection and subscription management for self-serve tiers uses Str
 
 ## 2. Plans
 
-| Plan | Orders/mo | Suppliers | Price | Trial |
+| Plan | Orders | Suppliers | Price | Pilot window |
 |---|---|---|---|---|
-| `starter` | 20 | 1 | €0 | 14 days, one-time, then frozen |
-| `growth` | 150 | 5 | €149/mo | 14 days |
-| `operations` | 500 | 10 | €399/mo | 14 days |
-| `integration` | 1,000 | 20 | €999/mo | 14 days |
+| `pilot` | 20 total | 1 | €0 | Ends at 14 days OR 20 orders — whichever comes first |
+| `growth` | 150/mo | 5 | €149/mo | 14-day Stripe trial |
+| `operations` | 500/mo | 10 | €399/mo | 14-day Stripe trial |
+| `integration` | 1,000/mo | 20 | €999/mo | 14-day Stripe trial |
 | `enterprise` | Custom | Custom | from €2,500/mo | — (manual) |
 
-### Starter trial behaviour (important)
+### Pilot behaviour (important)
 
-The Starter plan is a **one-time 14-day evaluation**, not a permanent free tier.
+The Pilot plan is a **one-time evaluation** with two independent exit conditions — whichever triggers first ends the Pilot:
 
-- `trial_started_at` is set to `DateTime.UtcNow` when the `Organisation` row is created.
-- While `DateTime.UtcNow - trial_started_at ≤ 14 days`: normal Starter limits apply (20 orders, 1 supplier).
-- After 14 days: the account is **frozen** — order and supplier counts do **not** replenish on the monthly rollover. All uploads and supplier additions return `429` with `"error": "trial_expired"`.
-- The only exit from frozen state is upgrading to a paid plan (Growth or above).
-- This is enforced server-side via `IBillingService.CheckOrderLimitAsync` / `CheckSupplierLimitAsync`. No Stripe involvement for the Starter tier — the trial is tracked entirely by `trial_started_at`.
-- "One-time" is structural: the trial is bound to the `Organisation` row, not the user. A new trial requires a new organisation (new Clerk org), which is a deliberate friction point.
+1. **Time:** `DateTime.UtcNow > effective_pilot_end` where `effective_pilot_end = pilot_extended_until ?? (trial_started_at + 14 days)`
+2. **Volume:** cumulative orders processed since `trial_started_at` ≥ 20
 
-### Feature gates per plan
+**Order counting for Pilot is cumulative, not monthly.** Unlike paid plans (which use a rolling monthly window), Pilot counts all `purchase_orders` where `org_id = @orgId AND created_at >= trial_started_at`. There is no monthly replenishment.
 
-| Feature | Starter | Growth | Operations | Integration | Enterprise |
+**After Pilot ends:**
+- All uploads and supplier additions return `429` with `"error": "pilot_expired"`
+- The account is fully frozen until upgraded to a paid plan
+- "One-time" is structural: the Pilot is bound to the `Organisation` row, not the user. Starting a new Pilot requires a new Clerk org and a new Organisation row — deliberate friction.
+
+**Pilot extension (manual safety valve):**  
+A serious lead whose team was unavailable during the initial window should not be lost. The settings page shows a "Need more time? Request a Pilot extension" link when Pilot is active or has just expired. Clicking it calls `POST /api/billing/pilot/request-extension`, which sets `pilot_extension_requested_at` and notifies the sales team (logged + email for now). An admin then manually sets `pilot_extended_until` in the DB to grant extra days. No automation needed in this iteration — the request is the sales signal.
+
+---
+
+## 3. Feature gates per plan
+
+| Feature | Pilot | Growth | Operations | Integration | Enterprise |
 |---|---|---|---|---|---|
 | CSV / XLSX | ✓ | ✓ | ✓ | ✓ | ✓ |
 | XML | — | ✓ | ✓ | ✓ | ✓ |
@@ -54,28 +62,32 @@ The Starter plan is a **one-time 14-day evaluation**, not a permanent free tier.
 | Custom supplier rules | — | — | — | — | ✓ |
 | SLA + dedicated onboarding | — | — | — | — | ✓ |
 
-Feature gates are enforced server-side via `IBillingService.HasFeatureAsync(orgId, BillingFeature)`. The frontend reads a `features[]` array from `GET /api/billing/status` to show/hide UI affordances.
+Feature gates are enforced server-side via `IBillingService.HasFeatureAsync(orgId, BillingFeature)`. The frontend reads a `features[]` array from `GET /api/billing/status` to show/hide UI affordances without extra round-trips.
 
 ---
 
-## 3. Data Model
+## 4. Data Model
 
-### `organisations` table — three new columns
+### `organisations` table — five new columns
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
-| `trial_started_at` | `timestamptz` | no | Set to `NOW()` at org creation; drives Starter freeze logic |
+| `trial_started_at` | `timestamptz` | no | Set to `NOW()` at org creation; never updated |
+| `pilot_extended_until` | `timestamptz` | yes | Admin-set override for the 14-day deadline |
+| `pilot_extension_requested_at` | `timestamptz` | yes | Set by the "Request extension" button; sales signal |
 | `stripe_customer_id` | `text` | yes | Set on first Checkout session creation |
 | `stripe_subscription_id` | `text` | yes | Set by `checkout.session.completed` webhook |
 
-Existing `plan` string column stays. Updated by webhook events. Defaults to `"starter"`.
+Existing `plan` string column stays. Updated by webhook events. Defaults to `"pilot"`.
 
 ### `Organisation` entity additions
 
 ```csharp
-public DateTime  TrialStartedAt       { get; set; }   // set at creation, never updated
-public string?   StripeCustomerId     { get; set; }
-public string?   StripeSubscriptionId { get; set; }
+public DateTime   TrialStartedAt                { get; set; }   // set at creation, never updated
+public DateTime?  PilotExtendedUntil            { get; set; }   // admin override
+public DateTime?  PilotExtensionRequestedAt     { get; set; }   // set by request-extension endpoint
+public string?    StripeCustomerId              { get; set; }
+public string?    StripeSubscriptionId          { get; set; }
 ```
 
 EF migration: `AddStripeFieldsToOrganisations`.
@@ -85,13 +97,15 @@ EF migration: `AddStripeFieldsToOrganisations`.
 ```csharp
 public static class PlanConstants
 {
-    public const string Starter     = "starter";
+    public const string Pilot       = "pilot";
     public const string Growth      = "growth";
     public const string Operations  = "operations";
     public const string Integration = "integration";
     public const string Enterprise  = "enterprise";
 
-    public static readonly TimeSpan StarterTrialDuration = TimeSpan.FromDays(14);
+    public static readonly TimeSpan PilotDuration    = TimeSpan.FromDays(14);
+    public const int                PilotOrderLimit  = 20;
+    public const int                PilotSupplierLimit = 1;
 }
 ```
 
@@ -100,9 +114,12 @@ public static class PlanConstants
 ```csharp
 public record PlanLimits(int OrdersPerMonth, int SupplierCount);
 
+// Note: Pilot uses PlanConstants.PilotOrderLimit (cumulative), not OrdersPerMonth (monthly).
+// OrdersPerMonth for Pilot is set to PilotOrderLimit for uniform lookup; enforcement logic
+// applies the correct counting window per plan type.
 public static readonly Dictionary<string, PlanLimits> Limits = new()
 {
-    [PlanConstants.Starter]     = new(20,    1),
+    [PlanConstants.Pilot]       = new(20,    1),
     [PlanConstants.Growth]      = new(150,   5),
     [PlanConstants.Operations]  = new(500,   10),
     [PlanConstants.Integration] = new(1_000, 20),
@@ -110,7 +127,7 @@ public static readonly Dictionary<string, PlanLimits> Limits = new()
 };
 ```
 
-### `BillingFeature` — `ProcuLink.Core.Constants`
+### `BillingFeature` enum — `ProcuLink.Core.Constants`
 
 ```csharp
 public enum BillingFeature
@@ -122,17 +139,17 @@ public enum BillingFeature
 }
 ```
 
-Feature-to-minimum-plan resolution lives in a static lookup in `PlanConstants`. No DB column needed — derived from `plan` string at runtime.
+Feature-to-minimum-plan resolution is a static lookup in `PlanConstants`. No DB column needed — derived from `plan` string at runtime.
 
 ---
 
-## 4. Backend API
+## 5. Backend API
 
-### 4.1 New package
+### 5.1 New package
 
 `Stripe.net` added to `ProcuLink.Api.csproj`.
 
-### 4.2 Configuration
+### 5.2 Configuration
 
 ```json
 // appsettings.Development.json
@@ -145,42 +162,68 @@ Feature-to-minimum-plan resolution lives in a static lookup in `PlanConstants`. 
 }
 ```
 
-`StripeConfiguration.ApiKey` set at startup. `StripeClient` not registered in DI — static Stripe SDK pattern used throughout (matches Stripe.net conventions).
+`StripeConfiguration.ApiKey` set at startup. Static Stripe SDK pattern (no DI registration).
 
-### 4.3 Service layer
+### 5.3 Service layer
 
 **`IBillingService`** — `ProcuLink.Core.Services`:
 
 ```csharp
-Task<BillingStatus> GetStatusAsync(Guid orgId);
-Task<bool> CheckOrderLimitAsync(Guid orgId);
-Task<bool> CheckSupplierLimitAsync(Guid orgId);
-Task<bool> HasFeatureAsync(Guid orgId, BillingFeature feature);
-Task<string> CreateCheckoutSessionAsync(Guid orgId, string plan, string returnUrl);
-Task<string> CreatePortalSessionAsync(Guid orgId, string returnUrl);
+Task<BillingStatus>    GetStatusAsync(Guid orgId);
+Task<LimitCheckResult> CheckOrderLimitAsync(Guid orgId);
+Task<LimitCheckResult> CheckSupplierLimitAsync(Guid orgId);
+Task<bool>             HasFeatureAsync(Guid orgId, BillingFeature feature);
+Task<string>           CreateCheckoutSessionAsync(Guid orgId, string plan, string returnUrl);
+Task<string>           CreatePortalSessionAsync(Guid orgId, string returnUrl);
+Task                   RequestPilotExtensionAsync(Guid orgId);
 ```
 
-**`StripeBillingService`** — `ProcuLink.Api.Services`:
-- `CreateCheckoutSessionAsync` accepts `plan` parameter, resolves correct price ID from config
-- Checkout options: `trial_period_days = 14`, `mode = subscription`, `allow_promotion_codes = true`
-- Portal: `return_url` → `/settings`
+**`StripeBillingService`** — `ProcuLink.Api.Services` (implements `IBillingService`):
+- `CreateCheckoutSessionAsync`: resolves price ID from plan string, sets `trial_period_days = 14`, `mode = subscription`, `allow_promotion_codes = true`, stores `metadata["plan"] = plan`
+- `RequestPilotExtensionAsync`: sets `PilotExtensionRequestedAt = DateTime.UtcNow`, saves, logs + sends notification email to configured sales address
+
+**Pilot order counting logic in `CheckOrderLimitAsync`:**
+```
+if plan == "pilot":
+    count = SELECT COUNT(*) FROM purchase_orders
+            WHERE org_id = @orgId AND created_at >= trial_started_at
+    pilot_expired = (UtcNow > effective_pilot_end) OR (count >= 20)
+    return LimitCheckResult(Allowed: !pilot_expired, PilotExpired: pilot_expired, ...)
+else:
+    count = SELECT COUNT(*) FROM purchase_orders
+            WHERE org_id = @orgId AND created_at >= start_of_current_month
+    return LimitCheckResult(Allowed: count < plan_limit, ...)
+```
 
 **`BillingStatus`** record — `ProcuLink.Core.Contracts`:
 
 ```csharp
 record BillingStatus(
     string           Plan,
-    int              OrdersThisMonth,
+    int              OrdersUsed,          // cumulative for Pilot, month-to-date for paid
     int              OrderLimit,
     int              SuppliersActive,
     int              SupplierLimit,
-    DateTime?        TrialEndsAt,        // set for Starter and paid-plan trials
-    bool             TrialExpired,       // true when Starter trial > 14 days and not upgraded
-    BillingFeature[] Features            // resolved from plan
+    DateTime?        PilotEndsAt,         // effective_pilot_end for Pilot accounts
+    bool             PilotExpired,
+    bool             ExtensionRequested,  // true if request-extension was called
+    DateTime?        TrialEndsAt,         // Stripe trial end for paid-plan trials
+    BillingFeature[] Features
 );
 ```
 
-### 4.4 BillingController
+**`LimitCheckResult`** record — `ProcuLink.Core.Contracts`:
+
+```csharp
+record LimitCheckResult(
+    bool    Allowed,
+    bool    PilotExpired,   // false for paid plans
+    string  Plan,
+    int     Limit
+);
+```
+
+### 5.4 BillingController
 
 Route prefix: `/api/billing`.
 
@@ -189,29 +232,32 @@ Route prefix: `/api/billing`.
 | `GET` | `/status` | JWT | `BillingStatus` JSON |
 | `POST` | `/checkout` | JWT | `{ plan }` → `{ url }` |
 | `POST` | `/portal` | JWT | — → `{ url }` |
-| `POST` | `/webhook` | Stripe sig | raw body |
+| `POST` | `/pilot/request-extension` | JWT | — → `{ message }` |
+| `POST` | `/webhook` | Stripe sig | raw body → `200` |
 
 **`POST /checkout` body:**
 ```json
 { "plan": "growth" | "operations" | "integration" }
 ```
-Enterprise omitted — that path shows "Contact sales" UI, no Checkout session.
+Enterprise → "Contact sales" UI, no Checkout session.
+
+**`POST /pilot/request-extension`:**
+- If `PilotExtensionRequestedAt` already set → return `200` (idempotent, no re-notification)
+- Otherwise set field, save, notify sales, return `{ "message": "Extension request received. Our team will be in touch within 1 business day." }`
 
 **Webhook events handled:**
 
 | Event | Action |
 |---|---|
-| `checkout.session.completed` | Write `StripeCustomerId`, `StripeSubscriptionId`, set `Plan` from metadata |
-| `customer.subscription.updated` | `trialing`/`active` → ensure correct plan; `past_due`/`unpaid` → log only |
-| `customer.subscription.deleted` | `Plan = "sandbox"`, clear `StripeSubscriptionId` |
-
-Plan is stored in Stripe session metadata (`metadata["plan"] = "growth"`) at Checkout creation so the webhook knows which tier to activate.
+| `checkout.session.completed` | Write `StripeCustomerId`, `StripeSubscriptionId`, set `Plan` from `metadata["plan"]` |
+| `customer.subscription.updated` | `trialing`/`active` → ensure `Plan` matches metadata; `past_due`/`unpaid` → log only |
+| `customer.subscription.deleted` | `Plan = "pilot"`, clear `StripeSubscriptionId` (account reverts to frozen Pilot) |
 
 **Idempotency:** Read DB state before each write, skip if already matches.  
-**Error handling:** Catch-all logs + Sentry, returns `500` for Stripe retry.  
-**Raw body:** Webhook route must use `[FromBody]` with raw bytes, not JSON model binding.
+**Error handling:** Catch-all → log + Sentry capture → return `500` for Stripe retry.  
+**Raw body:** Webhook route uses `[FromBody]` with raw bytes before signature verification.
 
-### 4.5 Limit enforcement
+### 5.5 Limit enforcement
 
 **Order limit** — `OrdersController.Upload`:
 
@@ -219,112 +265,114 @@ Plan is stored in Stripe session metadata (`metadata["plan"] = "growth"`) at Che
 var check = await _billing.CheckOrderLimitAsync(orgId);
 if (!check.Allowed)
     return StatusCode(429, new {
-        error      = check.TrialExpired ? "trial_expired" : "order_limit_reached",
+        error      = check.PilotExpired ? "pilot_expired" : "order_limit_reached",
         plan       = check.Plan,
         limit      = check.Limit,
         upgradeUrl = "/settings"
     });
 ```
 
-`CheckOrderLimitAsync` returns a `LimitCheckResult` (not a plain bool) so the caller can distinguish between `trial_expired` and `order_limit_reached` for the correct frontend message.
-
 **Supplier limit** — `SuppliersController.Create`:
 
 ```csharp
-if (!await _billing.CheckSupplierLimitAsync(orgId))
+var check = await _billing.CheckSupplierLimitAsync(orgId);
+if (!check.Allowed)
     return StatusCode(429, new {
-        error      = "Supplier limit reached",
-        plan       = status.Plan,
-        limit      = status.SupplierLimit,
+        error      = check.PilotExpired ? "pilot_expired" : "supplier_limit_reached",
+        plan       = check.Plan,
+        limit      = check.Limit,
         upgradeUrl = "/settings"
     });
 ```
 
-**Feature gate** — any endpoint that serves a gated feature:
+**Feature gate** — any endpoint serving a gated feature:
 
 ```csharp
 if (!await _billing.HasFeatureAsync(orgId, BillingFeature.WebhookDelivery))
-    return StatusCode(403, new { error = "Upgrade required", feature = "webhook_delivery" });
+    return StatusCode(403, new { error = "upgrade_required", feature = "webhook_delivery" });
 ```
 
 ---
 
-## 5. Frontend
+## 6. Frontend
 
-### 5.1 Settings page — Billing section
+### 6.1 Settings page — Billing section
 
 File: `src/app/(app)/settings/page.tsx`
 
-Fetches `GET /api/billing/status` via TanStack Query.
+Fetches `GET /api/billing/status` via TanStack Query (`queryKey: ["billing-status"]`).
 
-**Starter — trial active** (`plan == "starter"` AND `trialExpired == false`):
-- Badge: "Starter · Trial · N days left"
-- Usage bars: orders (`ordersThisMonth / 20`) + suppliers (`active / 1`)
-- CTA row: "Upgrade to Growth", "Upgrade to Operations", "Upgrade to Integration" — three buttons
-- Subtle "Need Enterprise? [Contact us →]" link below
+**Pilot — active** (`plan == "pilot"` AND `pilotExpired == false`):
+- Badge: "Pilot · N days left · M orders remaining"
+- Usage bars: orders (`ordersUsed / 20`) + suppliers (`active / 1`)
+- CTA row: "Upgrade to Growth · €149/mo", "Upgrade to Operations · €399/mo", "Upgrade to Integration · €999/mo"
+- Secondary link: "Need more time? [Request a Pilot extension →]" — calls `POST /api/billing/pilot/request-extension`
+- "Need Enterprise? [Contact us →]" below
 
-**Starter — trial expired** (`plan == "starter"` AND `trialExpired == true`):
-- Banner at top of page: "Your 14-day trial has ended. Upgrade to continue using ProcuLink."
-- All usage bars show as locked/greyed
-- Same CTA row as above, but the primary button is more prominent
-- No "manage billing" option (no Stripe subscription exists yet)
+**Pilot — expired** (`plan == "pilot"` AND `pilotExpired == true`):
+- Amber banner: "Your Pilot has ended. Upgrade to continue using ProcuLink."
+- Usage bars locked/greyed
+- Same CTA row as above (more prominent)
+- If `extensionRequested == false`: "Need more time? [Request a Pilot extension →]"
+- If `extensionRequested == true`: "Extension request sent — our team will be in touch." (no button)
 
-**Growth / Operations / Integration (trial):**
+**Growth / Operations / Integration — Stripe trial active:**
 - Badge: plan name + "Trial · N days left"
-- Usage bars: orders + suppliers for that plan's limits
-- CTA: "Manage billing →" → portal
+- Usage bars: monthly window
+- CTA: "Manage billing →" → Customer Portal
 
-**Growth / Operations / Integration (active):**
+**Growth / Operations / Integration — active:**
 - Badge: plan name + price (e.g. "Operations · €399/mo")
 - Usage bars
 - CTA: "Manage billing →" → portal
-- "Upgrade →" link to the next tier if not already on Integration
+- "Upgrade to [next tier] →" if not on Integration
 
 **Enterprise:**
 - Badge: "Enterprise · Custom"
-- No usage bars (unlimited)
-- "Contact your account manager" static text
+- "Contact your account manager" — no usage bars
 
-### 5.2 Upload 429 handling
+### 6.2 Upload 429 handling — `UploadWorkbench.tsx`
 
-`UploadWorkbench.tsx`: if upload POST returns `429`, inline banner replaces the pipeline animation:
+Inline banner replaces pipeline animation:
 
-- `error == "trial_expired"` → "Your 14-day trial has ended. [Upgrade to continue →]"
-- `error == "order_limit_reached"` → "You've reached your [N]-order monthly limit. [Upgrade your plan →]"
+| `error` value | Message |
+|---|---|
+| `pilot_expired` | "Your Pilot has ended. [Upgrade to continue →]" |
+| `order_limit_reached` | "You've reached your [N]-order monthly limit. [Upgrade your plan →]" |
 
-### 5.3 Supplier add 429 handling
+### 6.3 Supplier add 429 handling
 
-Supplier creation form: if POST to suppliers returns `429`:
+Supplier creation form if POST returns `429`:
 
 > "You've reached your [N]-supplier limit on the [Plan] plan. [Upgrade →]"
 
 ---
 
-## 6. Files changed / created
+## 7. Files changed / created
 
 | File | Change |
 |---|---|
 | `ProcuLink.Api/ProcuLink.Api.csproj` | Add `Stripe.net` |
-| `ProcuLink.Core/Constants/PlanConstants.cs` | New — plan strings, limits dict, feature-to-plan map |
+| `ProcuLink.Core/Constants/PlanConstants.cs` | New — plan strings, limits dict, pilot constants, feature map |
 | `ProcuLink.Core/Constants/BillingFeature.cs` | New enum |
-| `ProcuLink.Core/Entities/Organisation.cs` | Add `StripeCustomerId`, `StripeSubscriptionId` |
-| `ProcuLink.Core/Contracts/BillingStatus.cs` | New record (includes `TrialExpired` bool) |
-| `ProcuLink.Core/Contracts/LimitCheckResult.cs` | New record — `Allowed`, `TrialExpired`, `Plan`, `Limit` |
+| `ProcuLink.Core/Entities/Organisation.cs` | Add 5 new fields |
+| `ProcuLink.Core/Contracts/BillingStatus.cs` | New record |
+| `ProcuLink.Core/Contracts/LimitCheckResult.cs` | New record |
 | `ProcuLink.Core/Services/IBillingService.cs` | New interface |
-| `ProcuLink.Infrastructure/Migrations/…` | `AddStripeFieldsToOrganisations` |
-| `ProcuLink.Infrastructure/ProcuLinkDbContext.cs` | Map new columns (snake_case config) |
-| `ProcuLink.Api/Services/StripeBillingService.cs` | New — Stripe SDK calls |
-| `ProcuLink.Api/Controllers/BillingController.cs` | New — 4 endpoints |
+| `ProcuLink.Infrastructure/Migrations/…AddStripeFields…` | New EF migration |
+| `ProcuLink.Infrastructure/ProcuLinkDbContext.cs` | Map new columns (snake_case) |
+| `ProcuLink.Api/Services/StripeBillingService.cs` | New — implements IBillingService |
+| `ProcuLink.Api/Controllers/BillingController.cs` | New — 5 endpoints |
 | `ProcuLink.Api/Controllers/OrdersController.cs` | Add order limit check in Upload |
 | `ProcuLink.Api/Controllers/SuppliersController.cs` | Add supplier limit check in Create |
-| `ProcuLink.Api/Program.cs` | Register `StripeBillingService`, set `StripeConfiguration.ApiKey` |
-| `appsettings.Development.json` | Stripe section — 3 price IDs + secret key |
-| `src/app/(app)/settings/page.tsx` | Full billing section with 5-tier UI |
-| `src/components/bridge/UploadWorkbench.tsx` | 429 inline banner |
+| `ProcuLink.Api/Program.cs` | Register StripeBillingService, set StripeConfiguration.ApiKey |
+| `appsettings.Development.json` | Stripe section with 3 price IDs |
+| `src/app/(app)/settings/page.tsx` | Full billing section with 5-tier UI + extension request |
+| `src/components/bridge/UploadWorkbench.tsx` | 429 inline banner with pilot_expired / order_limit_reached |
 
 ---
 
-## 7. Webhook registration
+## 8. Webhook registration
 
 Stripe dashboard endpoint: `https://<api-host>/api/billing/webhook`  
 Events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`
@@ -333,26 +381,28 @@ Local dev: `stripe listen --forward-to localhost:5223/api/billing/webhook`
 
 ---
 
-## 8. Revenue model context
+## 9. Revenue model context
 
 Target: €3M ARR within 3 years.
 
-| Tier | Target accounts | Monthly ARR contribution |
+| Tier | Target accounts | Monthly contribution |
 |---|---|---|
-| Integration (€999) | 50 | €49,950 |
-| Enterprise (avg €3,000) | 30 | €90,000 |
-| Operations (€399) | 100 | €39,900 |
-| **Total** | | **~€2.16M ARR at these counts** |
+| Integration (€999) | 50 | €49,950/mo |
+| Enterprise (avg €3,000) | 30 | €90,000/mo |
+| Operations (€399) | 100 | €39,900/mo |
+| Growth (€149) | 200 | €29,800/mo |
+| **Total** | | **~€2.5M ARR** |
 
-Starter and Growth tiers are acquisition funnels, not revenue targets. The product, onboarding, and sales motion should all optimise for converting Starter → Growth → Operations trials into Integration contracts.
+Pilot → Growth → Operations → Integration is the conversion funnel. The Pilot extension request is a deliberate sales touch point: a lead who runs out of Pilot capacity in 3 days is a hot prospect who needs a call, not an automated email.
 
 ---
 
-## 9. Out of scope (this iteration)
+## 10. Out of scope (this iteration)
 
 - Proration on mid-cycle plan changes
-- Dunning emails (Stripe Smart Retries handles this)
+- Dunning emails (Stripe Smart Retries)
 - Invoice PDF download (Customer Portal)
-- Usage-based metering (per-order pricing)
+- Usage-based metering
 - Multi-seat / per-user pricing
+- Admin UI for managing Pilot extensions (manual DB edit for now)
 - Self-serve Enterprise signup (manual contract path only)
