@@ -1,9 +1,14 @@
+using System.Globalization;
 using System.Text.Json;
+using CsvHelper;
+using CsvHelper.Configuration;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Helpers;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
+using ProcuLink.Transform.Mapping;
 using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
 
@@ -20,6 +25,7 @@ public sealed class OrderService : IOrderService
     private readonly IFileStorageService         _fileStorage;
     private readonly OrderParserFactory          _parserFactory;
     private readonly IItemMappingService         _mappings;
+    private readonly IPoMappingService           _poMappingService;
     private readonly IEnumerable<ITransformService> _transformers;
     private readonly ILogger<OrderService>       _logger;
 
@@ -28,15 +34,17 @@ public sealed class OrderService : IOrderService
         IFileStorageService            fileStorage,
         OrderParserFactory             parserFactory,
         IItemMappingService            mappings,
+        IPoMappingService              poMappingService,
         IEnumerable<ITransformService> transformers,
         ILogger<OrderService>          logger)
     {
-        _db           = db;
-        _fileStorage  = fileStorage;
-        _parserFactory = parserFactory;
-        _mappings     = mappings;
-        _transformers = transformers;
-        _logger       = logger;
+        _db               = db;
+        _fileStorage      = fileStorage;
+        _parserFactory    = parserFactory;
+        _mappings         = mappings;
+        _poMappingService = poMappingService;
+        _transformers     = transformers;
+        _logger           = logger;
     }
 
     // ── CreateFromFileAsync ───────────────────────────────────────────────────
@@ -277,20 +285,37 @@ public sealed class OrderService : IOrderService
             using var buffer = new MemoryStream();
             await fileStream.CopyToAsync(buffer, ct);
 
-            var extension = Path.GetExtension(entity.SourceFileKey);
-            IPurchaseOrderParser parser;
-            try { parser = _parserFactory.GetParser(extension); }
-            catch (UnsupportedFileFormatException ex)
+            var extension = Path.GetExtension(entity.SourceFileKey).ToLowerInvariant();
+
+            var poMapping = await _poMappingService.GetAsync(organisationId, entity.SupplierId, ct);
+
+            // Validate extension when no mapping template is available (fast-fail before R2 download already done)
+            if (poMapping is null || extension != ".csv")
             {
-                entity.Status    = "failed";
-                entity.UpdatedAt = DateTime.UtcNow;
-                await _db.SaveChangesAsync(ct);
-                return Result<PurchaseOrderEntity>.Fail(ex.Message);
+                try { _parserFactory.GetParser(extension); }
+                catch (UnsupportedFileFormatException ex)
+                {
+                    entity.Status    = "failed";
+                    entity.UpdatedAt = DateTime.UtcNow;
+                    await _db.SaveChangesAsync(ct);
+                    return Result<PurchaseOrderEntity>.Fail(ex.Message);
+                }
             }
 
             buffer.Position = 0;
             ParsedOrder parsedOrder;
-            try { parsedOrder = await parser.ParseAsync(buffer, ct); }
+            try
+            {
+                if (poMapping is not null && extension == ".csv")
+                {
+                    parsedOrder = await ParseWithMappingTemplateAsync(buffer.ToArray(), poMapping, ct);
+                }
+                else
+                {
+                    var parser = _parserFactory.GetParser(extension);
+                    parsedOrder = await parser.ParseAsync(buffer, ct);
+                }
+            }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to parse file for order {OrderId}", orderId);
@@ -597,6 +622,65 @@ public sealed class OrderService : IOrderService
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static Task<ParsedOrder> ParseWithMappingTemplateAsync(
+        byte[] buffer, PoMappingConfig config, CancellationToken ct)
+    {
+        using var stream = new MemoryStream(buffer);
+        using var reader = new StreamReader(stream);
+
+        var csvConfig = new CsvConfiguration(CultureInfo.InvariantCulture)
+        {
+            HasHeaderRecord    = config.HasHeaderRecord,
+            Delimiter          = config.Separator,
+            PrepareHeaderForMatch = args => args.Header?.ToLowerInvariant().Trim() ?? string.Empty,
+            MissingFieldFound  = null!,
+            BadDataFound       = null!,
+        };
+
+        using var csv = new CsvReader(reader, csvConfig);
+        csv.Read();
+        csv.ReadHeader();
+        var headers = csv.HeaderRecord ?? Array.Empty<string>();
+
+        var allRows = new List<Dictionary<string, string>>();
+        while (csv.Read())
+        {
+            var row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var h in headers)
+                row[h] = csv.GetField(h) ?? string.Empty;
+            allRows.Add(row);
+        }
+
+        // For flat PO CSVs: first row provides header-section values, all rows provide lines
+        var headerRow = allRows.Count > 0
+            ? (IReadOnlyDictionary<string, string>)allRows[0]
+            : new Dictionary<string, string>();
+        var lineRows = allRows.Cast<IReadOnlyDictionary<string, string>>().ToList();
+
+        var mapped = PoMappingEngine.Apply(headerRow, lineRows, config);
+
+        DateTime? orderDate = null;
+        if (mapped.OrderDate is not null && DateTime.TryParse(mapped.OrderDate, out var d))
+            orderDate = d;
+
+        var lines = mapped.Lines.Select((l, i) => new ParsedOrderLine(
+            LineNumber:    int.TryParse(l.LineNumber, out var ln) ? ln : (i + 1),
+            BuyerItemCode: l.BuyerItemCode ?? string.Empty,
+            Description:   l.Description,
+            Quantity:      decimal.TryParse(l.Quantity, NumberStyles.Any, CultureInfo.InvariantCulture, out var qty) ? qty : 0,
+            Unit:          l.Unit,
+            UnitPrice:     decimal.TryParse(l.UnitPrice, NumberStyles.Any, CultureInfo.InvariantCulture, out var up) ? up : null
+        )).ToList();
+
+        return Task.FromResult(new ParsedOrder(
+            PoNumber:  mapped.PoNumber ?? string.Empty,
+            OrderDate: orderDate,
+            BuyerName: mapped.BuyerName,
+            Currency:  mapped.Currency,
+            Lines:     lines
+        ));
+    }
 
     private static AuditEvent BuildAuditEvent(Guid orgId, Guid entityId, string action, object payload) =>
         new()
