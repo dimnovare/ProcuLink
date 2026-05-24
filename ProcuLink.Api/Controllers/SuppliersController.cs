@@ -297,7 +297,7 @@ public class SuppliersController : ControllerBase
     public async Task<IActionResult> GetPoMapping(Guid id, CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
-        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id).FirstOrDefaultAsync(ct);
+        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id && s.DeletedAt == null).FirstOrDefaultAsync(ct);
         if (supplier is null) return NotFound();
         var config = await _poMappingService.GetAsync(orgId, id, ct);
         if (config is null) return NoContent();
@@ -310,7 +310,7 @@ public class SuppliersController : ControllerBase
     public async Task<IActionResult> UpsertPoMapping(Guid id, [FromBody] PoMappingConfig config, CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
-        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id).FirstOrDefaultAsync(ct);
+        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id && s.DeletedAt == null).FirstOrDefaultAsync(ct);
         if (supplier is null) return NotFound();
         var saved = await _poMappingService.UpsertAsync(orgId, id, config, ct);
         return Ok(saved);
@@ -322,7 +322,7 @@ public class SuppliersController : ControllerBase
     public async Task<IActionResult> DeletePoMapping(Guid id, CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
-        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id).FirstOrDefaultAsync(ct);
+        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id && s.DeletedAt == null).FirstOrDefaultAsync(ct);
         if (supplier is null) return NotFound();
         await _poMappingService.DeleteAsync(orgId, id, ct);
         return NoContent();
@@ -334,7 +334,7 @@ public class SuppliersController : ControllerBase
     public async Task<IActionResult> TestPoMapping(Guid id, [FromBody] TestPoMappingRequest request, CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
-        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id).FirstOrDefaultAsync(ct);
+        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id && s.DeletedAt == null).FirstOrDefaultAsync(ct);
         if (supplier is null) return NotFound();
         var result = PoMappingEngine.Apply(request.HeaderRow, request.LineRows, request.Config);
         return Ok(result);
