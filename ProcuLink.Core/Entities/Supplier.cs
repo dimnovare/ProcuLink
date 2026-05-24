@@ -15,4 +15,5 @@ public class Supplier
     public List<SupplierProfileEntity> SupplierProfiles { get; set; } = new();
     public List<PurchaseOrderEntity> PurchaseOrders { get; set; } = new();
     public List<ItemMapping> ItemMappings { get; set; } = new();
+    public List<SupplierPoMapping> PoMappings { get; set; } = new();
 }
