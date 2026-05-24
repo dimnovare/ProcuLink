@@ -35,7 +35,8 @@ public sealed class StripeBillingService : IBillingService
     public async Task<BillingStatus> GetStatusAsync(Guid orgId, CancellationToken ct = default)
     {
         var org = await LoadOrgAsync(orgId, ct);
-        var limits = PlanConstants.Limits[org.Plan];
+        if (!PlanConstants.Limits.TryGetValue(org.Plan, out var limits))
+            throw new InvalidOperationException($"Unknown plan '{org.Plan}' for org {org.Id}.");
 
         var ordersUsed      = await CountOrdersAsync(org, ct);
         var suppliersActive = await CountSuppliersAsync(orgId, ct);
@@ -73,7 +74,8 @@ public sealed class StripeBillingService : IBillingService
     public async Task<LimitCheckResult> CheckOrderLimitAsync(Guid orgId, CancellationToken ct = default)
     {
         var org    = await LoadOrgAsync(orgId, ct);
-        var limits = PlanConstants.Limits[org.Plan];
+        if (!PlanConstants.Limits.TryGetValue(org.Plan, out var limits))
+            throw new InvalidOperationException($"Unknown plan '{org.Plan}' for org {org.Id}.");
 
         if (org.Plan == PlanConstants.Pilot)
         {
@@ -92,12 +94,14 @@ public sealed class StripeBillingService : IBillingService
     public async Task<LimitCheckResult> CheckSupplierLimitAsync(Guid orgId, CancellationToken ct = default)
     {
         var org    = await LoadOrgAsync(orgId, ct);
-        var limits = PlanConstants.Limits[org.Plan];
+        if (!PlanConstants.Limits.TryGetValue(org.Plan, out var limits))
+            throw new InvalidOperationException($"Unknown plan '{org.Plan}' for org {org.Id}.");
 
         if (org.Plan == PlanConstants.Pilot)
         {
             var effectiveEnd = org.PilotExtendedUntil ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
-            var expired      = DateTime.UtcNow > effectiveEnd;
+            var count        = await CountOrdersAsync(org, ct);
+            var expired      = DateTime.UtcNow > effectiveEnd || count >= PlanConstants.PilotOrderLimit;
             if (expired) return new LimitCheckResult(false, PilotExpired: true, org.Plan, PlanConstants.PilotSupplierLimit);
         }
 
@@ -126,6 +130,9 @@ public sealed class StripeBillingService : IBillingService
             PlanConstants.Integration => _config["Stripe:IntegrationPriceId"],
             _ => throw new ArgumentException($"No Stripe price configured for plan '{plan}'.")
         };
+
+        if (string.IsNullOrWhiteSpace(priceId))
+            throw new InvalidOperationException($"Stripe price ID not configured for plan '{plan}'.");
 
         var org = await LoadOrgAsync(orgId, ct);
 
