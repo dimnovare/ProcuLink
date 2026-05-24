@@ -54,7 +54,7 @@ public sealed class BillingController : ControllerBase
         CancellationToken ct)
     {
         var validPlans = new[] { PlanConstants.Growth, PlanConstants.Operations, PlanConstants.Integration };
-        if (!validPlans.Contains(request.Plan))
+        if (!validPlans.Contains(request.Plan, StringComparer.OrdinalIgnoreCase))
             return BadRequest(new { error = $"Invalid plan '{request.Plan}'. Valid: growth, operations, integration." });
 
         var returnUrl = $"{_config["Frontend:Url"] ?? "http://localhost:8081"}/settings";
@@ -99,9 +99,11 @@ public sealed class BillingController : ControllerBase
     [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> Webhook()
+    public async Task<IActionResult> Webhook(CancellationToken ct)
     {
-        var json      = await new StreamReader(Request.Body).ReadToEndAsync();
+        string json;
+        using (var reader = new StreamReader(Request.Body))
+            json = await reader.ReadToEndAsync(ct);
         var signature = Request.Headers["Stripe-Signature"].FirstOrDefault();
         var secret    = _config["Stripe:WebhookSecret"] ?? string.Empty;
 
@@ -118,7 +120,7 @@ public sealed class BillingController : ControllerBase
 
         try
         {
-            await HandleStripeEventAsync(stripeEvent);
+            await HandleStripeEventAsync(stripeEvent, ct);
         }
         catch (Exception ex)
         {
@@ -132,20 +134,20 @@ public sealed class BillingController : ControllerBase
 
     // ── Webhook event dispatcher ──────────────────────────────────────────
 
-    private async Task HandleStripeEventAsync(Stripe.Event e)
+    private async Task HandleStripeEventAsync(Stripe.Event e, CancellationToken ct)
     {
         switch (e.Type)
         {
             case "checkout.session.completed":
-                await HandleCheckoutCompletedAsync(e.Data.Object as Stripe.Checkout.Session);
+                await HandleCheckoutCompletedAsync(e.Data.Object as Stripe.Checkout.Session, ct);
                 break;
 
             case "customer.subscription.updated":
-                await HandleSubscriptionUpdatedAsync(e.Data.Object as Stripe.Subscription);
+                await HandleSubscriptionUpdatedAsync(e.Data.Object as Stripe.Subscription, ct);
                 break;
 
             case "customer.subscription.deleted":
-                await HandleSubscriptionDeletedAsync(e.Data.Object as Stripe.Subscription);
+                await HandleSubscriptionDeletedAsync(e.Data.Object as Stripe.Subscription, ct);
                 break;
 
             default:
@@ -154,17 +156,25 @@ public sealed class BillingController : ControllerBase
         }
     }
 
-    private async Task HandleCheckoutCompletedAsync(Stripe.Checkout.Session? session)
+    private async Task HandleCheckoutCompletedAsync(Stripe.Checkout.Session? session, CancellationToken ct)
     {
         if (session is null) return;
 
         session.Metadata.TryGetValue("org_id", out var orgIdStr);
         session.Metadata.TryGetValue("plan", out var plan);
 
-        if (!Guid.TryParse(orgIdStr, out var orgId) || string.IsNullOrEmpty(plan)) return;
+        if (!Guid.TryParse(orgIdStr, out var orgId) || string.IsNullOrEmpty(plan))
+        {
+            _logger.LogWarning("checkout.session.completed: missing/invalid metadata (org_id={OrgId}, plan={Plan}) on session {SessionId}", orgIdStr, plan, session.Id);
+            return;
+        }
 
-        var org = await _db.Organisations.FindAsync(orgId);
-        if (org is null) return;
+        var org = await _db.Organisations.FindAsync(new object[] { orgId }, ct);
+        if (org is null)
+        {
+            _logger.LogWarning("checkout.session.completed: org {OrgId} not found — upgrade lost for session {SessionId}", orgId, session.Id);
+            return;
+        }
 
         // Idempotent: skip if already in target state
         if (org.Plan == plan && org.StripeCustomerId == session.CustomerId) return;
@@ -172,18 +182,18 @@ public sealed class BillingController : ControllerBase
         org.Plan                 = plan;
         org.StripeCustomerId     = session.CustomerId;
         org.StripeSubscriptionId = session.SubscriptionId;
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation("Org {OrgId} upgraded to {Plan} via Stripe checkout {SessionId}",
             orgId, plan, session.Id);
     }
 
-    private async Task HandleSubscriptionUpdatedAsync(Stripe.Subscription? sub)
+    private async Task HandleSubscriptionUpdatedAsync(Stripe.Subscription? sub, CancellationToken ct)
     {
         if (sub is null) return;
 
         var org = await _db.Organisations
-            .FirstOrDefaultAsync(o => o.StripeCustomerId == sub.CustomerId);
+            .FirstOrDefaultAsync(o => o.StripeCustomerId == sub.CustomerId, ct);
         if (org is null) return;
 
         var status = sub.Status;
@@ -193,7 +203,7 @@ public sealed class BillingController : ControllerBase
             if (!string.IsNullOrEmpty(plan) && org.Plan != plan)
             {
                 org.Plan = plan;
-                await _db.SaveChangesAsync();
+                await _db.SaveChangesAsync(ct);
                 _logger.LogInformation("Org {OrgId} plan confirmed as {Plan} (sub status: {Status})",
                     org.Id, plan, status);
             }
@@ -205,19 +215,19 @@ public sealed class BillingController : ControllerBase
         }
     }
 
-    private async Task HandleSubscriptionDeletedAsync(Stripe.Subscription? sub)
+    private async Task HandleSubscriptionDeletedAsync(Stripe.Subscription? sub, CancellationToken ct)
     {
         if (sub is null) return;
 
         var org = await _db.Organisations
-            .FirstOrDefaultAsync(o => o.StripeCustomerId == sub.CustomerId);
+            .FirstOrDefaultAsync(o => o.StripeCustomerId == sub.CustomerId, ct);
         if (org is null) return;
 
         if (org.Plan == PlanConstants.Pilot && org.StripeSubscriptionId is null) return;
 
         org.Plan                 = PlanConstants.Pilot;
         org.StripeSubscriptionId = null;
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation("Org {OrgId} subscription cancelled — reverted to frozen Pilot.", org.Id);
     }
