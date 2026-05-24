@@ -34,6 +34,19 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.Plan).HasColumnName("plan").IsRequired();
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.HasIndex(x => x.ClerkOrgId).IsUnique();
+            b.Property(x => x.TrialStartedAt)
+             .HasColumnName("trial_started_at")
+             .HasColumnType("timestamptz");
+            b.Property(x => x.PilotExtendedUntil)
+             .HasColumnName("pilot_extended_until")
+             .HasColumnType("timestamptz");
+            b.Property(x => x.PilotExtensionRequestedAt)
+             .HasColumnName("pilot_extension_requested_at")
+             .HasColumnType("timestamptz");
+            b.Property(x => x.StripeCustomerId)
+             .HasColumnName("stripe_customer_id");
+            b.Property(x => x.StripeSubscriptionId)
+             .HasColumnName("stripe_subscription_id");
         });
 
         // ── users ──────────────────────────────────────────────────────
