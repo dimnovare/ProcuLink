@@ -20,17 +20,20 @@ public class SuppliersController : ControllerBase
     private readonly IItemMappingService        _mappingService;
     private readonly ProcuLinkDbContext         _db;
     private readonly ICurrentTenantService      _tenant;
+    private readonly IBillingService            _billing;
 
     public SuppliersController(
         ISupplierProfileRepository supplierProfileRepository,
         IItemMappingService        mappingService,
         ProcuLinkDbContext         db,
-        ICurrentTenantService      tenant)
+        ICurrentTenantService      tenant,
+        IBillingService            billing)
     {
         _supplierProfileRepository = supplierProfileRepository;
         _mappingService            = mappingService;
         _db                        = db;
         _tenant                    = tenant;
+        _billing                   = billing;
     }
 
     // ── GET /api/suppliers ────────────────────────────────────────────────────
@@ -63,6 +66,20 @@ public class SuppliersController : ControllerBase
         CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
+
+        // ── Billing limit check ────────────────────────────────────────────
+        var limitCheck = await _billing.CheckSupplierLimitAsync(orgId, ct);
+        if (!limitCheck.Allowed)
+        {
+            return StatusCode(429, new
+            {
+                error      = limitCheck.PilotExpired ? "pilot_expired" : "supplier_limit_reached",
+                plan       = limitCheck.Plan,
+                limit      = limitCheck.Limit,
+                upgradeUrl = "/settings",
+            });
+        }
+
         var nameTrimmed = request.Name.Trim();
 
         var exists = await _db.Suppliers

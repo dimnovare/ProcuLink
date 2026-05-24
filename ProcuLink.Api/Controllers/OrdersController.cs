@@ -27,6 +27,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IBackgroundJobClient      _jobs;
     private readonly ProcuLinkDbContext        _db;
     private readonly ILogger<OrdersController> _logger;
+    private readonly IBillingService           _billing;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -35,13 +36,15 @@ public sealed class OrdersController : ControllerBase
         ICurrentTenantService     tenant,
         IBackgroundJobClient      jobs,
         ProcuLinkDbContext        db,
-        ILogger<OrdersController> logger)
+        ILogger<OrdersController> logger,
+        IBillingService           billing)
     {
-        _orders = orders;
-        _tenant = tenant;
-        _jobs   = jobs;
-        _db     = db;
-        _logger = logger;
+        _orders  = orders;
+        _tenant  = tenant;
+        _jobs    = jobs;
+        _db      = db;
+        _logger  = logger;
+        _billing = billing;
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -80,6 +83,19 @@ public sealed class OrdersController : ControllerBase
             return BadRequest(new { error = "supplierId is required." });
 
         var orgId = _tenant.OrganisationId;
+
+        // ── Billing limit check ────────────────────────────────────────────
+        var limitCheck = await _billing.CheckOrderLimitAsync(orgId, ct);
+        if (!limitCheck.Allowed)
+        {
+            return StatusCode(429, new
+            {
+                error      = limitCheck.PilotExpired ? "pilot_expired" : "order_limit_reached",
+                plan       = limitCheck.Plan,
+                limit      = limitCheck.Limit,
+                upgradeUrl = "/settings",
+            });
+        }
 
         await using var stream = file.OpenReadStream();
         var result = await _orders.CreateStubAsync(
