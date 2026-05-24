@@ -2,6 +2,7 @@
   <Project Path="ProcuLink.Api/ProcuLink.Api.csproj" />
   <Project Path="ProcuLink.Core/ProcuLink.Core.csproj" />
   <Project Path="ProcuLink.Infrastructure/ProcuLink.Infrastructure.csproj" />
+  <Project Path="ProcuLink.Transform.Tests/ProcuLink.Transform.Tests.csproj" />
   <Project Path="ProcuLink.Transform/ProcuLink.Transform.csproj" />
   <Project Path="ProcuLink.Worker/ProcuLink.Worker.csproj" />
 </Solution>
