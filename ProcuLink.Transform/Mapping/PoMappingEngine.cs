@@ -29,7 +29,7 @@ public static class PoMappingEngine
 
     private static string? ResolveField(
         string canonicalField,
-        Dictionary<string, FieldMappingEntry> mapping,
+        IReadOnlyDictionary<string, FieldMappingEntry> mapping,
         IReadOnlyDictionary<string, string> row)
     {
         if (!mapping.TryGetValue(canonicalField, out var entry)) return null;
@@ -37,7 +37,7 @@ public static class PoMappingEngine
         string? value = entry.FixedValue
             ?? (entry.ExternalField is not null && row.TryGetValue(entry.ExternalField, out var v) ? v : null);
 
-        foreach (var m in entry.FieldManipulators)
+        foreach (var m in entry.FieldManipulators ?? [])
         {
             var manipulator = ManipulatorRegistry.Resolve(m.Type, m.Params);
             value = manipulator.Apply(value, row);
