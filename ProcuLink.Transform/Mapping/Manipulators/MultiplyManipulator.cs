@@ -9,7 +9,9 @@ public class MultiplyManipulator : IFieldManipulator
     {
         if (@params.Count != 1)
             throw new ArgumentException("Multiply requires exactly 1 param: [factor]", nameof(@params));
-        _factor = decimal.Parse(@params[0], System.Globalization.CultureInfo.InvariantCulture);
+        if (!decimal.TryParse(@params[0], System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out _factor))
+            throw new ArgumentException("Multiply param 'factor' must be a valid decimal number.", nameof(@params));
     }
 
     public string? Apply(string? value, IReadOnlyDictionary<string, string> row)

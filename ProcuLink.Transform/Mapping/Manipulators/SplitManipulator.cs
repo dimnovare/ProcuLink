@@ -11,7 +11,8 @@ public class SplitManipulator : IFieldManipulator
         if (@params.Count != 2)
             throw new ArgumentException("Split requires exactly 2 params: [delimiter, index]", nameof(@params));
         _delimiter = @params[0];
-        _index = int.Parse(@params[1]);
+        if (!int.TryParse(@params[1], out _index))
+            throw new ArgumentException("Split param 'index' must be a valid integer.", nameof(@params));
     }
 
     public string? Apply(string? value, IReadOnlyDictionary<string, string> row)

@@ -9,7 +9,9 @@ public class DivideManipulator : IFieldManipulator
     {
         if (@params.Count != 1)
             throw new ArgumentException("Divide requires exactly 1 param: [divisor]", nameof(@params));
-        _divisor = decimal.Parse(@params[0], System.Globalization.CultureInfo.InvariantCulture);
+        if (!decimal.TryParse(@params[0], System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out _divisor))
+            throw new ArgumentException("Divide param 'divisor' must be a valid decimal number.", nameof(@params));
     }
 
     public string? Apply(string? value, IReadOnlyDictionary<string, string> row)
