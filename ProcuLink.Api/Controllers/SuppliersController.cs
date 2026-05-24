@@ -6,8 +6,10 @@ using ProcuLink.Api.Contracts;
 using ProcuLink.Core.Canonical;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
+using ProcuLink.Transform.Mapping;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -21,19 +23,22 @@ public class SuppliersController : ControllerBase
     private readonly ProcuLinkDbContext         _db;
     private readonly ICurrentTenantService      _tenant;
     private readonly IBillingService            _billing;
+    private readonly IPoMappingService          _poMappingService;
 
     public SuppliersController(
         ISupplierProfileRepository supplierProfileRepository,
         IItemMappingService        mappingService,
         ProcuLinkDbContext         db,
         ICurrentTenantService      tenant,
-        IBillingService            billing)
+        IBillingService            billing,
+        IPoMappingService          poMappingService)
     {
         _supplierProfileRepository = supplierProfileRepository;
         _mappingService            = mappingService;
         _db                        = db;
         _tenant                    = tenant;
         _billing                   = billing;
+        _poMappingService          = poMappingService;
     }
 
     // ── GET /api/suppliers ────────────────────────────────────────────────────
@@ -285,4 +290,58 @@ public class SuppliersController : ControllerBase
         await _mappingService.DeleteAsync(orgId, mappingId, ct);
         return NoContent();
     }
+
+    // ── GET /api/suppliers/{id}/po-mapping ────────────────────────────────────
+
+    [HttpGet("{id:guid}/po-mapping")]
+    public async Task<IActionResult> GetPoMapping(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id).FirstOrDefaultAsync(ct);
+        if (supplier is null) return NotFound();
+        var config = await _poMappingService.GetAsync(orgId, id, ct);
+        if (config is null) return NoContent();
+        return Ok(config);
+    }
+
+    // ── PUT /api/suppliers/{id}/po-mapping ────────────────────────────────────
+
+    [HttpPut("{id:guid}/po-mapping")]
+    public async Task<IActionResult> UpsertPoMapping(Guid id, [FromBody] PoMappingConfig config, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id).FirstOrDefaultAsync(ct);
+        if (supplier is null) return NotFound();
+        var saved = await _poMappingService.UpsertAsync(orgId, id, config, ct);
+        return Ok(saved);
+    }
+
+    // ── DELETE /api/suppliers/{id}/po-mapping ─────────────────────────────────
+
+    [HttpDelete("{id:guid}/po-mapping")]
+    public async Task<IActionResult> DeletePoMapping(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id).FirstOrDefaultAsync(ct);
+        if (supplier is null) return NotFound();
+        await _poMappingService.DeleteAsync(orgId, id, ct);
+        return NoContent();
+    }
+
+    // ── POST /api/suppliers/{id}/po-mapping/test ──────────────────────────────
+
+    [HttpPost("{id:guid}/po-mapping/test")]
+    public async Task<IActionResult> TestPoMapping(Guid id, [FromBody] TestPoMappingRequest request, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id).FirstOrDefaultAsync(ct);
+        if (supplier is null) return NotFound();
+        var result = PoMappingEngine.Apply(request.HeaderRow, request.LineRows, request.Config);
+        return Ok(result);
+    }
 }
+
+public record TestPoMappingRequest(
+    IReadOnlyDictionary<string, string> HeaderRow,
+    IReadOnlyList<IReadOnlyDictionary<string, string>> LineRows,
+    PoMappingConfig Config);
