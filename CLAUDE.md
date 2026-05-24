@@ -13,20 +13,122 @@ and need them transformed into supplier-ready structured documents and delivered
 ## Repository layout
 
 ```
-C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\        ← .NET solution root
+C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\          ← .NET solution
 ├── CLAUDE.md
 ├── ProcuLink.slnx
-├── ProcuLink.Api\                   ← ASP.NET Core 8 — dev port :5223
-├── ProcuLink.Core\                  ← Domain models, interfaces
-├── ProcuLink.Infrastructure\        ← EF Core, Postgres, R2, service impls
-├── ProcuLink.Transform\             ← Parsers (CSV/XLSX) + transform (XML/CSV)
-├── ProcuLink.Worker\                ← ⚡ ACTIVATE IN PHASE 3 — Hangfire jobs
-└── (no ProcuLink.Web — frontend is a separate repo, see below)
+├── ProcuLink.Api\                   ← ASP.NET Core 8 — dev :5223
+├── ProcuLink.Core\                  ← Domain models + service interfaces
+├── ProcuLink.Infrastructure\        ← EF Core, Postgres, R2/Local storage
+├── ProcuLink.Transform\             ← CSV/XLSX parsers + XML/CSV transform
+└── ProcuLink.Worker\                ← Hangfire jobs host (Phase 3+)
 
-C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink\   ← Frontend repo
+C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink\  ← Frontend
 GitHub: https://github.com/dimnovare/project-proculink
 Package manager: bun
+Framework: Next.js 15 (App Router) — see migration section below
 ```
+
+---
+
+## Claude Code plugins — install these, use them every session
+
+These are real plugins with exact install commands sourced from their repos.
+Install once globally. They persist across all sessions.
+
+---
+
+### 1. Superpowers — structured workflow framework
+**Source:** https://github.com/obra/superpowers
+**Install (inside a Claude Code session):**
+```
+/plugin marketplace add obra/superpowers-marketplace
+/plugin install superpowers@superpowers-marketplace
+```
+Quit and restart Claude Code after install. Skills auto-inject on session start.
+
+**What it does:** Forces Claude to plan before coding, write tests first, and
+self-review before handing back. Prevents jumping straight to code on complex tasks.
+
+**Slash commands:**
+- `/superpowers:brainstorm` — explore requirements and design before any implementation.
+  Claude asks questions instead of writing code immediately.
+- `/superpowers:write-plan` — produce a written plan with 2–5 min tasks, exact file paths,
+  and complete code. Required before `/superpowers:execute-plan`.
+- `/superpowers:execute-plan` — runs subagents to implement the plan, with two-stage code
+  review after each task.
+- `/superpowers:debug` — systematic root cause investigation with hypothesis testing.
+  Triggers architectural review after 3 failed fix attempts.
+- `/superpowers:code-review` — reviews implementation against the plan and coding standards.
+
+**When to invoke:**
+- Any feature touching ≥3 files: run `/superpowers:brainstorm` first
+- Any medium+ task: run `/superpowers:write-plan` then `/superpowers:execute-plan`
+- Any bug that survives one fix attempt: run `/superpowers:debug`
+- End of each task group: run `/superpowers:code-review`
+
+---
+
+### 2. frontend-design — production-grade UI
+**Source:** https://github.com/anthropics/claude-code/tree/main/plugins/frontend-design
+**Install:**
+```
+/plugin install frontend-design@claude-plugins-official
+```
+Or via npx: `npx claude-plugins install @anthropics/claude-code-plugins/frontend-design`
+
+**What it does:** Auto-invokes when Claude detects frontend work. Enforces bold
+typography, distinctive colour palettes, deliberate spacing, and creative layouts.
+Prevents generic "AI slop" UI output.
+
+**When to invoke explicitly:** Any new page, component, or significant UI change
+in `project-proculink`. If Claude is about to generate a component, say
+"use /frontend-design guidance for this" to make it explicit.
+
+---
+
+### 3. code-review — automated PR review
+**Source:** https://github.com/anthropics/claude-code/blob/main/plugins/code-review/README.md
+**Install:**
+```
+/plugin install code-review@claude-plugins-official
+```
+Or via npx: `npx claude-plugins install @anthropics/claude-code-plugins/code-review`
+
+**What it does:** Runs 5 parallel Sonnet agents checking: CLAUDE.md compliance,
+bug detection, historical context, PR history, and code comments. Confidence-based
+scoring filters false positives.
+
+**Command:** `/code-review`
+
+**When to invoke:** Run `/code-review` at the end of every task group (A, B, C…)
+before marking it complete. Never skip. Paste the diff or describe what changed.
+
+---
+
+### 4. claude-mem — persistent session memory
+**Source:** https://github.com/thedotmack/claude-mem
+**Install:**
+```
+/plugin marketplace add thedotmack/claude-mem
+/plugin install claude-mem
+```
+Then restart Claude Code.
+
+**⚠️ Critical:** Do NOT run `npm install -g claude-mem` — that installs only the
+SDK library without the hooks or worker service. Always use `/plugin` commands above.
+Requires Node.js 18+.
+
+**What it does:** Captures everything Claude does during sessions (tool calls,
+decisions, file changes), compresses with AI, and injects relevant context into
+future sessions via SQLite + vector search. Sessions no longer start cold.
+
+**How it works:** Fully automatic after install — no manual commands needed.
+Context injects at session start. To search past sessions explicitly, ask:
+"What did we do with the order parsing last time?" or
+"What bugs did we fix in the transform pipeline?"
+
+**Optional manual:** After a major session, ask Claude to summarise key decisions
+so claude-mem captures them with higher importance.
 
 ---
 
@@ -34,9 +136,25 @@ Package manager: bun
 
 | Task | Tool |
 |---|---|
-| New screens / layouts / UI polish | **Lovable** → git pull in `project-proculink` |
-| Auth wiring, API calls, data hooks, bug fixes | **Claude Code** in `project-proculink` |
+| Complex feature planning (≥3 files) | **`/superpowers:brainstorm`** first |
+| Implementation from a plan | **`/superpowers:execute-plan`** |
+| New pages / major UI components | **`/frontend-design`** + Claude Code |
+| UI component generation (framework-agnostic) | **Lovable** → copy to Next.js structure |
+| End of each task group | **`/code-review`** before marking done |
 | All .NET backend | **Claude Code** in `ProcuLink` solution |
+| Next.js routing, Server Components, middleware | **Claude Code** only — not Lovable |
+
+**Note on Lovable after Next.js migration:**
+Lovable generates Vite React code. After migrating to Next.js, Lovable's GitHub
+push-and-preview no longer "just works" for pages (the Vite preview won't match
+Next.js patterns). However, the UI components Lovable generates (shadcn, Tailwind,
+TypeScript React) are framework-agnostic and usable in Next.js after minor adaptation:
+- Change `import { useNavigate } from 'react-router-dom'` → `import { useRouter } from 'next/navigation'`
+- Add `'use client'` directive to interactive components
+- Everything else (shadcn, Tailwind, TanStack Query) works identically
+
+Recommended workflow: Use Lovable for component/UI polish. Use Claude Code + `/frontend-design`
+for new pages, layouts, and anything requiring Next.js-specific patterns.
 
 ---
 
@@ -44,14 +162,18 @@ Package manager: bun
 
 | Layer | Choice |
 |---|---|
-| Frontend | Vite + React 18 + TypeScript + Tailwind + shadcn/ui |
+| Frontend | **Next.js 15 (App Router)** + TypeScript + Tailwind + shadcn/ui |
 | Package manager | **bun** — never npm or yarn |
-| Auth | Clerk (frontend `@clerk/clerk-react` + backend JWT) |
+| Auth | **`@clerk/nextjs`** (NOT `@clerk/clerk-react` — different package for Next.js) |
+| Clerk middleware | `middleware.ts` in project root — protects `(app)` routes |
+| Frontend data | TanStack Query v5 — in Client Components only |
 | API | ASP.NET Core 8 — dev :5223 |
 | ORM | EF Core 9 + Npgsql |
 | Database | PostgreSQL — `Host=localhost;Port=5435;Database=proculink_dev` |
-| File storage | Cloudflare R2 (AWSSDK.S3) |
-| Background jobs | Hangfire + Hangfire.PostgreSql — Phase 3 only |
+| File storage | Cloudflare R2 (dev: `LocalFileStorageService` when keys absent) |
+| Background jobs | Hangfire + Hangfire.PostgreSql |
+| Error tracking | Sentry (backend `Sentry.AspNetCore`, frontend `@sentry/nextjs`) |
+| Deployment | Railway (API) + Vercel (frontend — native Next.js support) |
 
 ---
 
@@ -62,294 +184,281 @@ Package manager: bun
 | Phase 0 — Prototype spike | ✅ Done |
 | Phase 1 — Auth + Postgres + Tenancy | ✅ Done |
 | Phase 2 — Core loop | ✅ Done |
-| **Phase 3 — Sellable MVP** | 🚧 **CURRENT** |
-| Phase 4 — Commercial | ⏳ Pending |
+| Phase 3 — Sellable MVP | ✅ Done |
+| **Next.js migration** | 🚧 **DO FIRST before Phase 4** |
+| Phase 4 — Commercial | ⏳ After migration |
 
 ---
 
-## What Phase 2 delivered (authoritative — do not redo)
+## Next.js migration plan
 
-### Backend
-- ✅ `R2StorageService` — upload, signed URL, delete via AWSSDK.S3
-- ✅ `CsvOrderParser`, `XlsxOrderParser`, `OrderParserFactory` in `ProcuLink.Transform\Parsing`
-- ✅ `XmlTransformService`, `CsvTransformService` in `ProcuLink.Transform\Output`
-- ✅ `OrderService` — full lifecycle: CreateFromFile, GetById, List, Resolve, Transform, GetDownloadUrl
-- ✅ `ItemMappingService` — Resolve (exact match), Upsert, GetForSupplier, Delete
-- ✅ `OrdersController` — thin, <100 lines, all endpoints org-scoped with [Authorize]
-- ✅ `SuppliersController` — GET /api/suppliers, GET/DELETE /api/suppliers/{id}/mappings
-- ✅ All EF entities mapped in `ProcuLinkDbContext`, migration `InitialSchema` applied
-- ✅ Clerk JWT middleware, `ICurrentTenantService`, rate limiting, upload size guard, filename sanitisation
+**Approach:** In-place migration of `project-proculink`. Same GitHub repo, same
+Vercel project. No new repo needed. Migrate route by route.
 
-### Frontend (`project-proculink`)
-- ✅ Clerk `ClerkProvider` in `main.tsx`, `SignedIn`/`SignedOut` guards in `App.tsx`
-- ✅ `authHeader()` helper in `api-client.ts` — all real* functions attach Bearer token
-- ✅ `index.html` — ProcuLink title/description, no Lovable metadata
-- ✅ `package.json` name: `proculink-web`
-- ✅ `OrderDetailPage` — status badge, unresolved banner, line table, artifacts list, download button
-- ✅ `ResolveSection` — wired to `POST /api/orders/{id}/resolve`, saveMappings checkbox functional
-- ✅ `OrderActions` — format picker (XML/CSV), Transform button wired, no console.log
-- ✅ `UploadPage` — navigates to `/orders/{id}` after upload
-- ✅ `MappingsPage` — supplier dropdown, mapping table with delete
-- ✅ `vercel.json` present for frontend deployment
+**Why same repo works:** Next.js is a framework switch, not a new project. All
+existing components, API client, TanStack Query hooks, and shadcn/ui are reusable.
+Vercel natively detects Next.js — just update `vercel.json` and redeploy.
 
----
+### Target route structure (App Router)
 
-## Known tech debt to fix in Phase 3
+```
+project-proculink/
+├── app/
+│   ├── layout.tsx                  ← root layout: ClerkProvider, TanStack, Toaster
+│   ├── (marketing)/                ← public routes — no auth, SSR/SSG
+│   │   ├── layout.tsx              ← marketing layout (nav, footer)
+│   │   ├── page.tsx                ← / landing page
+│   │   ├── pricing/page.tsx
+│   │   └── how-it-works/page.tsx
+│   └── (app)/                      ← auth-protected routes
+│       ├── layout.tsx              ← AppLayout with sidebar (Client Component)
+│       ├── dashboard/page.tsx
+│       ├── upload/page.tsx
+│       ├── orders/
+│       │   ├── page.tsx
+│       │   └── [id]/page.tsx
+│       ├── suppliers/page.tsx
+│       ├── mappings/page.tsx
+│       └── settings/page.tsx
+├── middleware.ts                    ← Clerk auth guard for (app) routes
+├── src/
+│   ├── components/                 ← existing components (mostly unchanged)
+│   ├── lib/api-client.ts           ← update VITE_ → NEXT_PUBLIC_ env vars
+│   └── types/procurement.ts        ← unchanged
+├── next.config.ts
+└── vercel.json                     ← update for Next.js
+```
 
-- ⚠️ `OrderDetailPage`, `MappingsPage`, `UploadPage` use `useEffect` for data fetching
-  — **must be converted to TanStack Query hooks**
-- ⚠️ `SupplierProfilesController` still injects `ISupplierProfileRepository` (file-based)
-  — **must be migrated to EF Core in Phase 3**
-- ⚠️ `R2StorageService` throws `InvalidOperationException` on startup if credentials are empty
-  — **add `LocalFileStorageService` (writes to `/tmp/proculink-dev/`) for dev when R2 not configured**
-- ⚠️ Old Phase 0 types (`PurchaseOrder`, `PurchaseOrderSummary`, `AutomationStatus`) still in
-  `types/procurement.ts` — dead code, remove when safe
-- ⚠️ `lovable-tagger` still in devDependencies — harmless but remove it
+### Migration task list — do in this exact order
 
----
+**Use `/superpowers:write-plan` before starting this group.**
 
-## 🚧 Phase 3 — Sellable MVP
-
-**Goal:** A pilot customer can sign up, configure a supplier, upload orders reliably,
-and receive output — without any manual intervention from us. Everything must be
-observable, retryable, and deployable.
-
----
-
-### Group A — Fix tech debt first (do this before new features)
-
-- [ ] **A1.** Add `LocalFileStorageService` to `ProcuLink.Infrastructure\Storage\`:
-  - Implements `IFileStorageService`
-  - Writes to `Path.Combine(Path.GetTempPath(), "proculink-dev", key)`
-  - `GetSignedDownloadUrlAsync` returns a local API endpoint URL, not a signed URL
-  - Register conditionally in `Program.cs`:
-    ```csharp
-    if (string.IsNullOrEmpty(config["Storage:R2AccessKeyId"]))
-        builder.Services.AddSingleton<IFileStorageService, LocalFileStorageService>();
-    else
-        builder.Services.AddSingleton<IFileStorageService, R2StorageService>();
-    ```
-- [ ] **A2.** Add `GET /api/dev/files/{**key}` endpoint (dev-only, no auth) to serve local files
-  — only registered when `app.Environment.IsDevelopment()`.
-- [ ] **A3.** Convert `UploadPage.tsx` supplier loading to TanStack Query:
-  ```ts
-  const { data: suppliers = [] } = useQuery({
-    queryKey: ['suppliers'],
-    queryFn: () => apiClient.getSuppliers(),
-  });
+- [ ] **M1.** In `project-proculink`: scaffold Next.js 15 alongside existing files:
+  ```bash
+  bunx create-next-app@latest . --typescript --tailwind --app --src-dir no --import-alias "@/*" --yes
   ```
-- [ ] **A4.** Convert `OrderDetailPage.tsx` order loading to TanStack Query:
-  ```ts
-  const { data: order, isLoading, refetch } = useQuery({
-    queryKey: ['order', id],
-    queryFn: () => apiClient.getOrderById(id!),
-    enabled: !!id,
-  });
+  This overwrites `package.json` — afterwards restore bun lockfile:
+  `bun install`
+
+- [ ] **M2.** Replace Clerk package:
+  ```bash
+  bun remove @clerk/clerk-react
+  bun add @clerk/nextjs
   ```
-  Replace `handleOrderUpdated` with `queryClient.invalidateQueries(['order', id])`.
-- [ ] **A5.** Convert `MappingsPage.tsx` to TanStack Query:
-  - `useQuery(['suppliers'])` for supplier list
-  - `useQuery(['mappings', selectedId], ..., { enabled: !!selectedId })` for mappings
-  - `useMutation` for delete
-- [ ] **A6.** Migrate `SupplierProfilesController` to EF:
-  - Remove `ISupplierProfileRepository` injection
-  - Inject `ProcuLinkDbContext` directly (or create `EfSupplierProfileRepository`)
-  - All queries: `.Where(x => x.OrgId == _tenant.OrganisationId)`
-- [ ] **A7.** Remove dead types from `types/procurement.ts`:
-  `PurchaseOrder`, `PurchaseOrderLine`, `PurchaseOrderSummary`, `AutomationStatus`
-- [ ] **A8.** Remove `lovable-tagger` from devDependencies: `bun remove lovable-tagger`
+  Note: `@clerk/nextjs` has different import paths than `@clerk/clerk-react`.
 
----
+- [ ] **M3.** Replace Sentry package:
+  ```bash
+  bun remove @sentry/react
+  bun add @sentry/nextjs
+  ```
 
-### Group B — Supplier management (required for onboarding)
+- [ ] **M4.** Create `middleware.ts` in project root:
+  ```ts
+  import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 
-Currently there is no way to create a supplier. The upload page lists suppliers from the DB,
-but the DB is empty for a new org. Fix this before onboarding wizard.
+  const isProtectedRoute = createRouteMatcher([
+    '/dashboard(.*)', '/orders(.*)', '/upload(.*)',
+    '/suppliers(.*)', '/mappings(.*)', '/settings(.*)',
+  ]);
 
-- [ ] **B1.** Add `POST /api/suppliers` — create a supplier for the org:
+  export default clerkMiddleware((auth, req) => {
+    if (isProtectedRoute(req)) auth().protect();
+  });
+
+  export const config = {
+    matcher: ['/((?!_next|.*\\..*).*)'],
+  };
+  ```
+
+- [ ] **M5.** Create `app/layout.tsx` — root layout:
+  ```tsx
+  import { ClerkProvider } from '@clerk/nextjs';
+  import { Inter } from 'next/font/google';
+  import './globals.css';
+
+  export default function RootLayout({ children }) {
+    return (
+      <html lang="en">
+        <body>
+          <ClerkProvider>{children}</ClerkProvider>
+        </body>
+      </html>
+    );
+  }
+  ```
+
+- [ ] **M6.** Create `app/(app)/layout.tsx` — app shell:
+  - Move `AppLayout.tsx` content here
+  - Wrap with `QueryClientProvider` (must be a Client Component: `'use client'`)
+  - Include `<Toaster />` and `<Sonner />`
+
+- [ ] **M7.** Migrate pages one by one — copy from `src/pages/` → `app/(app)/*/page.tsx`:
+  - `Dashboard.tsx` → `app/(app)/dashboard/page.tsx`
+  - `OrdersPage.tsx` → `app/(app)/orders/page.tsx`
+  - `OrderDetailPage.tsx` → `app/(app)/orders/[id]/page.tsx`
+  - `UploadPage.tsx` → `app/(app)/upload/page.tsx`
+  - `SuppliersPage.tsx` → `app/(app)/suppliers/page.tsx`
+  - `MappingsPage.tsx` → `app/(app)/mappings/page.tsx`
+  - Add `'use client'` at top of each (they use hooks/TanStack Query)
+
+- [ ] **M8.** Replace all `react-router-dom` imports:
+  - `useNavigate()` → `useRouter()` from `next/navigation`
+  - `useParams()` → `useParams()` from `next/navigation` (same name, different import)
+  - `<Link to="...">` → `<Link href="...">` from `next/link`
+  - `<BrowserRouter>`, `<Routes>`, `<Route>` → delete entirely (App Router handles routing)
+  - `bun remove react-router-dom`
+
+- [ ] **M9.** Update env variable names in `api-client.ts` and all components:
+  - `import.meta.env.VITE_API_BASE_URL` → `process.env.NEXT_PUBLIC_API_BASE_URL`
+  - `import.meta.env.VITE_USE_MOCK` → `process.env.NEXT_PUBLIC_USE_MOCK`
+  - `import.meta.env.VITE_CLERK_PUBLISHABLE_KEY` → handled by `@clerk/nextjs` automatically
+    via `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+
+- [ ] **M10.** Update `.env` (committed):
+  ```
+  NEXT_PUBLIC_API_BASE_URL=http://localhost:5223
+  NEXT_PUBLIC_USE_MOCK=false
+  ```
+  Update `.env.local` (gitignored):
+  ```
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+  NEXT_PUBLIC_SENTRY_DSN=
+  ```
+
+- [ ] **M11.** Update `vercel.json` for Next.js:
   ```json
-  { "name": "Supplier Name" }
+  {
+    "framework": "nextjs"
+  }
   ```
-  Returns `{ id, name }`. Validates name is unique per org.
-- [ ] **B2.** Add `PUT /api/suppliers/{id}` — rename a supplier.
-- [ ] **B3.** Add `DELETE /api/suppliers/{id}` — soft-delete (set `deleted_at`, filter from all queries).
-  Add `deleted_at timestamptz` column + EF migration.
-- [ ] **B4.** Add `POST /api/suppliers/{id}/profiles` — create or update supplier profile for the org.
-  Body: `{ outputFormat, destinationType, destinationConfig }`.
-  This replaces the legacy `POST /api/supplier-profiles` endpoint.
-- [ ] **B5.** Frontend: Add a Suppliers page (`/suppliers`) — list, create, edit name, delete.
-  Each supplier shows its profile config if one exists.
-  Wire to the new endpoints above. Use TanStack Query throughout.
-- [ ] **B6.** Update `UploadPage.tsx` to show "Add supplier" link when the list is empty.
+  Remove any Vite-specific SPA rewrites.
 
----
-
-### Group C — Hangfire background jobs
-
-Replace the synchronous in-request parse+transform with async jobs.
-This is essential for reliability — large files should not block HTTP.
-
-- [ ] **C1.** Add NuGet packages to `ProcuLink.Worker.csproj`:
-  - `Hangfire.Core`
-  - `Hangfire.PostgreSql`
-  - `Hangfire.AspNetCore`
-- [ ] **C2.** Add Hangfire to `ProcuLink.Api\Program.cs`:
-  ```csharp
-  builder.Services.AddHangfire(cfg => cfg
-      .UsePostgreSqlStorage(connectionString));
-  builder.Services.AddHangfireServer();
-  app.UseHangfireDashboard("/hangfire"); // dev only
+- [ ] **M12.** Create `next.config.ts`:
+  ```ts
+  import type { NextConfig } from 'next';
+  const config: NextConfig = {
+    // API is on a different origin — no rewrites needed
+  };
+  export default config;
   ```
-- [ ] **C3.** Create `ParseOrderJob` in `ProcuLink.Worker`:
-  - Takes `orderId` and `organisationId`
-  - Sets order status → `parsing` (add to enum)
-  - Runs `OrderParserFactory` + item resolution
-  - Updates order lines + status → `pending_review` or `ready`
-  - On failure: status → `failed`, write audit event
-- [ ] **C4.** Create `TransformOrderJob` in `ProcuLink.Worker`:
-  - Takes `orderId`, `organisationId`, `format`
-  - Runs transform + uploads artifact to R2
-  - On success: status → `ready_to_deliver`
-  - Enqueues `DeliverOrderJob` if supplier has a webhook configured
-  - On failure: status → `transform_failed`
-- [ ] **C5.** Create `DeliverOrderJob` in `ProcuLink.Worker`:
-  - Takes `orderId`, `organisationId`, `artifactId`
-  - Reads supplier profile `destination_config` for webhook URL and headers
-  - POSTs the artifact content to the webhook endpoint
-  - Writes `delivery_attempts` row with status + response_code
-  - On 2xx: order status → `delivered`
-  - On 4xx: status → `delivery_failed` (no retry — client error)
-  - On 5xx or timeout: Hangfire automatic retry (3 attempts, exponential backoff)
-  - After 3 failures: status → `delivery_failed`, write dead-letter audit event
-- [ ] **C6.** Update `OrdersController.Upload` to enqueue `ParseOrderJob` instead of parsing inline.
-  Return immediately with `{ orderId, status: "parsing" }`.
-- [ ] **C7.** Update `OrdersController.Transform` to enqueue `TransformOrderJob` instead of running inline.
-  Return immediately with `{ status: "transforming" }`.
-- [ ] **C8.** Add `parsing` and `ready_to_deliver` and `transform_failed` and `delivery_failed`
-  to the status string set. Update `OrderStatus` type in `types/procurement.ts` to match.
-- [ ] **C9.** Add `GET /api/orders/{id}/status` — lightweight endpoint returning just `{ status }`.
-  Used by the frontend to poll while an order is in `parsing` or `transforming` state.
+
+- [ ] **M13.** Delete Vite artefacts:
+  - `vite.config.ts`, `index.html`, `src/vite-env.d.ts`
+  - `src/App.tsx`, `src/App.css`, `src/main.tsx` (replaced by App Router)
+  - `bun remove vite @vitejs/plugin-react-swc`
+
+- [ ] **M14.** Run `bun run build` — fix any TypeScript or import errors. Ship when green.
+
+- [ ] **M15.** Create the `(marketing)` layout and stub pages:
+  - `app/(marketing)/layout.tsx` — minimal layout, no auth, no sidebar
+  - `app/(marketing)/page.tsx` — landing page stub with `<head>` metadata
+  - `app/(marketing)/pricing/page.tsx` — pricing stub
+  - `app/(marketing)/how-it-works/page.tsx` — how-it-works stub
+  - These render as SSR pages — `generateMetadata()` for SEO
+
+- [ ] **M16.** Redirect `/` to `/dashboard` if logged in:
+  Update `middleware.ts` to redirect authenticated users away from marketing routes.
+
+- [ ] **M17.** Run `/code-review` on the entire migration diff before merging.
 
 ---
 
-### Group D — Frontend: async status polling
+## Phase 4 — Commercial (after migration)
 
-- [ ] **D1.** In `OrderDetailPage.tsx`: when `order.status` is `parsing` or `transforming`,
-  poll `GET /api/orders/{id}/status` every 2 seconds using TanStack Query's `refetchInterval`.
-  Stop polling when status changes to a stable state.
-  Show a spinner with appropriate message ("Parsing file…" / "Transforming…").
-- [ ] **D2.** Add `parsing`, `ready_to_deliver`, `transform_failed`, `delivery_failed` to
-  `StatusBadge` component with appropriate colours and labels.
-- [ ] **D3.** `UploadPage.tsx`: after upload, immediately navigate to order detail.
-  The polling in D1 takes care of showing progress.
-- [ ] **D4.** `OrderActions.tsx`: after clicking Transform, navigate to order detail.
-  Remove the inline loading state (job is async now).
+### Group A — Remaining tech debt
+- [ ] **A1.** `bun remove lovable-tagger`
+- [ ] **A2.** Remove `SupplierProfilesController.cs` (redundant — routes now in `SuppliersController`)
+- [ ] **A3.** Remove `ProcuLink.Core\Canonical\` once confirmed unused
+- [ ] **A4.** Verify `GET /api/orders/{id}/audit` exists in `OrdersController`
+- [ ] **A5.** Verify `GET /api/orders/{id}/status` exists in `OrdersController`
 
----
+### Group B — Marketing pages (Next.js SSR — no react-helmet needed)
+- [ ] **B1.** Build out `app/(marketing)/page.tsx` — full landing page:
+  - Hero: "Stop reformatting purchase orders. Start delivering them."
+  - Three-step explainer with visual flow
+  - Testimonial placeholder
+  - CTA → Clerk sign-up
+  - `generateMetadata()` with proper OG tags
+- [ ] **B2.** Build `app/(marketing)/pricing/page.tsx` — three tiers:
+  Starter (free, 20 orders/mo), Growth (€49/mo, 200 orders), Enterprise (custom)
+- [ ] **B3.** Build `app/(marketing)/how-it-works/page.tsx` — step-by-step + FAQ
+- [ ] **B4.** Update `robots.txt` — allow `(marketing)` routes, disallow `(app)` routes
 
-### Group E — Audit trail in UI
+### Group C — Stripe billing
+- [ ] Add `Stripe.net` to `ProcuLink.Api.csproj`
+- [ ] Add `stripe_customer_id`, `stripe_subscription_id` to `organisations` table + migration
+- [ ] `POST /api/billing/checkout` — Stripe Checkout session for Growth plan
+- [ ] `POST /api/billing/portal` — Stripe Customer Portal session
+- [ ] `POST /api/billing/webhook` (no auth) — handle `checkout.session.completed` + `subscription.deleted`
+- [ ] `GET /api/billing/status` — returns `{ plan, ordersThisMonth, orderLimit }`
+- [ ] Enforce order limit in `OrdersController.Upload` → 429 with upgrade message
+- [ ] `app/(app)/settings/page.tsx` — plan + usage display, upgrade + manage buttons
 
-- [ ] **E1.** Add `GET /api/orders/{id}/audit` endpoint:
-  Returns `audit_events` rows for this order, newest first:
-  `[{ action, payload, createdAt }]`
-- [ ] **E2.** Add `AuditTimeline` component in `src/components/orders/`:
-  Vertical timeline of events — Created, Resolved, Transformed, Delivered, Failed.
-  Show `createdAt` as relative time ("2 minutes ago") and absolute on hover.
-- [ ] **E3.** Add `AuditTimeline` to `OrderDetailPage` sidebar, below the Summary card.
-  Use TanStack Query: `useQuery(['order-audit', id], ...)`.
+### Group D — PO field mapping engine
+- [ ] `SupplierPoMapping` entity + JSONB `config_json` + EF migration
+- [ ] `IPoMappingService` + `PoMappingService` — CRUD for mapping config
+- [ ] `IFieldManipulator` interface + 8 manipulators (Replace, Trim, DateFormat, Concat, Fallback, Split, Multiply, Divide)
+- [ ] `PoMappingEngine` in `ProcuLink.Transform` — applies template to raw CSV rows → `MappedOrder`
+- [ ] `ParseOrderJob` updated — template-aware path (falls back to `CsvOrderParser` when no config)
+- [ ] `GET/PUT /api/suppliers/{id}/po-mapping` + export/import endpoints
+- [ ] `PoMappingEditor` frontend component on supplier detail page — visual field-by-field mapping UI
+- [ ] Spec: `docs/superpowers/specs/2026-05-24-bulk-mapping-import-export-design.md`
 
----
+### Group D2 — Supplier delivery configuration
+- [ ] Per-supplier delivery config: protocol (HTTP/SFTP/FTP/webhook), auth (none/basic/OAuth2), URL, request body template, retry settings
+- [ ] `SupplierDeliveryConfig` entity + JSONB config + EF migration
+- [ ] `IDeliveryConnector` interface + HTTP connector implementation
+- [ ] Test-fire capability: send a sample order to the configured endpoint, return response
+- [ ] Frontend: delivery config tab on supplier detail page (visual, non-developer friendly)
 
-### Group F — Onboarding wizard
+### Group E — AI mapping suggestions (Claude API)
+- [ ] Add `Anthropic.SDK` to `ProcuLink.Api.csproj`
+- [ ] `IAiMappingService` + `ClaudeAiMappingService` — suggest supplier code from buyer code + description
+- [ ] Call in `ParseOrderJob` for unresolved lines (no-op if `Anthropic:ApiKey` absent)
+- [ ] Frontend: pre-fill resolve inputs with AI suggestions, show "✨ AI suggested" badge
 
-New users land on an empty dashboard with no suppliers and no orders.
-The wizard walks them through setup the first time.
+### Group F — PDF ingestion
+- [ ] Add `PdfPig` to `ProcuLink.Transform`
+- [ ] `PdfOrderParser : IPurchaseOrderParser` — text extraction + line parsing
+- [ ] Accept `.pdf` in upload endpoint + FileUploadZone
 
-- [ ] **F1.** Add `GET /api/onboarding/status` endpoint:
-  Returns `{ hasSupplier: bool, hasUpload: bool, hasDelivery: bool }` for the org.
-- [ ] **F2.** Create `OnboardingWizard` component — 3-step modal or full page:
-  - Step 1: Create your first supplier (name input → POST /api/suppliers)
-  - Step 2: Upload your first order (embedded FileUploadZone)
-  - Step 3: Done — "Your first order is processing"
-- [ ] **F3.** Show `OnboardingWizard` on `Dashboard` page when `!hasSupplier`.
-  Dismiss permanently once supplier + first upload are done.
-- [ ] **F4.** `Dashboard` page: replace placeholder stats with real data:
-  - Total orders this month
-  - Orders pending review
-  - Orders delivered
-  - Pull from `GET /api/dashboard/stats` (add this endpoint)
+### Group G — ERP connectors
+- [ ] `IErpConnector` interface
+- [ ] `ErplyConnector` (REST API) + `DirectoConnector` (XML API)
+- [ ] New `destination_type` values: `erp_erply`, `erp_directo`
 
----
-
-### Group G — Deploy
-
-- [ ] **G1.** Backend — deploy to Railway:
-  - Create `railway.toml` in solution root
-  - Set env vars in Railway dashboard: `ConnectionStrings__DefaultConnection`,
-    `Clerk__Authority`, `Storage__R2*`
-  - Add `ASPNETCORE_URLS=http://+:$PORT` to Railway config
-- [ ] **G2.** Frontend — deploy to Vercel:
-  - `vercel.json` already exists ✅
-  - Set env vars in Vercel: `VITE_API_BASE_URL` (Railway URL), `VITE_CLERK_PUBLISHABLE_KEY`
-  - Confirm `VITE_USE_MOCK=false` in Vercel env
-- [ ] **G3.** Database — Neon.tech:
-  - Create a production database project (keep dev separate)
-  - Run `dotnet ef database update` against production connection string once
-- [ ] **G4.** CORS: update `Program.cs` to allow the Vercel production domain
-  alongside localhost origins.
-- [ ] **G5.** Health check: `app.MapHealthChecks("/health")` — Railway uses this for deploy validation.
-- [ ] **G6.** Add Sentry to the backend:
-  - `dotnet add package Sentry.AspNetCore`
-  - `builder.WebHost.UseSentry(dsn)` in `Program.cs`
-- [ ] **G7.** Add Sentry to the frontend:
-  - `bun add @sentry/react`
-  - Init in `main.tsx` with DSN from `VITE_SENTRY_DSN`
-
----
-
-### Phase 3 definition of done
-
-Phase 3 is complete when:
-1. A new user can sign up via Clerk, land on the dashboard, and be guided through setup
-2. Upload → parse → resolve → transform → download works end-to-end without hitting the API synchronously
-3. Webhook delivery is attempted with retries and failure state is visible
-4. The audit trail is visible on every order
-5. The app is deployed and accessible at a public URL
-6. An error in either the API or frontend appears in Sentry
-
----
-
-## Phase 4 — Commercial (after first paying customers)
-
-- Next.js marketing site (separate repo — public SEO pages, pricing, sign-up CTA)
-- Stripe billing + usage metering (orders processed per month)
-- PDF ingestion (extract line items from PDF purchase orders via document parsing)
-- Email polling (IMAP — receive order emails, attach to supplier)
-- ERP connectors: Erply and Directo (Estonia/Baltics first)
-- AI mapping suggestions: call Claude API for unrecognised buyer item codes
-- Peppol / Telema e-invoicing integration
-- Bulk mapping import (CSV upload of existing mapping tables)
+### Group H — Email polling (IMAP)
+- [ ] `MailKit` in `ProcuLink.Worker`
+- [ ] `EmailPollingJob` — recurring Hangfire job, every 5 min
+- [ ] `email_config` jsonb on `organisations` + migration
+- [ ] `PUT /api/settings/email` endpoint
+- [ ] Email settings section in `app/(app)/settings/page.tsx`
 
 ---
 
 ## Coding conventions
 
-### .NET backend
-- Controllers: thin — validate → call service → return DTO.
-- Services in `ProcuLink.Core\Services\` or `ProcuLink.Api\Services\`.
-- Every service method: `Task<Result<T>> MethodAsync(Guid organisationId, ..., CancellationToken ct)`.
-- `Result<T>` for business errors — no exceptions for expected failures.
-- All EF queries: `.Where(x => x.OrganisationId == organisationId)` — mandatory, no exceptions.
-- No raw SQL.
-- Hangfire jobs are idempotent — safe to retry.
+### Next.js frontend
+- **App Router only.** No Pages Router.
+- **Server Components by default** — only add `'use client'` when component uses
+  hooks, event handlers, or browser APIs.
+- **TanStack Query in Client Components only** — wrap in a `QueryClientProvider`
+  in a Client Component layout.
+- **`@clerk/nextjs`** — use `auth()` in Server Components,
+  `useAuth()`/`useUser()` in Client Components.
+- **No `react-router-dom`** — use `next/link`, `next/navigation`.
+- **SEO:** `generateMetadata()` in Server Components — no `react-helmet-async`.
+- **Environment:** `NEXT_PUBLIC_*` prefix for client-side vars, nothing else.
+- **bun** only — never npm.
+- **TanStack Query** for all server state in Client Components.
+- All API calls via `src/lib/api-client.ts`.
 
-### Frontend (`project-proculink`)
-- **TanStack Query for ALL server state** — no `useEffect` for data fetching. Ever.
-- `useMutation` for writes (POST/PUT/DELETE).
-- All API calls via `src/lib/api-client.ts`. No direct `fetch` in components.
-- No mock data after Phase 1.
-- `bun` for all package operations.
-- Tailwind only — no inline styles.
+### .NET backend (unchanged)
+- Controllers thin. Every service method takes `Guid organisationId`.
+- All EF queries: `.Where(x => x.OrganisationId == organisationId)`.
+- Hangfire jobs idempotent.
+- No raw SQL.
 
 ---
 
@@ -361,62 +470,69 @@ Phase 3 is complete when:
   "ConnectionStrings": {
     "DefaultConnection": "Host=localhost;Port=5435;Database=proculink_dev;Username=postgres;Password=postgres"
   },
-  "Clerk": {
-    "Authority": "https://golden-alpaca-43.clerk.accounts.dev"
-  },
+  "Clerk": { "Authority": "https://golden-alpaca-43.clerk.accounts.dev" },
   "Storage": {
-    "R2AccountId": "",
     "R2AccessKeyId": "",
     "R2SecretAccessKey": "",
     "R2BucketName": "proculink-dev",
     "R2Endpoint": "https://<accountid>.r2.cloudflarestorage.com"
   },
-  "Hangfire": {
-    "ConnectionString": "Host=localhost;Port=5435;Database=proculink_dev;Username=postgres;Password=postgres"
-  }
+  "Stripe": { "SecretKey": "", "WebhookSecret": "", "GrowthPriceId": "" },
+  "Anthropic": { "ApiKey": "" },
+  "Sentry": { "Dsn": "" },
+  "Frontend": { "Url": "" }
 }
 ```
-Note: If `Storage:R2AccessKeyId` is empty, `LocalFileStorageService` is used automatically.
 
-### `project-proculink\.env` (committed)
+### `project-proculink\.env` (committed, Next.js)
 ```
-VITE_API_BASE_URL=http://localhost:5223
-VITE_USE_MOCK=false
+NEXT_PUBLIC_API_BASE_URL=http://localhost:5223
+NEXT_PUBLIC_USE_MOCK=false
 ```
 
-### `project-proculink\.env.local` (gitignored — Clerk key goes here)
+### `project-proculink\.env.local` (gitignored)
 ```
-VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
-VITE_SENTRY_DSN=          ← add when Sentry is set up
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+NEXT_PUBLIC_SENTRY_DSN=
 ```
 
 ---
 
 ## Key links
-- Frontend GitHub: https://github.com/dimnovare/project-proculink
+- Frontend: https://github.com/dimnovare/project-proculink
 - Frontend local: C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink
 - Backend local: C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink
 - API dev: http://localhost:5223
 - Scalar UI: http://localhost:5223/scalar
 - Hangfire dashboard (dev): http://localhost:5223/hangfire
-- Clerk dashboard: https://clerk.com (authority: golden-alpaca-43.clerk.accounts.dev)
+- Clerk: https://clerk.com (authority: golden-alpaca-43.clerk.accounts.dev)
 - Neon.tech: https://neon.tech
 - Cloudflare R2: https://dash.cloudflare.com
 - Railway: https://railway.app
 - Vercel: https://vercel.com
+- Stripe: https://stripe.com
 
 ---
 
+## Token/context discipline
+- Start with `git status --short` and `git diff --stat`.
+- Do not run full `git diff` unless asked.
+- Do not read all markdown documentation automatically.
+- Read only files directly relevant to the current task.
+
 ## What NOT to do
-- ❌ `npm install` — use **bun**
+- ❌ `npm install` — **bun** only
+- ❌ `npm install -g claude-mem` — use `/plugin` commands, never npm for claude-mem
+- ❌ Use `@clerk/clerk-react` — Next.js uses `@clerk/nextjs`
+- ❌ Use Pages Router — App Router only
+- ❌ `react-helmet-async` — use `generateMetadata()` in Server Components
+- ❌ `react-router-dom` — use `next/link` and `next/navigation`
+- ❌ `VITE_*` env vars after migration — use `NEXT_PUBLIC_*`
 - ❌ EF queries without `org_id` scope — ever
 - ❌ `useEffect` for data fetching — TanStack Query only
-- ❌ Direct `fetch` in components — use `api-client.ts`
-- ❌ Hangfire jobs that are not idempotent
-- ❌ AI/LLM calls — Phase 4 only
-- ❌ PDF or email ingestion — Phase 4 only
-- ❌ Billing or marketing pages — Phase 4 only
+- ❌ Skip `/superpowers:brainstorm` for tasks touching ≥3 files
+- ❌ Skip `/code-review` at end of a group
+- ❌ Call Anthropic API before Phase 4 Group E
 - ❌ Raw SQL — EF Core only
-- ❌ Filesystem storage for new code — R2 or LocalFileStorageService only
-- ❌ Add Next.js — Phase 4 marketing site only
-- ❌ Scaffold a new frontend — `project-proculink` is the frontend
+- ❌ Hangfire jobs that are not idempotent
+

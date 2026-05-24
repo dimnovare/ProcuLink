@@ -1,111 +1,358 @@
-# Bulk Mapping Import/Export — Design Spec
+# PO Field Mapping Engine — Design Spec
 
 > **Phase 4 Group D**
+>
+> **Scope:** Per-supplier mapping templates that transform an incoming client PO CSV into
+> ProcuLink's canonical order format. Covers the full purchase order (header + line fields)
+> with 8 field manipulators. Delivery/posting configuration is Group D2 (separate spec).
 
-**Goal:** Let users bulk-load item code mappings from an arbitrary CSV file and download existing mappings as CSV, with a two-step import dialog that lets them pick which CSV columns map to buyer and supplier codes.
+**Goal:** Replace hardcoded CSV column aliases with a per-supplier configurable mapping
+template — stored as JSONB — so any client's PO CSV layout can be transformed into the
+canonical order format without code changes. Non-developers configure mappings through a
+visual UI; advanced users can toggle to raw JSON.
 
-**Architecture:** Two new endpoints on the existing `SuppliersController` (no new controller). A small static `CsvHelper` class handles CSV parsing. Frontend adds an `ImportMappingsDialog` component and two buttons to the existing `MappingsPage`.
+**Architecture:** New `SupplierPoMapping` entity (JSONB config) + `IPoMappingService` for
+CRUD + `PoMappingEngine` in `ProcuLink.Transform` that applies the template to raw CSV rows.
+`ParseOrderJob` gains a template-aware code path; existing `CsvOrderParser` path remains as
+fallback for suppliers with no template.
 
-**Tech Stack:** .NET 8 / ASP.NET Core / EF Core (backend); Next.js 15 App Router, TanStack Query v5, shadcn/ui (frontend)
+**Tech Stack:** .NET 8 / ASP.NET Core / EF Core + Npgsql JSONB (backend);
+Next.js 15 App Router, TanStack Query v5, shadcn/ui (frontend)
+
+---
+
+## Relationship to Existing Code
+
+- **`CsvOrderParser`** — kept unchanged. Used as fallback when no `SupplierPoMapping` exists.
+- **`ItemMapping` / `IItemMappingService`** — kept unchanged. Item code resolution
+  (buyer code → supplier code lookup) remains a separate post-mapping step in `ParseOrderJob`.
+- **`SupplierProfile.DestinationConfig`** — unchanged. Delivery configuration is Group D2.
+
+---
+
+## Canonical PO Schema
+
+These are the target fields every mapping template maps **to**. They are fixed — new fields
+require a spec change.
+
+### Header fields (one value per PO)
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `PoNumber` | `string` | Required |
+| `OrderDate` | `string` → date | Parsed after `DateFormat` manipulator |
+| `BuyerName` | `string` | Buyer company name |
+| `Currency` | `string` | ISO 4217, e.g. `EUR` |
+| `BillingAddress` | `string` | Full address — often built with `Concat` |
+| `ShippingAddress` | `string` | Full delivery address |
+| `PaymentTerms` | `string?` | e.g. `Net 30` |
+| `Notes` | `string?` | Free-text comment |
+
+### Line fields (one value per line row)
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `BuyerItemCode` | `string` | Required — used for supplier code resolution |
+| `Description` | `string?` | Product description |
+| `Quantity` | `decimal` | Required |
+| `Unit` | `string?` | e.g. `pcs`, `kg`, `m` |
+| `UnitPrice` | `decimal?` | Net price per unit |
+
+---
+
+## Config JSON Shape
+
+Stored in `SupplierPoMapping.ConfigJson` (JSONB). Each field entry specifies either
+`externalField` (read from a named CSV column) or `fixedValue` (hard-coded), with an
+optional `fieldManipulators` chain applied in order.
+
+```json
+{
+  "hasHeaderRecord": true,
+  "separator": ",",
+  "header": {
+    "PoNumber":   { "externalField": "Order No" },
+    "OrderDate":  {
+      "externalField": "Date",
+      "fieldManipulators": [{ "name": "DateFormat", "parameters": ["dd/MM/yyyy"] }]
+    },
+    "BuyerName":  { "externalField": "Company" },
+    "Currency":   { "fixedValue": "EUR" },
+    "BillingAddress": {
+      "externalField": "BillStreet",
+      "fieldManipulators": [
+        { "name": "Concat", "parameters": ["@", ", ", "@BillCity", " ", "@BillZip"] }
+      ]
+    },
+    "ShippingAddress": { "externalField": "ShipAddr" },
+    "PaymentTerms": { "externalField": "Terms" },
+    "Notes":       { "externalField": "Comments" }
+  },
+  "lines": {
+    "BuyerItemCode": { "externalField": "Item Code" },
+    "Description":   { "externalField": "Product Name" },
+    "Quantity": {
+      "externalField": "Qty",
+      "fieldManipulators": [{ "name": "Replace", "parameters": [",", "."] }]
+    },
+    "Unit":      { "externalField": "UOM" },
+    "UnitPrice": {
+      "externalField": "Price",
+      "fieldManipulators": [{ "name": "Replace", "parameters": [",", "."] }]
+    }
+  }
+}
+```
 
 ---
 
 ## Backend
 
-### New endpoints (added to `SuppliersController`)
+### Data model
 
-#### `POST /api/suppliers/{id}/mappings/import`
-
-- Auth: `[Authorize]` (org-scoped via `ICurrentTenantService`)
-- Content-type: `multipart/form-data`
-- Query parameters: `buyerColumn` (string), `supplierColumn` (string) — the CSV header names to use
-- Form field: `file` (IFormFile)
-
-**Logic:**
-1. Verify the supplier exists and belongs to the org → `404` if not.
-2. Parse the CSV header row to find zero-based column indices for `buyerColumn` and `supplierColumn` → `400 { error: "Column '{name}' not found in CSV header" }` if either is missing.
-3. For each data row: read both cells; skip if either is empty/whitespace (count as `skipped`); otherwise call `_mappingService.UpsertAsync(orgId, supplierId, buyer, supplier, MappingSource.Imported, ct)` (count as `imported`).
-4. Return `200 { imported: N, skipped: M }`.
-
-#### `GET /api/suppliers/{id}/mappings/export`
-
-- Auth: `[Authorize]` (org-scoped)
-- No request body or query params.
-
-**Logic:**
-1. Verify supplier belongs to org → `404` if not.
-2. Fetch all mappings via `_mappingService.GetForSupplierAsync(orgId, supplierId, ct)`.
-3. Build CSV in memory: header line `buyer_item_code,supplier_item_code` followed by one line per mapping (`BuyerItemCode,SupplierItemCode`). Quote any cell that contains a comma or double-quote (double-quote escaped as `""`).
-4. Return `File(bytes, "text/csv", $"mappings-{supplier.Name}.csv")` with `Content-Disposition: attachment`.
-
-### New file: `ProcuLink.Api/Helpers/CsvHelper.cs`
-
-Static helper with two methods:
+**New entity: `ProcuLink.Core/Entities/SupplierPoMapping.cs`**
 
 ```csharp
-// Parses a CSV line into cells, handling double-quote-wrapped fields.
-// Trims leading/trailing whitespace from each cell after unquoting.
-public static string[] ParseLine(string line)
+public class SupplierPoMapping
+{
+    public Guid         Id         { get; set; }
+    public Guid         OrgId      { get; set; }
+    public Guid         SupplierId { get; set; }
+    public JsonDocument ConfigJson { get; set; } = null!;  // JSONB
+    public DateTime     CreatedAt  { get; set; }
+    public DateTime     UpdatedAt  { get; set; }
 
-// Escapes a cell value for CSV: wraps in double-quotes if it contains
-// a comma, double-quote, or newline; escapes internal double-quotes as "".
-public static string EscapeCell(string value)
+    public Organisation Organisation { get; set; } = null!;
+    public Supplier     Supplier     { get; set; } = null!;
+}
 ```
 
-No external CSV library dependency — item codes will not contain commas in practice, but the helper handles quoted fields correctly for robust export.
+EF mapping: `HasColumnType("jsonb")`. Unique index on `(org_id, supplier_id)`.
+New migration: `AddSupplierPoMappings`.
+
+### Config POCOs — `ProcuLink.Core/Services/Mapping/`
+
+```csharp
+public record PoMappingConfig(
+    bool HasHeaderRecord,
+    string Separator,
+    Dictionary<string, FieldMappingEntry> Header,
+    Dictionary<string, FieldMappingEntry> Lines
+);
+
+public record FieldMappingEntry(
+    string? ExternalField,
+    string? FixedValue,
+    List<ManipulatorEntry>? FieldManipulators
+);
+
+public record ManipulatorEntry(string Name, string[] Parameters);
+```
+
+### `IPoMappingService` — `ProcuLink.Core/Services/Mapping/`
+
+```csharp
+public interface IPoMappingService
+{
+    Task<PoMappingConfig?> GetAsync(Guid orgId, Guid supplierId, CancellationToken ct);
+    Task SaveAsync(Guid orgId, Guid supplierId, PoMappingConfig config, CancellationToken ct);
+}
+```
+
+`PoMappingService` in `ProcuLink.Infrastructure/Services/` — upserts the row, serialises
+`PoMappingConfig` to `JsonDocument` on save, deserialises on read.
+
+### API endpoints (added to `SuppliersController`)
+
+All verify supplier belongs to org → 404 otherwise.
+
+| Method | Route | Purpose |
+|--------|-------|---------|
+| `GET` | `/api/suppliers/{id}/po-mapping` | Return config (404 if none exists) |
+| `PUT` | `/api/suppliers/{id}/po-mapping` | Create or replace config |
+| `GET` | `/api/suppliers/{id}/po-mapping/export` | Download as `mapping-{name}.json` attachment |
+| `POST` | `/api/suppliers/{id}/po-mapping/import` | Upload `.json` file, validate structure, save |
+
+`PUT` body: `PoMappingConfig` JSON. Returns 200 with saved config.
+`POST /import`: `multipart/form-data` with `file` field. Validates required keys exist
+(`header`, `lines`, `separator`) → 400 with message if invalid. Returns 200 with config.
+
+---
+
+## Transform Engine — `ProcuLink.Transform/Mapping/`
+
+### `IFieldManipulator`
+
+```csharp
+public interface IFieldManipulator
+{
+    string Name { get; }
+    // rowContext = all raw CSV column values for the current row (for cross-field refs)
+    string Apply(string value, string[] parameters,
+                 IReadOnlyDictionary<string, string> rowContext);
+}
+```
+
+### 8 manipulators
+
+| Class | `Name` | Behaviour | Parameters |
+|-------|--------|-----------|------------|
+| `ReplaceManipulator` | `Replace` | Replace all occurrences of A with B | `[",", "."]` |
+| `TrimManipulator` | `Trim` | Strip chars (default: whitespace) | `[]` or `["-", "_"]` |
+| `DateFormatManipulator` | `DateFormat` | Parse with given format → ISO 8601 | `["dd/MM/yyyy"]` |
+| `ConcatManipulator` | `Concat` | Join parts: `@` = ExternalField value, `@Col` = other column | `["@", ", ", "@City"]` |
+| `FallbackManipulator` | `Fallback` | Use named column when primary is empty | `["OtherColumn"]` |
+| `SplitManipulator` | `Split` | Split by delimiter, return segment at index | `[" - ", "0"]` |
+| `MultiplyManipulator` | `Multiply` | Multiply decimal value by factor | `["0.453592"]` |
+| `DivideManipulator` | `Divide` | Divide decimal value by factor | `["100"]` |
+
+`ManipulatorRegistry` — static `Dictionary<string, IFieldManipulator>` keyed by `Name`
+(case-insensitive). Registered at startup.
+
+### `PoMappingEngine`
+
+```csharp
+public sealed class PoMappingEngine
+{
+    // rows: each row is a dict of CSV column name → raw string value
+    public MappedOrder Apply(
+        IReadOnlyList<IReadOnlyDictionary<string, string>> rows,
+        PoMappingConfig config);
+}
+```
+
+**Header extraction:** For each header field entry, if `FixedValue` is set use it directly;
+otherwise scan all rows for the first non-empty value in the `ExternalField` column, then
+apply the manipulator chain with `rowContext = rows[0]`.
+
+**Line extraction:** For each row, resolve each line field the same way (using that row
+as `rowContext`). Skip rows where `BuyerItemCode` resolves to empty.
+
+**Output:** `MappedOrder` record in `ProcuLink.Transform/Mapping/`:
+
+```csharp
+public record MappedOrder(
+    string?  PoNumber,
+    DateTime? OrderDate,
+    string?  BuyerName,
+    string?  Currency,
+    string?  BillingAddress,
+    string?  ShippingAddress,
+    string?  PaymentTerms,
+    string?  Notes,
+    IReadOnlyList<MappedOrderLine> Lines
+);
+
+public record MappedOrderLine(
+    int      LineNumber,
+    string   BuyerItemCode,
+    string?  Description,
+    decimal  Quantity,
+    string?  Unit,
+    decimal? UnitPrice
+);
+```
+
+`MappedOrder` serialises to the same `CanonicalJson` shape as `ParsedOrder`, extended with
+`billingAddress`, `shippingAddress`, `paymentTerms`, `notes`. Everything downstream reads
+from `CanonicalJson` and is unaffected.
+
+### `ParseOrderJob` update
+
+```
+Download file from R2
+↓
+Load PoMappingConfig? for (orgId, supplierId)
+├── Config exists → read raw CSV rows (CsvHelper, no ClassMap)
+│                  → PoMappingEngine.Apply → MappedOrder → CanonicalJson
+└── No config    → CsvOrderParser.ParseAsync → ParsedOrder → CanonicalJson  (unchanged)
+↓
+Item code resolution via IItemMappingService (unchanged, runs after either path)
+```
 
 ---
 
 ## Frontend
 
-### New file: `src/components/bridge/ImportMappingsDialog.tsx`
+### Supplier detail page
 
-A shadcn `<Dialog>` controlled by `open` / `onOpenChange` props. Accepts `supplierId: string` as a prop.
+`src/app/(app)/library/suppliers/[id]/page.tsx` gets a **"PO Mapping"** tab added
+alongside existing tabs.
 
-**Phase 1 — Column selection:**
-- A `<input type="file" accept=".csv">` inside the dialog body.
-- On file selection: use `FileReader.readAsText()` to read the file, split the first line by comma, trim whitespace and double-quotes to extract header names.
-- Render two `<Select>` components: "Buyer item code column" and "Supplier item code column", populated with the parsed header names.
-- "Import" button is disabled until both selects have a value and the file is present.
+### `src/components/bridge/PoMappingEditor.tsx`
 
-**Phase 2 — Importing:**
-- On "Import" click: call `importMappings()` via `useMutation`.
-- Button shows a `<Loader2>` spinner while pending.
-- On success: close dialog, invalidate `["mappings", supplierId]`, show toast: `"Imported N rows (M skipped)"`.
-- On error: show destructive toast with the error message; dialog stays open so the user can retry.
-- Reset all local state (file, headers, column choices) when dialog closes.
+`'use client'` component receiving `supplierId: string`. Loads config via `useQuery`
+(key: `["po-mapping", supplierId]`). Local state mirrors the config for editing.
 
-### Changes to `src/views/MappingsPage.tsx`
+**Layout:**
 
-The existing mappings card `<CardHeader>` gets a right-aligned button group added, visible only when a supplier is selected:
+1. **Toolbar (top right):** Save button (calls `savePoMapping` via `useMutation`, shows
+   spinner while pending, toast on success/error) · Export JSON (downloads file) ·
+   Import JSON (hidden `<input type="file" accept=".json">`) · "View JSON" toggle
+   (switches entire editor to a read-only `<pre>` of the current config — not editable,
+   just for inspection)
 
-- **"Export CSV"** (`<Download>` icon): calls `exportMappings(selectedId)`. Disabled if `loadingMappings` or `mappings.length === 0`.
-- **"Import CSV"** (`<Upload>` icon): sets `importOpen(true)` to open `ImportMappingsDialog`. Always enabled when a supplier is selected.
+2. **File settings strip:** Separator dropdown (`,` / `;` / Tab) · Has Header Record toggle
 
-`<ImportMappingsDialog supplierId={selectedId} open={importOpen} onOpenChange={setImportOpen} />` rendered unconditionally at the bottom of the component (below the cards), with `supplierId` defaulting to `""` when nothing is selected (dialog will not be opened in that case).
+3. **"Order Header" card:** One row per canonical header field (8 rows). Each row:
+   - Field name label (bold)
+   - Source toggle: "Column" / "Fixed value"
+   - If Column: text input labelled "CSV column name"
+   - If Fixed value: text input labelled "Value"
+   - Manipulators chevron → expands an inline list of added manipulators with
+     an "Add manipulator" button
 
-### Changes to `src/lib/api-client.ts`
+4. **"Line Items" card:** Same structure for 5 line fields.
 
-Two new named exports following the existing `USE_MOCK` / `authHeader()` pattern:
+5. **Manipulator row** (inside expanded section):
+   - `<Select>` with 8 options
+   - Parameter inputs that change based on selected manipulator:
+     - `Replace` → "Find" + "Replace with" text inputs
+     - `Trim` → optional "Characters" input (placeholder: "whitespace")
+     - `DateFormat` → "Format" input (placeholder: `dd/MM/yyyy`)
+     - `Concat` → dynamic list of parts — each part is a text input prefixed with
+       a type toggle ("Literal" / "Column ref"); "Add part" button
+     - `Fallback` → "Fallback column" text input
+     - `Split` → "Delimiter" + "Index" inputs
+     - `Multiply` / `Divide` → "Factor" numeric input
+   - × remove button (right side)
+
+Unmapped fields show a muted "Not mapped" placeholder — not an error, just empty.
+
+### `src/lib/api-client.ts` additions
 
 ```typescript
-export async function importMappings(
-  supplierId: string,
-  file: File,
-  buyerColumn: string,
-  supplierColumn: string,
-): Promise<{ imported: number; skipped: number }>
+export async function getPoMapping(supplierId: string): Promise<PoMappingConfig | null>
+export async function savePoMapping(supplierId: string, config: PoMappingConfig): Promise<PoMappingConfig>
+export async function exportPoMapping(supplierId: string): Promise<void>   // blob download
+export async function importPoMapping(supplierId: string, file: File): Promise<PoMappingConfig>
 ```
 
-- Mock: returns `{ imported: 2, skipped: 0 }` after 800 ms delay.
-- Real: `POST /api/suppliers/{supplierId}/mappings/import?buyerColumn=…&supplierColumn=…` with a `FormData` body containing the file; parses JSON response.
+Mock: `getPoMapping` returns a sample config with `PoNumber`, `OrderDate`, `Currency`
+(fixed: `EUR`) in header and `BuyerItemCode`, `Quantity` (with Replace `,`→`.`) in lines.
+`exportPoMapping` builds a blob from the mock config and triggers `<a download>`.
+
+### TypeScript types — `src/types/procurement.ts` additions
 
 ```typescript
-export async function exportMappings(supplierId: string): Promise<void>
-```
+export interface PoMappingConfig {
+  hasHeaderRecord: boolean;
+  separator: string;
+  header: Record<string, FieldMappingEntry>;
+  lines:  Record<string, FieldMappingEntry>;
+}
 
-- Mock: builds a blob from `mockMappings[supplierId]` (header + rows), creates an object URL, clicks a hidden `<a download="mappings-mock.csv">`, revokes the URL.
-- Real: `GET /api/suppliers/{supplierId}/mappings/export` with auth header; receives blob; same download trigger pattern.
+export interface FieldMappingEntry {
+  externalField?:    string;
+  fixedValue?:       string;
+  fieldManipulators?: ManipulatorEntry[];
+}
+
+export interface ManipulatorEntry {
+  name:       string;
+  parameters: string[];
+}
+```
 
 ---
 
@@ -113,11 +360,31 @@ export async function exportMappings(supplierId: string): Promise<void>
 
 | Action | Path |
 |--------|------|
-| Create | `ProcuLink.Api/Helpers/CsvHelper.cs` |
-| Modify | `ProcuLink.Api/Controllers/SuppliersController.cs` — add 2 endpoints |
-| Create | `src/components/bridge/ImportMappingsDialog.tsx` |
-| Modify | `src/views/MappingsPage.tsx` — add import/export buttons + dialog |
-| Modify | `src/lib/api-client.ts` — add `importMappings`, `exportMappings` |
+| Create | `ProcuLink.Core/Entities/SupplierPoMapping.cs` |
+| Create | `ProcuLink.Core/Services/Mapping/PoMappingConfig.cs` |
+| Create | `ProcuLink.Core/Services/Mapping/IPoMappingService.cs` |
+| Create | `ProcuLink.Infrastructure/Services/PoMappingService.cs` |
+| Create | `ProcuLink.Transform/Mapping/IFieldManipulator.cs` |
+| Create | `ProcuLink.Transform/Mapping/ManipulatorRegistry.cs` |
+| Create | `ProcuLink.Transform/Mapping/Manipulators/ReplaceManipulator.cs` |
+| Create | `ProcuLink.Transform/Mapping/Manipulators/TrimManipulator.cs` |
+| Create | `ProcuLink.Transform/Mapping/Manipulators/DateFormatManipulator.cs` |
+| Create | `ProcuLink.Transform/Mapping/Manipulators/ConcatManipulator.cs` |
+| Create | `ProcuLink.Transform/Mapping/Manipulators/FallbackManipulator.cs` |
+| Create | `ProcuLink.Transform/Mapping/Manipulators/SplitManipulator.cs` |
+| Create | `ProcuLink.Transform/Mapping/Manipulators/MultiplyManipulator.cs` |
+| Create | `ProcuLink.Transform/Mapping/Manipulators/DivideManipulator.cs` |
+| Create | `ProcuLink.Transform/Mapping/MappedOrder.cs` |
+| Create | `ProcuLink.Transform/Mapping/PoMappingEngine.cs` |
+| Create | `src/components/bridge/PoMappingEditor.tsx` |
+| Create | `src/types/procurement.ts` (additions) |
+| Modify | `ProcuLink.Infrastructure/ProcuLinkDbContext.cs` — add `SupplierPoMappings` DbSet + EF config |
+| Modify | `ProcuLink.Api/Controllers/SuppliersController.cs` — add 4 endpoints |
+| Modify | `ProcuLink.Api/Program.cs` — register `IPoMappingService` |
+| Modify | `ProcuLink.Worker/Jobs/ParseOrderJob.cs` — template-aware code path |
+| Modify | `src/lib/api-client.ts` — add 4 functions |
+| Modify | `src/app/(app)/library/suppliers/[id]/page.tsx` — add PO Mapping tab |
+| Create | EF migration `AddSupplierPoMappings` |
 
 ---
 
@@ -126,22 +393,36 @@ export async function exportMappings(supplierId: string): Promise<void>
 | Scenario | Response |
 |----------|----------|
 | Supplier not found or wrong org | `404 Not Found` |
-| `buyerColumn` or `supplierColumn` not in CSV header | `400 { error: "Column 'X' not found in CSV header" }` |
-| File missing or empty | `400 { error: "No file uploaded" }` |
-| Row with empty buyer or supplier cell | Skipped, counted in `skipped` |
-| Import network error (frontend) | Destructive toast; dialog stays open |
-| Export network error (frontend) | Destructive toast |
+| Import file missing or empty | `400 { error: "No file provided" }` |
+| Import JSON missing required keys | `400 { error: "Invalid mapping config: missing 'lines'" }` |
+| ExternalField column not found in CSV | Row treated as if field is empty (no crash) |
+| Manipulator receives non-numeric input for Multiply/Divide | Returns original value unchanged; warning logged |
+| Save network error (frontend) | Destructive toast; editor stays open |
+| Import file parse error (frontend) | Destructive toast; editor stays open |
 
 ---
 
 ## Testing
 
-**Backend (`ProcuLink.Api.Tests` or integration tests):**
-- `CsvHelper.ParseLine` unit tests: plain cells, quoted cells, cells with embedded commas, embedded double-quotes.
-- `CsvHelper.EscapeCell` unit tests: plain value, value with comma, value with double-quote.
-- Import endpoint: valid CSV → correct `imported`/`skipped` counts; missing column → 400; wrong org → 404.
-- Export endpoint: returns CSV with correct headers and rows; empty supplier → header-only CSV; wrong org → 404.
+**`ProcuLink.Transform` unit tests:**
+
+- Each manipulator in isolation: valid input, empty input, edge cases
+  (e.g. `Replace` with no match, `DateFormat` with unparseable string,
+  `Concat` with missing `@Col` reference — returns empty string for that part)
+- `PoMappingEngine.Apply`: sample config + sample rows → verify all header and line fields
+  extracted correctly; verify `FixedValue` overrides `ExternalField`; verify missing column
+  returns empty string (not exception); verify manipulator chain applied in order
+
+**`ProcuLink.Api` integration tests:**
+
+- `GET /api/suppliers/{id}/po-mapping` — 404 when no config; 200 with config when exists
+- `PUT /api/suppliers/{id}/po-mapping` — creates on first call; replaces on second call
+- `POST /api/suppliers/{id}/po-mapping/import` — valid JSON → 200; missing keys → 400;
+  wrong org → 404
+- `GET /api/suppliers/{id}/po-mapping/export` — Content-Disposition attachment header present
 
 **Frontend:**
-- `ImportMappingsDialog`: header parsing from a sample CSV string; column select populates correctly; submit calls `importMappings` with correct args; success closes dialog and shows toast; error keeps dialog open.
-- `exportMappings` mock: blob is created and download triggered.
+
+- `PoMappingEditor`: renders all 8 header fields and 5 line fields; column/fixed toggle
+  switches input; manipulator add/remove works; save calls `savePoMapping` with correct shape;
+  export triggers download; import reads file and populates editor
