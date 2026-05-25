@@ -19,4 +19,4 @@ COPY --from=build /app/out .
 EXPOSE 8080
 
 # Railway injects PORT at runtime; fall back to 8080 for local docker run
-CMD sh -c "ASPNETCORE_URLS=http://+:${PORT:-8080} dotnet ProcuLink.Api.dll"
+CMD ["sh", "-c", "ASPNETCORE_URLS=http://+:${PORT:-8080} dotnet ProcuLink.Api.dll"]
