@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 178 40" fill="none" role="img" aria-label="ProcuLink">
+  <title>ProcuLink</title>
+  <path d="M8 10h14a10 10 0 0 1 10 10v0a10 10 0 0 1-10 10H8" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" fill="none"></path>
+  <circle cx="8" cy="10" r="2.5" fill="currentColor"></circle>
+  <circle cx="8" cy="30" r="2.5" fill="currentColor"></circle>
+  <text x="48" y="27" font-family="Inter, system-ui, sans-serif" font-weight="700" font-size="22" letter-spacing="-0.015em" fill="currentColor">ProcuLink</text>
+</svg>

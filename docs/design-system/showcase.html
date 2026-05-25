@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=1280"/>
+  <title>ProcuLink Design System — Showcase</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bricolage+Grotesque:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="tokens/tokens.css"/>
+  <style>
+    /* Showcase-only layout */
+    body { background: var(--bg); }
+    .doc { max-width: 1180px; margin: 0 auto; padding: 56px 32px 80px; }
+    .doc-head { padding: 24px 0 32px; border-bottom: 1px solid var(--border); margin-bottom: 32px;}
+    .doc-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-muted); }
+    .doc-title { font-family: var(--font-display); font-size: 44px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.05; margin: 6px 0 0; }
+    .doc-sub { color: var(--ink-muted); font-size: 16px; margin-top: 12px; max-width: 720px; line-height: 1.55;}
+    .nav { display: flex; gap: 0; padding: 14px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); flex-wrap: wrap; background: var(--surface); position: sticky; top: 0; z-index: 30; margin: 0 -32px 32px; padding-left: 32px; padding-right: 32px;}
+    .nav a { padding: 6px 12px; border-radius: 5px; font-size: 13px; color: var(--ink-muted); text-decoration: none; }
+    .nav a:hover { background: var(--surface-2); color: var(--ink); text-decoration: none;}
+    section { padding-top: 24px; padding-bottom: 32px; scroll-margin-top: 76px; }
+    section + section { border-top: 1px solid var(--border); }
+    h2 { font-family: var(--font-display); font-size: 28px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 8px;}
+    h3 { font-size: 16px; font-weight: 600; margin: 24px 0 10px;}
+    h4 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); margin: 18px 0 8px;}
+    p { color: var(--ink-muted); font-size: 14px; line-height: 1.55; max-width: 720px;}
+
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+    .grid-6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+
+    .swatch { border-radius: 8px; overflow: hidden; border: 1px solid var(--border); background: var(--surface);}
+    .swatch-color { height: 76px;}
+    .swatch-info { padding: 10px 12px; font-size: 12px;}
+    .swatch-name { font-weight: 600; color: var(--ink); }
+    .swatch-hex { font-family: var(--font-mono); font-size: 11px; color: var(--ink-muted); margin-top: 2px;}
+
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 18px; }
+    .panel-dark { background: var(--navy); color: var(--navy-text); border-color: var(--navy-border); }
+
+    .xcard-demo { position: relative; padding: 18px 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); overflow: hidden;}
+    .xcard-demo[data-edge="left-blue"]::before  { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--brand-blue);}
+    .xcard-demo[data-edge="left-green"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--brand-green);}
+    .xcard-demo[data-edge="left-bridge"]::before{ content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--gradient-link-spine);}
+    .xcard-demo[data-edge="top-bridge"]::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--gradient-link-spine);}
+
+    .label { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted);}
+    .num { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.025em; line-height: 1;}
+
+    .button {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      height: 30px; padding: 0 12px;
+      border-radius: var(--radius); border: 1px solid transparent;
+      font: inherit; font-size: 12.5px; font-weight: 500;
+      cursor: pointer; transition: background .15s;
+    }
+    .button.primary   { background: var(--navy); color: white; }
+    .button.primary:hover { background: var(--navy-surface); }
+    .button.secondary { background: var(--surface); color: var(--ink); border-color: var(--border);}
+    .button.secondary:hover { background: var(--surface-2); border-color: var(--border-strong);}
+    .button.ghost     { background: transparent; color: var(--ink-muted);}
+    .button.ghost:hover { background: var(--surface-2); color: var(--ink);}
+    .button.danger    { background: var(--danger); color: white;}
+    .button.ai        { background: var(--ai); color: white;}
+
+    .chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      height: 20px; padding: 0 7px;
+      border-radius: var(--radius-sm);
+      font-size: 11px; font-weight: 500;
+    }
+    .chip-dot { width: 5px; height: 5px; border-radius: 50%;}
+
+    .src-chip {
+      font-family: var(--font-mono);
+      font-size: 10px; font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      letter-spacing: 0.02em;
+    }
+
+    .conf {
+      display: inline-flex; align-items: center;
+      font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+      padding: 1px 5px; border-radius: 3px;
+    }
+    .conf.ok   { background: var(--brand-green-soft); color: var(--brand-green-deep);}
+    .conf.warn { background: var(--amber-soft); color: var(--amber);}
+    .conf.danger { background: var(--danger-soft); color: var(--danger);}
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border);}
+    th { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); background: var(--surface);}
+
+    .spine-demo { position: relative; padding-left: 36px; }
+    .spine-demo::before { content: ""; position: absolute; left: 22px; top: 0; bottom: 0; width: 3px; background: var(--gradient-link-spine); border-radius: 2px;}
+    .spine-node {
+      position: relative; margin-bottom: 10px;
+      background: white; border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;
+    }
+    .spine-node::after {
+      content: ""; position: absolute; left: -19px; top: 14px;
+      width: 13px; height: 13px; border-radius: 50%;
+      background: white; border: 2.5px solid var(--brand-blue);
+    }
+    .spine-node.green::after { border-color: var(--brand-green);}
+
+    .key { font-family: var(--font-mono); font-size: 10px; color: var(--ink-muted); padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface);}
+
+    .download {
+      margin-top: 24px;
+      padding: 20px 22px;
+      background: var(--navy);
+      color: white;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+    .download h3 { color: white; margin: 0; font-size: 18px;}
+    .download p  { color: var(--navy-text); margin: 4px 0 0; max-width: 540px;}
+    .download a {
+      margin-left: auto;
+      padding: 12px 18px;
+      background: white;
+      color: var(--navy);
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .download a:hover { background: var(--bg);}
+
+    /* Animations */
+    @keyframes spine-flow {
+      0% { background-position: -100% 0; }
+      100% { background-position: 100% 0; }
+    }
+    .anim-spine {
+      height: 2px;
+      background: linear-gradient(90deg, transparent 0%, var(--brand-blue) 30%, var(--brand-green) 70%, transparent 100%);
+      background-size: 50% 100%;
+      background-repeat: no-repeat;
+      animation: spine-flow 4s linear infinite;
+    }
+  </style>
+</head>
+<body>
+
+<div class="doc">
+
+  <div class="doc-head">
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <svg width="36" height="36" viewBox="0 0 40 40" fill="none"><defs><linearGradient id="mk-head" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1E66C9"/><stop offset="100%" stop-color="#2E8E3A"/></linearGradient></defs><path d="M8 10h14a10 10 0 0 1 10 10v0a10 10 0 0 1-10 10H8" stroke="url(#mk-head)" stroke-width="3.6" stroke-linecap="round" fill="none"/><circle cx="8" cy="10" r="2.5" fill="#1E66C9"/><circle cx="8" cy="30" r="2.5" fill="#2E8E3A"/></svg>
+      <div>
+        <div class="doc-eyebrow">ProcuLink Design System · v1.0</div>
+        <div style="font-size: 13.5px; color: var(--ink-muted);">The Bridge Layer · May 2026</div>
+      </div>
+    </div>
+    <h1 class="doc-title">Buyers on one side.<br/>Suppliers on the other.<br/>We are the bridge.</h1>
+    <p class="doc-sub">This page is a visual reference. The source of truth is the <code style="font-family: var(--font-mono); font-size: 13px;">design-system/</code> folder — tokens, components, motion, content rules, and the Claude Code handoff brief.</p>
+  </div>
+
+  <nav class="nav">
+    <a href="#colors">Colors</a>
+    <a href="#typography">Typography</a>
+    <a href="#spacing">Spacing & Radii</a>
+    <a href="#components">Components</a>
+    <a href="#signatures">Signatures</a>
+    <a href="#motion">Motion</a>
+    <a href="#identity">Identity</a>
+    <a href="#download">Download</a>
+  </nav>
+
+  <!-- ============ COLORS ============ -->
+  <section id="colors">
+    <h2>Colors</h2>
+    <p>Four buckets only: Brand · Chrome · Surface · Semantic. If a color doesn't classify, it doesn't ship. Blue = buyer / incoming / structure. Green = supplier / outgoing / completion.</p>
+
+    <h4>Brand</h4>
+    <div class="grid-6">
+      <div class="swatch"><div class="swatch-color" style="background: #1E66C9;"></div><div class="swatch-info"><div class="swatch-name">brand-blue</div><div class="swatch-hex">#1E66C9</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #0F4FA8;"></div><div class="swatch-info"><div class="swatch-name">brand-blue-deep</div><div class="swatch-hex">#0F4FA8</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #E3EDFB;"></div><div class="swatch-info"><div class="swatch-name">brand-blue-soft</div><div class="swatch-hex">#E3EDFB</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #2E8E3A;"></div><div class="swatch-info"><div class="swatch-name">brand-green</div><div class="swatch-hex">#2E8E3A</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #1E6D29;"></div><div class="swatch-info"><div class="swatch-name">brand-green-deep</div><div class="swatch-hex">#1E6D29</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #E2F1E2;"></div><div class="swatch-info"><div class="swatch-name">brand-green-soft</div><div class="swatch-hex">#E2F1E2</div></div></div>
+    </div>
+
+    <h4>Navy chrome (sidebar + topbar only)</h4>
+    <div class="grid-6">
+      <div class="swatch"><div class="swatch-color" style="background: #0B1A2F;"></div><div class="swatch-info"><div class="swatch-name">navy</div><div class="swatch-hex">#0B1A2F</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #10243E;"></div><div class="swatch-info"><div class="swatch-name">navy-surface</div><div class="swatch-hex">#10243E</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #1C2F49;"></div><div class="swatch-info"><div class="swatch-name">navy-border</div><div class="swatch-hex">#1C2F49</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #C5D2E4;"></div><div class="swatch-info"><div class="swatch-name">navy-text</div><div class="swatch-hex">#C5D2E4</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #7C8DA6;"></div><div class="swatch-info"><div class="swatch-name">navy-muted</div><div class="swatch-hex">#7C8DA6</div></div></div>
+    </div>
+
+    <h4>Surface</h4>
+    <div class="grid-6">
+      <div class="swatch"><div class="swatch-color" style="background: #F6F7FA;"></div><div class="swatch-info"><div class="swatch-name">bg</div><div class="swatch-hex">#F6F7FA</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #F8F6F1;"></div><div class="swatch-info"><div class="swatch-name">bg-warm</div><div class="swatch-hex">#F8F6F1</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #FFFFFF; box-shadow: inset 0 0 0 1px var(--border);"></div><div class="swatch-info"><div class="swatch-name">surface</div><div class="swatch-hex">#FFFFFF</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #EFF2F7;"></div><div class="swatch-info"><div class="swatch-name">surface-2</div><div class="swatch-hex">#EFF2F7</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #E2E6EE;"></div><div class="swatch-info"><div class="swatch-name">border</div><div class="swatch-hex">#E2E6EE</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #C6CDDA;"></div><div class="swatch-info"><div class="swatch-name">border-strong</div><div class="swatch-hex">#C6CDDA</div></div></div>
+    </div>
+
+    <h4>Semantic</h4>
+    <div class="grid-4">
+      <div class="swatch"><div class="swatch-color" style="background: #C97A14;"></div><div class="swatch-info"><div class="swatch-name">amber · warning</div><div class="swatch-hex">#C97A14</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #C53A3A;"></div><div class="swatch-info"><div class="swatch-name">danger</div><div class="swatch-hex">#C53A3A</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: #6F4FCE;"></div><div class="swatch-info"><div class="swatch-name">ai · AI-only</div><div class="swatch-hex">#6F4FCE</div></div></div>
+      <div class="swatch"><div class="swatch-color" style="background: linear-gradient(90deg, #1E66C9 0%, #1E66C9 35%, #2E8E3A 65%, #2E8E3A 100%);"></div><div class="swatch-info"><div class="swatch-name">link-spine gradient</div><div class="swatch-hex">#1E66C9 → #2E8E3A</div></div></div>
+    </div>
+  </section>
+
+  <!-- ============ TYPOGRAPHY ============ -->
+  <section id="typography">
+    <h2>Typography</h2>
+    <p>Three families. Inter is the workhorse. Bricolage Grotesque is the display face — use sparingly. JetBrains Mono is reserved for technical identifiers.</p>
+
+    <h4>Display · Bricolage Grotesque</h4>
+    <div class="panel" style="padding: 26px 28px;">
+      <div style="font-family: var(--font-display); font-size: 78px; font-weight: 600; letter-spacing: -0.035em; line-height: 0.98;">
+        From messy order in,<br/>to clean order out.
+      </div>
+      <div style="font-family: var(--font-display); font-size: 36px; font-weight: 600; letter-spacing: -0.025em; margin-top: 18px;">
+        1,284
+      </div>
+      <div style="font-size: 11px; font-weight: 600; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 6px;">
+        Orders this week
+      </div>
+    </div>
+
+    <h4>UI · Inter</h4>
+    <div class="panel" style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+      <div>
+        <div style="font-size: 32px; font-weight: 600; letter-spacing: -0.025em;">H1 — Page title</div>
+        <div style="font-size: 24px; font-weight: 600; letter-spacing: -0.02em; margin-top: 10px;">H2 — Section title</div>
+        <div style="font-size: 18px; font-weight: 600; letter-spacing: -0.015em; margin-top: 10px;">H3 — Subsection</div>
+        <div style="font-size: 16px; font-weight: 600; margin-top: 10px;">H4 — Card title</div>
+      </div>
+      <div>
+        <div style="font-size: 14px; color: var(--ink-muted); margin-top: 4px;">Body-L 14px — for marketing body and comfortable reading. Lorem ipsum dolor sit amet, consectetur adipiscing elit.</div>
+        <div style="font-size: 13px; color: var(--ink); margin-top: 12px;">Body 13px — default body. Used everywhere in product UI for descriptions and prose.</div>
+        <div style="font-size: 12.5px; color: var(--ink); margin-top: 12px;">Body-S 12.5px — table rows, dense UI surfaces.</div>
+        <div style="font-size: 11.5px; color: var(--ink-muted); margin-top: 12px;">SM 11.5px — table headers, captions, chip labels.</div>
+      </div>
+    </div>
+
+    <h4>Mono · JetBrains Mono</h4>
+    <div class="panel" style="font-family: var(--font-mono);">
+      <div style="font-size: 16px; font-weight: 600;">PO-2026-008412</div>
+      <div style="font-size: 13px; color: var(--ink-muted); margin-top: 6px;">HEI-PLT-09 → ACM-PLT-200×200×4</div>
+      <div style="font-size: 12px; color: var(--ink-muted); margin-top: 6px;">Order/@orderID · BillTo/Address · ItemOut[3]</div>
+      <div style="font-size: 11px; color: var(--ink-faint); margin-top: 12px; font-family: var(--font-sans);">Use for: PO numbers · SKUs · file paths · field paths · IDs · durations · volumes</div>
+    </div>
+  </section>
+
+  <!-- ============ SPACING ============ -->
+  <section id="spacing">
+    <h2>Spacing & Radii</h2>
+    <p>4px base. Use these tokens only. Radii max out at 12px on rectangles; chips and round badges use full radius.</p>
+
+    <h4>Spacing scale</h4>
+    <div style="display: flex; align-items: flex-end; gap: 18px; padding: 20px 0;">
+      <div style="text-align: center;"><div style="width: 4px; height: 36px; background: var(--brand-blue); margin: 0 auto;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">4</div></div>
+      <div style="text-align: center;"><div style="width: 8px; height: 36px; background: var(--brand-blue); margin: 0 auto;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">8</div></div>
+      <div style="text-align: center;"><div style="width: 12px; height: 36px; background: var(--brand-blue); margin: 0 auto;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">12</div></div>
+      <div style="text-align: center;"><div style="width: 16px; height: 36px; background: var(--brand-blue); margin: 0 auto;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">16</div></div>
+      <div style="text-align: center;"><div style="width: 24px; height: 36px; background: var(--brand-blue); margin: 0 auto;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">24</div></div>
+      <div style="text-align: center;"><div style="width: 32px; height: 36px; background: var(--brand-blue); margin: 0 auto;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">32</div></div>
+      <div style="text-align: center;"><div style="width: 48px; height: 36px; background: var(--brand-blue); margin: 0 auto;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">48</div></div>
+      <div style="text-align: center;"><div style="width: 64px; height: 36px; background: var(--brand-blue); margin: 0 auto;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">64</div></div>
+    </div>
+
+    <h4>Radii</h4>
+    <div class="grid-6">
+      <div style="text-align: center;"><div style="height: 56px; background: var(--brand-blue-soft); border: 1px solid var(--brand-blue); border-radius: 4px;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">4 · sm</div></div>
+      <div style="text-align: center;"><div style="height: 56px; background: var(--brand-blue-soft); border: 1px solid var(--brand-blue); border-radius: 6px;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">6 · default</div></div>
+      <div style="text-align: center;"><div style="height: 56px; background: var(--brand-blue-soft); border: 1px solid var(--brand-blue); border-radius: 8px;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">8 · md</div></div>
+      <div style="text-align: center;"><div style="height: 56px; background: var(--brand-blue-soft); border: 1px solid var(--brand-blue); border-radius: 10px;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">10 · lg</div></div>
+      <div style="text-align: center;"><div style="height: 56px; background: var(--brand-blue-soft); border: 1px solid var(--brand-blue); border-radius: 12px;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">12 · xl</div></div>
+      <div style="text-align: center;"><div style="height: 56px; background: var(--brand-blue-soft); border: 1px solid var(--brand-blue); border-radius: 9999px;"></div><div style="font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 6px;">full</div></div>
+    </div>
+  </section>
+
+  <!-- ============ COMPONENTS ============ -->
+  <section id="components">
+    <h2>Components</h2>
+    <p>Foundation primitives. See <code style="font-family: var(--font-mono); font-size: 13px;">design-system/components/</code> for working React/JSX implementations.</p>
+
+    <h4>Buttons</h4>
+    <div class="panel" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+      <button class="button primary">Cross the bridge →</button>
+      <button class="button secondary">Save draft</button>
+      <button class="button ghost">Cancel</button>
+      <button class="button danger">Delete mapping</button>
+      <button class="button ai">Accept AI suggestion</button>
+    </div>
+
+    <h4>Status pills</h4>
+    <div class="panel" style="display: flex; gap: 8px; flex-wrap: wrap;">
+      <span class="chip" style="background: var(--brand-blue-soft); color: var(--brand-blue-deep);"><span class="chip-dot" style="background: var(--brand-blue);"></span>New</span>
+      <span class="chip" style="background: var(--ai-soft); color: var(--ai);"><span class="chip-dot" style="background: var(--ai);"></span>Extracting</span>
+      <span class="chip" style="background: var(--amber-soft); color: var(--amber);"><span class="chip-dot" style="background: var(--amber);"></span>Needs review</span>
+      <span class="chip" style="background: var(--brand-green-soft); color: var(--brand-green-deep);"><span class="chip-dot" style="background: var(--brand-green);"></span>Ready</span>
+      <span class="chip" style="background: var(--surface-2); color: var(--ink-muted);"><span class="chip-dot" style="background: var(--ink-faint);"></span>Delivered</span>
+      <span class="chip" style="background: var(--danger-soft); color: var(--danger);"><span class="chip-dot" style="background: var(--danger);"></span>Failed</span>
+    </div>
+
+    <h4>File-type chips</h4>
+    <div class="panel" style="display: flex; gap: 6px; flex-wrap: wrap;">
+      <span class="src-chip" style="background: #FBEEEE; color: #B53F3F;">PDF</span>
+      <span class="src-chip" style="background: var(--brand-green-soft); color: var(--brand-green-deep);">XLSX</span>
+      <span class="src-chip" style="background: #EEF3F8; color: #345470;">CSV</span>
+      <span class="src-chip" style="background: var(--ai-soft); color: #5E3DB0;">cXML</span>
+      <span class="src-chip" style="background: var(--amber-soft); color: var(--amber);">EDI</span>
+      <span class="src-chip" style="background: #E9EDF3; color: #4A5568;">EMAIL</span>
+      <span class="src-chip" style="background: #E3F0E3; color: var(--brand-green-deep);">API</span>
+      <span class="src-chip" style="background: #FFF4D6; color: #846100;">JSON</span>
+    </div>
+
+    <h4>Confidence chips</h4>
+    <div class="panel" style="display: flex; gap: 12px;">
+      <span class="conf ok">99%</span>
+      <span class="conf ok">92%</span>
+      <span class="conf warn">84%</span>
+      <span class="conf warn">76%</span>
+      <span class="conf danger">62%</span>
+    </div>
+
+    <h4>Status journey</h4>
+    <div class="panel" style="display: flex; flex-direction: column; gap: 18px;">
+      <div style="display: inline-flex; align-items: center; gap: 0;">
+        <span style="width: 14px; height: 14px; border-radius: 50%; background: var(--brand-green); border: 1.5px solid var(--brand-green);"></span>
+        <span style="width: 8px; height: 1.5px; background: var(--brand-green);"></span>
+        <span style="width: 14px; height: 14px; border-radius: 50%; background: var(--brand-green); border: 1.5px solid var(--brand-green);"></span>
+        <span style="width: 8px; height: 1.5px; background: var(--brand-green);"></span>
+        <span style="width: 14px; height: 14px; border-radius: 50%; background: var(--brand-blue); border: 1.5px solid var(--brand-blue); box-shadow: 0 0 0 3px rgba(30,102,201,0.18);"></span>
+        <span style="width: 8px; height: 1.5px; background: var(--border);"></span>
+        <span style="width: 14px; height: 14px; border-radius: 50%; background: white; border: 1.5px solid var(--border-strong);"></span>
+        <span style="width: 8px; height: 1.5px; background: var(--border);"></span>
+        <span style="width: 14px; height: 14px; border-radius: 50%; background: white; border: 1.5px solid var(--border-strong);"></span>
+        <span style="margin-left: 12px; font-size: 11px; color: var(--ink-muted);">Order at Validate (3/5)</span>
+      </div>
+    </div>
+
+    <h4>Cross-section cards (XCard)</h4>
+    <div class="grid-4">
+      <div class="xcard-demo" data-edge="left-blue">
+        <div class="label" style="color: var(--brand-blue);">BUYER</div>
+        <div style="font-size: 15px; font-weight: 600; margin-top: 4px;">Heinrich Industries</div>
+        <div style="font-size: 12px; color: var(--ink-muted); margin-top: 4px;">14 orders today</div>
+      </div>
+      <div class="xcard-demo" data-edge="left-green">
+        <div class="label" style="color: var(--brand-green-deep);">SUPPLIER</div>
+        <div style="font-size: 15px; font-weight: 600; margin-top: 4px;">Acme Components</div>
+        <div style="font-size: 12px; color: var(--ink-muted); margin-top: 4px;">98% acceptance</div>
+      </div>
+      <div class="xcard-demo" data-edge="left-bridge">
+        <div class="label">BRIDGE</div>
+        <div style="font-size: 15px; font-weight: 600; margin-top: 4px;">PO-2026-008412</div>
+        <div style="font-size: 12px; color: var(--ink-muted); margin-top: 4px;">14 lines · 3 issues</div>
+      </div>
+      <div class="xcard-demo" data-edge="top-bridge">
+        <div class="label">KPI</div>
+        <div class="num" style="font-size: 28px; margin-top: 4px;">1,284</div>
+        <div style="font-size: 11.5px; color: var(--brand-green-deep); font-weight: 500; margin-top: 4px;">+18% vs prev</div>
+      </div>
+    </div>
+
+    <h4>Buttons on dark (navy chrome)</h4>
+    <div class="panel panel-dark" style="display: flex; gap: 10px; align-items: center;">
+      <button class="button" style="background: white; color: var(--navy); border: 0;">Open inbox</button>
+      <button class="button" style="background: var(--navy-surface); color: white; border: 1px solid var(--navy-border);">Settings</button>
+      <button class="button ghost" style="color: var(--navy-text);">Cancel</button>
+      <span style="margin-left: auto; font-size: 12px; color: var(--navy-muted);">cmd+K to search</span>
+      <span class="key" style="background: var(--navy-surface); border-color: var(--navy-border); color: var(--navy-muted);">⌘K</span>
+    </div>
+  </section>
+
+  <!-- ============ SIGNATURES ============ -->
+  <section id="signatures">
+    <h2>Signature components</h2>
+    <p>These five make a ProcuLink screen recognizable. See <code style="font-family: var(--font-mono); font-size: 13px;">05-components.md</code> for full specs and React reference implementations.</p>
+
+    <h4>Edge rails (left = buyer · right = supplier)</h4>
+    <div style="position: relative; height: 180px; background: var(--bg); border-radius: 10px; border: 1px solid var(--border); overflow: hidden;">
+      <div style="position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--gradient-rail-buyer);"></div>
+      <div style="position: absolute; left: 0; top: 24px; width: 14px; height: 32px; background: var(--brand-blue); border-top-right-radius: 4px; border-bottom-right-radius: 4px;"></div>
+      <div style="position: absolute; left: 22px; top: 28px; font-size: 9px; font-weight: 700; color: var(--brand-blue); letter-spacing: 0.12em; writing-mode: vertical-rl; text-transform: uppercase;">BUYER · IN</div>
+      <div style="position: absolute; right: 0; top: 0; bottom: 0; width: 4px; background: var(--gradient-rail-supplier);"></div>
+      <div style="position: absolute; right: 0; top: 24px; width: 14px; height: 32px; background: var(--brand-green); border-top-left-radius: 4px; border-bottom-left-radius: 4px;"></div>
+      <div style="position: absolute; right: 22px; top: 28px; font-size: 9px; font-weight: 700; color: var(--brand-green); letter-spacing: 0.12em; writing-mode: vertical-rl; text-transform: uppercase; transform: rotate(180deg);">SUPPLIER · OUT</div>
+      <div style="padding: 32px 40px; height: 100%; display: flex; align-items: center; justify-content: center;">
+        <div style="text-align: center; color: var(--ink-muted); font-size: 13px;">Work area framed by edge rails<br/><span style="font-size: 11px; color: var(--ink-faint);">used on order-handling screens · never around individual cards</span></div>
+      </div>
+    </div>
+
+    <h4>Wire topology (Bridge dashboard centerpiece)</h4>
+    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0; overflow: hidden;">
+      <svg viewBox="0 0 800 280" width="100%" height="280">
+        <defs>
+          <linearGradient id="wg" x1="0" x2="1"><stop offset="0%" stop-color="#1E66C9"/><stop offset="100%" stop-color="#2E8E3A"/></linearGradient>
+          <linearGradient id="ww" x1="0" x2="1"><stop offset="0%" stop-color="#1E66C9"/><stop offset="50%" stop-color="#C97A14"/><stop offset="100%" stop-color="#C97A14"/></linearGradient>
+        </defs>
+        <text x="24" y="26" style="fill: #0B1A2F; font-size: 14px; font-weight: 600; font-family: 'Bricolage Grotesque', sans-serif; letter-spacing: -0.015em;">Order topology</text>
+        <text x="24" y="44" style="fill: #56627A; font-size: 10.5px;">7 lanes · 28 crossings in last 24h</text>
+        <!-- Buyers -->
+        <g>
+          <rect x="40" y="60" width="120" height="32" rx="5" fill="#FFFFFF" stroke="#1E66C9" stroke-width="1.2"/><rect x="40" y="60" width="2.5" height="32" fill="#1E66C9"/>
+          <text x="52" y="75" style="fill: #0B1A2F; font-size: 11px; font-weight: 600;">Heinrich</text>
+          <text x="52" y="87" style="fill: #8A93A5; font-size: 9px; font-family: 'JetBrains Mono';">HEI · 412/wk</text>
+          <circle cx="160" cy="76" r="3.5" fill="#1E66C9"/>
+        </g>
+        <g>
+          <rect x="40" y="120" width="120" height="32" rx="5" fill="#FFFFFF" stroke="#1E66C9" stroke-width="1.2"/><rect x="40" y="120" width="2.5" height="32" fill="#1E66C9"/>
+          <text x="52" y="135" style="fill: #0B1A2F; font-size: 11px; font-weight: 600;">Nordmark</text>
+          <text x="52" y="147" style="fill: #8A93A5; font-size: 9px; font-family: 'JetBrains Mono';">NRD · 268/wk</text>
+          <circle cx="160" cy="136" r="3.5" fill="#1E66C9"/>
+        </g>
+        <g>
+          <rect x="40" y="180" width="120" height="32" rx="5" fill="#FFFFFF" stroke="#1E66C9" stroke-width="1.2"/><rect x="40" y="180" width="2.5" height="32" fill="#1E66C9"/>
+          <text x="52" y="195" style="fill: #0B1A2F; font-size: 11px; font-weight: 600;">Centralis</text>
+          <text x="52" y="207" style="fill: #8A93A5; font-size: 9px; font-family: 'JetBrains Mono';">CNT · 144/wk</text>
+          <circle cx="160" cy="196" r="3.5" fill="#1E66C9"/>
+        </g>
+        <!-- Wires -->
+        <path d="M 160 76  C 320 76,  480 96, 640 96"  stroke="url(#wg)" stroke-width="4" fill="none" opacity="0.78"/>
+        <path d="M 160 76  C 320 76,  480 160, 640 160" stroke="url(#wg)" stroke-width="2" fill="none" opacity="0.6"/>
+        <path d="M 160 136 C 320 136, 480 96, 640 96"   stroke="url(#wg)" stroke-width="3" fill="none" opacity="0.6"/>
+        <path d="M 160 136 C 320 136, 480 220, 640 220" stroke="url(#wg)" stroke-width="2" fill="none" opacity="0.6"/>
+        <path d="M 160 196 C 320 196, 480 160, 640 160" stroke="url(#ww)" stroke-width="3" fill="none" opacity="0.78"/>
+        <!-- Alert -->
+        <g transform="translate(400, 178)"><circle r="8" fill="#FFFFFF" stroke="#C97A14" stroke-width="1.5"/><text x="0" y="3" text-anchor="middle" style="fill: #C97A14; font-size: 9px; font-weight: 700;">6</text></g>
+        <!-- Suppliers -->
+        <g>
+          <rect x="640" y="80" width="120" height="32" rx="5" fill="#FFFFFF" stroke="#2E8E3A" stroke-width="1.2"/><rect x="757.5" y="80" width="2.5" height="32" fill="#2E8E3A"/>
+          <text x="652" y="95" style="fill: #0B1A2F; font-size: 11px; font-weight: 600;">Acme</text>
+          <text x="652" y="107" style="fill: #8A93A5; font-size: 9px; font-family: 'JetBrains Mono';">ACM · 98%</text>
+          <circle cx="640" cy="96" r="3.5" fill="#FFFFFF" stroke="#2E8E3A" stroke-width="1.8"/>
+        </g>
+        <g>
+          <rect x="640" y="144" width="120" height="32" rx="5" fill="#FFFFFF" stroke="#2E8E3A" stroke-width="1.2"/><rect x="757.5" y="144" width="2.5" height="32" fill="#2E8E3A"/>
+          <text x="652" y="159" style="fill: #0B1A2F; font-size: 11px; font-weight: 600;">BoltWorks</text>
+          <text x="652" y="171" style="fill: #8A93A5; font-size: 9px; font-family: 'JetBrains Mono';">BLT · 96%</text>
+          <circle cx="640" cy="160" r="3.5" fill="#FFFFFF" stroke="#2E8E3A" stroke-width="1.8"/>
+        </g>
+        <g>
+          <rect x="640" y="204" width="120" height="32" rx="5" fill="#FFFFFF" stroke="#C97A14" stroke-width="1.2"/><rect x="757.5" y="204" width="2.5" height="32" fill="#C97A14"/>
+          <text x="652" y="219" style="fill: #0B1A2F; font-size: 11px; font-weight: 600;">MedicaSupply</text>
+          <text x="652" y="231" style="fill: #C97A14; font-size: 9px; font-family: 'JetBrains Mono';">MED · 71%</text>
+          <circle cx="640" cy="220" r="3.5" fill="#FFFFFF" stroke="#C97A14" stroke-width="1.8"/>
+        </g>
+      </svg>
+    </div>
+
+    <h4>Canonical spine (the order schema as architecture)</h4>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start;">
+      <div class="panel">
+        <div class="label" style="color: var(--ink-faint); margin-bottom: 14px;">CANONICAL SPINE</div>
+        <div class="spine-demo">
+          <div class="spine-node">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+              <div class="label" style="font-size: 10px;">PO NUMBER</div>
+              <span class="conf ok" style="margin-left: auto;">99%</span>
+            </div>
+            <div style="font-family: var(--font-mono); font-size: 12.5px; font-weight: 500;">PO-2026-008412</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border); font-size: 9.5px; font-family: var(--font-mono); font-weight: 600;">
+              <span style="color: var(--brand-blue);">← header</span>
+              <span style="color: var(--ink-faint);">→</span>
+              <span style="color: var(--brand-green-deep); flex: 1; text-align: right;">Order/@orderID</span>
+            </div>
+          </div>
+          <div class="spine-node" style="background: var(--amber-soft); border-color: #F0E0BD;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+              <div class="label" style="font-size: 10px;">BILL TO</div>
+              <span class="conf warn" style="margin-left: auto;">72%</span>
+            </div>
+            <div style="font-size: 12.5px; font-weight: 500;">Postfach 1042 · 70001 Stuttgart, DE</div>
+            <div style="font-size: 10.5px; color: var(--amber); margin-top: 3px;">⚠ Format differs from prior orders</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border); font-size: 9.5px; font-family: var(--font-mono); font-weight: 600;">
+              <span style="color: var(--brand-blue);">← parties.billTo</span>
+              <span style="color: var(--ink-faint);">→</span>
+              <span style="color: var(--brand-green-deep); flex: 1; text-align: right;">BillTo/Address</span>
+            </div>
+          </div>
+          <div class="spine-node green">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+              <div class="label" style="font-size: 10px;">GRAND TOTAL</div>
+              <span class="conf ok" style="margin-left: auto;">100%</span>
+            </div>
+            <div style="font-family: var(--font-mono); font-size: 16px; font-weight: 600; letter-spacing: -0.01em;">€ 4,436.73</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border); font-size: 9.5px; font-family: var(--font-mono); font-weight: 600;">
+              <span style="color: var(--brand-blue);">← totals</span>
+              <span style="color: var(--ink-faint);">→</span>
+              <span style="color: var(--brand-green-deep); flex: 1; text-align: right;">Total/@amount</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="label" style="color: var(--ink-faint); margin-bottom: 14px;">AI SUGGESTION</div>
+        <div style="border: 1px solid var(--border); border-left: 3px solid var(--ai); border-radius: 6px; padding: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="font-size: 13px; font-weight: 600; flex: 1;">Map HEI-PLT-09 → ACM-PLT-200×200×4</div>
+            <span style="font-size: 9.5px; font-weight: 700; padding: 2px 6px; border-radius: 3px; background: var(--ai-soft); color: var(--ai); text-transform: uppercase; letter-spacing: 0.04em;">AI · 84%</span>
+          </div>
+          <div style="font-size: 11.5px; color: var(--ink-muted); margin-top: 6px; line-height: 1.5;">Acme catalog match. Used 6 times in last 90 days by Heinrich.</div>
+          <div style="display: flex; gap: 6px; margin-top: 10px;">
+            <button class="button ai" style="height: 26px; padding: 0 9px; font-size: 11.5px;">Accept</button>
+            <button class="button secondary" style="height: 26px; padding: 0 9px; font-size: 11.5px;">Edit</button>
+            <button class="button ghost" style="height: 26px; padding: 0 9px; font-size: 11.5px;">Reject</button>
+          </div>
+        </div>
+
+        <div class="label" style="color: var(--ink-faint); margin: 18px 0 14px;">FILE-TYPE CHIP IN A ROW</div>
+        <div style="padding: 10px 12px; background: var(--surface-2); border-radius: 6px; display: flex; align-items: center; gap: 10px; font-size: 12px;">
+          <span class="src-chip" style="background: var(--ai-soft); color: #5E3DB0;">cXML</span>
+          <span style="font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-muted);">acme-1.2.cxml</span>
+          <span style="margin-left: auto; font-size: 11px; color: var(--brand-green-deep); font-weight: 500;">✓ accepted</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ MOTION ============ -->
+  <section id="motion">
+    <h2>Motion</h2>
+    <p>Six patterns, each with a single job. All respect <code style="font-family: var(--font-mono); font-size: 12.5px;">prefers-reduced-motion</code>. See <code style="font-family: var(--font-mono); font-size: 12.5px;">06-motion.md</code>.</p>
+
+    <h4>Link-spine activation (live)</h4>
+    <div class="panel">
+      <div class="anim-spine" style="margin: 18px 0 6px;"></div>
+      <div style="font-size: 12px; color: var(--ink-muted);">When an order advances a stage — the topbar spine fills left→right.</div>
+    </div>
+
+    <h4>Motion budget</h4>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Rule</th><th>Detail</th></tr></thead>
+        <tbody>
+          <tr><td>Loop max</td><td>6 seconds</td></tr>
+          <tr><td>Concurrent animations</td><td>2 + the wire-topology background</td></tr>
+          <tr><td>While typing</td><td>Pause all motion</td></tr>
+          <tr><td>Keyboard navigation</td><td>Pause all motion above the action bar</td></tr>
+          <tr><td>Reduced motion</td><td>Disable wire travellers and spine fills entirely</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ IDENTITY ============ -->
+  <section id="identity">
+    <h2>Identity</h2>
+    <p>The mark is one expression of a family of link-glyphs. Rails, spine, stage glyphs, logo, and loading state all share the same construction.</p>
+
+    <h4>Mark · sizes</h4>
+    <div class="panel" style="display: flex; gap: 32px; align-items: center;">
+      <div style="text-align: center;">
+        <svg width="16" height="16" viewBox="0 0 40 40" fill="none"><defs><linearGradient id="mk-id-16" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1E66C9"/><stop offset="100%" stop-color="#2E8E3A"/></linearGradient></defs><path d="M8 10h14a10 10 0 0 1 10 10v0a10 10 0 0 1-10 10H8" stroke="url(#mk-id-16)" stroke-width="3.6" stroke-linecap="round" fill="none"/><circle cx="8" cy="10" r="2.5" fill="#1E66C9"/><circle cx="8" cy="30" r="2.5" fill="#2E8E3A"/></svg>
+        <div style="font-size: 10px; color: var(--ink-muted); margin-top: 5px;">16 · favicon</div>
+      </div>
+      <div style="text-align: center;">
+        <svg width="24" height="24" viewBox="0 0 40 40" fill="none"><defs><linearGradient id="mk-id-24" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1E66C9"/><stop offset="100%" stop-color="#2E8E3A"/></linearGradient></defs><path d="M8 10h14a10 10 0 0 1 10 10v0a10 10 0 0 1-10 10H8" stroke="url(#mk-id-24)" stroke-width="3.6" stroke-linecap="round" fill="none"/><circle cx="8" cy="10" r="2.5" fill="#1E66C9"/><circle cx="8" cy="30" r="2.5" fill="#2E8E3A"/></svg>
+        <div style="font-size: 10px; color: var(--ink-muted); margin-top: 5px;">24 · sidebar</div>
+      </div>
+      <div style="text-align: center;">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><defs><linearGradient id="mk-id-40" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1E66C9"/><stop offset="100%" stop-color="#2E8E3A"/></linearGradient></defs><path d="M8 10h14a10 10 0 0 1 10 10v0a10 10 0 0 1-10 10H8" stroke="url(#mk-id-40)" stroke-width="3.6" stroke-linecap="round" fill="none"/><circle cx="8" cy="10" r="2.5" fill="#1E66C9"/><circle cx="8" cy="30" r="2.5" fill="#2E8E3A"/></svg>
+        <div style="font-size: 10px; color: var(--ink-muted); margin-top: 5px;">40 · marketing nav</div>
+      </div>
+      <div style="text-align: center;">
+        <svg width="80" height="80" viewBox="0 0 40 40" fill="none"><defs><linearGradient id="mk-id-80" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1E66C9"/><stop offset="100%" stop-color="#2E8E3A"/></linearGradient></defs><path d="M8 10h14a10 10 0 0 1 10 10v0a10 10 0 0 1-10 10H8" stroke="url(#mk-id-80)" stroke-width="3.6" stroke-linecap="round" fill="none"/><circle cx="8" cy="10" r="2.5" fill="#1E66C9"/><circle cx="8" cy="30" r="2.5" fill="#2E8E3A"/></svg>
+        <div style="font-size: 10px; color: var(--ink-muted); margin-top: 5px;">80 · hero</div>
+      </div>
+      <div style="margin-left: 24px;">
+        <div style="font-family: var(--font-display); font-size: 26px; font-weight: 700; letter-spacing: -0.02em;">ProcuLink</div>
+        <div style="font-size: 11.5px; color: var(--ink-muted); margin-top: 4px;">Wordmark · Inter 700 · tracking −0.015em</div>
+      </div>
+    </div>
+
+    <h4>Mark on navy (mono)</h4>
+    <div class="panel panel-dark" style="display: flex; gap: 32px; align-items: center;">
+      <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style="color: white;"><path d="M8 10h14a10 10 0 0 1 10 10v0a10 10 0 0 1-10 10H8" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" fill="none"/><circle cx="8" cy="10" r="2.5" fill="currentColor"/><circle cx="8" cy="30" r="2.5" fill="currentColor"/></svg>
+      <div style="font-family: var(--font-display); font-size: 22px; font-weight: 700; color: white; letter-spacing: -0.015em;">ProcuLink</div>
+      <div style="margin-left: auto; font-size: 11.5px; color: var(--navy-muted);">For sidebar + topbar use. Uses <code style="font-family: var(--font-mono); color: var(--navy-text);">currentColor</code>.</div>
+    </div>
+  </section>
+
+  <!-- ============ DOWNLOAD ============ -->
+  <section id="download">
+    <h2>Download & handoff</h2>
+    <p>The complete system is a folder of Markdown, tokens, components, and SVG assets. Drop the folder into your repo and point Claude Code at the included brief.</p>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px;">
+      <div class="panel">
+        <h4 style="margin-top: 0;">For Claude Code</h4>
+        <ol style="font-size: 13px; color: var(--ink-muted); line-height: 1.65; padding-left: 20px;">
+          <li>Drop the <code style="font-family: var(--font-mono); font-size: 12.5px;">design-system/</code> folder into your repo.</li>
+          <li>Hand Claude Code the file <code style="font-family: var(--font-mono); font-size: 12.5px;">10-claude-code-brief.md</code>.</li>
+          <li>Wire <code style="font-family: var(--font-mono); font-size: 12.5px;">tokens/tailwind.config.ts</code> into your Tailwind config.</li>
+          <li>Import the signature components from <code style="font-family: var(--font-mono); font-size: 12.5px;">components/</code>.</li>
+        </ol>
+      </div>
+      <div class="panel">
+        <h4 style="margin-top: 0;">For a designer (Figma)</h4>
+        <ol style="font-size: 13px; color: var(--ink-muted); line-height: 1.65; padding-left: 20px;">
+          <li>Import <code style="font-family: var(--font-mono); font-size: 12.5px;">tokens/tokens.json</code> with the Tokens Studio plugin.</li>
+          <li>Use this showcase as the visual reference.</li>
+          <li>The mark family lives in <code style="font-family: var(--font-mono); font-size: 12.5px;">assets/logo/</code>.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="download">
+      <div>
+        <h3>Get the package</h3>
+        <p>ProcuLink Design System v1.0 — markdown docs · tokens · components · SVG assets · Claude Code brief.</p>
+      </div>
+      <a href="https://example.invalid/redacted" id="download-link">⬇ Download .zip</a>
+    </div>
+
+    <h4 style="margin-top: 32px;">File structure</h4>
+    <pre style="font-family: var(--font-mono); font-size: 12px; padding: 16px 18px; background: var(--surface-2); border-radius: 8px; border: 1px solid var(--border); color: var(--ink); overflow-x: auto; line-height: 1.6;">design-system/
+├── README.md
+├── 01-foundations.md
+├── 02-tokens.md
+├── 03-typography.md
+├── 04-color.md
+├── 05-components.md
+├── 06-motion.md
+├── 07-content.md
+├── 08-iconography.md
+├── 09-trust-rules.md
+├── 10-claude-code-brief.md    ← hand this to Claude Code
+├── tokens/
+│   ├── tokens.css
+│   ├── tokens.json
+│   ├── tailwind.config.ts
+│   └── tokens.ts
+├── components/
+│   ├── EdgeRails.tsx
+│   ├── WireTopology.tsx
+│   ├── CanonicalSpine.tsx
+│   ├── DocumentAnatomy.tsx
+│   ├── XCard.tsx
+│   ├── StatusJourney.tsx
+│   ├── LinkSpine.tsx
+│   ├── MonumentNumber.tsx
+│   └── primitives.tsx
+├── assets/
+│   ├── logo/  (SVG mark, lockup, favicon, LinkedIn banner)
+│   ├── glyphs/
+│   └── fonts.md
+└── showcase.html              ← this page</pre>
+  </section>
+
+</div>
+
+</body>
+</html>

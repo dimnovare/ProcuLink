@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" role="img" aria-label="ProcuLink">
+  <title>ProcuLink</title>
+  <defs>
+    <linearGradient id="procu-mark-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1E66C9"></stop>
+      <stop offset="100%" stop-color="#2E8E3A"></stop>
+    </linearGradient>
+  </defs>
+  
+  <path d="M8 10h14a10 10 0 0 1 10 10v0a10 10 0 0 1-10 10H8" stroke="url(#procu-mark-grad)" stroke-width="3.6" stroke-linecap="round" fill="none"></path>
+  
+  <circle cx="8" cy="10" r="2.5" fill="#1E66C9"></circle>
+  
+  <circle cx="8" cy="30" r="2.5" fill="#2E8E3A"></circle>
+</svg>
