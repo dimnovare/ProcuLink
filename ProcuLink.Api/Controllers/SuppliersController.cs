@@ -26,6 +26,7 @@ public class SuppliersController : ControllerBase
     private readonly IBillingService            _billing;
     private readonly IPoMappingService          _poMappingService;
     private readonly IDeliveryConfigService     _deliveryConfigService;
+    private readonly IDeliveryService           _deliveryService;
 
     public SuppliersController(
         ISupplierProfileRepository supplierProfileRepository,
@@ -34,7 +35,8 @@ public class SuppliersController : ControllerBase
         ICurrentTenantService      tenant,
         IBillingService            billing,
         IPoMappingService          poMappingService,
-        IDeliveryConfigService     deliveryConfigService)
+        IDeliveryConfigService     deliveryConfigService,
+        IDeliveryService           deliveryService)
     {
         _supplierProfileRepository = supplierProfileRepository;
         _mappingService            = mappingService;
@@ -43,6 +45,7 @@ public class SuppliersController : ControllerBase
         _billing                   = billing;
         _poMappingService          = poMappingService;
         _deliveryConfigService     = deliveryConfigService;
+        _deliveryService           = deliveryService;
     }
 
     // ── GET /api/suppliers ────────────────────────────────────────────────────
@@ -401,17 +404,18 @@ public class SuppliersController : ControllerBase
     // ── POST /api/suppliers/{id}/delivery-config/test-fire ───────────────────
 
     [HttpPost("{id:guid}/delivery-config/test-fire")]
-    [ProducesResponseType(StatusCodes.Status501NotImplemented)]
+    [ProducesResponseType(typeof(DeliveryTestResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> TestFireDeliveryConfig(Guid id, CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
 
-        return StatusCode(StatusCodes.Status501NotImplemented, new
-        {
-            error = "Delivery test-fire will be available after the delivery workflow service is enabled."
-        });
+        var config = await _deliveryConfigService.GetAsync(orgId, id, ct);
+        if (config is null) return NotFound(new { error = "Delivery config not found." });
+
+        var result = await _deliveryService.TestFireAsync(orgId, id, ct);
+        return Ok(result);
     }
 
     private Task<bool> SupplierExistsAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
