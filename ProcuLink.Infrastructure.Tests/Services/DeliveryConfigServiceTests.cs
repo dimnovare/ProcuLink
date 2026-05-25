@@ -171,6 +171,31 @@ public class DeliveryConfigServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_AcceptsErpProtocols()
+    {
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        var erply = await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest("ERP_ERPLY", false, "{\"url\":\"https://erply.example/api\"}", null),
+            default);
+
+        erply.Protocol.Should().Be("erp_erply");
+
+        var directo = await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest("erp_directo", false, "{\"url\":\"https://login.directo.ee/xmlcore\"}", null),
+            default);
+
+        directo.Protocol.Should().Be("erp_directo");
+    }
+
+    [Fact]
     public async Task UpsertAsync_RejectsUnknownProtocol()
     {
         await using var db = CreateDb();
@@ -183,7 +208,7 @@ public class DeliveryConfigServiceTests
             default);
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("Delivery protocol must be http, sftp, or ftp.*");
+            .WithMessage("Delivery protocol must be http, sftp, ftp, erp_erply, or erp_directo.*");
     }
 
     private sealed class DeliveryConfigTestDbContext : ProcuLinkDbContext

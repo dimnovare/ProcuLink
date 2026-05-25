@@ -10,9 +10,11 @@ using ProcuLink.Api.Services;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Erp;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Dispatchers;
+using ProcuLink.Infrastructure.Services.Erp;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
 using ProcuLink.Infrastructure.Storage;
@@ -154,7 +156,11 @@ builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
+builder.Services.AddScoped<IErpConnector, ErplyConnector>();
+builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
+builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
+builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
 // ── Parsing layer (ProcuLink.Transform) ───────────────────────────────────
 // Each parser registered individually so DI can inject IEnumerable<IPurchaseOrderParser>

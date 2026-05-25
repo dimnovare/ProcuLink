@@ -470,9 +470,11 @@ Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level suppl
 - [x] Accept `.pdf` in upload endpoint + FileUploadZone
 
 ### Group G — ERP connectors
-- [ ] `IErpConnector` interface
-- [ ] `ErplyConnector` (REST API) + `DirectoConnector` (XML API)
-- [ ] New `destination_type` values: `erp_erply`, `erp_directo`
+**Status:** ✅ Implemented as delivery adapters for already-generated artifacts. ERP-native order modeling and supplier-specific ERP payload transforms remain future hardening.
+
+- [x] `IErpConnector` interface
+- [x] `ErplyConnector` (REST API) + `DirectoConnector` (XML API)
+- [x] New `destination_type`/protocol values: `erp_erply`, `erp_directo`
 
 ### Group H — Email polling (IMAP)
 - [ ] `MailKit` in `ProcuLink.Worker`

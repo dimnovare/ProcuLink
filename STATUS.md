@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 4 Group F complete — ERP connectors next**
+## Where we are: **Phase 4 Group G complete — Email polling next**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -19,6 +19,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 | **Group D** ✅ | PO Field Mapping Engine — all 12 tasks done and pushed to both repos |
 | **Group E** ✅ | AI mapping suggestions — provider-neutral, OpenAI structured outputs first |
 | **Group F** ✅ | PDF ingestion — text-based purchase-order PDFs via PdfPig |
+| **Group G** ✅ | ERP connectors — Erply and Directo delivery adapters |
 
 ---
 
@@ -189,6 +190,31 @@ Verification:
 
 ---
 
+## Group G — ERP connectors ✅ (May 25 2026)
+
+**Status: Implemented as delivery adapters for already-generated artifacts. ERP-native order modeling and supplier-specific ERP payload transforms remain future hardening.**
+
+Backend (`ProcuLink`):
+- Added `DeliveryProtocolConstants` with `erp_erply` and `erp_directo`.
+- Added provider-neutral `IErpConnector`, `ErpDeliveryRequest`, and `ErpDeliveryResult`.
+- Added `ErplyConnector` for REST-style POST delivery with bearer/API-key auth support.
+- Added `DirectoConnector` for XML/API form-post delivery.
+- Added `ErplyDeliveryDispatcher` and `DirectoDeliveryDispatcher` so existing `DeliveryService` can dispatch ERP destinations through the same audit/status workflow.
+- Registered ERP connectors and dispatchers in API DI.
+- Expanded delivery config validation to accept `erp_erply` and `erp_directo`.
+
+Frontend (`project-proculink`):
+- Extended delivery protocol typing with `erp_erply` and `erp_directo`.
+- Enabled Erply ERP and Directo ERP modes in `DeliveryConfigEditor`.
+- Added ERP-specific config fields while preserving masked credential behavior.
+
+Verification:
+- `dotnet build ProcuLink.slnx --no-restore` → passed.
+- `dotnet test ProcuLink.slnx --no-restore` → 56 tests passed.
+- `bun run build` in `project-proculink` → passed; existing Sentry/Browserslist/ESLint warnings remain.
+
+---
+
 ## Design workflow correction (May 25 2026)
 
 - Lovable is no longer used for this project.
@@ -208,8 +234,8 @@ Verification:
 | **D2** | Buyer-side supplier delivery config (HTTP-first path) | **Implemented — live manual QA still recommended** |
 | **E** | AI mapping suggestions — provider-neutral, OpenAI structured outputs first | **Implemented — live OpenAI QA still recommended** |
 | **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
-| **G** | ERP connectors (Erply, Directo) | Next |
-| **H** | Email polling (IMAP/MailKit) | Not started |
+| **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
+| **H** | Email polling (IMAP/MailKit) | Next |
 
 ### Group E provider decision (May 25 2026)
 
@@ -238,8 +264,8 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 - DB: `Host=localhost;Port=5435;Database=proculink_dev`
 
 ## Latest commits to push when ready
-- Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), and Group F PDF ingestion.
-- Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), and Group F PDF upload acceptance.
+- Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), and Group G ERP connectors.
+- Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), and Group G ERP connector UI.
 - Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
 
 ---

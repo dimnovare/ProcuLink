@@ -3,12 +3,13 @@ using ProcuLink.Core.Entities;
 namespace ProcuLink.Core.Services.Delivery;
 
 /// <summary>
-/// Protocol-specific delivery dispatcher. One implementation per protocol (http / sftp / ftp).
+/// Protocol-specific delivery dispatcher. One implementation per protocol
+/// (http / sftp / ftp / erp_erply / erp_directo).
 /// Registered as IEnumerable&lt;IDeliveryDispatcher&gt; in DI; DeliveryService resolves by Protocol.
 /// </summary>
 public interface IDeliveryDispatcher
 {
-    /// <summary>Protocol name this dispatcher handles: "http" | "sftp" | "ftp".</summary>
+    /// <summary>Protocol name this dispatcher handles.</summary>
     string Protocol { get; }
 
     /// <summary>

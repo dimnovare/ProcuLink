@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
 
@@ -8,12 +9,9 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
 {
     private const string CredentialsMask = "********";
 
-    private static readonly HashSet<string> AllowedProtocols = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "http",
-        "sftp",
-        "ftp",
-    };
+    private static readonly HashSet<string> AllowedProtocols = new(
+        DeliveryProtocolConstants.All,
+        StringComparer.OrdinalIgnoreCase);
 
     private readonly ProcuLinkDbContext _db;
     private readonly DeliveryEncryptionService _encryption;
@@ -115,7 +113,9 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
 
         var normalized = protocol.Trim().ToLowerInvariant();
         if (!AllowedProtocols.Contains(normalized))
-            throw new ArgumentException("Delivery protocol must be http, sftp, or ftp.", nameof(protocol));
+            throw new ArgumentException(
+                $"Delivery protocol must be {DeliveryProtocolConstants.AllowedListForMessage}.",
+                nameof(protocol));
 
         return normalized;
     }
