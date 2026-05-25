@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 4 Group D — PO Field Mapping Engine**
+## Where we are: **Phase 4 Group D2 — Supplier Delivery Config**
 
 ### Completed phases
 | Phase | What was built |
@@ -14,6 +14,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 | Group A | Tech debt (bun remove lovable-tagger, controller cleanup) |
 | Group B | Marketing pages (landing, pricing, how-it-works) |
 | **Group C** ✅ | Stripe billing — all 12 tasks done and pushed to both repos |
+| **Group D** ✅ | PO Field Mapping Engine — all 12 tasks done and pushed to both repos |
 
 ---
 
@@ -33,26 +34,31 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Group D — PO Field Mapping Engine
+## Group D — PO Field Mapping Engine ✅ (May 25 2026)
 
-**Status: Design spec done. Implementation plan NOT yet created.**
+**Backend (`ProcuLink`):**
+- `PoMappingConfig` POCOs + `IPoMappingService` interface (`ProcuLink.Core`)
+- `SupplierPoMapping` entity with JSONB `config_json` + EF migration (`supplier_po_mappings`)
+- `IFieldManipulator` interface + `ManipulatorRegistry` factory
+- 8 field manipulators: Replace, Trim, DateFormat, Concat, Fallback, Split, Multiply, Divide (`ProcuLink.Transform`)
+- `PoMappingEngine.Apply()` static method
+- `PoMappingService` CRUD with camelCase JSONB serialization (`ProcuLink.Infrastructure`)
+- 4 API endpoints on `SuppliersController`: GET/PUT/DELETE `{id}/po-mapping`, POST `{id}/po-mapping/test`
+- `OrderService` template-aware CSV parsing branch with culture-safe date parse
+- 22 unit tests (all passing)
 
-### Design doc
-`docs/superpowers/specs/2026-05-24-bulk-mapping-import-export-design.md`
+**Frontend (`project-proculink`):**
+- `src/lib/api/types.ts` — TypeScript types mirroring backend contracts
+- `src/lib/api/mapping.ts` — API client for all 4 mapping endpoints
+- `src/components/bridge/PoMappingEditor.tsx` — visual CSV field mapping editor component
+- `SupplierDockProfile` — "PO Mapping" tab wired to editor
 
-### What Group D builds
-Replaces hardcoded column aliases in `CsvOrderParser` with per-supplier **mapping templates** stored as JSONB. Each template maps supplier CSV columns → canonical fields and applies manipulators (Replace, Trim, DateFormat, Concat, Fallback, Split, Multiply, Divide).
+## Group D2 — Supplier Delivery Config
 
-### Architecture decisions (from brainstorm)
-- **Template-based**: `SupplierPoMapping` entity with `config_json` JSONB on `supplier_profiles`
-- **Engine in Transform layer**: `PoMappingEngine` in `ProcuLink.Transform` — applies template to raw CSV rows
-- **8 field manipulators**: Replace, Trim, DateFormat, Concat, Fallback, Split, Multiply, Divide
-- **Bulk import/export**: CSV format for template portability between suppliers
-- **Frontend**: Visual mapping editor on supplier detail page
+**Status: Not started**
 
-### Next action
-Run `/superpowers:write-plan` with spec at:
-`docs/superpowers/specs/2026-05-24-bulk-mapping-import-export-design.md`
+### What Group D2 builds
+Per-supplier delivery configuration: HTTP webhooks, SFTP, FTP — protocol selection, auth credentials, test-fire. Non-developer friendly UI for configuring how mapped POs are delivered to each supplier.
 
 ---
 
@@ -60,7 +66,7 @@ Run `/superpowers:write-plan` with spec at:
 
 | Group | What | Status |
 |---|---|---|
-| **D2** | Supplier delivery config (HTTP/SFTP/FTP, auth, test-fire) | Not started |
+| **D2** | Supplier delivery config (HTTP/SFTP/FTP, auth, test-fire) | **Next** |
 | **E** | AI mapping suggestions via Claude API | Not started |
 | **F** | PDF ingestion (`PdfPig`) | Not started |
 | **G** | ERP connectors (Erply, Directo) | Not started |
