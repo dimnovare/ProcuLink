@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
 
@@ -9,6 +10,7 @@ namespace ProcuLink.Infrastructure.Services.Dispatchers;
 public class HttpDeliveryDispatcher : IDeliveryDispatcher
 {
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<HttpDeliveryDispatcher> _logger;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -18,9 +20,12 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => "http";
 
-    public HttpDeliveryDispatcher(IHttpClientFactory httpClientFactory)
+    public HttpDeliveryDispatcher(
+        IHttpClientFactory httpClientFactory,
+        ILogger<HttpDeliveryDispatcher> logger)
     {
         _httpClientFactory = httpClientFactory;
+        _logger = logger;
     }
 
     public async Task<DeliveryResult> DispatchAsync(
@@ -33,8 +38,12 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
     {
         try
         {
-            var httpCfg = JsonSerializer.Deserialize<HttpConfig>(config.ConfigJson, JsonOpts)
-                          ?? throw new InvalidOperationException("Invalid HTTP config JSON.");
+            var httpCfg = JsonSerializer.Deserialize<HttpConfig>(config.ConfigJson, JsonOpts);
+            if (httpCfg is null || string.IsNullOrWhiteSpace(httpCfg.Url))
+                return new DeliveryResult(false, "HTTP delivery configuration is invalid.");
+
+            if (!Uri.TryCreate(httpCfg.Url, UriKind.Absolute, out var endpoint))
+                return new DeliveryResult(false, "HTTP delivery endpoint URL is invalid.");
 
             var creds = string.IsNullOrEmpty(decryptedCredentials)
                 ? default
@@ -42,8 +51,8 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
 
             var client  = _httpClientFactory.CreateClient("delivery");
             var request = new HttpRequestMessage(
-                new HttpMethod(httpCfg.Method ?? "POST"),
-                httpCfg.Url);
+                new HttpMethod(string.IsNullOrWhiteSpace(httpCfg.Method) ? "POST" : httpCfg.Method),
+                endpoint);
 
             // Apply auth
             ApplyAuth(request, creds);
@@ -58,17 +67,28 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
             request.Content.Headers.ContentType =
                 MediaTypeHeaderValue.TryParse(contentType, out var mt) ? mt : new MediaTypeHeaderValue("application/octet-stream");
 
-            var response = await client.SendAsync(request, ct);
-            var body     = await response.Content.ReadAsStringAsync(ct);
+            using var timeoutCts = httpCfg.TimeoutSeconds is > 0
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            timeoutCts?.CancelAfter(TimeSpan.FromSeconds(httpCfg.TimeoutSeconds!.Value));
+            var requestCt = timeoutCts?.Token ?? ct;
+
+            var response = await client.SendAsync(request, requestCt);
+            var body     = await response.Content.ReadAsStringAsync(requestCt);
             var code     = (int)response.StatusCode;
 
             return response.IsSuccessStatusCode
                 ? new DeliveryResult(true, null, code)
-                : new DeliveryResult(false, $"HTTP {code}: {body[..Math.Min(200, body.Length)]}", code);
+                : new DeliveryResult(false, BuildFailureMessage(code, body), code);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return new DeliveryResult(false, "HTTP delivery timed out.");
         }
         catch (Exception ex)
         {
-            return new DeliveryResult(false, ex.Message);
+            _logger.LogWarning(ex, "HTTP delivery failed before a response was received.");
+            return new DeliveryResult(false, "HTTP delivery failed before receiving a response.");
         }
     }
 
@@ -80,25 +100,50 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
         switch (type)
         {
             case "apikey":
-                var header = creds.GetProperty("header").GetString()!;
-                var value  = creds.GetProperty("value").GetString()!;
-                request.Headers.TryAddWithoutValidation(header, value);
+                if (creds.TryGetProperty("header", out var h) &&
+                    creds.TryGetProperty("value", out var v) &&
+                    !string.IsNullOrWhiteSpace(h.GetString()))
+                {
+                    var headerName = h.GetString()!;
+                    request.Headers.TryAddWithoutValidation(headerName, v.GetString());
+                }
                 break;
 
             case "bearer":
-                var token = creds.GetProperty("token").GetString()!;
-                request.Headers.Authorization =
-                    new AuthenticationHeaderValue("Bearer", token);
+                if (creds.TryGetProperty("token", out var token) &&
+                    !string.IsNullOrWhiteSpace(token.GetString()))
+                {
+                    request.Headers.Authorization =
+                        new AuthenticationHeaderValue("Bearer", token.GetString());
+                }
                 break;
 
             case "basic":
-                var user    = creds.GetProperty("username").GetString()!;
-                var pass    = creds.GetProperty("password").GetString()!;
-                var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{pass}"));
-                request.Headers.Authorization =
-                    new AuthenticationHeaderValue("Basic", encoded);
+                if (creds.TryGetProperty("username", out var username) &&
+                    creds.TryGetProperty("password", out var password))
+                {
+                    var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username.GetString()}:{password.GetString()}"));
+                    request.Headers.Authorization =
+                        new AuthenticationHeaderValue("Basic", encoded);
+                }
                 break;
         }
+    }
+
+    private static string BuildFailureMessage(int code, string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return $"HTTP {code}: supplier endpoint returned an error.";
+
+        var summary = body
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+
+        if (summary.Length > 120)
+            summary = summary[..120];
+
+        return $"HTTP {code}: supplier endpoint returned an error. Response summary: {summary}";
     }
 
     // ── Private config POCO ───────────────────────────────────────────────────
