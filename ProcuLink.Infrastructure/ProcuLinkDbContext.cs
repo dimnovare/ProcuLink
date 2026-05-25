@@ -130,7 +130,7 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.OrgId).HasColumnName("org_id");
             b.Property(x => x.SupplierId).HasColumnName("supplier_id");
             b.Property(x => x.Protocol).HasColumnName("protocol").IsRequired();
-            b.Property(x => x.AutoDeliver).HasColumnName("auto_deliver").HasDefaultValue(false);
+            b.Property(x => x.AutoDeliver).HasColumnName("auto_deliver").HasDefaultValue(false).ValueGeneratedNever();
             b.Property(x => x.ConfigJson).HasColumnName("config_json").HasColumnType("jsonb");
             b.Property(x => x.EncryptedCredentials).HasColumnName("encrypted_credentials").IsRequired();
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
