@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 4 Group D2 — Buyer-Side Supplier Delivery Config HTTP-first path complete**
+## Where we are: **Phase 4 Group C2 + D2 complete — live billing/delivery QA next**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -34,9 +34,9 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - `BillingSection` component on settings page
 - `UploadWorkbench` 429 banner with upgrade CTA
 
-### Group C2 — Billing model reconciliation
+### Group C2 — Billing model reconciliation ✅ (May 25 2026)
 
-**Status: Required before billing is treated as final**
+**Status: Final model implemented in backend and frontend. Live Stripe webhook/Checkout QA is still required before billing is treated as production-ready.**
 
 The final billing model is now locked:
 
@@ -50,13 +50,31 @@ The final billing model is now locked:
 
 Source of truth: `docs/superpowers/specs/2026-05-24-stripe-billing-design.md`.
 
-Important corrections:
+Important corrections shipped:
 - Pilot is internal/free, not Stripe Checkout and not free forever.
 - Expired Pilot becomes read-only: users can view previous data and billing, but cannot upload, transform, deliver, or add suppliers.
 - Add explicit account statuses: `trialing`, `active`, `trial_expired`, `past_due`, `read_only`, `cancelled`.
 - Paid self-serve Checkout only supports Growth, Operations, Integration.
 - Enterprise is contact-sales/manual.
 - Pricing page, settings billing UI, upload 429 banners, supplier-limit banners, and backend limits must reflect the final model.
+
+Backend (`ProcuLink`):
+- Added account status constants and expanded plan constants.
+- Extended `Organisation` billing fields + EF migration `AddBillingPlanFieldsToOrganisations`.
+- Replaced `BillingStatus` with the final contract: plan/status, order and supplier usage, trial dates, limit flags, processing/add-supplier permissions, Stripe ids.
+- Updated `StripeBillingService`, `BillingController`, Checkout, Portal, webhook price-id mapping, upload/transform enforcement, supplier-limit support, and delivery read-only guard.
+
+Frontend (`project-proculink`):
+- Updated billing TypeScript contract and mock billing data.
+- Rebuilt settings billing UI around Pilot read-only freeze, paid-plan Checkout, and Stripe Portal.
+- Updated upload 429 banners for Pilot expired, order limit, and supplier limit.
+- Replaced old Starter/Growth/Enterprise pricing page with Pilot/Growth/Operations/Integration/Enterprise.
+
+Verification:
+- `dotnet build ProcuLink.slnx --no-restore` → passed.
+- `dotnet test ProcuLink.Infrastructure.Tests\ProcuLink.Infrastructure.Tests.csproj --no-restore` → 25 passed.
+- `dotnet test ProcuLink.Transform.Tests\ProcuLink.Transform.Tests.csproj --no-restore` → 22 passed.
+- `bun run build` in `project-proculink` → passed; existing Sentry/Browserslist/ESLint warnings remain.
 
 ---
 
@@ -135,7 +153,7 @@ Per-supplier delivery configuration for a procurement team sending purchase orde
 
 | Group | What | Status |
 |---|---|---|
-| **C2** | Final billing model reconciliation | **Required** |
+| **C2** | Final billing model reconciliation | **Implemented — live Stripe QA still recommended** |
 | **D2** | Buyer-side supplier delivery config (HTTP-first path) | **Implemented — live manual QA still recommended** |
 | **E** | AI mapping suggestions via Claude API | Not started |
 | **F** | PDF ingestion (`PdfPig`) | Not started |
