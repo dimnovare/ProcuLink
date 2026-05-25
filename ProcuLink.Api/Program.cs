@@ -151,6 +151,7 @@ builder.Services.AddScoped<IBillingService, StripeBillingService>();
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
+builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
 
 // ── Parsing layer (ProcuLink.Transform) ───────────────────────────────────
