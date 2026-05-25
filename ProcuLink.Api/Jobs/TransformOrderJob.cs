@@ -11,11 +11,16 @@ namespace ProcuLink.Api.Jobs;
 public class TransformOrderJob
 {
     private readonly IOrderService           _orderService;
+    private readonly IBackgroundJobClient    _jobs;
     private readonly ILogger<TransformOrderJob> _logger;
 
-    public TransformOrderJob(IOrderService orderService, ILogger<TransformOrderJob> logger)
+    public TransformOrderJob(
+        IOrderService orderService,
+        IBackgroundJobClient jobs,
+        ILogger<TransformOrderJob> logger)
     {
         _orderService = orderService;
+        _jobs         = jobs;
         _logger       = logger;
     }
 
@@ -50,6 +55,8 @@ public class TransformOrderJob
         _logger.LogInformation(
             "TransformOrderJob completed for order {OrderId}, artifactId={ArtifactId}",
             orderId, result.Value!.ArtifactId);
+
+        DeliverOrderJob.Enqueue(_jobs, orderId, organisationId, result.Value.ArtifactId);
     }
 
     // ── Static factory method ─────────────────────────────────────────────────
