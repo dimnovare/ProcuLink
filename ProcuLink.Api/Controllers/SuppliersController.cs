@@ -6,6 +6,7 @@ using ProcuLink.Api.Contracts;
 using ProcuLink.Core.Canonical;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
@@ -24,6 +25,7 @@ public class SuppliersController : ControllerBase
     private readonly ICurrentTenantService      _tenant;
     private readonly IBillingService            _billing;
     private readonly IPoMappingService          _poMappingService;
+    private readonly IDeliveryConfigService     _deliveryConfigService;
 
     public SuppliersController(
         ISupplierProfileRepository supplierProfileRepository,
@@ -31,7 +33,8 @@ public class SuppliersController : ControllerBase
         ProcuLinkDbContext         db,
         ICurrentTenantService      tenant,
         IBillingService            billing,
-        IPoMappingService          poMappingService)
+        IPoMappingService          poMappingService,
+        IDeliveryConfigService     deliveryConfigService)
     {
         _supplierProfileRepository = supplierProfileRepository;
         _mappingService            = mappingService;
@@ -39,6 +42,7 @@ public class SuppliersController : ControllerBase
         _tenant                    = tenant;
         _billing                   = billing;
         _poMappingService          = poMappingService;
+        _deliveryConfigService     = deliveryConfigService;
     }
 
     // ── GET /api/suppliers ────────────────────────────────────────────────────
@@ -339,6 +343,79 @@ public class SuppliersController : ControllerBase
         var result = PoMappingEngine.Apply(request.HeaderRow, request.LineRows, request.Config);
         return Ok(result);
     }
+
+    // ── GET /api/suppliers/{id}/delivery-config ──────────────────────────────
+
+    [HttpGet("{id:guid}/delivery-config")]
+    [ProducesResponseType(typeof(DeliveryConfigResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetDeliveryConfig(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        var config = await _deliveryConfigService.GetAsync(orgId, id, ct);
+        return config is null ? NoContent() : Ok(config);
+    }
+
+    // ── PUT /api/suppliers/{id}/delivery-config ──────────────────────────────
+
+    [HttpPut("{id:guid}/delivery-config")]
+    [ProducesResponseType(typeof(DeliveryConfigResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpsertDeliveryConfig(
+        Guid id,
+        [FromBody] UpsertDeliveryConfigRequest request,
+        CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        try
+        {
+            var saved = await _deliveryConfigService.UpsertAsync(orgId, id, request, ct);
+            return Ok(saved);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    // ── DELETE /api/suppliers/{id}/delivery-config ───────────────────────────
+
+    [HttpDelete("{id:guid}/delivery-config")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteDeliveryConfig(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        await _deliveryConfigService.DeleteAsync(orgId, id, ct);
+        return NoContent();
+    }
+
+    // ── POST /api/suppliers/{id}/delivery-config/test-fire ───────────────────
+
+    [HttpPost("{id:guid}/delivery-config/test-fire")]
+    [ProducesResponseType(StatusCodes.Status501NotImplemented)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> TestFireDeliveryConfig(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        return StatusCode(StatusCodes.Status501NotImplemented, new
+        {
+            error = "Delivery test-fire will be available after the delivery workflow service is enabled."
+        });
+    }
+
+    private Task<bool> SupplierExistsAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
+        _db.Suppliers.AnyAsync(s => s.Id == supplierId && s.OrgId == orgId && s.DeletedAt == null, ct);
 }
 
 public record TestPoMappingRequest(
