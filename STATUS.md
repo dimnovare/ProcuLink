@@ -168,6 +168,11 @@ Per-supplier delivery configuration for a procurement team sending purchase orde
 - API dev port: `:5223` · FE dev port: `:8082`
 - DB: `Host=localhost;Port=5435;Database=proculink_dev`
 
+## Latest commits to push when ready
+- Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), plus D2 backend commits.
+- Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`) and C2 frontend (`6116af9`).
+- Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
+
 ---
 
 ## UI fixes applied (May 24 2026)

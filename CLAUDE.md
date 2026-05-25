@@ -2,11 +2,22 @@
 
 ## What this project is
 
-ProcuLink is a **B2B supplier-order bridge** for Baltic/Nordic distributors,
-wholesalers, and manufacturers that receive orders in messy formats (CSV, XLSX)
-and need them transformed into supplier-ready structured documents and delivered.
+ProcuLink is a **B2B outbound procurement bridge** for buyer/procurement teams
+that need to send purchase orders to many suppliers in each supplier's required
+format and delivery channel.
 
-**Upload a buyer order file → validate → resolve mappings → transform → deliver.**
+**Import a buyer-side order source → validate → resolve supplier mappings → transform → deliver to the supplier.**
+
+**First ICP / next-6-week wedge:** buyer/procurement teams sending POs out.
+They have many supplier requirements, delivery channels, item-code mappings,
+and acceptance errors. Keep the broader platform vision, but prioritize reliable
+outbound PO processing before invoices, PEPPOL, broad document automation, or
+large ERP connector coverage.
+
+**Core workflow:** `Parse → Normalize → Validate → Review exceptions → Transform → Deliver → Learn`.
+
+**Current source of truth:** read `STATUS.md` before planning. It overrides stale
+phase text in this file if there is a mismatch.
 
 ---
 
@@ -76,13 +87,18 @@ self-review before handing back. Prevents jumping straight to code on complex ta
 ```
 Or via npx: `npx claude-plugins install @anthropics/claude-code-plugins/frontend-design`
 
-**What it does:** Auto-invokes when Claude detects frontend work. Enforces bold
-typography, distinctive colour palettes, deliberate spacing, and creative layouts.
-Prevents generic "AI slop" UI output.
+**What it does:** Provides production-grade UI judgement, layout critique, and
+polish. For ProcuLink it must execute the locked local design system, not invent
+a new visual direction.
 
 **When to invoke explicitly:** Any new page, component, or significant UI change
 in `project-proculink`. If Claude is about to generate a component, say
 "use /frontend-design guidance for this" to make it explicit.
+
+**Design source of truth:** `C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\docs\design-system`.
+Read `00-agent-quick-brief.md` first, then only the specific design files needed
+for the current task. The locked direction is Direction 4 - The Bridge Layer,
+supported by Direction 3 - System Identity.
 
 ---
 
@@ -138,23 +154,16 @@ so claude-mem captures them with higher importance.
 |---|---|
 | Complex feature planning (≥3 files) | **`/superpowers:brainstorm`** first |
 | Implementation from a plan | **`/superpowers:execute-plan`** |
-| New pages / major UI components | **`/frontend-design`** + Claude Code |
-| UI component generation (framework-agnostic) | **Lovable** → copy to Next.js structure |
+| New pages / major UI components | Local design system + **`/frontend-design`** + Claude Code |
+| UI component generation | Claude Code only, using `docs/design-system` |
 | End of each task group | **`/code-review`** before marking done |
 | All .NET backend | **Claude Code** in `ProcuLink` solution |
-| Next.js routing, Server Components, middleware | **Claude Code** only — not Lovable |
+| Next.js routing, Server Components, middleware | **Claude Code** only |
 
-**Note on Lovable after Next.js migration:**
-Lovable generates Vite React code. After migrating to Next.js, Lovable's GitHub
-push-and-preview no longer "just works" for pages (the Vite preview won't match
-Next.js patterns). However, the UI components Lovable generates (shadcn, Tailwind,
-TypeScript React) are framework-agnostic and usable in Next.js after minor adaptation:
-- Change `import { useNavigate } from 'react-router-dom'` → `import { useRouter } from 'next/navigation'`
-- Add `'use client'` directive to interactive components
-- Everything else (shadcn, Tailwind, TanStack Query) works identically
-
-Recommended workflow: Use Lovable for component/UI polish. Use Claude Code + `/frontend-design`
-for new pages, layouts, and anything requiring Next.js-specific patterns.
+**Lovable is not used for ProcuLink.** Do not ask for Lovable, do not import
+Lovable-generated Vite/React code, and do not treat Lovable as a component
+source. All UI/UX and design decisions run through the local design system,
+`/frontend-design`, and Claude Design/reference images.
 
 ---
 
@@ -168,7 +177,7 @@ for new pages, layouts, and anything requiring Next.js-specific patterns.
 | Clerk middleware | `middleware.ts` in project root — protects `(app)` routes |
 | Frontend data | TanStack Query v5 — in Client Components only |
 | API | ASP.NET Core 8 — dev :5223 |
-| ORM | EF Core 9 + Npgsql |
+| ORM | EF Core 8 + Npgsql |
 | Database | PostgreSQL — `Host=localhost;Port=5435;Database=proculink_dev` |
 | File storage | Cloudflare R2 (dev: `LocalFileStorageService` when keys absent) |
 | Background jobs | Hangfire + Hangfire.PostgreSql |
@@ -185,12 +194,44 @@ for new pages, layouts, and anything requiring Next.js-specific patterns.
 | Phase 1 — Auth + Postgres + Tenancy | ✅ Done |
 | Phase 2 — Core loop | ✅ Done |
 | Phase 3 — Sellable MVP | ✅ Done |
-| **Next.js migration** | 🚧 **DO FIRST before Phase 4** |
-| Phase 4 — Commercial | ⏳ After migration |
+| Next.js migration | ✅ Done |
+| Phase 4 — Commercial | 🚧 In progress — Group E AI mapping suggestions next |
 
 ---
 
-## Next.js migration plan
+## Latest committed implementation state (May 25 2026)
+
+Read this before starting new work:
+
+- **Group C2 billing reconciliation is implemented** in backend and frontend.
+  - Backend commit: `18feb71 feat: reconcile final billing model backend`
+  - Frontend commit: `6116af9 feat: reconcile final billing model frontend`
+  - Status commit: `f957f16 docs: update billing reconciliation status`
+- **Group D2 buyer-side supplier delivery config is implemented for the HTTP-first path.**
+  - Key backend commits include `70f20bd`, `301b836`, `779a128`, `61832f7`, `09b36c3`, `ee20fbe`, `19c8e98`, `326529d`, `2d765fc`
+  - Frontend commits: `7772f4a`, `748c6de`
+- **Do not redo C2 or D2.** Treat both as implemented unless `STATUS.md` says a regression reopened them.
+- **Manual/live QA still recommended:**
+  - Stripe Checkout + Portal + webhook mapping with real Stripe test events.
+  - HTTP delivery config test-fire against a running API session.
+- **Last verified commands:**
+  - `dotnet build ProcuLink.slnx --no-restore` passed.
+  - `dotnet test ProcuLink.Infrastructure.Tests\ProcuLink.Infrastructure.Tests.csproj --no-restore` passed, 25 tests.
+  - `dotnet test ProcuLink.Transform.Tests\ProcuLink.Transform.Tests.csproj --no-restore` passed, 22 tests.
+  - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
+
+Next implementation group is **Group E — AI mapping suggestions**, but before coding:
+
+1. Read `STATUS.md`.
+2. Read only task-relevant design docs, starting with `docs/design-system/00-agent-quick-brief.md` if frontend is touched.
+3. Use `/superpowers:brainstorm` and `/superpowers:write-plan` because Group E touches backend services, parsing flow, API contracts, and frontend review UI.
+
+---
+
+## Historical Next.js migration plan — complete, do not execute
+
+**Status:** Complete. This section is kept only as historical context. Do **not**
+run M1-M17 again.
 
 **Approach:** In-place migration of `project-proculink`. Same GitHub repo, same
 Vercel project. No new repo needed. Migrate route by route.
@@ -367,6 +408,8 @@ project-proculink/
 ## Phase 4 — Commercial (after migration)
 
 ### Group A — Remaining tech debt
+**Status:** ✅ Done. Do not repeat unless `STATUS.md` says a regression reopened it.
+
 - [ ] **A1.** `bun remove lovable-tagger`
 - [ ] **A2.** Remove `SupplierProfilesController.cs` (redundant — routes now in `SuppliersController`)
 - [ ] **A3.** Remove `ProcuLink.Core\Canonical\` once confirmed unused
@@ -374,43 +417,61 @@ project-proculink/
 - [ ] **A5.** Verify `GET /api/orders/{id}/status` exists in `OrdersController`
 
 ### Group B — Marketing pages (Next.js SSR — no react-helmet needed)
+**Status:** ✅ Done. Do not repeat unless `STATUS.md` says a regression reopened it.
+
 - [ ] **B1.** Build out `app/(marketing)/page.tsx` — full landing page:
   - Hero: "Stop reformatting purchase orders. Start delivering them."
   - Three-step explainer with visual flow
   - Testimonial placeholder
   - CTA → Clerk sign-up
   - `generateMetadata()` with proper OG tags
-- [ ] **B2.** Build `app/(marketing)/pricing/page.tsx` — three tiers:
-  Starter (free, 20 orders/mo), Growth (€49/mo, 200 orders), Enterprise (custom)
+- [ ] **B2.** Build/update `app/(marketing)/pricing/page.tsx` — final billing ladder:
+  Pilot (free 14 days), Growth (€149/mo), Operations (€399/mo), Integration (€999/mo), Enterprise (custom)
 - [ ] **B3.** Build `app/(marketing)/how-it-works/page.tsx` — step-by-step + FAQ
 - [ ] **B4.** Update `robots.txt` — allow `(marketing)` routes, disallow `(app)` routes
 
 ### Group C — Stripe billing
-- [ ] Add `Stripe.net` to `ProcuLink.Api.csproj`
-- [ ] Add `stripe_customer_id`, `stripe_subscription_id` to `organisations` table + migration
-- [ ] `POST /api/billing/checkout` — Stripe Checkout session for Growth plan
-- [ ] `POST /api/billing/portal` — Stripe Customer Portal session
-- [ ] `POST /api/billing/webhook` (no auth) — handle `checkout.session.completed` + `subscription.deleted`
-- [ ] `GET /api/billing/status` — returns `{ plan, ordersThisMonth, orderLimit }`
-- [ ] Enforce order limit in `OrdersController.Upload` → 429 with upgrade message
-- [ ] `app/(app)/settings/page.tsx` — plan + usage display, upgrade + manage buttons
+**Status:** ✅ Implemented. C2 final billing model reconciliation is also implemented.
+Read `STATUS.md` and `docs/superpowers/specs/2026-05-24-stripe-billing-design.md`
+before changing billing code.
+
+Final plan ladder:
+
+| Plan | Price | Orders | Suppliers |
+|---|---:|---:|---:|
+| Pilot | €0 / 14 days | 20 total during trial | 1 |
+| Growth | €149/mo | 150/month | 5 |
+| Operations | €399/mo | 500/month | 10 |
+| Integration | €999/mo | 1,000/month | 20 |
+| Enterprise | Custom, from €2,500/mo | Custom | Custom |
+
+Pilot is not free forever and does not use Stripe. Expired Pilot accounts become
+read-only: users can view previous data and billing, but cannot upload, transform,
+deliver, or add suppliers. Paid self-serve Checkout supports only Growth,
+Operations, and Integration. Enterprise is contact-sales/manual.
+
+Live Stripe Checkout/Portal/webhook QA is still recommended before production billing launch.
 
 ### Group D — PO field mapping engine
-- [ ] `SupplierPoMapping` entity + JSONB `config_json` + EF migration
-- [ ] `IPoMappingService` + `PoMappingService` — CRUD for mapping config
-- [ ] `IFieldManipulator` interface + 8 manipulators (Replace, Trim, DateFormat, Concat, Fallback, Split, Multiply, Divide)
-- [ ] `PoMappingEngine` in `ProcuLink.Transform` — applies template to raw CSV rows → `MappedOrder`
-- [ ] `ParseOrderJob` updated — template-aware path (falls back to `CsvOrderParser` when no config)
-- [ ] `GET/PUT /api/suppliers/{id}/po-mapping` + export/import endpoints
-- [ ] `PoMappingEditor` frontend component on supplier detail page — visual field-by-field mapping UI
-- [ ] Spec: `docs/superpowers/specs/2026-05-24-bulk-mapping-import-export-design.md`
+**Status:** ✅ Done. Supplier-level CSV PO mapping config, mapping engine,
+manipulators, test endpoint, and frontend `PoMappingEditor` are implemented.
 
-### Group D2 — Supplier delivery configuration
-- [ ] Per-supplier delivery config: protocol (HTTP/SFTP/FTP/webhook), auth (none/basic/OAuth2), URL, request body template, retry settings
-- [ ] `SupplierDeliveryConfig` entity + JSONB config + EF migration
-- [ ] `IDeliveryConnector` interface + HTTP connector implementation
-- [ ] Test-fire capability: send a sample order to the configured endpoint, return response
-- [ ] Frontend: delivery config tab on supplier detail page (visual, non-developer friendly)
+### Group D2 — Buyer-side supplier delivery configuration
+**Status:** ✅ Implemented for the HTTP-first path. Do not replan/rebuild it.
+
+What exists now:
+- Delivery state model distinguishes artifact generation from real delivery:
+  `ready_to_deliver` → `delivering` → `delivered` or `delivery_failed`.
+- Delivery credentials use authenticated `AesGcm` encryption.
+- Supplier delivery config CRUD exists at GET/PUT/DELETE `/api/suppliers/{id}/delivery-config`.
+- Safe test-fire exists at POST `/api/suppliers/{id}/delivery-config/test-fire`.
+- `IDeliveryService` owns delivery workflow, delivery attempts, and dispatcher calls.
+- `TransformOrderJob` enqueues delivery after successful transform.
+- `HttpDeliveryDispatcher` is hardened with timeout support and safer failure messages.
+- Frontend has `DeliveryConfigEditor` and a `Delivery` tab in `SupplierDockProfile`.
+- SFTP/FTP remain intentionally deferred until HTTP delivery is production-proven.
+
+Manual browser/Scalar test-fire against a live API session is still recommended before pushing delivery to real users.
 
 ### Group E — AI mapping suggestions (Claude API)
 - [ ] Add `Anthropic.SDK` to `ProcuLink.Api.csproj`
@@ -477,7 +538,13 @@ project-proculink/
     "R2BucketName": "proculink-dev",
     "R2Endpoint": "https://<accountid>.r2.cloudflarestorage.com"
   },
-  "Stripe": { "SecretKey": "", "WebhookSecret": "", "GrowthPriceId": "" },
+  "Stripe": {
+    "SecretKey": "",
+    "WebhookSecret": "",
+    "GrowthPriceId": "",
+    "OperationsPriceId": "",
+    "IntegrationPriceId": ""
+  },
   "Anthropic": { "ApiKey": "" },
   "Sentry": { "Dsn": "" },
   "Frontend": { "Url": "" }
@@ -523,6 +590,7 @@ NEXT_PUBLIC_SENTRY_DSN=
 ## What NOT to do
 - ❌ `npm install` — **bun** only
 - ❌ `npm install -g claude-mem` — use `/plugin` commands, never npm for claude-mem
+- ❌ Lovable or Lovable-generated Vite/React code — ProcuLink UI is Claude Code + `/frontend-design` only
 - ❌ Use `@clerk/clerk-react` — Next.js uses `@clerk/nextjs`
 - ❌ Use Pages Router — App Router only
 - ❌ `react-helmet-async` — use `generateMetadata()` in Server Components
@@ -535,4 +603,3 @@ NEXT_PUBLIC_SENTRY_DSN=
 - ❌ Call Anthropic API before Phase 4 Group E
 - ❌ Raw SQL — EF Core only
 - ❌ Hangfire jobs that are not idempotent
-
