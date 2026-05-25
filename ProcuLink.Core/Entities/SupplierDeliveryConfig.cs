@@ -15,7 +15,7 @@ public class SupplierDeliveryConfig
     /// <summary>Non-secret JSONB: endpoint URL, host, remote path, extra headers, timeout, etc.</summary>
     public string ConfigJson { get; set; } = "{}";
 
-    /// <summary>AES-256-CBC encrypted, base64. Empty string means no credentials configured.</summary>
+    /// <summary>Authenticated encrypted credential payload. Empty string means no credentials configured.</summary>
     public string EncryptedCredentials { get; set; } = string.Empty;
 
     public DateTime CreatedAt { get; set; }

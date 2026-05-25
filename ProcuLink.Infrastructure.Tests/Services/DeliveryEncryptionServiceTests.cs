@@ -67,6 +67,17 @@ public class DeliveryEncryptionServiceTests
     }
 
     [Fact]
+    public void Decrypt_TamperedPayload_ReturnsNull()
+    {
+        var svc = CreateService();
+        var encrypted = svc.Encrypt("{\"type\":\"apikey\",\"value\":\"secret\"}");
+        var bytes = Convert.FromBase64String(encrypted);
+        bytes[^1] ^= 0x01;
+
+        svc.Decrypt(Convert.ToBase64String(bytes)).Should().BeNull();
+    }
+
+    [Fact]
     public void Constructor_MissingKey_ThrowsInvalidOperation()
     {
         var config = new ConfigurationBuilder().Build(); // empty
@@ -78,7 +89,6 @@ public class DeliveryEncryptionServiceTests
     public void Decrypt_TooShort_ReturnsNull()
     {
         var svc = CreateService();
-        // 20 bytes: valid base64, has IV prefix but no full ciphertext block
         svc.Decrypt(Convert.ToBase64String(new byte[20])).Should().BeNull();
     }
 }
