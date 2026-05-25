@@ -639,8 +639,11 @@ public sealed class OrderService : IOrderService
         };
 
         using var csv = new CsvReader(reader, csvConfig);
-        csv.Read();
-        csv.ReadHeader();
+        if (config.HasHeaderRecord)
+        {
+            csv.Read();
+            csv.ReadHeader();
+        }
         var headers = csv.HeaderRecord ?? Array.Empty<string>();
 
         var allRows = new List<Dictionary<string, string>>();
@@ -661,7 +664,7 @@ public sealed class OrderService : IOrderService
         var mapped = PoMappingEngine.Apply(headerRow, lineRows, config);
 
         DateTime? orderDate = null;
-        if (mapped.OrderDate is not null && DateTime.TryParse(mapped.OrderDate, out var d))
+        if (mapped.OrderDate is not null && DateTime.TryParse(mapped.OrderDate, CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var d))
             orderDate = d;
 
         var lines = mapped.Lines.Select((l, i) => new ParsedOrderLine(
