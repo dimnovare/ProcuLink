@@ -57,9 +57,16 @@ public sealed class BillingController : ControllerBase
         if (!validPlans.Contains(request.Plan, StringComparer.OrdinalIgnoreCase))
             return BadRequest(new { error = $"Invalid plan '{request.Plan}'. Valid: growth, operations, integration." });
 
-        var returnUrl = $"{_config["Frontend:Url"] ?? "http://localhost:8081"}/settings";
-        var url = await _billing.CreateCheckoutSessionAsync(_tenant.OrganisationId, request.Plan, returnUrl, ct);
-        return Ok(new { url });
+        var returnUrl = $"{_config["Frontend:Url"] ?? "http://localhost:8082"}/settings";
+        try
+        {
+            var url = await _billing.CreateCheckoutSessionAsync(_tenant.OrganisationId, request.Plan.ToLowerInvariant(), returnUrl, ct);
+            return Ok(new { url });
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     // ── POST /api/billing/portal ──────────────────────────────────────────
@@ -70,7 +77,7 @@ public sealed class BillingController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> CreatePortal(CancellationToken ct)
     {
-        var returnUrl = $"{_config["Frontend:Url"] ?? "http://localhost:8081"}/settings";
+        var returnUrl = $"{_config["Frontend:Url"] ?? "http://localhost:8082"}/settings";
         try
         {
             var url = await _billing.CreatePortalSessionAsync(_tenant.OrganisationId, returnUrl, ct);
@@ -176,16 +183,28 @@ public sealed class BillingController : ControllerBase
             return;
         }
 
-        // Idempotent: skip if already in target state
-        if (org.Plan == plan && org.StripeCustomerId == session.CustomerId) return;
+        var subscriptionStatus = string.IsNullOrWhiteSpace(session.SubscriptionId)
+            ? null
+            : await GetSubscriptionStatusAsync(session.SubscriptionId, ct);
+        var priceId = string.IsNullOrWhiteSpace(session.SubscriptionId)
+            ? null
+            : await GetSubscriptionPriceIdAsync(session.SubscriptionId, ct);
+        var mappedPlan = MapPriceIdToPlan(priceId) ?? plan;
 
-        org.Plan                 = plan;
-        org.StripeCustomerId     = session.CustomerId;
+        org.Plan = mappedPlan;
+        org.AccountStatus = subscriptionStatus == "trialing"
+            ? AccountStatusConstants.Trialing
+            : AccountStatusConstants.Active;
+        org.StripeCustomerId = session.CustomerId;
         org.StripeSubscriptionId = session.SubscriptionId;
+        org.StripePriceId = priceId;
+        org.StripeSubscriptionStatus = subscriptionStatus;
+        org.BillingEmail = session.CustomerDetails?.Email;
+        org.BillingUpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation("Org {OrgId} upgraded to {Plan} via Stripe checkout {SessionId}",
-            orgId, plan, session.Id);
+            orgId, mappedPlan, session.Id);
     }
 
     private async Task HandleSubscriptionUpdatedAsync(Stripe.Subscription? sub, CancellationToken ct)
@@ -196,23 +215,28 @@ public sealed class BillingController : ControllerBase
             .FirstOrDefaultAsync(o => o.StripeCustomerId == sub.CustomerId, ct);
         if (org is null) return;
 
-        var status = sub.Status;
-        if (status is "trialing" or "active")
+        var priceId = sub.Items.Data.FirstOrDefault()?.Price?.Id;
+        var mappedPlan = MapPriceIdToPlan(priceId);
+
+        if (!string.IsNullOrEmpty(mappedPlan))
+            org.Plan = mappedPlan;
+
+        org.StripeSubscriptionId = sub.Id;
+        org.StripePriceId = priceId;
+        org.StripeSubscriptionStatus = sub.Status;
+        org.AccountStatus = sub.Status switch
         {
-            sub.Metadata.TryGetValue("plan", out var plan);
-            if (!string.IsNullOrEmpty(plan) && org.Plan != plan)
-            {
-                org.Plan = plan;
-                await _db.SaveChangesAsync(ct);
-                _logger.LogInformation("Org {OrgId} plan confirmed as {Plan} (sub status: {Status})",
-                    org.Id, plan, status);
-            }
-        }
-        else
-        {
-            _logger.LogWarning("Subscription {SubId} for org {OrgId} is {Status} — monitoring, not downgrading yet.",
-                sub.Id, org.Id, status);
-        }
+            "trialing" => AccountStatusConstants.Trialing,
+            "active" => AccountStatusConstants.Active,
+            "past_due" or "unpaid" => AccountStatusConstants.PastDue,
+            "canceled" => AccountStatusConstants.ReadOnly,
+            _ => org.AccountStatus,
+        };
+        org.BillingUpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation("Org {OrgId} subscription {SubId} updated: status={Status}, plan={Plan}",
+            org.Id, sub.Id, sub.Status, org.Plan);
     }
 
     private async Task HandleSubscriptionDeletedAsync(Stripe.Subscription? sub, CancellationToken ct)
@@ -225,11 +249,37 @@ public sealed class BillingController : ControllerBase
 
         if (org.Plan == PlanConstants.Pilot && org.StripeSubscriptionId is null) return;
 
-        org.Plan                 = PlanConstants.Pilot;
+        org.Plan = PlanConstants.Pilot;
+        org.AccountStatus = AccountStatusConstants.ReadOnly;
         org.StripeSubscriptionId = null;
+        org.StripeSubscriptionStatus = "canceled";
+        org.BillingUpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation("Org {OrgId} subscription cancelled — reverted to frozen Pilot.", org.Id);
+    }
+
+    private async Task<string?> GetSubscriptionPriceIdAsync(string subscriptionId, CancellationToken ct)
+    {
+        var service = new Stripe.SubscriptionService();
+        var subscription = await service.GetAsync(subscriptionId, cancellationToken: ct);
+        return subscription.Items.Data.FirstOrDefault()?.Price?.Id;
+    }
+
+    private async Task<string?> GetSubscriptionStatusAsync(string subscriptionId, CancellationToken ct)
+    {
+        var service = new Stripe.SubscriptionService();
+        var subscription = await service.GetAsync(subscriptionId, cancellationToken: ct);
+        return subscription.Status;
+    }
+
+    private string? MapPriceIdToPlan(string? priceId)
+    {
+        if (string.IsNullOrWhiteSpace(priceId)) return null;
+        if (priceId == _config["Stripe:GrowthPriceId"]) return PlanConstants.Growth;
+        if (priceId == _config["Stripe:OperationsPriceId"]) return PlanConstants.Operations;
+        if (priceId == _config["Stripe:IntegrationPriceId"]) return PlanConstants.Integration;
+        return null;
     }
 }
 

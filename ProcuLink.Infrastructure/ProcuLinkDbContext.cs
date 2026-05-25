@@ -34,12 +34,19 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.ClerkOrgId).HasColumnName("clerk_org_id").IsRequired();
             b.Property(x => x.Name).HasColumnName("name").IsRequired();
             b.Property(x => x.Plan).HasColumnName("plan").IsRequired();
+            b.Property(x => x.AccountStatus)
+             .HasColumnName("account_status")
+             .HasDefaultValue("trialing")
+             .IsRequired();
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.HasIndex(x => x.ClerkOrgId).IsUnique();
             b.Property(x => x.TrialStartedAt)
              .HasColumnName("trial_started_at")
              .HasColumnType("timestamptz")
              .HasDefaultValueSql("now()");
+            b.Property(x => x.TrialEndsAt)
+             .HasColumnName("trial_ends_at")
+             .HasColumnType("timestamptz");
             b.Property(x => x.PilotExtendedUntil)
              .HasColumnName("pilot_extended_until")
              .HasColumnType("timestamptz");
@@ -50,6 +57,15 @@ public class ProcuLinkDbContext : DbContext
              .HasColumnName("stripe_customer_id");
             b.Property(x => x.StripeSubscriptionId)
              .HasColumnName("stripe_subscription_id");
+            b.Property(x => x.StripePriceId)
+             .HasColumnName("stripe_price_id");
+            b.Property(x => x.StripeSubscriptionStatus)
+             .HasColumnName("stripe_subscription_status");
+            b.Property(x => x.BillingEmail)
+             .HasColumnName("billing_email");
+            b.Property(x => x.BillingUpdatedAt)
+             .HasColumnName("billing_updated_at")
+             .HasColumnType("timestamptz");
         });
 
         // ── users ──────────────────────────────────────────────────────

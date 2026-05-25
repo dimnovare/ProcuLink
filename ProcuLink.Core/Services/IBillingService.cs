@@ -7,6 +7,10 @@ public interface IBillingService
     /// <summary>Returns full billing snapshot for the settings page.</summary>
     Task<BillingStatus> GetStatusAsync(Guid orgId, CancellationToken ct = default);
 
+    Task<bool> CanProcessOrdersAsync(Guid orgId, CancellationToken ct = default);
+
+    Task<bool> CanAddSupplierAsync(Guid orgId, CancellationToken ct = default);
+
     /// <summary>
     /// Checks whether the org may process another order.
     /// Pilot: cumulative count vs PilotOrderLimit; also checks time window.
@@ -25,6 +29,10 @@ public interface IBillingService
 
     /// <summary>Creates a Stripe Customer Portal session. Returns the redirect URL.</summary>
     Task<string> CreatePortalSessionAsync(Guid orgId, string returnUrl, CancellationToken ct = default);
+
+    Task MarkPilotStartedAsync(Guid orgId, CancellationToken ct = default);
+
+    Task MarkPilotExpiredIfNeededAsync(Guid orgId, CancellationToken ct = default);
 
     /// <summary>Records a pilot extension request and notifies sales. Idempotent.</summary>
     Task RequestPilotExtensionAsync(Guid orgId, CancellationToken ct = default);

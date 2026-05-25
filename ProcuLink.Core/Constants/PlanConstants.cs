@@ -9,6 +9,15 @@ public static class PlanConstants
     public const string Integration = "integration";
     public const string Enterprise  = "enterprise";
 
+    public static readonly string[] All =
+    [
+        Pilot,
+        Growth,
+        Operations,
+        Integration,
+        Enterprise,
+    ];
+
     // ── Pilot trial config ─────────────────────────────────────────────────
     public static readonly TimeSpan PilotDuration     = TimeSpan.FromDays(14);
     public const int                PilotOrderLimit   = 20;
@@ -24,6 +33,15 @@ public static class PlanConstants
             [Integration] = (1_000,            20),
             [Enterprise]  = (int.MaxValue,     int.MaxValue),
         };
+
+    public static int GetOrderLimit(string plan) =>
+        Limits.TryGetValue(plan, out var limits) ? limits.Orders : PilotOrderLimit;
+
+    public static int GetSupplierLimit(string plan) =>
+        Limits.TryGetValue(plan, out var limits) ? limits.Suppliers : PilotSupplierLimit;
+
+    public static bool IsPaidPlan(string plan) =>
+        plan is Growth or Operations or Integration or Enterprise;
 
     // ── Feature gate: minimum plan required per feature ───────────────────
     private static readonly IReadOnlyDictionary<BillingFeature, string> MinimumPlan =

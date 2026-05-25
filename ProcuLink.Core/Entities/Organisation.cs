@@ -6,11 +6,14 @@ public class Organisation
     public string ClerkOrgId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string Plan { get; set; } = "pilot";
+    public string AccountStatus { get; set; } = "trialing";
     public DateTime CreatedAt { get; set; }
 
     // ── Pilot trial tracking ───────────────────────────────────────────────
     /// <summary>Set at org creation. Never updated. Drives Pilot time-window check.</summary>
     public DateTime  TrialStartedAt               { get; set; }
+    /// <summary>Set at org creation for Pilot. Historical value remains after upgrade/cancel.</summary>
+    public DateTime? TrialEndsAt                  { get; set; }
     /// <summary>Admin-set override. When set, extends the 14-day deadline.</summary>
     public DateTime? PilotExtendedUntil           { get; set; }
     /// <summary>Set when user clicks "Request Pilot extension". Sales signal.</summary>
@@ -19,6 +22,10 @@ public class Organisation
     // ── Stripe ────────────────────────────────────────────────────────────
     public string? StripeCustomerId      { get; set; }
     public string? StripeSubscriptionId  { get; set; }
+    public string? StripePriceId         { get; set; }
+    public string? StripeSubscriptionStatus { get; set; }
+    public string? BillingEmail          { get; set; }
+    public DateTime? BillingUpdatedAt    { get; set; }
 
     // Navigation
     public List<Membership> Memberships { get; set; } = new();

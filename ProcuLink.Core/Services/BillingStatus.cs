@@ -1,19 +1,22 @@
-using ProcuLink.Core.Constants;
-
 namespace ProcuLink.Core.Services;
 
 /// <summary>
 /// Snapshot of a tenant's billing state. Returned by GET /api/billing/status.
-/// OrdersUsed is cumulative since trial_started_at for Pilot; month-to-date for paid plans.
+/// Pilot order usage is counted since trial_started_at; paid plans use month-to-date usage.
 /// </summary>
-public record BillingStatus(
-    string           Plan,
-    int              OrdersUsed,
-    int              OrderLimit,
-    int              SuppliersActive,
-    int              SupplierLimit,
-    DateTime?        PilotEndsAt,         // effective pilot end for Pilot accounts; null for paid
-    bool             PilotExpired,
-    bool             ExtensionRequested,  // true if request-extension was called
-    string[]         Features             // feature names: BillingFeature enum member names, lowercase
-);
+public sealed record BillingStatus(
+    string Plan,
+    string AccountStatus,
+    int OrdersThisMonth,
+    int OrderLimit,
+    int SuppliersUsed,
+    int SupplierLimit,
+    DateTime? TrialStartedAt,
+    DateTime? TrialEndsAt,
+    bool IsTrialExpired,
+    bool IsOrderLimitReached,
+    bool IsSupplierLimitReached,
+    bool CanProcessOrders,
+    bool CanAddSupplier,
+    string? StripeCustomerId,
+    string? StripeSubscriptionId);

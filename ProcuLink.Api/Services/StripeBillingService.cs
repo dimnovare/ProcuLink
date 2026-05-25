@@ -1,6 +1,4 @@
-// ProcuLink.Api/Services/StripeBillingService.cs
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -10,131 +8,126 @@ using Stripe.Checkout;
 namespace ProcuLink.Api.Services;
 
 /// <summary>
-/// Implements IBillingService using Stripe.net and EF Core.
-/// Pilot order counts are cumulative since trial_started_at.
-/// Paid-plan order counts use a rolling monthly window.
+/// Implements billing state, limits, and Stripe Checkout/Portal integration.
+/// Pilot is internal and does not use Stripe.
 /// </summary>
 public sealed class StripeBillingService : IBillingService
 {
+    private static readonly HashSet<string> ProcessingAllowedStatuses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        AccountStatusConstants.Trialing,
+        AccountStatusConstants.Active,
+    };
+
     private readonly ProcuLinkDbContext _db;
-    private readonly IConfiguration    _config;
+    private readonly IConfiguration _config;
     private readonly ILogger<StripeBillingService> _logger;
 
     public StripeBillingService(
-        ProcuLinkDbContext            db,
-        IConfiguration                config,
+        ProcuLinkDbContext db,
+        IConfiguration config,
         ILogger<StripeBillingService> logger)
     {
-        _db     = db;
+        _db = db;
         _config = config;
         _logger = logger;
     }
 
-    // ── GetStatusAsync ────────────────────────────────────────────────────
-
     public async Task<BillingStatus> GetStatusAsync(Guid orgId, CancellationToken ct = default)
     {
-        var org = await LoadOrgAsync(orgId, ct);
-        if (!PlanConstants.Limits.TryGetValue(org.Plan, out var limits))
-            throw new InvalidOperationException($"Unknown plan '{org.Plan}' for org {org.Id}.");
+        await MarkPilotExpiredIfNeededAsync(orgId, ct);
 
-        var ordersUsed      = await CountOrdersAsync(org, ct);
-        var suppliersActive = await CountSuppliersAsync(orgId, ct);
+        var org = await LoadOrgAsync(orgId, asTracking: false, ct);
+        var plan = NormalizePlan(org.Plan);
+        var orderLimit = PlanConstants.GetOrderLimit(plan);
+        var supplierLimit = PlanConstants.GetSupplierLimit(plan);
+        var ordersUsed = await CountOrdersAsync(org, ct);
+        var suppliersUsed = await CountSuppliersAsync(orgId, ct);
+        var trialEndsAt = GetTrialEndsAt(org);
+        var isTrialExpired = plan == PlanConstants.Pilot &&
+            (DateTime.UtcNow > trialEndsAt || ordersUsed >= PlanConstants.PilotOrderLimit);
+        var isOrderLimitReached = ordersUsed >= orderLimit;
+        var isSupplierLimitReached = suppliersUsed >= supplierLimit;
+        var statusAllowsProcessing = ProcessingAllowedStatuses.Contains(org.AccountStatus);
 
-        bool pilotExpired        = false;
-        DateTime? pilotEndsAt    = null;
-        bool extensionRequested  = org.PilotExtensionRequestedAt.HasValue;
+        var canProcessOrders = plan == PlanConstants.Enterprise
+            ? !IsReadOnlyStatus(org.AccountStatus)
+            : statusAllowsProcessing && !isTrialExpired && !isOrderLimitReached;
 
-        if (org.Plan == PlanConstants.Pilot)
-        {
-            var effectiveEnd = org.PilotExtendedUntil ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
-            pilotEndsAt  = effectiveEnd;
-            pilotExpired = DateTime.UtcNow > effectiveEnd || ordersUsed >= PlanConstants.PilotOrderLimit;
-        }
-
-        var features = PlanConstants.FeaturesForPlan(org.Plan)
-            .Select(f => f.ToString().ToLowerInvariant())
-            .ToArray();
+        var canAddSupplier = plan == PlanConstants.Enterprise
+            ? !IsReadOnlyStatus(org.AccountStatus)
+            : statusAllowsProcessing && !isTrialExpired && !isSupplierLimitReached;
 
         return new BillingStatus(
-            Plan:               org.Plan,
-            OrdersUsed:         ordersUsed,
-            OrderLimit:         limits.Orders,
-            SuppliersActive:    suppliersActive,
-            SupplierLimit:      limits.Suppliers,
-            PilotEndsAt:        pilotEndsAt,
-            PilotExpired:       pilotExpired,
-            ExtensionRequested: extensionRequested,
-            Features:           features
-        );
+            Plan: plan,
+            AccountStatus: org.AccountStatus,
+            OrdersThisMonth: ordersUsed,
+            OrderLimit: orderLimit,
+            SuppliersUsed: suppliersUsed,
+            SupplierLimit: supplierLimit,
+            TrialStartedAt: org.TrialStartedAt,
+            TrialEndsAt: plan == PlanConstants.Pilot ? trialEndsAt : org.TrialEndsAt,
+            IsTrialExpired: isTrialExpired,
+            IsOrderLimitReached: isOrderLimitReached,
+            IsSupplierLimitReached: isSupplierLimitReached,
+            CanProcessOrders: canProcessOrders,
+            CanAddSupplier: canAddSupplier,
+            StripeCustomerId: org.StripeCustomerId,
+            StripeSubscriptionId: org.StripeSubscriptionId);
     }
 
-    // ── CheckOrderLimitAsync ──────────────────────────────────────────────
+    public async Task<bool> CanProcessOrdersAsync(Guid orgId, CancellationToken ct = default) =>
+        (await GetStatusAsync(orgId, ct)).CanProcessOrders;
+
+    public async Task<bool> CanAddSupplierAsync(Guid orgId, CancellationToken ct = default) =>
+        (await GetStatusAsync(orgId, ct)).CanAddSupplier;
 
     public async Task<LimitCheckResult> CheckOrderLimitAsync(Guid orgId, CancellationToken ct = default)
     {
-        var org    = await LoadOrgAsync(orgId, ct);
-        if (!PlanConstants.Limits.TryGetValue(org.Plan, out var limits))
-            throw new InvalidOperationException($"Unknown plan '{org.Plan}' for org {org.Id}.");
-
-        if (org.Plan == PlanConstants.Pilot)
-        {
-            var effectiveEnd = org.PilotExtendedUntil ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
-            var count        = await CountOrdersAsync(org, ct);
-            var expired      = DateTime.UtcNow > effectiveEnd || count >= PlanConstants.PilotOrderLimit;
-            return new LimitCheckResult(!expired, PilotExpired: expired, org.Plan, PlanConstants.PilotOrderLimit);
-        }
-
-        var monthlyCount = await CountOrdersAsync(org, ct);
-        return new LimitCheckResult(monthlyCount < limits.Orders, PilotExpired: false, org.Plan, limits.Orders);
+        var status = await GetStatusAsync(orgId, ct);
+        return new LimitCheckResult(
+            status.CanProcessOrders,
+            status.Plan == PlanConstants.Pilot && status.IsTrialExpired,
+            status.Plan,
+            status.OrderLimit);
     }
-
-    // ── CheckSupplierLimitAsync ───────────────────────────────────────────
 
     public async Task<LimitCheckResult> CheckSupplierLimitAsync(Guid orgId, CancellationToken ct = default)
     {
-        var org    = await LoadOrgAsync(orgId, ct);
-        if (!PlanConstants.Limits.TryGetValue(org.Plan, out var limits))
-            throw new InvalidOperationException($"Unknown plan '{org.Plan}' for org {org.Id}.");
-
-        if (org.Plan == PlanConstants.Pilot)
-        {
-            var effectiveEnd = org.PilotExtendedUntil ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
-            var count        = await CountOrdersAsync(org, ct);
-            var expired      = DateTime.UtcNow > effectiveEnd || count >= PlanConstants.PilotOrderLimit;
-            if (expired) return new LimitCheckResult(false, PilotExpired: true, org.Plan, PlanConstants.PilotSupplierLimit);
-        }
-
-        var active  = await CountSuppliersAsync(orgId, ct);
-        var allowed = active < limits.Suppliers;
-        return new LimitCheckResult(allowed, PilotExpired: false, org.Plan, limits.Suppliers);
+        var status = await GetStatusAsync(orgId, ct);
+        return new LimitCheckResult(
+            status.CanAddSupplier,
+            status.Plan == PlanConstants.Pilot && status.IsTrialExpired,
+            status.Plan,
+            status.SupplierLimit);
     }
-
-    // ── HasFeatureAsync ───────────────────────────────────────────────────
 
     public async Task<bool> HasFeatureAsync(Guid orgId, BillingFeature feature, CancellationToken ct = default)
     {
-        var org = await LoadOrgAsync(orgId, ct);
-        return PlanConstants.PlanHasFeature(org.Plan, feature);
+        var org = await LoadOrgAsync(orgId, asTracking: false, ct);
+        if (IsReadOnlyStatus(org.AccountStatus)) return false;
+        return PlanConstants.PlanHasFeature(NormalizePlan(org.Plan), feature);
     }
 
-    // ── CreateCheckoutSessionAsync ────────────────────────────────────────
-
     public async Task<string> CreateCheckoutSessionAsync(
-        Guid orgId, string plan, string returnUrl, CancellationToken ct = default)
+        Guid orgId,
+        string plan,
+        string returnUrl,
+        CancellationToken ct = default)
     {
+        plan = plan.ToLowerInvariant();
         var priceId = plan switch
         {
-            PlanConstants.Growth      => _config["Stripe:GrowthPriceId"],
-            PlanConstants.Operations  => _config["Stripe:OperationsPriceId"],
+            PlanConstants.Growth => _config["Stripe:GrowthPriceId"],
+            PlanConstants.Operations => _config["Stripe:OperationsPriceId"],
             PlanConstants.Integration => _config["Stripe:IntegrationPriceId"],
-            _ => throw new ArgumentException($"No Stripe price configured for plan '{plan}'.")
+            _ => throw new ArgumentException($"No Stripe Checkout for plan '{plan}'.")
         };
 
         if (string.IsNullOrWhiteSpace(priceId))
             throw new InvalidOperationException($"Stripe price ID not configured for plan '{plan}'.");
 
-        var org = await LoadOrgAsync(orgId, ct);
+        var org = await LoadOrgAsync(orgId, asTracking: false, ct);
 
         var options = new SessionCreateOptions
         {
@@ -145,12 +138,15 @@ public sealed class StripeBillingService : IBillingService
             },
             SubscriptionData = new SessionSubscriptionDataOptions
             {
-                TrialPeriodDays = 14,
                 Metadata = new Dictionary<string, string> { ["plan"] = plan }
             },
-            Metadata      = new Dictionary<string, string> { ["org_id"] = orgId.ToString(), ["plan"] = plan },
-            SuccessUrl    = $"{returnUrl}?billing=success",
-            CancelUrl     = returnUrl,
+            Metadata = new Dictionary<string, string>
+            {
+                ["org_id"] = orgId.ToString(),
+                ["plan"] = plan
+            },
+            SuccessUrl = $"{returnUrl}?billing=success",
+            CancelUrl = returnUrl,
             AllowPromotionCodes = true,
         };
 
@@ -162,19 +158,19 @@ public sealed class StripeBillingService : IBillingService
         return session.Url;
     }
 
-    // ── CreatePortalSessionAsync ──────────────────────────────────────────
-
     public async Task<string> CreatePortalSessionAsync(
-        Guid orgId, string returnUrl, CancellationToken ct = default)
+        Guid orgId,
+        string returnUrl,
+        CancellationToken ct = default)
     {
-        var org = await LoadOrgAsync(orgId, ct);
+        var org = await LoadOrgAsync(orgId, asTracking: false, ct);
 
         if (org.StripeCustomerId is null)
             throw new InvalidOperationException("No Stripe customer found for this organisation.");
 
         var options = new Stripe.BillingPortal.SessionCreateOptions
         {
-            Customer  = org.StripeCustomerId,
+            Customer = org.StripeCustomerId,
             ReturnUrl = returnUrl,
         };
 
@@ -183,48 +179,67 @@ public sealed class StripeBillingService : IBillingService
         return session.Url;
     }
 
-    // ── RequestPilotExtensionAsync ────────────────────────────────────────
+    public async Task MarkPilotStartedAsync(Guid orgId, CancellationToken ct = default)
+    {
+        var org = await LoadOrgAsync(orgId, asTracking: true, ct);
+        if (org.TrialStartedAt == default)
+            org.TrialStartedAt = DateTime.UtcNow;
+        org.TrialEndsAt ??= org.TrialStartedAt.Add(PlanConstants.PilotDuration);
+        org.Plan = PlanConstants.Pilot;
+        org.AccountStatus = AccountStatusConstants.Trialing;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task MarkPilotExpiredIfNeededAsync(Guid orgId, CancellationToken ct = default)
+    {
+        var org = await LoadOrgAsync(orgId, asTracking: true, ct);
+        if (org.Plan != PlanConstants.Pilot) return;
+        if (org.AccountStatus is AccountStatusConstants.TrialExpired or AccountStatusConstants.ReadOnly) return;
+
+        org.TrialEndsAt ??= org.TrialStartedAt.Add(PlanConstants.PilotDuration);
+        var ordersUsed = await CountOrdersAsync(org, ct);
+        var expired = DateTime.UtcNow > org.TrialEndsAt.Value || ordersUsed >= PlanConstants.PilotOrderLimit;
+        if (!expired) return;
+
+        org.AccountStatus = AccountStatusConstants.TrialExpired;
+        await _db.SaveChangesAsync(ct);
+    }
 
     public async Task RequestPilotExtensionAsync(Guid orgId, CancellationToken ct = default)
     {
-        var org = await _db.Organisations
-            .FirstOrDefaultAsync(o => o.Id == orgId, ct)
-            ?? throw new InvalidOperationException($"Organisation {orgId} not found.");
+        var org = await LoadOrgAsync(orgId, asTracking: true, ct);
 
         if (org.PilotExtensionRequestedAt.HasValue)
         {
             _logger.LogInformation("Pilot extension already requested for org {OrgId}", orgId);
-            return; // idempotent
+            return;
         }
 
         org.PilotExtensionRequestedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
         _logger.LogWarning(
-            "SALES SIGNAL — Pilot extension requested. OrgId={OrgId} OrgName={OrgName} RequestedAt={At}",
+            "SALES SIGNAL - Pilot extension requested. OrgId={OrgId} OrgName={OrgName} RequestedAt={At}",
             org.Id, org.Name, org.PilotExtensionRequestedAt);
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────
-
-    private async Task<Core.Entities.Organisation> LoadOrgAsync(Guid orgId, CancellationToken ct)
+    private async Task<Core.Entities.Organisation> LoadOrgAsync(Guid orgId, bool asTracking, CancellationToken ct)
     {
-        return await _db.Organisations
-            .AsNoTracking()
-            .FirstOrDefaultAsync(o => o.Id == orgId, ct)
+        var query = _db.Organisations.AsQueryable();
+        if (!asTracking) query = query.AsNoTracking();
+
+        return await query.FirstOrDefaultAsync(o => o.Id == orgId, ct)
             ?? throw new InvalidOperationException($"Organisation {orgId} not found.");
     }
 
     private async Task<int> CountOrdersAsync(Core.Entities.Organisation org, CancellationToken ct)
     {
-        if (org.Plan == PlanConstants.Pilot)
+        if (NormalizePlan(org.Plan) == PlanConstants.Pilot)
         {
-            // Cumulative count since trial start (no monthly reset)
             return await _db.PurchaseOrders
                 .CountAsync(o => o.OrgId == org.Id && o.CreatedAt >= org.TrialStartedAt, ct);
         }
 
-        // Rolling monthly window for paid plans
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         return await _db.PurchaseOrders
             .CountAsync(o => o.OrgId == org.Id && o.CreatedAt >= monthStart, ct);
@@ -232,4 +247,16 @@ public sealed class StripeBillingService : IBillingService
 
     private Task<int> CountSuppliersAsync(Guid orgId, CancellationToken ct) =>
         _db.Suppliers.CountAsync(s => s.OrgId == orgId && s.DeletedAt == null, ct);
+
+    private static DateTime GetTrialEndsAt(Core.Entities.Organisation org) =>
+        org.TrialEndsAt ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
+
+    private static string NormalizePlan(string plan) =>
+        PlanConstants.All.Contains(plan) ? plan : PlanConstants.Pilot;
+
+    private static bool IsReadOnlyStatus(string status) =>
+        status is AccountStatusConstants.TrialExpired
+            or AccountStatusConstants.ReadOnly
+            or AccountStatusConstants.PastDue
+            or AccountStatusConstants.Cancelled;
 }

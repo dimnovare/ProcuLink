@@ -1,4 +1,5 @@
 using Hangfire;
+using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 
 namespace ProcuLink.Api.Jobs;
@@ -10,13 +11,16 @@ namespace ProcuLink.Api.Jobs;
 public class DeliverOrderJob
 {
     private readonly IDeliveryService _deliveryService;
+    private readonly IBillingService _billingService;
     private readonly ILogger<DeliverOrderJob> _logger;
 
     public DeliverOrderJob(
         IDeliveryService deliveryService,
+        IBillingService billingService,
         ILogger<DeliverOrderJob> logger)
     {
         _deliveryService = deliveryService;
+        _billingService = billingService;
         _logger = logger;
     }
 
@@ -31,6 +35,14 @@ public class DeliverOrderJob
             "DeliverOrderJob starting for order {OrderId}, artifact {ArtifactId}",
             orderId,
             artifactId);
+
+        if (!await _billingService.CanProcessOrdersAsync(organisationId, ct))
+        {
+            _logger.LogWarning(
+                "DeliverOrderJob skipped for order {OrderId}: billing account cannot process orders",
+                orderId);
+            return;
+        }
 
         var result = await _deliveryService.DispatchArtifactAsync(
             organisationId,

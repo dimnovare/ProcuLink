@@ -226,6 +226,18 @@ public sealed class OrdersController : ControllerBase
         if (formatStr != "xml" && formatStr != "csv")
             return BadRequest(new { error = "Format must be 'xml' or 'csv'." });
 
+        var limitCheck = await _billing.CheckOrderLimitAsync(_tenant.OrganisationId, ct);
+        if (!limitCheck.Allowed)
+        {
+            return StatusCode(429, new
+            {
+                error = limitCheck.PilotExpired ? "pilot_expired" : "order_limit_reached",
+                plan = limitCheck.Plan,
+                limit = limitCheck.Limit,
+                upgradeUrl = "/settings",
+            });
+        }
+
         // Pre-flight: load the order to confirm it exists and is "ready"
         var getResult = await _orders.GetByIdAsync(_tenant.OrganisationId, id, ct);
         if (!getResult.IsSuccess)
