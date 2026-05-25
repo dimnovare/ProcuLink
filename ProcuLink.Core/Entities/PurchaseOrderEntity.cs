@@ -16,7 +16,8 @@ public class PurchaseOrderEntity
     public string Currency { get; set; } = string.Empty;
 
     /// <summary>
-    /// pending_parse | pending_review | ready | transforming | delivered | failed
+    /// pending_parse | parsing | pending_review | ready | transforming |
+    /// ready_to_deliver | delivering | delivered | delivery_failed | failed
     /// </summary>
     public string Status { get; set; } = "pending_parse";
 

@@ -4,6 +4,7 @@ using CsvHelper;
 using CsvHelper.Configuration;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Helpers;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
@@ -507,7 +508,7 @@ public sealed class OrderService : IOrderService
 
         _db.OutboundArtifacts.Add(artifact);
 
-        entity.Status    = "delivered";
+        entity.Status    = OrderStatusConstants.ReadyToDeliver;
         entity.UpdatedAt = now;
 
         _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "Transformed", new

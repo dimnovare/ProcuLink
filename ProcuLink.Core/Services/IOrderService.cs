@@ -57,7 +57,8 @@ public interface IOrderService
 
     /// <summary>
     /// Transform a fully-resolved order to XML or CSV, upload the artifact to R2,
-    /// persist the outbound_artifacts row, and advance the order status to "delivered".
+    /// persist the outbound_artifacts row, and advance the order status to "ready_to_deliver".
+    /// Delivery workflow is responsible for "delivering", "delivered", and "delivery_failed".
     /// Returns 422-equivalent failure if any line still has NeedsReview = true.
     /// </summary>
     Task<Result<TransformResponse>> TransformAsync(
