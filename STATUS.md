@@ -4,7 +4,9 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 4 Group D2 — Supplier Delivery Config**
+## Where we are: **Phase 4 Group D2 — Buyer-Side Supplier Delivery Config HTTP-first path complete**
+
+**Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
 ### Completed phases
 | Phase | What was built |
@@ -32,6 +34,30 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - `BillingSection` component on settings page
 - `UploadWorkbench` 429 banner with upgrade CTA
 
+### Group C2 — Billing model reconciliation
+
+**Status: Required before billing is treated as final**
+
+The final billing model is now locked:
+
+| Plan | Price | Orders | Suppliers |
+|---|---:|---:|---:|
+| Pilot | €0 / 14 days | 20 total during trial | 1 |
+| Growth | €149/mo | 150/month | 5 |
+| Operations | €399/mo | 500/month | 10 |
+| Integration | €999/mo | 1,000/month | 20 |
+| Enterprise | Custom, from €2,500/mo | Custom | Custom |
+
+Source of truth: `docs/superpowers/specs/2026-05-24-stripe-billing-design.md`.
+
+Important corrections:
+- Pilot is internal/free, not Stripe Checkout and not free forever.
+- Expired Pilot becomes read-only: users can view previous data and billing, but cannot upload, transform, deliver, or add suppliers.
+- Add explicit account statuses: `trialing`, `active`, `trial_expired`, `past_due`, `read_only`, `cancelled`.
+- Paid self-serve Checkout only supports Growth, Operations, Integration.
+- Enterprise is contact-sales/manual.
+- Pricing page, settings billing UI, upload 429 banners, supplier-limit banners, and backend limits must reflect the final model.
+
 ---
 
 ## Group D — PO Field Mapping Engine ✅ (May 25 2026)
@@ -53,20 +79,64 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - `src/components/bridge/PoMappingEditor.tsx` — visual CSV field mapping editor component
 - `SupplierDockProfile` — "PO Mapping" tab wired to editor
 
-## Group D2 — Supplier Delivery Config
+## Group D2 — Buyer-Side Supplier Delivery Config ✅ HTTP-first path (May 25 2026)
 
-**Status: Not started**
+**Status: HTTP/webhook delivery config path implemented and committed. SFTP/FTP intentionally deferred until HTTP workflow is production-proven.**
 
 ### What Group D2 builds
-Per-supplier delivery configuration: HTTP webhooks, SFTP, FTP — protocol selection, auth credentials, test-fire. Non-developer friendly UI for configuring how mapped POs are delivered to each supplier.
+Per-supplier delivery configuration for a procurement team sending purchase orders out: HTTP/webhook first, then SFTP/FTP. Protocol selection, auth credentials, output file naming, safe test-fire, retry policy, audit trail, and non-developer friendly UI for configuring how mapped POs are delivered to each supplier.
+
+### What shipped
+
+**Backend (`ProcuLink`):**
+- Replaced delivery credential encryption with authenticated `AesGcm`.
+- Added `OrderStatusConstants`; transform now sets `ready_to_deliver`, not `delivered`.
+- Added delivery config contracts and `IDeliveryConfigService`.
+- Added `DeliveryConfigService` with org-scoped CRUD, protocol validation, encrypted credential storage, credential preservation, and redacted reads.
+- Added supplier delivery config endpoints: GET/PUT/DELETE `/api/suppliers/{id}/delivery-config`.
+- Added real test-fire endpoint: POST `/api/suppliers/{id}/delivery-config/test-fire`; writes `DeliveryAttempt` with `OrderId = null`.
+- Added `IDeliveryService` + `DeliveryService` workflow: no-op when no config or `auto_deliver=false`, `delivering` during dispatch, `delivered` only on dispatcher success, `delivery_failed` on dispatch failure.
+- Replaced old `DeliverOrderJob` supplier-profile webhook logic with delivery workflow delegation.
+- `TransformOrderJob` now enqueues delivery after successful transform.
+- Hardened `HttpDeliveryDispatcher` with timeout support and safer failure messages.
+
+**Frontend (`project-proculink`):**
+- Added delivery config TypeScript types and API client.
+- Added `DeliveryConfigEditor` in the Bridge Layer style.
+- Added `Delivery` tab to `SupplierDockProfile`.
+- HTTP is enabled first; SFTP/FTP are visible as later protocols.
+
+### Verification
+- `dotnet test ProcuLink.Infrastructure.Tests\ProcuLink.Infrastructure.Tests.csproj --no-restore` → 25 passed.
+- `dotnet test ProcuLink.Transform.Tests\ProcuLink.Transform.Tests.csproj --no-restore` → 22 passed.
+- `dotnet build ProcuLink.slnx --no-restore` → passed.
+- `bun run build` in `project-proculink` → passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
+
+### Deferred from D2
+- SFTP dispatcher.
+- FTP/FTPS dispatcher.
+- PEPPOL, ERP connectors, invoices, and broad document types.
+- Manual browser/Scalar test-fire against a live API session still recommended before pushing.
 
 ---
 
-## After Group D
+## Design workflow correction (May 25 2026)
+
+- Lovable is no longer used for this project.
+- All UI/UX decisions run through `docs/design-system`, `/frontend-design`, and Claude Design/reference images.
+- Design system path: `C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\docs\design-system`
+- First-read design file for agents: `docs/design-system/00-agent-quick-brief.md`
+- Locked direction: Direction 4 — The Bridge Layer, supported by Direction 3 — System Identity.
+- Keep design files on disk; they do not affect token usage unless Claude/Codex reads them. Agents should read the quick brief first, then only task-specific design files.
+
+---
+
+## Current queue
 
 | Group | What | Status |
 |---|---|---|
-| **D2** | Supplier delivery config (HTTP/SFTP/FTP, auth, test-fire) | **Next** |
+| **C2** | Final billing model reconciliation | **Required** |
+| **D2** | Buyer-side supplier delivery config (HTTP-first path) | **Implemented — live manual QA still recommended** |
 | **E** | AI mapping suggestions via Claude API | Not started |
 | **F** | PDF ingestion (`PdfPig`) | Not started |
 | **G** | ERP connectors (Erply, Directo) | Not started |
