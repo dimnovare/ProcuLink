@@ -19,6 +19,7 @@ public class ProcuLinkDbContext : DbContext
     public DbSet<DeliveryAttempt> DeliveryAttempts => Set<DeliveryAttempt>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<SupplierPoMapping> SupplierPoMappings => Set<SupplierPoMapping>();
+    public DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs => Set<SupplierDeliveryConfig>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -118,6 +119,31 @@ public class ProcuLinkDbContext : DbContext
             b.HasOne(x => x.Supplier)
                 .WithMany(s => s.PoMappings)
                 .HasForeignKey(x => x.SupplierId);
+        });
+
+        // ── supplier_delivery_configs ──────────────────────────────────
+        modelBuilder.Entity<SupplierDeliveryConfig>(b =>
+        {
+            b.ToTable("supplier_delivery_configs");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            b.Property(x => x.Protocol).HasColumnName("protocol").IsRequired();
+            b.Property(x => x.AutoDeliver).HasColumnName("auto_deliver").HasDefaultValue(false);
+            b.Property(x => x.ConfigJson).HasColumnName("config_json").HasColumnType("jsonb");
+            b.Property(x => x.EncryptedCredentials).HasColumnName("encrypted_credentials").IsRequired();
+            b.Property(x => x.CreatedAt).HasColumnName("created_at");
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+
+            b.HasIndex(x => new { x.OrgId, x.SupplierId }).IsUnique();
+
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
+            b.HasOne(x => x.Supplier)
+             .WithMany(s => s.DeliveryConfigs)
+             .HasForeignKey(x => x.SupplierId);
         });
 
         // ── supplier_profiles ──────────────────────────────────────────
@@ -256,7 +282,8 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.ErrorMessage).HasColumnName("error_message");
             b.HasOne(x => x.Order)
              .WithMany(x => x.DeliveryAttempts)
-             .HasForeignKey(x => x.OrderId);
+             .HasForeignKey(x => x.OrderId)
+             .IsRequired(false);
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.DeliveryAttempts)
              .HasForeignKey(x => x.OrgId);

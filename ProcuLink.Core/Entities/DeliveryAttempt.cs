@@ -3,7 +3,8 @@ namespace ProcuLink.Core.Entities;
 public class DeliveryAttempt
 {
     public Guid Id { get; set; }
-    public Guid OrderId { get; set; }
+    /// <summary>Null for test-fire attempts not linked to a real order.</summary>
+    public Guid? OrderId { get; set; }
     public Guid OrgId { get; set; }
     public string Channel { get; set; } = string.Empty;
     public string Destination { get; set; } = string.Empty;
@@ -12,7 +13,7 @@ public class DeliveryAttempt
     public int? ResponseCode { get; set; }
     public string? ErrorMessage { get; set; }
 
-    // Navigation
-    public PurchaseOrderEntity Order { get; set; } = null!;
+    // Navigation — Order is optional (null for test-fire rows)
+    public PurchaseOrderEntity? Order { get; set; }
     public Organisation Organisation { get; set; } = null!;
 }

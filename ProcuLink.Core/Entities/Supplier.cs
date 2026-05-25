@@ -16,4 +16,5 @@ public class Supplier
     public List<PurchaseOrderEntity> PurchaseOrders { get; set; } = new();
     public List<ItemMapping> ItemMappings { get; set; } = new();
     public List<SupplierPoMapping> PoMappings { get; set; } = new();
+    public List<SupplierDeliveryConfig> DeliveryConfigs { get; set; } = new();
 }
