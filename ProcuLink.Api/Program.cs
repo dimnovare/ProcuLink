@@ -161,6 +161,7 @@ builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
 // into OrderParserFactory, which selects by file extension at runtime.
 builder.Services.AddSingleton<IPurchaseOrderParser, CsvOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
+builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
 builder.Services.AddSingleton<OrderParserFactory>();
 
 // ── Transform layer (ProcuLink.Transform) ──────────────────────────────────

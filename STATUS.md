@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 4 Group E complete — PDF ingestion next**
+## Where we are: **Phase 4 Group F complete — ERP connectors next**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -18,6 +18,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 | **Group C** ✅ | Stripe billing — all 12 tasks done and pushed to both repos |
 | **Group D** ✅ | PO Field Mapping Engine — all 12 tasks done and pushed to both repos |
 | **Group E** ✅ | AI mapping suggestions — provider-neutral, OpenAI structured outputs first |
+| **Group F** ✅ | PDF ingestion — text-based purchase-order PDFs via PdfPig |
 
 ---
 
@@ -166,6 +167,28 @@ Verification:
 
 ---
 
+## Group F — PDF ingestion ✅ (May 25 2026)
+
+**Status: Implemented for text-based purchase-order PDFs. Scanned/image-only PDFs and OCR are intentionally deferred.**
+
+Backend (`ProcuLink`):
+- Added `PdfPig` package to `ProcuLink.Transform`.
+- Added `PdfOrderParser : IPurchaseOrderParser` with text extraction, header detection, and conservative line parsing.
+- Registered the PDF parser in API DI so `OrderParserFactory` can select it.
+- Updated upload validation to accept `.pdf` alongside CSV/XLSX.
+- Added focused transform tests covering PDF parser selection, parsed header/line data, and header-only PDFs.
+
+Frontend (`project-proculink`):
+- Updated `FileUploadZone` to accept `.pdf`/`application/pdf`.
+- Updated upload copy and selected-file icon handling so PDFs are first-class upload inputs.
+
+Verification:
+- `dotnet build ProcuLink.slnx --no-restore` → passed.
+- `dotnet test ProcuLink.slnx --no-restore` → 52 tests passed.
+- `bun run build` in `project-proculink` → passed; existing Sentry/Browserslist/ESLint warnings remain.
+
+---
+
 ## Design workflow correction (May 25 2026)
 
 - Lovable is no longer used for this project.
@@ -184,8 +207,8 @@ Verification:
 | **C2** | Final billing model reconciliation | **Implemented — live Stripe QA still recommended** |
 | **D2** | Buyer-side supplier delivery config (HTTP-first path) | **Implemented — live manual QA still recommended** |
 | **E** | AI mapping suggestions — provider-neutral, OpenAI structured outputs first | **Implemented — live OpenAI QA still recommended** |
-| **F** | PDF ingestion (`PdfPig`) | Next |
-| **G** | ERP connectors (Erply, Directo) | Not started |
+| **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
+| **G** | ERP connectors (Erply, Directo) | Next |
 | **H** | Email polling (IMAP/MailKit) | Not started |
 
 ### Group E provider decision (May 25 2026)
@@ -215,8 +238,8 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 - DB: `Host=localhost;Port=5435;Database=proculink_dev`
 
 ## Latest commits to push when ready
-- Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), plus D2 backend commits.
-- Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`) and C2 frontend (`6116af9`).
+- Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), and Group F PDF ingestion.
+- Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), and Group F PDF upload acceptance.
 - Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
 
 ---

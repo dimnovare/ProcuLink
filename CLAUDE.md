@@ -195,7 +195,7 @@ source. All UI/UX and design decisions run through the local design system,
 | Phase 2 — Core loop | ✅ Done |
 | Phase 3 — Sellable MVP | ✅ Done |
 | Next.js migration | ✅ Done |
-| Phase 4 — Commercial | 🚧 In progress — Group E complete, Group F PDF ingestion next |
+| Phase 4 — Commercial | 🚧 In progress — Group F complete, Group G ERP connectors next |
 
 ---
 
@@ -214,21 +214,25 @@ Read this before starting new work:
   - Provider-neutral `IAiMappingService` with OpenAI structured outputs first.
   - Suggestions are stored on purchase order lines and exposed as line metadata.
   - Resolve UI pre-fills suggestions but visibly labels confidence, reason, and provenance.
-- **Do not redo C2, D2, or E.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
+- **Group F PDF ingestion is implemented** for text-based purchase-order PDFs.
+  - `PdfOrderParser` uses `PdfPig` for text extraction plus conservative header/line parsing.
+  - The API accepts `.pdf` uploads, and `FileUploadZone` accepts PDF files.
+  - Scanned/image-only PDFs and OCR are deferred.
+- **Do not redo C2, D2, E, or F.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
 - **Manual/live QA still recommended:**
   - Stripe Checkout + Portal + webhook mapping with real Stripe test events.
   - HTTP delivery config test-fire against a running API session.
   - OpenAI-backed mapping suggestion with a real `Ai:OpenAI:ApiKey`.
 - **Last verified commands:**
   - `dotnet build ProcuLink.slnx --no-restore` passed.
-  - `dotnet test ProcuLink.slnx --no-restore` passed, 49 tests.
+  - `dotnet test ProcuLink.slnx --no-restore` passed, 52 tests.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
-Next implementation group is **Group F — PDF ingestion**, but before coding:
+Next implementation group is **Group G — ERP connectors**, but before coding:
 
 1. Read `STATUS.md`.
 2. Read only task-relevant design docs, starting with `docs/design-system/00-agent-quick-brief.md` if frontend is touched.
-3. Use `/superpowers:brainstorm` and `/superpowers:write-plan` because Group F touches parser selection, upload validation, transform tests, and frontend upload UX.
+3. Use `/superpowers:brainstorm` and `/superpowers:write-plan` because Group G touches connector contracts, delivery destinations, backend services, and likely settings/delivery UI.
 
 ---
 
@@ -501,9 +505,11 @@ Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level suppl
 - [ ] Future provider option: `ClaudeAiMappingService` may be added later behind the same `IAiMappingService`, but it is not the Group E default.
 
 ### Group F — PDF ingestion
-- [ ] Add `PdfPig` to `ProcuLink.Transform`
-- [ ] `PdfOrderParser : IPurchaseOrderParser` — text extraction + line parsing
-- [ ] Accept `.pdf` in upload endpoint + FileUploadZone
+**Status:** ✅ Implemented for text-based purchase-order PDFs. Scanned/image-only PDFs and OCR are deferred.
+
+- [x] Add `PdfPig` to `ProcuLink.Transform`
+- [x] `PdfOrderParser : IPurchaseOrderParser` — text extraction + line parsing
+- [x] Accept `.pdf` in upload endpoint + FileUploadZone
 
 ### Group G — ERP connectors
 - [ ] `IErpConnector` interface

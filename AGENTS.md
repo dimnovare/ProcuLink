@@ -463,9 +463,11 @@ Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level suppl
 - [ ] Future provider option: `ClaudeAiMappingService` may be added later behind the same `IAiMappingService`, but it is not the Group E default.
 
 ### Group F — PDF ingestion
-- [ ] Add `PdfPig` to `ProcuLink.Transform`
-- [ ] `PdfOrderParser : IPurchaseOrderParser` — text extraction + line parsing
-- [ ] Accept `.pdf` in upload endpoint + FileUploadZone
+**Status:** ✅ Implemented for text-based purchase-order PDFs. Scanned/image-only PDFs and OCR are deferred.
+
+- [x] Add `PdfPig` to `ProcuLink.Transform`
+- [x] `PdfOrderParser : IPurchaseOrderParser` — text extraction + line parsing
+- [x] Accept `.pdf` in upload endpoint + FileUploadZone
 
 ### Group G — ERP connectors
 - [ ] `IErpConnector` interface

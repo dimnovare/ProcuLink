@@ -50,7 +50,7 @@ public sealed class OrdersController : ControllerBase
     // ── POST /api/orders/upload ───────────────────────────────────────────────
 
     /// <summary>
-    /// Upload a CSV or XLSX purchase order file.
+    /// Upload a CSV, XLSX, or text-based PDF purchase order file.
     /// The file is stored to R2 and a parsing job is enqueued.
     /// Returns immediately with status "parsing" — poll GET /api/orders/{id}/status.
     /// Rate-limited to 20 uploads per minute per authenticated user.
@@ -76,8 +76,8 @@ public sealed class OrdersController : ControllerBase
                 new { error = "File exceeds the 10 MB upload limit." });
 
         var extension = FileNameSanitiser.GetExtension(file.FileName);
-        if (extension != ".csv" && extension != ".xlsx")
-            return BadRequest(new { error = "Only CSV and XLSX files are supported." });
+        if (extension != ".csv" && extension != ".xlsx" && extension != ".pdf")
+            return BadRequest(new { error = "Only CSV, XLSX, and PDF files are supported." });
 
         if (supplierId == Guid.Empty)
             return BadRequest(new { error = "supplierId is required." });
