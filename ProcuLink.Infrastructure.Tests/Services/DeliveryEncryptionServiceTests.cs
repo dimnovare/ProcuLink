@@ -73,4 +73,12 @@ public class DeliveryEncryptionServiceTests
         var act = () => new DeliveryEncryptionService(config);
         act.Should().Throw<InvalidOperationException>();
     }
+
+    [Fact]
+    public void Decrypt_TooShort_ReturnsNull()
+    {
+        var svc = CreateService();
+        // 20 bytes: valid base64, has IV prefix but no full ciphertext block
+        svc.Decrypt(Convert.ToBase64String(new byte[20])).Should().BeNull();
+    }
 }

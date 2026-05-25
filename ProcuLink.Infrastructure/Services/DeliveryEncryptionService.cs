@@ -51,7 +51,7 @@ public class DeliveryEncryptionService
         try
         {
             var combined = Convert.FromBase64String(base64);
-            if (combined.Length < 17) return null; // too short to contain IV + at least 1 byte
+            if (combined.Length < 32) return null; // must contain IV (16 bytes) + at least one full CBC block (16 bytes)
 
             var iv         = combined[..16];
             var ciphertext = combined[16..];
