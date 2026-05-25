@@ -439,11 +439,28 @@ but the plan must now prioritize buyer-side outbound delivery correctness.
 - Keep the UI non-developer friendly: supplier dock → Delivery tab → protocol, endpoint, credentials,
   file naming, auto/manual toggle, test-fire result, and recent attempts.
 
-### Group E — AI mapping suggestions (Claude API)
-- [ ] Add `Anthropic.SDK` to `ProcuLink.Api.csproj`
-- [ ] `IAiMappingService` + `ClaudeAiMappingService` — suggest supplier code from buyer code + description
-- [ ] Call in `ParseOrderJob` for unresolved lines (no-op if `Anthropic:ApiKey` absent)
-- [ ] Frontend: pre-fill resolve inputs with AI suggestions, show "✨ AI suggested" badge
+### Group E — AI mapping suggestions (provider-neutral, OpenAI first)
+**Status:** Not started. Use provider-neutral service design with OpenAI structured outputs as the first implementation.
+
+Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level supplier SKU suggestions, the product needs low-cost, fast, strict JSON responses with confidence and provenance. Use OpenAI structured outputs first, keep the interface provider-neutral, and leave Claude/Anthropic as a future optional provider for heavier reasoning workflows.
+
+- [ ] Add OpenAI SDK/package to the backend project that implements the provider.
+- [ ] Add provider-neutral `IAiMappingService` contract.
+- [ ] Add `OpenAiMappingService` first implementation using structured outputs / JSON schema.
+- [ ] Config:
+  - `Ai:Provider = "openai"`
+  - `Ai:OpenAI:ApiKey`
+  - `Ai:OpenAI:MappingModel = "gpt-5-mini"` by default, with `"gpt-5-nano"` acceptable for very cheap fallback testing.
+- [ ] No-op when no AI API key is configured.
+- [ ] Call the service after deterministic mapping lookup for unresolved lines.
+- [ ] Do not auto-apply suggestions. Store/display them as suggestions only.
+- [ ] Every suggestion must include:
+  - suggested supplier item code
+  - confidence
+  - short reason
+  - source/provenance, e.g. existing mappings, candidate catalog rows, buyer code/description evidence
+- [ ] Frontend: pre-fill unresolved resolve inputs with AI suggestions, show `AI suggested` badge, confidence, and provenance. Avoid decorative sparkle copy.
+- [ ] Future provider option: `ClaudeAiMappingService` may be added later behind the same `IAiMappingService`, but it is not the Group E default.
 
 ### Group F — PDF ingestion
 - [ ] Add `PdfPig` to `ProcuLink.Transform`
@@ -511,7 +528,13 @@ but the plan must now prioritize buyer-side outbound delivery correctness.
     "OperationsPriceId": "",
     "IntegrationPriceId": ""
   },
-  "Anthropic": { "ApiKey": "" },
+  "Ai": {
+    "Provider": "openai",
+    "OpenAI": {
+      "ApiKey": "",
+      "MappingModel": "gpt-5-mini"
+    }
+  },
   "Sentry": { "Dsn": "" },
   "Frontend": { "Url": "" }
 }
@@ -560,6 +583,6 @@ NEXT_PUBLIC_SENTRY_DSN=
 - ❌ `useEffect` for data fetching — TanStack Query only
 - ❌ Skip `/superpowers:brainstorm` for tasks touching ≥3 files
 - ❌ Skip `/code-review` at end of a group
-- ❌ Call Anthropic API before Phase 4 Group E
+- ❌ Hardwire Group E to Anthropic/Claude — use provider-neutral AI mapping with OpenAI structured outputs first
 - ❌ Raw SQL — EF Core only
 - ❌ Hangfire jobs that are not idempotent

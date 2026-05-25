@@ -155,10 +155,28 @@ Per-supplier delivery configuration for a procurement team sending purchase orde
 |---|---|---|
 | **C2** | Final billing model reconciliation | **Implemented — live Stripe QA still recommended** |
 | **D2** | Buyer-side supplier delivery config (HTTP-first path) | **Implemented — live manual QA still recommended** |
-| **E** | AI mapping suggestions via Claude API | Not started |
+| **E** | AI mapping suggestions — provider-neutral, OpenAI structured outputs first | Not started |
 | **F** | PDF ingestion (`PdfPig`) | Not started |
 | **G** | ERP connectors (Erply, Directo) | Not started |
 | **H** | Email polling (IMAP/MailKit) | Not started |
+
+### Group E provider decision (May 25 2026)
+
+Do not implement Group E as Anthropic-only. Use a provider-neutral `IAiMappingService` with OpenAI structured outputs as the first provider because SKU suggestion needs cheap, fast, schema-bound JSON with confidence and provenance.
+
+Required behavior:
+- no-op when no AI API key is configured;
+- run only after deterministic mapping lookup leaves a line unresolved;
+- never auto-apply suggestions;
+- every suggestion shows supplier code, confidence, reason, and provenance;
+- frontend may prefill unresolved fields, but must visibly label them as `AI suggested`.
+
+Config direction:
+- `Ai:Provider = "openai"`
+- `Ai:OpenAI:ApiKey`
+- `Ai:OpenAI:MappingModel = "gpt-5-mini"`
+
+Claude/Anthropic can be added later behind the same interface for heavier reasoning, but it is not the Group E default.
 
 ---
 
