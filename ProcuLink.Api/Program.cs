@@ -8,6 +8,7 @@ using Microsoft.IdentityModel.Tokens;
 using ProcuLink.Api.Middleware;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure.Services;
@@ -148,6 +149,7 @@ else
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
+builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();

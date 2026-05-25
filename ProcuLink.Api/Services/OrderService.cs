@@ -7,6 +7,7 @@ using ProcuLink.Api.Helpers;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Mapping;
@@ -27,6 +28,7 @@ public sealed class OrderService : IOrderService
     private readonly OrderParserFactory          _parserFactory;
     private readonly IItemMappingService         _mappings;
     private readonly IPoMappingService           _poMappingService;
+    private readonly IAiMappingService           _aiMappings;
     private readonly IEnumerable<ITransformService> _transformers;
     private readonly ILogger<OrderService>       _logger;
 
@@ -36,6 +38,7 @@ public sealed class OrderService : IOrderService
         OrderParserFactory             parserFactory,
         IItemMappingService            mappings,
         IPoMappingService              poMappingService,
+        IAiMappingService              aiMappings,
         IEnumerable<ITransformService> transformers,
         ILogger<OrderService>          logger)
     {
@@ -44,6 +47,7 @@ public sealed class OrderService : IOrderService
         _parserFactory    = parserFactory;
         _mappings         = mappings;
         _poMappingService = poMappingService;
+        _aiMappings       = aiMappings;
         _transformers     = transformers;
         _logger           = logger;
     }
@@ -107,28 +111,24 @@ public sealed class OrderService : IOrderService
         // 6. Auto-resolve each line against the item_mappings table
         var lineEntities   = new List<PurchaseOrderLineEntity>(parsedOrder.Lines.Count);
         bool anyUnresolved = false;
+        var aiSuggestionCount = 0;
+        var supplierName = await GetSupplierNameAsync(organisationId, supplierId, ct);
+        var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
 
         foreach (var line in parsedOrder.Lines)
         {
-            var supplierCode = await _mappings.ResolveAsync(
-                organisationId, supplierId, line.BuyerItemCode, ct);
+            var lineEntity = await BuildLineEntityAsync(
+                organisationId,
+                supplierId,
+                supplierName,
+                line,
+                aiCandidates,
+                ct);
 
-            bool resolved = !string.IsNullOrWhiteSpace(supplierCode);
-            if (!resolved) anyUnresolved = true;
+            if (lineEntity.NeedsReview) anyUnresolved = true;
+            if (!string.IsNullOrWhiteSpace(lineEntity.AiSuggestedSupplierItemCode)) aiSuggestionCount++;
 
-            lineEntities.Add(new PurchaseOrderLineEntity
-            {
-                Id               = Guid.NewGuid(),
-                LineNumber       = line.LineNumber,
-                BuyerItemCode    = line.BuyerItemCode,
-                SupplierItemCode = supplierCode,
-                Description      = line.Description,
-                Quantity         = line.Quantity,
-                Unit             = line.Unit,
-                UnitPrice        = line.UnitPrice ?? 0m,
-                Confidence       = resolved ? 1.0f : 0.0f,
-                NeedsReview      = !resolved
-            });
+            lineEntities.Add(lineEntity);
         }
 
         // 7. Build the order entity
@@ -159,7 +159,8 @@ public sealed class OrderService : IOrderService
         {
             sourceFileKey,
             lineCount       = lineEntities.Count,
-            unresolvedCount = lineEntities.Count(l => l.NeedsReview)
+            unresolvedCount = lineEntities.Count(l => l.NeedsReview),
+            aiSuggestionCount
         }));
 
         await _db.SaveChangesAsync(ct);
@@ -339,28 +340,25 @@ public sealed class OrderService : IOrderService
             // Auto-resolve lines against item_mappings
             var lineEntities   = new List<PurchaseOrderLineEntity>(parsedOrder.Lines.Count);
             bool anyUnresolved = false;
+            var aiSuggestionCount = 0;
+            var supplierName = entity.Supplier?.Name
+                               ?? await GetSupplierNameAsync(organisationId, entity.SupplierId, ct);
+            var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, entity.SupplierId, ct);
 
             foreach (var line in parsedOrder.Lines)
             {
-                var supplierCode = await _mappings.ResolveAsync(
-                    organisationId, entity.SupplierId, line.BuyerItemCode, ct);
+                var lineEntity = await BuildLineEntityAsync(
+                    organisationId,
+                    entity.SupplierId,
+                    supplierName,
+                    line,
+                    aiCandidates,
+                    ct);
 
-                bool resolved = !string.IsNullOrWhiteSpace(supplierCode);
-                if (!resolved) anyUnresolved = true;
+                if (lineEntity.NeedsReview) anyUnresolved = true;
+                if (!string.IsNullOrWhiteSpace(lineEntity.AiSuggestedSupplierItemCode)) aiSuggestionCount++;
 
-                lineEntities.Add(new PurchaseOrderLineEntity
-                {
-                    Id               = Guid.NewGuid(),
-                    LineNumber       = line.LineNumber,
-                    BuyerItemCode    = line.BuyerItemCode,
-                    SupplierItemCode = supplierCode,
-                    Description      = line.Description,
-                    Quantity         = line.Quantity,
-                    Unit             = line.Unit,
-                    UnitPrice        = line.UnitPrice ?? 0m,
-                    Confidence       = resolved ? 1.0f : 0.0f,
-                    NeedsReview      = !resolved
-                });
+                lineEntities.Add(lineEntity);
             }
 
             // Update order with parsed data
@@ -380,6 +378,7 @@ public sealed class OrderService : IOrderService
             {
                 lineCount       = lineEntities.Count,
                 unresolvedCount = lineEntities.Count(l => l.NeedsReview),
+                aiSuggestionCount,
                 newStatus       = entity.Status
             }));
 
@@ -591,6 +590,10 @@ public sealed class OrderService : IOrderService
             line.SupplierItemCode = res.SupplierItemCode.Trim();
             line.NeedsReview     = false;
             line.Confidence      = 1.0f;
+            line.AiSuggestedSupplierItemCode = null;
+            line.AiSuggestionConfidence = null;
+            line.AiSuggestionReason = null;
+            line.AiSuggestionProvenance = null;
 
             // Persist the mapping so future uploads auto-resolve it
             if (saveMappings && !string.IsNullOrWhiteSpace(line.BuyerItemCode))
@@ -623,6 +626,84 @@ public sealed class OrderService : IOrderService
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private async Task<PurchaseOrderLineEntity> BuildLineEntityAsync(
+        Guid organisationId,
+        Guid supplierId,
+        string supplierName,
+        ParsedOrderLine line,
+        IReadOnlyList<AiMappingCandidate> aiCandidates,
+        CancellationToken ct)
+    {
+        var supplierCode = await _mappings.ResolveAsync(
+            organisationId, supplierId, line.BuyerItemCode, ct);
+
+        bool resolved = !string.IsNullOrWhiteSpace(supplierCode);
+        AiMappingSuggestion? suggestion = null;
+
+        if (!resolved)
+        {
+            suggestion = await _aiMappings.SuggestSupplierItemCodeAsync(
+                organisationId,
+                supplierId,
+                supplierName,
+                new AiMappingLineContext(
+                    line.LineNumber,
+                    line.BuyerItemCode,
+                    line.Description,
+                    line.Quantity,
+                    line.Unit),
+                aiCandidates,
+                ct);
+        }
+
+        return new PurchaseOrderLineEntity
+        {
+            Id               = Guid.NewGuid(),
+            LineNumber       = line.LineNumber,
+            BuyerItemCode    = line.BuyerItemCode,
+            SupplierItemCode = supplierCode,
+            Description      = line.Description,
+            Quantity         = line.Quantity,
+            Unit             = line.Unit,
+            UnitPrice        = line.UnitPrice ?? 0m,
+            Confidence       = resolved ? 1.0f : 0.0f,
+            NeedsReview      = !resolved,
+            AiSuggestedSupplierItemCode = suggestion?.SupplierItemCode,
+            AiSuggestionConfidence = suggestion?.Confidence,
+            AiSuggestionReason = suggestion?.Reason,
+            AiSuggestionProvenance = suggestion?.Provenance
+        };
+    }
+
+    private async Task<string> GetSupplierNameAsync(
+        Guid organisationId,
+        Guid supplierId,
+        CancellationToken ct)
+    {
+        return await _db.Suppliers
+            .AsNoTracking()
+            .Where(s => s.OrgId == organisationId && s.Id == supplierId)
+            .Select(s => s.Name)
+            .FirstOrDefaultAsync(ct) ?? string.Empty;
+    }
+
+    private async Task<IReadOnlyList<AiMappingCandidate>> GetAiMappingCandidatesAsync(
+        Guid organisationId,
+        Guid supplierId,
+        CancellationToken ct)
+    {
+        return await _db.ItemMappings
+            .AsNoTracking()
+            .Where(m => m.OrgId == organisationId && m.SupplierId == supplierId)
+            .OrderByDescending(m => m.UpdatedAt)
+            .Take(40)
+            .Select(m => new AiMappingCandidate(
+                m.BuyerItemCode,
+                m.SupplierItemCode,
+                $"existing mapping {m.BuyerItemCode} -> {m.SupplierItemCode}"))
+            .ToListAsync(ct);
+    }
 
     private static Task<ParsedOrder> ParseWithMappingTemplateAsync(
         byte[] buffer, PoMappingConfig config, CancellationToken ct)

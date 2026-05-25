@@ -27,7 +27,15 @@ public record OrderLineDto(
     string?  Unit,
     decimal  UnitPrice,
     float    Confidence,
-    bool     NeedsReview
+    bool     NeedsReview,
+    AiMappingSuggestionDto? AiSuggestion
+);
+
+public record AiMappingSuggestionDto(
+    string SupplierItemCode,
+    float Confidence,
+    string Reason,
+    string Provenance
 );
 
 /// <summary>Outbound artifact reference in the order response.</summary>

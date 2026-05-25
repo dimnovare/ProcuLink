@@ -337,11 +337,23 @@ public sealed class OrdersController : ControllerBase
             .Select(l => new OrderLineDto(
                 l.Id, l.LineNumber, l.BuyerItemCode, l.SupplierItemCode,
                 l.Description, l.Quantity, l.Unit, l.UnitPrice,
-                l.Confidence, l.NeedsReview))
+                l.Confidence, l.NeedsReview, MapAiSuggestion(l)))
             .ToList(),
         Artifacts: e.OutboundArtifacts
             .OrderByDescending(a => a.CreatedAt)
             .Select(a => new ArtifactDto(a.Id, a.Format, a.FileKey, a.CreatedAt))
             .ToList()
     );
+
+    private static AiMappingSuggestionDto? MapAiSuggestion(PurchaseOrderLineEntity line)
+    {
+        if (string.IsNullOrWhiteSpace(line.AiSuggestedSupplierItemCode))
+            return null;
+
+        return new AiMappingSuggestionDto(
+            line.AiSuggestedSupplierItemCode,
+            line.AiSuggestionConfidence ?? 0f,
+            line.AiSuggestionReason ?? string.Empty,
+            line.AiSuggestionProvenance ?? string.Empty);
+    }
 }

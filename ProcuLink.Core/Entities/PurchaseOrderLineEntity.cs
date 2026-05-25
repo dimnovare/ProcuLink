@@ -16,6 +16,10 @@ public class PurchaseOrderLineEntity
     public decimal UnitPrice { get; set; }
     public float Confidence { get; set; }
     public bool NeedsReview { get; set; }
+    public string? AiSuggestedSupplierItemCode { get; set; }
+    public float? AiSuggestionConfidence { get; set; }
+    public string? AiSuggestionReason { get; set; }
+    public string? AiSuggestionProvenance { get; set; }
 
     // Navigation
     public PurchaseOrderEntity Order { get; set; } = null!;

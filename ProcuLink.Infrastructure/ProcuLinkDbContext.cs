@@ -233,6 +233,10 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.UnitPrice).HasColumnName("unit_price");
             b.Property(x => x.Confidence).HasColumnName("confidence");
             b.Property(x => x.NeedsReview).HasColumnName("needs_review");
+            b.Property(x => x.AiSuggestedSupplierItemCode).HasColumnName("ai_suggested_supplier_item_code");
+            b.Property(x => x.AiSuggestionConfidence).HasColumnName("ai_suggestion_confidence");
+            b.Property(x => x.AiSuggestionReason).HasColumnName("ai_suggestion_reason");
+            b.Property(x => x.AiSuggestionProvenance).HasColumnName("ai_suggestion_provenance");
             b.HasOne(x => x.Order)
              .WithMany(x => x.Lines)
              .HasForeignKey(x => x.OrderId);

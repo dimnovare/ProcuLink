@@ -440,26 +440,26 @@ but the plan must now prioritize buyer-side outbound delivery correctness.
   file naming, auto/manual toggle, test-fire result, and recent attempts.
 
 ### Group E — AI mapping suggestions (provider-neutral, OpenAI first)
-**Status:** Not started. Use provider-neutral service design with OpenAI structured outputs as the first implementation.
+**Status:** Implemented. Live OpenAI provider QA still recommended before production use.
 
 Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level supplier SKU suggestions, the product needs low-cost, fast, strict JSON responses with confidence and provenance. Use OpenAI structured outputs first, keep the interface provider-neutral, and leave Claude/Anthropic as a future optional provider for heavier reasoning workflows.
 
-- [ ] Add OpenAI SDK/package to the backend project that implements the provider.
-- [ ] Add provider-neutral `IAiMappingService` contract.
-- [ ] Add `OpenAiMappingService` first implementation using structured outputs / JSON schema.
-- [ ] Config:
+- [x] Add OpenAI SDK/package to the backend project that implements the provider.
+- [x] Add provider-neutral `IAiMappingService` contract.
+- [x] Add `OpenAiMappingService` first implementation using structured outputs / JSON schema.
+- [x] Config:
   - `Ai:Provider = "openai"`
   - `Ai:OpenAI:ApiKey`
   - `Ai:OpenAI:MappingModel = "gpt-5-mini"` by default, with `"gpt-5-nano"` acceptable for very cheap fallback testing.
-- [ ] No-op when no AI API key is configured.
-- [ ] Call the service after deterministic mapping lookup for unresolved lines.
-- [ ] Do not auto-apply suggestions. Store/display them as suggestions only.
-- [ ] Every suggestion must include:
+- [x] No-op when no AI API key is configured.
+- [x] Call the service after deterministic mapping lookup for unresolved lines.
+- [x] Do not auto-apply suggestions. Store/display them as suggestions only.
+- [x] Every suggestion must include:
   - suggested supplier item code
   - confidence
   - short reason
   - source/provenance, e.g. existing mappings, candidate catalog rows, buyer code/description evidence
-- [ ] Frontend: pre-fill unresolved resolve inputs with AI suggestions, show `AI suggested` badge, confidence, and provenance. Avoid decorative sparkle copy.
+- [x] Frontend: pre-fill unresolved resolve inputs with AI suggestions, show `AI suggested` badge, confidence, and provenance. Avoid decorative sparkle copy.
 - [ ] Future provider option: `ClaudeAiMappingService` may be added later behind the same `IAiMappingService`, but it is not the Group E default.
 
 ### Group F — PDF ingestion

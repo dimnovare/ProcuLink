@@ -195,7 +195,7 @@ source. All UI/UX and design decisions run through the local design system,
 | Phase 2 — Core loop | ✅ Done |
 | Phase 3 — Sellable MVP | ✅ Done |
 | Next.js migration | ✅ Done |
-| Phase 4 — Commercial | 🚧 In progress — Group E AI mapping suggestions next |
+| Phase 4 — Commercial | 🚧 In progress — Group E complete, Group F PDF ingestion next |
 
 ---
 
@@ -210,21 +210,25 @@ Read this before starting new work:
 - **Group D2 buyer-side supplier delivery config is implemented for the HTTP-first path.**
   - Key backend commits include `70f20bd`, `301b836`, `779a128`, `61832f7`, `09b36c3`, `ee20fbe`, `19c8e98`, `326529d`, `2d765fc`
   - Frontend commits: `7772f4a`, `748c6de`
-- **Do not redo C2 or D2.** Treat both as implemented unless `STATUS.md` says a regression reopened them.
+- **Group E AI mapping suggestions are implemented** in backend and frontend.
+  - Provider-neutral `IAiMappingService` with OpenAI structured outputs first.
+  - Suggestions are stored on purchase order lines and exposed as line metadata.
+  - Resolve UI pre-fills suggestions but visibly labels confidence, reason, and provenance.
+- **Do not redo C2, D2, or E.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
 - **Manual/live QA still recommended:**
   - Stripe Checkout + Portal + webhook mapping with real Stripe test events.
   - HTTP delivery config test-fire against a running API session.
+  - OpenAI-backed mapping suggestion with a real `Ai:OpenAI:ApiKey`.
 - **Last verified commands:**
   - `dotnet build ProcuLink.slnx --no-restore` passed.
-  - `dotnet test ProcuLink.Infrastructure.Tests\ProcuLink.Infrastructure.Tests.csproj --no-restore` passed, 25 tests.
-  - `dotnet test ProcuLink.Transform.Tests\ProcuLink.Transform.Tests.csproj --no-restore` passed, 22 tests.
+  - `dotnet test ProcuLink.slnx --no-restore` passed, 49 tests.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
-Next implementation group is **Group E — AI mapping suggestions**, but before coding:
+Next implementation group is **Group F — PDF ingestion**, but before coding:
 
 1. Read `STATUS.md`.
 2. Read only task-relevant design docs, starting with `docs/design-system/00-agent-quick-brief.md` if frontend is touched.
-3. Use `/superpowers:brainstorm` and `/superpowers:write-plan` because Group E touches backend services, parsing flow, API contracts, and frontend review UI.
+3. Use `/superpowers:brainstorm` and `/superpowers:write-plan` because Group F touches parser selection, upload validation, transform tests, and frontend upload UX.
 
 ---
 
@@ -474,26 +478,26 @@ What exists now:
 Manual browser/Scalar test-fire against a live API session is still recommended before pushing delivery to real users.
 
 ### Group E — AI mapping suggestions (provider-neutral, OpenAI first)
-**Status:** Not started. Use provider-neutral service design with OpenAI structured outputs as the first implementation.
+**Status:** Implemented. Live OpenAI provider QA still recommended before production use.
 
 Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level supplier SKU suggestions, the product needs low-cost, fast, strict JSON responses with confidence and provenance. Use OpenAI structured outputs first, keep the interface provider-neutral, and leave Claude/Anthropic as a future optional provider for heavier reasoning workflows.
 
-- [ ] Add OpenAI SDK/package to the backend project that implements the provider.
-- [ ] Add provider-neutral `IAiMappingService` contract.
-- [ ] Add `OpenAiMappingService` first implementation using structured outputs / JSON schema.
-- [ ] Config:
+- [x] Add OpenAI SDK/package to the backend project that implements the provider.
+- [x] Add provider-neutral `IAiMappingService` contract.
+- [x] Add `OpenAiMappingService` first implementation using structured outputs / JSON schema.
+- [x] Config:
   - `Ai:Provider = "openai"`
   - `Ai:OpenAI:ApiKey`
   - `Ai:OpenAI:MappingModel = "gpt-5-mini"` by default, with `"gpt-5-nano"` acceptable for very cheap fallback testing.
-- [ ] No-op when no AI API key is configured.
-- [ ] Call the service after deterministic mapping lookup for unresolved lines.
-- [ ] Do not auto-apply suggestions. Store/display them as suggestions only.
-- [ ] Every suggestion must include:
+- [x] No-op when no AI API key is configured.
+- [x] Call the service after deterministic mapping lookup for unresolved lines.
+- [x] Do not auto-apply suggestions. Store/display them as suggestions only.
+- [x] Every suggestion must include:
   - suggested supplier item code
   - confidence
   - short reason
   - source/provenance, e.g. existing mappings, candidate catalog rows, buyer code/description evidence
-- [ ] Frontend: pre-fill unresolved resolve inputs with AI suggestions, show `AI suggested` badge, confidence, and provenance. Avoid decorative sparkle copy.
+- [x] Frontend: pre-fill unresolved resolve inputs with AI suggestions, show `AI suggested` badge, confidence, and provenance. Avoid decorative sparkle copy.
 - [ ] Future provider option: `ClaudeAiMappingService` may be added later behind the same `IAiMappingService`, but it is not the Group E default.
 
 ### Group F — PDF ingestion

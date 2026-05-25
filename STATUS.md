@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 4 Group C2 + D2 complete — live billing/delivery QA next**
+## Where we are: **Phase 4 Group E complete — PDF ingestion next**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -17,6 +17,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 | Group B | Marketing pages (landing, pricing, how-it-works) |
 | **Group C** ✅ | Stripe billing — all 12 tasks done and pushed to both repos |
 | **Group D** ✅ | PO Field Mapping Engine — all 12 tasks done and pushed to both repos |
+| **Group E** ✅ | AI mapping suggestions — provider-neutral, OpenAI structured outputs first |
 
 ---
 
@@ -138,6 +139,33 @@ Per-supplier delivery configuration for a procurement team sending purchase orde
 
 ---
 
+## Group E — AI mapping suggestions ✅ (May 25 2026)
+
+**Status: Implemented in backend and frontend. Live OpenAI key/provider QA is still recommended before relying on suggestions in production.**
+
+Backend (`ProcuLink`):
+- Added `OpenAI` SDK package to `ProcuLink.Infrastructure`.
+- Added provider-neutral `IAiMappingService` contract and `OpenAiMappingService`.
+- Uses OpenAI structured outputs / JSON schema with `Ai:Provider = "openai"`, `Ai:OpenAI:ApiKey`, and `Ai:OpenAI:MappingModel` (`gpt-5-mini` default).
+- No-ops when AI provider/key is absent.
+- Runs only after deterministic item mapping lookup leaves a line unresolved.
+- Stores suggestions on `purchase_order_lines` via EF migration `AddAiMappingSuggestionsToOrderLines`.
+- API exposes suggestions as line metadata: supplier code, confidence, reason, provenance.
+- Manual line resolution clears suggestion metadata and persists confirmed mappings when requested.
+
+Frontend (`project-proculink`):
+- Added AI suggestion types to the order line contract.
+- Resolve UI pre-fills unresolved supplier-code fields when suggestions exist.
+- Suggestions are visibly labelled `AI suggested` with confidence, reason, provenance, and controls to use or clear the suggestion.
+- Mock orders include AI suggestions for local review/demo.
+
+Verification:
+- `dotnet build ProcuLink.slnx --no-restore` → passed.
+- `dotnet test ProcuLink.slnx --no-restore` → 49 tests passed.
+- `bun run build` in `project-proculink` → passed; existing Sentry/Browserslist/ESLint warnings remain.
+
+---
+
 ## Design workflow correction (May 25 2026)
 
 - Lovable is no longer used for this project.
@@ -155,8 +183,8 @@ Per-supplier delivery configuration for a procurement team sending purchase orde
 |---|---|---|
 | **C2** | Final billing model reconciliation | **Implemented — live Stripe QA still recommended** |
 | **D2** | Buyer-side supplier delivery config (HTTP-first path) | **Implemented — live manual QA still recommended** |
-| **E** | AI mapping suggestions — provider-neutral, OpenAI structured outputs first | Not started |
-| **F** | PDF ingestion (`PdfPig`) | Not started |
+| **E** | AI mapping suggestions — provider-neutral, OpenAI structured outputs first | **Implemented — live OpenAI QA still recommended** |
+| **F** | PDF ingestion (`PdfPig`) | Next |
 | **G** | ERP connectors (Erply, Directo) | Not started |
 | **H** | Email polling (IMAP/MailKit) | Not started |
 
