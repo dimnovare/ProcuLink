@@ -8,8 +8,10 @@ using Microsoft.IdentityModel.Tokens;
 using ProcuLink.Api.Middleware;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Dispatchers;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
 using ProcuLink.Infrastructure.Storage;
@@ -147,6 +149,9 @@ builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
+builder.Services.AddSingleton<DeliveryEncryptionService>();
+builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
+builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
 
 // ── Parsing layer (ProcuLink.Transform) ───────────────────────────────────
 // Each parser registered individually so DI can inject IEnumerable<IPurchaseOrderParser>
