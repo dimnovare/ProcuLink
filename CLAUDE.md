@@ -211,7 +211,7 @@ before writing implementation plans.
 
 | Group | Workstream | Status |
 |---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 6 complete** |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 7 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
 | **K** | Standards + engine hardening | Planned after I/J scoping |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
@@ -254,7 +254,7 @@ Read this before starting new work:
   - `EmailPollingJob` runs from `ProcuLink.Worker` every 5 minutes through Hangfire.
   - CSV/XLSX/PDF attachments enter the existing create-stub and parse pipeline.
   - Body-only parsing and richer message-id dedupe are deferred.
-- **Group I UI/UX polish is in progress, pass 6 complete.**
+- **Group I UI/UX polish is in progress, pass 7 complete.**
   - Passes 1-2 fixed Wire Topology traveller/path/legend/port issues and added Playwright protected-route QA.
   - Pass 3 screenshot-tested `/upload` and `/settings` on desktop/mobile.
   - `/upload` now stacks on mobile and uses recent-order route cards instead of forcing a desktop table.
@@ -264,7 +264,8 @@ Read this before starting new work:
   - Supplier/buyer dock cards, crossings log rows, and webhook rows now stack safely on mobile.
   - Pass 5 fixed supplier detail, mapping editor, PO mapping, and delivery config mobile layouts.
   - Pass 6 fixed settings billing/email loading and API-unavailable states, added bounded billing/email fetch timeouts, made connectors mobile-native, and added lightweight connector/webhook configuration panels.
-  - Continue QA for mappings import/export dialogs, rules/templates edit states, plan-gated/empty/loading/error states beyond settings, dense order-review edits, and live save/test-fire behavior for connector/webhook forms before Group J.
+  - Pass 7 fixed mappings import/export/add/edit, rules list/edit, and templates new/edit interaction states. Rules list view no longer clips as a desktop table on mobile, and dense order-review inline edit/confirm states were rechecked.
+  - Continue QA for plan-gated/empty/loading/error states beyond settings, live save/test-fire behavior for connector/webhook/mapping/rule/template forms, and full first-upload-to-delivery happy/error paths before Group J.
 - **Do not redo C2, D2, E, F, G, or H.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
 - **Manual/live QA still recommended:**
   - Stripe Checkout + Portal + webhook mapping with real Stripe test events.
