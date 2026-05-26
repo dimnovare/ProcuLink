@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 5 planned — Group I UI/UX production polish next**
+## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 1 complete**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -17,7 +17,7 @@ Source of truth for the next grouped plan:
 
 | Group | Workstream | Status | Why |
 |---|---|---|---|
-| **I** | UI/UX production polish + responsive QA | **Next** | The product must feel reliable before more engine depth is layered on top. Fix visible Bridge Layer issues first, including the Wire Topology pulse/dot that can appear detached from its wire. |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 1 complete** | The product must feel reliable before more engine depth is layered on top. First pass fixed the known Wire Topology traveller defect and tightened Bridge dashboard responsiveness. Full route-by-route visual QA remains. |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
 | **K** | Standards + engine hardening | Planned after I/J scoping | Expand toward explicit standards coverage: cXML, UBL/Peppol BIS Order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
@@ -281,18 +281,25 @@ Deferred from H:
 | **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
-| **I** | UI/UX production polish + responsive QA | **Next** |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 1 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
 | **K** | Standards + engine hardening | Planned after I/J scoping |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
 
-### Group I — UI/UX production polish + responsive QA (next)
+### Group I — UI/UX production polish + responsive QA (in progress)
 
 Use `/frontend-design` and the local design system. Start with
 `docs/design-system/00-agent-quick-brief.md`.
 
+Pass 1 completed (May 26 2026):
+- `WireTopology` no longer uses standalone `animateMotion` pulse circles. Travellers are now short animated SVG path segments using the same `pathD` as the rendered wire, so they cannot visually detach from the wire path.
+- Topology travellers are hidden under `prefers-reduced-motion`.
+- Bridge dashboard header controls wrap on small screens.
+- KPI cards move from fixed 5-column layout to responsive 1/2/5-column layout.
+- Lower dashboard panels stack below `xl`, and queue/supplier-health rows truncate/wrap safely.
+- `bun run build` in `project-proculink` passed. Existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
+
 Must address:
-- Wire Topology traveller/pulse dots must never appear detached from visible wire paths.
 - Desktop/tablet/mobile QA for the Bridge routes.
 - App shell, sidebar, topbar, route labels, active states, and mobile navigation.
 - Core flow polish: sign-in, first upload, inbox/review, mapping, transform, delivery, settings/billing/email.
@@ -358,7 +365,7 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 - `MarketingNav`: canonical `ProcuLinkMark` (size 30, text 18px) — was wrong ellipse shape and too small
 - `BridgeSidebar`: logo now white and sized correctly (28px mark, 17px text, 56px height)
 - `BridgeTopbar`: height bumped to 56px to match sidebar logo row
-- `WireTopology`: pulse dots fade in/out near endpoints — no more "floating dot" at supplier port
+- `WireTopology`: traveller motion is now attached same-path SVG segments, not standalone pulse dots
 - `SpineReview`: two-row header (endpoints top, StatusJourney full-width below) — was cramped
 - `SpineReview` DocumentAnatomy: zone labels moved left, overflow hidden — was bleeding into center column
 - `PricingPage`: hero merged with card section (no blank gap), subtitle uses `<br>`, 3-col fixed grid

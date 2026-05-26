@@ -12,7 +12,7 @@
 
 ### Group I — UI/UX Production Polish And Responsive QA
 
-**Status:** Next.
+**Status:** In progress. Pass 1 complete: topology traveller fix + first Bridge dashboard responsive polish. Full route-by-route QA remains.
 
 **Purpose:** Make the product feel reliable before layering broader engines on top. Visible UI defects weaken trust, especially in the Bridge Layer metaphor.
 
@@ -33,8 +33,8 @@ Tasks:
   - `/operations/connectors`
   - `/operations/webhooks`
   - `/settings`
-- [ ] Fix the known Wire Topology issue: traveller/pulse dots must never appear detached from a visible wire path.
-- [ ] Verify motion respects `prefers-reduced-motion` and communicates state rather than decoration.
+- [x] Fix the known Wire Topology issue: traveller/pulse dots must never appear detached from a visible wire path.
+- [x] Verify topology motion respects `prefers-reduced-motion` and communicates state rather than decoration.
 - [ ] Polish app shell, sidebar, topbar, route naming, active states, and mobile navigation.
 - [ ] Polish core flows:
   - sign-in/sign-up return path;
@@ -180,7 +180,7 @@ Acceptance:
 ## Rules For Future Agents
 
 - `STATUS.md` remains the source of truth.
-- Group I is next unless the user explicitly reprioritizes.
+- Group I is in progress unless the user explicitly reprioritizes.
 - Use the local design system for all UI work.
 - No Lovable, no Vite, no React Router, no old Starter pricing.
 - Do not start Group K broad standards implementation until the standards matrix is written and approved.
