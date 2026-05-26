@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 7 complete**
+## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 8 complete**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -17,7 +17,7 @@ Source of truth for the next grouped plan:
 
 | Group | Workstream | Status | Why |
 |---|---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 7 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-7 fixed the known Wire Topology traveller/visibility defects, added Playwright QA, tightened mobile shell/order review behavior, cleaned upload/settings responsive defects, fixed inbox/dock/log/webhook mobile layout issues, made supplier detail/mapping/delivery forms usable on mobile, added resilient settings plus connector/webhook configuration states, and completed library interaction panels for mappings/rules/templates. More state QA remains. |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 8 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-8 fixed the known Wire Topology traveller/visibility defects, added Playwright QA, tightened mobile shell/order review behavior, cleaned upload/settings responsive defects, fixed inbox/dock/log/webhook mobile layout issues, made supplier detail/mapping/delivery forms usable on mobile, added resilient settings plus connector/webhook configuration states, completed library interaction panels for mappings/rules/templates, and tightened upload/supplier plan-gated states. More live-flow QA remains. |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
 | **K** | Standards + engine hardening | Planned after I/J scoping | Expand toward explicit standards coverage: cXML, UBL/Peppol BIS Order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
@@ -281,7 +281,7 @@ Deferred from H:
 | **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 5 complete** |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 8 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
 | **K** | Standards + engine hardening | Planned after I/J scoping |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
@@ -346,8 +346,15 @@ Pass 7 completed (May 26 2026):
 - Dense order-review inline edit and confirmation modal were rechecked on mobile and remain usable inside the horizontal canonical workbench.
 - Verified with Playwright screenshots and `bun run build`. Existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
+Pass 8 completed (May 26 2026):
+- `/upload` now has a real selected-file state for browse/drop, shows plan usage/read-only context in the pipeline panel, and blocks processing when billing says `canProcessOrders=false`.
+- Upload errors now flow through shared `ApiHttpError` handling, preserving HTTP status/body so 429 Pilot/order/supplier-limit responses display the correct upgrade copy instead of collapsing into a generic failure.
+- `/library/suppliers` now distinguishes actual supplier-limit state from billing-service-unavailable state; the add action no longer presents a misleading "limit reached" label when the API is merely unavailable.
+- Supplier dock creation now opens a lightweight inline setup panel when the plan allows adding a supplier, keeping the action visible instead of inert while live persistence remains for later QA/hardening.
+- Verified with Playwright screenshots: `/upload` desktop/mobile and `/library/suppliers` desktop/mobile, including the screenshot-driven billing-unavailable label correction. `bun run build` passed. Existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
+
 Must address:
-- Continue desktop/tablet/mobile QA for remaining interaction states, especially plan-gated/empty/loading/error states beyond settings, live save/test-fire behavior for connector/webhook/mapping/rule/template forms, and full first-upload-to-delivery happy/error paths.
+- Continue desktop/tablet/mobile QA for remaining live-flow states, especially live save/test-fire behavior for connector/webhook/mapping/rule/template forms and the full first-upload-to-delivery happy/error paths against a running API.
 - App shell, sidebar, topbar, route labels, active states, and mobile navigation.
 - Core flow polish: sign-in, first upload, inbox/review, mapping, transform, delivery, settings/billing/email.
 - Empty, loading, error, disabled/read-only, and plan-gated states.
@@ -403,7 +410,7 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 ## Latest commits / push state
 - Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), Group G ERP connectors, and Group H email polling.
 - Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), Group G ERP connector UI, and Group H settings UI.
-- Phase 5 roadmap is now documented. Current implementation group is **Group I**; pass 7 has completed mappings/rules/templates interaction panels plus dense order-review edit QA, and remaining state/live-flow QA should continue before Group J.
+- Phase 5 roadmap is now documented. Current implementation group is **Group I**; pass 8 has completed upload and supplier plan-gated state polish, and remaining live-flow QA should continue before Group J.
 - Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
 
 ---
