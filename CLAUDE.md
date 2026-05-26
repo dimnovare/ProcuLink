@@ -205,19 +205,21 @@ Deep-research review on May 26 2026 confirmed the same direction as `STATUS.md`:
 ProcuLink should now be treated as a real working product, not a prototype or
 simple MVP. Do not add broad new engines on top of visibly rough UX.
 
-Next work should happen in this order unless the user explicitly changes it:
+Next work is grouped as **Phase 5 — Production Hardening And Standards**.
+Read `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`
+before writing implementation plans.
 
-1. **UI/UX production polish and mobile responsiveness.** The Bridge Layer is locked,
-   but screens need careful QA, responsive layouts, empty/error states, and visible
-   defects fixed. Known example: the Wire Topology traveller/dot must never appear
-   detached from a visible wire.
-2. **Live end-to-end QA.** Verify deployed Clerk, Stripe, upload, mapping, transform,
-   delivery test-fire, ERP adapters, and IMAP polling with real test credentials.
-3. **Engine hardening.** Expand standards deliberately: cXML, UBL/Peppol BIS order,
-   common EDI order formats, supplier CSV/XLSX templates, API/webhook payload
-   templates, and later invoices/other documents.
-4. **Trust/commercial readiness.** Improve onboarding, support/legal/trust pages,
-   analytics, demo flows, product copy, and case-study hooks.
+| Group | Workstream | Status |
+|---|---|---|
+| **I** | UI/UX production polish + responsive QA | **Next** |
+| **J** | Live end-to-end QA + deployment hardening | Planned after I |
+| **K** | Standards + engine hardening | Planned after I/J scoping |
+| **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
+
+Group I must happen first unless the user explicitly reprioritizes. The Bridge
+Layer is locked, but screens need careful QA, responsive layouts, empty/error
+states, and visible defects fixed. Known example: the Wire Topology traveller/dot
+must never appear detached from a visible wire.
 
 ---
 
@@ -263,11 +265,12 @@ Read this before starting new work:
   - `dotnet test ProcuLink.slnx --no-restore` passed, 60 tests.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
-No remaining Phase 4 C-H group is open. Next implementation should be selected from product hardening/live QA priorities, for example Stripe webhook QA, delivery test-fire QA, IMAP live QA, SFTP/FTP delivery, PEPPOL, OCR for scanned PDFs, or ERP-native order payload modeling.
+No remaining Phase 4 C-H group is open. Next implementation group is **Group I — UI/UX production polish + responsive QA** from the Phase 5 roadmap.
 
 1. Read `STATUS.md`.
-2. Read only task-relevant design docs, starting with `docs/design-system/00-agent-quick-brief.md` if frontend is touched.
-3. Use `/superpowers:brainstorm` and `/superpowers:write-plan` for any new task touching 3+ files.
+2. Read `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`.
+3. Read only task-relevant design docs, starting with `docs/design-system/00-agent-quick-brief.md` for Group I.
+4. Use `/superpowers:brainstorm` and `/superpowers:write-plan` for any new task touching 3+ files.
 
 ---
 

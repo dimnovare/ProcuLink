@@ -4,19 +4,23 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 4 Groups C-H complete — live QA and hardening next**
+## Where we are: **Phase 5 planned — Group I UI/UX production polish next**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
 **Production direction (May 26 2026):** ProcuLink is no longer being treated as a throwaway MVP. The next work should make the product feel trustworthy and usable end-to-end: UI/UX polish, mobile responsiveness, live QA of billing/delivery/email, and then engine hardening for broader input/output standards.
 
-### Recommended next sequence
-| Priority | Workstream | Why |
-|---|---|---|
-| 1 | **UI/UX production polish + responsive QA** | The product must feel reliable before more engine depth is layered on top. Fix visible Bridge Layer issues first, including the Wire Topology pulse/dot that can appear detached from its wire. |
-| 2 | **Live end-to-end QA** | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
-| 3 | **Engine hardening roadmap** | Expand from current CSV/XLSX/PDF/XML/JSON/cXML paths toward explicit standards coverage: cXML, UBL/Peppol BIS order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
-| 4 | **Trust/commercial readiness** | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
+### Phase 5 grouped roadmap
+
+Source of truth for the next grouped plan:
+`docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`.
+
+| Group | Workstream | Status | Why |
+|---|---|---|---|
+| **I** | UI/UX production polish + responsive QA | **Next** | The product must feel reliable before more engine depth is layered on top. Fix visible Bridge Layer issues first, including the Wire Topology pulse/dot that can appear detached from its wire. |
+| **J** | Live end-to-end QA + deployment hardening | Planned after I | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
+| **K** | Standards + engine hardening | Planned after I/J scoping | Expand toward explicit standards coverage: cXML, UBL/Peppol BIS Order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
+| **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
 
 ### Completed phases
 | Phase | What was built |
@@ -31,6 +35,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 | **Group F** ✅ | PDF ingestion — text-based purchase-order PDFs via PdfPig |
 | **Group G** ✅ | ERP connectors — Erply and Directo delivery adapters |
 | **Group H** ✅ | Email polling — IMAP attachment ingestion via MailKit |
+| **Phase 5 roadmap** | Groups I-L planned: UI polish, live QA, standards hardening, commercial trust |
 
 ---
 
@@ -276,6 +281,44 @@ Deferred from H:
 | **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
+| **I** | UI/UX production polish + responsive QA | **Next** |
+| **J** | Live end-to-end QA + deployment hardening | Planned after I |
+| **K** | Standards + engine hardening | Planned after I/J scoping |
+| **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
+
+### Group I — UI/UX production polish + responsive QA (next)
+
+Use `/frontend-design` and the local design system. Start with
+`docs/design-system/00-agent-quick-brief.md`.
+
+Must address:
+- Wire Topology traveller/pulse dots must never appear detached from visible wire paths.
+- Desktop/tablet/mobile QA for the Bridge routes.
+- App shell, sidebar, topbar, route labels, active states, and mobile navigation.
+- Core flow polish: sign-in, first upload, inbox/review, mapping, transform, delivery, settings/billing/email.
+- Empty, loading, error, disabled/read-only, and plan-gated states.
+
+Do **not** introduce a new visual direction. Keep Direction 4 — The Bridge Layer,
+supported by Direction 3 — System Identity.
+
+### Group J — live end-to-end QA + deployment hardening
+
+Verify deployed Vercel/Railway behavior with real test service configuration:
+Clerk, Stripe Checkout/Portal/webhooks, upload/parse/transform/download,
+HTTP delivery test-fire, ERP sandbox/stub test-fire, IMAP polling, Sentry/logging,
+CORS, database migrations, and production env vars.
+
+### Group K — standards + engine hardening
+
+Do not start broad implementation until a standards matrix is written. The matrix
+must define support level, fixtures, validation depth, plan gate, and owner for:
+cXML, UBL/Peppol BIS Order, supplier CSV/XLSX templates, JSON/API payload
+templates, EDI order formats, and OCR/scanned PDF support.
+
+### Group L — trust, onboarding + commercial readiness
+
+Add onboarding, demo data, concrete ROI copy, trust/security/legal/support pages,
+analytics event plan, and sales/demo assets after UI polish begins.
 
 ### Group E provider decision (May 25 2026)
 
@@ -306,6 +349,7 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 ## Latest commits / push state
 - Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), Group G ERP connectors, and Group H email polling.
 - Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), Group G ERP connector UI, and Group H settings UI.
+- Phase 5 roadmap is now documented. Next implementation group is **Group I**.
 - Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
 
 ---

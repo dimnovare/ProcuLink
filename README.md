@@ -131,14 +131,25 @@ Current rules:
 - Read `docs/design-system/00-agent-quick-brief.md` first for UI work
 - Locked visual direction: Direction 4, The Bridge Layer, supported by Direction 3, System Identity
 
-## Next Work
+## Phase 5 Roadmap
 
-The recommended next sequence is:
+The grouped roadmap is documented in:
 
-1. UI/UX production polish and mobile responsiveness.
-2. Live end-to-end QA for Clerk, Stripe, upload, mapping, transform, delivery, ERP, and IMAP.
-3. Engine hardening for more standards and output templates.
-4. Trust/commercial readiness: onboarding, support/legal, analytics, copy, and proof points.
+```text
+docs\superpowers\plans\2026-05-26-production-hardening-roadmap.md
+```
+
+Next group:
+
+```text
+Group I — UI/UX production polish + responsive QA
+```
+
+Then:
+
+- Group J — Live end-to-end QA + deployment hardening
+- Group K — Standards + engine hardening
+- Group L — Trust, onboarding + commercial readiness
 
 ## License
 
