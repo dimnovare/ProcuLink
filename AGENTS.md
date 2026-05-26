@@ -195,7 +195,7 @@ source. All UI/UX and design decisions run through the local design system,
 | Phase 2 — Core loop | ✅ Done |
 | Phase 3 — Sellable MVP | ✅ Done |
 | Next.js migration | ✅ Done |
-| Phase 4 — Commercial | 🚧 In progress — Group D2 buyer-side supplier delivery config |
+| Phase 4 — Commercial | ✅ Groups C-H implemented — live QA and hardening next |
 
 ---
 
@@ -477,11 +477,13 @@ Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level suppl
 - [x] New `destination_type`/protocol values: `erp_erply`, `erp_directo`
 
 ### Group H — Email polling (IMAP)
-- [ ] `MailKit` in `ProcuLink.Worker`
-- [ ] `EmailPollingJob` — recurring Hangfire job, every 5 min
-- [ ] `email_config` jsonb on `organisations` + migration
-- [ ] `PUT /api/settings/email` endpoint
-- [ ] Email settings section in `app/(app)/settings/page.tsx`
+**Status:** ✅ Implemented for Integration+ IMAP attachment ingestion. Live IMAP mailbox QA is still recommended before production use.
+
+- [x] `MailKit` in `ProcuLink.Worker`
+- [x] `EmailPollingJob` — recurring Hangfire job, every 5 min
+- [x] `email_config` jsonb on `organisations` + migration
+- [x] `PUT /api/settings/email` endpoint
+- [x] Email settings section in `app/(app)/settings/page.tsx`
 
 ---
 

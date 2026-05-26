@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 4 Group G complete — Email polling next**
+## Where we are: **Phase 4 Groups C-H complete — live QA and hardening next**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -20,6 +20,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 | **Group E** ✅ | AI mapping suggestions — provider-neutral, OpenAI structured outputs first |
 | **Group F** ✅ | PDF ingestion — text-based purchase-order PDFs via PdfPig |
 | **Group G** ✅ | ERP connectors — Erply and Directo delivery adapters |
+| **Group H** ✅ | Email polling — IMAP attachment ingestion via MailKit |
 
 ---
 
@@ -215,6 +216,35 @@ Verification:
 
 ---
 
+## Group H — Email polling ✅ (May 26 2026)
+
+**Status: Implemented for Integration+ organisations ingesting CSV/XLSX/PDF order attachments from IMAP mailboxes. Body-only email parsing and richer message-id dedupe are deferred.**
+
+Backend (`ProcuLink`):
+- Added `email_config` JSONB on `organisations` via EF migration `AddEmailConfigToOrganisations`.
+- Added email settings contracts, `IEmailSettingsService`, and `EmailSettingsService`.
+- IMAP passwords are encrypted with the existing `DeliveryEncryptionService`; redacted reads preserve saved credentials.
+- Added `GET/PUT /api/settings/email`; enabling requires `BillingFeature.EmailIngestion` and a valid org-scoped default supplier.
+- Added `MailKit` to `ProcuLink.Worker`.
+- Added `EmailPollingJob`, scheduled in Hangfire every 5 minutes.
+- Email polling loads enabled org configs, skips plans without email ingestion, reads unseen messages, imports CSV/XLSX/PDF attachments through `IOrderService.CreateStubAsync`, and enqueues `ParseOrderJob`.
+
+Frontend (`project-proculink`):
+- Added email settings TypeScript contracts and API helpers.
+- Replaced the settings placeholder with a Bridge Layer IMAP configuration panel: enable toggle, host/port/SSL/folder, username/password, default supplier, saved-password state, last-polled metadata, and Integration-plan gate.
+
+Verification:
+- `dotnet build ProcuLink.slnx --no-restore` → passed.
+- `dotnet test ProcuLink.slnx --no-restore` → 60 tests passed.
+- `bun run build` in `project-proculink` → passed; existing Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin warnings remain.
+
+Deferred from H:
+- Live IMAP mailbox QA with real app-password credentials.
+- Body-only email parsing.
+- Persistent message-id/import dedupe beyond marking processed messages as seen.
+
+---
+
 ## Design workflow correction (May 25 2026)
 
 - Lovable is no longer used for this project.
@@ -235,7 +265,7 @@ Verification:
 | **E** | AI mapping suggestions — provider-neutral, OpenAI structured outputs first | **Implemented — live OpenAI QA still recommended** |
 | **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
-| **H** | Email polling (IMAP/MailKit) | Next |
+| **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
 
 ### Group E provider decision (May 25 2026)
 
@@ -263,9 +293,9 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 - API dev port: `:5223` · FE dev port: `:8082`
 - DB: `Host=localhost;Port=5435;Database=proculink_dev`
 
-## Latest commits to push when ready
-- Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), and Group G ERP connectors.
-- Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), and Group G ERP connector UI.
+## Latest commits / push state
+- Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), Group G ERP connectors, and Group H email polling.
+- Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), Group G ERP connector UI, and Group H settings UI.
 - Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
 
 ---

@@ -26,6 +26,7 @@ public class Organisation
     public string? StripeSubscriptionStatus { get; set; }
     public string? BillingEmail          { get; set; }
     public DateTime? BillingUpdatedAt    { get; set; }
+    public string EmailConfigJson        { get; set; } = "{}";
 
     // Navigation
     public List<Membership> Memberships { get; set; } = new();

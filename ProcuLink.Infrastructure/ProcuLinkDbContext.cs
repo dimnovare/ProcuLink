@@ -66,6 +66,11 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.BillingUpdatedAt)
              .HasColumnName("billing_updated_at")
              .HasColumnType("timestamptz");
+            b.Property(x => x.EmailConfigJson)
+             .HasColumnName("email_config")
+             .HasColumnType("jsonb")
+             .HasDefaultValue("{}")
+             .IsRequired();
         });
 
         // ── users ──────────────────────────────────────────────────────

@@ -10,6 +10,8 @@
   <ItemGroup>
     <PackageReference Include="ClosedXML" Version="0.104.2" />
     <PackageReference Include="CsvHelper" Version="33.0.0" />
+    <PackageReference Include="Hangfire.PostgreSql" Version="1.20.10" />
+    <PackageReference Include="MailKit" Version="4.16.0" />
     <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.8" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
@@ -19,5 +21,6 @@
     <ProjectReference Include="..\ProcuLink.Core\ProcuLink.Core.csproj" />
     <ProjectReference Include="..\ProcuLink.Infrastructure\ProcuLink.Infrastructure.csproj" />
     <ProjectReference Include="..\ProcuLink.Transform\ProcuLink.Transform.csproj" />
+    <ProjectReference Include="..\ProcuLink.Api\ProcuLink.Api.csproj" />
   </ItemGroup>
 </Project>

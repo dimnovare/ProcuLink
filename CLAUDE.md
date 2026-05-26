@@ -195,11 +195,11 @@ source. All UI/UX and design decisions run through the local design system,
 | Phase 2 — Core loop | ✅ Done |
 | Phase 3 — Sellable MVP | ✅ Done |
 | Next.js migration | ✅ Done |
-| Phase 4 — Commercial | 🚧 In progress — Group G complete, Group H email polling next |
+| Phase 4 — Commercial | ✅ Groups C-H implemented — live QA and hardening next |
 
 ---
 
-## Latest committed implementation state (May 25 2026)
+## Latest committed implementation state (May 26 2026)
 
 Read this before starting new work:
 
@@ -223,22 +223,29 @@ Read this before starting new work:
   - `erp_erply` and `erp_directo` are accepted delivery protocol values.
   - The existing delivery workflow handles status, attempts, and test-fire rows.
   - These deliver generated artifacts; ERP-native order modeling remains future hardening.
-- **Do not redo C2, D2, E, F, or G.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
+- **Group H email polling is implemented** for Integration+ IMAP attachment ingestion.
+  - `organisations.email_config` stores encrypted IMAP settings as JSONB.
+  - `GET/PUT /api/settings/email` exposes org-scoped settings and billing-gated enablement.
+  - `EmailPollingJob` runs from `ProcuLink.Worker` every 5 minutes through Hangfire.
+  - CSV/XLSX/PDF attachments enter the existing create-stub and parse pipeline.
+  - Body-only parsing and richer message-id dedupe are deferred.
+- **Do not redo C2, D2, E, F, G, or H.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
 - **Manual/live QA still recommended:**
   - Stripe Checkout + Portal + webhook mapping with real Stripe test events.
   - HTTP delivery config test-fire against a running API session.
   - OpenAI-backed mapping suggestion with a real `Ai:OpenAI:ApiKey`.
   - Erply and Directo connector test-fire against ERP sandbox endpoints.
+  - IMAP polling against a real mailbox/app password and supplier profile.
 - **Last verified commands:**
   - `dotnet build ProcuLink.slnx --no-restore` passed.
-  - `dotnet test ProcuLink.slnx --no-restore` passed, 56 tests.
+  - `dotnet test ProcuLink.slnx --no-restore` passed, 60 tests.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
-Next implementation group is **Group H — Email polling (IMAP)**, but before coding:
+No remaining Phase 4 C-H group is open. Next implementation should be selected from product hardening/live QA priorities, for example Stripe webhook QA, delivery test-fire QA, IMAP live QA, SFTP/FTP delivery, PEPPOL, OCR for scanned PDFs, or ERP-native order payload modeling.
 
 1. Read `STATUS.md`.
 2. Read only task-relevant design docs, starting with `docs/design-system/00-agent-quick-brief.md` if frontend is touched.
-3. Use `/superpowers:brainstorm` and `/superpowers:write-plan` because Group H touches worker jobs, IMAP credentials, settings endpoints, billing gates, and frontend settings UI.
+3. Use `/superpowers:brainstorm` and `/superpowers:write-plan` for any new task touching 3+ files.
 
 ---
 
@@ -525,11 +532,13 @@ Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level suppl
 - [x] New `destination_type`/protocol values: `erp_erply`, `erp_directo`
 
 ### Group H — Email polling (IMAP)
-- [ ] `MailKit` in `ProcuLink.Worker`
-- [ ] `EmailPollingJob` — recurring Hangfire job, every 5 min
-- [ ] `email_config` jsonb on `organisations` + migration
-- [ ] `PUT /api/settings/email` endpoint
-- [ ] Email settings section in `app/(app)/settings/page.tsx`
+**Status:** ✅ Implemented for Integration+ IMAP attachment ingestion. Live IMAP mailbox QA is still recommended before production use.
+
+- [x] `MailKit` in `ProcuLink.Worker`
+- [x] `EmailPollingJob` — recurring Hangfire job, every 5 min
+- [x] `email_config` jsonb on `organisations` + migration
+- [x] `PUT /api/settings/email` endpoint
+- [x] Email settings section in `app/(app)/settings/page.tsx`
 
 ---
 
