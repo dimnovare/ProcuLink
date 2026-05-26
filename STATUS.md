@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 4 complete**
+## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 5 complete**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -17,7 +17,7 @@ Source of truth for the next grouped plan:
 
 | Group | Workstream | Status | Why |
 |---|---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 4 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-4 fixed the known Wire Topology traveller/visibility defects, added Playwright QA, tightened mobile shell/order review behavior, cleaned upload/settings responsive defects, and fixed remaining inbox/dock/log/webhook mobile layout issues. Full route-by-route visual QA remains. |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 5 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-5 fixed the known Wire Topology traveller/visibility defects, added Playwright QA, tightened mobile shell/order review behavior, cleaned upload/settings responsive defects, fixed inbox/dock/log/webhook mobile layout issues, and made supplier detail/mapping/delivery forms usable on mobile. Interaction/state QA remains. |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
 | **K** | Standards + engine hardening | Planned after I/J scoping | Expand toward explicit standards coverage: cXML, UBL/Peppol BIS Order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
@@ -281,7 +281,7 @@ Deferred from H:
 | **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 4 complete** |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 5 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
 | **K** | Standards + engine hardening | Planned after I/J scoping |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
@@ -323,8 +323,16 @@ Pass 4 completed (May 26 2026):
 - Fixed crossings log and webhook mobile rows so event data stacks instead of clipping horizontally.
 - Verified with Playwright screenshots: `/inbox`, `/library/suppliers`, `/library/buyers`, `/operations/log`, and `/operations/webhooks` mobile plus `/inbox` and `/operations/log` desktop. `bun run build` passed. Existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
+Pass 5 completed (May 26 2026):
+- Route QA captured supplier detail, mapping editor, rules/templates, connectors, settings, and supplier tab interactions.
+- Fixed supplier detail mobile header so title, code badge, and KPI metrics no longer overlap.
+- Fixed supplier detail overview cards and tab strip responsiveness.
+- Fixed Mapping Editor mobile layout by adding buyer-to-supplier mapping cards while preserving the dense desktop table.
+- Fixed PO mapping and delivery config tab surfaces so toolbars, field rows, protocol selector, auth fields, and footer actions stack safely on mobile.
+- Verified with Playwright screenshots: `/library/suppliers/s1`, `/library/mappings`, supplier `PO Mapping`, and supplier `Delivery` on mobile plus supplier detail/mapping desktop. `bun run build` passed. Existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
+
 Must address:
-- Continue desktop/tablet/mobile QA for remaining Bridge routes and interaction states, especially supplier detail, mappings import/export, rules/templates edit states, connector/webhook forms, plan-gated/empty/loading/error states, and dense order-review edits.
+- Continue desktop/tablet/mobile QA for remaining interaction states, especially mappings import/export dialogs, rules/templates edit states, connector/webhook forms, settings billing/email tabs, plan-gated/empty/loading/error states, and dense order-review edits.
 - App shell, sidebar, topbar, route labels, active states, and mobile navigation.
 - Core flow polish: sign-in, first upload, inbox/review, mapping, transform, delivery, settings/billing/email.
 - Empty, loading, error, disabled/read-only, and plan-gated states.
@@ -380,7 +388,7 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 ## Latest commits / push state
 - Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), Group G ERP connectors, and Group H email polling.
 - Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), Group G ERP connector UI, and Group H settings UI.
-- Phase 5 roadmap is now documented. Current implementation group is **Group I**; pass 4 has completed broad route responsive cleanup, and interaction/state QA should continue before Group J.
+- Phase 5 roadmap is now documented. Current implementation group is **Group I**; pass 5 has completed supplier detail/mapping/delivery responsive cleanup, and interaction/state QA should continue before Group J.
 - Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
 
 ---
