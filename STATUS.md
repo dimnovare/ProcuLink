@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 1 complete**
+## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 2 complete**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -17,7 +17,7 @@ Source of truth for the next grouped plan:
 
 | Group | Workstream | Status | Why |
 |---|---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 1 complete** | The product must feel reliable before more engine depth is layered on top. First pass fixed the known Wire Topology traveller defect and tightened Bridge dashboard responsiveness. Full route-by-route visual QA remains. |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 2 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-2 fixed the known Wire Topology traveller/visibility defects, added Playwright QA, and tightened mobile shell/order review behavior. Full route-by-route visual QA remains. |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
 | **K** | Standards + engine hardening | Planned after I/J scoping | Expand toward explicit standards coverage: cXML, UBL/Peppol BIS Order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
@@ -281,7 +281,7 @@ Deferred from H:
 | **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 1 complete** |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 2 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
 | **K** | Standards + engine hardening | Planned after I/J scoping |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
@@ -292,15 +292,24 @@ Use `/frontend-design` and the local design system. Start with
 `docs/design-system/00-agent-quick-brief.md`.
 
 Pass 1 completed (May 26 2026):
-- `WireTopology` no longer uses standalone `animateMotion` pulse circles. Travellers are now short animated SVG path segments using the same `pathD` as the rendered wire, so they cannot visually detach from the wire path.
+- `WireTopology` travellers now animate on the same SVG `pathD` as the rendered wire and start hidden until the animation begins, so they cannot appear as standalone dots before page load.
 - Topology travellers are hidden under `prefers-reduced-motion`.
 - Bridge dashboard header controls wrap on small screens.
 - KPI cards move from fixed 5-column layout to responsive 1/2/5-column layout.
 - Lower dashboard panels stack below `xl`, and queue/supplier-health rows truncate/wrap safely.
 - `bun run build` in `project-proculink` passed. Existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
+Pass 2 completed (May 26 2026):
+- Installed Playwright for frontend QA and ignored `.qa-screenshots/`.
+- Added a non-production local QA auth bypass (`PROCULINK_QA_BYPASS_AUTH=true`) so protected routes can be screenshot-tested locally without weakening production Clerk middleware.
+- Fixed `WireTopology` horizontal-wire rendering by using SVG `linearGradient` with `gradientUnits="userSpaceOnUse"`; same-lane wires can be straight but now render with the same gradient/stroke logic as curved wires.
+- Added shared-port fan-out so multiple wires from the same buyer/supplier dock do not hide one another.
+- Tethered alert counters to their wire and moved the volume legend out of supplier-pill collision space.
+- Improved mobile shell navigation, marketing nav compaction, and `SpineReview` mobile behavior with a stable horizontally-scrollable canonical workbench.
+- Verified with Playwright screenshots: `/bridge` desktop/mobile and `/inbox/008412` mobile. `bun run build` passed after the topology changes.
+
 Must address:
-- Desktop/tablet/mobile QA for the Bridge routes.
+- Continue desktop/tablet/mobile QA for all Bridge routes, especially upload/settings and dense review screens.
 - App shell, sidebar, topbar, route labels, active states, and mobile navigation.
 - Core flow polish: sign-in, first upload, inbox/review, mapping, transform, delivery, settings/billing/email.
 - Empty, loading, error, disabled/read-only, and plan-gated states.
@@ -356,7 +365,7 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 ## Latest commits / push state
 - Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), Group G ERP connectors, and Group H email polling.
 - Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), Group G ERP connector UI, and Group H settings UI.
-- Phase 5 roadmap is now documented. Next implementation group is **Group I**.
+- Phase 5 roadmap is now documented. Current implementation group is **Group I**.
 - Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
 
 ---

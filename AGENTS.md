@@ -211,15 +211,17 @@ before writing implementation plans.
 
 | Group | Workstream | Status |
 |---|---|---|
-| **I** | UI/UX production polish + responsive QA | **Next** |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 2 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
 | **K** | Standards + engine hardening | Planned after I/J scoping |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
 
-Group I must happen first unless the user explicitly reprioritizes. The Bridge
+Group I must continue unless the user explicitly reprioritizes. The Bridge
 Layer is locked, but screens need careful QA, responsive layouts, empty/error
-states, and visible defects fixed. Known example: the Wire Topology traveller/dot
-must never appear detached from a visible wire.
+states, and visible defects fixed. Wire Topology rules are now explicit: same-lane
+wires may be straight, cross-lane wires arc, every wire uses the same visible
+gradient stroke, shared ports fan out, alert counters stay tethered to their
+route, and the legend must not overlap buyer/supplier pills.
 
 ---
 
@@ -235,6 +237,11 @@ Current frontend rules:
 - Use `bun` only.
 - Do not use Vite, Vite env vars, Vite previews, `index.html`, `src/main.tsx`, or `@vitejs/*` packages.
 - Do not use Lovable-generated components or routing patterns.
+- Playwright is installed in the frontend for visual QA. Screenshots belong in
+  `.qa-screenshots/` and must stay uncommitted.
+- For local protected-route screenshots only, start the frontend with
+  `PROCULINK_QA_BYPASS_AUTH=true bun run dev -- --hostname 127.0.0.1 --port 8082`.
+  The bypass is disabled in production by `NODE_ENV`.
 
 If older reports or commits mention Vite, React Router, Starter pricing, or Lovable, treat that as archived pre-migration history, not current guidance.
 
