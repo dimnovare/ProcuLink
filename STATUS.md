@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 2 complete**
+## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 3 complete**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -17,7 +17,7 @@ Source of truth for the next grouped plan:
 
 | Group | Workstream | Status | Why |
 |---|---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 2 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-2 fixed the known Wire Topology traveller/visibility defects, added Playwright QA, and tightened mobile shell/order review behavior. Full route-by-route visual QA remains. |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 3 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-3 fixed the known Wire Topology traveller/visibility defects, added Playwright QA, tightened mobile shell/order review behavior, and cleaned first-pass upload/settings responsive defects. Full route-by-route visual QA remains. |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
 | **K** | Standards + engine hardening | Planned after I/J scoping | Expand toward explicit standards coverage: cXML, UBL/Peppol BIS Order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
@@ -281,7 +281,7 @@ Deferred from H:
 | **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 2 complete** |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 3 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
 | **K** | Standards + engine hardening | Planned after I/J scoping |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
@@ -308,8 +308,15 @@ Pass 2 completed (May 26 2026):
 - Improved mobile shell navigation, marketing nav compaction, and `SpineReview` mobile behavior with a stable horizontally-scrollable canonical workbench.
 - Verified with Playwright screenshots: `/bridge` desktop/mobile and `/inbox/008412` mobile. `bun run build` passed after the topology changes.
 
+Pass 3 completed (May 26 2026):
+- Route QA captured upload, settings, and order review screenshots across desktop/mobile.
+- `UploadWorkbench` no longer forces a desktop two-column grid on mobile; it stacks route configuration below upload/recent activity.
+- Recent uploads now render as readable buyer-to-supplier route cards on mobile while keeping the dense table on tablet/desktop.
+- Settings now uses horizontal tab chips on mobile instead of a narrow sidebar; email polling form grids collapse safely.
+- Verified with Playwright screenshots: `/upload` desktop/mobile and `/settings` desktop/mobile. `bun run build` passed. Existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
+
 Must address:
-- Continue desktop/tablet/mobile QA for all Bridge routes, especially upload/settings and dense review screens.
+- Continue desktop/tablet/mobile QA for remaining Bridge routes, especially inbox queue, supplier/buyer libraries, mappings, rules/templates, operations pages, and dense review/edit states.
 - App shell, sidebar, topbar, route labels, active states, and mobile navigation.
 - Core flow polish: sign-in, first upload, inbox/review, mapping, transform, delivery, settings/billing/email.
 - Empty, loading, error, disabled/read-only, and plan-gated states.
@@ -365,7 +372,7 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 ## Latest commits / push state
 - Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), Group G ERP connectors, and Group H email polling.
 - Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), Group G ERP connector UI, and Group H settings UI.
-- Phase 5 roadmap is now documented. Current implementation group is **Group I**.
+- Phase 5 roadmap is now documented. Current implementation group is **Group I**; pass 3 has completed upload/settings responsive cleanup, and route-by-route QA should continue before Group J.
 - Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
 
 ---

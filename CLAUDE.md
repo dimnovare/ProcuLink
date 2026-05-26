@@ -211,15 +211,16 @@ before writing implementation plans.
 
 | Group | Workstream | Status |
 |---|---|---|
-| **I** | UI/UX production polish + responsive QA | **Next** |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 3 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
 | **K** | Standards + engine hardening | Planned after I/J scoping |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
 
-Group I must happen first unless the user explicitly reprioritizes. The Bridge
-Layer is locked, but screens need careful QA, responsive layouts, empty/error
-states, and visible defects fixed. Known example: the Wire Topology traveller/dot
-must never appear detached from a visible wire.
+Group I remains the active implementation group unless the user explicitly
+reprioritizes. The Bridge Layer is locked, but screens still need route-by-route
+desktop/tablet/mobile QA, responsive layouts, empty/error states, and visible
+defects fixed. Known example: the Wire Topology traveller/dot must never appear
+detached from a visible wire.
 
 ---
 
@@ -253,6 +254,12 @@ Read this before starting new work:
   - `EmailPollingJob` runs from `ProcuLink.Worker` every 5 minutes through Hangfire.
   - CSV/XLSX/PDF attachments enter the existing create-stub and parse pipeline.
   - Body-only parsing and richer message-id dedupe are deferred.
+- **Group I UI/UX polish is in progress, pass 3 complete.**
+  - Passes 1-2 fixed Wire Topology traveller/path/legend/port issues and added Playwright protected-route QA.
+  - Pass 3 screenshot-tested `/upload` and `/settings` on desktop/mobile.
+  - `/upload` now stacks on mobile and uses recent-order route cards instead of forcing a desktop table.
+  - `/settings` now uses horizontal mobile tabs and responsive email-polling grids.
+  - Continue route QA for inbox queue, supplier/buyer libraries, mappings, rules/templates, operations pages, and dense review/edit/error states before Group J.
 - **Do not redo C2, D2, E, F, G, or H.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
 - **Manual/live QA still recommended:**
   - Stripe Checkout + Portal + webhook mapping with real Stripe test events.
@@ -265,7 +272,7 @@ Read this before starting new work:
   - `dotnet test ProcuLink.slnx --no-restore` passed, 60 tests.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
-No remaining Phase 4 C-H group is open. Next implementation group is **Group I — UI/UX production polish + responsive QA** from the Phase 5 roadmap.
+No remaining Phase 4 C-H group is open. Current implementation group is **Group I — UI/UX production polish + responsive QA** from the Phase 5 roadmap.
 
 1. Read `STATUS.md`.
 2. Read `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`.
