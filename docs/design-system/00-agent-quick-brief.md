@@ -95,3 +95,11 @@ states such as `ready_to_deliver`, `delivering`, `delivered`, and
   Accept/Edit/Reject style controls.
 - Motion must communicate state, not flair. Respect `prefers-reduced-motion`.
 
+## Current UI Polish Target
+
+Before adding new visual patterns, QA the existing Bridge Layer screens across
+desktop and mobile. Known issue to fix first: Wire Topology traveller/pulse dots
+must always be visually attached to a rendered wire path. Do not allow a standalone
+dot to appear between buyer and supplier cards without the corresponding line.
+The pulse and visible wire must share the exact same SVG path, and the pulse should
+fade or be disabled if the path cannot be rendered cleanly at the current viewport.

@@ -8,6 +8,16 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
+**Production direction (May 26 2026):** ProcuLink is no longer being treated as a throwaway MVP. The next work should make the product feel trustworthy and usable end-to-end: UI/UX polish, mobile responsiveness, live QA of billing/delivery/email, and then engine hardening for broader input/output standards.
+
+### Recommended next sequence
+| Priority | Workstream | Why |
+|---|---|---|
+| 1 | **UI/UX production polish + responsive QA** | The product must feel reliable before more engine depth is layered on top. Fix visible Bridge Layer issues first, including the Wire Topology pulse/dot that can appear detached from its wire. |
+| 2 | **Live end-to-end QA** | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
+| 3 | **Engine hardening roadmap** | Expand from current CSV/XLSX/PDF/XML/JSON/cXML paths toward explicit standards coverage: cXML, UBL/Peppol BIS order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
+| 4 | **Trust/commercial readiness** | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
+
 ### Completed phases
 | Phase | What was built |
 |---|---|

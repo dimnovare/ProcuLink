@@ -36,7 +36,7 @@ C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\          ← .NET solutio
 C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink\  ← Frontend
 GitHub: https://github.com/dimnovare/project-proculink
 Package manager: bun
-Framework: Next.js 15 (App Router) — see migration section below
+Framework: Next.js 15 (App Router)
 ```
 
 ---
@@ -199,6 +199,28 @@ source. All UI/UX and design decisions run through the local design system,
 
 ---
 
+## Current direction — production hardening
+
+Deep-research review on May 26 2026 confirmed the same direction as `STATUS.md`:
+ProcuLink should now be treated as a real working product, not a prototype or
+simple MVP. Do not add broad new engines on top of visibly rough UX.
+
+Next work should happen in this order unless the user explicitly changes it:
+
+1. **UI/UX production polish and mobile responsiveness.** The Bridge Layer is locked,
+   but screens need careful QA, responsive layouts, empty/error states, and visible
+   defects fixed. Known example: the Wire Topology traveller/dot must never appear
+   detached from a visible wire.
+2. **Live end-to-end QA.** Verify deployed Clerk, Stripe, upload, mapping, transform,
+   delivery test-fire, ERP adapters, and IMAP polling with real test credentials.
+3. **Engine hardening.** Expand standards deliberately: cXML, UBL/Peppol BIS order,
+   common EDI order formats, supplier CSV/XLSX templates, API/webhook payload
+   templates, and later invoices/other documents.
+4. **Trust/commercial readiness.** Improve onboarding, support/legal/trust pages,
+   analytics, demo flows, product copy, and case-study hooks.
+
+---
+
 ## Latest committed implementation state (May 26 2026)
 
 Read this before starting new work:
@@ -249,184 +271,26 @@ No remaining Phase 4 C-H group is open. Next implementation should be selected f
 
 ---
 
-## Historical Next.js migration plan — complete, do not execute
+## Frontend state — current, not historical
 
-**Status:** Complete. This section is kept only as historical context. Do **not**
-run M1-M17 again.
+The frontend migration is complete. Treat `project-proculink` as a native **Next.js 15 App Router** application.
 
-**Approach:** In-place migration of `project-proculink`. Same GitHub repo, same
-Vercel project. No new repo needed. Migrate route by route.
+Current frontend rules:
+- Use `src/app/` App Router routes only.
+- Use `@clerk/nextjs`, `middleware.ts`, and Clerk server/client helpers for auth.
+- Use `NEXT_PUBLIC_*` variables for client-visible values.
+- Use `next/link` and `next/navigation`; never use `react-router-dom`.
+- Use `bun` only.
+- Do not use Vite, Vite env vars, Vite previews, `index.html`, `src/main.tsx`, or `@vitejs/*` packages.
+- Do not use Lovable-generated components or routing patterns.
 
-**Why same repo works:** Next.js is a framework switch, not a new project. All
-existing components, API client, TanStack Query hooks, and shadcn/ui are reusable.
-Vercel natively detects Next.js — just update `vercel.json` and redeploy.
-
-### Target route structure (App Router)
-
-```
-project-proculink/
-├── app/
-│   ├── layout.tsx                  ← root layout: ClerkProvider, TanStack, Toaster
-│   ├── (marketing)/                ← public routes — no auth, SSR/SSG
-│   │   ├── layout.tsx              ← marketing layout (nav, footer)
-│   │   ├── page.tsx                ← / landing page
-│   │   ├── pricing/page.tsx
-│   │   └── how-it-works/page.tsx
-│   └── (app)/                      ← auth-protected routes
-│       ├── layout.tsx              ← AppLayout with sidebar (Client Component)
-│       ├── dashboard/page.tsx
-│       ├── upload/page.tsx
-│       ├── orders/
-│       │   ├── page.tsx
-│       │   └── [id]/page.tsx
-│       ├── suppliers/page.tsx
-│       ├── mappings/page.tsx
-│       └── settings/page.tsx
-├── middleware.ts                    ← Clerk auth guard for (app) routes
-├── src/
-│   ├── components/                 ← existing components (mostly unchanged)
-│   ├── lib/api-client.ts           ← update VITE_ → NEXT_PUBLIC_ env vars
-│   └── types/procurement.ts        ← unchanged
-├── next.config.ts
-└── vercel.json                     ← update for Next.js
-```
-
-### Migration task list — do in this exact order
-
-**Use `/superpowers:write-plan` before starting this group.**
-
-- [ ] **M1.** In `project-proculink`: scaffold Next.js 15 alongside existing files:
-  ```bash
-  bunx create-next-app@latest . --typescript --tailwind --app --src-dir no --import-alias "@/*" --yes
-  ```
-  This overwrites `package.json` — afterwards restore bun lockfile:
-  `bun install`
-
-- [ ] **M2.** Replace Clerk package:
-  ```bash
-  bun remove @clerk/clerk-react
-  bun add @clerk/nextjs
-  ```
-  Note: `@clerk/nextjs` has different import paths than `@clerk/clerk-react`.
-
-- [ ] **M3.** Replace Sentry package:
-  ```bash
-  bun remove @sentry/react
-  bun add @sentry/nextjs
-  ```
-
-- [ ] **M4.** Create `middleware.ts` in project root:
-  ```ts
-  import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
-
-  const isProtectedRoute = createRouteMatcher([
-    '/dashboard(.*)', '/orders(.*)', '/upload(.*)',
-    '/suppliers(.*)', '/mappings(.*)', '/settings(.*)',
-  ]);
-
-  export default clerkMiddleware((auth, req) => {
-    if (isProtectedRoute(req)) auth().protect();
-  });
-
-  export const config = {
-    matcher: ['/((?!_next|.*\\..*).*)'],
-  };
-  ```
-
-- [ ] **M5.** Create `app/layout.tsx` — root layout:
-  ```tsx
-  import { ClerkProvider } from '@clerk/nextjs';
-  import { Inter } from 'next/font/google';
-  import './globals.css';
-
-  export default function RootLayout({ children }) {
-    return (
-      <html lang="en">
-        <body>
-          <ClerkProvider>{children}</ClerkProvider>
-        </body>
-      </html>
-    );
-  }
-  ```
-
-- [ ] **M6.** Create `app/(app)/layout.tsx` — app shell:
-  - Move `AppLayout.tsx` content here
-  - Wrap with `QueryClientProvider` (must be a Client Component: `'use client'`)
-  - Include `<Toaster />` and `<Sonner />`
-
-- [ ] **M7.** Migrate pages one by one — copy from `src/pages/` → `app/(app)/*/page.tsx`:
-  - `Dashboard.tsx` → `app/(app)/dashboard/page.tsx`
-  - `OrdersPage.tsx` → `app/(app)/orders/page.tsx`
-  - `OrderDetailPage.tsx` → `app/(app)/orders/[id]/page.tsx`
-  - `UploadPage.tsx` → `app/(app)/upload/page.tsx`
-  - `SuppliersPage.tsx` → `app/(app)/suppliers/page.tsx`
-  - `MappingsPage.tsx` → `app/(app)/mappings/page.tsx`
-  - Add `'use client'` at top of each (they use hooks/TanStack Query)
-
-- [ ] **M8.** Replace all `react-router-dom` imports:
-  - `useNavigate()` → `useRouter()` from `next/navigation`
-  - `useParams()` → `useParams()` from `next/navigation` (same name, different import)
-  - `<Link to="...">` → `<Link href="...">` from `next/link`
-  - `<BrowserRouter>`, `<Routes>`, `<Route>` → delete entirely (App Router handles routing)
-  - `bun remove react-router-dom`
-
-- [ ] **M9.** Update env variable names in `api-client.ts` and all components:
-  - `import.meta.env.VITE_API_BASE_URL` → `process.env.NEXT_PUBLIC_API_BASE_URL`
-  - `import.meta.env.VITE_USE_MOCK` → `process.env.NEXT_PUBLIC_USE_MOCK`
-  - `import.meta.env.VITE_CLERK_PUBLISHABLE_KEY` → handled by `@clerk/nextjs` automatically
-    via `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-
-- [ ] **M10.** Update `.env` (committed):
-  ```
-  NEXT_PUBLIC_API_BASE_URL=http://localhost:5223
-  NEXT_PUBLIC_USE_MOCK=false
-  ```
-  Update `.env.local` (gitignored):
-  ```
-  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
-  NEXT_PUBLIC_SENTRY_DSN=
-  ```
-
-- [ ] **M11.** Update `vercel.json` for Next.js:
-  ```json
-  {
-    "framework": "nextjs"
-  }
-  ```
-  Remove any Vite-specific SPA rewrites.
-
-- [ ] **M12.** Create `next.config.ts`:
-  ```ts
-  import type { NextConfig } from 'next';
-  const config: NextConfig = {
-    // API is on a different origin — no rewrites needed
-  };
-  export default config;
-  ```
-
-- [ ] **M13.** Delete Vite artefacts:
-  - `vite.config.ts`, `index.html`, `src/vite-env.d.ts`
-  - `src/App.tsx`, `src/App.css`, `src/main.tsx` (replaced by App Router)
-  - `bun remove vite @vitejs/plugin-react-swc`
-
-- [ ] **M14.** Run `bun run build` — fix any TypeScript or import errors. Ship when green.
-
-- [ ] **M15.** Create the `(marketing)` layout and stub pages:
-  - `app/(marketing)/layout.tsx` — minimal layout, no auth, no sidebar
-  - `app/(marketing)/page.tsx` — landing page stub with `<head>` metadata
-  - `app/(marketing)/pricing/page.tsx` — pricing stub
-  - `app/(marketing)/how-it-works/page.tsx` — how-it-works stub
-  - These render as SSR pages — `generateMetadata()` for SEO
-
-- [ ] **M16.** Redirect `/` to `/dashboard` if logged in:
-  Update `middleware.ts` to redirect authenticated users away from marketing routes.
-
-- [ ] **M17.** Run `/code-review` on the entire migration diff before merging.
+If older reports or commits mention Vite, React Router, Starter pricing, or Lovable, treat that as archived pre-migration history, not current guidance.
 
 ---
+## Implemented commercial groups C-H
 
-## Phase 4 — Commercial (after migration)
+This section is implementation history and capability reference. Do not execute
+unchecked historical checklist items unless `STATUS.md` explicitly reopens them.
 
 ### Group A — Remaining tech debt
 **Status:** ✅ Done. Do not repeat unless `STATUS.md` says a regression reopened it.

@@ -1,225 +1,144 @@
 # ProcuLink
 
-Purchase Order Processing Solution - Transform buyer POs into supplier-ready formats.
+ProcuLink is a B2B outbound procurement bridge for buyer/procurement teams that
+need to turn messy purchase-order sources into supplier-ready outputs.
 
-## Solution Structure
+Core workflow:
 
-```
-ProcuLink/
-├── ProcuLink.Api/          # ASP.NET Core REST API
-├── ProcuLink.Core/         # Domain models (PurchaseOrder, SupplierProfile, etc.)
-├── ProcuLink.Infrastructure/ # File-based repositories
-├── ProcuLink.Transform/    # (Future) Transformation logic
-├── ProcuLink.Worker/       # (Future) Background processing
-└── ProcuLink.Web/          # React frontend (git submodule)
+```text
+Parse -> Normalize -> Validate -> Review exceptions -> Transform -> Deliver -> Learn
 ```
 
-## Quick Start
+The product is no longer a file-based prototype. Treat this repository as the
+current .NET backend/worker solution for a production SaaS.
 
-### 1. Clone with Submodules
+## Repositories
+
+```text
+C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink
+  ProcuLink.Api              ASP.NET Core 8 API
+  ProcuLink.Core             Domain models, constants, service interfaces
+  ProcuLink.Infrastructure   EF Core, PostgreSQL, storage, delivery services
+  ProcuLink.Transform        CSV/XLSX/PDF parsing and output transforms
+  ProcuLink.Worker           Hangfire worker jobs
+
+C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink
+  Next.js 15 App Router frontend
+```
+
+Frontend repo: https://github.com/dimnovare/project-proculink
+
+## Current Stack
+
+- Backend: ASP.NET Core 8
+- ORM/database: EF Core 8 + PostgreSQL
+- Jobs: Hangfire + Hangfire.PostgreSql
+- Storage: Cloudflare R2, with local storage fallback in development
+- Auth: Clerk JWT validation
+- Billing: Stripe
+- AI mapping: provider-neutral interface, OpenAI structured outputs first
+- Frontend: Next.js 15 App Router, TypeScript, Tailwind, shadcn/ui, TanStack Query
+- Package manager: bun only for frontend
+
+## Local Backend
+
+Default development API:
+
+```text
+http://localhost:5223
+```
+
+Useful local URLs:
+
+```text
+Scalar UI:          http://localhost:5223/scalar
+Hangfire dashboard: http://localhost:5223/hangfire
+```
+
+Run backend:
 
 ```bash
-git clone --recurse-submodules https://github.com/dimnovare/ProcuLink.git
-cd ProcuLink
+dotnet run --project ProcuLink.Api
 ```
 
-If you already cloned without `--recurse-submodules`:
-```bash
-git submodule sync --recursive
-git submodule update --init --recursive
-```
-
-### 2. Run Backend
+Run worker:
 
 ```bash
-cd ProcuLink.Api
-dotnet run
+dotnet run --project ProcuLink.Worker
 ```
 
-API runs at: http://localhost:5223
-Swagger UI: http://localhost:5223/swagger
-
-### 3. Run Frontend
+Run tests:
 
 ```bash
-cd ProcuLink.Web
-cp .env.example .env   # Configure API URL
-npm install
-npm run dev
+dotnet test ProcuLink.slnx --no-restore
 ```
 
-Frontend runs at: http://localhost:5173
+Build:
+
+```bash
+dotnet build ProcuLink.slnx --no-restore
+```
 
 ## Configuration
 
-### Supplier Profiles
+Development settings live in:
 
-Create JSON files in `ProcuLink.Api/data/suppliers/`:
-
-**Example: `data/suppliers/AcmeSupplier.json`**
-```json
-{
-  "supplierName": "Acme Supplier",
-  "requiresSupplierItemCode": true,
-  "requiredFields": [],
-  "supportsPartialAutomation": false,
-  "acceptedFormats": ["XML", "CSV"]
-}
+```text
+ProcuLink.Api\appsettings.Development.json
 ```
 
-### Webhook Delivery (Optional)
+Required local database shape:
 
-Configure in `appsettings.json`:
-```json
-{
-  "Delivery": {
-    "WebhookUrl": "https://your-webhook-endpoint.com/receive"
-  }
-}
+```text
+Host=localhost;Port=5435;Database=proculink_dev;Username=postgres;Password=postgres
 ```
 
-## API Endpoints
+Frontend development variables use Next.js names, not Vite names:
 
-### Purchase Orders
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/purchase-orders/upload` | Upload CSV/XLSX file |
-| GET | `/api/purchase-orders` | List all orders (summaries) |
-| GET | `/api/purchase-orders/{id}` | Get order details |
-| POST | `/api/purchase-orders/{id}/transform?format=xml` | Generate outbound file |
-| GET | `/api/purchase-orders/{id}/outbound` | Get outbound metadata |
-| GET | `/api/purchase-orders/{id}/outbound/download` | Download outbound file |
-| POST | `/api/purchase-orders/{id}/send` | Send to webhook |
-
-### Suppliers
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/suppliers` | List supplier names |
-| GET | `/api/suppliers/profiles` | List all profiles |
-| GET | `/api/suppliers/profiles/{name}` | Get profile by name |
-
-### Health
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-
-## End-to-End Demo
-
-### Step 1: Create Supplier Profile
-
-```bash
-mkdir -p ProcuLink.Api/data/suppliers
-cat > ProcuLink.Api/data/suppliers/TestSupplier.json << 'EOF'
-{
-  "supplierName": "TestSupplier",
-  "requiresSupplierItemCode": true,
-  "requiredFields": [],
-  "supportsPartialAutomation": false,
-  "acceptedFormats": ["XML", "CSV"]
-}
-EOF
+```text
+NEXT_PUBLIC_API_BASE_URL=http://localhost:5223
+NEXT_PUBLIC_USE_MOCK=false
 ```
 
-### Step 2: Create Test CSV
+Do not commit real Stripe, Clerk, OpenAI, R2, or delivery credential secrets.
 
-```bash
-cat > /tmp/test-order.csv << 'EOF'
-PoNumber,OrderDate,BuyerName,LineNumber,BuyerItemCode,SupplierItemCode,Description,Quantity,UnitPrice,Currency
-PO-2024-001,2024-01-20,Acme Corp,1,B001,S001,Widget A,10,25.00,USD
-PO-2024-001,2024-01-20,Acme Corp,2,B002,S002,Widget B,5,15.00,USD
-EOF
-```
+## Current Product State
 
-### Step 3: Upload Order
+Implemented baseline:
 
-```bash
-curl -X POST http://localhost:5223/api/purchase-orders/upload \
-  -F "file=@/tmp/test-order.csv" \
-  -F "supplierName=TestSupplier"
-```
+- Auth, PostgreSQL tenancy, and core order loop
+- Final billing ladder: Pilot, Growth, Operations, Integration, Enterprise
+- PO field mapping engine
+- Supplier delivery configuration, HTTP-first
+- AI mapping suggestions
+- Text-based PDF ingestion
+- ERP delivery adapters for Erply and Directo
+- IMAP email polling for CSV/XLSX/PDF order attachments
 
-Response includes order ID and validation messages.
+Read [STATUS.md](./STATUS.md) before starting new work. It is the current handoff
+source of truth.
 
-### Step 4: Transform Order
+## Design And Frontend Direction
 
-```bash
-# Get order ID from previous response
-ORDER_ID="your-order-id-here"
+Frontend implementation lives in `project-proculink`, not this repo. The frontend
+is a native Next.js 15 App Router application.
 
-# Generate XML outbound
-curl -X POST "http://localhost:5223/api/purchase-orders/$ORDER_ID/transform?format=xml"
-```
+Current rules:
 
-### Step 5: Download Outbound File
+- No Vite, no `VITE_*` env vars, no `react-router-dom`
+- No Lovable-generated code
+- Use the local design system in `docs/design-system`
+- Read `docs/design-system/00-agent-quick-brief.md` first for UI work
+- Locked visual direction: Direction 4, The Bridge Layer, supported by Direction 3, System Identity
 
-```bash
-curl -O http://localhost:5223/api/purchase-orders/$ORDER_ID/outbound/download
-```
+## Next Work
 
-### Step 6: Send to Webhook (Optional)
+The recommended next sequence is:
 
-```bash
-# First configure WebhookUrl in appsettings.json
-curl -X POST http://localhost:5223/api/purchase-orders/$ORDER_ID/send
-```
-
-## Data Storage
-
-All data is stored in the filesystem under `ProcuLink.Api/data/`:
-
-```
-data/
-├── orders/          # Purchase order JSON files
-│   └── {guid}.json
-├── suppliers/       # Supplier profile JSON files
-│   └── {name}.json
-└── outbound/        # Transform outputs
-    └── {orderId}/
-        ├── artifact.json
-        ├── {supplier}.xml
-        └── delivery.json
-```
-
-## Automation Status
-
-Orders have one of two automation statuses:
-
-- **Automatable**: All validation checks passed, ready for transform/send
-- **NeedsClarification**: Issues found:
-  - No supplier profile configured
-  - Missing required supplier item codes
-
-## Frontend Environment
-
-Create `.env` from `.env.example`:
-
-```bash
-VITE_API_BASE_URL=http://localhost:5223
-VITE_USE_MOCK=false
-```
-
-## Development
-
-### Prerequisites
-
-- .NET 8 SDK
-- Node.js 18+
-- npm or bun
-
-### Running Tests
-
-```bash
-dotnet test
-```
-
-### Building for Production
-
-```bash
-dotnet publish -c Release
-```
+1. UI/UX production polish and mobile responsiveness.
+2. Live end-to-end QA for Clerk, Stripe, upload, mapping, transform, delivery, ERP, and IMAP.
+3. Engine hardening for more standards and output templates.
+4. Trust/commercial readiness: onboarding, support/legal, analytics, copy, and proof points.
 
 ## License
 
