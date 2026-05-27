@@ -446,7 +446,8 @@ public sealed class OrderService : IOrderService
         // JOIN that drops rows with 0 lines (stubs in "parsing" status).
         //
         // Step 1: fetch order + supplier name (LEFT JOIN — null-safe for deleted suppliers).
-        // Step 2: fetch per-order line counts via a second scalar query, then join in memory.
+        // Step 2: fetch per-order line aggregates (count, unresolved, total value) in a second
+        //         scalar query, then join in memory to avoid EF cartesian-product issues.
         var orders = await _db.PurchaseOrders
             .AsNoTracking()
             .Where(x => x.OrgId == organisationId)
@@ -459,6 +460,9 @@ public sealed class OrderService : IOrderService
                 e.OrderDate,
                 e.Status,
                 e.CreatedAt,
+                e.Currency,
+                e.SourceFileKey,
+                e.CanonicalJson,
             })
             .ToListAsync(ct);
 
@@ -467,30 +471,67 @@ public sealed class OrderService : IOrderService
 
         var orderIds = orders.Select(o => o.Id).ToList();
 
-        // Aggregate line counts in a single query: (orderId, total, unresolved)
+        // Aggregate line counts and total order value in a single query.
         var lineCounts = await _db.PurchaseOrderLines
             .AsNoTracking()
             .Where(l => orderIds.Contains(l.OrderId))
             .GroupBy(l => l.OrderId)
             .Select(g => new
             {
-                OrderId      = g.Key,
-                Total        = g.Count(),
-                Unresolved   = g.Count(l => l.NeedsReview),
+                OrderId    = g.Key,
+                Total      = g.Count(),
+                Unresolved = g.Count(l => l.NeedsReview),
+                TotalValue = g.Sum(l => l.Quantity * l.UnitPrice),
             })
             .ToDictionaryAsync(g => g.OrderId, ct);
 
         var summaries = orders.Select(o =>
         {
             lineCounts.TryGetValue(o.Id, out var lc);
+
+            // Extract buyer name from canonical JSON (populated after parsing).
+            string? buyerName = null;
+            if (o.CanonicalJson != null)
+            {
+                try
+                {
+                    var root = o.CanonicalJson.RootElement;
+                    if (root.TryGetProperty("buyerName", out var el))
+                        buyerName = el.GetString();
+                    else if (root.TryGetProperty("BuyerName", out var el2))
+                        buyerName = el2.GetString();
+                }
+                catch { /* malformed JSON — ignore */ }
+            }
+
+            // Derive a short format label from the source file extension.
+            string? sourceFormat = null;
+            if (!string.IsNullOrEmpty(o.SourceFileKey))
+            {
+                var ext = System.IO.Path.GetExtension(o.SourceFileKey).TrimStart('.').ToLowerInvariant();
+                sourceFormat = ext switch
+                {
+                    "pdf"          => "pdf",
+                    "csv"          => "csv",
+                    "xlsx" or "xls"=> "xlsx",
+                    "xml" or "cxml"=> "cxml",
+                    "edi" or "x12" => "edi",
+                    _              => null,
+                };
+            }
+
             return new PurchaseOrderSummary(
                 o.Id,
                 o.PoNumber,
                 o.SupplierName,
+                buyerName,
                 o.OrderDate,
                 o.Status,
-                lc?.Total ?? 0,
+                lc?.Total      ?? 0,
                 lc?.Unresolved ?? 0,
+                lc?.TotalValue ?? 0m,
+                o.Currency,
+                sourceFormat,
                 o.CreatedAt);
         }).ToList();
 
