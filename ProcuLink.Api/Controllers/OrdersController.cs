@@ -342,8 +342,28 @@ public sealed class OrdersController : ControllerBase
         Artifacts: e.OutboundArtifacts
             .OrderByDescending(a => a.CreatedAt)
             .Select(a => new ArtifactDto(a.Id, a.Format, a.FileKey, a.CreatedAt))
-            .ToList()
+            .ToList(),
+        BuyerName: ExtractBuyerName(e)
     );
+
+    /// <summary>
+    /// Extracts BuyerName from the canonical JSON if parsing has completed.
+    /// Returns null if the order is still parsing or CanonicalJson is absent.
+    /// </summary>
+    private static string? ExtractBuyerName(PurchaseOrderEntity e)
+    {
+        if (e.CanonicalJson is null) return null;
+        try
+        {
+            if (e.CanonicalJson.RootElement.TryGetProperty("buyerName", out var el))
+                return el.GetString();
+            // camelCase variant
+            if (e.CanonicalJson.RootElement.TryGetProperty("BuyerName", out var el2))
+                return el2.GetString();
+        }
+        catch { /* malformed JSON — ignore */ }
+        return null;
+    }
 
     private static AiMappingSuggestionDto? MapAiSuggestion(PurchaseOrderLineEntity line)
     {

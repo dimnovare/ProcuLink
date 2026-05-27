@@ -13,7 +13,9 @@ public record OrderDto(
     DateTime   CreatedAt,
     DateTime   UpdatedAt,
     IReadOnlyList<OrderLineDto>    Lines,
-    IReadOnlyList<ArtifactDto>     Artifacts
+    IReadOnlyList<ArtifactDto>     Artifacts,
+    /// <summary>Buyer name extracted from CanonicalJson; null until parsing completes.</summary>
+    string?    BuyerName = null
 );
 
 /// <summary>Single purchase order line in the API response.</summary>
