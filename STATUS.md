@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 15 complete**
+## Where we are: **Phase 5 in progress — Group J deployment hardening begun**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -18,7 +18,7 @@ Source of truth for the next grouped plan:
 | Group | Workstream | Status | Why |
 |---|---|---|---|
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-11 fixed topology/visibility defects, added Playwright QA, tightened mobile shell/upload/settings/inbox/dock/log/webhook/library/supplier-mapping/delivery/connector/webhook/billing flows, and wired live upload routing. Pass 12 (topology + bridge visual calibration): log-compressed `strokeFromWeight()`, staggered Bezier CPs, amber alert badges, r=2.2 pulse, mobile Lane List, responsive accordion for bridge detail, 28px StatusJourney nodes, `1fr/1.05fr/1.15fr` column grid, footer de-duplication, mobile sticky CTA, 2×2 KPI grid on mobile. Pass 13: BridgeTopbar auto-breadcrumb from pathname via `useAutoCrumb()`. Pass 14: BridgePageLoader loading.tsx for all 11 missing routes, InboxView mobile empty state, global `:focus-visible` ring + dark-chrome override, sidebar workspace-switcher accessible button, topbar aria-labels. Pass 15: SpineReview wired to live `GET /api/orders/{id}` via `useQuery`; `buildNodesFromOrder()` maps Order → SpineNodeData[]; `BuyerName` added to `OrderDto` (extracted from `CanonicalJson`); loading gate renders `SpineReviewSkeleton`; error/not-found gate renders centred panel with back-to-inbox button (placed after all hooks). |
-| **J** | Live end-to-end QA + deployment hardening | Planned after I | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
+| **J** | Live end-to-end QA + deployment hardening | **In progress** | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. Code-level deployment gaps fixed (see Group J section). |
 | **K** | Standards + engine hardening | Planned after I/J scoping | Expand toward explicit standards coverage: cXML, UBL/Peppol BIS Order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
 
@@ -389,7 +389,72 @@ Must address:
 Do **not** introduce a new visual direction. Keep Direction 4 — The Bridge Layer,
 supported by Direction 3 — System Identity.
 
-### Group J — live end-to-end QA + deployment hardening
+### Group J — live end-to-end QA + deployment hardening (in progress)
+
+#### Code-level gaps fixed (May 27 2026)
+
+| Item | Fix | Commit |
+|---|---|---|
+| **EF migrations never applied in prod** | Added `db.Database.MigrateAsync()` in `Program.cs` before `app.Run()` | `2f725cb` |
+| **Worker never deployed** | Added `Dockerfile.worker` for `ProcuLink.Worker` as a separate Railway service | `2f725cb` |
+| **No prod appsettings template** | Added `appsettings.Production.json` (all-blank, no secrets) | `2f725cb` |
+| **Frontend env vars incomplete** | Expanded `.env.example` with `CLERK_SECRET_KEY`, `SENTRY_*` | `c9ac1bb` |
+| **SpineReview header hardcoded** | FROM/TO, file chips, StatusJourney stage, ConfirmDialog, CrossedToast now use live order data | `9240abd` |
+
+#### Railway environment variables required
+
+Set these in **Railway API service** environment:
+
+| Variable | Source |
+|---|---|
+| `ConnectionStrings__DefaultConnection` | Railway Postgres plugin → `DATABASE_URL` (convert to Npgsql format) |
+| `ASPNETCORE_ENVIRONMENT` | `Production` |
+| `Clerk__Authority` | Clerk dashboard → API Keys → JWT public key domain |
+| `Storage__R2AccountId` | Cloudflare R2 → Account ID |
+| `Storage__R2AccessKeyId` | Cloudflare R2 → API token → Access Key ID |
+| `Storage__R2SecretAccessKey` | Cloudflare R2 → API token → Secret Access Key |
+| `Storage__R2Endpoint` | `https://<accountid>.r2.cloudflarestorage.com` |
+| `Storage__R2BucketName` | `proculink` (or prod bucket name) |
+| `Stripe__SecretKey` | Stripe dashboard → API Keys → Secret key (live) |
+| `Stripe__WebhookSecret` | Stripe dashboard → Webhooks → signing secret for Railway URL |
+| `Stripe__GrowthPriceId` | Stripe dashboard → Products → Growth monthly price ID |
+| `Stripe__OperationsPriceId` | Stripe dashboard → Products → Operations monthly price ID |
+| `Stripe__IntegrationPriceId` | Stripe dashboard → Products → Integration monthly price ID |
+| `Ai__OpenAI__ApiKey` | OpenAI platform → API keys |
+| `Delivery__EncryptionKey` | Generate: `openssl rand -base64 32` → 32-byte AES-GCM key as base64 |
+| `Frontend__Url` | Vercel deployment URL e.g. `https://proculink.vercel.app` |
+| `Sentry__Dsn` | Sentry project → Settings → DSN |
+
+Set these in **Railway Worker service** environment (same values):
+`ConnectionStrings__DefaultConnection`, `ASPNETCORE_ENVIRONMENT`, `Clerk__Authority`,
+`Storage__*`, `Ai__OpenAI__ApiKey`, `Delivery__EncryptionKey`.
+
+Set these in **Vercel** environment (Production + Preview):
+
+| Variable | Value |
+|---|---|
+| `NEXT_PUBLIC_API_BASE_URL` | Railway API service public URL |
+| `NEXT_PUBLIC_USE_MOCK` | `false` |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk dashboard → API Keys → Publishable key (live) |
+| `CLERK_SECRET_KEY` | Clerk dashboard → API Keys → Secret key (live) |
+| `NEXT_PUBLIC_SENTRY_DSN` | Sentry project → Settings → DSN |
+| `SENTRY_AUTH_TOKEN` | Sentry → Settings → Auth Tokens |
+| `SENTRY_ORG` | Sentry organisation slug |
+| `SENTRY_PROJECT` | Sentry project slug |
+
+#### Remaining live QA items (require deployed services)
+
+- [ ] Verify Railway API service starts and `/health` returns 200
+- [ ] Verify Railway Worker service starts and Hangfire dashboard accessible
+- [ ] Verify Clerk login, protected routes, org resolution, sign-out on Vercel URL
+- [ ] Verify Stripe Checkout flow (Growth plan) with test card; verify webhook lands
+- [ ] Verify Stripe Portal works for an active subscription
+- [ ] Verify upload → parse → `pending_review` status update in live DB
+- [ ] Verify resolve → transform → artifact download end-to-end
+- [ ] Verify HTTP delivery test-fire against a controlled endpoint (e.g. webhook.site)
+- [ ] Verify IMAP polling against a test mailbox/app password (Integration plan)
+- [ ] Verify Sentry captures a frontend error and a backend 500 without leaking secrets
+- [ ] Verify CORS does not block Vercel origin (check browser console on first load)
 
 Verify deployed Vercel/Railway behavior with real test service configuration:
 Clerk, Stripe Checkout/Portal/webhooks, upload/parse/transform/download,
