@@ -52,27 +52,40 @@ public sealed class EmailPollingJob
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
+        _logger.LogInformation("Email polling run started.");
+
         var orgConfigs = await _db.Organisations
             .AsNoTracking()
             .Where(x => x.EmailConfigJson != "{}")
             .Select(x => new { x.Id, x.EmailConfigJson })
             .ToListAsync(ct);
 
+        _logger.LogInformation("Email polling: found {Count} org(s) with email config.", orgConfigs.Count);
+
+        var polled = 0;
+        var skipped = 0;
+
         foreach (var org in orgConfigs)
         {
             var config = EmailPollingConfig.FromJson(org.EmailConfigJson);
             if (!config.Enabled)
+            {
+                _logger.LogInformation("Skipping email polling for org {OrgId}: polling is disabled in config.", org.Id);
+                skipped++;
                 continue;
+            }
 
             if (!await _billing.HasFeatureAsync(org.Id, BillingFeature.EmailIngestion, ct))
             {
                 _logger.LogInformation("Skipping email polling for org {OrgId}: plan does not include email ingestion.", org.Id);
+                skipped++;
                 continue;
             }
 
             try
             {
                 await PollOrganisationAsync(org.Id, config, ct);
+                polled++;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -83,13 +96,15 @@ public sealed class EmailPollingJob
                 _logger.LogError(ex, "Email polling failed for org {OrgId}.", org.Id);
             }
         }
+
+        _logger.LogInformation("Email polling run complete. Polled={Polled}, Skipped={Skipped}.", polled, skipped);
     }
 
     private async Task PollOrganisationAsync(Guid orgId, EmailPollingConfig config, CancellationToken ct)
     {
         if (config.DefaultSupplierId is null || string.IsNullOrWhiteSpace(config.Host) || string.IsNullOrWhiteSpace(config.Username))
         {
-            _logger.LogWarning("Skipping email polling for org {OrgId}: email config is incomplete.", orgId);
+            _logger.LogWarning("Skipping email polling for org {OrgId}: email config is incomplete (host/username/supplierId missing).", orgId);
             return;
         }
 
@@ -103,6 +118,10 @@ public sealed class EmailPollingJob
             return;
         }
 
+        _logger.LogInformation(
+            "Polling IMAP for org {OrgId}: {User}@{Host}:{Port} folder={Folder}",
+            orgId, config.Username, config.Host, config.Port, config.Folder);
+
         using var client = new ImapClient();
         await client.ConnectAsync(
             config.Host,
@@ -115,16 +134,27 @@ public sealed class EmailPollingJob
         await folder.OpenAsync(FolderAccess.ReadWrite, ct);
 
         var unseen = await folder.SearchAsync(SearchQuery.NotSeen, ct);
+        _logger.LogInformation("Org {OrgId}: {UnseenCount} unseen message(s) in {Folder}.", orgId, unseen.Count, config.Folder);
+
+        var queued = 0;
         foreach (var uid in unseen)
         {
             var message = await folder.GetMessageAsync(uid, ct);
             var processed = await ProcessMessageAsync(orgId, config.DefaultSupplierId.Value, message, ct);
             if (processed)
+            {
                 await folder.AddFlagsAsync(uid, MessageFlags.Seen, silent: true, ct);
+                queued++;
+            }
         }
+
+        if (queued > 0)
+            _logger.LogInformation("Org {OrgId}: queued {Queued} parse job(s) from email attachments.", orgId, queued);
 
         await client.DisconnectAsync(quit: true, ct);
         await _emailSettings.MarkPolledAsync(orgId, DateTime.UtcNow, ct);
+
+        _logger.LogInformation("IMAP poll complete for org {OrgId}. Unseen={Unseen}, ParseJobsQueued={Queued}.", orgId, unseen.Count, queued);
     }
 
     private async Task<bool> ProcessMessageAsync(Guid orgId, Guid supplierId, MimeMessage message, CancellationToken ct)
