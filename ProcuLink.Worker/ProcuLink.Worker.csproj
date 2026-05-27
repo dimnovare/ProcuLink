@@ -5,6 +5,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-ProcuLink.Worker-f6445e22-ba08-4ef0-ba1a-429882ba2bf8</UserSecretsId>
+    <!-- Worker references ProcuLink.Api for ParseOrderJob; both have appsettings.json.
+         Allow the last-written copy to win — Worker's appsettings overwrite the Api's. -->
+    <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
   </PropertyGroup>
 
   <ItemGroup>
