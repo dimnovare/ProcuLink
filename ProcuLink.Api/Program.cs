@@ -253,13 +253,40 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
 
-// ── Auto-migrate on startup ───────────────────────────────────────────────
-// Applies any pending EF migrations before the first request is served.
-// Safe to run on every startup — EF checks __EFMigrationsHistory before applying.
-using (var scope = app.Services.CreateScope())
+// ── Auto-migrate after server starts ─────────────────────────────────────
+// Runs AFTER the HTTP server is listening so the Railway health check
+// succeeds immediately. Neon Postgres has a cold-start delay on the
+// first connection; retrying with backoff handles that gracefully.
+// We use ApplicationStarted so the scope is created inside a running host.
+app.Lifetime.ApplicationStarted.Register(() =>
 {
-    var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-    await db.Database.MigrateAsync();
-}
+    _ = Task.Run(async () =>
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var loggerFactory = scope.ServiceProvider.GetRequiredService<ILoggerFactory>();
+        var migLogger = loggerFactory.CreateLogger("ProcuLink.Migrations");
+
+        for (var attempt = 1; attempt <= 6; attempt++)
+        {
+            try
+            {
+                await db.Database.MigrateAsync();
+                migLogger.LogInformation("Database migrations applied (attempt {Attempt}).", attempt);
+                return;
+            }
+            catch (Exception ex) when (attempt < 6)
+            {
+                var delay = TimeSpan.FromSeconds(attempt * 3); // 3 s, 6 s, 9 s, 12 s, 15 s
+                migLogger.LogWarning(
+                    "Migration attempt {Attempt}/6 failed ({Message}). Retrying in {Delay}s…",
+                    attempt, ex.Message, delay.TotalSeconds);
+                await Task.Delay(delay);
+            }
+        }
+
+        migLogger.LogError("All 6 migration attempts failed — app is running but DB schema may be outdated.");
+    });
+});
 
 app.Run();
