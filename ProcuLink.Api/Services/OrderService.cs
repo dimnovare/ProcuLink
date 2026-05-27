@@ -297,9 +297,7 @@ public sealed class OrderService : IOrderService
                 try { _parserFactory.GetParser(extension); }
                 catch (UnsupportedFileFormatException ex)
                 {
-                    entity.Status    = "failed";
-                    entity.UpdatedAt = DateTime.UtcNow;
-                    await _db.SaveChangesAsync(ct);
+                    await SetOrderFailedAsync(orderId, organisationId, ct);
                     return Result<PurchaseOrderEntity>.Fail(ex.Message);
                 }
             }
@@ -321,8 +319,7 @@ public sealed class OrderService : IOrderService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to parse file for order {OrderId}", orderId);
-                entity.Status    = "failed";
-                entity.UpdatedAt = DateTime.UtcNow;
+                await SetOrderFailedAsync(orderId, organisationId, ct);
                 _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "ParseFailed",
                     new { error = ex.Message }));
                 await _db.SaveChangesAsync(ct);
@@ -331,9 +328,7 @@ public sealed class OrderService : IOrderService
 
             if (parsedOrder.Lines.Count == 0)
             {
-                entity.Status    = "failed";
-                entity.UpdatedAt = DateTime.UtcNow;
-                await _db.SaveChangesAsync(ct);
+                await SetOrderFailedAsync(orderId, organisationId, ct);
                 return Result<PurchaseOrderEntity>.Fail("File contains no line items.");
             }
 
@@ -361,28 +356,58 @@ public sealed class OrderService : IOrderService
                 lineEntities.Add(lineEntity);
             }
 
-            // Update order with parsed data
+            // ── Persist parsed results ────────────────────────────────────────
+            // Use ExecuteUpdateAsync for the parent row so we bypass EF's change
+            // tracker entirely.  This avoids DbUpdateConcurrencyException (0 rows
+            // affected) that occurs when the long-running parse leaves the tracked
+            // entity stale on Neon serverless / Npgsql 8 connection multiplexing.
             var now = DateTime.UtcNow;
-            entity.PoNumber   = string.IsNullOrWhiteSpace(parsedOrder.PoNumber)
-                                    ? $"PO-{now:yyyyMMddHHmmss}"
-                                    : parsedOrder.PoNumber;
-            entity.OrderDate  = parsedOrder.OrderDate.HasValue
-                                    ? DateOnly.FromDateTime(parsedOrder.OrderDate.Value)
-                                    : DateOnly.FromDateTime(now);
-            entity.Currency   = parsedOrder.Currency ?? "EUR";
-            entity.Status     = anyUnresolved ? "pending_review" : "ready";
-            entity.UpdatedAt  = now;
-            entity.Lines.AddRange(lineEntities);
+            var newPoNumber = string.IsNullOrWhiteSpace(parsedOrder.PoNumber)
+                                ? $"PO-{now:yyyyMMddHHmmss}"
+                                : parsedOrder.PoNumber;
+            var newOrderDate = parsedOrder.OrderDate.HasValue
+                                ? DateOnly.FromDateTime(parsedOrder.OrderDate.Value)
+                                : DateOnly.FromDateTime(now);
+            var newCurrency = parsedOrder.Currency ?? "EUR";
+            var newStatus   = anyUnresolved ? "pending_review" : "ready";
 
+            var updated = await _db.PurchaseOrders
+                .Where(o => o.Id == orderId && o.OrgId == organisationId)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(o => o.PoNumber,   newPoNumber)
+                    .SetProperty(o => o.OrderDate,  newOrderDate)
+                    .SetProperty(o => o.Currency,   newCurrency)
+                    .SetProperty(o => o.Status,     newStatus)
+                    .SetProperty(o => o.UpdatedAt,  now), ct);
+
+            if (updated == 0)
+            {
+                _logger.LogError(
+                    "ParseStoredFileAsync: ExecuteUpdateAsync affected 0 rows for order {OrderId}", orderId);
+                return Result<PurchaseOrderEntity>.Fail("Order could not be updated — not found or already deleted.");
+            }
+
+            // Set the FK on each line before inserting (EF relationship fixup
+            // can't run because we detached the parent from tracking above).
+            foreach (var line in lineEntities) line.OrderId = orderId;
+            _db.PurchaseOrderLines.AddRange(lineEntities);
             _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "Parsed", new
             {
                 lineCount       = lineEntities.Count,
                 unresolvedCount = lineEntities.Count(l => l.NeedsReview),
                 aiSuggestionCount,
-                newStatus       = entity.Status
+                newStatus,
             }));
 
             await _db.SaveChangesAsync(ct);
+
+            // Reflect changes on the in-memory entity so callers see the final state.
+            entity.PoNumber  = newPoNumber;
+            entity.OrderDate = newOrderDate;
+            entity.Currency  = newCurrency;
+            entity.Status    = newStatus;
+            entity.UpdatedAt = now;
+            entity.Lines.AddRange(lineEntities);
 
             _logger.LogInformation(
                 "Order {OrderId} parsed: {LineCount} lines, {Unresolved} unresolved, status={Status}",
@@ -765,6 +790,20 @@ public sealed class OrderService : IOrderService
             Currency:  mapped.Currency,
             Lines:     lines
         ));
+    }
+
+    /// <summary>
+    /// Sets order status to "failed" using ExecuteUpdateAsync to avoid
+    /// DbUpdateConcurrencyException when the tracked entity is stale.
+    /// </summary>
+    private async Task SetOrderFailedAsync(Guid orderId, Guid organisationId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        await _db.PurchaseOrders
+            .Where(o => o.Id == orderId && o.OrgId == organisationId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(o => o.Status,    "failed")
+                .SetProperty(o => o.UpdatedAt, now), ct);
     }
 
     private static AuditEvent BuildAuditEvent(Guid orgId, Guid entityId, string action, object payload) =>
