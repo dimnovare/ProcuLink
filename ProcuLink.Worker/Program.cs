@@ -34,7 +34,8 @@ builder.Services.AddHangfire(cfg => cfg
     .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString)));
 builder.Services.AddHangfireServer(opts =>
 {
-    opts.WorkerCount = 2;
+    // Worker is the sole Hangfire executor — also processes ParseOrderJob enqueued by the API.
+    opts.WorkerCount = 4;
     opts.Queues = new[] { "default" };
 });
 
@@ -71,6 +72,8 @@ builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 
 builder.Services.AddScoped<EmailPollingJob>();
+// ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
+builder.Services.AddScoped<ParseOrderJob>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();

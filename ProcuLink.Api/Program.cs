@@ -91,11 +91,9 @@ builder.Services.AddHangfire(cfg => cfg
     .UseSimpleAssemblyNameTypeSerializer()
     .UseRecommendedSerializerSettings()
     .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString)));
-builder.Services.AddHangfireServer(opts =>
-{
-    opts.WorkerCount = 4; // conservative for Phase 3 MVP
-    opts.Queues = new[] { "default" };
-});
+// No AddHangfireServer here — the Worker process is the sole Hangfire executor.
+// The API only enqueues jobs; running a server here would cause it to try to
+// deserialize ProcuLink.Worker types (e.g. EmailPollingJob) that it can't load.
 
 // ── HTTP client for webhook delivery ──────────────────────────────────────
 builder.Services.AddHttpClient("delivery", c =>
