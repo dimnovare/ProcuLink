@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Services;
+using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Middleware;
@@ -8,6 +9,10 @@ namespace ProcuLink.Api.Middleware;
 /// Runs after authentication. For authenticated requests that carry an org_id claim,
 /// looks up the internal Organisation UUID and stores it in HttpContext.Items so that
 /// CurrentTenantService can serve it synchronously throughout the rest of the pipeline.
+///
+/// If the org_id is present but no matching DB record exists, the organisation is
+/// auto-provisioned on the spot (pilot trial, 14-day window). This covers the first
+/// login flow where Clerk creates an org before the back-end has ever seen it.
 ///
 /// Unauthenticated requests (e.g. /health) pass through untouched.
 /// </summary>
@@ -38,19 +43,36 @@ public sealed class TenantResolutionMiddleware
 
                 if (org is null)
                 {
-                    _logger.LogWarning(
-                        "Authenticated request with unknown org_id '{ClerkOrgId}' — organisation not provisioned.",
-                        clerkOrgId);
+                    // Auto-provision: first time this Clerk org contacts the API.
+                    // Use org_slug as the display name; fall back to the raw org_id.
+                    var orgSlug = context.User.FindFirst("org_slug")?.Value;
+                    var now = DateTime.UtcNow;
 
-                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
-                    await context.Response.WriteAsJsonAsync(new
+                    var newOrg = new Organisation
                     {
-                        error = "Organisation not provisioned. Contact support."
-                    });
-                    return;
-                }
+                        Id             = Guid.NewGuid(),
+                        ClerkOrgId     = clerkOrgId,
+                        Name           = orgSlug ?? clerkOrgId,
+                        Plan           = "pilot",
+                        AccountStatus  = "trialing",
+                        CreatedAt      = now,
+                        TrialStartedAt = now,
+                        TrialEndsAt    = now.AddDays(14),
+                    };
 
-                context.Items[CurrentTenantService.Items.OrganisationId] = org.Id;
+                    db.Organisations.Add(newOrg);
+                    await db.SaveChangesAsync(context.RequestAborted);
+
+                    _logger.LogInformation(
+                        "Auto-provisioned organisation '{Name}' (ClerkOrgId={ClerkOrgId}).",
+                        newOrg.Name, clerkOrgId);
+
+                    context.Items[CurrentTenantService.Items.OrganisationId] = newOrg.Id;
+                }
+                else
+                {
+                    context.Items[CurrentTenantService.Items.OrganisationId] = org.Id;
+                }
             }
         }
 
