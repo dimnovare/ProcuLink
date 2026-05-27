@@ -46,8 +46,11 @@ public sealed class R2StorageService : IFileStorageService, IAsyncDisposable
             Key         = key,
             InputStream = content,
             ContentType = contentType,
-            // Disable MD5 checksum — R2 does not require it and it causes issues with streaming bodies
-            DisablePayloadSigning = false
+            // R2 does not support STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER.
+            // DisablePayloadSigning=true switches to a standard (non-chunked) PUT
+            // which R2 accepts correctly.
+            DisablePayloadSigning = true,
+            UseChunkEncoding      = false,
         };
 
         await _client.PutObjectAsync(request, ct);
