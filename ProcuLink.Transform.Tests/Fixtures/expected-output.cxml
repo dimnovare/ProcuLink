@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cXML payloadID="PLACEHOLDER@proculink" timestamp="2024-01-15T09:00:00Z" xml:lang="en-US">
+  <Header>
+    <From>
+      <Credential domain="OrgId">
+        <Identity>00000000-0000-0000-0000-000000000001</Identity>
+      </Credential>
+    </From>
+    <To>
+      <Credential domain="SupplierId">
+        <Identity>00000000-0000-0000-0000-000000000002</Identity>
+      </Credential>
+    </To>
+    <Sender>
+      <Credential domain="NetworkUserId">
+        <Identity>proculink</Identity>
+      </Credential>
+      <UserAgent>ProcuLink/1.0</UserAgent>
+    </Sender>
+  </Header>
+  <Request deploymentMode="production">
+    <OrderRequest>
+      <OrderRequestHeader orderID="PO-12345" orderDate="2024-01-15" type="new">
+        <Total>
+          <Money currency="EUR">1250.00</Money>
+        </Total>
+      </OrderRequestHeader>
+      <ItemOut quantity="10" lineNumber="1">
+        <ItemID>
+          <SupplierPartID>SUP-ABC-001</SupplierPartID>
+        </ItemID>
+        <ItemDetail>
+          <UnitPrice>
+            <Money currency="EUR">125.00</Money>
+          </UnitPrice>
+          <Description xml:lang="en">Widget Type A</Description>
+          <UnitOfMeasure>EA</UnitOfMeasure>
+        </ItemDetail>
+      </ItemOut>
+    </OrderRequest>
+  </Request>
+</cXML>

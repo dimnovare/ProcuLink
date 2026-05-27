@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE cXML SYSTEM "http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd">
+<cXML payloadID="1234567890abcdef@proculink" timestamp="2024-01-15T09:00:00Z" xml:lang="en-US">
+  <Header>
+    <From>
+      <Credential domain="DUNS">
+        <Identity>buyer-duns-123456</Identity>
+      </Credential>
+    </From>
+    <To>
+      <Credential domain="DUNS">
+        <Identity>supplier-duns-654321</Identity>
+      </Credential>
+    </To>
+    <Sender>
+      <Credential domain="NetworkUserId">
+        <Identity>procurement@buyer.example.com</Identity>
+      </Credential>
+      <UserAgent>ProcurementSystem/4.2</UserAgent>
+    </Sender>
+  </Header>
+  <Request deploymentMode="production">
+    <OrderRequest>
+      <OrderRequestHeader orderID="PO-12345" orderDate="2024-01-15" type="new">
+        <Total>
+          <Money currency="EUR">1250.00</Money>
+        </Total>
+        <BillTo>
+          <Address>
+            <Name xml:lang="en">Acme Procurement GmbH</Name>
+            <PostalAddress>
+              <Street>Industriestrasse 1</Street>
+              <City>Berlin</City>
+              <PostalCode>10115</PostalCode>
+              <Country isoCountryCode="DE">Germany</Country>
+            </PostalAddress>
+          </Address>
+        </BillTo>
+        <ShipTo>
+          <Address>
+            <Name xml:lang="en">Acme Warehouse</Name>
+            <PostalAddress>
+              <Street>Lagerstrasse 42</Street>
+              <City>Berlin</City>
+              <PostalCode>10178</PostalCode>
+              <Country isoCountryCode="DE">Germany</Country>
+            </PostalAddress>
+          </Address>
+        </ShipTo>
+      </OrderRequestHeader>
+      <ItemOut quantity="10" lineNumber="1">
+        <ItemID>
+          <SupplierPartID>SUP-ABC-001</SupplierPartID>
+        </ItemID>
+        <ItemDetail>
+          <UnitPrice>
+            <Money currency="EUR">125.00</Money>
+          </UnitPrice>
+          <Description xml:lang="en">Widget Type A</Description>
+          <UnitOfMeasure>EA</UnitOfMeasure>
+        </ItemDetail>
+      </ItemOut>
+      <ItemOut quantity="5" lineNumber="2">
+        <ItemID>
+          <SupplierPartID>SUP-XYZ-002</SupplierPartID>
+        </ItemID>
+        <ItemDetail>
+          <UnitPrice>
+            <Money currency="EUR">150.00</Money>
+          </UnitPrice>
+          <Description xml:lang="en">Bracket Assembly</Description>
+          <UnitOfMeasure>PCS</UnitOfMeasure>
+        </ItemDetail>
+      </ItemOut>
+    </OrderRequest>
+  </Request>
+</cXML>

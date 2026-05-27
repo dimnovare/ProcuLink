@@ -19,7 +19,7 @@ Source of truth for the next grouped plan:
 |---|---|---|---|
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-11 fixed topology/visibility defects, added Playwright QA, tightened mobile shell/upload/settings/inbox/dock/log/webhook/library/supplier-mapping/delivery/connector/webhook/billing flows, and wired live upload routing. Pass 12 (topology + bridge visual calibration): log-compressed `strokeFromWeight()`, staggered Bezier CPs, amber alert badges, r=2.2 pulse, mobile Lane List, responsive accordion for bridge detail, 28px StatusJourney nodes, `1fr/1.05fr/1.15fr` column grid, footer de-duplication, mobile sticky CTA, 2×2 KPI grid on mobile. Pass 13: BridgeTopbar auto-breadcrumb from pathname via `useAutoCrumb()`. Pass 14: BridgePageLoader loading.tsx for all 11 missing routes, InboxView mobile empty state, global `:focus-visible` ring + dark-chrome override, sidebar workspace-switcher accessible button, topbar aria-labels. Pass 15: SpineReview wired to live `GET /api/orders/{id}` via `useQuery`; `buildNodesFromOrder()` maps Order → SpineNodeData[]; `BuyerName` added to `OrderDto` (extracted from `CanonicalJson`); loading gate renders `SpineReviewSkeleton`; error/not-found gate renders centred panel with back-to-inbox button (placed after all hooks). |
 | **J** | Live end-to-end QA + deployment hardening | **In progress** | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. Code-level deployment gaps fixed (see Group J section). |
-| **K** | Standards + engine hardening | Planned after I/J scoping | Expand toward explicit standards coverage: cXML, UBL/Peppol BIS Order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
+| **K** | Standards matrix written; cXML parser hardened + output transformer added; 18 new tests; docs/standards-matrix.md + docs/canonical-po-model.md created | `feat/group-k-standards` branch — pending merge |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
 
 ### Completed phases
@@ -283,7 +283,7 @@ Deferred from H:
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 11 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
-| **K** | Standards + engine hardening | Planned after I/J scoping |
+| **K** | Standards + engine hardening | **In progress** — standards matrix + cXML input/output added; see `feat/group-k-standards` branch |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
 
 ### Group I — UI/UX production polish + responsive QA (in progress)
@@ -461,12 +461,14 @@ Clerk, Stripe Checkout/Portal/webhooks, upload/parse/transform/download,
 HTTP delivery test-fire, ERP sandbox/stub test-fire, IMAP polling, Sentry/logging,
 CORS, database migrations, and production env vars.
 
-### Group K — standards + engine hardening
+### Group K — standards + engine hardening (in progress)
 
-Do not start broad implementation until a standards matrix is written. The matrix
-must define support level, fixtures, validation depth, plan gate, and owner for:
-cXML, UBL/Peppol BIS Order, supplier CSV/XLSX templates, JSON/API payload
-templates, EDI order formats, and OCR/scanned PDF support.
+Standards matrix written at `docs/standards-matrix.md`. Canonical PO model documented at
+`docs/canonical-po-model.md`. cXML 1.2 input parser (`CxmlOrderParser`) and output transformer
+(`CxmlTransformService`) implemented and tested. `OutputFormat.CXml` added to core enum.
+Both classes registered in API DI. 18 new unit tests added across parser and transformer.
+
+Next: JSON/API payload output transformer, then UBL 2.1 / Peppol BIS Order input.
 
 ### Group L — trust, onboarding + commercial readiness
 
