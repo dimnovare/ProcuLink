@@ -172,6 +172,7 @@ builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 builder.Services.AddSingleton<IPurchaseOrderParser, CsvOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
+builder.Services.AddSingleton<IPurchaseOrderParser, CxmlOrderParser>();
 builder.Services.AddSingleton<OrderParserFactory>();
 
 // ── Transform layer (ProcuLink.Transform) ──────────────────────────────────
@@ -179,6 +180,7 @@ builder.Services.AddSingleton<OrderParserFactory>();
 // the correct one at runtime via IEnumerable<ITransformService> + CanTransform().
 builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
+builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
 
 // ── Health check (G5) ─────────────────────────────────────────────────────
 builder.Services.AddHealthChecks();

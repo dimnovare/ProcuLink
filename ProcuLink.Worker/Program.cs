@@ -67,9 +67,11 @@ builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 builder.Services.AddSingleton<IPurchaseOrderParser, CsvOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
+builder.Services.AddSingleton<IPurchaseOrderParser, CxmlOrderParser>();
 builder.Services.AddSingleton<OrderParserFactory>();
 builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
+builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
 
 builder.Services.AddScoped<EmailPollingJob>();
 // ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.

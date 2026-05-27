@@ -24,4 +24,8 @@
     <ProjectReference Include="..\ProcuLink.Core\ProcuLink.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
