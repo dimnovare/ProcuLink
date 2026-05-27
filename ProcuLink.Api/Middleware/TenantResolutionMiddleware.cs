@@ -31,7 +31,22 @@ public sealed class TenantResolutionMiddleware
     {
         if (context.User.Identity?.IsAuthenticated == true)
         {
+            // Prefer the Clerk org_id claim. When no Clerk organisation is active in
+            // the session (e.g. personal account, or the session hasn't activated the
+            // org yet) fall back to the user's sub claim so each user still maps to a
+            // tenant. Clerk user IDs start with "user_" and org IDs with "org_", so
+            // they share no namespace and won't collide.
             var clerkOrgId = context.User.FindFirst("org_id")?.Value;
+            var orgSlug    = context.User.FindFirst("org_slug")?.Value;
+            var sub        = context.User.FindFirst("sub")?.Value;
+            var fellBackToUser = false;
+
+            if (string.IsNullOrEmpty(clerkOrgId) && !string.IsNullOrEmpty(sub))
+            {
+                clerkOrgId     = sub;
+                orgSlug        = "Personal workspace";
+                fellBackToUser = true;
+            }
 
             if (!string.IsNullOrEmpty(clerkOrgId))
             {
@@ -43,11 +58,8 @@ public sealed class TenantResolutionMiddleware
 
                 if (org is null)
                 {
-                    // Auto-provision: first time this Clerk org contacts the API.
-                    // Use org_slug as the display name; fall back to the raw org_id.
-                    var orgSlug = context.User.FindFirst("org_slug")?.Value;
+                    // Auto-provision: first time this tenant key contacts the API.
                     var now = DateTime.UtcNow;
-
                     var newOrg = new Organisation
                     {
                         Id             = Guid.NewGuid(),
@@ -64,8 +76,8 @@ public sealed class TenantResolutionMiddleware
                     await db.SaveChangesAsync(context.RequestAborted);
 
                     _logger.LogInformation(
-                        "Auto-provisioned organisation '{Name}' (ClerkOrgId={ClerkOrgId}).",
-                        newOrg.Name, clerkOrgId);
+                        "Auto-provisioned organisation '{Name}' (TenantKey={ClerkOrgId}, FellBackToUser={Fallback}).",
+                        newOrg.Name, clerkOrgId, fellBackToUser);
 
                     context.Items[CurrentTenantService.Items.OrganisationId] = newOrg.Id;
                 }
