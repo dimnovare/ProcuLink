@@ -211,18 +211,22 @@ before writing implementation plans.
 
 | Group | Workstream | Status |
 |---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 8 complete** |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 9 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
 | **K** | Standards + engine hardening | Planned after I/J scoping |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
 
-Group I must continue unless the user explicitly reprioritizes. Passes 1-8 are
+Group I must continue unless the user explicitly reprioritizes. Passes 1-9 are
 complete: topology/wire defects, mobile shell, upload/settings, inbox/docks/logs,
 supplier detail/mapping/delivery, settings/connector/webhook states,
 mappings/rules/templates panels, and upload/supplier plan-gated states have all
-been screenshot-tested and patched. The Bridge Layer is locked, but remaining
-live-flow QA still needs connector/webhook/mapping/rule/template save/test-fire
-behavior and first-upload-to-delivery happy/error paths against a running API.
+been screenshot-tested and patched. Pass 9 also added visible local QA feedback
+for connector/webhook draft test/save, mapping import/export/add/edit,
+validation-rule toggle/edit, and output-template validate/save actions. The
+Bridge Layer is locked, but remaining live-flow QA still needs the full
+first-upload-to-delivery happy/error paths against a running API; Group J should
+turn the local connector/webhook/mapping/rule/template affordances into real
+persistence/test-fire verification.
 Wire Topology rules are explicit: same-lane wires may be straight, cross-lane
 wires arc, every wire uses the same visible gradient stroke, shared ports fan out,
 alert counters stay tethered to their route, and the legend must not overlap
