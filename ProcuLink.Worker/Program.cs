@@ -70,13 +70,8 @@ builder.Services.AddSingleton<OrderParserFactory>();
 builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 
+builder.Services.AddScoped<EmailPollingJob>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();
-
-RecurringJob.AddOrUpdate<EmailPollingJob>(
-    "email-polling",
-    job => job.ExecuteAsync(CancellationToken.None),
-    "*/5 * * * *");
-
 host.Run();
