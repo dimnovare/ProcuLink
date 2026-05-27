@@ -253,4 +253,13 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
 
+// ── Auto-migrate on startup ───────────────────────────────────────────────
+// Applies any pending EF migrations before the first request is served.
+// Safe to run on every startup — EF checks __EFMigrationsHistory before applying.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+    await db.Database.MigrateAsync();
+}
+
 app.Run();

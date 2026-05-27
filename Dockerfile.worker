@@ -1,0 +1,21 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+COPY ProcuLink.Core/ProcuLink.Core.csproj ProcuLink.Core/
+COPY ProcuLink.Infrastructure/ProcuLink.Infrastructure.csproj ProcuLink.Infrastructure/
+COPY ProcuLink.Transform/ProcuLink.Transform.csproj ProcuLink.Transform/
+COPY ProcuLink.Api/ProcuLink.Api.csproj ProcuLink.Api/
+COPY ProcuLink.Worker/ProcuLink.Worker.csproj ProcuLink.Worker/
+
+RUN dotnet restore ProcuLink.Worker/ProcuLink.Worker.csproj
+
+COPY . .
+
+RUN dotnet publish ProcuLink.Worker/ProcuLink.Worker.csproj --no-restore -c Release -o /app/out
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+COPY --from=build /app/out .
+
+# Worker does not expose HTTP; PORT env var is ignored but set by Railway anyway
+CMD ["dotnet", "ProcuLink.Worker.dll"]
