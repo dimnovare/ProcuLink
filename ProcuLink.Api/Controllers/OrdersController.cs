@@ -223,8 +223,8 @@ public sealed class OrdersController : ControllerBase
         CancellationToken ct)
     {
         var formatStr = request.Format?.ToLowerInvariant();
-        if (formatStr != "xml" && formatStr != "csv")
-            return BadRequest(new { error = "Format must be 'xml' or 'csv'." });
+        if (formatStr != "xml" && formatStr != "csv" && formatStr != "json" && formatStr != "cxml")
+            return BadRequest(new { error = "Format must be 'xml', 'csv', 'json', or 'cxml'." });
 
         var limitCheck = await _billing.CheckOrderLimitAsync(_tenant.OrganisationId, ct);
         if (!limitCheck.Allowed)
@@ -297,6 +297,53 @@ public sealed class OrdersController : ControllerBase
             .ToListAsync(ct);
 
         return Ok(events);
+    }
+
+    // ── POST /api/orders/{id}/redeliver ──────────────────────────────────────
+
+    /// <summary>
+    /// Re-enqueue delivery for an order that has already been transformed.
+    /// Bypasses the AutoDeliver flag — use when the supplier was unreachable
+    /// or the operator wants to force a manual retry.
+    /// Valid source statuses: delivery_failed, ready_to_deliver.
+    /// </summary>
+    [HttpPost("{id:guid}/redeliver")]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Redeliver(Guid id, CancellationToken ct)
+    {
+        var orgId     = _tenant.OrganisationId;
+        var getResult = await _orders.GetByIdAsync(orgId, id, ct);
+
+        if (!getResult.IsSuccess)
+            return NotFound();
+
+        var order = getResult.Value!;
+
+        if (order.Status is not ("delivery_failed" or "ready_to_deliver"))
+            return BadRequest(new
+            {
+                error = $"Order must be in 'delivery_failed' or 'ready_to_deliver' status to redeliver (current: '{order.Status}')."
+            });
+
+        var artifact = order.OutboundArtifacts
+            .OrderByDescending(a => a.CreatedAt)
+            .FirstOrDefault();
+
+        if (artifact is null)
+            return BadRequest(new { error = "No outbound artifact found. Transform the order before redelivering." });
+
+        order.Status = "delivering";
+        await _db.SaveChangesAsync(ct);
+
+        DeliverOrderJob.EnqueueRedeliver(_jobs, id, orgId, artifact.Id);
+
+        _logger.LogInformation(
+            "RedeliverOrderJob enqueued for order {OrderId}, artifact {ArtifactId}, org {OrgId}",
+            id, artifact.Id, orgId);
+
+        return Accepted(new { status = "delivering" });
     }
 
     // ── GET /api/orders/{id}/artifacts/{artifactId}/download ─────────────────

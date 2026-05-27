@@ -29,12 +29,14 @@ public class DeliverOrderJob
         Guid orderId,
         Guid organisationId,
         Guid artifactId,
+        bool requireAutoDeliver,
         CancellationToken ct)
     {
         _logger.LogInformation(
-            "DeliverOrderJob starting for order {OrderId}, artifact {ArtifactId}",
+            "DeliverOrderJob starting for order {OrderId}, artifact {ArtifactId}, requireAutoDeliver={RequireAutoDeliver}",
             orderId,
-            artifactId);
+            artifactId,
+            requireAutoDeliver);
 
         if (!await _billingService.CanProcessOrdersAsync(organisationId, ct))
         {
@@ -48,7 +50,7 @@ public class DeliverOrderJob
             organisationId,
             orderId,
             artifactId,
-            requireAutoDeliver: true,
+            requireAutoDeliver,
             ct);
 
         if (!result.Success)
@@ -60,6 +62,7 @@ public class DeliverOrderJob
         }
     }
 
+    /// <summary>Enqueue automatic post-transform delivery (respects AutoDeliver flag).</summary>
     public static void Enqueue(
         IBackgroundJobClient jobs,
         Guid orderId,
@@ -67,6 +70,17 @@ public class DeliverOrderJob
         Guid artifactId)
     {
         jobs.Enqueue<DeliverOrderJob>(j =>
-            j.ExecuteAsync(orderId, organisationId, artifactId, CancellationToken.None));
+            j.ExecuteAsync(orderId, organisationId, artifactId, true, CancellationToken.None));
+    }
+
+    /// <summary>Enqueue a forced redeliver (bypasses AutoDeliver flag).</summary>
+    public static void EnqueueRedeliver(
+        IBackgroundJobClient jobs,
+        Guid orderId,
+        Guid organisationId,
+        Guid artifactId)
+    {
+        jobs.Enqueue<DeliverOrderJob>(j =>
+            j.ExecuteAsync(orderId, organisationId, artifactId, false, CancellationToken.None));
     }
 }

@@ -181,6 +181,7 @@ builder.Services.AddSingleton<OrderParserFactory>();
 builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
+builder.Services.AddSingleton<ITransformService, JsonTransformService>();
 
 // ── Health check (G5) ─────────────────────────────────────────────────────
 builder.Services.AddHealthChecks();

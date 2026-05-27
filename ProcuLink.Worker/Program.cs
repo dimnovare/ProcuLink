@@ -72,6 +72,7 @@ builder.Services.AddSingleton<OrderParserFactory>();
 builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
+builder.Services.AddSingleton<ITransformService, JsonTransformService>();
 
 builder.Services.AddScoped<EmailPollingJob>();
 // ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
