@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 10 complete**
+## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 11 complete**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -17,7 +17,7 @@ Source of truth for the next grouped plan:
 
 | Group | Workstream | Status | Why |
 |---|---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 10 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-10 fixed the known Wire Topology traveller/visibility defects, added Playwright QA, tightened mobile shell/order review behavior, cleaned upload/settings responsive defects, fixed inbox/dock/log/webhook mobile layout issues, made supplier detail/mapping/delivery forms usable on mobile, added resilient settings plus connector/webhook configuration states, completed library interaction panels for mappings/rules/templates, tightened upload/supplier plan-gated states, added visible local feedback for draft test/save flows, and corrected the mocked first-upload-to-review-to-delivery path. More live API/deployment QA remains. |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 11 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-10 fixed the known Wire Topology traveller/visibility defects, added Playwright QA, tightened mobile shell/order review behavior, cleaned upload/settings responsive defects, fixed inbox/dock/log/webhook mobile layout issues, made supplier detail/mapping/delivery forms usable on mobile, added resilient settings plus connector/webhook configuration states, completed library interaction panels for mappings/rules/templates, tightened upload/supplier plan-gated states, added visible local feedback for draft test/save flows, and corrected the mocked first-upload-to-review-to-delivery path. Pass 11 wired live upload to real suppliers and routes non-mock sessions to `/orders/{id}` (API-backed review) instead of static `/inbox/{id}`. More live API/deployment QA and SpineReview API wiring remain. |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
 | **K** | Standards + engine hardening | Planned after I/J scoping | Expand toward explicit standards coverage: cXML, UBL/Peppol BIS Order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
@@ -281,7 +281,7 @@ Deferred from H:
 | **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 10 complete** |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 11 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
 | **K** | Standards + engine hardening | Planned after I/J scoping |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
@@ -365,6 +365,12 @@ Pass 10 completed (May 27 2026):
 - The review sticky action bar now has a mobile-specific summary/action layout; grand total, output template, exception state, and buttons no longer squeeze or overlap on small screens.
 - Verified with mock-mode Playwright screenshots: file upload → new `/inbox/ord-*` review route, review draft notice, output copy notice, delivered state, and mobile review footer. `bun run build` passed. Existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
+Pass 11 completed (May 27 2026):
+- `UploadWorkbench` now loads supplier docks from `GET /api/suppliers` instead of hardcoded mock UUIDs, with loading/error/empty states and a link to `/library/suppliers` when none exist.
+- When `NEXT_PUBLIC_USE_MOCK=false`, successful uploads route to `/orders/{id}` (`OrderDetailPage` — real API, polling while `parsing`/`transforming`) instead of `/inbox/{id}` (`SpineReview` is still static demo data).
+- Exported `isApiMockMode` from `api-client.ts` for consistent mock vs live routing.
+- Backend `dotnet test ProcuLink.slnx` → 60 passed. Frontend `bun run build` passed. Existing Sentry/Browserslist/ESLint warnings remain.
+
 Must address:
 - Continue live API/deployment QA for the full first-upload-to-delivery happy/error paths against a running backend, including real save/test-fire persistence for connector/webhook/mapping/rule/template forms in Group J.
 - App shell, sidebar, topbar, route labels, active states, and mobile navigation.
@@ -422,7 +428,7 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 ## Latest commits / push state
 - Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), Group G ERP connectors, and Group H email polling.
 - Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), Group G ERP connector UI, and Group H settings UI.
-- Phase 5 roadmap is now documented. Current implementation group is **Group I**; pass 10 has completed the mocked first-upload-to-review-to-delivery UI path, and live API/deployment QA should continue before Group J.
+- Phase 5 roadmap is now documented. Current implementation group is **Group I**; pass 11 wired live upload supplier selection and API-backed post-upload review routing. Live API/deployment QA (Clerk session + running API/worker) and `SpineReview` API integration should continue before Group J.
 - Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
 
 ---
