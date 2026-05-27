@@ -441,21 +441,58 @@ public sealed class OrderService : IOrderService
     public async Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(
         Guid organisationId, CancellationToken ct)
     {
-        // Projection to avoid loading full line data — EF translates this to SQL
-        var summaries = await _db.PurchaseOrders
+        // Split the projection into two queries to avoid EF's MultipleCollectionInclude
+        // issue: accessing e.Lines twice in a single SELECT generates a cartesian-product
+        // JOIN that drops rows with 0 lines (stubs in "parsing" status).
+        //
+        // Step 1: fetch order + supplier name (LEFT JOIN — null-safe for deleted suppliers).
+        // Step 2: fetch per-order line counts via a second scalar query, then join in memory.
+        var orders = await _db.PurchaseOrders
             .AsNoTracking()
             .Where(x => x.OrgId == organisationId)
             .OrderByDescending(x => x.CreatedAt)
-            .Select(e => new PurchaseOrderSummary(
+            .Select(e => new
+            {
                 e.Id,
                 e.PoNumber,
-                e.Supplier.Name,
+                SupplierName = e.Supplier != null ? e.Supplier.Name : "Unknown Supplier",
                 e.OrderDate,
                 e.Status,
-                e.Lines.Count,
-                e.Lines.Count(l => l.NeedsReview),
-                e.CreatedAt))
+                e.CreatedAt,
+            })
             .ToListAsync(ct);
+
+        if (orders.Count == 0)
+            return Result<IReadOnlyList<PurchaseOrderSummary>>.Ok(Array.Empty<PurchaseOrderSummary>());
+
+        var orderIds = orders.Select(o => o.Id).ToList();
+
+        // Aggregate line counts in a single query: (orderId, total, unresolved)
+        var lineCounts = await _db.PurchaseOrderLines
+            .AsNoTracking()
+            .Where(l => orderIds.Contains(l.OrderId))
+            .GroupBy(l => l.OrderId)
+            .Select(g => new
+            {
+                OrderId      = g.Key,
+                Total        = g.Count(),
+                Unresolved   = g.Count(l => l.NeedsReview),
+            })
+            .ToDictionaryAsync(g => g.OrderId, ct);
+
+        var summaries = orders.Select(o =>
+        {
+            lineCounts.TryGetValue(o.Id, out var lc);
+            return new PurchaseOrderSummary(
+                o.Id,
+                o.PoNumber,
+                o.SupplierName,
+                o.OrderDate,
+                o.Status,
+                lc?.Total ?? 0,
+                lc?.Unresolved ?? 0,
+                o.CreatedAt);
+        }).ToList();
 
         return Result<IReadOnlyList<PurchaseOrderSummary>>.Ok(summaries);
     }
