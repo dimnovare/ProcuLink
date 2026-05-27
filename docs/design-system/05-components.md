@@ -56,7 +56,7 @@ The Bridge dashboard centerpiece. Buyers on the left, suppliers on the right, wi
 **Construction notes**
 - SVG-driven. Wires are cubic Beziers with control points at 35% and 65% of the canvas width.
 - Wire stroke = `url(#wire-grad)` (blue→green) or `url(#wire-warn)` (blue→amber) for at-risk lanes.
-- Wire thickness from `weight` (1–6 maps to 1.5–6px stroke).
+- Wire thickness from `weight` via `strokeFromWeight()` — log-compressed to ~1.2–5.2 px so volume hints at hierarchy without one wire dominating. Use the same helper for the legend.
 - Travelling pulse: a `<circle>` with `style={{ offsetPath: 'path("...")' }}` and a CSS animation.
 - Buyer port = rounded rect with a 3px blue left strip.
 - Supplier port = rounded rect with a 3px green right strip; amber if `warn`.
@@ -177,7 +177,7 @@ The 5-node mini-track that replaces a static status pill.
 - Completed nodes (`i < stage`) filled green.
 - Active node (`i === stage`) filled blue with a 3–4px blueSoft ring (pulse on activation).
 - Failed: the active node becomes danger-colored with an X icon.
-- Compact variant is 14px nodes / 14px gap, no labels. Full variant is 18px / 22px with labels below.
+- Compact variant: 14 px nodes / one-line labels below; used in mobile sticky strips and inbox rows. Full variant: 28 px nodes (was 18 px) / labels below; centered, ≤ 720 px wide.
 
 **Reference** — see `components/StatusJourney.tsx`.
 

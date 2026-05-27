@@ -121,6 +121,12 @@
   --duration-spine: 1200ms;
   --duration-wire-loop: 6000ms;
 
+  /* ---------- Wire stroke scale (Topology) ----------
+     Volume buckets 1..6 → stroke widths via log compression.
+     See WireTopology.tsx · strokeFromWeight().
+     Approx:   1: 1.20px   2: 2.75px   3: 3.66px   4: 4.30px   5: 4.80px   6: 5.21px
+     --------------------------------------------------- */
+
   /* ---------- Z-index ---------- */
   --z-base:    0;
   --z-rails:   1;

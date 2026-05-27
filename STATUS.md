@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 11 complete**
+## Where we are: **Phase 5 in progress — Group I UI/UX polish pass 12 complete**
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
@@ -17,7 +17,7 @@ Source of truth for the next grouped plan:
 
 | Group | Workstream | Status | Why |
 |---|---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 11 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-10 fixed the known Wire Topology traveller/visibility defects, added Playwright QA, tightened mobile shell/order review behavior, cleaned upload/settings responsive defects, fixed inbox/dock/log/webhook mobile layout issues, made supplier detail/mapping/delivery forms usable on mobile, added resilient settings plus connector/webhook configuration states, completed library interaction panels for mappings/rules/templates, tightened upload/supplier plan-gated states, added visible local feedback for draft test/save flows, and corrected the mocked first-upload-to-review-to-delivery path. Pass 11 wired live upload to real suppliers and routes non-mock sessions to `/orders/{id}` (API-backed review) instead of static `/inbox/{id}`. More live API/deployment QA and SpineReview API wiring remain. |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 12 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-11 fixed topology/visibility defects, added Playwright QA, tightened mobile shell/upload/settings/inbox/dock/log/webhook/library/supplier-mapping/delivery/connector/webhook/billing flows, and wired live upload routing. Pass 12 (topology + bridge visual calibration): log-compressed `strokeFromWeight()`, staggered Bezier CPs to prevent wire bunching, amber alert badges, r=2.2 pulse, mobile Lane List, responsive accordion for bridge detail, 28px StatusJourney nodes, `1fr/1.05fr/1.15fr` column grid, footer de-duplication, mobile sticky CTA, 2×2 KPI grid on mobile, design-system doc updates. More live API/deployment QA and SpineReview API wiring remain. |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. |
 | **K** | Standards + engine hardening | Planned after I/J scoping | Expand toward explicit standards coverage: cXML, UBL/Peppol BIS Order, common EDI order formats, supplier CSV/XLSX templates, API/webhook payload templates, and later invoices/other documents. |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
@@ -370,6 +370,15 @@ Pass 11 completed (May 27 2026):
 - When `NEXT_PUBLIC_USE_MOCK=false`, successful uploads route to `/orders/{id}` (`OrderDetailPage` — real API, polling while `parsing`/`transforming`) instead of `/inbox/{id}` (`SpineReview` is still static demo data).
 - Exported `isApiMockMode` from `api-client.ts` for consistent mock vs live routing.
 - Backend `dotnet test ProcuLink.slnx` → 60 passed. Frontend `bun run build` passed. Existing Sentry/Browserslist/ESLint warnings remain.
+
+Pass 12 completed (May 27 2026) — Topology + Bridge visual calibration per design brief:
+- `WireTopology`: exported `strokeFromWeight()` (log-compressed, weight 1–6 → ~1.2–5.2px); replaced linear STROKE_W lookup; added staggered Bezier control points (cx1 370±20, cx2 530±18) to prevent co-landing wire bunching; alert badges changed to white fill + amber stroke + amber numeral (no stem line); pulse radius 2.2, strokeWidth 1.2; buyer port dot = blue filled + white core; supplier port dot = hollow + colored stroke; legend rebuilt from weights [1,2,4,6] via `strokeFromWeight()`; responsive wrapper — `WireTopologyLaneList` renders below `md:` (lane rows with 76×38 mini-arc, buyer chip → supplier chip).
+- `StatusJourney`: full variant upgraded to 28px nodes, 3px gradient connector, max-w-[720px] centered; optional `crossingRef` prop shows "Stage N of 5 · {ref}" sub-label above the stepper.
+- `SpineReview`: 3-column body grid changed to `1fr/1.05fr/1.15fr` with 22px gap; connector SVG stubs deleted from `SpineNodeCard`; footer stripped to grand total + template + exceptions only (header retains Save/Cross); mobile accordion (`AccordionPanel` ×3: Source/Canonical/Output) + `md:hidden` sticky CTA bar with Save + Cross.
+- `BridgeDashboard`: KPI grid changed to `grid-cols-2` on mobile (2×2 layout).
+- Design-system docs: `tokens.css` wire stroke scale comment added; `05-components.md` §A.2 and §A.6 updated to reflect `strokeFromWeight()` and 28px full variant.
+- Frontend commit `35ff057`, pushed to `main`.
+- TypeScript check: `tsc --noEmit` → no errors.
 
 Must address:
 - Continue live API/deployment QA for the full first-upload-to-delivery happy/error paths against a running backend, including real save/test-fire persistence for connector/webhook/mapping/rule/template forms in Group J.
