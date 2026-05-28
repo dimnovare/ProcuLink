@@ -5,7 +5,7 @@ This page explains how ProcuLink complies with the EU General Data Protection Re
 ## Roles
 
 - **You** (the customer organisation) are the **Data Controller** of the purchase orders, supplier records, and buyer records you process through ProcuLink.
-- **ProcuLink OÜ** (registered in Estonia, TBC) is the **Data Processor**.
+- **ProcuLink OÜ** (registration 17477775, Tallinn, Estonia) is the **Data Processor**.
 - We act only on documented instructions from you, as defined in our Data Processing Agreement (DPA).
 
 ## Data residency
@@ -94,4 +94,4 @@ Customers may disable AI suggestions to eliminate this transfer entirely.
 - Security incidents: `security@proculink.app`
 - Data Protection Officer: TBC at general availability (Estonia does not currently require a DPO for organisations of ProcuLink's size; we plan to appoint one when we reach the threshold).
 
-ProcuLink OÜ (registration number TBC) is registered in Tallinn, Estonia, and reports to the Estonian Data Protection Inspectorate (AKI) as required.
+ProcuLink OÜ (registration number 17477775) is registered in Tallinn, Estonia, and reports to the Estonian Data Protection Inspectorate (AKI) as required.
