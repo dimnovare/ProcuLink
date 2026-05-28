@@ -1,4 +1,5 @@
 using System.Threading.RateLimiting;
+using Amazon.S3;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -12,12 +13,16 @@ using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Erp;
 using ProcuLink.Core.Services.Email;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Core.Services.Ocr;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ai;
 using ProcuLink.Infrastructure.Services.Dispatchers;
 using ProcuLink.Infrastructure.Services.Email;
 using ProcuLink.Infrastructure.Services.Erp;
+using ProcuLink.Infrastructure.Services.Ingress;
+using ProcuLink.Infrastructure.Services.Ocr;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
 using ProcuLink.Infrastructure.Storage;
@@ -161,8 +166,47 @@ builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddScoped<IIdempotencyService, IdempotencyService>();
 builder.Services.AddScoped<ISchemaInferencer, OpenAiSchemaInferencer>();
+builder.Services.AddScoped<IEmailBodyOrderExtractor, OpenAiEmailBodyOrderExtractor>();
 builder.Services.AddScoped<IInboundEmailRouter, InboundEmailRouter>();
 builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.HangfireParseJobEnqueuer>();
+
+// ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
+builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
+builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
+builder.Services.AddSingleton<IAmazonS3>(sp =>
+{
+    // Platform-level S3 client. The per-org credentials stored in
+    // S3IngressConfig are decrypted but not yet used (see
+    // docs/agent-reports/2026-05-28-s3-ingress.md → "Single IAmazonS3
+    // instance injected" follow-up). Configure via S3Ingress:* keys.
+    var cfg     = sp.GetRequiredService<IConfiguration>();
+    var key     = cfg["S3Ingress:AccessKeyId"] ?? string.Empty;
+    var secret  = cfg["S3Ingress:SecretAccessKey"] ?? string.Empty;
+    var region  = cfg["S3Ingress:Region"] ?? "eu-west-1";
+    var service = cfg["S3Ingress:ServiceUrl"];
+
+    var s3Config = new AmazonS3Config
+    {
+        AuthenticationRegion = region,
+        ForcePathStyle       = true,
+    };
+    if (!string.IsNullOrWhiteSpace(service)) s3Config.ServiceURL = service;
+    else s3Config.RegionEndpoint = Amazon.RegionEndpoint.GetBySystemName(region);
+
+    return new AmazonS3Client(key, secret, s3Config);
+});
+builder.Services.AddScoped<IS3IngressService, S3IngressService>();
+
+// OCR fallback — opt-in via Ocr:Azure:Endpoint + Ocr:Azure:ApiKey.
+if (!string.IsNullOrWhiteSpace(builder.Configuration["Ocr:Azure:Endpoint"])
+    && !string.IsNullOrWhiteSpace(builder.Configuration["Ocr:Azure:ApiKey"]))
+{
+    builder.Services.AddSingleton<IDocumentOcrService, AzureDocumentIntelligenceOcrService>();
+}
+else
+{
+    builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
+}
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();

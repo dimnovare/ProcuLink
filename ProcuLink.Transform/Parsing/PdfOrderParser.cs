@@ -1,16 +1,26 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using ProcuLink.Core.Services.Ocr;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.Content;
 
 namespace ProcuLink.Transform.Parsing;
 
 /// <summary>
-/// Parses text-based PDF purchase orders. This is intentionally conservative:
-/// scanned/OCR PDFs are out of scope until an OCR extraction layer is added.
+/// Parses text-based PDF purchase orders. Falls back to <see cref="IDocumentOcrService"/>
+/// when PdfPig extracts no text (image-only / scanned PDFs) and an OCR provider is configured.
 /// </summary>
 public sealed class PdfOrderParser : IPurchaseOrderParser
 {
+    private readonly IDocumentOcrService? _ocrService;
+
+    public PdfOrderParser() : this(null) { }
+
+    public PdfOrderParser(IDocumentOcrService? ocrService)
+    {
+        _ocrService = ocrService;
+    }
+
     private static readonly Regex PoNumberRegex = new(
         @"\b(?:po\s*(?:number|no\.?|#)|purchase\s*order)\s*[:#-]?\s*(?<value>.+)$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -38,25 +48,47 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
     public bool CanParse(string fileExtension) =>
         string.Equals(fileExtension, ".pdf", StringComparison.OrdinalIgnoreCase);
 
-    public Task<ParsedOrder> ParseAsync(Stream fileStream, CancellationToken ct)
+    public async Task<ParsedOrder> ParseAsync(Stream fileStream, CancellationToken ct)
     {
-        using var document = PdfDocument.Open(fileStream);
-        var textLines = ExtractTextLines(document)
-            .Select(NormalizeWhitespace)
-            .Where(line => !string.IsNullOrWhiteSpace(line))
-            .ToList();
+        // Buffer up-front so PdfPig and the OCR fallback can each consume a fresh stream
+        // over the same bytes — input streams are not guaranteed to be seekable.
+        using var ms = new MemoryStream();
+        await fileStream.CopyToAsync(ms, ct);
+        var bytes = ms.ToArray();
+
+        List<string> textLines;
+        using (var pdfStream = new MemoryStream(bytes))
+        using (var document  = PdfDocument.Open(pdfStream))
+        {
+            textLines = ExtractTextLines(document)
+                .Select(NormalizeWhitespace)
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                .ToList();
+        }
+
+        // OCR fallback for scanned / image-only PDFs (no-op when OCR provider not configured).
+        if (textLines.Count == 0 && _ocrService is { IsAvailable: true })
+        {
+            using var ocrStream = new MemoryStream(bytes);
+            var ocrText = await _ocrService.ExtractTextAsync(ocrStream, "application/pdf", ct);
+            if (!string.IsNullOrWhiteSpace(ocrText))
+            {
+                textLines = SplitPageText(ocrText)
+                    .Select(NormalizeWhitespace)
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                    .ToList();
+            }
+        }
 
         if (textLines.Count == 0)
-            return Task.FromResult(new ParsedOrder(null, null, null, null, Array.Empty<ParsedOrderLine>()));
+            return new ParsedOrder(null, null, null, null, Array.Empty<ParsedOrderLine>());
 
-        var parsed = new ParsedOrder(
+        return new ParsedOrder(
             PoNumber:  FindFirstValue(textLines, PoNumberRegex),
             OrderDate: ParseDate(FindFirstValue(textLines, OrderDateRegex)),
             BuyerName: FindFirstValue(textLines, BuyerRegex),
             Currency:  FindFirstValue(textLines, CurrencyRegex)?.ToUpperInvariant(),
             Lines:     ParseLines(textLines));
-
-        return Task.FromResult(parsed);
     }
 
     private static IEnumerable<string> ExtractTextLines(PdfDocument document)

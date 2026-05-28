@@ -23,7 +23,17 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/5 * * * *");
 
-        _logger.LogInformation("Registered recurring job: email-polling (every 5 minutes).");
+        _recurringJobs.AddOrUpdate<SftpPollingJob>(
+            "sftp-polling",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/5 * * * *");
+
+        _recurringJobs.AddOrUpdate<S3PollingJob>(
+            "s3-polling",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/5 * * * *");
+
+        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling (each every 5 minutes).");
         return base.StartAsync(cancellationToken);
     }
 

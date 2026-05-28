@@ -1,3 +1,4 @@
+using Amazon.S3;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
@@ -8,11 +9,16 @@ using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Erp;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Core.Services.Ocr;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Ai;
 using ProcuLink.Infrastructure.Services.Dispatchers;
 using ProcuLink.Infrastructure.Services.Erp;
+using ProcuLink.Infrastructure.Services.Ingress;
+using ProcuLink.Infrastructure.Services.Ocr;
 using ProcuLink.Infrastructure.Storage;
 using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
@@ -89,7 +95,43 @@ builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
 builder.Services.AddSingleton<ITransformService, JsonTransformService>();
 
+// ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
+builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
+builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
+builder.Services.AddSingleton<IAmazonS3>(sp =>
+{
+    var cfg     = sp.GetRequiredService<IConfiguration>();
+    var key     = cfg["S3Ingress:AccessKeyId"] ?? string.Empty;
+    var secret  = cfg["S3Ingress:SecretAccessKey"] ?? string.Empty;
+    var region  = cfg["S3Ingress:Region"] ?? "eu-west-1";
+    var service = cfg["S3Ingress:ServiceUrl"];
+
+    var s3Config = new AmazonS3Config
+    {
+        AuthenticationRegion = region,
+        ForcePathStyle       = true,
+    };
+    if (!string.IsNullOrWhiteSpace(service)) s3Config.ServiceURL = service;
+    else s3Config.RegionEndpoint = Amazon.RegionEndpoint.GetBySystemName(region);
+
+    return new AmazonS3Client(key, secret, s3Config);
+});
+builder.Services.AddScoped<IS3IngressService, S3IngressService>();
+builder.Services.AddScoped<IEmailBodyOrderExtractor, OpenAiEmailBodyOrderExtractor>();
+
+if (!string.IsNullOrWhiteSpace(builder.Configuration["Ocr:Azure:Endpoint"])
+    && !string.IsNullOrWhiteSpace(builder.Configuration["Ocr:Azure:ApiKey"]))
+{
+    builder.Services.AddSingleton<IDocumentOcrService, AzureDocumentIntelligenceOcrService>();
+}
+else
+{
+    builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
+}
+
 builder.Services.AddScoped<EmailPollingJob>();
+builder.Services.AddScoped<SftpPollingJob>();
+builder.Services.AddScoped<S3PollingJob>();
 // ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
 builder.Services.AddScoped<ParseOrderJob>();
 builder.Services.AddHostedService<Worker>();

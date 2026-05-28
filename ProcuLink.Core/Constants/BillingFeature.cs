@@ -16,4 +16,6 @@ public enum BillingFeature
     ErpConnectors,
     CustomSupplierRules,
     SlaOnboarding,
+    SftpIngestion,
+    S3Ingestion,
 }

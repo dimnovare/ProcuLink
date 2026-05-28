@@ -22,6 +22,10 @@ public class ProcuLinkDbContext : DbContext
     public DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs => Set<SupplierDeliveryConfig>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
     public DbSet<AiUsageMonthly> AiUsageMonthly => Set<AiUsageMonthly>();
+    public DbSet<SftpIngressConfig> SftpIngressConfigs => Set<SftpIngressConfig>();
+    public DbSet<ImportedSftpFile> ImportedSftpFiles => Set<ImportedSftpFile>();
+    public DbSet<S3IngressConfig> S3IngressConfigs => Set<S3IngressConfig>();
+    public DbSet<ImportedS3Object> ImportedS3Objects => Set<ImportedS3Object>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -343,6 +347,73 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.UpdatedAt)
              .HasColumnName("updated_at")
              .HasColumnType("timestamptz");
+        });
+
+        // ── sftp_ingress_configs ───────────────────────────────────────
+        modelBuilder.Entity<SftpIngressConfig>(b =>
+        {
+            b.ToTable("sftp_ingress_configs");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.Host).HasColumnName("host").IsRequired();
+            b.Property(x => x.Port).HasColumnName("port").HasDefaultValue(22);
+            b.Property(x => x.Username).HasColumnName("username").IsRequired();
+            b.Property(x => x.EncryptedPassword).HasColumnName("encrypted_password").IsRequired();
+            b.Property(x => x.RemoteDirectory).HasColumnName("remote_directory").IsRequired();
+            b.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(false);
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
+        });
+
+        // ── imported_sftp_files ────────────────────────────────────────
+        modelBuilder.Entity<ImportedSftpFile>(b =>
+        {
+            b.ToTable("imported_sftp_files");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.RemotePath).HasColumnName("remote_path").IsRequired();
+            b.Property(x => x.FileHash).HasColumnName("file_hash").IsRequired();
+            b.Property(x => x.ImportedAt).HasColumnName("imported_at").HasColumnType("timestamptz");
+            b.HasIndex(x => new { x.OrgId, x.RemotePath }).IsUnique();
+        });
+
+        // ── s3_ingress_configs ─────────────────────────────────────────
+        modelBuilder.Entity<S3IngressConfig>(b =>
+        {
+            b.ToTable("s3_ingress_configs");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.BucketName).HasColumnName("bucket_name").IsRequired();
+            b.Property(x => x.KeyPrefix).HasColumnName("key_prefix").IsRequired();
+            b.Property(x => x.Region).HasColumnName("region").IsRequired();
+            b.Property(x => x.AccessKeyId).HasColumnName("access_key_id").IsRequired();
+            b.Property(x => x.EncryptedSecretKey).HasColumnName("encrypted_secret_key").IsRequired();
+            b.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(false);
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
+        });
+
+        // ── imported_s3_objects ────────────────────────────────────────
+        modelBuilder.Entity<ImportedS3Object>(b =>
+        {
+            b.ToTable("imported_s3_objects");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.BucketName).HasColumnName("bucket_name").IsRequired();
+            b.Property(x => x.ObjectKey).HasColumnName("object_key").IsRequired();
+            b.Property(x => x.ETag).HasColumnName("etag").IsRequired();
+            b.Property(x => x.ImportedAt).HasColumnName("imported_at").HasColumnType("timestamptz");
+            b.HasIndex(x => new { x.OrgId, x.BucketName, x.ObjectKey }).IsUnique();
         });
 
         // ── audit_events ───────────────────────────────────────────────

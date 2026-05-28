@@ -61,6 +61,8 @@ public static class PlanConstants
             [BillingFeature.ErpConnectors]      = Enterprise,
             [BillingFeature.CustomSupplierRules]= Enterprise,
             [BillingFeature.SlaOnboarding]      = Enterprise,
+            [BillingFeature.SftpIngestion]      = Integration,
+            [BillingFeature.S3Ingestion]        = Integration,
         };
 
     private static readonly List<string> PlanOrder =
