@@ -114,17 +114,69 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 **Production direction (May 26 2026):** ProcuLink is no longer being treated as a throwaway MVP. The next work should make the product feel trustworthy and usable end-to-end: UI/UX polish, mobile responsiveness, live QA of billing/delivery/email, and then engine hardening for broader input/output standards.
 
-### Phase 5 grouped roadmap
+### Phase 6 — international standard + dual-persona UX (current)
 
-Source of truth for the next grouped plan:
+Source of truth for the forward plan:
+`docs/superpowers/plans/2026-05-28-phase-6-international-standard-roadmap.md`.
+Positioning rationale: `docs/strategy/international-standard-thesis.md`.
+
+ProcuLink's product thesis as of 2026-05-28: become the international
+standard for outbound B2B purchase order routing — any input format /
+channel → canonical PO → any output format / channel. Best-in-class for
+30-year procurement veterans, effortless for first-time users,
+standards-fit for every supplier shape, and cost-effective versus
+SPS Commerce / TrueCommerce / Babelway / Pagero. The Learn loop
+(`Parse → Normalize → Validate → Review → Transform → Deliver → Learn`)
+remains the long-term moat; standards depth + channel breadth + dual-persona
+UX are the next 6 months of execution.
+
+| Horizon | Theme | Timeline | Status |
+|---|---|---|---|
+| **1** | Production Ready + Effortless | next 4–6 weeks | In progress |
+| **2** | Standards Backbone + Channel Breadth | Q4 2026 | Planned |
+| **3** | Network Effects | Q1 2027+ | Planned |
+
+#### Horizon 1 — Production Ready + Effortless (next 4–6 weeks)
+
+| Group | Workstream | Status |
+|---|---|---|
+| **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed, live deployed QA remaining |
+| **J2** | Purge mock / demo residue from frontend (sample PO `008412`, mock dashboard rows, hardcoded UUIDs) so prospects don't see staged data | Planned |
+| **L (expanded)** | Trust + onboarding wizard + dual-persona UX (default novice + expert toggle) + magic mapping preview + in-app help + per-industry templates + analytics | In progress — Waves 1+2+3 shipped (cookie banner, PostHog SDK frontend+backend, event emitters, sample-order endpoint, 4-step wizard, `/welcome`, `/watch`, `/help`, `/support`, Pilot Book-a-demo CTAs); dual-persona / magic mapping preview / per-industry templates / standards-visibility chrome new for Phase 6 |
+
+#### Horizon 2 — Standards Backbone + Channel Breadth (Q4 2026)
+
+| Group | Workstream | Status |
+|---|---|---|
+| **M** | Standards depth: UBL 2.1 + Peppol BIS 3.0 Order (parse + transform), EDIFACT ORDERS d.96A real parser (evaluate EdiFabric vs open-source), ANSI X12 850, generic JSON/REST PO output transformer, ISO 20022 reference, in-app standards comparison screen | Planned |
+| **N** | Channel expansion: SFTP out, FTPS out, SMTP send-out (PO as attachment + body), AS2/AS4 (partner-wrap first via mendelson / DragonAS2, in-house later), PEPPOL Access Point (partner-wrap first via Pagero / Tradeshift, in-house migration on roadmap), generic HMAC-verified webhook receive | Planned |
+| **O** | Delivery feedback loop: retry/replay queue UI, supplier rejection capture (manual + email-in), ACK round-trip (APERAK for EDIFACT, MDN for AS2, DESADV correlation), per-supplier SLA timer | Planned |
+
+#### Horizon 3 — Network Effects (Q1 2027+)
+
+| Group | Workstream | Status |
+|---|---|---|
+| **P** | RBAC within org (Owner / Admin / Operator / Viewer, per-supplier delegation, audit log per user, SCIM 2.0 for Enterprise) | Planned |
+| **Q** | Supplier mapping library: passive anonymised accumulation starts in Horizon 2 data model; public catalog ships in Horizon 3 | Planned |
+| **R** | i18n (EN / DE / FR / ES / IT / PL UI + AI mapping in any language) | Planned |
+| **S** | P2P loop closure (Invoice send via UBL Invoice + Peppol BIS Invoice 3.0; ASN / DESADV round-trip; 3-way match prep) | Planned |
+
+### Phase 5 grouped roadmap (audit trail — superseded by Phase 6 above)
+
+Phase 5 (production hardening) framing has been superseded by Phase 6.
+Phase 5 history is preserved below as the audit trail. Groups I, K, and L
+(Waves 1+2+3) shipped; Group J carries forward into Horizon 1; Groups M–S
+are new in Phase 6.
+
+Previous Phase 5 source of truth:
 `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`.
 
-| Group | Workstream | Status | Why |
-|---|---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-11 fixed topology/visibility defects, added Playwright QA, tightened mobile shell/upload/settings/inbox/dock/log/webhook/library/supplier-mapping/delivery/connector/webhook/billing flows, and wired live upload routing. Pass 12 (topology + bridge visual calibration): log-compressed `strokeFromWeight()`, staggered Bezier CPs, amber alert badges, r=2.2 pulse, mobile Lane List, responsive accordion for bridge detail, 28px StatusJourney nodes, `1fr/1.05fr/1.15fr` column grid, footer de-duplication, mobile sticky CTA, 2×2 KPI grid on mobile. Pass 13: BridgeTopbar auto-breadcrumb from pathname via `useAutoCrumb()`. Pass 14: BridgePageLoader loading.tsx for all 11 missing routes, InboxView mobile empty state, global `:focus-visible` ring + dark-chrome override, sidebar workspace-switcher accessible button, topbar aria-labels. Pass 15: SpineReview wired to live `GET /api/orders/{id}` via `useQuery`; `buildNodesFromOrder()` maps Order → SpineNodeData[]; `BuyerName` added to `OrderDto` (extracted from `CanonicalJson`); loading gate renders `SpineReviewSkeleton`; error/not-found gate renders centred panel with back-to-inbox button (placed after all hooks). |
-| **J** | Live end-to-end QA + deployment hardening | **In progress** | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. Code-level deployment gaps fixed (see Group J section). |
-| **K** | Standards + engine hardening | ✅ Done | Standards matrix + canonical PO model written; cXML 1.2 input parser + output transformer landed with 18 new tests; merged to `main` via `2697115`. |
-| **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
+| Group | Workstream | Status (end of Phase 5) |
+|---|---|---|
+| **I** | UI/UX production polish + responsive QA | ✅ Effectively complete through pass 15. Passes 1-11 fixed topology/visibility defects, added Playwright QA, tightened mobile shell/upload/settings/inbox/dock/log/webhook/library/supplier-mapping/delivery/connector/webhook/billing flows, and wired live upload routing. Pass 12 (topology + bridge visual calibration): log-compressed `strokeFromWeight()`, staggered Bezier CPs, amber alert badges, r=2.2 pulse, mobile Lane List, responsive accordion for bridge detail, 28px StatusJourney nodes, `1fr/1.05fr/1.15fr` column grid, footer de-duplication, mobile sticky CTA, 2×2 KPI grid on mobile. Pass 13: BridgeTopbar auto-breadcrumb from pathname via `useAutoCrumb()`. Pass 14: BridgePageLoader loading.tsx for all 11 missing routes, InboxView mobile empty state, global `:focus-visible` ring + dark-chrome override, sidebar workspace-switcher accessible button, topbar aria-labels. Pass 15: SpineReview wired to live `GET /api/orders/{id}` via `useQuery`; `buildNodesFromOrder()` maps Order → SpineNodeData[]; `BuyerName` added to `OrderDto` (extracted from `CanonicalJson`); loading gate renders `SpineReviewSkeleton`; error/not-found gate renders centred panel with back-to-inbox button. |
+| **J** | Live end-to-end QA + deployment hardening | In progress — carries forward into Horizon 1 (Phase 6). Code-level deployment gaps fixed (see Group J section). |
+| **K** | Standards + engine hardening | ✅ Done — Standards matrix + canonical PO model written; cXML 1.2 input parser + output transformer landed with 18 new tests; merged to `main` via `2697115`. |
+| **L** | Trust, onboarding + commercial readiness | ✅ Waves 1+2+3 shipped. Expanded scope (dual-persona UX, magic mapping preview, per-industry templates, standards-visibility chrome) continues in Horizon 1. |
 
 ### Completed phases
 | Phase | What was built |

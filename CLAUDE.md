@@ -213,28 +213,48 @@ source. All UI/UX and design decisions run through the local design system,
 
 ---
 
-## Current direction — production hardening
+## Current direction — international standard for outbound PO routing
 
-Deep-research review on May 26 2026 confirmed the same direction as `STATUS.md`:
-ProcuLink should now be treated as a real working product, not a prototype or
-simple MVP. Do not add broad new engines on top of visibly rough UX.
+ProcuLink's product thesis as of 2026-05-28: become the **international standard
+for outbound B2B purchase order routing**. Any input format / channel →
+canonical PO → any output format / channel. Best-in-class for 30-year
+procurement veterans (depth, density, standards visibility). Effortless for
+first-time users (wizard, templates, magic mapping preview, AI defaults).
+Standards-fit for every supplier shape (Cinderella's-shoe-into-any-format).
+Cost-effective versus SPS Commerce / TrueCommerce / Babelway / Pagero.
 
-Next work is grouped as **Phase 5 — Production Hardening And Standards**.
-Read `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`
-before writing implementation plans.
+The next 4–6 weeks are tracked as **Phase 6 — International Standard +
+Dual-Persona UX**. Source of truth for the forward plan:
+`docs/superpowers/plans/2026-05-28-phase-6-international-standard-roadmap.md`.
+Positioning rationale: `docs/strategy/international-standard-thesis.md`.
 
-| Group | Workstream | Status |
-|---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
-| **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed, live deployed QA remaining |
-| **K** | Standards + engine hardening | ✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`) |
-| **L** | Trust, onboarding + commercial readiness | ✅ Done — Waves 1+2+3 all merged to `main` both repos (entity rename, /dpa /subprocessors /aup /customers /one-pager /welcome /watch /help, cookie banner, posthog frontend+backend SDK, event emitters, sample-order endpoint + button, 4-step wizard, in-app Help, /support contact form, Stripe success_url → /welcome, Pilot Book-a-demo CTAs, dead-code cleanup). All Wave 1/2/3 feature branches deleted local + remote, stashes cleared. Waiting on founder configuration only: PostHog keys, Clerk post-signup redirect, NEXT_PUBLIC_STATUS_URL, NEXT_PUBLIC_WALKTHROUGH_LOOM_URL, NEXT_PUBLIC_BOOK_DEMO_URL, optional SMTP for the support form. Backend test count: **213** (102 Transform + 11 Api.Tests + 100 Infrastructure). |
+The Learn loop (`Parse → Normalize → Validate → Review → Transform →
+Deliver → Learn`) remains the long-term moat. Standards depth + channel
+breadth + dual-persona UX are the next 6 months of execution.
 
-Group I remains the active implementation group unless the user explicitly
-reprioritizes. The Bridge Layer is locked, but screens still need route-by-route
-desktop/tablet/mobile QA, responsive layouts, empty/error states, and visible
-defects fixed. Known example: the Wire Topology traveller/dot must never appear
-detached from a visible wire.
+### 3-Horizon roadmap
+
+| Horizon | Theme | Timeline | Groups |
+|---|---|---|---|
+| **1** | Production Ready + Effortless | next 4–6 weeks | J (live QA), J2 (purge mock/demo residue), L expanded (onboarding wizard + dual-persona UX + magic mapping preview + in-app help + per-industry templates + analytics) |
+| **2** | Standards Backbone + Channel Breadth | Q4 2026 | M (UBL / Peppol BIS / EDIFACT / X12 / JSON / ISO 20022 reference), N (SFTP / FTPS / SMTP / AS2 / AS4 / PEPPOL AP / webhook-in — partner-wrap first for AS2 + PEPPOL), O (retry queue / rejection capture / ACK round-trip / SLA timers) |
+| **3** | Network Effects | Q1 2027+ | P (RBAC + SCIM), Q (supplier mapping library), R (i18n EN/DE/FR/ES/IT/PL), S (UBL Invoice + DESADV round-trip + 3-way match prep) |
+
+Phase 5 status carried into Phase 6: Group I (UI polish) is effectively
+complete through pass 15. Group K (cXML 1.2 + standards matrix + canonical
+PO model) shipped. Group L Waves 1+2+3 shipped. Horizon 1 picks up with
+Group J live QA, the new Group J2 demo-data purge, and an expanded Group L
+building the dual-persona onboarding / mapping / help experience.
+
+Standards-visibility and dual-persona UX are **non-negotiable for every new
+screen from Phase 6 onward** — see "Coding conventions → Product-level
+rules" below. The Bridge Layer direction is still locked.
+
+Backend test count: **213** (102 Transform + 11 Api.Tests + 100 Infrastructure).
+Waiting on founder configuration only for Group L Wave 3 to function in
+production: PostHog keys, Clerk post-signup redirect,
+`NEXT_PUBLIC_STATUS_URL`, `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`,
+`NEXT_PUBLIC_BOOK_DEMO_URL`, optional SMTP for the support form.
 
 ---
 
@@ -481,6 +501,40 @@ Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level suppl
 ---
 
 ## Coding conventions
+
+### Product-level rules (Phase 6+)
+
+These two rules apply to **every new screen and every new field** from
+Phase 6 (2026-05-28) onward. They are durable product invariants, not
+group-scoped tasks.
+
+**Dual-persona UX rule.** Every new screen must work for a first-time user
+(default mode) **and** a power user (expert mode toggle). No new screen
+ships without both densities considered.
+
+- **Default mode** favours wizards, per-industry templates, sensible
+  defaults, AI-pre-filled fields with visible confidence + provenance, and
+  generous spacing.
+- **Expert mode** reveals density, raw values (JSON / XML / EDI envelopes),
+  standards mappings inline, hotkeys, and inline-edit-of-anything
+  affordances.
+- The toggle is sticky across sessions (`localStorage`), visible on every
+  operational screen, and overridable per-screen if a flow only makes sense
+  in one mode.
+- Specification: `docs/design-system/00-agent-quick-brief.md` → "Dual-Persona UX".
+
+**Standards-visibility rule.** Any field in a transform / mapping context
+must be able to surface its standards mapping (UBL / EDIFACT / X12 / cXML /
+Peppol BIS / ISO 20022) when expert mode is on. The user must be able to see
+"this field maps to UBL `cbc:ID` / EDIFACT `BGM 1004` / X12 `BEG03` /
+cXML `OrderRequestHeader@orderID`" without leaving the screen.
+
+- The canonical PO model is the join key. Each field on `ParsedOrder` /
+  `ParsedOrderLine` carries its standards references in
+  `docs/standards-matrix.md` § "Canonical PO Model fields".
+- Standards visibility is what makes ProcuLink trustworthy to 30-year
+  procurement veterans. Hiding it because "it's complicated" loses the
+  expert persona.
 
 ### Next.js frontend
 - **App Router only.** No Pages Router.

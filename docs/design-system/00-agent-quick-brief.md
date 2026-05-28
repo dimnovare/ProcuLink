@@ -67,6 +67,53 @@ Supporting signatures:
 - Monumental KPI numbers in display type.
 - System Identity mark/glyph family everywhere a custom mark is needed.
 
+## Dual-Persona UX (Phase 6+)
+
+Every new screen must work for two personas at once and be QA'd in both
+modes. This is a non-negotiable product invariant from 2026-05-28 onward,
+codified in `CLAUDE.md` under "Coding conventions → Product-level rules".
+
+### Default mode (first-time / novice user)
+
+- Wizard-style flows with one decision per step.
+- Sensible defaults from per-industry templates (industrial distribution,
+  food and beverage wholesale, hospitality procurement, healthcare GPO).
+- AI-pre-filled fields rendered with visible confidence + provenance +
+  Accept / Edit / Reject controls (never auto-applied).
+- Explanatory copy that names the user's outcome ("Send this order to your
+  supplier") instead of internal mechanics ("Run the transform job").
+- Conservative density: generous spacing, large click targets, fewer
+  columns visible.
+- The five-stage journey (Parse → Normalize → Validate → Transform →
+  Deliver) is the primary mental model surfaced everywhere.
+
+### Expert mode (power user / 30-year procurement veteran)
+
+- Toggle is visible on every operational screen and sticky across sessions
+  via `localStorage`.
+- Higher density: compact rows, more columns visible at once, condensed
+  type scale.
+- **Standards mappings inline** — every field in a transform / mapping
+  context surfaces its UBL / EDIFACT / X12 / cXML / Peppol BIS / ISO 20022
+  reference next to the value. Source of truth for those references:
+  `docs/standards-matrix.md` § "Canonical PO Model fields".
+- Inline edit-of-anything affordances; modals reserved for irreversible or
+  multi-field operations.
+- Hotkeys for common actions; `?` opens a hotkey overlay on every screen.
+- Raw view (JSON / XML / EDI envelope) accessible from any artifact.
+- No "are you sure" confirmations on safe / reversible operations.
+
+### Implementation rule
+
+No new screen ships without both modes considered. The PR description must
+call out which mode each interaction belongs to. Default mode is the
+unauthenticated / new-user experience; expert mode is opt-in but sticky.
+Per-screen overrides (a flow that only makes sense in one mode) are
+allowed but must be justified in the PR.
+
+The toggle copy is "Default / Expert" — not "Simple / Advanced" or any
+phrasing that implies the default user is less capable.
+
 ## Current Product Wedge
 
 First ICP: buyer/procurement teams sending purchase orders out to many suppliers.

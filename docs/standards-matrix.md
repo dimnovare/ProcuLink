@@ -1,60 +1,132 @@
-# ProcuLink — Standards Matrix (Group K)
+# ProcuLink — Standards Matrix
 
-_Last updated: 2026-05-27. This file is the authoritative reference for input/output format support levels,
-plan gates, and implementation priorities._
+_Last updated 2026-05-28. Authoritative reference for which procurement
+standards ProcuLink supports today, at what conformance level, over which
+transport, and what is on the roadmap. Aligned with the Phase 6
+international-standard direction
+(`docs/superpowers/plans/2026-05-28-phase-6-international-standard-roadmap.md`)._
 
 ---
 
-## Format Support Table
+## How to read this file
 
-| Format | Direction | Support Level | Parser / Transform Class | Validation Depth | Fixture File | Plan Gate | Notes |
+The headline matrix below is the per-standard view: one row per
+international or de-facto standard, with current ProcuLink coverage and a
+reference link. Sections after the matrix break out format-by-format
+implementation detail (parser class, transformer class, fixture, plan
+gate) and the shared canonical PO model that all parsers populate.
+
+Status values used throughout:
+
+- **supported** — parser and/or transformer implemented and tested.
+- **partial** — code path exists but not a dedicated parser / transformer
+  class; field coverage may be limited.
+- **planned (Horizon N)** — scheduled in the international-standard
+  roadmap.
+- **deferred** — known requirement; not yet on a Horizon.
+
+---
+
+## Headline standards matrix
+
+| Standard | Version | ProcuLink: parse | ProcuLink: transform out | Typical transport | Conformance level today | Reference |
+|---|---|---|---|---|---|---|
+| **cXML** | 1.2.024 | supported (`CxmlOrderParser`) | supported (`CxmlTransformService`) | HTTPS POST (OrderRequest envelope), supplier portals | Header + line fidelity for `OrderRequest`; envelope round-trip; payloadID + timestamp emitted | [cxml.org](http://cxml.org/) · [Reference DTD](http://xml.cxml.org/current/cXML.dtd) |
+| **UBL Order** | 2.1 (OASIS) | planned (Horizon 2 — Group M) | planned (Horizon 2 — Group M) | HTTPS / Peppol Access Point / SMTP attachment | — | [UBL 2.1 Order](http://docs.oasis-open.org/ubl/os-UBL-2.1/UBL-2.1.html) |
+| **Peppol BIS Order** | 3.0 | planned (Horizon 2 — Group M, pairs with UBL) | planned (Horizon 2 — Group M) | Peppol Access Point (AS4) | — | [Peppol BIS Order 3.0 spec](https://docs.peppol.eu/poacc/upgrade-3/profiles/3-order/) |
+| **EDIFACT ORDERS** | UN D.96A (and D.01B by request) | stub today; planned real parser (Horizon 2 — Group M) | planned (Horizon 2 — Group M) | AS2 (partner-wrap), SFTP, VAN | EdiFabric vs open-source library decision pending — see `docs/superpowers/specs/2026-Q4-edifact-library-evaluation.md` (to be written) | [UN/EDIFACT ORDERS D.96A](https://service.unece.org/trade/untdid/d96a/trmd/orders_c.htm) |
+| **ANSI X12** | 850 (versions 004010, 005010) | planned (Horizon 2 — Group M) | planned (Horizon 2 — Group M) | AS2 (partner-wrap), VAN, SFTP | Same library decision as EDIFACT | [X12 850 Purchase Order](https://x12.org/codes/transaction-sets) |
+| **OpenPEPPOL transport (AS4)** | Peppol AS4 profile | n/a (transport, not document) | planned (Horizon 2 — Group N, partner-wrapped via Pagero / Tradeshift) | AS4 between Access Points | — | [Peppol AS4 profile](https://docs.peppol.eu/edelivery/as4/specification/) |
+| **AS2 / AS4 (drummond)** | RFC 4130 (AS2), AS4 profile | n/a (transport) | planned (Horizon 2 — Group N, partner-wrap via mendelson / DragonAS2 first) | AS2 / AS4 | — | [RFC 4130](https://datatracker.ietf.org/doc/html/rfc4130) |
+| **ISO 20022 — purchase-side reference** | 2013+ | reference-only (Horizon 2 — Group M) | reference-only | n/a | Mapping documented from canonical PO model to ISO 20022 procurement-relevant concepts. No transport in scope. | [ISO 20022](https://www.iso20022.org/) |
+| **Internal canonical PO** | n/a | supported (`ParsedOrder` / `ParsedOrderLine`) | supported (CSV / XML / cXML / JSON-partial) | n/a (in-memory) | All implemented parsers populate this; all implemented transformers emit from it. | This repo — `ProcuLink.Core/Models/ParsedOrder.cs`, `docs/canonical-po-model.md` |
+| **Supplier CSV (buyer-defined template)** | n/a | supported (`CsvOrderParser`) | supported (`CsvTransformService`) | HTTPS upload, SFTP, email attachment | Column alias matching; delimiter auto-detection (`,`/`;`); RFC 4180 escaping on output | n/a |
+| **Supplier XLSX (buyer-defined template)** | n/a | supported (`XlsxOrderParser`) | n/a | HTTPS upload | ClosedXML; first worksheet only; header-row matching with multi-alias columns | n/a |
+| **Supplier XML (generic envelope)** | n/a | n/a | supported (`XmlTransformService`) | HTTPS POST, SFTP, email attachment | Generic `<PurchaseOrder>` envelope — not cXML | n/a |
+| **JSON / REST PO payload** | n/a | partial (inline in `OrderService` via `System.Text.Json`) | planned (Horizon 2 — Group M, dedicated `JsonTransformService`) | HTTPS POST (webhook), API ingress | Header + line via canonical JSON stored in `CanonicalJson`. No standalone `IPurchaseOrderParser` yet. | n/a |
+| **Text-based PDF (PO layout)** | n/a | supported (`PdfOrderParser` via PdfPig 0.1.14) | n/a | HTTPS upload, email attachment | Regex header + line extraction; conservative parsing; non-scanned only | [PdfPig](https://github.com/UglyToad/PdfPig) |
+| **Scanned PDF / OCR** | n/a | deferred | n/a | HTTPS upload, email attachment | Azure Document Intelligence config-gated stub exists (`AzureDocumentIntelligenceOcrService`); falls back to `NoOpOcrService` when key absent | [Azure Document Intelligence](https://learn.microsoft.com/azure/ai-services/document-intelligence/) |
+
+### Headline reading guide
+
+- "Supported" rows are the wedge today: cXML, the internal canonical model,
+  CSV/XLSX input, CSV/XML output, text-PDF input.
+- UBL / Peppol BIS Order / EDIFACT real parser / X12 850 are the Horizon 2
+  Group M deliverables that turn ProcuLink from "good cXML tool" into
+  "international standard router".
+- AS2 / AS4 / PEPPOL transports are Horizon 2 Group N, partner-wrapped
+  first.
+- ISO 20022 is reference-only for Horizon 2 — documentation alignment, no
+  transport.
+
+---
+
+## Format-by-format implementation detail
+
+This is the implementation-level view, kept for engineers extending parsers
+or transformers. Where the headline matrix lists "supported", the rows below
+name the class and the test fixture.
+
+| Format | Direction | Implementation class | Validation depth | Fixture | Plan gate | Notes |
+|---|---|---|---|---|---|---|
+| **cXML 1.2** | Input | `ProcuLink.Transform.Parsing.CxmlOrderParser` | Required fields: `orderID`, `deploymentMode`, ≥1 `ItemOut` with `SupplierPartID`/`Quantity`/`UnitPrice/Money` | `ProcuLink.Transform.Tests/Fixtures/sample-order.cxml` | Integration | Added Group K |
+| **cXML 1.2** | Output | `ProcuLink.Transform.Output.CxmlTransformService` | No unresolved lines; emits cXML 1.2.024 with payloadID + timestamp | `ProcuLink.Transform.Tests/Fixtures/expected-output.cxml` | Integration | Added Group K |
+| **UBL 2.1 / Peppol BIS Order 3** | Input | planned (`UblOrderParser` per `c395b6c` wires a real parser; coverage to be expanded in Horizon 2 Group M) | — | — | Integration | Namespace `urn:oasis:names:specification:ubl:schema:xsd:Order-2` |
+| **UBL 2.1 / Peppol BIS Order 3** | Output | planned (Horizon 2 — Group M) | — | — | Integration | Emit `Order` document; mandatory `ID`, `IssueDate`, `OrderLine/LineItem` |
+| **EDIFACT ORDERS D.96A** | Input | stub (`EdifactOrderParser` — real parsing per `2bd4ecd`; full ORDERS coverage in Horizon 2 Group M after library decision) | — | — | Integration | Library decision: EdiFabric (commercial) vs open-source. Segment delimiter `'`; `UNA`+`UNB`+`ORDERS`. |
+| **EDIFACT ORDERS D.96A** | Output | planned (Horizon 2 — Group M) | — | — | Integration | Same library decision as input |
+| **ANSI X12 850** | Input | planned (Horizon 2 — Group M) | — | — | Integration | Same library decision as EDIFACT |
+| **ANSI X12 850** | Output | planned (Horizon 2 — Group M) | — | — | Integration | — |
+| **CSV (buyer template)** | Input | `ProcuLink.Transform.Parsing.CsvOrderParser` | Column alias matching; delimiter auto-detection (`,`/`;`) | inline in `ProcuLink.Transform.Tests/Parsing/` | Growth | Comma and semicolon delimited |
+| **XLSX (buyer template)** | Input | `ProcuLink.Transform.Parsing.XlsxOrderParser` | Header-row matching; empty-row skip; multi-alias columns | inline in `ProcuLink.Transform.Tests/Parsing/` | Growth | ClosedXML; first worksheet only |
+| **Supplier CSV output template** | Output | `ProcuLink.Transform.Output.CsvTransformService` | No unresolved lines; RFC 4180 escaping | — | Growth | Columns: SupplierItemCode, Description, Quantity, Unit, UnitPrice, LineTotal |
+| **Supplier XML output template** | Output | `ProcuLink.Transform.Output.XmlTransformService` | No unresolved lines; generic `<PurchaseOrder>` envelope | — | Operations | Not cXML — plain `<PurchaseOrder>` |
+| **JSON / API payload** | Input | partial (`OrderService` inline `System.Text.Json`) | Header + line fields from canonical JSON in `CanonicalJson`; no dedicated parser class | — | Growth | No standalone `IPurchaseOrderParser` |
+| **JSON / API payload** | Output | planned (Horizon 2 — Group M, `JsonTransformService` + `OutputFormat.Json`) | — | — | Growth | Emit canonical JSON as API response artifact |
+| **Text-based PDF** | Input | `ProcuLink.Transform.Parsing.PdfOrderParser` (PdfPig 0.1.14) | Regex header + line extraction; non-scanned only | `ProcuLink.Transform.Tests/Parsing/PdfOrderParserTests.cs` (inline) | Operations | Conservative parsing |
+| **Scanned PDF / OCR** | Input | config-gated stub (`AzureDocumentIntelligenceOcrService` → `NoOpOcrService` fallback) | — | — | Integration | Real OCR enabled when `Ocr:Azure:Endpoint` set |
+
+### Invoice + ASN (Wave 3, parallel to PO standards)
+
+| Format | Direction | Implementation class | Status | Notes |
+|---|---|---|---|---|
+| **UBL Invoice 2.1** | Input | `UblInvoiceParser` | supported | Full UBL 2.1 invoice parse; `IsUblInvoiceDocument` peek helper |
+| **EDIFACT INVOIC** | Input | `EdifactInvoiceParser` | stub | EdiFabric licence required; drop-in ready |
+| **EDIFACT DESADV** | Input | `EdifactDesadvParser` | stub | Same library dependency |
+| **CSV / XML / JSON invoice** | Output | `CsvInvoiceTransformService` / `XmlInvoiceTransformService` / `JsonInvoiceTransformService` | supported | Reuses canonical invoice model |
+| **UBL Invoice 2.1 output** | Output | planned (Horizon 3 — Group S) | — | Required for P2P loop closure |
+| **Peppol BIS Invoice 3.0** | Output | planned (Horizon 3 — Group S) | — | Same dependency as UBL Order output |
+
+---
+
+## Canonical PO Model fields
+
+All parsers populate `ParsedOrder` / `ParsedOrderLine`, which then persist to
+`PurchaseOrderEntity` / `PurchaseOrderLineEntity`. This is the field-level
+contract every standards parser must satisfy.
+
+### Header (`ParsedOrder`)
+
+| Field | C# Type | Required | Business Rule | UBL ref | EDIFACT ref | X12 850 ref | cXML ref |
 |---|---|---|---|---|---|---|---|
-| **cXML 1.2** | Input | supported | `CxmlOrderParser` | Required fields: `orderID`, `deploymentMode`, ≥1 `ItemOut` with `SupplierPartID`/`Quantity`/`UnitPrice/Money` | `ProcuLink.Transform.Tests/Fixtures/sample-order.cxml` | Integration | Added Group K |
-| **cXML 1.2** | Output | supported | `CxmlTransformService` | Validates no unresolved lines; emits cXML 1.2.024 with payloadID + timestamp | `ProcuLink.Transform.Tests/Fixtures/expected-output.cxml` | Integration | Added Group K |
-| **UBL 2.1 / Peppol BIS Order 3** | Input | planned | — | — | — | Integration | Requires `NuGet: UBL.NET` or hand-rolled XSD; namespace `urn:oasis:names:specification:ubl:schema:xsd:Order-2` |
-| **UBL 2.1 / Peppol BIS Order 3** | Output | planned | — | — | — | Integration | Emit `Order` document; mandatory `ID`, `IssueDate`, `OrderLine/LineItem` |
-| **CSV (buyer template)** | Input | supported | `CsvOrderParser` | Column alias matching; delimiter auto-detection (`,`/`;`) | `ProcuLink.Transform.Tests/Fixtures/` (inline in tests) | Growth | Comma and semicolon delimited |
-| **XLSX (buyer template)** | Input | supported | `XlsxOrderParser` | Header-row matching; empty-row skip; multi-alias columns | `ProcuLink.Transform.Tests/Fixtures/` (inline in tests) | Growth | ClosedXML; first worksheet only |
-| **Supplier CSV output template** | Output | supported | `CsvTransformService` | Validates no unresolved lines; RFC 4180 escaping | — | Growth | Columns: SupplierItemCode, Description, Quantity, Unit, UnitPrice, LineTotal |
-| **Supplier XML output template** | Output | supported | `XmlTransformService` | Validates no unresolved lines; generic `PurchaseOrder` schema | — | Operations | Not cXML — plain `<PurchaseOrder>` envelope |
-| **JSON / API payload** | Input | partial | `OrderService` (inline) | Header + line fields from canonical JSON in `CanonicalJson`; no dedicated parser class | — | Growth | Parsed via `System.Text.Json` in `OrderService`; no standalone `IPurchaseOrderParser` |
-| **JSON / API payload** | Output | planned | — | — | — | Growth | Planned: emit canonical JSON as API response artifact |
-| **EDI X12 850** | Input | planned/deferred | — | — | — | Integration | Requires `EdiFabric` or `EdiWeave` commercial lib or hand-rolled tokenizer; high effort |
-| **EDI X12 850** | Output | planned/deferred | — | — | — | Integration | Same library requirement; deferred post-Integration tier launch |
-| **EDIFACT ORDERS D96A** | Input | planned/deferred | — | — | — | Integration | Similar to X12; segment delimiter `'`; `UNA`+`UNB`+`ORDERS`; deferred |
-| **EDIFACT ORDERS D96A** | Output | planned/deferred | — | — | — | Integration | Deferred |
-| **Text-based PDF** | Input | supported | `PdfOrderParser` | Regex header + line extraction via PdfPig; scanned/OCR PDFs explicitly out of scope | `ProcuLink.Transform.Tests/Parsing/PdfOrderParserTests.cs` (inline) | Operations | PdfPig 0.1.14; conservative parsing |
-| **Scanned PDF / OCR** | Input | deferred | — | — | — | Integration | Requires Tesseract or Azure Document Intelligence; high integration cost |
+| `PoNumber` | `string?` | recommended | Max 50 chars; null allowed | `cbc:ID` | `BGM 1004` | `BEG03` | `OrderRequestHeader/@orderID` |
+| `OrderDate` | `DateTime?` | recommended | Parsers attempt ISO 8601, `dd/MM/yyyy`, `MM/dd/yyyy`, `d.M.yyyy` | `cbc:IssueDate` | `DTM C507/2380` | `BEG05` | `OrderRequestHeader/@orderDate` |
+| `BuyerName` | `string?` | optional | Free text; display + audit | `cac:BuyerCustomerParty/cac:Party/cac:PartyName/cbc:Name` | `NAD BY` | `N1*BY` | `OrderRequestHeader/Contact[@role='buyer']/Name` |
+| `Currency` | `string?` | recommended | ISO 4217; uppercased on persist | `cbc:DocumentCurrencyCode` | `CUX C504/6347` | `CUR02` | `OrderRequestHeader/Total/Money/@currency` |
+| `Lines` | `IReadOnlyList<ParsedOrderLine>` | yes | At least one line expected | `cac:OrderLine` | `LIN` | `PO1` | `ItemOut` |
 
----
+### Line (`ParsedOrderLine`)
 
-## Canonical PO Model Fields
+| Field | C# Type | Required | Business Rule | UBL ref | EDIFACT ref | X12 850 ref | cXML ref |
+|---|---|---|---|---|---|---|---|
+| `LineNumber` | `int` | yes | Auto-increment from 1 if not present | `cbc:ID` | `LIN 1082` | `PO101` | `ItemOut/@lineNumber` |
+| `BuyerItemCode` | `string` | yes | Buyer's own code; lookup key in `item_mappings`; never overwritten by supplier code | `cac:Item/cac:BuyersItemIdentification/cbc:ID` | `LIN C212 (IN)` | `PO107/PO109` (buyer-qualified) | `ItemOut/ItemID/BuyerPartID` |
+| `Description` | `string?` | optional | Free text | `cac:Item/cbc:Description` | `IMD C273/7008` | `PID05` | `ItemOut/ItemDetail/Description` |
+| `Quantity` | `decimal` | yes | Defaults to `0` if unparseable; culture-invariant | `cbc:Quantity` | `QTY C186/6060` | `PO102` | `ItemOut/@quantity` |
+| `Unit` | `string?` | optional | `EA`, `PCS`, `KG`, … | `cbc:Quantity/@unitCode` | `QTY C186/6411` | `PO103` | `ItemOut/UnitOfMeasure` |
+| `UnitPrice` | `decimal?` | recommended | Required for CSV / XML / cXML transforms | `cac:Price/cbc:PriceAmount` | `PRI C509/5118` | `PO104` | `ItemOut/UnitPrice/Money` |
 
-These are the fields that all parsers must populate into `ParsedOrder` / `ParsedOrderLine`,
-which are then persisted to the EF entities `PurchaseOrderEntity` / `PurchaseOrderLineEntity`.
-
-### Header fields (`ParsedOrder`)
-
-| Field | C# Type | Required | Business Rule |
-|---|---|---|---|
-| `PoNumber` | `string?` | recommended | Max 50 chars; null allowed from parsers that cannot extract it |
-| `OrderDate` | `DateTime?` | recommended | Parsers attempt multiple date formats (ISO 8601, `dd/MM/yyyy`, `MM/dd/yyyy`, `d.M.yyyy`) |
-| `BuyerName` | `string?` | optional | Free text; used for display and audit only |
-| `Currency` | `string?` | recommended | ISO 4217 three-letter code (e.g. `EUR`, `USD`); uppercased on persist |
-| `Lines` | `IReadOnlyList<ParsedOrderLine>` | yes | At least one line expected; empty list allowed but triggers warning |
-
-### Line fields (`ParsedOrderLine`)
-
-| Field | C# Type | Required | Business Rule |
-|---|---|---|---|
-| `LineNumber` | `int` | yes | Auto-incremented from 1 if not present in source file |
-| `BuyerItemCode` | `string` | yes | The buyer's own item code; used as lookup key in `item_mappings`; never overwritten by supplier code |
-| `Description` | `string?` | optional | Free text description from the source file |
-| `Quantity` | `decimal` | yes | Defaults to `0` if unparseable; culture-invariant parsing |
-| `Unit` | `string?` | optional | Unit of measure (e.g. `EA`, `PCS`, `KG`) |
-| `UnitPrice` | `decimal?` | recommended | Null if not present in source file; required for `CsvTransformService`/`XmlTransformService`/`CxmlTransformService` output |
-
-### EF entity extensions (`PurchaseOrderLineEntity`, resolved after mapping)
+### EF entity extensions (resolved after mapping)
 
 | Field | C# Type | Required | Business Rule |
 |---|---|---|---|
@@ -66,29 +138,69 @@ which are then persisted to the EF entities `PurchaseOrderEntity` / `PurchaseOrd
 | `AiSuggestionReason` | `string?` | optional | Human-readable reason from AI provider |
 | `AiSuggestionProvenance` | `string?` | optional | Model ID / provider name |
 
+The standards-reference columns above are the contract for the
+"Standards-visibility rule" in `CLAUDE.md` — expert mode must surface
+these labels next to each field on screen.
+
 ---
 
-## Plan Gates
+## Plan gates
 
 | Plan | Included formats |
 |---|---|
 | **Pilot** (internal/free, 14 days) | CSV input, XLSX input, Supplier CSV output |
-| **Growth** (€149/mo) | + PDF input, Supplier XML output, JSON/API output |
+| **Growth** (€149/mo) | + PDF input, Supplier XML output, JSON/API output (when shipped) |
 | **Operations** (€399/mo) | All Growth formats |
-| **Integration** (€999/mo) | + cXML input/output, UBL/Peppol (when implemented), EDI X12 850 (when implemented), EDIFACT (when implemented), OCR/scanned PDF (when implemented) |
+| **Integration** (€999/mo) | + cXML input/output, UBL/Peppol (when implemented), EDIFACT (when implemented), X12 850 (when implemented), OCR/scanned PDF (when implemented) |
 | **Enterprise** | All formats + custom supplier rules and ERP connectors |
 
-Gate enforcement: `BillingFeature.Cxml` is already defined in `ProcuLink.Core/Constants/BillingFeature.cs`.
-UBL/Peppol, EDI, and OCR gates will use new `BillingFeature` enum values when those parsers are built.
+Gate enforcement: `BillingFeature.Cxml` is defined in
+`ProcuLink.Core/Constants/BillingFeature.cs`. UBL/Peppol, EDIFACT, X12, and
+OCR gates will use new `BillingFeature` values when those parsers ship.
 
 ---
 
-## Next Implementation Priorities
+## Implementation priorities (linked to Horizons)
 
-1. **JSON/API payload output** — add a dedicated `JsonTransformService` and `OutputFormat.Json`; low effort; unblocks webhook delivery of canonical JSON to suppliers.
-2. **UBL 2.1 / Peppol BIS Order 3 input** — high demand in EU procurement; evaluate `UBL.NET` NuGet package vs hand-rolled XSD deserialization.
-3. **UBL 2.1 / Peppol BIS Order 3 output** — pairs with UBL input; required for Peppol network delivery.
-4. **EDI X12 850 input** — US market; evaluate `EdiFabric` (commercial) vs open-source tokenizer.
-5. **EDIFACT ORDERS input** — European EDI; can share library with X12 if `EdiFabric` is chosen.
-6. **OCR / scanned PDF input** — integrate Azure Document Intelligence or Tesseract behind `BillingFeature` gate; required for customers without structured PO files.
-7. **EDI output formats** — only after input is validated end-to-end with at least one production buyer.
+Horizon 1 (now): no new standards work — focus is reliability + onboarding.
+
+Horizon 2 — Group M priorities, in order:
+
+1. **JSON / REST PO output** — `JsonTransformService` + `OutputFormat.Json`.
+   Low effort; unblocks webhook delivery of canonical JSON to suppliers
+   running their own ERP webhook receivers.
+2. **UBL 2.1 / Peppol BIS Order 3 input** — high demand in EU procurement.
+   Expand `UblOrderParser` to full BIS 3.0 conformance.
+3. **UBL 2.1 / Peppol BIS Order 3 output** — pairs with UBL input; required
+   for Peppol network delivery (via partner-wrapped Access Point in
+   Group N).
+4. **EDIFACT library decision** — write
+   `docs/superpowers/specs/2026-Q4-edifact-library-evaluation.md`; pick
+   EdiFabric vs open-source; then build the real parser + transformer.
+5. **ANSI X12 850 input + output** — likely shares the EDIFACT library
+   decision.
+6. **In-app standards comparison screen** (`/standards`) — expert-mode
+   view of "this canonical field in UBL / EDIFACT / X12 / cXML / Peppol
+   BIS" with a live example pulled from a real order.
+
+Horizon 3 — Group S priorities (P2P loop closure):
+
+7. **UBL Invoice 2.1 output + Peppol BIS Invoice 3.0** — natural follow-on
+   from the Wave 3 inbound invoice model.
+8. **OCR / scanned PDF** — Azure Document Intelligence behind
+   `BillingFeature.Ocr`; required for customers without structured PO files.
+
+Order changes if pilot demand reorders them.
+
+---
+
+## References
+
+- Phase 6 roadmap:
+  `docs/superpowers/plans/2026-05-28-phase-6-international-standard-roadmap.md`
+- Positioning:
+  `docs/strategy/international-standard-thesis.md`
+- Canonical PO model:
+  `docs/canonical-po-model.md`
+- Format / channel ground truth:
+  `docs/format-channel-roadmap.md`
