@@ -1,0 +1,30 @@
+# Local dev infrastructure for ProcuLink.
+# Brings up Postgres 15 on port 5435 to match appsettings.Development.json.
+#
+# Usage:
+#   docker compose up -d postgres
+#   docker compose down            # stop everything
+#   docker compose down -v         # stop and DROP DATA (clean slate)
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: proculink-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: proculink_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5435:5432"
+    volumes:
+      - proculink-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d proculink_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  proculink-postgres-data:
+    name: proculink-postgres-data

@@ -40,67 +40,118 @@ Frontend repo: https://github.com/dimnovare/project-proculink
 - Frontend: Next.js 15 App Router, TypeScript, Tailwind, shadcn/ui, TanStack Query
 - Package manager: bun only for frontend
 
-## Local Backend
+## Local Setup
 
-Default development API:
+### Prerequisites
 
-```text
-http://localhost:5223
-```
+- .NET 8 SDK
+- Docker Desktop (for Postgres)
+- (optional) `dotnet-ef` CLI: `dotnet tool install --global dotnet-ef`
 
-Useful local URLs:
+### One-time setup
 
-```text
-Scalar UI:          http://localhost:5223/scalar
-Hangfire dashboard: http://localhost:5223/hangfire
-```
-
-Run backend:
+**1. Trust the dev HTTPS certificate.** The frontend talks to `https://localhost:7230` by default. Without this, browser fetch calls fail silently with `Failed to fetch`.
 
 ```bash
-dotnet run --project ProcuLink.Api
+dotnet dev-certs https --trust
 ```
 
-Run worker:
+**2. Start Postgres** on the expected port (5435):
+
+```bash
+docker compose up -d postgres
+```
+
+**3. Apply EF migrations:**
+
+```bash
+dotnet ef database update --project ProcuLink.Infrastructure --startup-project ProcuLink.Api
+```
+
+**4. (Optional) Local secrets** via `dotnet user-secrets` from the `ProcuLink.Api` folder:
+
+```bash
+cd ProcuLink.Api
+dotnet user-secrets set "Ai:OpenAI:ApiKey" "sk-..."
+dotnet user-secrets set "Stripe:SecretKey" "sk_test_..."
+```
+
+Without these, AI mapping and Stripe billing no-op silently — the rest of the stack works.
+
+### Run the stack
+
+Open **three terminals**:
+
+**Terminal 1 — API** (HTTPS profile opens both `:7230` and `:5223`):
+
+```bash
+dotnet run --project ProcuLink.Api --launch-profile https
+```
+
+| URL | What |
+|---|---|
+| `https://localhost:7230/health` | Health check |
+| `https://localhost:7230/scalar` | API explorer |
+| `https://localhost:7230/hangfire` | Job dashboard |
+
+**Terminal 2 — Worker** (Hangfire processor):
 
 ```bash
 dotnet run --project ProcuLink.Worker
 ```
 
-Run tests:
+**Terminal 3 — Frontend** (sibling repo):
 
 ```bash
-dotnet test ProcuLink.slnx --no-restore
+cd ../project-proculink
+bun install
+bun run dev
 ```
 
-Build:
+Frontend at `http://localhost:8082`. Ensure its `.env.local` has:
+
+```text
+NEXT_PUBLIC_API_BASE_URL=https://localhost:7230
+```
+
+If you prefer HTTP only, use `--launch-profile http` for the API and set `NEXT_PUBLIC_API_BASE_URL=http://localhost:5223`. The CORS allow-list (`Program.cs`) includes both ports.
+
+### Verify
+
+1. `https://localhost:7230/health` returns `Healthy`.
+2. `http://localhost:8082` loads the marketing landing page.
+3. Sign in → onboarding wizard appears → adding a supplier succeeds (no `Failed to fetch`).
+
+### Common issues
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Failed to fetch` on every API call | Dev HTTPS cert not trusted | `dotnet dev-certs https --trust`, then restart the browser |
+| `Failed to fetch` on POST requests only | CORS preflight blocked | Confirm the frontend port (default 8082) is in `Program.cs` CORS allow-list, or add it via `Frontend:Url` env var |
+| `connection refused` on `localhost:5435` | Postgres not running | `docker compose up -d postgres` |
+| `relation "..." does not exist` | Migrations not applied | `dotnet ef database update --project ProcuLink.Infrastructure --startup-project ProcuLink.Api` |
+| Hangfire jobs never run | Worker not started | Start Terminal 2 |
+| AI suggestions never appear | No OpenAI key | `dotnet user-secrets set "Ai:OpenAI:ApiKey" "sk-..."` |
+| Stripe billing UI hangs | No Stripe key + no graceful fallback in dev | Set a Stripe test key in user-secrets, or stay off the billing screens |
+
+## Build + test
 
 ```bash
 dotnet build ProcuLink.slnx --no-restore
+dotnet test ProcuLink.slnx --no-restore
 ```
 
-## Configuration
+Current baseline: **213 tests** (102 Transform + 11 Api.Tests + 100 Infrastructure), 0 failures.
 
-Development settings live in:
+## Configuration files
 
-```text
-ProcuLink.Api\appsettings.Development.json
-```
+| File | Purpose |
+|---|---|
+| `ProcuLink.Api/appsettings.Development.json` | Dev defaults (Postgres connection, Clerk authority, plan price ids stubs) |
+| `ProcuLink.Api/appsettings.Production.json` | Empty production placeholders — values come from Railway env vars |
+| `docker-compose.yml` | Postgres 15 on port 5435 |
 
-Required local database shape:
-
-```text
-Host=localhost;Port=5435;Database=proculink_dev;Username=postgres;Password=postgres
-```
-
-Frontend development variables use Next.js names, not Vite names:
-
-```text
-NEXT_PUBLIC_API_BASE_URL=http://localhost:5223
-NEXT_PUBLIC_USE_MOCK=false
-```
-
-Do not commit real Stripe, Clerk, OpenAI, R2, or delivery credential secrets.
+Do not commit real Stripe, Clerk, OpenAI, R2, or delivery credential secrets — use user-secrets or env vars.
 
 ## Current Product State
 
