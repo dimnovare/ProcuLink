@@ -220,9 +220,9 @@ before writing implementation plans.
 
 | Group | Workstream | Status |
 |---|---|---|
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 10 complete** |
-| **J** | Live end-to-end QA + deployment hardening | Planned after I |
-| **K** | Standards + engine hardening | Planned after I/J scoping |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
+| **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed, live deployed QA remaining |
+| **K** | Standards + engine hardening | ✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`) |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
 
 Group I remains the active implementation group unless the user explicitly
@@ -233,7 +233,7 @@ detached from a visible wire.
 
 ---
 
-## Latest committed implementation state (May 26 2026)
+## Latest committed implementation state (May 28 2026)
 
 Read this before starting new work:
 
@@ -263,20 +263,21 @@ Read this before starting new work:
   - `EmailPollingJob` runs from `ProcuLink.Worker` every 5 minutes through Hangfire.
   - CSV/XLSX/PDF attachments enter the existing create-stub and parse pipeline.
   - Body-only parsing and richer message-id dedupe are deferred.
-- **Group I UI/UX polish is in progress, pass 10 complete.**
-  - Passes 1-2 fixed Wire Topology traveller/path/legend/port issues and added Playwright protected-route QA.
-  - Pass 3 screenshot-tested `/upload` and `/settings` on desktop/mobile.
-  - `/upload` now stacks on mobile and uses recent-order route cards instead of forcing a desktop table.
-  - `/settings` now uses horizontal mobile tabs and responsive email-polling grids.
-  - Pass 4 screenshot-tested inbox queue, supplier/buyer docks, mappings, rules/templates, operations log, connectors, webhooks, and tablet order review.
-  - `/inbox` now renders visible mobile route cards plus a desktop table; the broken virtualized table dependency was removed.
-  - Supplier/buyer dock cards, crossings log rows, and webhook rows now stack safely on mobile.
-  - Pass 5 fixed supplier detail, mapping editor, PO mapping, and delivery config mobile layouts.
-  - Pass 6 fixed settings billing/email loading and API-unavailable states, added bounded billing/email fetch timeouts, made connectors mobile-native, and added lightweight connector/webhook configuration panels.
-  - Pass 7 fixed mappings import/export/add/edit, rules list/edit, and templates new/edit interaction states. Rules list view no longer clips as a desktop table on mobile, and dense order-review inline edit/confirm states were rechecked.
-  - Pass 8 fixed upload selected-file/read-only/429 handling, surfaced upload plan usage state, and clarified `/library/suppliers` supplier-limit versus billing-unavailable states. Supplier add now opens a lightweight inline setup panel when allowed.
-  - Pass 9 added visible local QA feedback for connector/webhook draft test and save actions, mapping import/export/add/edit saves, validation-rule toggle/edit saves, and output-template validate/save actions. Mapping and rules notices were moved into wrapped rows so they do not squeeze filters or clip on mobile.
-  - Pass 10 corrected the mocked first-upload-to-review-to-delivery path: upload routes to the returned order id instead of hardcoded `/inbox/008412`; review Save draft, output Copy/Download, and delivered actions now show visible local feedback; the mobile review action bar no longer squeezes the total/template/exception/buttons.
+- **Group I UI/UX polish is in progress, pass 15 complete.**
+  - Passes 1-2: Wire Topology traveller/path/legend/port fixes, Playwright QA bypass added.
+  - Pass 3: `/upload` mobile stack layout, `/settings` horizontal mobile tabs.
+  - Pass 4: inbox mobile route cards + desktop table, removed `@tanstack/react-virtual`, dock/log/webhook mobile stacking.
+  - Pass 5: supplier detail/mapping editor/PO mapping/delivery config mobile layouts.
+  - Pass 6: billing/email API-unavailable states, bounded fetch timeouts, connector mobile cards, connector/webhook config panels.
+  - Pass 7: mappings/rules/templates import-edit panels, rules mobile card list, template body edit.
+  - Pass 8: upload selected-file/read-only/429 handling, plan usage in pipeline panel, supplier-limit vs billing-unavailable distinction.
+  - Pass 9: connector/webhook/mapping/rule/template local QA feedback notices; notices moved into wrapped rows.
+  - Pass 10: upload routes to returned order id (not hardcoded `/inbox/008412`); review Save/Copy/Download/delivered feedback; mobile review action bar layout.
+  - Pass 11: `UploadWorkbench` loads supplier docks from `GET /api/suppliers`; non-mock uploads route to `/orders/{id}`; exported `isApiMockMode`.
+  - Pass 12: Topology + Bridge visual calibration — `strokeFromWeight()`, staggered Bezier CPs, amber alert badges, `r=2.2` pulse, `WireTopologyLaneList` mobile, 28px `StatusJourney` nodes, `1fr/1.05fr/1.15fr` SpineReview grid, 2×2 mobile KPI grid.
+  - Pass 13: `BridgeTopbar` auto-breadcrumb from pathname via `useAutoCrumb()`.
+  - Pass 14: `BridgePageLoader` loading.tsx for 11 missing routes, `InboxView` mobile empty state, global `:focus-visible` ring, sidebar workspace-switcher accessible button, topbar aria-labels.
+  - Pass 15: `SpineReview` wired to live `GET /api/orders/{id}` via `useQuery`; `buildNodesFromOrder()` maps Order → SpineNodeData[]; `BuyerName` added to `OrderDto`; loading skeleton + error/not-found gate added.
   - Continue live API/deployment QA for the full first-upload-to-delivery happy/error paths against a running backend before Group J. Group J should turn the current connector/webhook/mapping/rule/template local QA affordances into real persistence/test-fire verification.
 - **Do not redo C2, D2, E, F, G, or H.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
 - **Manual/live QA still recommended:**
@@ -285,12 +286,14 @@ Read this before starting new work:
   - OpenAI-backed mapping suggestion with a real `Ai:OpenAI:ApiKey`.
   - Erply and Directo connector test-fire against ERP sandbox endpoints.
   - IMAP polling against a real mailbox/app password and supplier profile.
+- **Group K — cXML 1.2 standards hardening is implemented.** `CxmlOrderParser`, `CxmlTransformService`, `OutputFormat.CXml`, standards matrix, canonical PO model docs. Merged to `main` (`2697115`). 193 tests pass.
+- **Wave 1/2 code completeness verified (2026-05-28):** `EdifactOrderParser` + `UblOrderParser` have real parsing logic (Wave 1 complete). SFTP/S3 ingress, OCR (config-gated), and email-body extractor (API-only by design) are all wired (Wave 2 complete). `EdifactInvoiceParser`/`EdifactDesadvParser` stubs are Wave 3, not Wave 2.
 - **Last verified commands:**
   - `dotnet build ProcuLink.slnx --no-restore` passed.
-  - `dotnet test ProcuLink.slnx --no-restore` passed, 60 tests.
+  - `dotnet test ProcuLink.slnx --no-restore` passed, 193 tests (102 Transform + 91 Infrastructure).
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
-No remaining Phase 4 C-H group is open. Current implementation group is **Group I — UI/UX production polish + responsive QA** from the Phase 5 roadmap; pass 10 is complete, with live API/deployment QA still remaining before Group J.
+No remaining Phase 4 C-H group is open. Group K is complete. Current implementation group is **Group I — UI/UX production polish + responsive QA** from the Phase 5 roadmap; pass 15 is complete, with live API/deployment QA still remaining before Group J completes.
 
 1. Read `STATUS.md`.
 2. Read `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`.
