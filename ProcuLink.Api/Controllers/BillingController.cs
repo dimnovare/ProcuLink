@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -36,6 +37,27 @@ public sealed class BillingController : ControllerBase
         _aiUsage = aiUsage;
     }
 
+    // ── Cast helper — lets webhook handlers call EmitBilling* without a Program.cs change ─
+    // In production _billing always resolves to StripeBillingService.
+    // If it doesn't (e.g. in a test using a mock IBillingService) the call is safely skipped.
+    private StripeBillingService? BillingEvents => _billing as StripeBillingService;
+
+    // ── Plan rank — used to detect downgrades in HandleSubscriptionUpdatedAsync ───────────
+    private static readonly Dictionary<string, int> PlanRank = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [PlanConstants.Pilot]       = 0,
+        [PlanConstants.Growth]      = 1,
+        [PlanConstants.Operations]  = 2,
+        [PlanConstants.Integration] = 3,
+        [PlanConstants.Enterprise]  = 4,
+    };
+
+    private static bool IsPlanDowngrade(string? fromPlan, string toPlan) =>
+        !string.IsNullOrEmpty(fromPlan)
+        && PlanRank.TryGetValue(fromPlan, out var fromRank)
+        && PlanRank.TryGetValue(toPlan,   out var toRank)
+        && toRank < fromRank;
+
     // ── GET /api/billing/status ───────────────────────────────────────────
 
     [HttpGet("status")]
@@ -61,10 +83,10 @@ public sealed class BillingController : ControllerBase
         if (!validPlans.Contains(request.Plan, StringComparer.OrdinalIgnoreCase))
             return BadRequest(new { error = $"Invalid plan '{request.Plan}'. Valid: growth, operations, integration." });
 
-        var returnUrl = $"{_config["Frontend:Url"] ?? "http://localhost:8082"}/settings";
+        var frontendUrl = _config["Frontend:Url"] ?? "http://localhost:8082";
         try
         {
-            var url = await _billing.CreateCheckoutSessionAsync(_tenant.OrganisationId, request.Plan.ToLowerInvariant(), returnUrl, ct);
+            var url = await _billing.CreateCheckoutSessionAsync(_tenant.OrganisationId, request.Plan.ToLowerInvariant(), frontendUrl, ct);
             return Ok(new { url });
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -217,6 +239,7 @@ public sealed class BillingController : ControllerBase
             : await GetSubscriptionPriceIdAsync(session.SubscriptionId, ct);
         var mappedPlan = MapPriceIdToPlan(priceId) ?? plan;
 
+        var fromPlan = org.Plan; // capture before mutation for analytics
         org.Plan = mappedPlan;
         org.AccountStatus = subscriptionStatus == "trialing"
             ? AccountStatusConstants.Trialing
@@ -231,6 +254,13 @@ public sealed class BillingController : ControllerBase
 
         _logger.LogInformation("Org {OrgId} upgraded to {Plan} via Stripe checkout {SessionId}",
             orgId, mappedPlan, session.Id);
+
+        await (BillingEvents?.EmitBillingUpgradedAsync(
+            orgId:           orgId,
+            fromPlan:        fromPlan ?? PlanConstants.Pilot,
+            toPlan:          mappedPlan,
+            stripeSessionId: session.Id,
+            ct:              ct) ?? Task.CompletedTask);
     }
 
     private async Task HandleSubscriptionUpdatedAsync(Stripe.Subscription? sub, CancellationToken ct)
@@ -244,6 +274,7 @@ public sealed class BillingController : ControllerBase
         var priceId = sub.Items.Data.FirstOrDefault()?.Price?.Id;
         var mappedPlan = MapPriceIdToPlan(priceId);
 
+        var fromPlan = org.Plan; // capture before mutation for analytics
         if (!string.IsNullOrEmpty(mappedPlan))
             org.Plan = mappedPlan;
 
@@ -263,6 +294,15 @@ public sealed class BillingController : ControllerBase
 
         _logger.LogInformation("Org {OrgId} subscription {SubId} updated: status={Status}, plan={Plan}",
             org.Id, sub.Id, sub.Status, org.Plan);
+
+        if (!string.IsNullOrEmpty(mappedPlan) && IsPlanDowngrade(fromPlan, mappedPlan))
+        {
+            await (BillingEvents?.EmitBillingDowngradedAsync(
+                orgId:    org.Id,
+                fromPlan: fromPlan ?? PlanConstants.Pilot,
+                toPlan:   mappedPlan,
+                ct:       ct) ?? Task.CompletedTask);
+        }
     }
 
     private async Task HandleSubscriptionDeletedAsync(Stripe.Subscription? sub, CancellationToken ct)
@@ -275,6 +315,7 @@ public sealed class BillingController : ControllerBase
 
         if (org.Plan == PlanConstants.Pilot && org.StripeSubscriptionId is null) return;
 
+        var previousPlan = org.Plan; // capture before mutation for analytics
         org.Plan = PlanConstants.Pilot;
         org.AccountStatus = AccountStatusConstants.ReadOnly;
         org.StripeSubscriptionId = null;
@@ -283,6 +324,16 @@ public sealed class BillingController : ControllerBase
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation("Org {OrgId} subscription cancelled — reverted to frozen Pilot.", org.Id);
+
+        var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var hadOrders = await _db.PurchaseOrders
+            .AnyAsync(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= monthStart, ct);
+
+        await (BillingEvents?.EmitBillingCancelledAsync(
+            orgId:              org.Id,
+            previousPlan:       previousPlan,
+            hadOrdersThisMonth: hadOrders,
+            ct:                 ct) ?? Task.CompletedTask);
     }
 
     private async Task<string?> GetSubscriptionPriceIdAsync(string subscriptionId, CancellationToken ct)
