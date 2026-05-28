@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
 
 namespace ProcuLink.Infrastructure.Services.Email;
@@ -59,9 +60,18 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     /// </summary>
     private const string DefaultHostSuffix = ".proculink.app";
 
+    /// <summary>
+    /// Provenance tag stamped on orders the router creates from the email body
+    /// (after the NLP extractor). The review UI reads this from
+    /// <c>PurchaseOrderEntity.CanonicalJson.source</c> to show how the order
+    /// was created (vs. attachment upload, IMAP poll, etc.).
+    /// </summary>
+    private const string EmailBodyNlpSourceTag = "email_body_nlp";
+
     private readonly ProcuLinkDbContext _db;
     private readonly IOrderService _orders;
     private readonly IParseJobEnqueuer _enqueuer;
+    private readonly IEmailBodyOrderExtractor _bodyExtractor;
     private readonly IConfiguration _config;
     private readonly ILogger<InboundEmailRouter> _logger;
 
@@ -69,12 +79,14 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         ProcuLinkDbContext db,
         IOrderService orders,
         IParseJobEnqueuer enqueuer,
+        IEmailBodyOrderExtractor bodyExtractor,
         IConfiguration config,
         ILogger<InboundEmailRouter> logger)
     {
         _db = db;
         _orders = orders;
         _enqueuer = enqueuer;
+        _bodyExtractor = bodyExtractor;
         _config = config;
         _logger = logger;
     }
@@ -142,11 +154,14 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         }
 
         // ── 4. Filter attachments ────────────────────────────────────────────
+        // Note: an empty attachment list is no longer an early-return — the
+        // body-NLP fallback below may still produce an order from prose text.
         if (payload.Attachments.Count == 0)
         {
-            _logger.LogInformation("Inbound email for org {OrgId} carried no attachments — ignoring.", org.Id);
+            _logger.LogInformation(
+                "Inbound email for org {OrgId} carried no attachments; will try email-body NLP fallback if a body is present.",
+                org.Id);
             await WriteAuditAsync(org.Id, "inbound_email.no_attachments", payload, ct);
-            return new InboundEmailResult(true, OrgId: orgId, Array.Empty<Guid>(), Error: null);
         }
 
         // ── 5. Create one stub per supported attachment ──────────────────────
@@ -200,6 +215,57 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             _logger.LogInformation(
                 "Inbound email created order {OrderId} for org {OrgId} (attachment={FileName}).",
                 orderId, org.Id, att.FileName);
+        }
+
+        // ── 6. Email-body NLP fallback ───────────────────────────────────────
+        // When no attachment produced an order — either nothing was attached or
+        // every attachment was unsupported / empty / rejected — fall back to
+        // extracting a purchase order from the email body itself. The extractor
+        // is a no-op without an OpenAI key, so this is safe in unit tests and
+        // local dev where the body field is set but the AI provider is absent.
+        if (created.Count == 0 && !string.IsNullOrWhiteSpace(payload.Body))
+        {
+            try
+            {
+                var extraction = await _bodyExtractor.ExtractAsync(payload.Body!, ct);
+                if (extraction.Success && extraction.Order is not null)
+                {
+                    var stubResult = await _orders.CreateStubFromParsedOrderAsync(
+                        org.Id,
+                        supplierId.Value,
+                        extraction.Order,
+                        EmailBodyNlpSourceTag,
+                        ct);
+
+                    if (stubResult.IsSuccess)
+                    {
+                        var orderId = stubResult.Value!.Id;
+                        created.Add(orderId);
+                        _logger.LogInformation(
+                            "Inbound email created order {OrderId} for org {OrgId} from email body NLP (confidence={Confidence:F2}).",
+                            orderId, org.Id, extraction.Confidence);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Inbound email body extraction for org {OrgId} succeeded but stub creation failed: {Error}",
+                            org.Id, stubResult.Error);
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Inbound email body extraction for org {OrgId} did not yield an order (confidence={Confidence:F2}, reason={Reason}).",
+                        org.Id, extraction.Confidence, extraction.FailureReason ?? "n/a");
+                }
+            }
+            catch (Exception ex)
+            {
+                // NLP fallback must never break the webhook — log and continue.
+                _logger.LogWarning(ex,
+                    "Inbound email body extraction for org {OrgId} threw; treating message as having no orders.",
+                    org.Id);
+            }
         }
 
         await WriteAuditAsync(org.Id, "inbound_email.processed",

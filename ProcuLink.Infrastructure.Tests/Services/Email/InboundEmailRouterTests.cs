@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Infrastructure.Services.Email;
 
@@ -286,6 +287,65 @@ public class InboundEmailRouterTests
         orders.CalledWith.Select(c => c.FileName).Should().BeEquivalentTo(new[] { "po.csv", "backup.xml" });
     }
 
+    // ── 9. Email-body NLP fallback ───────────────────────────────────────────
+
+    [Fact]
+    public async Task BodyExtractionPath_NoAttachments_CreatesStubFromExtractedOrder()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+
+        // Extractor returns a successful extraction — the router must call
+        // CreateStubFromParsedOrderAsync (NOT CreateStubAsync) and report the
+        // resulting order id back to the caller.
+        var extractedOrder = new ExtractedOrder(
+            PoNumber:  "PO-FROM-BODY-001",
+            OrderDate: new DateTime(2026, 5, 28),
+            BuyerName: "Acme Buyer",
+            Currency:  "EUR",
+            Lines: new[]
+            {
+                new ExtractedOrderLine(1, "WIDGET-A", "Widget A blue", 10m, "pcs", 2.50m),
+                new ExtractedOrderLine(2, "WIDGET-B", "Widget B red",   5m, "pcs", 3.00m),
+            });
+        var extractor = new FakeBodyExtractor(
+            new EmailBodyExtractionResult(Success: true, Confidence: 0.85, Order: extractedOrder, FailureReason: null));
+
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId, extractor: extractor);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.app",
+            Subject:   "Order request (no attachment)",
+            Attachments: Array.Empty<InboundAttachment>(),
+            Body: "Hi team, please send 10 of WIDGET-A at 2.50 EUR and 5 of WIDGET-B at 3.00 EUR. Thanks!");
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeTrue();
+        result.OrgId.Should().Be(orgId);
+        result.CreatedOrderIds.Should().HaveCount(1,
+            "the extractor returned a usable order from the email body");
+
+        // The body path uses the new CreateStubFromParsedOrderAsync — the
+        // attachment path (CreateStubAsync) must not have been invoked.
+        orders.CalledWith.Should().BeEmpty();
+        orders.ParsedOrderCalls.Should().HaveCount(1);
+        orders.ParsedOrderCalls[0].OrgId.Should().Be(orgId);
+        orders.ParsedOrderCalls[0].Source.Should().Be("email_body_nlp");
+        orders.ParsedOrderCalls[0].Order.PoNumber.Should().Be("PO-FROM-BODY-001");
+        orders.ParsedOrderCalls[0].Order.Lines.Should().HaveCount(2);
+
+        // No parse job — the order is already populated, there is nothing to parse.
+        enqueuer.Calls.Should().BeEmpty();
+
+        extractor.Calls.Should().Be(1);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static InboundEmailRouter MakeRouter(
@@ -293,7 +353,8 @@ public class InboundEmailRouterTests
         IOrderService orders,
         IParseJobEnqueuer enqueuer,
         string slug,
-        Guid orgId)
+        Guid orgId,
+        IEmailBodyOrderExtractor? extractor = null)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -303,7 +364,9 @@ public class InboundEmailRouterTests
             .Build();
 
         return new InboundEmailRouter(
-            db, orders, enqueuer, config,
+            db, orders, enqueuer,
+            extractor ?? FakeBodyExtractor.NoOp,
+            config,
             NullLogger<InboundEmailRouter>.Instance);
     }
 
@@ -355,6 +418,7 @@ public class InboundEmailRouterTests
     private sealed class FakeOrderService : IOrderService
     {
         public List<(Guid OrgId, Guid SupplierId, string FileName, string ContentType, long Size)> CalledWith { get; } = new();
+        public List<(Guid OrgId, Guid SupplierId, ExtractedOrder Order, string Source)> ParsedOrderCalls { get; } = new();
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
             Guid organisationId, Guid supplierId, Stream fileStream,
@@ -378,6 +442,24 @@ public class InboundEmailRouterTests
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
         }
 
+        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
+            Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
+        {
+            ParsedOrderCalls.Add((organisationId, supplierId, order, source));
+
+            var stub = new PurchaseOrderEntity
+            {
+                Id = Guid.NewGuid(),
+                OrgId = organisationId,
+                SupplierId = supplierId,
+                Status = "pending_review",
+                SourceFileKey = null,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            };
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
+        }
+
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> ParseStoredFileAsync(Guid organisationId, Guid orderId, CancellationToken ct)
@@ -392,6 +474,29 @@ public class InboundEmailRouterTests
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> ResolveAsync(Guid organisationId, Guid orderId, IReadOnlyList<LineResolution> resolutions, bool saveMappings, CancellationToken ct)
             => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Test double for <see cref="IEmailBodyOrderExtractor"/>. Returns a fixed
+    /// result on every call; <see cref="NoOp"/> short-circuits with
+    /// <c>Success=false</c> so tests that don't care about the body path see
+    /// the router behave exactly as before.
+    /// </summary>
+    private sealed class FakeBodyExtractor : IEmailBodyOrderExtractor
+    {
+        public static readonly FakeBodyExtractor NoOp = new(
+            new EmailBodyExtractionResult(Success: false, Confidence: 0, Order: null, FailureReason: "no-op fake"));
+
+        private readonly EmailBodyExtractionResult _result;
+        public int Calls { get; private set; }
+
+        public FakeBodyExtractor(EmailBodyExtractionResult result) { _result = result; }
+
+        public Task<EmailBodyExtractionResult> ExtractAsync(string emailBody, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromResult(_result);
+        }
     }
 
     private sealed class RecordingEnqueuer : IParseJobEnqueuer

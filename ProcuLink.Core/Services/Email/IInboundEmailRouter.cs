@@ -44,11 +44,18 @@ public interface IInboundEmailRouter
 /// </param>
 /// <param name="Subject">Free-text subject line. Not used for routing today; kept for audit.</param>
 /// <param name="Attachments">Decoded attachments — the router filters by extension.</param>
+/// <param name="Body">
+/// Plain-text body of the message. When no supported attachment yields an order,
+/// the router falls back to <see cref="Ai.IEmailBodyOrderExtractor"/> on this
+/// field. Webhook adapters should prefer the provider's text body and strip HTML
+/// tags from the HTML body when only that is available.
+/// </param>
 public sealed record InboundEmailPayload(
     string FromEmail,
     string ToEmail,
     string Subject,
-    IReadOnlyList<InboundAttachment> Attachments);
+    IReadOnlyList<InboundAttachment> Attachments,
+    string? Body = null);
 
 /// <summary>A single decoded attachment from an inbound email.</summary>
 /// <param name="FileName">Original file name as supplied by the sender.</param>

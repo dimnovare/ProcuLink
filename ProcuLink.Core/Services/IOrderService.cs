@@ -1,4 +1,5 @@
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services.Ai;
 
 namespace ProcuLink.Core.Services;
 
@@ -32,6 +33,37 @@ public interface IOrderService
         Stream fileStream,
         string filename,
         string contentType,
+        CancellationToken ct);
+
+    /// <summary>
+    /// Create a purchase order directly from an already-parsed order (e.g. from
+    /// the email-body NLP extractor). There is no source file — the order is
+    /// persisted with lines populated, auto-resolved against item_mappings, and
+    /// no <c>ParseOrderJob</c> is required.
+    /// </summary>
+    /// <param name="organisationId">Tenant.</param>
+    /// <param name="supplierId">Resolved supplier id.</param>
+    /// <param name="order">
+    /// The already-parsed order. Field-by-field identical in shape to
+    /// <c>ProcuLink.Transform.Parsing.ParsedOrder</c>; mapped to it internally
+    /// by the implementation (Core cannot reference Transform).
+    /// </param>
+    /// <param name="source">
+    /// Provenance tag stored on the order's canonical JSON, e.g.
+    /// <c>"email_body_nlp"</c>. The review UI uses this to show how the order
+    /// was created.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// The persisted order with status <c>"pending_review"</c> when any line is
+    /// unresolved, or <c>"ready"</c> when every line auto-resolved against an
+    /// existing item mapping.
+    /// </returns>
+    Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
+        Guid organisationId,
+        Guid supplierId,
+        ExtractedOrder order,
+        string source,
         CancellationToken ct);
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -102,7 +103,8 @@ public sealed class InboundEmailController : ControllerBase
             FromEmail: body.From ?? string.Empty,
             ToEmail: toAddress!,
             Subject: body.Subject ?? string.Empty,
-            Attachments: attachments);
+            Attachments: attachments,
+            Body: ResolveBody(body));
 
         // ── 4. Delegate to router ────────────────────────────────────────────
         var result = await _router.RouteAsync(payload, ct);
@@ -148,6 +150,38 @@ public sealed class InboundEmailController : ControllerBase
         if (string.IsNullOrWhiteSpace(content)) return Array.Empty<byte>();
         try { return Convert.FromBase64String(content); }
         catch (FormatException) { return Array.Empty<byte>(); }
+    }
+
+    /// <summary>
+    /// Prefer Postmark's <c>TextBody</c>; fall back to stripped <c>HtmlBody</c>
+    /// when only HTML is sent. The fallback is intentionally minimal — we only
+    /// need a plain-text body good enough for the NLP extractor, not a perfect
+    /// HTML-to-text renderer.
+    /// </summary>
+    private static string? ResolveBody(PostmarkInboundPayload body)
+    {
+        if (!string.IsNullOrWhiteSpace(body.TextBody))
+            return body.TextBody;
+        if (!string.IsNullOrWhiteSpace(body.HtmlBody))
+            return StripHtml(body.HtmlBody!);
+        return null;
+    }
+
+    private static readonly Regex HtmlTagRegex = new(@"<[^>]+>", RegexOptions.Compiled);
+    private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
+
+    private static string StripHtml(string html)
+    {
+        // Drop <script> and <style> blocks (content, not just tags) so their
+        // text doesn't bleed into the extracted body.
+        var noScripts = Regex.Replace(html, "<script[^>]*>.*?</script>",
+            string.Empty, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        var noStyles = Regex.Replace(noScripts, "<style[^>]*>.*?</style>",
+            string.Empty, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        var stripped = HtmlTagRegex.Replace(noStyles, " ");
+        var decoded = System.Net.WebUtility.HtmlDecode(stripped);
+        return WhitespaceRegex.Replace(decoded, " ").Trim();
     }
 
     /// <summary>

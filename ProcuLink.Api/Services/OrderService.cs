@@ -246,6 +246,110 @@ public sealed class OrderService : IOrderService
         return Result<PurchaseOrderEntity>.Ok(entity);
     }
 
+    // ── CreateStubFromParsedOrderAsync ────────────────────────────────────────
+
+    public async Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
+        Guid organisationId,
+        Guid supplierId,
+        ExtractedOrder order,
+        string source,
+        CancellationToken ct)
+    {
+        if (order is null || order.Lines is null || order.Lines.Count == 0)
+            return Result<PurchaseOrderEntity>.Fail("Extracted order contains no line items.");
+
+        var supplier = await _db.Suppliers.FindAsync(new object[] { supplierId }, ct);
+        if (supplier is null)
+            return Result<PurchaseOrderEntity>.Fail("Supplier not found.");
+
+        // Field-by-field map: ExtractedOrder → Transform.ParsedOrder so the
+        // existing auto-resolve / AI-suggest path can be reused unchanged.
+        var parsedLines = order.Lines.Select(l => new ParsedOrderLine(
+            LineNumber:    l.LineNumber,
+            BuyerItemCode: l.BuyerItemCode,
+            Description:   l.Description,
+            Quantity:      l.Quantity,
+            Unit:          l.Unit,
+            UnitPrice:     l.UnitPrice
+        )).ToList();
+
+        var lineEntities      = new List<PurchaseOrderLineEntity>(parsedLines.Count);
+        var anyUnresolved     = false;
+        var aiSuggestionCount = 0;
+        var aiCandidates      = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
+
+        foreach (var line in parsedLines)
+        {
+            var lineEntity = await BuildLineEntityAsync(
+                organisationId,
+                supplierId,
+                supplier.Name,
+                line,
+                aiCandidates,
+                ct);
+
+            if (lineEntity.NeedsReview) anyUnresolved = true;
+            if (!string.IsNullOrWhiteSpace(lineEntity.AiSuggestedSupplierItemCode)) aiSuggestionCount++;
+
+            lineEntities.Add(lineEntity);
+        }
+
+        var orderId = Guid.NewGuid();
+        var now     = DateTime.UtcNow;
+
+        // Provenance tag stored on canonical JSON so the review UI can show
+        // where the order came from. Mirrors the buyerName lookup pattern in
+        // ListAsync — additional fields are surfaced via the same column.
+        var canonicalPayload = new
+        {
+            source,
+            buyerName = order.BuyerName,
+            poNumber  = order.PoNumber,
+            orderDate = order.OrderDate,
+            currency  = order.Currency,
+        };
+        var canonicalJson = JsonDocument.Parse(JsonSerializer.Serialize(canonicalPayload));
+
+        var entity = new PurchaseOrderEntity
+        {
+            Id            = orderId,
+            OrgId         = organisationId,
+            SupplierId    = supplierId,
+            Supplier      = supplier,
+            PoNumber      = string.IsNullOrWhiteSpace(order.PoNumber)
+                                ? $"PO-{now:yyyyMMddHHmmss}"
+                                : order.PoNumber!,
+            OrderDate     = order.OrderDate.HasValue
+                                ? DateOnly.FromDateTime(order.OrderDate.Value)
+                                : DateOnly.FromDateTime(now),
+            Currency      = order.Currency ?? "EUR",
+            Status        = anyUnresolved ? "pending_review" : "ready",
+            SourceFileKey = null,
+            CanonicalJson = canonicalJson,
+            CreatedAt     = now,
+            UpdatedAt     = now,
+            Lines         = lineEntities,
+        };
+
+        _db.PurchaseOrders.Add(entity);
+        _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "Created", new
+        {
+            source,
+            lineCount       = lineEntities.Count,
+            unresolvedCount = lineEntities.Count(l => l.NeedsReview),
+            aiSuggestionCount,
+        }));
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Order {OrderId} created from extracted payload (source={Source}) for org {OrgId}: {LineCount} lines, {Unresolved} unresolved, status={Status}",
+            orderId, source, organisationId, lineEntities.Count,
+            lineEntities.Count(l => l.NeedsReview), entity.Status);
+
+        return Result<PurchaseOrderEntity>.Ok(entity);
+    }
+
     // ── ParseStoredFileAsync ──────────────────────────────────────────────────
 
     public async Task<Result<PurchaseOrderEntity>> ParseStoredFileAsync(
