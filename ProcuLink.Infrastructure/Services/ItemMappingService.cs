@@ -102,4 +102,47 @@ public sealed class ItemMappingService : IItemMappingService
             await _db.SaveChangesAsync(ct);
         }
     }
+
+    /// <inheritdoc/>
+    public async Task<ItemMapping> CreateAsync(
+        Guid orgId, Guid supplierId,
+        string buyerItemCode, string supplierItemCode,
+        MappingSource source, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var mapping = new ItemMapping
+        {
+            Id               = Guid.NewGuid(),
+            OrgId            = orgId,
+            SupplierId       = supplierId,
+            BuyerItemCode    = buyerItemCode.Trim(),
+            SupplierItemCode = supplierItemCode.Trim(),
+            Confidence       = source == MappingSource.Manual ? 1.0f : 0.8f,
+            Source           = source.ToString().ToLowerInvariant(),
+            CreatedAt        = now,
+            UpdatedAt        = now,
+        };
+        _db.ItemMappings.Add(mapping);
+        await _db.SaveChangesAsync(ct);
+        return mapping;
+    }
+
+    /// <inheritdoc/>
+    public async Task<ItemMapping?> UpdateByIdAsync(
+        Guid orgId, Guid mappingId,
+        string buyerItemCode, string supplierItemCode,
+        MappingSource source, CancellationToken ct)
+    {
+        var mapping = await _db.ItemMappings
+            .Where(m => m.Id == mappingId && m.OrgId == orgId)
+            .FirstOrDefaultAsync(ct);
+        if (mapping is null) return null;
+        mapping.BuyerItemCode    = buyerItemCode.Trim();
+        mapping.SupplierItemCode = supplierItemCode.Trim();
+        mapping.Source           = source.ToString().ToLowerInvariant();
+        mapping.Confidence       = source == MappingSource.Manual ? 1.0f : mapping.Confidence;
+        mapping.UpdatedAt        = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return mapping;
+    }
 }

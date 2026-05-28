@@ -27,4 +27,16 @@ public interface IItemMappingService
 
     /// <summary>Permanently delete a mapping by its primary key.</summary>
     Task DeleteAsync(Guid orgId, Guid mappingId, CancellationToken ct);
+
+    /// <summary>Create a new mapping. Returns the created entity.</summary>
+    Task<ItemMapping> CreateAsync(
+        Guid orgId, Guid supplierId,
+        string buyerItemCode, string supplierItemCode,
+        MappingSource source, CancellationToken ct);
+
+    /// <summary>Update buyer and supplier codes by mapping ID. Returns null when not found.</summary>
+    Task<ItemMapping?> UpdateByIdAsync(
+        Guid orgId, Guid mappingId,
+        string buyerItemCode, string supplierItemCode,
+        MappingSource source, CancellationToken ct);
 }

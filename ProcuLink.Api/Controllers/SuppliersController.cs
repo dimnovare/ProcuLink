@@ -278,6 +278,8 @@ public class SuppliersController : ControllerBase
             id               = m.Id,
             buyerItemCode    = m.BuyerItemCode,
             supplierItemCode = m.SupplierItemCode,
+            confidence       = m.Confidence,
+            source           = m.Source,
         });
 
         return Ok(result);
@@ -296,6 +298,123 @@ public class SuppliersController : ControllerBase
         var orgId = _tenant.OrganisationId;
         await _mappingService.DeleteAsync(orgId, mappingId, ct);
         return NoContent();
+    }
+
+    // ── POST /api/suppliers/{supplierId}/mappings ────────────────────────────────
+
+    public sealed record CreateMappingRequest(string BuyerItemCode, string SupplierItemCode);
+
+    /// <summary>Create a new item code mapping for the given supplier.</summary>
+    [HttpPost("{supplierId:guid}/mappings")]
+    [ProducesResponseType(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> CreateMapping(
+        Guid supplierId,
+        [FromBody] CreateMappingRequest request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.BuyerItemCode) ||
+            string.IsNullOrWhiteSpace(request.SupplierItemCode))
+            return BadRequest("BuyerItemCode and SupplierItemCode are required.");
+
+        var orgId   = _tenant.OrganisationId;
+        var mapping = await _mappingService.CreateAsync(
+            orgId, supplierId,
+            request.BuyerItemCode, request.SupplierItemCode,
+            MappingSource.Manual, ct);
+
+        return StatusCode(201, new
+        {
+            id               = mapping.Id,
+            buyerItemCode    = mapping.BuyerItemCode,
+            supplierItemCode = mapping.SupplierItemCode,
+            confidence       = mapping.Confidence,
+            source           = mapping.Source,
+        });
+    }
+
+    // ── PUT /api/suppliers/{supplierId}/mappings/{mappingId} ─────────────────────
+
+    public sealed record UpdateMappingRequest(string BuyerItemCode, string SupplierItemCode);
+
+    /// <summary>Update an existing item code mapping.</summary>
+    [HttpPut("{supplierId:guid}/mappings/{mappingId:guid}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateMapping(
+        Guid supplierId,
+        Guid mappingId,
+        [FromBody] UpdateMappingRequest request,
+        CancellationToken ct)
+    {
+        var orgId   = _tenant.OrganisationId;
+        var mapping = await _mappingService.UpdateByIdAsync(
+            orgId, mappingId,
+            request.BuyerItemCode, request.SupplierItemCode,
+            MappingSource.Manual, ct);
+
+        if (mapping is null) return NotFound();
+
+        return Ok(new
+        {
+            id               = mapping.Id,
+            buyerItemCode    = mapping.BuyerItemCode,
+            supplierItemCode = mapping.SupplierItemCode,
+            confidence       = mapping.Confidence,
+            source           = mapping.Source,
+        });
+    }
+
+    // ── POST /api/suppliers/{supplierId}/mappings/import ─────────────────────────
+
+    /// <summary>Bulk-import item code mappings from a CSV file (buyer_code, supplier_code columns).</summary>
+    [HttpPost("{supplierId:guid}/mappings/import")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ImportMappings(
+        Guid supplierId,
+        IFormFile file,
+        CancellationToken ct)
+    {
+        if (file is null || file.Length == 0) return BadRequest("No file provided.");
+
+        var orgId   = _tenant.OrganisationId;
+        var created = 0;
+        var updated = 0;
+
+        using var reader = new System.IO.StreamReader(file.OpenReadStream());
+        var header = await reader.ReadLineAsync(ct); // skip header
+        if (header is null) return BadRequest("Empty file.");
+
+        while (!reader.EndOfStream)
+        {
+            var line = await reader.ReadLineAsync(ct);
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            var parts = line.Split(',');
+            if (parts.Length < 2) continue;
+
+            var buyerCode    = parts[0].Trim().Trim('"');
+            var supplierCode = parts[1].Trim().Trim('"');
+            if (string.IsNullOrEmpty(buyerCode) || string.IsNullOrEmpty(supplierCode)) continue;
+
+            var existing = await _db.ItemMappings
+                .Where(m => m.OrgId == orgId && m.SupplierId == supplierId && m.BuyerItemCode == buyerCode)
+                .FirstOrDefaultAsync(ct);
+
+            if (existing is null)
+            {
+                await _mappingService.CreateAsync(orgId, supplierId, buyerCode, supplierCode, MappingSource.Imported, ct);
+                created++;
+            }
+            else
+            {
+                await _mappingService.UpdateByIdAsync(orgId, existing.Id, buyerCode, supplierCode, MappingSource.Imported, ct);
+                updated++;
+            }
+        }
+
+        return Ok(new { created, updated });
     }
 
     // ── GET /api/suppliers/{id}/po-mapping ────────────────────────────────────
