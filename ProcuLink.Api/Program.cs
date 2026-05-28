@@ -226,6 +226,7 @@ builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
+builder.Services.AddScoped<IDeliveryDispatcher, SftpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
