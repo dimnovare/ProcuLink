@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using ProcuLink.Core.Entities;
 
 namespace ProcuLink.Infrastructure;
@@ -40,6 +42,14 @@ public class ProcuLinkDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        // EF InMemory has no native JsonDocument type handler (Npgsql supplies one for Postgres).
+        // Register a string round-trip converter so all providers can materialise these columns.
+        // ParseJsonDoc is a static helper because expression trees cannot call methods with
+        // optional parameters directly (JsonDocument.Parse has optional JsonDocumentOptions).
+        var jsonDocConverter = new ValueConverter<JsonDocument?, string?>(
+            v => v == null ? null : v.RootElement.GetRawText(),
+            v => ParseJsonDoc(v));
 
         // ── organisations ──────────────────────────────────────────────
         modelBuilder.Entity<Organisation>(b =>
@@ -201,12 +211,14 @@ public class ProcuLinkDbContext : DbContext
              .HasColumnType("text[]");
             b.Property(x => x.RequiredFields)
              .HasColumnName("required_fields")
-             .HasColumnType("jsonb");
+             .HasColumnType("jsonb")
+             .HasConversion(jsonDocConverter);
             b.Property(x => x.OutputFormat).HasColumnName("output_format").IsRequired();
             b.Property(x => x.DestinationType).HasColumnName("destination_type").IsRequired();
             b.Property(x => x.DestinationConfig)
              .HasColumnName("destination_config")
-             .HasColumnType("jsonb");
+             .HasColumnType("jsonb")
+             .HasConversion(jsonDocConverter);
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             b.HasOne(x => x.Supplier)
@@ -232,7 +244,8 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.SourceFileKey).HasColumnName("source_file_key");
             b.Property(x => x.CanonicalJson)
              .HasColumnName("canonical_json")
-             .HasColumnType("jsonb");
+             .HasColumnType("jsonb")
+             .HasConversion(jsonDocConverter);
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             b.HasOne(x => x.Organisation)
@@ -444,7 +457,8 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.Action).HasColumnName("action").IsRequired();
             b.Property(x => x.Payload)
              .HasColumnName("payload")
-             .HasColumnType("jsonb");
+             .HasColumnType("jsonb")
+             .HasConversion(jsonDocConverter);
             b.Property(x => x.CreatedAt)
              .HasColumnName("created_at")
              .HasColumnType("timestamptz");
@@ -504,7 +518,8 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.Name).HasColumnName("name").IsRequired();
             b.Property(x => x.Format).HasColumnName("format").IsRequired();
             b.Property(x => x.Version).HasColumnName("version").IsRequired();
-            b.Property(x => x.ConfigJson).HasColumnName("config_json").HasColumnType("jsonb");
+            b.Property(x => x.ConfigJson).HasColumnName("config_json").HasColumnType("jsonb")
+             .HasConversion(jsonDocConverter);
             b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasOne(x => x.Organisation)
@@ -662,4 +677,7 @@ public class ProcuLinkDbContext : DbContext
              .OnDelete(DeleteBehavior.Cascade);
         });
     }
+
+    private static JsonDocument? ParseJsonDoc(string? v) =>
+        v == null ? null : JsonDocument.Parse(v);
 }

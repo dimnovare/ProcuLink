@@ -175,7 +175,21 @@ public class EmailSettingsServiceTests
             modelBuilder.Ignore<SupplierPoMapping>();
             modelBuilder.Ignore<SupplierDeliveryConfig>();
             modelBuilder.Ignore<IdempotencyKey>();
+            modelBuilder.Ignore<TenantApiKey>();
+            modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<AiUsageMonthly>();
+            modelBuilder.Ignore<SftpIngressConfig>();
+            modelBuilder.Ignore<ImportedSftpFile>();
+            modelBuilder.Ignore<S3IngressConfig>();
+            modelBuilder.Ignore<ImportedS3Object>();
+            modelBuilder.Ignore<Buyer>();
+            modelBuilder.Ignore<ValidationRule>();
+            modelBuilder.Ignore<OutputTemplate>();
+            modelBuilder.Ignore<InvoiceEntity>();
+            modelBuilder.Ignore<InvoiceLineEntity>();
+            modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
+            modelBuilder.Ignore<AsnPackageEntity>();
+            modelBuilder.Ignore<AsnPackageLineEntity>();
 
             modelBuilder.Entity<Organisation>(b =>
             {
@@ -186,6 +200,8 @@ public class EmailSettingsServiceTests
                 b.Ignore(x => x.OutboundArtifacts);
                 b.Ignore(x => x.DeliveryAttempts);
                 b.Ignore(x => x.AuditEvents);
+                b.Ignore(x => x.ApiKeys);
+                b.Ignore(x => x.IntegrationSubscriptions);
             });
 
             modelBuilder.Entity<Supplier>(b =>

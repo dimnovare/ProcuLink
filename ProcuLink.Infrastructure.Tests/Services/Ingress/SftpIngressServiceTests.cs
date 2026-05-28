@@ -355,8 +355,20 @@ public class SftpIngressServiceTests
             modelBuilder.Ignore<SupplierPoMapping>();
             modelBuilder.Ignore<SupplierDeliveryConfig>();
             modelBuilder.Ignore<IdempotencyKey>();
+            modelBuilder.Ignore<TenantApiKey>();
+            modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<AiUsageMonthly>();
             modelBuilder.Ignore<AuditEvent>();
+            modelBuilder.Ignore<S3IngressConfig>();
+            modelBuilder.Ignore<ImportedS3Object>();
+            modelBuilder.Ignore<Buyer>();
+            modelBuilder.Ignore<ValidationRule>();
+            modelBuilder.Ignore<OutputTemplate>();
+            modelBuilder.Ignore<InvoiceEntity>();
+            modelBuilder.Ignore<InvoiceLineEntity>();
+            modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
+            modelBuilder.Ignore<AsnPackageEntity>();
+            modelBuilder.Ignore<AsnPackageLineEntity>();
 
             // Only materialise the two new entities.
             modelBuilder.Entity<SftpIngressConfig>(b =>

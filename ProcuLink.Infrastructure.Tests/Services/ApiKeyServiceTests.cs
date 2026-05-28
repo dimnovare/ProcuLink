@@ -15,7 +15,7 @@ public class ApiKeyServiceTests
         var opts = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
-        return new ProcuLinkDbContext(opts);
+        return new ApiKeyTestDbContext(opts);
     }
 
     [Fact]
@@ -74,5 +74,80 @@ public class ApiKeyServiceTests
         ok.Should().BeFalse();
         var loaded = await db.TenantApiKeys.FindAsync(entity.Id);
         loaded!.IsActive.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Minimal in-memory DbContext that only materialises the entities needed
+    /// for ApiKeyService tests. All other entities (including those with JsonDocument
+    /// properties unsupported by the InMemory provider) are ignored.
+    /// </summary>
+    private sealed class ApiKeyTestDbContext : ProcuLinkDbContext
+    {
+        public ApiKeyTestDbContext(DbContextOptions<ProcuLinkDbContext> options)
+            : base(options) { }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            // Ignore entities that use JsonDocument (unsupported by InMemory provider).
+            modelBuilder.Ignore<AppUser>();
+            modelBuilder.Ignore<Membership>();
+            modelBuilder.Ignore<Supplier>();
+            modelBuilder.Ignore<SupplierProfileEntity>();
+            modelBuilder.Ignore<PurchaseOrderEntity>();
+            modelBuilder.Ignore<PurchaseOrderLineEntity>();
+            modelBuilder.Ignore<ItemMapping>();
+            modelBuilder.Ignore<OutboundArtifact>();
+            modelBuilder.Ignore<DeliveryAttempt>();
+            modelBuilder.Ignore<AuditEvent>();
+            modelBuilder.Ignore<SupplierPoMapping>();
+            modelBuilder.Ignore<SupplierDeliveryConfig>();
+            modelBuilder.Ignore<IdempotencyKey>();
+            modelBuilder.Ignore<AiUsageMonthly>();
+            modelBuilder.Ignore<SftpIngressConfig>();
+            modelBuilder.Ignore<ImportedSftpFile>();
+            modelBuilder.Ignore<S3IngressConfig>();
+            modelBuilder.Ignore<ImportedS3Object>();
+            modelBuilder.Ignore<Buyer>();
+            modelBuilder.Ignore<ValidationRule>();
+            modelBuilder.Ignore<OutputTemplate>();
+            modelBuilder.Ignore<InvoiceEntity>();
+            modelBuilder.Ignore<InvoiceLineEntity>();
+            modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
+            modelBuilder.Ignore<AsnPackageEntity>();
+            modelBuilder.Ignore<AsnPackageLineEntity>();
+
+            // Configure Organisation minimally (no JsonDocument navigations).
+            modelBuilder.Entity<Organisation>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.Ignore(x => x.Memberships);
+                b.Ignore(x => x.Suppliers);
+                b.Ignore(x => x.PurchaseOrders);
+                b.Ignore(x => x.ItemMappings);
+                b.Ignore(x => x.OutboundArtifacts);
+                b.Ignore(x => x.DeliveryAttempts);
+                b.Ignore(x => x.AuditEvents);
+            });
+
+            // Configure TenantApiKey with its FK to Organisation.
+            modelBuilder.Entity<TenantApiKey>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.HasIndex(x => x.KeyHash).IsUnique();
+                b.HasOne(k => k.Organisation)
+                 .WithMany(o => o.ApiKeys)
+                 .HasForeignKey(k => k.OrganisationId);
+            });
+
+            // IntegrationSubscription — not needed for ApiKeyService tests, but
+            // referenced by Organisation.IntegrationSubscriptions navigation.
+            modelBuilder.Entity<IntegrationSubscription>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.HasOne(s => s.Organisation)
+                 .WithMany(o => o.IntegrationSubscriptions)
+                 .HasForeignKey(s => s.OrganisationId);
+            });
+        }
     }
 }
