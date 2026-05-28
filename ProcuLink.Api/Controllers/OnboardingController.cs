@@ -38,6 +38,9 @@ public class OnboardingController : ControllerBase
         var hasUpload = await _db.PurchaseOrders
             .AnyAsync(o => o.OrgId == orgId, ct);
 
+        var hasResolvedMapping = await _db.PurchaseOrderLines
+            .AnyAsync(l => l.Order.OrgId == orgId && l.SupplierItemCode != null, ct);
+
         var hasDelivery = await _db.PurchaseOrders
             .AnyAsync(o => o.OrgId == orgId && o.Status == "delivered", ct);
 
@@ -45,6 +48,7 @@ public class OnboardingController : ControllerBase
         {
             hasSupplier,
             hasUpload,
+            hasResolvedMapping,
             hasDelivery,
         });
     }
