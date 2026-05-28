@@ -1,5 +1,8 @@
 using Hangfire;
+using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
+using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Jobs;
 
@@ -9,13 +12,21 @@ namespace ProcuLink.Api.Jobs;
 /// </summary>
 public class ParseOrderJob
 {
-    private readonly IOrderService        _orderService;
-    private readonly ILogger<ParseOrderJob> _logger;
+    private readonly IOrderService           _orderService;
+    private readonly ILogger<ParseOrderJob>  _logger;
+    private readonly ProcuLinkDbContext      _db;
+    private readonly IAnalyticsService       _analytics;
 
-    public ParseOrderJob(IOrderService orderService, ILogger<ParseOrderJob> logger)
+    public ParseOrderJob(
+        IOrderService orderService,
+        ILogger<ParseOrderJob> logger,
+        ProcuLinkDbContext db,
+        IAnalyticsService analytics)
     {
         _orderService = orderService;
         _logger       = logger;
+        _db           = db;
+        _analytics    = analytics;
     }
 
     /// <summary>
@@ -42,6 +53,48 @@ public class ParseOrderJob
         _logger.LogInformation(
             "ParseOrderJob completed for order {OrderId}, new status={Status}",
             orderId, result.Value!.Status);
+
+        // ── First-upload-parsed analytics emission ────────────────────────────
+        // Check whether any OTHER parsed order existed for this org. The current
+        // order is already persisted with its parsed status by OrderService, so
+        // we exclude it by id. This also naturally prevents re-firing on
+        // Hangfire retries — once another order is parsed, the AnyAsync is true.
+        var hadOtherParsedOrders = await _db.PurchaseOrders
+            .AsNoTracking()
+            .AnyAsync(o => o.OrgId == organisationId
+                        && o.Id != orderId
+                        && o.Status != OrderStatusConstants.Parsing
+                        && o.Status != OrderStatusConstants.PendingParse
+                        && o.Status != OrderStatusConstants.Failed, ct);
+
+        if (!hadOtherParsedOrders)
+        {
+            var order = await _db.PurchaseOrders.AsNoTracking()
+                .Where(o => o.Id == orderId && o.OrgId == organisationId)
+                .Select(o => new { o.SourceFileKey })
+                .FirstOrDefaultAsync(ct);
+
+            var parser = "unknown";
+            if (order?.SourceFileKey is string key && !string.IsNullOrWhiteSpace(key))
+            {
+                var ext = Path.GetExtension(key).TrimStart('.').ToLowerInvariant();
+                if (!string.IsNullOrEmpty(ext))
+                {
+                    parser = ext;
+                }
+            }
+
+            await _analytics.CaptureAsync(
+                organisationId: organisationId,
+                userId: null,
+                eventName: "first_upload_parsed",
+                properties: new Dictionary<string, object?>
+                {
+                    ["order_id"] = orderId,
+                    ["parser"]   = parser,
+                },
+                ct: ct);
+        }
     }
 
     // ── Static factory method for clean enqueue syntax ────────────────────────

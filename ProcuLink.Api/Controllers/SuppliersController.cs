@@ -27,6 +27,7 @@ public class SuppliersController : ControllerBase
     private readonly IPoMappingService          _poMappingService;
     private readonly IDeliveryConfigService     _deliveryConfigService;
     private readonly IDeliveryService           _deliveryService;
+    private readonly IAnalyticsService          _analytics;
 
     public SuppliersController(
         ISupplierProfileRepository supplierProfileRepository,
@@ -36,7 +37,8 @@ public class SuppliersController : ControllerBase
         IBillingService            billing,
         IPoMappingService          poMappingService,
         IDeliveryConfigService     deliveryConfigService,
-        IDeliveryService           deliveryService)
+        IDeliveryService           deliveryService,
+        IAnalyticsService          analytics)
     {
         _supplierProfileRepository = supplierProfileRepository;
         _mappingService            = mappingService;
@@ -46,6 +48,7 @@ public class SuppliersController : ControllerBase
         _poMappingService          = poMappingService;
         _deliveryConfigService     = deliveryConfigService;
         _deliveryService           = deliveryService;
+        _analytics                 = analytics;
     }
 
     // ── GET /api/suppliers ────────────────────────────────────────────────────
@@ -102,6 +105,9 @@ public class SuppliersController : ControllerBase
         if (exists)
             return Conflict(new { error = $"A supplier named '{nameTrimmed}' already exists." });
 
+        var hadSuppliers = await _db.Suppliers
+            .AnyAsync(s => s.OrgId == orgId && s.DeletedAt == null, ct);
+
         var supplier = new Supplier
         {
             Id        = Guid.NewGuid(),
@@ -112,6 +118,19 @@ public class SuppliersController : ControllerBase
 
         _db.Suppliers.Add(supplier);
         await _db.SaveChangesAsync(ct);
+
+        if (!hadSuppliers)
+        {
+            await _analytics.CaptureAsync(
+                organisationId: orgId,
+                userId: null,
+                eventName: "first_supplier_added",
+                properties: new Dictionary<string, object?>
+                {
+                    ["supplier_id"] = supplier.Id,
+                },
+                ct: ct);
+        }
 
         var result = new { id = supplier.Id, name = supplier.Name };
         return CreatedAtAction(nameof(GetSuppliers), result);

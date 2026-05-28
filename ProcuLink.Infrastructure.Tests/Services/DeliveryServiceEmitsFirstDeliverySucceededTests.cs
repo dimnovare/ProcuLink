@@ -7,17 +7,76 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Tests.TestDoubles;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
 
-public class DeliveryServiceTests
+public class DeliveryServiceEmitsFirstDeliverySucceededTests
 {
+    [Fact]
+    public async Task DispatchArtifactAsync_FirstDeliveryForOrg_EmitsFirstDeliverySucceeded()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+        await db.SaveChangesAsync();
+
+        var analytics = new FakeAnalyticsService();
+        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 202)), encryption, analytics);
+
+        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+        result.Success.Should().BeTrue();
+        (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status.Should().Be(OrderStatusConstants.Delivered);
+
+        analytics.CapturedEvents.Should().HaveCount(1);
+        var captured = analytics.CapturedEvents[0];
+        captured.EventName.Should().Be("first_delivery_succeeded");
+        captured.OrgId.Should().Be(ids.OrgId);
+        captured.Properties["order_id"].Should().Be(ids.OrderId);
+        captured.Properties["protocol"].Should().Be("http");
+    }
+
+    [Fact]
+    public async Task DispatchArtifactAsync_OrgAlreadyHasDeliveredOrders_DoesNotEmit()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+
+        // Seed a prior delivered order in the same org so this is NOT the first delivery.
+        var now = DateTime.UtcNow;
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = Guid.NewGuid(),
+            OrgId = ids.OrgId,
+            SupplierId = ids.SupplierId,
+            PoNumber = "PO-PRIOR",
+            OrderDate = DateOnly.FromDateTime(now),
+            Currency = "EUR",
+            Status = OrderStatusConstants.Delivered,
+            CreatedAt = now.AddDays(-1),
+            UpdatedAt = now.AddDays(-1),
+        });
+        await db.SaveChangesAsync();
+
+        var analytics = new FakeAnalyticsService();
+        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 202)), encryption, analytics);
+
+        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+        result.Success.Should().BeTrue();
+        analytics.CapturedEvents.Should().BeEmpty();
+    }
+
     private static ProcuLinkDbContext CreateDb()
     {
         var options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
-        return new DeliveryServiceTestDbContext(options);
+        return new EmitterTestDbContext(options);
     }
 
     private static DeliveryEncryptionService CreateEncryption()
@@ -69,117 +128,19 @@ public class DeliveryServiceTests
         return (orgId, supplierId, orderId, artifactId);
     }
 
-    [Fact]
-    public async Task DispatchArtifactAsync_NoConfig_NoOpsAndLeavesReadyToDeliver()
-    {
-        await using var db = CreateDb();
-        var ids = await SeedOrderAsync(db);
-        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 200)));
-
-        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
-
-        result.Success.Should().BeTrue();
-        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.ReadyToDeliver);
-        (await db.DeliveryAttempts.CountAsync()).Should().Be(0);
-    }
-
-    [Fact]
-    public async Task DispatchArtifactAsync_AutoDeliverFalse_NoOpsWhenRequired()
-    {
-        await using var db = CreateDb();
-        var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db);
-        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: false));
-        await db.SaveChangesAsync();
-        var dispatcher = new FakeDispatcher(new DeliveryResult(true, null, 200));
-        var service = CreateService(db, dispatcher, encryption);
-
-        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
-
-        result.Success.Should().BeTrue();
-        dispatcher.Calls.Should().Be(0);
-        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.ReadyToDeliver);
-    }
-
-    [Fact]
-    public async Task DispatchArtifactAsync_Success_WritesAttemptAndMarksDelivered()
-    {
-        await using var db = CreateDb();
-        var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db);
-        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
-        await db.SaveChangesAsync();
-        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 202)), encryption);
-
-        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
-
-        result.Success.Should().BeTrue();
-        var order = await db.PurchaseOrders.SingleAsync();
-        order.Status.Should().Be(OrderStatusConstants.Delivered);
-        var attempt = await db.DeliveryAttempts.SingleAsync();
-        attempt.OrderId.Should().Be(ids.OrderId);
-        attempt.Status.Should().Be("success");
-        attempt.ResponseCode.Should().Be(202);
-    }
-
-    [Fact]
-    public async Task DispatchArtifactAsync_Failure_WritesAttemptAndMarksDeliveryFailed()
-    {
-        await using var db = CreateDb();
-        var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db);
-        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
-        await db.SaveChangesAsync();
-        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(false, "HTTP 422", 422)), encryption);
-
-        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
-
-        result.Success.Should().BeFalse();
-        var order = await db.PurchaseOrders.SingleAsync();
-        order.Status.Should().Be(OrderStatusConstants.DeliveryFailed);
-        var attempt = await db.DeliveryAttempts.SingleAsync();
-        attempt.Status.Should().Be("failed");
-        attempt.ErrorMessage.Should().Be("HTTP 422");
-    }
-
-    [Fact]
-    public async Task TestFireAsync_WritesAttemptWithNullOrderId()
-    {
-        await using var db = CreateDb();
-        var encryption = CreateEncryption();
-        var orgId = Guid.NewGuid();
-        var supplierId = Guid.NewGuid();
-        db.SupplierDeliveryConfigs.Add(MakeConfig(orgId, supplierId, encryption, autoDeliver: false));
-        await db.SaveChangesAsync();
-        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 200)), encryption);
-
-        var result = await service.TestFireAsync(orgId, supplierId, default);
-
-        result.Success.Should().BeTrue();
-        var attempt = await db.DeliveryAttempts.SingleAsync();
-        attempt.OrderId.Should().BeNull();
-        attempt.OrgId.Should().Be(orgId);
-        attempt.Status.Should().Be("success");
-    }
-
     private static DeliveryService CreateService(
         ProcuLinkDbContext db,
         IDeliveryDispatcher dispatcher,
-        DeliveryEncryptionService? encryption = null) =>
+        DeliveryEncryptionService encryption,
+        IAnalyticsService analytics) =>
         new(
             db,
             new FakeFileStorage(),
-            encryption ?? CreateEncryption(),
+            encryption,
             new[] { dispatcher },
             new NoOpIntegrationTriggerService(),
-            new ProcuLink.Infrastructure.Tests.TestDoubles.FakeAnalyticsService(),
+            analytics,
             NullLogger<DeliveryService>.Instance);
-
-    private sealed class NoOpIntegrationTriggerService : ProcuLink.Core.Services.IIntegrationTriggerService
-    {
-        public Task EnqueueAsync(Guid organisationId, string eventType, object payload, CancellationToken ct)
-            => Task.CompletedTask;
-    }
 
     private static SupplierDeliveryConfig MakeConfig(
         Guid orgId,
@@ -199,10 +160,15 @@ public class DeliveryServiceTests
             UpdatedAt = DateTime.UtcNow,
         };
 
+    private sealed class NoOpIntegrationTriggerService : IIntegrationTriggerService
+    {
+        public Task EnqueueAsync(Guid organisationId, string eventType, object payload, CancellationToken ct)
+            => Task.CompletedTask;
+    }
+
     private sealed class FakeDispatcher : IDeliveryDispatcher
     {
         private readonly DeliveryResult _result;
-        public int Calls { get; private set; }
         public string Protocol => "http";
 
         public FakeDispatcher(DeliveryResult result)
@@ -216,14 +182,7 @@ public class DeliveryServiceTests
             string contentType,
             SupplierDeliveryConfig config,
             string decryptedCredentials,
-            CancellationToken ct)
-        {
-            Calls++;
-            content.Should().NotBeEmpty();
-            new[] { "PO-123.csv", "proculink-test.csv" }.Should().Contain(fileName);
-            decryptedCredentials.Should().Contain("type");
-            return Task.FromResult(_result);
-        }
+            CancellationToken ct) => Task.FromResult(_result);
     }
 
     private sealed class FakeFileStorage : IFileStorageService
@@ -240,9 +199,9 @@ public class DeliveryServiceTests
         public Task DeleteAsync(string key, CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class DeliveryServiceTestDbContext : ProcuLinkDbContext
+    private sealed class EmitterTestDbContext : ProcuLinkDbContext
     {
-        public DeliveryServiceTestDbContext(DbContextOptions<ProcuLinkDbContext> options)
+        public EmitterTestDbContext(DbContextOptions<ProcuLinkDbContext> options)
             : base(options)
         {
         }

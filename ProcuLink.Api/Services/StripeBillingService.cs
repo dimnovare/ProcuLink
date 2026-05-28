@@ -22,16 +22,82 @@ public sealed class StripeBillingService : IBillingService
     private readonly ProcuLinkDbContext _db;
     private readonly IConfiguration _config;
     private readonly ILogger<StripeBillingService> _logger;
+    private readonly IAnalyticsService _analytics;
 
     public StripeBillingService(
         ProcuLinkDbContext db,
         IConfiguration config,
-        ILogger<StripeBillingService> logger)
+        ILogger<StripeBillingService> logger,
+        IAnalyticsService analytics)
     {
         _db = db;
         _config = config;
         _logger = logger;
+        _analytics = analytics;
     }
+
+    /// <summary>
+    /// Emits the <c>billing_upgraded</c> analytics event. Called from the Stripe
+    /// <c>checkout.session.completed</c> webhook when an org moves to a paid plan.
+    /// </summary>
+    public Task EmitBillingUpgradedAsync(
+        Guid orgId,
+        string fromPlan,
+        string toPlan,
+        string stripeSessionId,
+        CancellationToken ct = default) =>
+        _analytics.CaptureAsync(
+            organisationId: orgId,
+            userId: null,
+            eventName: "billing_upgraded",
+            properties: new Dictionary<string, object?>
+            {
+                ["from_plan"]          = fromPlan,
+                ["to_plan"]            = toPlan,
+                ["stripe_session_id"]  = stripeSessionId,
+            },
+            ct: ct);
+
+    /// <summary>
+    /// Emits the <c>billing_downgraded</c> analytics event. Called from the Stripe
+    /// <c>customer.subscription.updated</c> webhook when an org moves to a lower-tier plan.
+    /// </summary>
+    public Task EmitBillingDowngradedAsync(
+        Guid orgId,
+        string fromPlan,
+        string toPlan,
+        CancellationToken ct = default) =>
+        _analytics.CaptureAsync(
+            organisationId: orgId,
+            userId: null,
+            eventName: "billing_downgraded",
+            properties: new Dictionary<string, object?>
+            {
+                ["from_plan"] = fromPlan,
+                ["to_plan"]   = toPlan,
+            },
+            ct: ct);
+
+    /// <summary>
+    /// Emits the <c>billing_cancelled</c> analytics event. Called from the Stripe
+    /// <c>customer.subscription.deleted</c> webhook. <paramref name="hadOrdersThisMonth"/>
+    /// must reflect whether the org processed any orders in the current Stripe billing cycle.
+    /// </summary>
+    public Task EmitBillingCancelledAsync(
+        Guid orgId,
+        string previousPlan,
+        bool hadOrdersThisMonth,
+        CancellationToken ct = default) =>
+        _analytics.CaptureAsync(
+            organisationId: orgId,
+            userId: null,
+            eventName: "billing_cancelled",
+            properties: new Dictionary<string, object?>
+            {
+                ["previous_plan"]         = previousPlan,
+                ["had_orders_this_month"] = hadOrdersThisMonth,
+            },
+            ct: ct);
 
     public async Task<BillingStatus> GetStatusAsync(Guid orgId, CancellationToken ct = default)
     {

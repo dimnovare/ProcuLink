@@ -40,7 +40,10 @@ C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\          ← .NET solutio
 ├── ProcuLink.Core\                  ← Domain models + service interfaces
 ├── ProcuLink.Infrastructure\        ← EF Core, Postgres, R2/Local storage
 ├── ProcuLink.Transform\             ← CSV/XLSX parsers + XML/CSV transform
-└── ProcuLink.Worker\                ← Hangfire jobs host (Phase 3+)
+├── ProcuLink.Worker\                ← Hangfire jobs host (Phase 3+)
+├── ProcuLink.Transform.Tests\       ← Transform unit tests
+├── ProcuLink.Infrastructure.Tests\  ← Infrastructure + delivery unit tests
+└── ProcuLink.Api.Tests\             ← Api/middleware/controller/job unit tests (added Phase 4.3)
 
 C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink\  ← Frontend
 GitHub: https://github.com/dimnovare/project-proculink
@@ -225,7 +228,7 @@ before writing implementation plans.
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
 | **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed, live deployed QA remaining |
 | **K** | Standards + engine hardening | ✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`) |
-| **L** | Trust, onboarding + commercial readiness | In progress — Group L Wave 1 (analytics/trust/PostHog) on branch `phase5/group-l-wave-1-backend-analytics` |
+| **L** | Trust, onboarding + commercial readiness | In progress — Wave 1 (PostHog backend client) merged to `main`; Phase 4.3 (backend event emitters) complete on `phase5/group-l-wave-2-backend-emitters` |
 
 Group I remains the active implementation group unless the user explicitly
 reprioritizes. The Bridge Layer is locked, but screens still need route-by-route
@@ -311,7 +314,7 @@ Read this before starting new work:
 - **Fix (2026-05-28): JsonDocument EF InMemory value converter** — added `string` round-trip `ValueConverter<JsonDocument?, string?>` to `ProcuLinkDbContext` for all 5 jsonb columns. Updated all test-scoped `Ignore` lists for new Wave 3+4 entities. Resolved 48 pre-existing test failures (commit `367c07f`).
 - **Fix (2026-05-28): Migration slug backfill** — `AddTenantApiKeysAndOrgSlug` migration now runs a SQL `UPDATE` to generate `kebab(name)-{first4uuid}` slugs for existing orgs before the unique index is created (commit `19078e2`).
 - **Worker DI fix (2026-05-28):** `IIntegrationTriggerService` registered in `ProcuLink.Worker/Program.cs` (commit `4607d6d`).
-- **Group L Wave 2 — sample-order onboarding chip is implemented** (commits `ffe7418` + `524b080`, branch `worktree-wave-2-sample-order-chip`):
+- **Group L Wave 2 — sample-order onboarding chip is implemented** (commits `ffe7418` + `524b080`):
   - `ProcuLink.Api/Fixtures/sample-order.csv` — embedded 3-line EUR fixture (DEMO-2026-001, Northwind Trading OÜ).
   - `IsSample: bool` on `PurchaseOrderEntity` + `Supplier`; `Code: string?` on `Supplier`.
   - EF migration `20260528150709_AddIsSampleFlags` — adds `is_sample` + `code` columns to `purchase_orders` and `suppliers`.
@@ -320,12 +323,20 @@ Read this before starting new work:
   - `POST /api/onboarding/sample-order` — `SampleOrderController` returns `{ orderId, isSample: true }`.
   - 3 new xUnit tests in `SampleOrderServiceTests`: supplier creation, supplier reuse, and quota exclusion (`!IsSample` filter).
   - **Do not redo.** Treat as implemented unless `STATUS.md` says a regression reopened it.
+- **Group L Phase 4.3 — backend analytics event emitters are implemented** (commits `b7fa374`, `0220fd8`):
+  - `IAnalyticsService` injected into 6 callsites: `TenantResolutionMiddleware`, `SuppliersController`, `ParseOrderJob`, `TransformOrderJob`, `DeliveryService`, `StripeBillingService`.
+  - Events emitted: `org_created`, `first_supplier_added`, `first_upload_parsed`, `first_transform_succeeded`, `first_delivery_succeeded`, `billing_upgraded`, `billing_downgraded`, `billing_cancelled`.
+  - All "first" events use `AnyAsync` org-scoped guard — idempotent across Hangfire retries.
+  - Billing emit methods (`EmitBillingUpgradedAsync` / `EmitBillingDowngradedAsync` / `EmitBillingCancelledAsync`) added to `StripeBillingService` as concrete public methods (not on `IBillingService`); wiring to `BillingController` webhook handlers is a separate later chip.
+  - New `ProcuLink.Api.Tests` project added to `ProcuLink.slnx`; 11 new tests (2 middleware + 2 suppliers + 2 parse job + 2 transform job + 3 billing).
+  - `FakeAnalyticsService` in both `ProcuLink.Infrastructure.Tests/TestDoubles/` and `ProcuLink.Api.Tests/TestDoubles/`.
+  - 2 new delivery emit tests in `ProcuLink.Infrastructure.Tests/Services/DeliveryServiceEmitsFirstDeliverySucceededTests.cs`.
 - **Last verified commands:**
   - `dotnet build ProcuLink.Api/ProcuLink.Api.csproj --no-restore` passed (API process locking DLLs; build Infrastructure + tests fine).
-  - `dotnet test ProcuLink.slnx --no-restore` passed, **198 tests** (102 Transform + 96 Infrastructure), 0 failures.
+  - `dotnet test ProcuLink.slnx --no-restore` passed, **211 tests** (102 Transform + 11 Api.Tests + 98 Infrastructure), 0 failures.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
-No remaining Phase 4 C-H group is open. Wave 3 and Wave 4 are complete. Group K is complete. Current implementation group is **Group I — UI/UX production polish + responsive QA** from the Phase 5 roadmap; pass 15 is complete. Group L Wave 1 (analytics/trust) is on branch `phase5/group-l-wave-1-backend-analytics`.
+No remaining Phase 4 C-H group is open. Wave 3 and Wave 4 are complete. Group K is complete. Current implementation group is **Group I — UI/UX production polish + responsive QA** from the Phase 5 roadmap; pass 15 is complete. Group L Wave 1 (PostHog backend client) is merged to `main`. Group L Phase 4.3 (backend event emitters) is on `phase5/group-l-wave-2-backend-emitters`.
 
 1. Read `STATUS.md`.
 2. Read `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`.
