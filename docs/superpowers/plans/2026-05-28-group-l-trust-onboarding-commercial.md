@@ -629,7 +629,7 @@ Required so we can legally fire PostHog from EU visitors. Two states: `functiona
 **Files:**
 - Create: `project-proculink/src/lib/cookie-consent.ts`
 
-- [ ] **Step 1: Create `cookie-consent.ts`**
+- [x] **Step 1: Create `cookie-consent.ts`**
 
 Full file content:
 
@@ -686,7 +686,7 @@ export function useCookieConsent(): [CookieConsent, (v: Exclude<CookieConsent, "
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add src/lib/cookie-consent.ts
@@ -699,7 +699,7 @@ git commit -m "feat(privacy): add useCookieConsent hook with localStorage persis
 - Create: `project-proculink/src/components/marketing/CookieConsentBanner.tsx`
 - Modify: `project-proculink/src/app/layout.tsx` (mount the banner)
 
-- [ ] **Step 1: Create `CookieConsentBanner.tsx`**
+- [x] **Step 1: Create `CookieConsentBanner.tsx`**
 
 Full file content:
 
@@ -790,7 +790,7 @@ export function CookieConsentBanner() {
 }
 ```
 
-- [ ] **Step 2: Mount in root layout**
+- [x] **Step 2: Mount in root layout**
 
 Read `src/app/layout.tsx` to confirm structure. Add an import for `CookieConsentBanner` and render it inside the `<body>` (after `{children}` but before any analytics scripts).
 
@@ -802,7 +802,7 @@ import { CookieConsentBanner } from "@/components/marketing/CookieConsentBanner"
 <CookieConsentBanner />
 ```
 
-- [ ] **Step 3: Verify build and visual**
+- [x] **Step 3: Verify build and visual**
 
 ```bash
 cd project-proculink && bun run build
@@ -810,7 +810,7 @@ cd project-proculink && bun run build
 
 Expected: success. Manually load `http://localhost:3000` in an incognito window — banner appears on first load, vanishes after click, stays gone on reload.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/components/marketing/CookieConsentBanner.tsx src/app/layout.tsx
@@ -1354,14 +1354,14 @@ git commit -m "feat(analytics): emit org_created + first_supplier/upload/transfo
 - Create: `project-proculink/src/components/analytics/AnalyticsBoot.tsx`
 - Modify: `project-proculink/.env.example` + `project-proculink/.env`
 
-- [ ] **Step 1: Add `posthog-js`**
+- [x] **Step 1: Add `posthog-js`**
 
 ```bash
 cd project-proculink
 bun add posthog-js
 ```
 
-- [ ] **Step 2: Add env vars**
+- [x] **Step 2: Add env vars**
 
 Append to `.env.example` and `.env`:
 
@@ -1370,7 +1370,7 @@ NEXT_PUBLIC_POSTHOG_KEY=
 NEXT_PUBLIC_POSTHOG_HOST=https://eu.posthog.com
 ```
 
-- [ ] **Step 3: Create `src/lib/analytics.ts`**
+- [x] **Step 3: Create `src/lib/analytics.ts`**
 
 ```ts
 "use client";
@@ -1436,7 +1436,7 @@ export function onConsentChanged(value: "functional-only" | "analytics-allowed")
 }
 ```
 
-- [ ] **Step 4: Create `AnalyticsBoot.tsx`**
+- [x] **Step 4: Create `AnalyticsBoot.tsx`**
 
 ```tsx
 "use client";
@@ -1476,7 +1476,7 @@ export function AnalyticsBoot() {
 }
 ```
 
-- [ ] **Step 5: Mount `AnalyticsBoot` in root layout**
+- [x] **Step 5: Mount `AnalyticsBoot` in root layout**
 
 Add to `src/app/layout.tsx` inside `<body>` before `<CookieConsentBanner />`:
 
@@ -1487,7 +1487,7 @@ import { AnalyticsBoot } from "@/components/analytics/AnalyticsBoot";
 <AnalyticsBoot />
 ```
 
-- [ ] **Step 6: Smoke check in dev**
+- [x] **Step 6: Smoke check in dev**
 
 ```bash
 bun run build
@@ -1495,7 +1495,7 @@ bun run build
 
 Expected: success. Run dev (`bun run dev`), open `http://localhost:3000`, accept cookies, verify PostHog network requests appear in DevTools when an API key is set. When key is empty (default), no requests fire.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add package.json bun.lockb src/lib/analytics.ts src/components/analytics/AnalyticsBoot.tsx src/app/layout.tsx .env .env.example
