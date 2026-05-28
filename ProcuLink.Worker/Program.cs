@@ -99,7 +99,10 @@ builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
 builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
 builder.Services.AddScoped<IS3IngressService, S3IngressService>();
-builder.Services.AddScoped<IEmailBodyOrderExtractor, OpenAiEmailBodyOrderExtractor>();
+// IEmailBodyOrderExtractor intentionally NOT registered here: OpenAiEmailBodyOrderExtractor
+// depends on ICurrentTenantService (HttpContext-based) which only exists in the API.
+// Email-body NLP runs in the API's InboundEmailController scope (Postmark webhook),
+// not in Worker jobs. Registering it here triggers DI validation failure at Host.Build().
 
 if (!string.IsNullOrWhiteSpace(builder.Configuration["Ocr:Azure:Endpoint"])
     && !string.IsNullOrWhiteSpace(builder.Configuration["Ocr:Azure:ApiKey"]))
