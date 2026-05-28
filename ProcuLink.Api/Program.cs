@@ -186,6 +186,9 @@ else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
 }
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
+builder.Services.AddScoped<IBuyerService, BuyerService>();
+builder.Services.AddScoped<IValidationRuleService, ValidationRuleService>();
+builder.Services.AddScoped<IOutputTemplateService, OutputTemplateService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();

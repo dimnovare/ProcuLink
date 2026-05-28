@@ -26,6 +26,9 @@ public class ProcuLinkDbContext : DbContext
     public DbSet<ImportedSftpFile> ImportedSftpFiles => Set<ImportedSftpFile>();
     public DbSet<S3IngressConfig> S3IngressConfigs => Set<S3IngressConfig>();
     public DbSet<ImportedS3Object> ImportedS3Objects => Set<ImportedS3Object>();
+    public DbSet<Buyer> Buyers => Set<Buyer>();
+    public DbSet<ValidationRule> ValidationRules => Set<ValidationRule>();
+    public DbSet<OutputTemplate> OutputTemplates => Set<OutputTemplate>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -439,6 +442,62 @@ public class ProcuLinkDbContext : DbContext
             b.HasOne(x => x.User)
              .WithMany(x => x.AuditEvents)
              .HasForeignKey(x => x.UserId);
+        });
+
+        // ── buyers ─────────────────────────────────────────────────────
+        modelBuilder.Entity<Buyer>(b =>
+        {
+            b.ToTable("buyers");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.Name).HasColumnName("name").IsRequired();
+            b.Property(x => x.Code).HasColumnName("code").IsRequired();
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
+        });
+
+        // ── validation_rules ───────────────────────────────────────────
+        modelBuilder.Entity<ValidationRule>(b =>
+        {
+            b.ToTable("validation_rules");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.Name).HasColumnName("name").IsRequired();
+            b.Property(x => x.Description).HasColumnName("description").IsRequired();
+            b.Property(x => x.Severity).HasColumnName("severity").IsRequired();
+            b.Property(x => x.Entity).HasColumnName("entity").IsRequired();
+            b.Property(x => x.Enabled).HasColumnName("enabled").HasDefaultValue(true);
+            b.Property(x => x.AutoBlock).HasColumnName("auto_block").HasDefaultValue(false);
+            b.Property(x => x.TriggerCount).HasColumnName("trigger_count").HasDefaultValue(0);
+            b.Property(x => x.LastTriggeredAt).HasColumnName("last_triggered_at").HasColumnType("timestamptz");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
+        });
+
+        // ── output_templates ───────────────────────────────────────────
+        modelBuilder.Entity<OutputTemplate>(b =>
+        {
+            b.ToTable("output_templates");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.Name).HasColumnName("name").IsRequired();
+            b.Property(x => x.Format).HasColumnName("format").IsRequired();
+            b.Property(x => x.Version).HasColumnName("version").IsRequired();
+            b.Property(x => x.ConfigJson).HasColumnName("config_json").HasColumnType("jsonb");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
         });
     }
 }
