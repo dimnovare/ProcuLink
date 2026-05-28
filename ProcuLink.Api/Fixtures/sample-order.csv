@@ -1,0 +1,4 @@
+po_number,buyer_name,line_no,item_code,description,quantity,unit_price,currency
+DEMO-2026-001,Northwind Trading OÜ,1,ACME-WIDGET-A,Widget A 10mm,12,4.50,EUR
+DEMO-2026-001,Northwind Trading OÜ,2,ACME-WIDGET-B,Widget B 20mm,6,8.25,EUR
+DEMO-2026-001,Northwind Trading OÜ,3,ACME-BRACKET-S,Bracket short,24,1.95,EUR
