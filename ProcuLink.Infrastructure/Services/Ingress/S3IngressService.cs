@@ -14,9 +14,9 @@ namespace ProcuLink.Infrastructure.Services.Ingress;
 /// them into the order-ingestion pipeline via <see cref="IOrderService.CreateStubAsync"/>.
 /// </summary>
 /// <remarks>
-/// IAmazonS3 is injected rather than constructed internally so that the DI
-/// container can create a per-org client using decrypted credentials — see
-/// docs/agent-reports/2026-05-28-s3-ingress.md for wiring guidance.
+/// A per-org <see cref="IAmazonS3"/> is built inside <see cref="PollAsync"/> from
+/// the org's decrypted <c>S3IngressConfig</c> credentials, so each tenant
+/// authenticates against their own bucket.
 /// </remarks>
 public sealed class S3IngressService : IS3IngressService
 {
@@ -33,20 +33,20 @@ public sealed class S3IngressService : IS3IngressService
     private readonly ProcuLinkDbContext _db;
     private readonly IOrderService _orderService;
     private readonly DeliveryEncryptionService _encryption;
-    private readonly IAmazonS3 _s3Client;
+    private readonly IAmazonS3ClientFactory _s3ClientFactory;
     private readonly ILogger<S3IngressService> _logger;
 
     public S3IngressService(
         ProcuLinkDbContext db,
         IOrderService orderService,
         DeliveryEncryptionService encryption,
-        IAmazonS3 s3Client,
+        IAmazonS3ClientFactory s3ClientFactory,
         ILogger<S3IngressService> logger)
     {
         _db = db;
         _orderService = orderService;
         _encryption = encryption;
-        _s3Client = s3Client;
+        _s3ClientFactory = s3ClientFactory;
         _logger = logger;
     }
 
@@ -78,6 +78,15 @@ public sealed class S3IngressService : IS3IngressService
             return 0;
         }
 
+        // S3IngressConfig does not yet carry a per-org ServiceUrl; pass null so
+        // the factory resolves the AWS endpoint from the region. R2 (custom
+        // endpoint) support will follow once the entity gains a ServiceUrl column.
+        var s3Client = _s3ClientFactory.Create(
+            config.AccessKeyId,
+            secretKey,
+            config.Region,
+            serviceUrl: null);
+
         _logger.LogInformation(
             "S3 ingress: listing bucket={Bucket} prefix={Prefix} for org {OrgId}.",
             config.BucketName, config.KeyPrefix, organisationId);
@@ -93,7 +102,7 @@ public sealed class S3IngressService : IS3IngressService
         ListObjectsV2Response listResponse;
         do
         {
-            listResponse = await _s3Client.ListObjectsV2Async(listRequest, ct);
+            listResponse = await s3Client.ListObjectsV2Async(listRequest, ct);
 
             foreach (var s3Object in listResponse.S3Objects)
             {
@@ -129,7 +138,7 @@ public sealed class S3IngressService : IS3IngressService
                 GetObjectResponse getResponse;
                 try
                 {
-                    getResponse = await _s3Client.GetObjectAsync(config.BucketName, s3Object.Key, ct);
+                    getResponse = await s3Client.GetObjectAsync(config.BucketName, s3Object.Key, ct);
                 }
                 catch (Exception ex)
                 {

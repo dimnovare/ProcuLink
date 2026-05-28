@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
@@ -212,8 +213,23 @@ public class S3IngressServiceTests
             db,
             orders ?? new FakeOrderService(),
             encryption,
-            s3,
+            new FakeAmazonS3ClientFactory(s3),
             NullLogger<S3IngressService>.Instance);
+    }
+
+    /// <summary>
+    /// Test double for <see cref="IAmazonS3ClientFactory"/> that returns a
+    /// pre-built <see cref="IAmazonS3"/> regardless of credentials. Lets the
+    /// existing mock-based tests reach the same S3 client through the factory.
+    /// </summary>
+    private sealed class FakeAmazonS3ClientFactory : IAmazonS3ClientFactory
+    {
+        private readonly IAmazonS3 _client;
+
+        public FakeAmazonS3ClientFactory(IAmazonS3 client) => _client = client;
+
+        public IAmazonS3 Create(string accessKeyId, string secretAccessKey, string region, string? serviceUrl)
+            => _client;
     }
 
     /// <summary>

@@ -1,5 +1,4 @@
 using System.Threading.RateLimiting;
-using Amazon.S3;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -173,28 +172,7 @@ builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.Hangfire
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
 builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
-builder.Services.AddSingleton<IAmazonS3>(sp =>
-{
-    // Platform-level S3 client. The per-org credentials stored in
-    // S3IngressConfig are decrypted but not yet used (see
-    // docs/agent-reports/2026-05-28-s3-ingress.md → "Single IAmazonS3
-    // instance injected" follow-up). Configure via S3Ingress:* keys.
-    var cfg     = sp.GetRequiredService<IConfiguration>();
-    var key     = cfg["S3Ingress:AccessKeyId"] ?? string.Empty;
-    var secret  = cfg["S3Ingress:SecretAccessKey"] ?? string.Empty;
-    var region  = cfg["S3Ingress:Region"] ?? "eu-west-1";
-    var service = cfg["S3Ingress:ServiceUrl"];
-
-    var s3Config = new AmazonS3Config
-    {
-        AuthenticationRegion = region,
-        ForcePathStyle       = true,
-    };
-    if (!string.IsNullOrWhiteSpace(service)) s3Config.ServiceURL = service;
-    else s3Config.RegionEndpoint = Amazon.RegionEndpoint.GetBySystemName(region);
-
-    return new AmazonS3Client(key, secret, s3Config);
-});
+builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
 builder.Services.AddScoped<IS3IngressService, S3IngressService>();
 
 // OCR fallback — opt-in via Ocr:Azure:Endpoint + Ocr:Azure:ApiKey.

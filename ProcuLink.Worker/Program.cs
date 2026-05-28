@@ -1,4 +1,3 @@
-using Amazon.S3;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
@@ -98,24 +97,7 @@ builder.Services.AddSingleton<ITransformService, JsonTransformService>();
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
 builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
-builder.Services.AddSingleton<IAmazonS3>(sp =>
-{
-    var cfg     = sp.GetRequiredService<IConfiguration>();
-    var key     = cfg["S3Ingress:AccessKeyId"] ?? string.Empty;
-    var secret  = cfg["S3Ingress:SecretAccessKey"] ?? string.Empty;
-    var region  = cfg["S3Ingress:Region"] ?? "eu-west-1";
-    var service = cfg["S3Ingress:ServiceUrl"];
-
-    var s3Config = new AmazonS3Config
-    {
-        AuthenticationRegion = region,
-        ForcePathStyle       = true,
-    };
-    if (!string.IsNullOrWhiteSpace(service)) s3Config.ServiceURL = service;
-    else s3Config.RegionEndpoint = Amazon.RegionEndpoint.GetBySystemName(region);
-
-    return new AmazonS3Client(key, secret, s3Config);
-});
+builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
 builder.Services.AddScoped<IS3IngressService, S3IngressService>();
 builder.Services.AddScoped<IEmailBodyOrderExtractor, OpenAiEmailBodyOrderExtractor>();
 
