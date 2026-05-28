@@ -124,23 +124,30 @@ builder.Services.AddScoped<ICurrentTenantService, CurrentTenantService>();
 // ── MVC / Controllers ──────────────────────────────────────────────────────
 builder.Services.AddControllers();
 
-// ── CORS — React frontend ──────────────────────────────────────────────────
+// ── CORS — Next.js frontend ────────────────────────────────────────────────
+// Frontend:Url can be a single URL or a comma-separated list. Supports Vercel
+// preview-deploy wildcard subdomains when configured as e.g.
+//   Frontend:Url=https://proculink.com,https://*.vercel.app
 builder.Services.AddCors(options =>
 {
-    // Add VITE_FRONTEND_URL (Railway env var) for production Vercel frontend (G4)
-    var frontendUrls = new List<string>
+    var defaultOrigins = new List<string>
     {
-        "http://localhost:8080",
-        "http://localhost:8081",
-        "http://localhost:5173",
-        "http://localhost:8082",
+        "http://localhost:3000",   // Next.js default dev port
+        "http://localhost:8082",   // ProcuLink frontend dev port (package.json)
     };
-    var vercelUrl = builder.Configuration["Frontend:Url"];
-    if (!string.IsNullOrWhiteSpace(vercelUrl))
-        frontendUrls.Add(vercelUrl);
+
+    var configured = (builder.Configuration["Frontend:Url"] ?? string.Empty)
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    var allOrigins = defaultOrigins
+        .Concat(configured)
+        .Where(u => !string.IsNullOrWhiteSpace(u))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
 
     options.AddPolicy("AllowFrontend", policy =>
-        policy.WithOrigins(frontendUrls.ToArray())
+        policy.WithOrigins(allOrigins)
+              .SetIsOriginAllowedToAllowWildcardSubdomains()
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials());
