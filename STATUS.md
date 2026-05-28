@@ -21,7 +21,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - `ParseInvoiceJob` — Hangfire idempotent job, 3 retries
 - `InvoiceController` (upload/list/get/approve/download) + `DesadvController` (202 Accepted)
 - 4 EF migrations: `AddInvoicesAndLines`, `AddAdvanceShippingNotices`, `AddTenantApiKeysAndOrgSlug`, `AddIntegrationSubscriptions`
-- Tests: `UblInvoiceParserTests` (7), `EdifactStubTests` (2), `CsvInvoiceTransformServiceTests` (3) — 102/102 Transform.Tests pass
+- Tests: `UblInvoiceParserTests` (7), `EdifactStubTests` (2), `CsvInvoiceTransformServiceTests` (3) — 102/102 Transform.Tests pass; 91/91 Infrastructure.Tests pass (193 total)
 
 **Wave 4 — Zapier/Make.com integration layer** (commit `3fbff22`):
 - `ApiKeyHasher` utility in `Core.Security` (no circular project refs)
@@ -38,9 +38,6 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - `docs/integrations/SUBMISSION.md` — Zapier + Make.com submission checklist and webhook security docs
 - Frontend: Settings → API Keys (create/list/revoke with one-time raw key display) + Settings → Connectors (Zapier/Make.com CTAs + custom webhook CRUD)
 - Tests: `ApiKeyServiceTests` (3), `ApiKeyHasherTests` (3)
-
-**Known pre-existing regression** (not caused by Wave 3/4):
-- 48 `ProcuLink.Infrastructure.Tests` fail with `JsonDocument` EF InMemory error — pre-dates Wave 3/4, tracked separately
 
 ---
 
