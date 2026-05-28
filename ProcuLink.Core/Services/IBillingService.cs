@@ -24,8 +24,13 @@ public interface IBillingService
     /// <summary>Returns true if the org's plan includes the requested feature.</summary>
     Task<bool> HasFeatureAsync(Guid orgId, BillingFeature feature, CancellationToken ct = default);
 
-    /// <summary>Creates a Stripe Checkout session for the given plan. Returns the redirect URL.</summary>
-    Task<string> CreateCheckoutSessionAsync(Guid orgId, string plan, string returnUrl, CancellationToken ct = default);
+    /// <summary>
+    /// Creates a Stripe Checkout session for the given plan. Returns the redirect URL.
+    /// <paramref name="frontendUrl"/> is the bare frontend origin (e.g. https://app.proculink.com).
+    /// The implementation builds success_url as {frontendUrl}/welcome?upgraded={plan}&amp;session_id={CHECKOUT_SESSION_ID}
+    /// and cancel_url as {frontendUrl}/settings.
+    /// </summary>
+    Task<string> CreateCheckoutSessionAsync(Guid orgId, string plan, string frontendUrl, CancellationToken ct = default);
 
     /// <summary>Creates a Stripe Customer Portal session. Returns the redirect URL.</summary>
     Task<string> CreatePortalSessionAsync(Guid orgId, string returnUrl, CancellationToken ct = default);

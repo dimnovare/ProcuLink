@@ -168,6 +168,16 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 builder.Services.AddScoped<ISampleOrderService, SampleOrderService>();
 
+// ── Support contact (Group L Wave 3) ─────────────────────────────────────
+// MailKitEmailSender when SMTP host configured; otherwise ConsoleEmailSender
+// logs the email (no-op delivery). Either way the support endpoint always 200s.
+if (!string.IsNullOrWhiteSpace(builder.Configuration["Smtp:Host"]))
+    builder.Services.AddScoped<IEmailSender, MailKitEmailSender>();
+else
+    builder.Services.AddScoped<IEmailSender, ConsoleEmailSender>();
+
+builder.Services.AddScoped<ISupportContactService, SupportContactService>();
+
 // ── Analytics (PostHog) — no-op when key absent ──────────────────────────
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();

@@ -178,7 +178,7 @@ public sealed class StripeBillingService : IBillingService
     public async Task<string> CreateCheckoutSessionAsync(
         Guid orgId,
         string plan,
-        string returnUrl,
+        string frontendUrl,
         CancellationToken ct = default)
     {
         plan = plan.ToLowerInvariant();
@@ -195,6 +195,9 @@ public sealed class StripeBillingService : IBillingService
 
         var org = await LoadOrgAsync(orgId, asTracking: false, ct);
 
+        // success_url routes to /welcome so the frontend can show the upgraded banner.
+        // {CHECKOUT_SESSION_ID} is a Stripe substitution token — C# {{ }} escaping produces
+        // the literal braces that Stripe requires at runtime.
         var options = new SessionCreateOptions
         {
             Mode = "subscription",
@@ -211,8 +214,8 @@ public sealed class StripeBillingService : IBillingService
                 ["org_id"] = orgId.ToString(),
                 ["plan"] = plan
             },
-            SuccessUrl = $"{returnUrl}?billing=success",
-            CancelUrl = returnUrl,
+            SuccessUrl = $"{frontendUrl}/welcome?upgraded={plan}&session_id={{CHECKOUT_SESSION_ID}}",
+            CancelUrl  = $"{frontendUrl}/settings",
             AllowPromotionCodes = true,
         };
 
