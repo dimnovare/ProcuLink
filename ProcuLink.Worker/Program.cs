@@ -67,6 +67,9 @@ else
     builder.Services.AddSingleton<IFileStorageService, R2StorageService>();
 
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
+// Wave 4: IntegrationTriggerService is needed by OrderService and DeliveryService.
+// Register it here so Worker DI validation passes (same as API/Program.cs line 198).
+builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
