@@ -205,6 +205,8 @@ source. All UI/UX and design decisions run through the local design system,
 | Phase 3 — Sellable MVP | ✅ Done |
 | Next.js migration | ✅ Done |
 | Phase 4 — Commercial | ✅ Groups C-H implemented — live QA and hardening next |
+| Wave 3 — Invoice + ASN canonical models | ✅ Done — UBL 2.1 invoice parser, invoice/ASN entities, CSV/XML/JSON transforms, Hangfire job, controllers |
+| Wave 4 — Zapier/Make.com integration layer | ✅ Done — API keys (`plk_`), org slug, integration subscriptions, `ApiKeyAuthHandler`, ingress/integration controllers, HMAC-SHA256 trigger firing, frontend tabs |
 
 ---
 
@@ -223,7 +225,7 @@ before writing implementation plans.
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
 | **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed, live deployed QA remaining |
 | **K** | Standards + engine hardening | ✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`) |
-| **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
+| **L** | Trust, onboarding + commercial readiness | In progress — Group L Wave 1 (analytics/trust/PostHog) on branch `phase5/group-l-wave-1-backend-analytics` |
 
 Group I remains the active implementation group unless the user explicitly
 reprioritizes. The Bridge Layer is locked, but screens still need route-by-route
@@ -279,21 +281,42 @@ Read this before starting new work:
   - Pass 14: `BridgePageLoader` loading.tsx for 11 missing routes, `InboxView` mobile empty state, global `:focus-visible` ring, sidebar workspace-switcher accessible button, topbar aria-labels.
   - Pass 15: `SpineReview` wired to live `GET /api/orders/{id}` via `useQuery`; `buildNodesFromOrder()` maps Order → SpineNodeData[]; `BuyerName` added to `OrderDto`; loading skeleton + error/not-found gate added.
   - Continue live API/deployment QA for the full first-upload-to-delivery happy/error paths against a running backend before Group J. Group J should turn the current connector/webhook/mapping/rule/template local QA affordances into real persistence/test-fire verification.
-- **Do not redo C2, D2, E, F, G, or H.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
+- **Do not redo C2, D2, E, F, G, H, Wave 3, or Wave 4.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
 - **Manual/live QA still recommended:**
   - Stripe Checkout + Portal + webhook mapping with real Stripe test events.
   - HTTP delivery config test-fire against a running API session.
   - OpenAI-backed mapping suggestion with a real `Ai:OpenAI:ApiKey`.
   - Erply and Directo connector test-fire against ERP sandbox endpoints.
   - IMAP polling against a real mailbox/app password and supplier profile.
-- **Group K — cXML 1.2 standards hardening is implemented.** `CxmlOrderParser`, `CxmlTransformService`, `OutputFormat.CXml`, standards matrix, canonical PO model docs. Merged to `main` (`2697115`). 193 tests pass.
+- **Group K — cXML 1.2 standards hardening is implemented.** `CxmlOrderParser`, `CxmlTransformService`, `OutputFormat.CXml`, standards matrix, canonical PO model docs. Merged to `main` (`2697115`).
 - **Wave 1/2 code completeness verified (2026-05-28):** `EdifactOrderParser` + `UblOrderParser` have real parsing logic (Wave 1 complete). SFTP/S3 ingress, OCR (config-gated), and email-body extractor (API-only by design) are all wired (Wave 2 complete). `EdifactInvoiceParser`/`EdifactDesadvParser` stubs are Wave 3, not Wave 2.
+- **Wave 3 — Invoice + ASN canonical models are implemented** (commit `3fbff22`):
+  - `UblInvoiceParser` (full UBL 2.1), `EdifactInvoiceParser` + `EdifactDesadvParser` stubs (EdiFabric licence required; drop-in ready).
+  - `InvoiceEntity` / `InvoiceLineEntity` / `AdvanceShippingNoticeEntity` / `AsnPackageEntity` / `AsnPackageLineEntity`.
+  - `CsvInvoiceTransformService` / `XmlInvoiceTransformService` / `JsonInvoiceTransformService`.
+  - `ParseInvoiceJob` (Hangfire, 3 retries). `InvoiceController` (upload/list/get/approve/download). `DesadvController` (202 Accepted + licence note).
+  - 4 EF migrations: `AddInvoicesAndLines`, `AddAdvanceShippingNotices`, `AddTenantApiKeysAndOrgSlug`, `AddIntegrationSubscriptions`.
+  - 12 new tests (7 UblInvoiceParser, 2 EdifactStub, 3 CsvInvoiceTransform).
+- **Wave 4 — Zapier/Make.com integration layer is implemented** (commit `3fbff22`):
+  - `ApiKeyHasher` in `Core.Security` (shared utility, no circular refs).
+  - `TenantApiKey` (`plk_` prefix, HMAC-SHA256 hash, plaintext never stored) + `Organisation.Slug` (unique kebab-case, auto-generated in `TenantResolutionMiddleware`).
+  - `IntegrationSubscription` (platform, eventType, targetUrl, AES-GCM encrypted HMAC secret).
+  - `ApiKeyAuthHandler` — second ASP.NET Core auth scheme alongside Clerk JWT Bearer.
+  - `IngressController` (`GET /api/ingress/{slug}/ping`, `POST /api/ingress/{slug}/orders`).
+  - `IntegrationController` (CRUD + toggle). `ApiKeyController` (Clerk-auth CRUD).
+  - `FireIntegrationTriggerJob` in `Infrastructure.Jobs` (HMAC-SHA256 `X-ProcuLink-Signature`, 3 retries, auto-deactivates after 3 failures).
+  - Hooks: `OrderService` → `order.created`; `DeliveryService` → `order.delivered` / `order.failed`.
+  - Frontend: Settings → **API Keys** tab (create/list/revoke, one-time raw key display) + **Connectors** tab (Zapier/Make CTAs + custom webhook CRUD).
+  - 6 new tests (3 ApiKeyService, 3 ApiKeyHasher). `docs/integrations/SUBMISSION.md` (Zapier + Make.com submission checklist).
+- **Fix (2026-05-28): JsonDocument EF InMemory value converter** — added `string` round-trip `ValueConverter<JsonDocument?, string?>` to `ProcuLinkDbContext` for all 5 jsonb columns. Updated all test-scoped `Ignore` lists for new Wave 3+4 entities. Resolved 48 pre-existing test failures (commit `367c07f`).
+- **Fix (2026-05-28): Migration slug backfill** — `AddTenantApiKeysAndOrgSlug` migration now runs a SQL `UPDATE` to generate `kebab(name)-{first4uuid}` slugs for existing orgs before the unique index is created (commit `19078e2`).
+- **Worker DI fix (2026-05-28):** `IIntegrationTriggerService` registered in `ProcuLink.Worker/Program.cs` (commit `4607d6d`).
 - **Last verified commands:**
-  - `dotnet build ProcuLink.slnx --no-restore` passed.
-  - `dotnet test ProcuLink.slnx --no-restore` passed, 193 tests (102 Transform + 91 Infrastructure).
+  - `dotnet build ProcuLink.Api/ProcuLink.Api.csproj --no-restore` passed (API process locking DLLs; build Infrastructure + tests fine).
+  - `dotnet test ProcuLink.slnx --no-restore` passed, **195 tests** (102 Transform + 93 Infrastructure), 0 failures.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
-No remaining Phase 4 C-H group is open. Group K is complete. Current implementation group is **Group I — UI/UX production polish + responsive QA** from the Phase 5 roadmap; pass 15 is complete, with live API/deployment QA still remaining before Group J completes.
+No remaining Phase 4 C-H group is open. Wave 3 and Wave 4 are complete. Group K is complete. Current implementation group is **Group I — UI/UX production polish + responsive QA** from the Phase 5 roadmap; pass 15 is complete. Group L Wave 1 (analytics/trust) is on branch `phase5/group-l-wave-1-backend-analytics`.
 
 1. Read `STATUS.md`.
 2. Read `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`.

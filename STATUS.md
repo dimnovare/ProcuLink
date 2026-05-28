@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-05-28 Group I pass 15 complete — dev stack smoke-tested, PipelineStrip live-verified**
+## Where we are: **2026-05-28 Wave 3 + Wave 4 complete — Group I pass 15 done, 195 tests green**
 
 ### Dev stack smoke test (2026-05-28, this session)
 
@@ -39,7 +39,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - `ParseInvoiceJob` — Hangfire idempotent job, 3 retries
 - `InvoiceController` (upload/list/get/approve/download) + `DesadvController` (202 Accepted)
 - 4 EF migrations: `AddInvoicesAndLines`, `AddAdvanceShippingNotices`, `AddTenantApiKeysAndOrgSlug`, `AddIntegrationSubscriptions`
-- Tests: `UblInvoiceParserTests` (7), `EdifactStubTests` (2), `CsvInvoiceTransformServiceTests` (3) — 102/102 Transform.Tests pass; 91/91 Infrastructure.Tests pass (193 total)
+- Tests: `UblInvoiceParserTests` (7), `EdifactStubTests` (2), `CsvInvoiceTransformServiceTests` (3) — 102/102 Transform.Tests pass; 93/93 Infrastructure.Tests pass (195 total, after JsonDocument fix)
 
 **Wave 4 — Zapier/Make.com integration layer** (commit `3fbff22`):
 - `ApiKeyHasher` utility in `Core.Security` (no circular project refs)
@@ -56,6 +56,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - `docs/integrations/SUBMISSION.md` — Zapier + Make.com submission checklist and webhook security docs
 - Frontend: Settings → API Keys (create/list/revoke with one-time raw key display) + Settings → Connectors (Zapier/Make.com CTAs + custom webhook CRUD)
 - Tests: `ApiKeyServiceTests` (3), `ApiKeyHasherTests` (3)
+- **Post-wave fixes (commit `367c07f`, `19078e2`):**
+  - `JsonDocument?` value converter added to `ProcuLinkDbContext` — resolved 48 pre-existing EF InMemory test failures.
+  - `AddTenantApiKeysAndOrgSlug` migration now backfills `kebab(name)-{first4uuid}` slugs for existing orgs before unique index is added.
+  - `IIntegrationTriggerService` registered in `ProcuLink.Worker/Program.cs` (commit `4607d6d` — fixes Worker startup crash).
 
 ---
 
@@ -352,9 +356,11 @@ Deferred from H:
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
-| **J** | Live end-to-end QA + deployment hardening | Planned after I |
-| **K** | Standards + engine hardening | **Implemented — cXML 1.2 input parser + output transformer, standards matrix, canonical PO model; merged to `main` (`2697115`)** |
-| **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
+| **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed; live deployed QA remaining |
+| **K** | Standards + engine hardening | **✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`)** |
+| **L** | Trust, onboarding + commercial readiness | **In progress — Wave 1 (analytics/trust/PostHog) on `phase5/group-l-wave-1-backend-analytics`** |
+| **Wave 3** | Invoice + ASN canonical models | **✅ Done — UBL 2.1 invoice parser, invoice/ASN entities, CSV/XML/JSON transforms, Hangfire job, controllers (`3fbff22`)** |
+| **Wave 4** | Zapier/Make.com integration layer | **✅ Done — API keys, org slug, integration subscriptions, ingress/trigger controllers, frontend tabs (`3fbff22`)** |
 
 ### Group I — UI/UX production polish + responsive QA (in progress)
 
@@ -585,10 +591,41 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 - DB: `Host=localhost;Port=5435;Database=proculink_dev`
 
 ## Latest commits / push state
-- Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), Group G ERP connectors, and Group H email polling.
-- Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), Group G ERP connector UI, and Group H settings UI.
-- Phase 5 roadmap is now documented. Current implementation group is **Group I**; pass 15 wired SpineReview to the live order API, exposing real PO fields, buyer name, line data, and AI-suggestion hints. Group I is now effectively complete; Group J (live end-to-end QA + deployment hardening) is next.
-- Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
+
+### Backend (`ProcuLink`) — branch `phase5/group-l-wave-1-backend-analytics`
+
+| Commit | What |
+|---|---|
+| `32e0f41` | docs: update CLAUDE.md + STATUS.md to pass 15, Wave 1/2 verified, Group K done |
+| `11f7935` | feat(analytics): PostHog backend client wrapper (no-op when key absent) |
+| `8ff3b3f` | docs(analytics): PostHog event taxonomy v1.0 |
+| `d3da4e6` | docs(trust): ProcuLink OÜ registration details |
+| `1ea7700` | docs(status): dev stack smoke test + PipelineStrip live verification |
+| `3416840` | docs(plan): Group L trust/onboarding/commercial plan |
+| `4607d6d` | fix(worker): register `IIntegrationTriggerService` in Worker DI |
+| `8a14c2b` | docs(status): mark Group K complete |
+| `0c16bc7` | chore(docs): prune obsolete agent-report scratch files |
+| `afd2d0f` | docs(status): remove stale JsonDocument regression note |
+| `19078e2` | fix(migration): backfill org slugs before unique index |
+| `367c07f` | fix(tests): resolve 48 InMemory JsonDocument test failures — **195 tests now** |
+| `89883e3` | docs: STATUS.md Wave 3+4 completion summary |
+| `95fedf8` | feat: 4 EF migrations for Wave 3+4 |
+| `218711a` | docs: Zapier/Make.com integration submission guide |
+| `3fbff22` | feat: Wave 3+4 — invoice/ASN models, UBL parser, API keys, integration triggers |
+
+**Test state:** 195/195 pass (102 Transform + 93 Infrastructure), 0 failures.
+
+### Frontend (`project-proculink`) — branch `main`
+
+| Commit | What |
+|---|---|
+| `f09390b` | feat(help): /help landing + 7 MDX articles + Fuse.js search |
+| `d125413` | build(help): enable .mdx via @next/mdx |
+| `1e8997c` | feat: Group I pass 11 — live backends, inbound/changelog/onboarding |
+| `a0c64cd` | fix(dev): skip Sentry wrapping in dev mode |
+| `5f119d8` | feat: Wave 4 frontend — API Keys tab + Connectors/Webhooks settings |
+
+**Build state:** `bun run build` passes. Existing warnings: Sentry global error handler, `onRequestError`, Browserslist age, Next ESLint plugin.
 
 ---
 
