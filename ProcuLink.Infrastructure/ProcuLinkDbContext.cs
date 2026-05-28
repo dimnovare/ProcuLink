@@ -20,6 +20,8 @@ public class ProcuLinkDbContext : DbContext
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<SupplierPoMapping> SupplierPoMappings => Set<SupplierPoMapping>();
     public DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs => Set<SupplierDeliveryConfig>();
+    public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
+    public DbSet<AiUsageMonthly> AiUsageMonthly => Set<AiUsageMonthly>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -312,6 +314,35 @@ public class ProcuLinkDbContext : DbContext
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.DeliveryAttempts)
              .HasForeignKey(x => x.OrgId);
+        });
+
+        // ── idempotency_keys ───────────────────────────────────────────
+        // Composite primary key (OrgId, Key) so two different organisations may
+        // legitimately reuse the same client-supplied key string (Stripe-style).
+        modelBuilder.Entity<IdempotencyKey>(b =>
+        {
+            b.ToTable("idempotency_keys");
+            b.HasKey(x => new { x.OrgId, x.Key });
+            b.Property(x => x.Key).HasColumnName("key").IsRequired();
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.OrderId).HasColumnName("order_id");
+            b.Property(x => x.CreatedAt)
+             .HasColumnName("created_at")
+             .HasColumnType("timestamptz");
+        });
+
+        // ── ai_usage_monthly ───────────────────────────────────────────
+        modelBuilder.Entity<AiUsageMonthly>(b =>
+        {
+            b.ToTable("ai_usage_monthly");
+            b.HasKey(x => new { x.OrgId, x.Year, x.Month });
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.Year).HasColumnName("year");
+            b.Property(x => x.Month).HasColumnName("month");
+            b.Property(x => x.TokensUsed).HasColumnName("tokens_used");
+            b.Property(x => x.UpdatedAt)
+             .HasColumnName("updated_at")
+             .HasColumnType("timestamptz");
         });
 
         // ── audit_events ───────────────────────────────────────────────

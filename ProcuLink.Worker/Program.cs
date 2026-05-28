@@ -21,8 +21,20 @@ using ProcuLink.Worker.Jobs;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is not configured.");
+// In Production we report ALL missing keys in one error after Build(); to
+// avoid the connection-string line below pre-empting that consolidated report
+// with a single-key error, only fail-fast on the connection string in
+// non-Production environments. In Production the StartupConfigurationValidator
+// after Build() handles the same gap as part of its combined report.
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (!string.Equals(builder.Environment.EnvironmentName, "Production", StringComparison.OrdinalIgnoreCase)
+    && string.IsNullOrWhiteSpace(connectionString))
+{
+    throw new InvalidOperationException("ConnectionStrings:DefaultConnection is not configured.");
+}
+// Use an empty string as a placeholder so DI registration below does not NRE;
+// the validator will then throw the real combined error after Build().
+connectionString ??= string.Empty;
 
 builder.Services.AddDbContext<ProcuLinkDbContext>(options =>
     options.UseNpgsql(connectionString));
@@ -54,6 +66,7 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
+builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
@@ -80,4 +93,21 @@ builder.Services.AddScoped<ParseOrderJob>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();
+
+// ── Startup configuration validation ─────────────────────────────────────
+// Fails fast in Production with a single combined error listing every missing
+// required key. Non-production environments log warnings instead.
+{
+    var startupLogger = host.Services
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("ProcuLink.Worker.Startup");
+    StartupConfigurationValidator.Validate(
+        configuration:   host.Services.GetRequiredService<IConfiguration>(),
+        logger:          startupLogger,
+        environmentName: host.Services.GetRequiredService<IHostEnvironment>().EnvironmentName,
+        requiredKeys:    StartupConfigurationValidator.WorkerRequiredKeys,
+        optionalKeys:    StartupConfigurationValidator.OptionalKeys,
+        componentName:   "ProcuLink.Worker");
+}
+
 host.Run();

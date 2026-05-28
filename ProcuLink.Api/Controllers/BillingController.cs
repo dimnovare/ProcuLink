@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ai;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Controllers;
@@ -17,19 +18,22 @@ public sealed class BillingController : ControllerBase
     private readonly IConfiguration                     _config;
     private readonly ILogger<BillingController>         _logger;
     private readonly ProcuLinkDbContext                 _db;
+    private readonly IAiUsageTracker                    _aiUsage;
 
     public BillingController(
         IBillingService            billing,
         ICurrentTenantService      tenant,
         IConfiguration             config,
         ILogger<BillingController> logger,
-        ProcuLinkDbContext         db)
+        ProcuLinkDbContext         db,
+        IAiUsageTracker            aiUsage)
     {
         _billing = billing;
         _tenant  = tenant;
         _config  = config;
         _logger  = logger;
         _db      = db;
+        _aiUsage = aiUsage;
     }
 
     // ── GET /api/billing/status ───────────────────────────────────────────
@@ -98,6 +102,28 @@ public sealed class BillingController : ControllerBase
     {
         await _billing.RequestPilotExtensionAsync(_tenant.OrganisationId, ct);
         return Ok(new { message = "Extension request received. Our team will be in touch within 1 business day." });
+    }
+
+    // ── GET /api/billing/ai-usage ─────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the current calendar month's OpenAI token usage for the caller's
+    /// organisation, plus the configured per-org monthly cap. Used by the
+    /// settings UI and by support to diagnose AI no-op behaviour.
+    /// </summary>
+    [HttpGet("ai-usage")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetAiUsage(CancellationToken ct)
+    {
+        var snapshot = await _aiUsage.GetCurrentAsync(_tenant.OrganisationId, ct);
+        return Ok(new
+        {
+            tokensUsed  = snapshot.TokensUsed,
+            tokensLimit = snapshot.TokensLimit,
+            year        = snapshot.Year,
+            month       = snapshot.Month,
+        });
     }
 
     // ── POST /api/billing/webhook ─────────────────────────────────────────

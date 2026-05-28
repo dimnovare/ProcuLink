@@ -28,8 +28,12 @@ public sealed class OrdersController : ControllerBase
     private readonly ProcuLinkDbContext        _db;
     private readonly ILogger<OrdersController> _logger;
     private readonly IBillingService           _billing;
+    private readonly IIdempotencyService       _idempotency;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
+
+    /// <summary>Max accepted length for Idempotency-Key — guards against accidental garbage. </summary>
+    private const int MaxIdempotencyKeyLength = 200;
 
     public OrdersController(
         IOrderService             orders,
@@ -37,14 +41,16 @@ public sealed class OrdersController : ControllerBase
         IBackgroundJobClient      jobs,
         ProcuLinkDbContext        db,
         ILogger<OrdersController> logger,
-        IBillingService           billing)
+        IBillingService           billing,
+        IIdempotencyService       idempotency)
     {
-        _orders  = orders;
-        _tenant  = tenant;
-        _jobs    = jobs;
-        _db      = db;
-        _logger  = logger;
-        _billing = billing;
+        _orders      = orders;
+        _tenant      = tenant;
+        _jobs        = jobs;
+        _db          = db;
+        _logger      = logger;
+        _billing     = billing;
+        _idempotency = idempotency;
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -84,6 +90,39 @@ public sealed class OrdersController : ControllerBase
 
         var orgId = _tenant.OrganisationId;
 
+        // ── Idempotency-Key short-circuit ───────────────────────────────────
+        // If the client retries an upload with the same Idempotency-Key + same
+        // org inside the 24 h window, return the original order instead of
+        // creating a duplicate. Outside the window the key is treated as new.
+        var idempotencyKey = ExtractIdempotencyKey(Request);
+        if (idempotencyKey is not null)
+        {
+            var existingOrderId = await _idempotency.TryGetExistingOrderIdAsync(idempotencyKey, orgId, ct);
+            if (existingOrderId is not null)
+            {
+                var existingOrder = await _orders.GetByIdAsync(orgId, existingOrderId.Value, ct);
+                if (existingOrder.IsSuccess)
+                {
+                    _logger.LogInformation(
+                        "Idempotent upload replay for key {Key}, org {OrgId} → existing order {OrderId}",
+                        idempotencyKey, orgId, existingOrderId.Value);
+
+                    return Ok(new
+                    {
+                        order              = MapToDto(existingOrder.Value!),
+                        validationMessages = Array.Empty<string>(),
+                        idempotentReplay   = true,
+                    });
+                }
+
+                // Mapped order vanished (e.g. hard-deleted) — fall through and
+                // create a fresh one, then re-bind the key below.
+                _logger.LogWarning(
+                    "Idempotency key {Key} mapped to missing order {OrderId}; creating a new order",
+                    idempotencyKey, existingOrderId.Value);
+            }
+        }
+
         // ── Billing limit check ────────────────────────────────────────────
         var limitCheck = await _billing.CheckOrderLimitAsync(orgId, ct);
         if (!limitCheck.Allowed)
@@ -106,6 +145,15 @@ public sealed class OrdersController : ControllerBase
 
         var stub = result.Value!;
 
+        // Bind the idempotency key to the new order. If a stale row exists
+        // (>24h or pointing at a deleted order), refresh it in place; otherwise
+        // insert a fresh row. We do this before enqueueing so a retry that
+        // races the job sees the same order id.
+        if (idempotencyKey is not null)
+        {
+            await _idempotency.BindAsync(idempotencyKey, orgId, stub.Id, ct);
+        }
+
         // Enqueue async parse — returns before parsing completes
         ParseOrderJob.Enqueue(_jobs, stub.Id, orgId);
 
@@ -118,6 +166,27 @@ public sealed class OrdersController : ControllerBase
             order              = MapToDto(stub),
             validationMessages = Array.Empty<string>()
         });
+    }
+
+    /// <summary>
+    /// Reads the optional <c>Idempotency-Key</c> header. Returns null for missing,
+    /// blank, or absurdly long values — the caller treats those as a non-idempotent
+    /// upload.
+    /// </summary>
+    private static string? ExtractIdempotencyKey(HttpRequest request)
+    {
+        if (!request.Headers.TryGetValue("Idempotency-Key", out var raw))
+            return null;
+
+        var value = raw.ToString();
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0 || trimmed.Length > MaxIdempotencyKeyLength)
+            return null;
+
+        return trimmed;
     }
 
     // ── GET /api/orders ───────────────────────────────────────────────────────

@@ -232,6 +232,8 @@ public class DeliveryConfigServiceTests
             modelBuilder.Ignore<DeliveryAttempt>();
             modelBuilder.Ignore<AuditEvent>();
             modelBuilder.Ignore<SupplierPoMapping>();
+            modelBuilder.Ignore<IdempotencyKey>();
+            modelBuilder.Ignore<AiUsageMonthly>();
 
             modelBuilder.Entity<SupplierDeliveryConfig>(b =>
             {

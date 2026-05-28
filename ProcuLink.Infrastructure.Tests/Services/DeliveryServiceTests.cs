@@ -250,6 +250,8 @@ public class DeliveryServiceTests
             modelBuilder.Ignore<ItemMapping>();
             modelBuilder.Ignore<AuditEvent>();
             modelBuilder.Ignore<SupplierPoMapping>();
+            modelBuilder.Ignore<IdempotencyKey>();
+            modelBuilder.Ignore<AiUsageMonthly>();
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {

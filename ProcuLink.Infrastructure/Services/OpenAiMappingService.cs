@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenAI.Chat;
 using ProcuLink.Core.Services.Ai;
@@ -41,8 +42,17 @@ public sealed class OpenAiMappingService : IAiMappingService
     private readonly ChatClient? _client;
     private readonly ILogger<OpenAiMappingService> _logger;
     private readonly string _model;
+    // The tracker is a scoped EF service; OpenAiMappingService itself is a singleton
+    // in the API/Worker DI containers, so we resolve a tracker per-call from the
+    // provided scope factory. When no scope factory is wired (tests, no-op path),
+    // we fall back to the inner factory instead.
+    private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly Func<IAiUsageTracker?>? _trackerFactory;
 
-    public OpenAiMappingService(IConfiguration configuration, ILogger<OpenAiMappingService> logger)
+    public OpenAiMappingService(
+        IConfiguration configuration,
+        ILogger<OpenAiMappingService> logger,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _logger = logger;
         _model = configuration["Ai:OpenAI:MappingModel"] ?? DefaultModel;
@@ -55,6 +65,41 @@ public sealed class OpenAiMappingService : IAiMappingService
         {
             _client = new ChatClient(_model, apiKey);
         }
+
+        _scopeFactory = scopeFactory;
+        _trackerFactory = null;
+    }
+
+    /// <summary>
+    /// Test-only ctor: lets tests inject a deterministic <see cref="IAiUsageTracker"/>
+    /// without spinning up an <see cref="IServiceScopeFactory"/>. Also lets tests
+    /// inject a custom <see cref="ChatClient"/> stand-in by overriding the API key
+    /// presence check (set <paramref name="overrideClient"/> to a non-null value).
+    /// </summary>
+    internal OpenAiMappingService(
+        IConfiguration configuration,
+        ILogger<OpenAiMappingService> logger,
+        IAiUsageTracker? tracker,
+        ChatClient? overrideClient = null)
+    {
+        _logger = logger;
+        _model = configuration["Ai:OpenAI:MappingModel"] ?? DefaultModel;
+
+        var provider = configuration["Ai:Provider"];
+        var apiKey = configuration["Ai:OpenAI:ApiKey"];
+
+        if (overrideClient is not null)
+        {
+            _client = overrideClient;
+        }
+        else if (string.Equals(provider, "openai", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(apiKey))
+        {
+            _client = new ChatClient(_model, apiKey);
+        }
+
+        _scopeFactory = null;
+        _trackerFactory = () => tracker;
     }
 
     public async Task<AiMappingSuggestion?> SuggestSupplierItemCodeAsync(
@@ -72,6 +117,39 @@ public sealed class OpenAiMappingService : IAiMappingService
             && string.IsNullOrWhiteSpace(line.Description))
         {
             return null;
+        }
+
+        // ── Per-org monthly token cap ────────────────────────────────────────
+        // Resolved per-call so the EF DbContext is short-lived and so test
+        // doubles can be injected via the internal ctor.
+        await using var trackerScope = _scopeFactory?.CreateAsyncScope();
+        var tracker = trackerScope is not null
+            ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
+            : _trackerFactory?.Invoke();
+
+        if (tracker is not null)
+        {
+            try
+            {
+                if (await tracker.IsAtOrOverLimitAsync(organisationId, ct))
+                {
+                    _logger.LogWarning(
+                        "OpenAI mapping skipped — org {OrgId} reached monthly token limit {Limit}",
+                        organisationId,
+                        tracker.MonthlyLimit);
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                // If the cap check itself fails we must not silently bypass the
+                // cap. Treat it as a no-op and warn.
+                _logger.LogWarning(
+                    ex,
+                    "OpenAI cap check failed for org {OrgId}; skipping suggestion to be safe",
+                    organisationId);
+                return null;
+            }
         }
 
         try
@@ -105,6 +183,26 @@ public sealed class OpenAiMappingService : IAiMappingService
             };
 
             ChatCompletion completion = await _client.CompleteChatAsync(messages, options, ct);
+
+            // Record token usage regardless of whether the structured output
+            // produced a usable suggestion — the call was billable either way.
+            if (tracker is not null)
+            {
+                try
+                {
+                    var totalTokens = completion.Usage?.TotalTokenCount ?? 0;
+                    if (totalTokens > 0)
+                        await tracker.IncrementAsync(organisationId, totalTokens, ct);
+                }
+                catch (Exception incEx)
+                {
+                    _logger.LogWarning(
+                        incEx,
+                        "Failed to record AI token usage for org {OrgId}",
+                        organisationId);
+                }
+            }
+
             var json = completion.Content.FirstOrDefault()?.Text;
 
             if (string.IsNullOrWhiteSpace(json))

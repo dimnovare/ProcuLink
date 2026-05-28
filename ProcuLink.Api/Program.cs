@@ -156,6 +156,8 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
+builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
+builder.Services.AddScoped<IIdempotencyService, IdempotencyService>();
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
@@ -224,6 +226,23 @@ builder.Services.AddSwaggerGen(options =>
 // ──────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 // ──────────────────────────────────────────────────────────────────────────
+
+// ── Startup configuration validation ─────────────────────────────────────
+// In Production any missing required key throws and lists every gap in one
+// shot. In non-production environments missing keys log a warning instead so
+// devs can still run the API without every secret wired up.
+{
+    var startupLogger = app.Services
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("ProcuLink.Startup");
+    StartupConfigurationValidator.Validate(
+        configuration:    app.Configuration,
+        logger:           startupLogger,
+        environmentName:  app.Environment.EnvironmentName,
+        requiredKeys:     StartupConfigurationValidator.ApiRequiredKeys,
+        optionalKeys:     StartupConfigurationValidator.OptionalKeys,
+        componentName:    "ProcuLink.Api");
+}
 
 // ── OpenAPI / Scalar UI — dev only ────────────────────────────────────────
 if (app.Environment.IsDevelopment())

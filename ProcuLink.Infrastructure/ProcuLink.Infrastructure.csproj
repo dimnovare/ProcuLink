@@ -19,4 +19,9 @@
     <ProjectReference Include="..\ProcuLink.Core\ProcuLink.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Allow internal test-only ctors to be reachable from Infrastructure.Tests. -->
+    <InternalsVisibleTo Include="ProcuLink.Infrastructure.Tests" />
+  </ItemGroup>
+
 </Project>

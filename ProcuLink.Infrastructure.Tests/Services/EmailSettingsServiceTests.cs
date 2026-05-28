@@ -174,6 +174,8 @@ public class EmailSettingsServiceTests
             modelBuilder.Ignore<AuditEvent>();
             modelBuilder.Ignore<SupplierPoMapping>();
             modelBuilder.Ignore<SupplierDeliveryConfig>();
+            modelBuilder.Ignore<IdempotencyKey>();
+            modelBuilder.Ignore<AiUsageMonthly>();
 
             modelBuilder.Entity<Organisation>(b =>
             {
