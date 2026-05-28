@@ -18,6 +18,17 @@ namespace ProcuLink.Infrastructure.Migrations
                 nullable: false,
                 defaultValue: "");
 
+            // Backfill slugs for any organisations that existed before this migration.
+            // Generates:  kebab(name) + '-' + first-4-chars-of-UUID
+            // e.g. "Acme Corp" → "acme-corp-a1b2"
+            migrationBuilder.Sql("""
+                UPDATE organisations
+                SET slug =
+                    TRIM(BOTH '-' FROM LOWER(REGEXP_REPLACE(name, '[^a-zA-Z0-9]+', '-', 'g')))
+                    || '-' || LEFT(REPLACE(CAST(id AS text), '-', ''), 4)
+                WHERE slug = '';
+                """);
+
             migrationBuilder.CreateTable(
                 name: "advance_shipping_notices",
                 columns: table => new
