@@ -4,7 +4,20 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-05-28 Wave 3 + Wave 4 shipped — Invoice/ASN canonical models + Zapier/Make.com integration layer**
+## Where we are: **2026-05-28 Group I pass 15 complete — dev stack smoke-tested, PipelineStrip live-verified**
+
+### Dev stack smoke test (2026-05-28, this session)
+
+- **Wave 3/4 EF migrations applied**: 4 duplicate migrations from the overnight agents were resolved — `AddInvoicesAndLines` ran clean; the 3 identical duplicates (`AddAdvanceShippingNotices`, `AddTenantApiKeysAndOrgSlug`, `AddIntegrationSubscriptions`) were fake-applied via `INSERT INTO "__EFMigrationsHistory"` since they contained no new SQL.
+- **Worker DI fix**: Wave 4 added `IIntegrationTriggerService` as a constructor dependency to `OrderService` and `DeliveryService` but didn't register it in `ProcuLink.Worker/Program.cs`. Fixed and committed (`4607d6d fix(worker): register IIntegrationTriggerService`).
+- **Org auto-seeded**: `TenantResolutionMiddleware` created org `370ca357-a72d-424a-b739-c90d4ec0ba4c` ("Personal workspace", pilot plan) on first authenticated API request.
+- **PipelineStrip live-verified**: `SpineReview` at `/inbox/[orderId]` correctly fetches real order from `https://localhost:7230`, maps `pending_review` → Stage 3 of 5 (Validate), and renders all 5 stages (Parse → Normalize → Validate → Transform → Deliver). Screenshot captured via Playwright: `pipeline-strip-screenshot.png`.
+- **Known issue — `/orders/[id]` shows "Order Not Found"**: `OrderDetailPage` at the `/orders/[id]` route makes no API calls and shows "Order Not Found". The same order loads correctly at `/inbox/[orderId]` via `SpineReview`. Root cause: likely stale TanStack Query error cache from a CORS failure on `http://localhost:5223` during first navigation (the HTTP port redirects to HTTPS, breaking CORS preflight). Logged as a separate fix task.
+- **API running**: `https://localhost:7230` (HTTPS Kestrel), `http://localhost:5223` redirects to HTTPS. Worker running. Frontend at `http://localhost:8082`.
+
+---
+
+## Where we were: **2026-05-28 Wave 3 + Wave 4 shipped — Invoice/ASN canonical models + Zapier/Make.com integration layer**
 
 ### Wave 3 + Wave 4 (2026-05-28)
 
