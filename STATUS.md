@@ -70,7 +70,7 @@ Source of truth for the next grouped plan:
 |---|---|---|---|
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** | The product must feel reliable before more engine depth is layered on top. Passes 1-11 fixed topology/visibility defects, added Playwright QA, tightened mobile shell/upload/settings/inbox/dock/log/webhook/library/supplier-mapping/delivery/connector/webhook/billing flows, and wired live upload routing. Pass 12 (topology + bridge visual calibration): log-compressed `strokeFromWeight()`, staggered Bezier CPs, amber alert badges, r=2.2 pulse, mobile Lane List, responsive accordion for bridge detail, 28px StatusJourney nodes, `1fr/1.05fr/1.15fr` column grid, footer de-duplication, mobile sticky CTA, 2×2 KPI grid on mobile. Pass 13: BridgeTopbar auto-breadcrumb from pathname via `useAutoCrumb()`. Pass 14: BridgePageLoader loading.tsx for all 11 missing routes, InboxView mobile empty state, global `:focus-visible` ring + dark-chrome override, sidebar workspace-switcher accessible button, topbar aria-labels. Pass 15: SpineReview wired to live `GET /api/orders/{id}` via `useQuery`; `buildNodesFromOrder()` maps Order → SpineNodeData[]; `BuyerName` added to `OrderDto` (extracted from `CanonicalJson`); loading gate renders `SpineReviewSkeleton`; error/not-found gate renders centred panel with back-to-inbox button (placed after all hooks). |
 | **J** | Live end-to-end QA + deployment hardening | **In progress** | Verify Clerk, Stripe, upload, mapping, transform, delivery, ERP test-fire, and IMAP polling against real deployed services. Code-level deployment gaps fixed (see Group J section). |
-| **K** | Standards matrix written; cXML parser hardened + output transformer added; 18 new tests; docs/standards-matrix.md + docs/canonical-po-model.md created | `feat/group-k-standards` branch — pending merge |
+| **K** | Standards + engine hardening | ✅ Done | Standards matrix + canonical PO model written; cXML 1.2 input parser + output transformer landed with 18 new tests; merged to `main` via `2697115`. |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts | Add onboarding, product copy clarity, trust/security pages, support/legal basics, demo data, analytics, and case-study hooks. |
 
 ### Completed phases
@@ -86,6 +86,7 @@ Source of truth for the next grouped plan:
 | **Group F** ✅ | PDF ingestion — text-based purchase-order PDFs via PdfPig |
 | **Group G** ✅ | ERP connectors — Erply and Directo delivery adapters |
 | **Group H** ✅ | Email polling — IMAP attachment ingestion via MailKit |
+| **Group K** ✅ | Standards + engine hardening — standards matrix, canonical PO model, cXML 1.2 parser + transformer |
 | **Phase 5 roadmap** | Groups I-L planned: UI polish, live QA, standards hardening, commercial trust |
 
 ---
@@ -334,7 +335,7 @@ Deferred from H:
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 11 complete** |
 | **J** | Live end-to-end QA + deployment hardening | Planned after I |
-| **K** | Standards + engine hardening | **In progress** — standards matrix + cXML input/output added; see `feat/group-k-standards` branch |
+| **K** | Standards + engine hardening | **Implemented — cXML 1.2 input parser + output transformer, standards matrix, canonical PO model; merged to `main` (`2697115`)** |
 | **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
 
 ### Group I — UI/UX production polish + responsive QA (in progress)
@@ -512,14 +513,27 @@ Clerk, Stripe Checkout/Portal/webhooks, upload/parse/transform/download,
 HTTP delivery test-fire, ERP sandbox/stub test-fire, IMAP polling, Sentry/logging,
 CORS, database migrations, and production env vars.
 
-### Group K — standards + engine hardening (in progress)
+### Group K — Standards + engine hardening ✅ (May 28 2026)
 
-Standards matrix written at `docs/standards-matrix.md`. Canonical PO model documented at
-`docs/canonical-po-model.md`. cXML 1.2 input parser (`CxmlOrderParser`) and output transformer
-(`CxmlTransformService`) implemented and tested. `OutputFormat.CXml` added to core enum.
-Both classes registered in API DI. 18 new unit tests added across parser and transformer.
+**Status: Implemented and merged to `main` via `2697115`. Standards matrix, canonical PO model, and cXML 1.2 input parser + output transformer landed with 18 new tests.**
 
-Next: JSON/API payload output transformer, then UBL 2.1 / Peppol BIS Order input.
+Backend (`ProcuLink`):
+- Added `docs/standards-matrix.md` mapping supported procurement standards (cXML 1.2, UBL 2.1 Order, EDIFACT ORDERS, OpenPEPPOL BIS, ANSI X12 850, internal canonical) to parser/transformer coverage and gaps.
+- Added `docs/canonical-po-model.md` documenting the in-memory `ParsedOrder` canonical PO shape (header, parties, lines, totals, references, custom fields) so future format work shares one target.
+- Added `CxmlOrderParser : IPurchaseOrderParser` in `ProcuLink.Transform/Parsing/` for cXML 1.2 `OrderRequest` documents with header detection, party/address/line extraction, and a dedicated `CxmlParseException` for malformed envelopes.
+- Added `CxmlTransformService : ITransformService` in `ProcuLink.Transform/Output/` producing standards-compliant cXML 1.2 `OrderRequest` output from the canonical PO model.
+- Added `OutputFormat.CXml` to the core output-format enum so deliveries can target cXML.
+- Registered `CxmlOrderParser` and `CxmlTransformService` in API DI (`ProcuLink.Api/Program.cs:216` and `Program.cs:226`).
+- Added 18 new unit tests across the parser and transformer (round-trip, malformed envelope, header/line fidelity, party/address normalization).
+
+Verification:
+- `dotnet build ProcuLink.slnx --no-restore` → passed.
+- `dotnet test ProcuLink.slnx --no-restore` → 193 tests passed (102 Transform + 91 Infrastructure), 0 failures.
+- Remote `origin` no longer carries `feat/group-k-standards`; only `refs/heads/main` exists.
+
+Next (deferred to future hardening passes):
+- JSON/API payload output transformer.
+- UBL 2.1 / Peppol BIS Order input parser.
 
 ### Group L — trust, onboarding + commercial readiness
 
