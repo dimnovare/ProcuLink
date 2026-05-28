@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-05-28 Wave 3 + Wave 4 complete — Group I pass 15 done, 195 tests green**
+## Where we are: **2026-05-28 Group L Phase 4.3 backend emitters complete — 208 tests green**
 
 ### Dev stack smoke test (2026-05-28, this session)
 
@@ -358,7 +358,7 @@ Deferred from H:
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
 | **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed; live deployed QA remaining |
 | **K** | Standards + engine hardening | **✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`)** |
-| **L** | Trust, onboarding + commercial readiness | **In progress — Wave 1 (analytics/trust/PostHog) on `phase5/group-l-wave-1-backend-analytics`** |
+| **L** | Trust, onboarding + commercial readiness | **In progress — Wave 1 merged to `main`; Phase 4.3 backend emitters on `phase5/group-l-wave-2-backend-emitters`** |
 | **Wave 3** | Invoice + ASN canonical models | **✅ Done — UBL 2.1 invoice parser, invoice/ASN entities, CSV/XML/JSON transforms, Hangfire job, controllers (`3fbff22`)** |
 | **Wave 4** | Zapier/Make.com integration layer | **✅ Done — API keys, org slug, integration subscriptions, ingress/trigger controllers, frontend tabs (`3fbff22`)** |
 
@@ -564,6 +564,27 @@ Next (deferred to future hardening passes):
 Add onboarding, demo data, concrete ROI copy, trust/security/legal/support pages,
 analytics event plan, and sales/demo assets after UI polish begins.
 
+#### Phase 4.3 — backend analytics event emitters ✅ (2026-05-28)
+
+**Branch:** `phase5/group-l-wave-2-backend-emitters` (commits `b7fa374`, `0220fd8`)
+
+`IAnalyticsService` injected into 6 callsites, all emitting idempotent PostHog funnel events:
+
+| Callsite | Event | Guard |
+|---|---|---|
+| `TenantResolutionMiddleware` | `org_created` (plan, created_via) | Auto-provision path only |
+| `SuppliersController.CreateSupplier` | `first_supplier_added` (supplier_id) | `AnyAsync` — no prior org suppliers |
+| `ParseOrderJob` | `first_upload_parsed` (order_id, parser) | `AnyAsync` — no prior parsed orders for org |
+| `TransformOrderJob` | `first_transform_succeeded` (order_id, output_format) | `AnyAsync` — no prior delivered/ready orders |
+| `DeliveryService.PersistAttemptAsync` | `first_delivery_succeeded` (order_id, protocol) | `AnyAsync` — no prior `Delivered` order for org |
+| `StripeBillingService` | `billing_upgraded` / `billing_downgraded` / `billing_cancelled` | Called explicitly; no guard needed |
+
+**Note:** `StripeBillingService.EmitBillingUpgradedAsync` / `EmitBillingDowngradedAsync` / `EmitBillingCancelledAsync` are concrete public methods (not on `IBillingService`). Wiring from `BillingController` Stripe webhook handlers is a separate later chip.
+
+**New project:** `ProcuLink.Api.Tests` added to `ProcuLink.slnx` — 11 tests across middleware, controller, jobs, and billing service.
+
+**Test count:** 208 total (102 Transform + 11 Api.Tests + 95 Infrastructure), 0 failures.
+
 ### Group E provider decision (May 25 2026)
 
 Do not implement Group E as Anthropic-only. Use a provider-neutral `IAiMappingService` with OpenAI structured outputs as the first provider because SKU suggestion needs cheap, fast, schema-bound JSON with confidence and provenance.
@@ -592,28 +613,21 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 
 ## Latest commits / push state
 
-### Backend (`ProcuLink`) — branch `phase5/group-l-wave-1-backend-analytics`
+### Backend (`ProcuLink`) — branch `phase5/group-l-wave-2-backend-emitters`
 
 | Commit | What |
 |---|---|
+| `0220fd8` | feat(analytics): emit org_created + first_supplier/upload/transform/delivery + billing events |
+| `b7fa374` | feat(analytics): add FakeAnalyticsService test double for emitter tests |
+| `81f6166` | merge: Group L Wave 1 — Phase 1 gdpr.md + Phase 4.1/4.2 backend analytics |
+| `e9811e8` | docs: mark Wave 3 + Wave 4 complete in CLAUDE.md + STATUS.md |
 | `32e0f41` | docs: update CLAUDE.md + STATUS.md to pass 15, Wave 1/2 verified, Group K done |
 | `11f7935` | feat(analytics): PostHog backend client wrapper (no-op when key absent) |
 | `8ff3b3f` | docs(analytics): PostHog event taxonomy v1.0 |
-| `d3da4e6` | docs(trust): ProcuLink OÜ registration details |
-| `1ea7700` | docs(status): dev stack smoke test + PipelineStrip live verification |
-| `3416840` | docs(plan): Group L trust/onboarding/commercial plan |
-| `4607d6d` | fix(worker): register `IIntegrationTriggerService` in Worker DI |
-| `8a14c2b` | docs(status): mark Group K complete |
-| `0c16bc7` | chore(docs): prune obsolete agent-report scratch files |
-| `afd2d0f` | docs(status): remove stale JsonDocument regression note |
-| `19078e2` | fix(migration): backfill org slugs before unique index |
-| `367c07f` | fix(tests): resolve 48 InMemory JsonDocument test failures — **195 tests now** |
-| `89883e3` | docs: STATUS.md Wave 3+4 completion summary |
-| `95fedf8` | feat: 4 EF migrations for Wave 3+4 |
-| `218711a` | docs: Zapier/Make.com integration submission guide |
+| `367c07f` | fix(tests): resolve 48 InMemory JsonDocument test failures |
 | `3fbff22` | feat: Wave 3+4 — invoice/ASN models, UBL parser, API keys, integration triggers |
 
-**Test state:** 195/195 pass (102 Transform + 93 Infrastructure), 0 failures.
+**Test state:** 208/208 pass (102 Transform + 11 Api.Tests + 95 Infrastructure), 0 failures.
 
 ### Frontend (`project-proculink`) — branch `main`
 
