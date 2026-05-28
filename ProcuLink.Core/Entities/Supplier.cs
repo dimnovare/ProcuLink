@@ -10,6 +10,12 @@ public class Supplier
     /// <summary>Soft-delete timestamp. Null = active.</summary>
     public DateTime? DeletedAt { get; set; }
 
+    /// <summary>Optional code used by the sample-order path to mark the hidden <c>__sample__</c> supplier; null for real suppliers.</summary>
+    public string? Code { get; set; }
+
+    /// <summary>True for the hidden sample supplier created by the sample-order onboarding path.</summary>
+    public bool IsSample { get; set; }
+
     // Navigation
     public Organisation Organisation { get; set; } = null!;
     public List<SupplierProfileEntity> SupplierProfiles { get; set; } = new();

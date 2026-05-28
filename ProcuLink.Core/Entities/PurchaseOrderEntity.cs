@@ -30,6 +30,9 @@ public class PurchaseOrderEntity
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>True when this order was created via the sample-order onboarding path. Excluded from billing quota.</summary>
+    public bool IsSample { get; set; }
+
     // Navigation
     public Organisation Organisation { get; set; } = null!;
     public Supplier Supplier { get; set; } = null!;

@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-05-28 Wave 3 + Wave 4 complete — Group I pass 15 done, 195 tests green**
+## Where we are: **2026-05-28 Group L Wave 2 (sample-order chip) complete — 198 tests green**
 
 ### Dev stack smoke test (2026-05-28, this session)
 
@@ -358,7 +358,7 @@ Deferred from H:
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
 | **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed; live deployed QA remaining |
 | **K** | Standards + engine hardening | **✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`)** |
-| **L** | Trust, onboarding + commercial readiness | **In progress — Wave 1 (analytics/trust/PostHog) on `phase5/group-l-wave-1-backend-analytics`** |
+| **L** | Trust, onboarding + commercial readiness | **In progress — Wave 1 (analytics/PostHog) ✅ on `phase5/group-l-wave-1-backend-analytics`; Wave 2 (sample-order backend chip) ✅ on `worktree-wave-2-sample-order-chip`** |
 | **Wave 3** | Invoice + ASN canonical models | **✅ Done — UBL 2.1 invoice parser, invoice/ASN entities, CSV/XML/JSON transforms, Hangfire job, controllers (`3fbff22`)** |
 | **Wave 4** | Zapier/Make.com integration layer | **✅ Done — API keys, org slug, integration subscriptions, ingress/trigger controllers, frontend tabs (`3fbff22`)** |
 
@@ -564,6 +564,28 @@ Next (deferred to future hardening passes):
 Add onboarding, demo data, concrete ROI copy, trust/security/legal/support pages,
 analytics event plan, and sales/demo assets after UI polish begins.
 
+#### Group L Wave 2 — sample-order backend chip ✅ (2026-05-28)
+
+**Branch:** `worktree-wave-2-sample-order-chip` — pushed to origin.
+
+**Phase 6.1 — fixture + entities + migration + quota guard** (commit `ffe7418`):
+- `ProcuLink.Api/Fixtures/sample-order.csv` — 3-line EUR fixture (DEMO-2026-001, Northwind Trading OÜ).
+- `PurchaseOrderEntity.IsSample: bool` + `Supplier.IsSample: bool` + `Supplier.Code: string?`.
+- EF migration `20260528150709_AddIsSampleFlags` — `is_sample` + `code` on both tables.
+- `StripeBillingService.CountOrdersAsync` — `&& !o.IsSample` guard on both Pilot cumulative and paid monthly count branches.
+
+**Phase 6.2 — service + controller + tests** (commit `524b080`):
+- `ISampleOrderService` (Core) — `Task<Guid> CreateAndEnqueueAsync(Guid orgId, string? userId, CancellationToken)`.
+- `SampleOrderService` (Infrastructure) — idempotent `__sample__` supplier, fixture upload via `IFileStorageService`, `IsSample = true` order stub, `IParseJobEnqueuer.EnqueueAsync`, `sample_order_started` PostHog event.
+- `POST /api/onboarding/sample-order` — returns `{ orderId, isSample: true }`.
+- `ISampleOrderService` DI-wired in `Program.cs` (`AddScoped`).
+- 3 xUnit tests: `CreatesSampleSupplier_IfMissing`, `ReusesExistingSampleSupplier`, `DoesNotIncrementOrdersThisMonth`.
+- 198 tests total (102 Transform + 96 Infrastructure), 0 failures.
+
+**Key implementation decisions:**
+- Fixture linked into `ProcuLink.Infrastructure.csproj` via `LogicalName` so `typeof(SampleOrderService).Assembly.GetManifestResourceStream(...)` resolves in unit tests without an Api project reference.
+- Uses `IParseJobEnqueuer` (already in Core) rather than `IBackgroundJobClient` directly — avoids Infrastructure→Api dependency cycle.
+
 ### Group E provider decision (May 25 2026)
 
 Do not implement Group E as Anthropic-only. Use a provider-neutral `IAiMappingService` with OpenAI structured outputs as the first provider because SKU suggestion needs cheap, fast, schema-bound JSON with confidence and provenance.
@@ -592,10 +614,12 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 
 ## Latest commits / push state
 
-### Backend (`ProcuLink`) — branch `phase5/group-l-wave-1-backend-analytics`
+### Backend (`ProcuLink`) — latest active branch `worktree-wave-2-sample-order-chip`
 
 | Commit | What |
 |---|---|
+| `524b080` | feat(sample): POST /api/onboarding/sample-order — sample-order service + controller + 3 tests |
+| `ffe7418` | feat(sample): add sample-order.csv fixture + IsSample flags + quota skip |
 | `32e0f41` | docs: update CLAUDE.md + STATUS.md to pass 15, Wave 1/2 verified, Group K done |
 | `11f7935` | feat(analytics): PostHog backend client wrapper (no-op when key absent) |
 | `8ff3b3f` | docs(analytics): PostHog event taxonomy v1.0 |
@@ -613,7 +637,7 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 | `218711a` | docs: Zapier/Make.com integration submission guide |
 | `3fbff22` | feat: Wave 3+4 — invoice/ASN models, UBL parser, API keys, integration triggers |
 
-**Test state:** 195/195 pass (102 Transform + 93 Infrastructure), 0 failures.
+**Test state:** 198/198 pass (102 Transform + 96 Infrastructure), 0 failures.
 
 ### Frontend (`project-proculink`) — branch `main`
 

@@ -237,12 +237,12 @@ public sealed class StripeBillingService : IBillingService
         if (NormalizePlan(org.Plan) == PlanConstants.Pilot)
         {
             return await _db.PurchaseOrders
-                .CountAsync(o => o.OrgId == org.Id && o.CreatedAt >= org.TrialStartedAt, ct);
+                .CountAsync(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= org.TrialStartedAt, ct);
         }
 
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         return await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == org.Id && o.CreatedAt >= monthStart, ct);
+            .CountAsync(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= monthStart, ct);
     }
 
     private Task<int> CountSuppliersAsync(Guid orgId, CancellationToken ct) =>

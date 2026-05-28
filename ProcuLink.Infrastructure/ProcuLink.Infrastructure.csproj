@@ -24,6 +24,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Linked embed so SampleOrderService can load the sample fixture from its own assembly
+         without taking a project reference on ProcuLink.Api (which would create a dependency cycle).
+         The same file is also embedded in ProcuLink.Api for symmetry with other Api fixtures. -->
+    <EmbeddedResource Include="..\ProcuLink.Api\Fixtures\sample-order.csv" Link="Fixtures\sample-order.csv" LogicalName="ProcuLink.Infrastructure.Fixtures.sample-order.csv" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Allow internal test-only ctors to be reachable from Infrastructure.Tests. -->
     <InternalsVisibleTo Include="ProcuLink.Infrastructure.Tests" />
   </ItemGroup>

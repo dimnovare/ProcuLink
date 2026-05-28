@@ -30,4 +30,8 @@
     <ProjectReference Include="..\ProcuLink.Transform\ProcuLink.Transform.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Fixtures\sample-order.csv" />
+  </ItemGroup>
+
 </Project>

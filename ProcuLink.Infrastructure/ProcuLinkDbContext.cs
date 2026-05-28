@@ -144,6 +144,8 @@ public class ProcuLinkDbContext : DbContext
             b.Property(x => x.Name).HasColumnName("name").IsRequired();
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
+            b.Property(x => x.Code).HasColumnName("code");
+            b.Property(x => x.IsSample).HasColumnName("is_sample").HasDefaultValue(false);
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.Suppliers)
              .HasForeignKey(x => x.OrgId);
@@ -248,6 +250,7 @@ public class ProcuLinkDbContext : DbContext
              .HasConversion(jsonDocConverter);
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            b.Property(x => x.IsSample).HasColumnName("is_sample").HasDefaultValue(false);
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.PurchaseOrders)
              .HasForeignKey(x => x.OrgId);
