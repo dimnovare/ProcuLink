@@ -19,6 +19,15 @@ large ERP connector coverage.
 **Current source of truth:** read `STATUS.md` before planning. It overrides stale
 phase text in this file if there is a mismatch.
 
+**Model routing policy:** read [`docs/CLAUDE_MODEL_ROUTING.md`](docs/CLAUDE_MODEL_ROUTING.md)
+before starting any non-trivial task. It defines which capability tier
+(cheap-fast / Sonnet / Opus) to use per task type, escalation/de-escalation
+rules, subagent policy, and the `[FAST]` / `[STANDARD]` / `[CAREFUL]` /
+`[OPUS-PLAN]` / `[OPUS-REVIEW]` prompt prefixes the user may apply.
+**Default to Sonnet for implementation.** Use Opus only for architecture,
+risky/cross-cutting reasoning, billing/security/tenancy review, or after
+two failed Sonnet attempts on the same problem.
+
 ---
 
 ## Repository layout
