@@ -4,7 +4,47 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 5 in progress — overnight 2026-05-28 closed Group J P0 backend gaps + dropped UI jargon + landed ROI calc + trust pack**
+## Where we are: **2026-05-28 Wave 3 + Wave 4 shipped — Invoice/ASN canonical models + Zapier/Make.com integration layer**
+
+### Wave 3 + Wave 4 (2026-05-28)
+
+**Wave 3 — Invoice + ASN canonical models** (commit `3fbff22`):
+- `ParsedInvoice` / `ParsedAsn` / `ParsedAsnPackage` / `ParsedAsnLine` records
+- `IInvoiceParser` / `IDesadvParser` interfaces
+- `UblInvoiceParser` — full UBL 2.1 Invoice XML parser with `IsUblInvoiceDocument` peek helper
+- `EdifactInvoiceParser` / `EdifactDesadvParser` — stubs (EdiFabric licence required; drop-in ready)
+- `InvoiceParserFactory` + `DesadvParserFactory`
+- `InvoiceEntity` / `InvoiceLineEntity` / `AdvanceShippingNoticeEntity` / `AsnPackageEntity` / `AsnPackageLineEntity`
+- `IInvoiceService` + `InvoiceService` (upload, parse-job, approve, forward CSV/XML/JSON)
+- `IDesadvService` + `DesadvService` (file store stub; parsing deferred)
+- `CsvInvoiceTransformService` / `XmlInvoiceTransformService` / `JsonInvoiceTransformService`
+- `ParseInvoiceJob` — Hangfire idempotent job, 3 retries
+- `InvoiceController` (upload/list/get/approve/download) + `DesadvController` (202 Accepted)
+- 4 EF migrations: `AddInvoicesAndLines`, `AddAdvanceShippingNotices`, `AddTenantApiKeysAndOrgSlug`, `AddIntegrationSubscriptions`
+- Tests: `UblInvoiceParserTests` (7), `EdifactStubTests` (2), `CsvInvoiceTransformServiceTests` (3) — 102/102 Transform.Tests pass
+
+**Wave 4 — Zapier/Make.com integration layer** (commit `3fbff22`):
+- `ApiKeyHasher` utility in `Core.Security` (no circular project refs)
+- `TenantApiKey` entity + `Organisation.Slug` (unique kebab-case, auto-generated)
+- `IntegrationSubscription` entity (platform, eventType, targetUrl, AES-GCM encrypted HMAC secret)
+- `ApiKeyAuthHandler` — second ASP.NET Core auth scheme alongside Clerk JWT Bearer
+- `IApiKeyService` + `ApiKeyService` — `plk_` prefix, HMAC-SHA256 hash, plaintext never stored
+- `ApiKeyController` — Clerk-auth CRUD for org members
+- `IngressController` — machine-to-machine `POST /api/ingress/{slug}/orders` + `GET /api/ingress/{slug}/ping`
+- `IntegrationController` — CRUD + toggle for subscriptions
+- `IIntegrationTriggerService` + `IntegrationTriggerService` + `FireIntegrationTriggerJob`
+  (HMAC-SHA256 `X-ProcuLink-Signature`, 3 retries, auto-deactivates subscription after 3 failures)
+- Hooks: `OrderService.CreateStubAsync` → `order.created`; `DeliveryService` → `order.delivered` / `order.failed`
+- `docs/integrations/SUBMISSION.md` — Zapier + Make.com submission checklist and webhook security docs
+- Frontend: Settings → API Keys (create/list/revoke with one-time raw key display) + Settings → Connectors (Zapier/Make.com CTAs + custom webhook CRUD)
+- Tests: `ApiKeyServiceTests` (3), `ApiKeyHasherTests` (3)
+
+**Known pre-existing regression** (not caused by Wave 3/4):
+- 48 `ProcuLink.Infrastructure.Tests` fail with `JsonDocument` EF InMemory error — pre-dates Wave 3/4, tracked separately
+
+---
+
+## Where we were: **Phase 5 in progress — overnight 2026-05-28 closed Group J P0 backend gaps + dropped UI jargon + landed ROI calc + trust pack**
 
 ### Overnight 2026-05-28 (uncommitted; review `docs/agent-reports/2026-05-28-overnight-summary.md`)
 
