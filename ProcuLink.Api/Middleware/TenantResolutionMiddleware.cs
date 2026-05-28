@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Middleware;
@@ -27,8 +28,10 @@ public sealed class TenantResolutionMiddleware
         _logger = logger;
     }
 
-    public async Task InvokeAsync(HttpContext context, ProcuLinkDbContext db)
+    public async Task InvokeAsync(HttpContext context, ProcuLinkDbContext db, IAnalyticsService analytics)
     {
+        var sub = context.User.FindFirst("sub")?.Value;
+
         if (context.User.Identity?.IsAuthenticated == true)
         {
             // Prefer the Clerk org_id claim. When no Clerk organisation is active in
@@ -38,7 +41,6 @@ public sealed class TenantResolutionMiddleware
             // they share no namespace and won't collide.
             var clerkOrgId = context.User.FindFirst("org_id")?.Value;
             var orgSlug    = context.User.FindFirst("org_slug")?.Value;
-            var sub        = context.User.FindFirst("sub")?.Value;
             var fellBackToUser = false;
 
             if (string.IsNullOrEmpty(clerkOrgId) && !string.IsNullOrEmpty(sub))
@@ -80,6 +82,17 @@ public sealed class TenantResolutionMiddleware
                     _logger.LogInformation(
                         "Auto-provisioned organisation '{Name}' (TenantKey={ClerkOrgId}, FellBackToUser={Fallback}).",
                         newOrg.Name, clerkOrgId, fellBackToUser);
+
+                    await analytics.CaptureAsync(
+                        organisationId: newOrg.Id,
+                        userId: sub,
+                        eventName: "org_created",
+                        properties: new Dictionary<string, object?>
+                        {
+                            ["plan"] = "pilot",
+                            ["created_via"] = "signup_flow",
+                        },
+                        ct: context.RequestAborted);
 
                     context.Items[CurrentTenantService.Items.OrganisationId] = newOrg.Id;
                 }

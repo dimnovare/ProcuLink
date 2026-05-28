@@ -16,6 +16,7 @@ public sealed class DeliveryService : IDeliveryService
     private readonly DeliveryEncryptionService _encryption;
     private readonly IReadOnlyDictionary<string, IDeliveryDispatcher> _dispatchers;
     private readonly IIntegrationTriggerService _integrationTrigger;
+    private readonly IAnalyticsService _analytics;
     private readonly ILogger<DeliveryService> _logger;
 
     public DeliveryService(
@@ -24,6 +25,7 @@ public sealed class DeliveryService : IDeliveryService
         DeliveryEncryptionService encryption,
         IEnumerable<IDeliveryDispatcher> dispatchers,
         IIntegrationTriggerService integrationTrigger,
+        IAnalyticsService analytics,
         ILogger<DeliveryService> logger)
     {
         _db = db;
@@ -31,6 +33,7 @@ public sealed class DeliveryService : IDeliveryService
         _encryption = encryption;
         _dispatchers = dispatchers.ToDictionary(x => x.Protocol, StringComparer.OrdinalIgnoreCase);
         _integrationTrigger = integrationTrigger;
+        _analytics = analytics;
         _logger = logger;
     }
 
@@ -185,6 +188,27 @@ public sealed class DeliveryService : IDeliveryService
         // ── Wave 4: fire order.delivered / order.failed triggers ──────────────────
         if (result.Success)
         {
+            // Check whether this is the org's FIRST delivered order. The current order's status
+            // has just been saved as 'delivered' above; exclude it by id.
+            var hadOtherDeliveredOrders = await _db.PurchaseOrders
+                .AnyAsync(o => o.OrgId == order.OrgId
+                            && o.Id != order.Id
+                            && o.Status == OrderStatusConstants.Delivered, ct);
+
+            if (!hadOtherDeliveredOrders)
+            {
+                await _analytics.CaptureAsync(
+                    organisationId: order.OrgId,
+                    userId: null,
+                    eventName: "first_delivery_succeeded",
+                    properties: new Dictionary<string, object?>
+                    {
+                        ["order_id"] = order.Id,
+                        ["protocol"] = config.Protocol,
+                    },
+                    ct: ct);
+            }
+
             _ = _integrationTrigger.EnqueueAsync(
                 order.OrgId,
                 "order.delivered",

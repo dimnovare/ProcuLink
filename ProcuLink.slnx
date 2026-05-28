@@ -6,4 +6,5 @@
   <Project Path="ProcuLink.Transform/ProcuLink.Transform.csproj" />
   <Project Path="ProcuLink.Worker/ProcuLink.Worker.csproj" />
   <Project Path="ProcuLink.Infrastructure.Tests/ProcuLink.Infrastructure.Tests.csproj" />
+  <Project Path="ProcuLink.Api.Tests/ProcuLink.Api.Tests.csproj" />
 </Solution>
