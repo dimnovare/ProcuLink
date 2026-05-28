@@ -66,23 +66,27 @@ public sealed class OrderService : IOrderService
         var safeFilename = FileNameSanitiser.Sanitise(filename);
         var extension    = FileNameSanitiser.GetExtension(filename);
 
-        // 2. Resolve parser early so we fail fast before hitting R2
-        IPurchaseOrderParser parser;
-        try
-        {
-            parser = _parserFactory.GetParser(extension);
-        }
-        catch (UnsupportedFileFormatException ex)
-        {
-            return Result<PurchaseOrderEntity>.Fail(ex.Message);
-        }
-
-        // 3. Buffer the stream — we need two passes (upload + parse)
+        // 2. Buffer the stream first — we need it to (a) peek for content-based
+        //    parser disambiguation (.xml UBL vs cXML, .txt EDIFACT) and
+        //    (b) replay for upload + parse.
         using var buffer = new MemoryStream();
         await fileStream.CopyToAsync(buffer, ct);
 
         if (buffer.Length == 0)
             return Result<PurchaseOrderEntity>.Fail("Uploaded file is empty.");
+
+        // 3. Resolve parser using extension + content peek (stream-aware overload)
+        IPurchaseOrderParser parser;
+        try
+        {
+            buffer.Position = 0;
+            parser = _parserFactory.GetParser(extension, buffer);
+            buffer.Position = 0;
+        }
+        catch (UnsupportedFileFormatException ex)
+        {
+            return Result<PurchaseOrderEntity>.Fail(ex.Message);
+        }
 
         // 4. Upload raw file to R2
         var orderId       = Guid.NewGuid();

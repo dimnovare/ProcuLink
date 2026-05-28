@@ -14,7 +14,9 @@ using ProcuLink.Core.Services.Erp;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Ai;
 using ProcuLink.Infrastructure.Services.Dispatchers;
+using ProcuLink.Infrastructure.Services.Email;
 using ProcuLink.Infrastructure.Services.Erp;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
@@ -158,6 +160,9 @@ builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddScoped<IIdempotencyService, IdempotencyService>();
+builder.Services.AddScoped<ISchemaInferencer, OpenAiSchemaInferencer>();
+builder.Services.AddScoped<IInboundEmailRouter, InboundEmailRouter>();
+builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.HangfireParseJobEnqueuer>();
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
@@ -175,6 +180,8 @@ builder.Services.AddSingleton<IPurchaseOrderParser, CsvOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, CxmlOrderParser>();
+builder.Services.AddSingleton<IPurchaseOrderParser, UblOrderParser>();
+builder.Services.AddSingleton<IPurchaseOrderParser, EdifactOrderParser>();
 builder.Services.AddSingleton<OrderParserFactory>();
 
 // ── Transform layer (ProcuLink.Transform) ──────────────────────────────────

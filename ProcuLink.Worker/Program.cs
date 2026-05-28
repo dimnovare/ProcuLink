@@ -81,6 +81,8 @@ builder.Services.AddSingleton<IPurchaseOrderParser, CsvOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, CxmlOrderParser>();
+builder.Services.AddSingleton<IPurchaseOrderParser, UblOrderParser>();
+builder.Services.AddSingleton<IPurchaseOrderParser, EdifactOrderParser>();
 builder.Services.AddSingleton<OrderParserFactory>();
 builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();

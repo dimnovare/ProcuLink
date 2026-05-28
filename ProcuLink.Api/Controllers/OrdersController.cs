@@ -82,8 +82,11 @@ public sealed class OrdersController : ControllerBase
                 new { error = "File exceeds the 10 MB upload limit." });
 
         var extension = FileNameSanitiser.GetExtension(file.FileName);
-        if (extension != ".csv" && extension != ".xlsx" && extension != ".pdf")
-            return BadRequest(new { error = "Only CSV, XLSX, and PDF files are supported." });
+        // Whitelist: CSV, XLSX, PDF (text), XML (cXML or UBL/Peppol), cXML (explicit), EDI (EDIFACT), TXT (EDIFACT-sniffed)
+        if (extension != ".csv" && extension != ".xlsx" && extension != ".pdf"
+            && extension != ".xml" && extension != ".cxml"
+            && extension != ".edi" && extension != ".txt")
+            return BadRequest(new { error = "Supported formats: CSV, XLSX, PDF, XML (cXML/UBL/Peppol), EDI (EDIFACT)." });
 
         if (supplierId == Guid.Empty)
             return BadRequest(new { error = "supplierId is required." });
