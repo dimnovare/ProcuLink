@@ -4,7 +4,21 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **Phase 5 in progress — Group J deployment hardening begun**
+## Where we are: **Phase 5 in progress — overnight 2026-05-28 closed Group J P0 backend gaps + dropped UI jargon + landed ROI calc + trust pack**
+
+### Overnight 2026-05-28 (uncommitted; review `docs/agent-reports/2026-05-28-overnight-summary.md`)
+
+- **Backend P0 gaps closed**: Idempotency-Key on `/upload`, per-org AI token cap (`Ai:OpenAI:MonthlyTokenLimitPerOrg`, default 100k), startup config validator. New tables `idempotency_keys` + `ai_usage_monthly` via migration `20260527230444_AddIdempotencyKeysAndAiUsageMonthly`. New endpoint `GET /api/billing/ai-usage`. **108 tests pass** (60 transform + 48 infrastructure).
+- **Marketing landing page**: fabricated stats (84% / 1m 42s / €4.20 / 99.7%) removed. ROI calculator at `project-proculink/src/components/marketing/ROICalculator.tsx` mounted between value-prop and CTA. Feature descriptions rewritten to drop Wire/Spine/Crossing jargon.
+- **Internal jargon swept from 17 user-facing files**: Bridge → Dashboard, Crossings → Orders/Deliveries, Cross the bridge → Send to supplier, Supplier docks → Suppliers, Buyer docks → Buyers, Crossings Log → Delivery Log, Spine Review → Order Review. Component / type / file / route names intentionally untouched.
+- **Trust pack**: `docs/trust/security.md`, `gdpr.md`, `reliability.md` written. Honest, no marketing fluff.
+- **Format/channel roadmap**: `docs/format-channel-roadmap.md` (3995 words) — 12-month plan for "any input → any output, any channel" vision with effort/priority/library specifics.
+- **GTM enablement pack**: `docs/gtm/icp-target-list-template.md`, `outreach-scripts.md`, `demo-script.md`, `pilot-onboarding-checklist.md`, `first-100-users-strategy.md`.
+- **Both repos build clean**. Nothing committed; founder reviews and commits in 4 logical groups per `docs/agent-reports/2026-05-28-overnight-summary.md`.
+
+---
+
+
 
 **Strategic correction (May 25 2026):** first paying ICP is the **buyer/procurement team sending orders out** to many suppliers, not the supplier/distributor receiving buyer orders. Keep the platform vision broad, but build the next 6 weeks around outbound PO reliability: buyer order source → canonical PO → supplier-specific validation/mapping → supplier-ready delivery.
 
