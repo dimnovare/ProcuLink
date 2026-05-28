@@ -4,40 +4,34 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-05-28 Group L Wave 3 backend finalized — Stripe success_url + support form endpoint**
+## Where we are: **2026-05-28 Group L FULLY SHIPPED — Waves 1+2+3 all merged to `main` both repos · 213 backend tests green · only founder configuration remaining**
 
-### Group L Wave 3 — backend support form + Stripe success_url (2026-05-28)
+### Group L Wave 3 — fully merged to `main` (2026-05-28)
 
-**Phase 7.2 — Stripe Checkout `success_url` redirect** (branch `feat/group-l-w3-backend-finalization`):
+**Backend — Phase 7.2 — Stripe Checkout `success_url` redirect:**
 - Checkout `success_url` now routes to `{Frontend:Url}/welcome?upgraded={plan}&session_id={CHECKOUT_SESSION_ID}`, `cancel_url` to `{Frontend:Url}/settings`. The `CreateCheckoutSessionAsync` parameter was renamed `returnUrl → frontendUrl` to reflect new semantics.
 - Stripe webhook handlers (`checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`) now invoke `StripeBillingService.EmitBillingUpgradedAsync` / `EmitBillingDowngradedAsync` / `EmitBillingCancelledAsync` via a cast `_billing as StripeBillingService` in `BillingController` webhook handlers.
 - Plan downgrades detected via rank ordering: `pilot < growth < operations < integration < enterprise`.
 
-**Phase 9.2 — Support contact form backend** (branch `feat/group-l-w3-backend-finalization`):
+**Backend — Phase 9.2 — Support contact form backend:**
 - `POST /api/support/contact` (allow-anonymous) accepts `SupportContactRequest` (Category, Subject, Message, UserEmail, UserAgent, Route).
 - New `IEmailSender` abstraction in `Core` with two implementations: `MailKitEmailSender` (SMTP, sends to `support@proculink.com`) and `ConsoleEmailSender` (dev fallback, logs to console when `Smtp:Host` is empty).
 - `ISupportContactService` (Core) + `SupportContactService` (Infrastructure) formats email as `[support][{category}] {subject}`, includes org/user/route/agent context headers.
 - Org-scoped submissions emit `support_form_submitted` analytics event with `category` and `route` properties.
 - MailKit 4.8.0 added to `ProcuLink.Infrastructure.csproj`; new `FakeEmailSender` test double in `ProcuLink.Infrastructure.Tests/TestDoubles/`.
 - 2 new unit tests in `SupportContactServiceTests`: happy path + anonymous (no analytics).
+- **Backend test count: 213** (102 Transform + 11 Api.Tests + 100 Infrastructure), 0 failures.
 
-**Frontend support form** (parallel branch `project-proculink:feat/group-l-w3-support-form-cross-repo`):
-- `ContactForm.tsx` client component, `apiClient.submitSupportRequest()` API helper.
-- Mounted on `(marketing)/support/page.tsx` below the existing FAQ list; existing mailto link kept visible.
-- Lands in a separate PR; do not look for it on `project-proculink` main until both backend and frontend branches merge together.
+**Frontend — Phase 6.3 + 10.3 + 10.4 cleanup + 9.2 support form:**
+- `apiClient.runSampleOrder()` + "Try with sample order" button on `/upload` + amber `?sample=1` banner on `SpineReview` when `order.isSample`.
+- `/watch` page (Client Component) — Loom iframe when `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL` set, dashed-border placeholder card otherwise; captures `watch_demo_started` analytics.
+- Pilot Book-a-demo CTA card on `/upload` and Billing settings, visible only when `billing.plan === "pilot"` AND `NEXT_PUBLIC_BOOK_DEMO_URL` is set; emits `book_demo_clicked` analytics on click.
+- New env vars: `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`, `NEXT_PUBLIC_BOOK_DEMO_URL` added to `.env` + `.env.example` (empty defaults).
+- Dead-code removal: `src/components/onboarding/OnboardingWizard.tsx`, `src/views/Dashboard.tsx`, orphaned `src/app/(app)/dashboard/page.tsx` + `loading.tsx`.
+- `apiClient.submitSupportRequest()` + `ContactForm.tsx` Client Component mounted on `/support` below the FAQ list; existing mailto link kept visible.
+- `Order.isSample?: boolean` added to TS contract for sample banner gate.
 
-**Waiting on founder configuration** (unchanged from Wave 2 list):
-- PostHog project keys (`Analytics:PostHog:ApiKey` + `NEXT_PUBLIC_POSTHOG_KEY`)
-- Clerk post-signup redirect to `/welcome`
-- Status page URL (`NEXT_PUBLIC_STATUS_URL`)
-- Walkthrough Loom URL (`NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`)
-- Cal.com URL (`NEXT_PUBLIC_BOOK_DEMO_URL`)
-- Optional SMTP: `Smtp:Host`, `Smtp:Port`, `Smtp:Username`, `Smtp:Password`, `Smtp:From` (without these, support form still 200s but emails go to the console log via `ConsoleEmailSender`).
-
-**Wave 3 deferred items** still pending implementation:
-- Phase 6.3 frontend "Try with sample order" button on `/upload`
-- Phase 10.3 `/watch` Loom embed + "Book a 15-min demo" CTAs
-- Phase 10.4 dead-code cleanup
+**Branches cleaned up after merge:** `feat/group-l-w3-backend-finalization`, `feat/group-l-wave-3-phase-6.3-10.3-10.4`, `feat/group-l-w3-support-form-cross-repo` — all deleted local + remote. Wave 2/3 chip stashes (5 backend + 3 frontend) all cleared. Extra frontend worktree (`project-proculink-supportform-wt`) removed from disk.
 
 ---
 
@@ -395,7 +389,7 @@ Deferred from H:
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
 | **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed; live deployed QA remaining |
 | **K** | Standards + engine hardening | **✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`)** |
-| **L** | Trust, onboarding + commercial readiness | **In progress — Wave 1 + Wave 2 (entity rename, /dpa /subprocessors /aup /customers /one-pager /welcome /help, cookie banner, posthog frontend+backend SDK, event emitters, sample-order, 4-step wizard, in-app Help) merged to `main`. Wave 3 pending (sample button, Stripe success_url, contact form, /watch + book-a-demo, cleanup).** |
+| **L** | Trust, onboarding + commercial readiness | **✅ Done (code) — Waves 1+2+3 all merged to `main`. Only founder configuration remaining (PostHog keys, Clerk redirect, status URL, Loom URL, Cal.com URL, optional SMTP).** |
 | **Wave 3** | Invoice + ASN canonical models | **✅ Done — UBL 2.1 invoice parser, invoice/ASN entities, CSV/XML/JSON transforms, Hangfire job, controllers (`3fbff22`)** |
 | **Wave 4** | Zapier/Make.com integration layer | **✅ Done — API keys, org slug, integration subscriptions, ingress/trigger controllers, frontend tabs (`3fbff22`)** |
 
@@ -648,17 +642,17 @@ analytics event plan, and sales/demo assets after UI polish begins.
 - **Phase 7.1 /welcome page** — `(marketing)/welcome/page.tsx` Client Component reads `?upgraded={plan}` for post-Checkout state, renders 4-step preview, captures `welcome_viewed` analytics.
 - **Phase 9.1 in-app HelpSlideover** — `BridgeTopbar.tsx` gets a Help button, opens `HelpSlideover.tsx` with route-aware contextual link (e.g. `/upload` → `/help/first-upload`) plus "Open help docs" / "Contact support" / "Report a bug" nav.
 
-#### Group L — deferred to Wave 3 (still pending implementation)
+#### Group L — Wave 3 shipped ✅ (was previously deferred)
 
-These phases are not in `main`; they need separate chips because they touch files currently held by Wave 1/2 or have ordering dependencies.
+All five phases below merged to `main` and tests green. Recap of what each delivered:
 
-| Phase | Scope | Why deferred |
-|---|---|---|
-| **6.3** | Frontend "Try with sample order" button on `/upload` + non-quota banner on review screen | Touches `UploadWorkbench.tsx` (Wave 2 Chip F also touched it); needs Phase 6.1/6.2 backend (now on `main`) |
-| **7.2** | Stripe Checkout `success_url` → `/welcome?upgraded={plan}` | `BillingController.cs` was kept clean of Wave 2; needs single small backend edit |
-| **9.2** | `POST /api/support/contact` backend + frontend contact form on `/support` | Touches `Program.cs` (Wave 2 Chip H also touched it); needs new `ISupportContactService` + `SupportController` |
-| **10.3** | `/watch` Loom-slot page + Pilot "Book a 15-min demo" CTAs on `/upload` and Billing settings | Touches `UploadWorkbench.tsx` and `BillingSection.tsx`; needs new env vars `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`, `NEXT_PUBLIC_BOOK_DEMO_URL` |
-| **10.4** | Dead-code cleanup (`src/components/onboarding/OnboardingWizard.tsx`, `src/views/Dashboard.tsx`) + final STATUS.md update | Runs last by design after all other Group L work merges |
+| Phase | Delivered |
+|---|---|
+| **6.3** | Frontend "Try with sample order" button on `/upload` + amber non-quota banner on `SpineReview` |
+| **7.2** | Stripe Checkout `success_url` → `/welcome?upgraded={plan}` + Stripe webhook handlers wired to `EmitBilling*` analytics emitters |
+| **9.2** | `POST /api/support/contact` backend (`ISupportContactService` + `IEmailSender`) + `ContactForm.tsx` on `/support` |
+| **10.3** | `/watch` Loom-slot page (env-gated) + Pilot "Book a 15-min demo" CTAs on `/upload` and Billing settings |
+| **10.4** | Dead-code cleanup of unused `OnboardingWizard` + `Dashboard` + orphaned dashboard route |
 
 #### Group L — waiting on founder configuration / external setup
 
@@ -667,11 +661,12 @@ Implementation is complete for each of these but they will not function in produ
 | Area | Action required | Where to set | Effect when missing |
 |---|---|---|---|
 | **PostHog analytics (frontend + backend)** | Create PostHog Cloud EU project; capture project API key | Vercel env: `NEXT_PUBLIC_POSTHOG_KEY` + `NEXT_PUBLIC_POSTHOG_HOST=https://eu.posthog.com`. Railway API + Worker: `Analytics:PostHog:ApiKey` | Frontend SDK and backend wrapper both no-op silently. Funnel data is not collected. |
-| **Stripe `success_url` redirect to `/welcome`** | Update Stripe Checkout `success_url` in `BillingController.cs` to point at `{frontendUrl}/welcome?upgraded={planKey}&session_id={CHECKOUT_SESSION_ID}` (Wave 3 Phase 7.2 chip) | `BillingController.cs` (code change) + Vercel `Frontend:Url` env var | After successful Checkout, users land on the generic settings page instead of the `/welcome` upgrade callout. |
+| **Stripe `success_url` `Frontend:Url`** | Code already routes Checkout to `{Frontend:Url}/welcome?upgraded={planKey}&session_id={CHECKOUT_SESSION_ID}` (Wave 3 Phase 7.2 shipped). Founder only needs to set the env var. | Vercel + Railway `Frontend:Url` env var | After successful Checkout, users hit a broken URL. |
 | **Clerk post-signup redirect to `/welcome`** | In Clerk dashboard for the `golden-alpaca-43` instance (and any production instance), set the post-sign-up redirect URL to `/welcome` | Clerk dashboard → Paths configuration | New sign-ups skip the welcome funnel and land on a default route. |
 | **Status page link in marketing footer** | Host an external status board (Instatus, BetterStack, etc.) and set the URL | `project-proculink/.env` → `NEXT_PUBLIC_STATUS_URL` (currently empty) | Footer link is hidden — no visible broken link, but customers cannot self-check uptime. |
-| **`/watch` walkthrough video** | Record a 60-90 second Loom and paste the embed URL | `project-proculink/.env` → `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL` (Wave 3 Phase 10.3 chip) | `/watch` shows a "video is being recorded" placeholder card. |
-| **"Book a 15-min demo" CTA** | Create a Cal.com or Calendly slot and paste the booking URL | `project-proculink/.env` → `NEXT_PUBLIC_BOOK_DEMO_URL` (Wave 3 Phase 10.3 chip) | Book-a-demo card on Pilot upload/billing screens is hidden. |
+| **`/watch` walkthrough video** | Record a 60-90 second Loom and paste the embed URL | `project-proculink/.env` + Vercel → `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL` | `/watch` shows a "video is being recorded" placeholder card. |
+| **"Book a 15-min demo" CTA** | Create a Cal.com or Calendly slot and paste the booking URL | `project-proculink/.env` + Vercel → `NEXT_PUBLIC_BOOK_DEMO_URL` | Book-a-demo card on Pilot upload/billing screens is hidden. |
+| **Support form SMTP (optional)** | Provide SMTP credentials so `MailKitEmailSender` actually delivers `support@proculink.com` emails. Without these, form returns 200 OK but emails go to the console log via `ConsoleEmailSender` (dev fallback). | Railway API: `Smtp:Host`, `Smtp:Port`, `Smtp:Username`, `Smtp:Password`, `Smtp:From` | Support form submissions are not actually delivered to the inbox. |
 | **DPA counter-signature workflow** | Founder receives `legal@proculink.com` inbox, signs incoming DPAs within 5 business days as committed in `/dpa` | Operational, not code | Customer-facing trust commitment becomes false. |
 | **Subprocessor change-notification subscriber list** | Founder maintains the manual subscriber list (currently no SaaS-backed list); emails the list 30 days before any subprocessor change | Operational, not code | Customer trust commitment in `/subprocessors` becomes false. |
 | **Cookie banner copy review** | Review the banner copy live on the marketing site (incognito tab) to confirm tone matches brand voice | Browser smoke test | Cosmetic only. |

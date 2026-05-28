@@ -228,7 +228,7 @@ before writing implementation plans.
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
 | **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed, live deployed QA remaining |
 | **K** | Standards + engine hardening | ✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`) |
-| **L** | Trust, onboarding + commercial readiness | Done — all phases shipped; waiting on founder configuration only (PostHog keys, Clerk redirect, status URL, Loom URL, Cal.com URL, optional SMTP). Wave 3 backend (support form + Stripe success_url) landed in branch `feat/group-l-w3-backend-finalization`; Wave 3 frontend (support form) landed in project-proculink branch `feat/group-l-w3-support-form-cross-repo`. |
+| **L** | Trust, onboarding + commercial readiness | ✅ Done — Waves 1+2+3 all merged to `main` both repos (entity rename, /dpa /subprocessors /aup /customers /one-pager /welcome /watch /help, cookie banner, posthog frontend+backend SDK, event emitters, sample-order endpoint + button, 4-step wizard, in-app Help, /support contact form, Stripe success_url → /welcome, Pilot Book-a-demo CTAs, dead-code cleanup). All Wave 1/2/3 feature branches deleted local + remote, stashes cleared. Waiting on founder configuration only: PostHog keys, Clerk post-signup redirect, NEXT_PUBLIC_STATUS_URL, NEXT_PUBLIC_WALKTHROUGH_LOOM_URL, NEXT_PUBLIC_BOOK_DEMO_URL, optional SMTP for the support form. Backend test count: **213** (102 Transform + 11 Api.Tests + 100 Infrastructure). |
 
 Group I remains the active implementation group unless the user explicitly
 reprioritizes. The Bridge Layer is locked, but screens still need route-by-route
@@ -336,7 +336,7 @@ Read this before starting new work:
   - `dotnet test ProcuLink.slnx --no-restore` passed, **211 tests** (102 Transform + 11 Api.Tests + 98 Infrastructure), 0 failures.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
-No remaining Phase 4 C-H group is open. Wave 3 and Wave 4 are complete. Group K is complete. Current implementation group **Group L** is fully shipped pending two remaining deferred slices (Phase 10.3 `/watch` + Book-a-demo CTAs, Phase 10.4 dead-code cleanup) and the frontend sample-button chip; Waves 1 + 2 + Wave 3 backend (Stripe `success_url` + support form) are on `main` or pending merge from branch `feat/group-l-w3-backend-finalization`. Waiting on founder configuration only — see `STATUS.md`. Group I (UI polish) is effectively complete through pass 15.
+No remaining Phase 4 C-H group is open. Wave 3 and Wave 4 (Invoice/ASN + Zapier/Make.com) are complete. Group K is complete. **Group L is fully shipped on `main` both repos** — Waves 1 + 2 + 3 all merged, all feature branches deleted local + remote, all chip stashes cleared. The only remaining work is founder configuration (PostHog keys, Clerk post-signup redirect, `NEXT_PUBLIC_STATUS_URL`, `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`, `NEXT_PUBLIC_BOOK_DEMO_URL`, optional SMTP) — see `STATUS.md` "Group L — waiting on founder configuration / external setup" table. Group I (UI polish) is effectively complete through pass 15.
 
 1. Read `STATUS.md`.
 2. Read `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`.
