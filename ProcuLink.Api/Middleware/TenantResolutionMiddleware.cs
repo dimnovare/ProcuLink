@@ -60,11 +60,13 @@ public sealed class TenantResolutionMiddleware
                 {
                     // Auto-provision: first time this tenant key contacts the API.
                     var now = DateTime.UtcNow;
+                    var orgName = orgSlug ?? clerkOrgId;
                     var newOrg = new Organisation
                     {
                         Id             = Guid.NewGuid(),
                         ClerkOrgId     = clerkOrgId,
-                        Name           = orgSlug ?? clerkOrgId,
+                        Name           = orgName,
+                        Slug           = GenerateSlug(orgName),
                         Plan           = "pilot",
                         AccountStatus  = "trialing",
                         CreatedAt      = now,
@@ -89,5 +91,24 @@ public sealed class TenantResolutionMiddleware
         }
 
         await _next(context);
+    }
+
+    /// <summary>
+    /// Generates a unique kebab-case slug from the org name.
+    /// Appends a 4-char random suffix to ensure uniqueness without a DB round-trip.
+    /// </summary>
+    private static string GenerateSlug(string name)
+    {
+        var slug = new string(name.ToLowerInvariant()
+            .Select(c => char.IsLetterOrDigit(c) ? c : '-')
+            .ToArray());
+        // Collapse consecutive dashes
+        while (slug.Contains("--"))
+            slug = slug.Replace("--", "-");
+        slug = slug.Trim('-');
+        if (string.IsNullOrEmpty(slug)) slug = "org";
+        // 4-char random suffix for uniqueness
+        slug += "-" + Guid.NewGuid().ToString("N")[..4];
+        return slug;
     }
 }

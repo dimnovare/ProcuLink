@@ -32,6 +32,8 @@ public sealed class OrderService : IOrderService
     private readonly IEnumerable<ITransformService> _transformers;
     private readonly ILogger<OrderService>       _logger;
 
+    private readonly IIntegrationTriggerService  _integrationTrigger;
+
     public OrderService(
         ProcuLinkDbContext             db,
         IFileStorageService            fileStorage,
@@ -40,16 +42,18 @@ public sealed class OrderService : IOrderService
         IPoMappingService              poMappingService,
         IAiMappingService              aiMappings,
         IEnumerable<ITransformService> transformers,
-        ILogger<OrderService>          logger)
+        ILogger<OrderService>          logger,
+        IIntegrationTriggerService     integrationTrigger)
     {
-        _db               = db;
-        _fileStorage      = fileStorage;
-        _parserFactory    = parserFactory;
-        _mappings         = mappings;
-        _poMappingService = poMappingService;
-        _aiMappings       = aiMappings;
-        _transformers     = transformers;
-        _logger           = logger;
+        _db                 = db;
+        _fileStorage        = fileStorage;
+        _parserFactory      = parserFactory;
+        _mappings           = mappings;
+        _poMappingService   = poMappingService;
+        _aiMappings         = aiMappings;
+        _transformers       = transformers;
+        _logger             = logger;
+        _integrationTrigger = integrationTrigger;
     }
 
     // ── CreateFromFileAsync ───────────────────────────────────────────────────
@@ -239,6 +243,19 @@ public sealed class OrderService : IOrderService
 
         await _db.SaveChangesAsync(ct);
 
+        // ── Wave 4: fire order.created trigger ───────────────────────────────────
+        _ = _integrationTrigger.EnqueueAsync(
+            organisationId,
+            "order.created",
+            new
+            {
+                order_id        = entity.Id,
+                status          = entity.Status,
+                source_filename = safeFilename,
+                created_at      = entity.CreatedAt,
+            },
+            ct);
+
         _logger.LogInformation(
             "Order stub {OrderId} created for org {OrgId}, status=parsing",
             orderId, organisationId);
@@ -341,6 +358,19 @@ public sealed class OrderService : IOrderService
         }));
 
         await _db.SaveChangesAsync(ct);
+
+        // ── Wave 4: fire order.created trigger ───────────────────────────────────
+        _ = _integrationTrigger.EnqueueAsync(
+            organisationId,
+            "order.created",
+            new
+            {
+                order_id   = entity.Id,
+                status     = entity.Status,
+                source,
+                created_at = entity.CreatedAt,
+            },
+            ct);
 
         _logger.LogInformation(
             "Order {OrderId} created from extracted payload (source={Source}) for org {OrgId}: {LineCount} lines, {Unresolved} unresolved, status={Status}",

@@ -5,6 +5,11 @@ public class Organisation
     public Guid Id { get; set; }
     public string ClerkOrgId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    /// <summary>
+    /// Unique kebab-case slug for machine-to-machine inbound addressing.
+    /// Auto-generated at org creation. Never changes after set.
+    /// </summary>
+    public string Slug { get; set; } = string.Empty;
     public string Plan { get; set; } = "pilot";
     public string AccountStatus { get; set; } = "trialing";
     public DateTime CreatedAt { get; set; }
@@ -36,4 +41,6 @@ public class Organisation
     public List<OutboundArtifact> OutboundArtifacts { get; set; } = new();
     public List<DeliveryAttempt> DeliveryAttempts { get; set; } = new();
     public List<AuditEvent> AuditEvents { get; set; } = new();
+    public List<TenantApiKey>             ApiKeys                  { get; set; } = new();
+    public List<IntegrationSubscription>  IntegrationSubscriptions { get; set; } = new();
 }

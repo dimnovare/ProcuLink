@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Middleware;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Services;
@@ -48,21 +49,26 @@ StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"] ?? string
 builder.Services.AddDbContext<ProcuLinkDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// ── Authentication — Clerk JWT Bearer ─────────────────────────────────────
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
+// ── Authentication — Clerk JWT Bearer + API Key ───────────────────────────
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme    = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.Authority = builder.Configuration["Clerk:Authority"];
+    // Disable legacy claim-type mapping. Without this, JwtBearer renames "sub"
+    // to ClaimTypes.NameIdentifier before claims reach HttpContext.User, which
+    // breaks TenantResolutionMiddleware's `FindFirst("sub")` fallback.
+    options.MapInboundClaims = false;
+    options.TokenValidationParameters = new TokenValidationParameters
     {
-        options.Authority = builder.Configuration["Clerk:Authority"];
-        // Disable legacy claim-type mapping. Without this, JwtBearer renames "sub"
-        // to ClaimTypes.NameIdentifier before claims reach HttpContext.User, which
-        // breaks TenantResolutionMiddleware's `FindFirst("sub")` fallback.
-        options.MapInboundClaims = false;
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateAudience = false,
-            NameClaimType = "sub",
-        };
-    });
+        ValidateAudience = false,
+        NameClaimType = "sub",
+    };
+})
+.AddScheme<ApiKeyAuthOptions, ApiKeyAuthHandler>("ApiKey", _ => { });
 
 builder.Services.AddAuthorization();
 
@@ -187,6 +193,9 @@ else
 }
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddScoped<IBuyerService, BuyerService>();
+// ── Wave 4: API keys + integration subscriptions ──────────────────────────
+builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
+builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService>();
 builder.Services.AddScoped<IValidationRuleService, ValidationRuleService>();
 builder.Services.AddScoped<IOutputTemplateService, OutputTemplateService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
@@ -216,6 +225,22 @@ builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
 builder.Services.AddSingleton<ITransformService, JsonTransformService>();
+
+// ── Wave 3: Invoice parsers ────────────────────────────────────────────────
+builder.Services.AddSingleton<IInvoiceParser, UblInvoiceParser>();
+builder.Services.AddSingleton<IInvoiceParser, EdifactInvoiceParser>();
+builder.Services.AddSingleton<InvoiceParserFactory>();
+builder.Services.AddSingleton<IDesadvParser, EdifactDesadvParser>();
+builder.Services.AddSingleton<DesadvParserFactory>();
+
+// ── Wave 3: Invoice transform services ────────────────────────────────────
+builder.Services.AddSingleton<IInvoiceTransformService, CsvInvoiceTransformService>();
+builder.Services.AddSingleton<IInvoiceTransformService, XmlInvoiceTransformService>();
+builder.Services.AddSingleton<IInvoiceTransformService, JsonInvoiceTransformService>();
+
+// ── Wave 3: Invoice + ASN services ────────────────────────────────────────
+builder.Services.AddScoped<IInvoiceService, ProcuLink.Infrastructure.Services.InvoiceService>();
+builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.DesadvService>();
 
 // ── Health check (G5) ─────────────────────────────────────────────────────
 builder.Services.AddHealthChecks();

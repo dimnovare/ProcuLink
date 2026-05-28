@@ -29,6 +29,13 @@ public class ProcuLinkDbContext : DbContext
     public DbSet<Buyer> Buyers => Set<Buyer>();
     public DbSet<ValidationRule> ValidationRules => Set<ValidationRule>();
     public DbSet<OutputTemplate> OutputTemplates => Set<OutputTemplate>();
+    public DbSet<InvoiceEntity>                Invoices                  => Set<InvoiceEntity>();
+    public DbSet<InvoiceLineEntity>            InvoiceLines              => Set<InvoiceLineEntity>();
+    public DbSet<AdvanceShippingNoticeEntity>  AdvanceShippingNotices    => Set<AdvanceShippingNoticeEntity>();
+    public DbSet<AsnPackageEntity>             AsnPackages               => Set<AsnPackageEntity>();
+    public DbSet<AsnPackageLineEntity>         AsnPackageLines           => Set<AsnPackageLineEntity>();
+    public DbSet<TenantApiKey>            TenantApiKeys            => Set<TenantApiKey>();
+    public DbSet<IntegrationSubscription> IntegrationSubscriptions => Set<IntegrationSubscription>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -80,6 +87,11 @@ public class ProcuLinkDbContext : DbContext
              .HasColumnType("jsonb")
              .HasDefaultValue("{}")
              .IsRequired();
+            b.Property(x => x.Slug)
+             .HasColumnName("slug")
+             .HasDefaultValue("")
+             .IsRequired();
+            b.HasIndex(x => x.Slug).IsUnique();
         });
 
         // ── users ──────────────────────────────────────────────────────
@@ -498,6 +510,156 @@ public class ProcuLinkDbContext : DbContext
             b.HasOne(x => x.Organisation)
              .WithMany()
              .HasForeignKey(x => x.OrgId);
+        });
+
+        // ── InvoiceEntity ─────────────────────────────────────────────────────────
+        modelBuilder.Entity<InvoiceEntity>(e =>
+        {
+            e.ToTable("invoices");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.OrganisationId).HasColumnName("organisation_id");
+            e.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            e.Property(x => x.BuyerId).HasColumnName("buyer_id");
+            e.Property(x => x.InvoiceNumber).HasColumnName("invoice_number");
+            e.Property(x => x.IssueDate).HasColumnName("issue_date");
+            e.Property(x => x.DueDate).HasColumnName("due_date");
+            e.Property(x => x.Currency).HasColumnName("currency").HasDefaultValue("EUR");
+            e.Property(x => x.PaymentTerms).HasColumnName("payment_terms");
+            e.Property(x => x.BuyerRef).HasColumnName("buyer_ref");
+            e.Property(x => x.SupplierRef).HasColumnName("supplier_ref");
+            e.Property(x => x.SubTotal).HasColumnName("sub_total").HasColumnType("numeric(18,4)");
+            e.Property(x => x.TaxTotal).HasColumnName("tax_total").HasColumnType("numeric(18,4)");
+            e.Property(x => x.GrandTotal).HasColumnName("grand_total").HasColumnType("numeric(18,4)");
+            e.Property(x => x.Status).HasColumnName("status").HasDefaultValue("pending_review");
+            e.Property(x => x.SourceFileName).HasColumnName("source_file_name");
+            e.Property(x => x.SourceFileKey).HasColumnName("source_file_key");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            e.HasIndex(x => x.OrganisationId);
+            e.HasOne(x => x.Organisation).WithMany()
+             .HasForeignKey(x => x.OrganisationId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── InvoiceLineEntity ─────────────────────────────────────────────────────
+        modelBuilder.Entity<InvoiceLineEntity>(e =>
+        {
+            e.ToTable("invoice_lines");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.InvoiceId).HasColumnName("invoice_id");
+            e.Property(x => x.OrganisationId).HasColumnName("organisation_id");
+            e.Property(x => x.LineNumber).HasColumnName("line_number");
+            e.Property(x => x.Description).HasColumnName("description");
+            e.Property(x => x.Quantity).HasColumnName("quantity").HasColumnType("numeric(18,4)");
+            e.Property(x => x.UnitCode).HasColumnName("unit_code").HasDefaultValue("EA");
+            e.Property(x => x.UnitPrice).HasColumnName("unit_price").HasColumnType("numeric(18,4)");
+            e.Property(x => x.TaxRate).HasColumnName("tax_rate").HasColumnType("numeric(7,4)");
+            e.Property(x => x.LineTotal).HasColumnName("line_total").HasColumnType("numeric(18,4)");
+            e.Property(x => x.BuyerItemCode).HasColumnName("buyer_item_code");
+            e.Property(x => x.SupplierItemCode).HasColumnName("supplier_item_code");
+            e.HasIndex(x => x.InvoiceId);
+            e.HasOne(x => x.Invoice).WithMany(i => i.Lines)
+             .HasForeignKey(x => x.InvoiceId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── AdvanceShippingNoticeEntity ────────────────────────────────────────────
+        modelBuilder.Entity<AdvanceShippingNoticeEntity>(e =>
+        {
+            e.ToTable("advance_shipping_notices");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.OrganisationId).HasColumnName("organisation_id");
+            e.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            e.Property(x => x.ShipmentId).HasColumnName("shipment_id");
+            e.Property(x => x.DespatchDate).HasColumnName("despatch_date");
+            e.Property(x => x.EstimatedDeliveryDate).HasColumnName("estimated_delivery_date");
+            e.Property(x => x.BuyerOrderRef).HasColumnName("buyer_order_ref");
+            e.Property(x => x.SupplierRef).HasColumnName("supplier_ref");
+            e.Property(x => x.Status).HasColumnName("status").HasDefaultValue("received");
+            e.Property(x => x.SourceFileName).HasColumnName("source_file_name");
+            e.Property(x => x.SourceFileKey).HasColumnName("source_file_key");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            e.HasIndex(x => x.OrganisationId);
+            e.HasOne(x => x.Organisation).WithMany()
+             .HasForeignKey(x => x.OrganisationId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── AsnPackageEntity ───────────────────────────────────────────────────────
+        modelBuilder.Entity<AsnPackageEntity>(e =>
+        {
+            e.ToTable("asn_packages");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.AdvanceShippingNoticeId).HasColumnName("advance_shipping_notice_id");
+            e.Property(x => x.OrganisationId).HasColumnName("organisation_id");
+            e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.Sscc).HasColumnName("sscc");
+            e.HasIndex(x => x.AdvanceShippingNoticeId);
+            e.HasOne(x => x.Asn).WithMany(a => a.Packages)
+             .HasForeignKey(x => x.AdvanceShippingNoticeId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── AsnPackageLineEntity ───────────────────────────────────────────────────
+        modelBuilder.Entity<AsnPackageLineEntity>(e =>
+        {
+            e.ToTable("asn_package_lines");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.OrganisationId).HasColumnName("organisation_id");
+            e.Property(x => x.BuyerItemCode).HasColumnName("buyer_item_code");
+            e.Property(x => x.SupplierItemCode).HasColumnName("supplier_item_code");
+            e.Property(x => x.Quantity).HasColumnName("quantity").HasColumnType("numeric(18,4)");
+            e.Property(x => x.UnitCode).HasColumnName("unit_code").HasDefaultValue("EA");
+            e.HasIndex(x => x.PackageId);
+            e.HasOne(x => x.Package).WithMany(p => p.Lines)
+             .HasForeignKey(x => x.PackageId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── TenantApiKey ──────────────────────────────────────────────────────────
+        modelBuilder.Entity<TenantApiKey>(e =>
+        {
+            e.ToTable("tenant_api_keys");
+            e.HasKey(k => k.Id);
+            e.Property(k => k.Id).HasColumnName("id");
+            e.Property(k => k.OrganisationId).HasColumnName("organisation_id");
+            e.Property(k => k.Label).HasColumnName("label");
+            e.Property(k => k.KeyHash).HasColumnName("key_hash");
+            e.Property(k => k.KeyPrefix).HasColumnName("key_prefix");
+            e.Property(k => k.IsActive).HasColumnName("is_active").HasDefaultValue(true);
+            e.Property(k => k.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            e.Property(k => k.LastUsedAt).HasColumnName("last_used_at").HasColumnType("timestamptz");
+            e.Property(k => k.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamptz");
+            e.HasIndex(k => k.KeyHash).IsUnique();
+            e.HasIndex(k => k.OrganisationId);
+            e.HasOne(k => k.Organisation)
+             .WithMany(o => o.ApiKeys)
+             .HasForeignKey(k => k.OrganisationId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── IntegrationSubscription ───────────────────────────────────────────────
+        modelBuilder.Entity<IntegrationSubscription>(e =>
+        {
+            e.ToTable("integration_subscriptions");
+            e.HasKey(s => s.Id);
+            e.Property(s => s.Id).HasColumnName("id");
+            e.Property(s => s.OrganisationId).HasColumnName("organisation_id");
+            e.Property(s => s.Platform).HasColumnName("platform");
+            e.Property(s => s.EventType).HasColumnName("event_type");
+            e.Property(s => s.TargetUrl).HasColumnName("target_url");
+            e.Property(s => s.EncryptedSecret).HasColumnName("encrypted_secret");
+            e.Property(s => s.IsActive).HasColumnName("is_active").HasDefaultValue(true);
+            e.Property(s => s.FailureCount).HasColumnName("failure_count").HasDefaultValue(0);
+            e.Property(s => s.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            e.Property(s => s.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            e.HasIndex(s => new { s.OrganisationId, s.EventType, s.IsActive });
+            e.HasOne(s => s.Organisation)
+             .WithMany(o => o.IntegrationSubscriptions)
+             .HasForeignKey(s => s.OrganisationId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

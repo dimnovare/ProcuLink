@@ -171,7 +171,14 @@ public class DeliveryServiceTests
             new FakeFileStorage(),
             encryption ?? CreateEncryption(),
             new[] { dispatcher },
+            new NoOpIntegrationTriggerService(),
             NullLogger<DeliveryService>.Instance);
+
+    private sealed class NoOpIntegrationTriggerService : ProcuLink.Core.Services.IIntegrationTriggerService
+    {
+        public Task EnqueueAsync(Guid organisationId, string eventType, object payload, CancellationToken ct)
+            => Task.CompletedTask;
+    }
 
     private static SupplierDeliveryConfig MakeConfig(
         Guid orgId,
@@ -252,6 +259,8 @@ public class DeliveryServiceTests
             modelBuilder.Ignore<SupplierPoMapping>();
             modelBuilder.Ignore<IdempotencyKey>();
             modelBuilder.Ignore<AiUsageMonthly>();
+            modelBuilder.Ignore<TenantApiKey>();
+            modelBuilder.Ignore<IntegrationSubscription>();
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {

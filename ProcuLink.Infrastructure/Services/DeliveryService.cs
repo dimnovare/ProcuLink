@@ -15,6 +15,7 @@ public sealed class DeliveryService : IDeliveryService
     private readonly IFileStorageService _fileStorage;
     private readonly DeliveryEncryptionService _encryption;
     private readonly IReadOnlyDictionary<string, IDeliveryDispatcher> _dispatchers;
+    private readonly IIntegrationTriggerService _integrationTrigger;
     private readonly ILogger<DeliveryService> _logger;
 
     public DeliveryService(
@@ -22,12 +23,14 @@ public sealed class DeliveryService : IDeliveryService
         IFileStorageService fileStorage,
         DeliveryEncryptionService encryption,
         IEnumerable<IDeliveryDispatcher> dispatchers,
+        IIntegrationTriggerService integrationTrigger,
         ILogger<DeliveryService> logger)
     {
         _db = db;
         _fileStorage = fileStorage;
         _encryption = encryption;
         _dispatchers = dispatchers.ToDictionary(x => x.Protocol, StringComparer.OrdinalIgnoreCase);
+        _integrationTrigger = integrationTrigger;
         _logger = logger;
     }
 
@@ -178,6 +181,24 @@ public sealed class DeliveryService : IDeliveryService
         });
 
         await _db.SaveChangesAsync(ct);
+
+        // ── Wave 4: fire order.delivered / order.failed triggers ──────────────────
+        if (result.Success)
+        {
+            _ = _integrationTrigger.EnqueueAsync(
+                order.OrgId,
+                "order.delivered",
+                new { order_id = order.Id, delivered_at = now },
+                ct);
+        }
+        else
+        {
+            _ = _integrationTrigger.EnqueueAsync(
+                order.OrgId,
+                "order.failed",
+                new { order_id = order.Id, failed_at = now, error = result.ErrorMessage },
+                ct);
+        }
 
         _logger.LogInformation(
             "Delivery attempt for order {OrderId}, artifact {ArtifactId}: {Status}",
