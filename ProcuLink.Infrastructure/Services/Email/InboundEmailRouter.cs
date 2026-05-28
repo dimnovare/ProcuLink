@@ -183,7 +183,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             // IOrderService.CreateStubAsync uploads to R2 and creates the stub.
             // It is the same call browser-upload and IMAP-poll use today.
             var stubResult = await _orders.CreateStubAsync(
-                org.Id, supplierId.Value, ms, att.FileName, contentType, ct);
+                org.Id, supplierId.Value, ms, att.FileName ?? "attachment", contentType, ct);
 
             if (!stubResult.IsSuccess)
             {
