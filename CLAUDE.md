@@ -311,9 +311,18 @@ Read this before starting new work:
 - **Fix (2026-05-28): JsonDocument EF InMemory value converter** — added `string` round-trip `ValueConverter<JsonDocument?, string?>` to `ProcuLinkDbContext` for all 5 jsonb columns. Updated all test-scoped `Ignore` lists for new Wave 3+4 entities. Resolved 48 pre-existing test failures (commit `367c07f`).
 - **Fix (2026-05-28): Migration slug backfill** — `AddTenantApiKeysAndOrgSlug` migration now runs a SQL `UPDATE` to generate `kebab(name)-{first4uuid}` slugs for existing orgs before the unique index is created (commit `19078e2`).
 - **Worker DI fix (2026-05-28):** `IIntegrationTriggerService` registered in `ProcuLink.Worker/Program.cs` (commit `4607d6d`).
+- **Group L Wave 2 — sample-order onboarding chip is implemented** (commits `ffe7418` + `524b080`, branch `worktree-wave-2-sample-order-chip`):
+  - `ProcuLink.Api/Fixtures/sample-order.csv` — embedded 3-line EUR fixture (DEMO-2026-001, Northwind Trading OÜ).
+  - `IsSample: bool` on `PurchaseOrderEntity` + `Supplier`; `Code: string?` on `Supplier`.
+  - EF migration `20260528150709_AddIsSampleFlags` — adds `is_sample` + `code` columns to `purchase_orders` and `suppliers`.
+  - `StripeBillingService.CountOrdersAsync` guards quota with `&& !o.IsSample` on both Pilot cumulative and paid-plan monthly branches.
+  - `ISampleOrderService` (Core) + `SampleOrderService` (Infrastructure): idempotent `__sample__` supplier, fixture upload via `IFileStorageService`, `IsSample = true` order stub, parse-job enqueue via `IParseJobEnqueuer`, `sample_order_started` analytics event.
+  - `POST /api/onboarding/sample-order` — `SampleOrderController` returns `{ orderId, isSample: true }`.
+  - 3 new xUnit tests in `SampleOrderServiceTests`: supplier creation, supplier reuse, and quota exclusion (`!IsSample` filter).
+  - **Do not redo.** Treat as implemented unless `STATUS.md` says a regression reopened it.
 - **Last verified commands:**
   - `dotnet build ProcuLink.Api/ProcuLink.Api.csproj --no-restore` passed (API process locking DLLs; build Infrastructure + tests fine).
-  - `dotnet test ProcuLink.slnx --no-restore` passed, **195 tests** (102 Transform + 93 Infrastructure), 0 failures.
+  - `dotnet test ProcuLink.slnx --no-restore` passed, **198 tests** (102 Transform + 96 Infrastructure), 0 failures.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
 No remaining Phase 4 C-H group is open. Wave 3 and Wave 4 are complete. Group K is complete. Current implementation group is **Group I — UI/UX production polish + responsive QA** from the Phase 5 roadmap; pass 15 is complete. Group L Wave 1 (analytics/trust) is on branch `phase5/group-l-wave-1-backend-analytics`.
