@@ -166,6 +166,7 @@ else
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
+builder.Services.AddScoped<ISampleOrderService, SampleOrderService>();
 
 // ── Analytics (PostHog) — no-op when key absent ──────────────────────────
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
