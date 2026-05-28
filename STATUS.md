@@ -4,6 +4,43 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-05-28 Group L Wave 3 backend finalized — Stripe success_url + support form endpoint**
+
+### Group L Wave 3 — backend support form + Stripe success_url (2026-05-28)
+
+**Phase 7.2 — Stripe Checkout `success_url` redirect** (branch `feat/group-l-w3-backend-finalization`):
+- Checkout `success_url` now routes to `{Frontend:Url}/welcome?upgraded={plan}&session_id={CHECKOUT_SESSION_ID}`, `cancel_url` to `{Frontend:Url}/settings`. The `CreateCheckoutSessionAsync` parameter was renamed `returnUrl → frontendUrl` to reflect new semantics.
+- Stripe webhook handlers (`checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`) now invoke `StripeBillingService.EmitBillingUpgradedAsync` / `EmitBillingDowngradedAsync` / `EmitBillingCancelledAsync` via a cast `_billing as StripeBillingService` in `BillingController` webhook handlers.
+- Plan downgrades detected via rank ordering: `pilot < growth < operations < integration < enterprise`.
+
+**Phase 9.2 — Support contact form backend** (branch `feat/group-l-w3-backend-finalization`):
+- `POST /api/support/contact` (allow-anonymous) accepts `SupportContactRequest` (Category, Subject, Message, UserEmail, UserAgent, Route).
+- New `IEmailSender` abstraction in `Core` with two implementations: `MailKitEmailSender` (SMTP, sends to `support@proculink.com`) and `ConsoleEmailSender` (dev fallback, logs to console when `Smtp:Host` is empty).
+- `ISupportContactService` (Core) + `SupportContactService` (Infrastructure) formats email as `[support][{category}] {subject}`, includes org/user/route/agent context headers.
+- Org-scoped submissions emit `support_form_submitted` analytics event with `category` and `route` properties.
+- MailKit 4.8.0 added to `ProcuLink.Infrastructure.csproj`; new `FakeEmailSender` test double in `ProcuLink.Infrastructure.Tests/TestDoubles/`.
+- 2 new unit tests in `SupportContactServiceTests`: happy path + anonymous (no analytics).
+
+**Frontend support form** (parallel branch `project-proculink:feat/group-l-w3-support-form-cross-repo`):
+- `ContactForm.tsx` client component, `apiClient.submitSupportRequest()` API helper.
+- Mounted on `(marketing)/support/page.tsx` below the existing FAQ list; existing mailto link kept visible.
+- Lands in a separate PR; do not look for it on `project-proculink` main until both backend and frontend branches merge together.
+
+**Waiting on founder configuration** (unchanged from Wave 2 list):
+- PostHog project keys (`Analytics:PostHog:ApiKey` + `NEXT_PUBLIC_POSTHOG_KEY`)
+- Clerk post-signup redirect to `/welcome`
+- Status page URL (`NEXT_PUBLIC_STATUS_URL`)
+- Walkthrough Loom URL (`NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`)
+- Cal.com URL (`NEXT_PUBLIC_BOOK_DEMO_URL`)
+- Optional SMTP: `Smtp:Host`, `Smtp:Port`, `Smtp:Username`, `Smtp:Password`, `Smtp:From` (without these, support form still 200s but emails go to the console log via `ConsoleEmailSender`).
+
+**Wave 3 deferred items** still pending implementation:
+- Phase 6.3 frontend "Try with sample order" button on `/upload`
+- Phase 10.3 `/watch` Loom embed + "Book a 15-min demo" CTAs
+- Phase 10.4 dead-code cleanup
+
+---
+
 ## Where we are: **2026-05-28 Group L Wave 2 fully merged to `main` — 211 tests green (102 Transform + 11 Api.Tests + 98 Infrastructure)**
 
 ### Dev stack smoke test (2026-05-28, this session)

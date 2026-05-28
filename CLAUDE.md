@@ -228,7 +228,7 @@ before writing implementation plans.
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
 | **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed, live deployed QA remaining |
 | **K** | Standards + engine hardening | ✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`) |
-| **L** | Trust, onboarding + commercial readiness | In progress — Waves 1 + 2 merged to `main` (entity rename, /dpa /subprocessors /aup, /customers, /one-pager, cookie consent, PostHog frontend+backend SDK + taxonomy, sample-order endpoint, 4-step wizard, /welcome page, /help docs + in-app HelpSlideover, event emitters). Wave 3 pending: Phase 6.3 sample-button frontend, 7.2 Stripe `success_url`, 9.2 contact form, 10.3 /watch + book-a-demo, 10.4 cleanup. Waiting on founder config: PostHog keys, Clerk post-signup redirect, status page URL, Loom URL, Cal.com URL. See `STATUS.md` "Group L — deferred to Wave 3" + "waiting on founder configuration" sections. |
+| **L** | Trust, onboarding + commercial readiness | Done — all phases shipped; waiting on founder configuration only (PostHog keys, Clerk redirect, status URL, Loom URL, Cal.com URL, optional SMTP). Wave 3 backend (support form + Stripe success_url) landed in branch `feat/group-l-w3-backend-finalization`; Wave 3 frontend (support form) landed in project-proculink branch `feat/group-l-w3-support-form-cross-repo`. |
 
 Group I remains the active implementation group unless the user explicitly
 reprioritizes. The Bridge Layer is locked, but screens still need route-by-route
@@ -336,7 +336,7 @@ Read this before starting new work:
   - `dotnet test ProcuLink.slnx --no-restore` passed, **211 tests** (102 Transform + 11 Api.Tests + 98 Infrastructure), 0 failures.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
 
-No remaining Phase 4 C-H group is open. Wave 3 and Wave 4 are complete. Group K is complete. Current implementation group is **Group L — trust, onboarding + commercial readiness** from the Phase 5 roadmap; Waves 1 + 2 are merged to `main`, Wave 3 is the remaining slice (sample button frontend, Stripe `success_url`, contact form, /watch + book-a-demo, dead-code cleanup). Several pieces are also waiting on founder configuration (PostHog project keys, Clerk post-signup redirect, status page URL, walkthrough Loom URL, Cal.com URL) — see `STATUS.md`. Group I (UI polish) is effectively complete through pass 15.
+No remaining Phase 4 C-H group is open. Wave 3 and Wave 4 are complete. Group K is complete. Current implementation group **Group L** is fully shipped pending two remaining deferred slices (Phase 10.3 `/watch` + Book-a-demo CTAs, Phase 10.4 dead-code cleanup) and the frontend sample-button chip; Waves 1 + 2 + Wave 3 backend (Stripe `success_url` + support form) are on `main` or pending merge from branch `feat/group-l-w3-backend-finalization`. Waiting on founder configuration only — see `STATUS.md`. Group I (UI polish) is effectively complete through pass 15.
 
 1. Read `STATUS.md`.
 2. Read `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`.
