@@ -611,6 +611,35 @@ analytics event plan, and sales/demo assets after UI polish begins.
 - **Phase 7.1 /welcome page** — `(marketing)/welcome/page.tsx` Client Component reads `?upgraded={plan}` for post-Checkout state, renders 4-step preview, captures `welcome_viewed` analytics.
 - **Phase 9.1 in-app HelpSlideover** — `BridgeTopbar.tsx` gets a Help button, opens `HelpSlideover.tsx` with route-aware contextual link (e.g. `/upload` → `/help/first-upload`) plus "Open help docs" / "Contact support" / "Report a bug" nav.
 
+#### Group L — deferred to Wave 3 (still pending implementation)
+
+These phases are not in `main`; they need separate chips because they touch files currently held by Wave 1/2 or have ordering dependencies.
+
+| Phase | Scope | Why deferred |
+|---|---|---|
+| **6.3** | Frontend "Try with sample order" button on `/upload` + non-quota banner on review screen | Touches `UploadWorkbench.tsx` (Wave 2 Chip F also touched it); needs Phase 6.1/6.2 backend (now on `main`) |
+| **7.2** | Stripe Checkout `success_url` → `/welcome?upgraded={plan}` | `BillingController.cs` was kept clean of Wave 2; needs single small backend edit |
+| **9.2** | `POST /api/support/contact` backend + frontend contact form on `/support` | Touches `Program.cs` (Wave 2 Chip H also touched it); needs new `ISupportContactService` + `SupportController` |
+| **10.3** | `/watch` Loom-slot page + Pilot "Book a 15-min demo" CTAs on `/upload` and Billing settings | Touches `UploadWorkbench.tsx` and `BillingSection.tsx`; needs new env vars `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`, `NEXT_PUBLIC_BOOK_DEMO_URL` |
+| **10.4** | Dead-code cleanup (`src/components/onboarding/OnboardingWizard.tsx`, `src/views/Dashboard.tsx`) + final STATUS.md update | Runs last by design after all other Group L work merges |
+
+#### Group L — waiting on founder configuration / external setup
+
+Implementation is complete for each of these but they will not function in production until external services are wired up.
+
+| Area | Action required | Where to set | Effect when missing |
+|---|---|---|---|
+| **PostHog analytics (frontend + backend)** | Create PostHog Cloud EU project; capture project API key | Vercel env: `NEXT_PUBLIC_POSTHOG_KEY` + `NEXT_PUBLIC_POSTHOG_HOST=https://eu.posthog.com`. Railway API + Worker: `Analytics:PostHog:ApiKey` | Frontend SDK and backend wrapper both no-op silently. Funnel data is not collected. |
+| **Stripe `success_url` redirect to `/welcome`** | Update Stripe Checkout `success_url` in `BillingController.cs` to point at `{frontendUrl}/welcome?upgraded={planKey}&session_id={CHECKOUT_SESSION_ID}` (Wave 3 Phase 7.2 chip) | `BillingController.cs` (code change) + Vercel `Frontend:Url` env var | After successful Checkout, users land on the generic settings page instead of the `/welcome` upgrade callout. |
+| **Clerk post-signup redirect to `/welcome`** | In Clerk dashboard for the `golden-alpaca-43` instance (and any production instance), set the post-sign-up redirect URL to `/welcome` | Clerk dashboard → Paths configuration | New sign-ups skip the welcome funnel and land on a default route. |
+| **Status page link in marketing footer** | Host an external status board (Instatus, BetterStack, etc.) and set the URL | `project-proculink/.env` → `NEXT_PUBLIC_STATUS_URL` (currently empty) | Footer link is hidden — no visible broken link, but customers cannot self-check uptime. |
+| **`/watch` walkthrough video** | Record a 60-90 second Loom and paste the embed URL | `project-proculink/.env` → `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL` (Wave 3 Phase 10.3 chip) | `/watch` shows a "video is being recorded" placeholder card. |
+| **"Book a 15-min demo" CTA** | Create a Cal.com or Calendly slot and paste the booking URL | `project-proculink/.env` → `NEXT_PUBLIC_BOOK_DEMO_URL` (Wave 3 Phase 10.3 chip) | Book-a-demo card on Pilot upload/billing screens is hidden. |
+| **DPA counter-signature workflow** | Founder receives `legal@proculink.com` inbox, signs incoming DPAs within 5 business days as committed in `/dpa` | Operational, not code | Customer-facing trust commitment becomes false. |
+| **Subprocessor change-notification subscriber list** | Founder maintains the manual subscriber list (currently no SaaS-backed list); emails the list 30 days before any subprocessor change | Operational, not code | Customer trust commitment in `/subprocessors` becomes false. |
+| **Cookie banner copy review** | Review the banner copy live on the marketing site (incognito tab) to confirm tone matches brand voice | Browser smoke test | Cosmetic only. |
+| **Plan file step checkboxes** | `docs/superpowers/plans/2026-05-28-group-l-trust-onboarding-commercial.md` has been incrementally updated by chips with `[x]` on completed steps; may have drift vs reality | Read-only audit | Future agents reading the plan may re-implement already-shipped work. |
+
 ### Group E provider decision (May 25 2026)
 
 Do not implement Group E as Anthropic-only. Use a provider-neutral `IAiMappingService` with OpenAI structured outputs as the first provider because SKU suggestion needs cheap, fast, schema-bound JSON with confidence and provenance.
