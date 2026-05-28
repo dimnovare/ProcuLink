@@ -4,7 +4,25 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-05-28 Wave 3 + Wave 4 shipped — Invoice/ASN canonical models + Zapier/Make.com integration layer**
+## Where we are: **2026-05-28 Wave 3 + Wave 4 complete — Group I pass 15 done, 195 tests green**
+
+### Dev stack smoke test (2026-05-28, this session)
+
+- **Wave 3/4 EF migrations applied**: 4 duplicate migrations from the overnight agents were resolved — `AddInvoicesAndLines` ran clean; the 3 identical duplicates (`AddAdvanceShippingNotices`, `AddTenantApiKeysAndOrgSlug`, `AddIntegrationSubscriptions`) were fake-applied via `INSERT INTO "__EFMigrationsHistory"` since they contained no new SQL.
+- **Worker DI fix**: Wave 4 added `IIntegrationTriggerService` as a constructor dependency to `OrderService` and `DeliveryService` but didn't register it in `ProcuLink.Worker/Program.cs`. Fixed and committed (`4607d6d fix(worker): register IIntegrationTriggerService`).
+- **Org auto-seeded**: `TenantResolutionMiddleware` created org `370ca357-a72d-424a-b739-c90d4ec0ba4c` ("Personal workspace", pilot plan) on first authenticated API request.
+- **PipelineStrip live-verified**: `SpineReview` at `/inbox/[orderId]` correctly fetches real order from `https://localhost:7230`, maps `pending_review` → Stage 3 of 5 (Validate), and renders all 5 stages (Parse → Normalize → Validate → Transform → Deliver). Screenshot captured via Playwright: `pipeline-strip-screenshot.png`.
+- **Known issue — `/orders/[id]` shows "Order Not Found"**: `OrderDetailPage` at the `/orders/[id]` route makes no API calls and shows "Order Not Found". The same order loads correctly at `/inbox/[orderId]` via `SpineReview`. Root cause: likely stale TanStack Query error cache from a CORS failure on `http://localhost:5223` during first navigation (the HTTP port redirects to HTTPS, breaking CORS preflight). Logged as a separate fix task.
+- **Wave 1 + Wave 2 code completeness verified** (2026-05-28):
+  - Wave 1 (`EdifactOrderParser`, `UblOrderParser`): real parsing logic — no `NotImplementedException`. Committed `c395b6c`, `2bd4ecd`.
+  - Wave 2 (SFTP/S3 ingress, `AzureDocumentIntelligenceOcrService`, `IEmailBodyOrderExtractor`): all committed and wired. OCR config-gated (`NoOpOcrService` fallback when `Ocr:Azure:Endpoint` absent — by design). `IEmailBodyOrderExtractor` intentionally API-only (HttpContext dependency; Worker comment documents this).
+  - Stubs that exist (`EdifactInvoiceParser`, `EdifactDesadvParser` throwing `NotImplementedException`) are Wave 3/invoice domain — out of scope.
+- **End-to-end smoke test confirmed**: background task logs show CSV upload → `ParseOrderJob` (Worker) → `status=pending_review` in one run. All three recurring jobs (email-polling, sftp-polling, s3-polling) fired without errors.
+- **API running**: `https://localhost:7230` (HTTPS Kestrel), `http://localhost:5223` redirects to HTTPS. Worker running. Frontend at `http://localhost:8082`.
+
+---
+
+## Where we were: **2026-05-28 Wave 3 + Wave 4 shipped — Invoice/ASN canonical models + Zapier/Make.com integration layer**
 
 ### Wave 3 + Wave 4 (2026-05-28)
 
@@ -21,7 +39,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - `ParseInvoiceJob` — Hangfire idempotent job, 3 retries
 - `InvoiceController` (upload/list/get/approve/download) + `DesadvController` (202 Accepted)
 - 4 EF migrations: `AddInvoicesAndLines`, `AddAdvanceShippingNotices`, `AddTenantApiKeysAndOrgSlug`, `AddIntegrationSubscriptions`
-- Tests: `UblInvoiceParserTests` (7), `EdifactStubTests` (2), `CsvInvoiceTransformServiceTests` (3) — 102/102 Transform.Tests pass; 91/91 Infrastructure.Tests pass (193 total)
+- Tests: `UblInvoiceParserTests` (7), `EdifactStubTests` (2), `CsvInvoiceTransformServiceTests` (3) — 102/102 Transform.Tests pass; 93/93 Infrastructure.Tests pass (195 total, after JsonDocument fix)
 
 **Wave 4 — Zapier/Make.com integration layer** (commit `3fbff22`):
 - `ApiKeyHasher` utility in `Core.Security` (no circular project refs)
@@ -38,6 +56,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - `docs/integrations/SUBMISSION.md` — Zapier + Make.com submission checklist and webhook security docs
 - Frontend: Settings → API Keys (create/list/revoke with one-time raw key display) + Settings → Connectors (Zapier/Make.com CTAs + custom webhook CRUD)
 - Tests: `ApiKeyServiceTests` (3), `ApiKeyHasherTests` (3)
+- **Post-wave fixes (commit `367c07f`, `19078e2`):**
+  - `JsonDocument?` value converter added to `ProcuLinkDbContext` — resolved 48 pre-existing EF InMemory test failures.
+  - `AddTenantApiKeysAndOrgSlug` migration now backfills `kebab(name)-{first4uuid}` slugs for existing orgs before unique index is added.
+  - `IIntegrationTriggerService` registered in `ProcuLink.Worker/Program.cs` (commit `4607d6d` — fixes Worker startup crash).
 
 ---
 
@@ -333,10 +355,12 @@ Deferred from H:
 | **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
-| **I** | UI/UX production polish + responsive QA | **In progress — pass 11 complete** |
-| **J** | Live end-to-end QA + deployment hardening | Planned after I |
-| **K** | Standards + engine hardening | **Implemented — cXML 1.2 input parser + output transformer, standards matrix, canonical PO model; merged to `main` (`2697115`)** |
-| **L** | Trust, onboarding + commercial readiness | Planned; can overlap after I starts |
+| **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |
+| **J** | Live end-to-end QA + deployment hardening | In progress — code gaps fixed; live deployed QA remaining |
+| **K** | Standards + engine hardening | **✅ Done — cXML 1.2 parser + transformer, standards matrix, canonical PO model (`2697115`)** |
+| **L** | Trust, onboarding + commercial readiness | **In progress — Wave 1 (analytics/trust/PostHog) on `phase5/group-l-wave-1-backend-analytics`** |
+| **Wave 3** | Invoice + ASN canonical models | **✅ Done — UBL 2.1 invoice parser, invoice/ASN entities, CSV/XML/JSON transforms, Hangfire job, controllers (`3fbff22`)** |
+| **Wave 4** | Zapier/Make.com integration layer | **✅ Done — API keys, org slug, integration subscriptions, ingress/trigger controllers, frontend tabs (`3fbff22`)** |
 
 ### Group I — UI/UX production polish + responsive QA (in progress)
 
@@ -567,10 +591,41 @@ Claude/Anthropic can be added later behind the same interface for heavier reason
 - DB: `Host=localhost;Port=5435;Database=proculink_dev`
 
 ## Latest commits / push state
-- Backend `ProcuLink`: includes C2 backend (`18feb71`) and status handoff (`f957f16`), D2 backend commits, Group E (`1094e86`), Group F (`831aa3e`), Group G ERP connectors, and Group H email polling.
-- Frontend `project-proculink`: includes D2 UI (`7772f4a`, `748c6de`), C2 frontend (`6116af9`), Group E (`5f03de9`), Group F (`85d03e3`), Group G ERP connector UI, and Group H settings UI.
-- Phase 5 roadmap is now documented. Current implementation group is **Group I**; pass 15 wired SpineReview to the live order API, exposing real PO fields, buyer name, line data, and AI-suggestion hints. Group I is now effectively complete; Group J (live end-to-end QA + deployment hardening) is next.
-- Both repos have verified builds/tests listed above. Manual live QA is recommended but not required before pushing code for backup/review.
+
+### Backend (`ProcuLink`) — branch `phase5/group-l-wave-1-backend-analytics`
+
+| Commit | What |
+|---|---|
+| `32e0f41` | docs: update CLAUDE.md + STATUS.md to pass 15, Wave 1/2 verified, Group K done |
+| `11f7935` | feat(analytics): PostHog backend client wrapper (no-op when key absent) |
+| `8ff3b3f` | docs(analytics): PostHog event taxonomy v1.0 |
+| `d3da4e6` | docs(trust): ProcuLink OÜ registration details |
+| `1ea7700` | docs(status): dev stack smoke test + PipelineStrip live verification |
+| `3416840` | docs(plan): Group L trust/onboarding/commercial plan |
+| `4607d6d` | fix(worker): register `IIntegrationTriggerService` in Worker DI |
+| `8a14c2b` | docs(status): mark Group K complete |
+| `0c16bc7` | chore(docs): prune obsolete agent-report scratch files |
+| `afd2d0f` | docs(status): remove stale JsonDocument regression note |
+| `19078e2` | fix(migration): backfill org slugs before unique index |
+| `367c07f` | fix(tests): resolve 48 InMemory JsonDocument test failures — **195 tests now** |
+| `89883e3` | docs: STATUS.md Wave 3+4 completion summary |
+| `95fedf8` | feat: 4 EF migrations for Wave 3+4 |
+| `218711a` | docs: Zapier/Make.com integration submission guide |
+| `3fbff22` | feat: Wave 3+4 — invoice/ASN models, UBL parser, API keys, integration triggers |
+
+**Test state:** 195/195 pass (102 Transform + 93 Infrastructure), 0 failures.
+
+### Frontend (`project-proculink`) — branch `main`
+
+| Commit | What |
+|---|---|
+| `f09390b` | feat(help): /help landing + 7 MDX articles + Fuse.js search |
+| `d125413` | build(help): enable .mdx via @next/mdx |
+| `1e8997c` | feat: Group I pass 11 — live backends, inbound/changelog/onboarding |
+| `a0c64cd` | fix(dev): skip Sentry wrapping in dev mode |
+| `5f119d8` | feat: Wave 4 frontend — API Keys tab + Connectors/Webhooks settings |
+
+**Build state:** `bun run build` passes. Existing warnings: Sentry global error handler, `onRequestError`, Browserslist age, Next ESLint plugin.
 
 ---
 

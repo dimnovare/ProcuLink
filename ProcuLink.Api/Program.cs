@@ -166,6 +166,10 @@ else
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
+
+// ── Analytics (PostHog) — no-op when key absent ──────────────────────────
+builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
+builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
@@ -370,6 +374,13 @@ app.Lifetime.ApplicationStarted.Register(() =>
 
         migLogger.LogError("All 6 migration attempts failed — app is running but DB schema may be outdated.");
     });
+});
+
+// ── Analytics graceful flush on shutdown ─────────────────────────────────
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    var svc = app.Services.GetRequiredService<IAnalyticsService>();
+    try { svc.FlushAsync(default).GetAwaiter().GetResult(); } catch { /* swallow */ }
 });
 
 app.Run();
