@@ -4,7 +4,19 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-05-29 Phase 6 wave merged — Group M/N/L features all on `main` · 272 backend tests green · 43 frontend Playwright tests**
+## Where we are: **2026-05-29 P0 parse-failure UX complete · 295 backend tests green · frontend builds clean**
+
+### P0 fix: parse-failure UX (2026-05-29)
+
+Resolved the P0 gap logged in the audit (STATUS.md line: "parse-error UX"). An order in `status=failed` from a parse failure now shows an actionable `ParseFailedPanel` instead of the generic "Order Not Found / Failed to load" gate.
+
+- **Backend:** `ParseFailureExplain` static helper (3 format-specific error generators). Closed two audit-event gaps in `OrderService.ParseStoredFileAsync` — unsupported-format and empty-lines paths now write a `ParseFailed` audit event with a human-readable message. Added `ErrorMessage?: string | null` to `OrderDto`; `GET /api/orders/{id}` queries the newest `*Failed` audit event and surfaces the message.
+- **Frontend:** New `FailedPanels.tsx` — `ParseFailedPanel` (danger left-border panel, format chip, error message from DTO/audit fallback, "Re-upload — try a different format" CTA with supplier pre-selected, `sessionStorage` detect-format result caching) + `FailedPanel` (amber for `transform_failed`, red for `delivery_failed`, "Back to review" / "Retry delivery" CTAs wired to `POST /api/orders/{id}/redeliver`). Wired into `SpineReview` (the primary order detail view at `/inbox/[orderId]`). `UploadWorkbench` now caches detect-format results after upload and honours `?supplierId=` URL param for pre-selection.
+- **Tests:** 295 backend tests (123 Transform + 44 Api.Tests + 128 Infrastructure), 0 failures. Frontend `bun run build` clean.
+
+---
+
+## Where we were: **2026-05-29 Phase 6 wave merged — Group M/N/L features all on `main` · 272 backend tests green · 43 frontend Playwright tests**
 
 ### Production fixes landed on `main` (2026-05-29)
 
