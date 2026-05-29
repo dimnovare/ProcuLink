@@ -1015,34 +1015,21 @@ public sealed class OrderService : IOrderService
     }
 
     /// <summary>
-    /// Sets order status to "failed" using ExecuteUpdateAsync to avoid
-    /// DbUpdateConcurrencyException when the tracked entity is stale.
-    /// Falls back to tracked-entity update for InMemory provider (tests).
+    /// Sets order status to "failed". Loads the row and persists via the change
+    /// tracker so this works on both the relational provider and the EF InMemory
+    /// test provider (ExecuteUpdateAsync is not translatable on InMemory). The row
+    /// is re-loaded at the moment of failure, so it is not stale.
     /// </summary>
     private async Task SetOrderFailedAsync(Guid orderId, Guid organisationId, CancellationToken ct)
     {
-        var now = DateTime.UtcNow;
-        try
-        {
-            await _db.PurchaseOrders
-                .Where(o => o.Id == orderId && o.OrgId == organisationId)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(o => o.Status,    "failed")
-                    .SetProperty(o => o.UpdatedAt, now), ct);
-        }
-        catch (InvalidOperationException)
-        {
-            // EF InMemory provider does not support ExecuteUpdateAsync via the relational path.
-            // Use tracked update as a fallback — semantics are identical.
-            var entity = await _db.PurchaseOrders
-                .Where(o => o.Id == orderId && o.OrgId == organisationId)
-                .FirstOrDefaultAsync(ct);
-            if (entity is not null)
-            {
-                entity.Status    = "failed";
-                entity.UpdatedAt = now;
-            }
-        }
+        var entity = await _db.PurchaseOrders
+            .Where(o => o.Id == orderId && o.OrgId == organisationId)
+            .FirstOrDefaultAsync(ct);
+        if (entity is null) return;
+
+        entity.Status    = "failed";
+        entity.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
     }
 
     private static AuditEvent BuildAuditEvent(Guid orgId, Guid entityId, string action, object payload) =>
