@@ -284,6 +284,8 @@ public class SftpIngressServiceTests
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> ResolveAsync(Guid o, Guid id, IReadOnlyList<LineResolution> r, bool s, CancellationToken ct)
             => throw new NotImplementedException();
+        public Task<Result<int>> AcceptAiSuggestionsAsync(Guid o, Guid id, double minConfidence, CancellationToken ct)
+            => throw new NotImplementedException();
     }
 
     private sealed class RecordingOrderService : IOrderService
@@ -323,6 +325,8 @@ public class SftpIngressServiceTests
         public Task<Result<DownloadUrl>> GetDownloadUrlAsync(Guid o, Guid id, Guid aid, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> ResolveAsync(Guid o, Guid id, IReadOnlyList<LineResolution> r, bool s, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<int>> AcceptAiSuggestionsAsync(Guid o, Guid id, double minConfidence, CancellationToken ct)
             => throw new NotImplementedException();
     }
 

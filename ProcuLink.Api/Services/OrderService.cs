@@ -885,6 +885,64 @@ public sealed class OrderService : IOrderService
         return Result<PurchaseOrderEntity>.Ok(entity);
     }
 
+    // ── AcceptAiSuggestionsAsync ──────────────────────────────────────────────
+
+    public async Task<Result<int>> AcceptAiSuggestionsAsync(
+        Guid organisationId,
+        Guid orderId,
+        double minConfidence,
+        CancellationToken ct)
+    {
+        // Load with tracking so EF picks up property changes on the line entities
+        var entity = await _db.PurchaseOrders
+            .Include(x => x.Lines)
+            .Where(x => x.Id == orderId && x.OrgId == organisationId)
+            .FirstOrDefaultAsync(ct);
+
+        if (entity is null)
+            return Result<int>.Fail("Order not found.");
+
+        var acceptedCount = 0;
+
+        foreach (var line in entity.Lines)
+        {
+            if (!line.NeedsReview) continue;
+            if (string.IsNullOrWhiteSpace(line.AiSuggestedSupplierItemCode)) continue;
+            if ((line.AiSuggestionConfidence ?? 0.0) < minConfidence) continue;
+
+            line.SupplierItemCode           = line.AiSuggestedSupplierItemCode;
+            line.Confidence                 = (float)(line.AiSuggestionConfidence ?? line.Confidence);
+            line.NeedsReview                = false;
+            line.AiSuggestedSupplierItemCode = null;
+            line.AiSuggestionConfidence     = null;
+            line.AiSuggestionReason         = null;
+            line.AiSuggestionProvenance     = null;
+
+            acceptedCount++;
+        }
+
+        // Recompute order status
+        entity.Status    = entity.Lines.Any(l => l.NeedsReview)
+                               ? OrderStatusConstants.PendingReview
+                               : OrderStatusConstants.Ready;
+        entity.UpdatedAt = DateTime.UtcNow;
+
+        _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "AiSuggestionsBulkAccepted", new
+        {
+            acceptedCount,
+            minConfidence,
+            newStatus = entity.Status
+        }));
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Order {OrderId}: {Count} AI suggestions bulk-accepted (minConfidence={Min}), status={Status}",
+            orderId, acceptedCount, minConfidence, entity.Status);
+
+        return Result<int>.Ok(acceptedCount);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private async Task<PurchaseOrderLineEntity> BuildLineEntityAsync(
