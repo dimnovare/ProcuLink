@@ -254,6 +254,8 @@ builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, SftpDeliveryDispatcher>();
+builder.Services.AddScoped<IDeliveryDispatcher, FtpsDeliveryDispatcher>();
+builder.Services.AddScoped<IDeliveryDispatcher, SmtpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
@@ -266,6 +268,7 @@ builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, CxmlOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, UblOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, EdifactOrderParser>();
+builder.Services.AddSingleton<IPurchaseOrderParser, X12OrderParser>(); // Group M — ANSI X12 850
 builder.Services.AddSingleton<OrderParserFactory>();
 
 // ── Transform layer (ProcuLink.Transform) ──────────────────────────────────
@@ -276,6 +279,7 @@ builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
 builder.Services.AddSingleton<ITransformService, JsonTransformService>();
 builder.Services.AddSingleton<ITransformService, UblOrderTransformService>(); // Group M Phase 1 — UBL 2.1 Peppol BIS 3.0
+builder.Services.AddSingleton<ITransformService, X12TransformService>(); // Group M — ANSI X12 850
 
 // ── Wave 3: Invoice parsers ────────────────────────────────────────────────
 builder.Services.AddSingleton<IInvoiceParser, UblInvoiceParser>();

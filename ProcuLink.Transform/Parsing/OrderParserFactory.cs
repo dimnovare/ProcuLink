@@ -61,6 +61,19 @@ public sealed class OrderParserFactory
             // Fall through to extension dispatch — CxmlOrderParser handles plain .xml
         }
 
+        // ── .x12 / .edi / .txt — promote to X12 850 when content matches ──────
+        // X12 starts with the fixed-width ISA segment and carries an ST*850
+        // transaction set further in, so we peek a larger window than EDIFACT.
+        // X12 (ISA) and EDIFACT (UNA/UNB) envelopes are mutually exclusive.
+        if ((ext == ".x12" || ext == ".edi" || ext == ".txt") && peek.CanSeek)
+        {
+            if (X12OrderParser.IsX12OrderDocument(peek))
+            {
+                var x12 = _parsers.OfType<X12OrderParser>().FirstOrDefault();
+                if (x12 is not null) return x12;
+            }
+        }
+
         // ── .txt — promote to EDIFACT when content matches ────────────────────
         if (ext == ".txt" && peek.CanSeek)
         {

@@ -208,7 +208,7 @@ public class DeliveryConfigServiceTests
             default);
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("Delivery protocol must be http, sftp, ftp, erp_erply, or erp_directo.*");
+            .WithMessage("Delivery protocol must be http, sftp, ftp, ftps, smtp, erp_erply, or erp_directo.*");
     }
 
     private sealed class DeliveryConfigTestDbContext : ProcuLinkDbContext
