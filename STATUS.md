@@ -4,6 +4,22 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-05-29 (late) — chip-collision recovery complete · all build/cleanup chips merged + pushed · 328 backend tests green**
+
+The 7 build/cleanup chips had run in the **shared** repo checkouts (not isolated worktrees) and collided — committing to `main` directly and leaving intermingled, partially-reverted, non-building working trees (repeated `git clean`/reset wipes). After the chips were stopped, this session recovered + completed + merged + **pushed** everything from ground truth (git + build + test), ignoring the contradictory chip narratives.
+
+**Backend (`de6b774`, pushed) — 328 tests (123 Transform + 161 Infrastructure + 44 Api), 0 failures:**
+- **#5 schema-fingerprint moat v1:** `SchemaFingerprint` entity + service + `SchemaFingerprintHasher` + `FingerprintBoost`; `ParseStoredFileAsync` returns `ParsedFileOutput` (entity + column headers + format); `ParseOrderJob` records org-scoped layout fingerprints; `POST /api/upload/detect-format` boosts confidence + returns `seenCount`. DI registered in **Api + Worker**.
+- **#2 delivery reliability:** `IDeliveryService.RetryDeliveryAsync` (attempt-count + `delivery_dead_letter`), `DeliveryAttempt.AttemptNumber`, `RetryDeliveryJob` + `POST /api/orders/{id}/retry-delivery`, `StuckOrderDetectionService` + recurring `StuckOrderDetectionJob` (15 min).
+- **#6 cleanup:** removed dead Phase-0 Canonical POCOs, never-injected EF repos, orphan `SupplierProfilesController`.
+- EF migration `AddSchemaFingerprintsAndDeliveryRetry` — model/snapshot consistent (`has-pending-model-changes` → none). (#1 redirect + #3 backend parse-failure committed earlier this day.)
+
+**Frontend (`51e4ea9`, pushed):** #3 `ParseFailedPanel`/`FailedPanel` in `SpineReview`; #1 `/orders→/inbox` e2e test; #4 J2 mock-purge (fabricated landing stat removed; CrossingsLog date from latest real event; drafts/MOCK_LOG/LaneDrawer/UploadWorkbench/SpineReview demo all gated behind `isApiMockMode` with honest live-user states); #7 legacy `src/views` removed; SupplierDockProfile live-wired. `bun run build` green.
+
+**Process lesson:** chips MUST run in isolated git worktrees — shared-checkout collisions caused the wipes. Recovery used a dangling commit + an out-of-repo backup (both deleted now the work is on `main`). Only `project-proculink/.claude/launch.json` (local config) left uncommitted.
+
+---
+
 ## Where we are: **2026-05-29 P0 parse-failure UX complete · 295 backend tests green · frontend builds clean**
 
 ### P0 fix: parse-failure UX (2026-05-29)
