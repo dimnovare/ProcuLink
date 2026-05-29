@@ -51,6 +51,21 @@ public class FormatDetectorServiceTests
     }
 
     [Fact]
+    public async Task DetectAsync_PopulatesColumnHeaders_ForCsv()
+    {
+        // Regression: the fingerprint moat needs DetectAsync to emit the CSV header row so
+        // ParseOrderJob can record a schema fingerprint and detect-format can return seenCount.
+        var csv = "po_number,supplier_code,sku,qty,price\nDEMO-1,SUP-9,ABC-1,2,9.99\n";
+        using var ms = new MemoryStream(Encoding.UTF8.GetBytes(csv));
+
+        var result = await _sut.DetectAsync(ms, "order.csv", CancellationToken.None);
+
+        result.Format.Should().Be("csv");
+        result.ColumnHeaders.Should().NotBeNull();
+        result.ColumnHeaders.Should().Equal("po_number", "supplier_code", "sku", "qty", "price");
+    }
+
+    [Fact]
     public async Task DetectAsync_ReturnsCxml_ForCxmlNamespace()
     {
         var xml = """

@@ -248,7 +248,16 @@ public sealed class FormatDetectorService : IFormatDetector
 
         // Metadata extraction — PO number from row 2 col aligned with a header like "po_number" / "po" / "order_id".
         var (po, lineCount) = ExtractCsvMetadata(lines, winner.Value, reasoning);
-        return new DetectedFormat("csv", 0.65, "CsvOrderParser", po, null, lineCount, reasoning);
+
+        // Column headers (header-row tokens) — surfaced so ParseOrderJob can record an org-scoped
+        // schema fingerprint and detect-format can boost confidence + return seenCount on repeat layouts.
+        var headers = line1.Split(winner.Value)
+                           .Select(h => h.Trim().Trim('"'))
+                           .Where(h => h.Length > 0)
+                           .ToList();
+
+        return new DetectedFormat("csv", 0.65, "CsvOrderParser", po, null, lineCount, reasoning,
+                                  ColumnHeaders: headers.Count > 0 ? headers : null);
     }
 
     /// <summary>
