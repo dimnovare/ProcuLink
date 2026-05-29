@@ -33,6 +33,16 @@ public class Organisation
     public DateTime? BillingUpdatedAt    { get; set; }
     public string EmailConfigJson        { get; set; } = "{}";
 
+    // ── Webhook receive ingress (Group N Phase 4) ────────────────────────
+    /// <summary>
+    /// AES-GCM-encrypted HMAC shared secret used to verify inbound webhook calls
+    /// at /api/webhook-ingress/{slug}/*. Separate from TenantApiKey because the
+    /// raw key must be re-derivable to verify HMAC signatures, but TenantApiKey
+    /// only stores a hash. Set/rotated by org admins; receiver-only — never
+    /// exposed back to callers after creation.
+    /// </summary>
+    public string? WebhookSecretEncrypted { get; set; }
+
     // Navigation
     public List<Membership> Memberships { get; set; } = new();
     public List<Supplier> Suppliers { get; set; } = new();
