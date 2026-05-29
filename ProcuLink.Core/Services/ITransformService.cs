@@ -2,7 +2,7 @@ using ProcuLink.Core.Entities;
 
 namespace ProcuLink.Core.Services;
 
-public enum OutputFormat { Xml, Csv, CXml, Json }
+public enum OutputFormat { Xml, Csv, CXml, Json, Ubl }
 
 /// <summary>
 /// Builds a formatted outbound document from a fully-resolved purchase order.
