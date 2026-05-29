@@ -1,6 +1,19 @@
-# Phase 6 — International Standard + Dual-Persona UX
+# Phase 6 — International Standard
 
 _Created 2026-05-28. Supersedes the Phase 5 production-hardening roadmap as the forward-looking plan. Phase 5 history is preserved in `STATUS.md`._
+
+> **Direction revision (2026-05-29):** The original "Dual-Persona UX"
+> theme has been dropped before any downstream component adopted it.
+> Successful B2B SaaS products ship ONE great experience with smart
+> defaults + progressive disclosure + a Command Palette for power
+> features (Linear, Stripe, Notion, Vercel, Railway) — not user-mode
+> toggles. References to "default mode", "expert mode", and any
+> `localStorage`-backed view-mode flag below are superseded by the
+> "One Great UX" rule in `CLAUDE.md` and `docs/design-system/00-agent-quick-brief.md`.
+> Power-user affordances (standards mappings inline, raw-view, hotkeys,
+> density density density) are still in scope — they ship through the
+> existing Command Palette (Cmd+K), per-table column selectors, and
+> info popovers, not behind a global user mode.
 
 ---
 
@@ -10,14 +23,14 @@ ProcuLink will become the international standard for outbound B2B purchase
 order routing: any input format/channel → canonical PO → any output
 format/channel. The product must be:
 
-- **Best in class** for 30-year procurement veterans (depth, density, standards visibility).
+- **Best in class** for 30-year procurement veterans (standards depth, surfaced field-level standards mappings, raw-view affordances, hotkeys via Command Palette).
 - **Effortless** for first-time users (wizard, templates, magic mapping preview, AI defaults).
 - **Standards-fit** — Cinderella's-shoe-into-any-format for whichever shape a supplier requires.
 - **Cost-effective** versus SPS Commerce / TrueCommerce / Babelway / Pagero.
 
 The Learn loop (`Parse → Normalize → Validate → Review → Transform → Deliver →
 Learn`) remains the long-term moat. Standards depth + channel breadth +
-dual-persona UX are the next 6 months of execution.
+one great UX are the next 6 months of execution.
 
 Full positioning rationale: `docs/strategy/international-standard-thesis.md`.
 
@@ -106,7 +119,7 @@ that alone.
 - Playwright crawl of the live Vercel preview shows no `008412` or `__mock__`
   references in any rendered route.
 
-### Group L (expanded) — onboarding + dual-persona UX
+### Group L (expanded) — onboarding + magic mapping + templates + help completion
 
 Wave 1 + Wave 2 + Wave 3 of Group L shipped (cookie banner, PostHog SDK
 frontend + backend, `org_created` / first-supplier / first-upload /
@@ -118,13 +131,6 @@ subprocessors / AUP pages, one-pager). The expanded scope below is what is
 
 **Scope (new for Phase 6).**
 
-- **Dual-persona UX rollout** — Default mode (novice) and Expert mode (power user)
-  toggle on every operational screen (`/upload`, `/inbox`, `/orders/[id]`,
-  `/library/*`, `/operations/*`, `/settings`). Toggle is sticky across sessions
-  in `localStorage`. Default mode: wizard, templates, AI defaults, generous
-  spacing. Expert mode: density, raw view, standards mapping inline, hotkeys.
-  Specification lives in `CLAUDE.md` "Product-level rules" and
-  `docs/design-system/00-agent-quick-brief.md` "Dual-Persona UX".
 - **Magic mapping preview** — On first upload, show a side-by-side preview of
   source field → canonical field → supplier field before the user has to commit.
   AI-suggested mappings render with visible confidence and provenance. The
@@ -135,6 +141,13 @@ subprocessors / AUP pages, one-pager). The expanded scope below is what is
   Each template ships with a canonical mapping skeleton, three example
   supplier mappings, and a sample order. Loaded from
   `ProcuLink.Api/Fixtures/templates/<industry>/`.
+- **Standards-visibility affordances** — Info popover next to every field
+  in transform / mapping contexts that surfaces the UBL / EDIFACT / X12 /
+  cXML / Peppol BIS / ISO 20022 reference. Command Palette entries
+  ("Show standards mapping for this field", "Show raw XML for this
+  artifact"). Per-table column selectors that include raw value columns.
+  This replaces the dropped "expert-mode toggle" approach — power
+  affordances are discoverable, not gated.
 - **In-app help completion** — `/help` already has 7 MDX articles + Fuse.js
   search (`f09390b`). Phase 6 adds context-aware help links: every screen has a
   Help affordance in `BridgeTopbar` that opens the slideover pre-routed to the
@@ -150,27 +163,25 @@ subprocessors / AUP pages, one-pager). The expanded scope below is what is
   founder records the 60-90s walkthrough. Wire `NEXT_PUBLIC_BOOK_DEMO_URL`
   once a Cal.com slot is live.
 
-**Sequencing rationale.** Dual-persona is upstream of every other Horizon
-2/3 feature — adding magic mapping preview, per-industry templates, or
-standards-visibility chrome later costs more if the persona toggle is bolted
-on rather than baked in. Magic mapping preview is the highest-leverage way to
-shorten time-to-first-delivery for novice users. Per-industry templates are
-how we cut sales cycle length for a known vertical.
+**Sequencing rationale.** Magic mapping preview is the highest-leverage way
+to shorten time-to-first-delivery for first-time users. Per-industry
+templates cut sales cycle length for a known vertical. Standards-visibility
+affordances + help completion serve veterans without forcing a bifurcated
+codebase.
 
-**ICP fit.** A 30-year procurement veteran does not want to babysit a wizard;
-they want density, keyboard shortcuts, and direct edit. A first-time user
-hired six months ago needs the wizard or they bounce. We cannot win both
-without dual-persona.
+**ICP fit.** Both first-time users and 30-year veterans benefit from
+magic mapping + templates + standards-visibility-on-demand. Veterans use
+the Command Palette and info popovers; first-time users discover them as
+their workflow demands. One codebase, one design system, no mode flag.
 
 **Success metrics.**
 - Onboarding wizard completion rate ≥ 70% for new orgs in the first 14 days.
-- Time from sign-up to first successful delivery < 15 minutes for a novice
-  user, < 5 minutes for an expert user.
-- Expert mode adoption ≥ 40% on accounts that complete the onboarding wizard
-  and run ≥ 5 orders.
+- Time from sign-up to first successful delivery < 15 minutes.
 - Magic mapping preview accept-without-edit rate ≥ 60% on text-based PDF
   and CSV input.
 - ≥ 3 industries with at least one production-use template in active use.
+- Command Palette usage ≥ 20% of authenticated sessions for accounts with
+  ≥ 5 orders (proxy for "veterans found the power affordances").
 
 ---
 
@@ -221,7 +232,7 @@ past "interesting tool" into "we can replace TrueCommerce".
 **Success metrics.**
 - 5 distinct standards parseable end-to-end (UBL, Peppol BIS, EDIFACT, X12, cXML).
 - 5 distinct standards transformable end-to-end (same list).
-- Standards-mapping inline (expert mode) supported for every field on the
+- Standards-mapping surfaced on demand (info popover or Command Palette) for every field on the
   canonical PO model.
 - At least one pilot customer converted on each of UBL, EDIFACT, X12.
 

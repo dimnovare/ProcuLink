@@ -223,20 +223,20 @@ first-time users (wizard, templates, magic mapping preview, AI defaults).
 Standards-fit for every supplier shape (Cinderella's-shoe-into-any-format).
 Cost-effective versus SPS Commerce / TrueCommerce / Babelway / Pagero.
 
-The next 4–6 weeks are tracked as **Phase 6 — International Standard +
-Dual-Persona UX**. Source of truth for the forward plan:
+The next 4–6 weeks are tracked as **Phase 6 — International Standard**.
+Source of truth for the forward plan:
 `docs/superpowers/plans/2026-05-28-phase-6-international-standard-roadmap.md`.
 Positioning rationale: `docs/strategy/international-standard-thesis.md`.
 
 The Learn loop (`Parse → Normalize → Validate → Review → Transform →
 Deliver → Learn`) remains the long-term moat. Standards depth + channel
-breadth + dual-persona UX are the next 6 months of execution.
+breadth + a single great UX are the next 6 months of execution.
 
 ### 3-Horizon roadmap
 
 | Horizon | Theme | Timeline | Groups |
 |---|---|---|---|
-| **1** | Production Ready + Effortless | next 4–6 weeks | J (live QA), J2 (purge mock/demo residue), L expanded (onboarding wizard + dual-persona UX + magic mapping preview + in-app help + per-industry templates + analytics) |
+| **1** | Production Ready + Effortless | next 4–6 weeks | J (live QA), J2 (purge mock/demo residue), L expanded (onboarding wizard + magic mapping preview + in-app help + per-industry templates + analytics) |
 | **2** | Standards Backbone + Channel Breadth | Q4 2026 | M (UBL / Peppol BIS / EDIFACT / X12 / JSON / ISO 20022 reference), N (SFTP / FTPS / SMTP / AS2 / AS4 / PEPPOL AP / webhook-in — partner-wrap first for AS2 + PEPPOL), O (retry queue / rejection capture / ACK round-trip / SLA timers) |
 | **3** | Network Effects | Q1 2027+ | P (RBAC + SCIM), Q (supplier mapping library), R (i18n EN/DE/FR/ES/IT/PL), S (UBL Invoice + DESADV round-trip + 3-way match prep) |
 
@@ -244,11 +244,17 @@ Phase 5 status carried into Phase 6: Group I (UI polish) is effectively
 complete through pass 15. Group K (cXML 1.2 + standards matrix + canonical
 PO model) shipped. Group L Waves 1+2+3 shipped. Horizon 1 picks up with
 Group J live QA, the new Group J2 demo-data purge, and an expanded Group L
-building the dual-persona onboarding / mapping / help experience.
+building the onboarding / mapping / help experience.
 
-Standards-visibility and dual-persona UX are **non-negotiable for every new
-screen from Phase 6 onward** — see "Coding conventions → Product-level
-rules" below. The Bridge Layer direction is still locked.
+**Direction note (2026-05-29):** The earlier "dual-persona UX" toggle
+(default vs expert mode) was dropped before any downstream component
+adopted it. Reason: successful B2B SaaS products (Linear, Stripe, Notion,
+Vercel, Railway) all ship ONE great experience with smart defaults +
+progressive disclosure + a Command Palette for power features — not
+explicit user-mode toggles. Standards visibility and power-user
+affordances will be surfaced via the existing Command Palette (Cmd+K),
+per-screen column selectors, and contextual disclosure, not a global
+mode flag. The Bridge Layer direction is still locked.
 
 Backend test count: **213** (102 Transform + 11 Api.Tests + 100 Infrastructure).
 Waiting on founder configuration only for Group L Wave 3 to function in
@@ -504,37 +510,43 @@ Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level suppl
 
 ### Product-level rules (Phase 6+)
 
-These two rules apply to **every new screen and every new field** from
+These rules apply to **every new screen and every new field** from
 Phase 6 (2026-05-28) onward. They are durable product invariants, not
 group-scoped tasks.
 
-**Dual-persona UX rule.** Every new screen must work for a first-time user
-(default mode) **and** a power user (expert mode toggle). No new screen
-ships without both densities considered.
+**One great experience rule.** ProcuLink ships ONE great UX, not a
+"default / expert" toggle. Successful B2B SaaS products (Linear, Stripe,
+Notion, Vercel, Railway) all use this approach: smart defaults +
+progressive disclosure + a Command Palette for power features. Users
+don't self-identify as novice or expert, and mode toggles add cognitive
+load without measurable benefit.
 
-- **Default mode** favours wizards, per-industry templates, sensible
-  defaults, AI-pre-filled fields with visible confidence + provenance, and
-  generous spacing.
-- **Expert mode** reveals density, raw values (JSON / XML / EDI envelopes),
-  standards mappings inline, hotkeys, and inline-edit-of-anything
-  affordances.
-- The toggle is sticky across sessions (`localStorage`), visible on every
-  operational screen, and overridable per-screen if a flow only makes sense
-  in one mode.
-- Specification: `docs/design-system/00-agent-quick-brief.md` → "Dual-Persona UX".
+- Wizards, per-industry templates, AI-pre-filled fields with visible
+  confidence + provenance, and sensible defaults are for everyone.
+- Density and power affordances (raw JSON/XML/EDI envelopes, hotkeys,
+  inline-edit-of-anything, standards mappings) are surfaced via the
+  existing Command Palette (Cmd+K), per-table column selectors, and
+  contextual disclosure — discoverable by anyone who needs them.
+- Don't add `localStorage`-backed user-mode flags. The earlier
+  `useViewMode()` hook + `<ViewModeToggle />` were removed before
+  adoption (2026-05-29).
 
-**Standards-visibility rule.** Any field in a transform / mapping context
-must be able to surface its standards mapping (UBL / EDIFACT / X12 / cXML /
-Peppol BIS / ISO 20022) when expert mode is on. The user must be able to see
-"this field maps to UBL `cbc:ID` / EDIFACT `BGM 1004` / X12 `BEG03` /
-cXML `OrderRequestHeader@orderID`" without leaving the screen.
+**Standards-visibility rule.** Any field in a transform / mapping
+context must be able to surface its standards mapping (UBL / EDIFACT /
+X12 / cXML / Peppol BIS / ISO 20022) on demand. The user must be able
+to see "this field maps to UBL `cbc:ID` / EDIFACT `BGM 1004` / X12
+`BEG03` / cXML `OrderRequestHeader@orderID`" without leaving the screen.
 
 - The canonical PO model is the join key. Each field on `ParsedOrder` /
   `ParsedOrderLine` carries its standards references in
   `docs/standards-matrix.md` § "Canonical PO Model fields".
+- Surface standards via: an info icon next to the field that opens a
+  popover, OR a Command Palette entry "Show standards mapping for this
+  field", OR a per-screen "Show standards" disclosure toggle. Pick
+  whichever fits the screen — don't gate it behind a user mode.
 - Standards visibility is what makes ProcuLink trustworthy to 30-year
-  procurement veterans. Hiding it because "it's complicated" loses the
-  expert persona.
+  procurement veterans. Hiding it because "it's complicated" loses
+  them.
 
 ### Next.js frontend
 - **App Router only.** No Pages Router.

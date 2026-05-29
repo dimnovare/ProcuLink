@@ -139,8 +139,10 @@ contract every standards parser must satisfy.
 | `AiSuggestionProvenance` | `string?` | optional | Model ID / provider name |
 
 The standards-reference columns above are the contract for the
-"Standards-visibility rule" in `CLAUDE.md` — expert mode must surface
-these labels next to each field on screen.
+"Standards-visibility rule" in `CLAUDE.md` — every field in a transform
+or mapping context must be able to surface these labels on demand
+(info popover, per-screen disclosure, or Command Palette entry). Not
+gated behind a user-mode toggle.
 
 ---
 

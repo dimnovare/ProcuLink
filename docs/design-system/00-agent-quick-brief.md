@@ -67,52 +67,66 @@ Supporting signatures:
 - Monumental KPI numbers in display type.
 - System Identity mark/glyph family everywhere a custom mark is needed.
 
-## Dual-Persona UX (Phase 6+)
+## One Great UX (Phase 6+, supersedes earlier Dual-Persona note)
 
-Every new screen must work for two personas at once and be QA'd in both
-modes. This is a non-negotiable product invariant from 2026-05-28 onward,
-codified in `CLAUDE.md` under "Coding conventions → Product-level rules".
+ProcuLink ships ONE great experience, not a "default / expert" toggle.
+This supersedes the earlier (2026-05-28) Dual-Persona section that
+proposed a localStorage-backed user-mode flag — that flag was removed
+on 2026-05-29 before adoption.
 
-### Default mode (first-time / novice user)
+**Reason**: successful B2B SaaS products (Linear, Stripe Dashboard,
+Notion, Vercel, Railway) all ship ONE great experience with smart
+defaults + progressive disclosure + a Command Palette for power
+features. Users don't self-identify as novice or expert; the toggle
+adds cognitive load ("which mode am I in? do I need to switch?")
+without measurable benefit, doubles testing burden, and slows new
+feature delivery because every screen must consider two design states.
 
-- Wizard-style flows with one decision per step.
-- Sensible defaults from per-industry templates (industrial distribution,
-  food and beverage wholesale, hospitality procurement, healthcare GPO).
-- AI-pre-filled fields rendered with visible confidence + provenance +
-  Accept / Edit / Reject controls (never auto-applied).
-- Explanatory copy that names the user's outcome ("Send this order to your
-  supplier") instead of internal mechanics ("Run the transform job").
-- Conservative density: generous spacing, large click targets, fewer
-  columns visible.
-- The five-stage journey (Parse → Normalize → Validate → Transform →
-  Deliver) is the primary mental model surfaced everywhere.
+### Every screen ships with
 
-### Expert mode (power user / 30-year procurement veteran)
+- **Smart defaults** from per-industry templates (industrial
+  distribution, food and beverage wholesale, hospitality procurement,
+  healthcare GPO) and Wave 3 AI mapping suggestions with visible
+  confidence + provenance + Accept / Edit / Reject controls.
+- **Wizard-style flows** for first-time-only paths (onboarding, first
+  delivery config) — not on every screen.
+- **Progressive disclosure** for advanced options: collapsed sections,
+  per-table column selectors, "Show more" affordances.
+- **Conservative density** by default — generous spacing, readable
+  type, fewer columns visible. Power users can densify via per-table
+  column controls.
+- **Explanatory copy** that names the user's outcome ("Send this order
+  to your supplier") instead of internal mechanics ("Run the
+  transform job").
+- **The five-stage journey** (Parse → Normalize → Validate → Transform
+  → Deliver) is the primary mental model surfaced everywhere.
 
-- Toggle is visible on every operational screen and sticky across sessions
-  via `localStorage`.
-- Higher density: compact rows, more columns visible at once, condensed
-  type scale.
-- **Standards mappings inline** — every field in a transform / mapping
-  context surfaces its UBL / EDIFACT / X12 / cXML / Peppol BIS / ISO 20022
-  reference next to the value. Source of truth for those references:
-  `docs/standards-matrix.md` § "Canonical PO Model fields".
-- Inline edit-of-anything affordances; modals reserved for irreversible or
-  multi-field operations.
-- Hotkeys for common actions; `?` opens a hotkey overlay on every screen.
-- Raw view (JSON / XML / EDI envelope) accessible from any artifact.
-- No "are you sure" confirmations on safe / reversible operations.
+### Power-user affordances surface through
 
-### Implementation rule
+- **Command Palette (`Cmd+K`)** — already shipped via `CommandPalette`
+  component. The discoverability surface for every power feature:
+  jump-to-order, jump-to-supplier, raw-view, copy-as-cURL, etc.
+- **Hotkeys** — `Cmd+K`, `?` for hotkey overlay, route-specific
+  shortcuts. All hotkeys must be discoverable via the `?` overlay or
+  the Command Palette.
+- **Standards mappings on demand** — info icon next to fields opens a
+  popover showing UBL / EDIFACT / X12 / cXML / Peppol BIS / ISO 20022
+  references for that canonical field. Source of truth:
+  `docs/standards-matrix.md` § "Canonical PO Model fields". Per-screen
+  "Show standards mappings" disclosure is also acceptable. Never gate
+  this behind a user mode.
+- **Raw view** (JSON / XML / EDI envelope) accessible via a "View raw"
+  affordance on any artifact card.
+- **Inline edit-of-anything** where the data is unambiguous; modals
+  reserved for irreversible or multi-field operations.
 
-No new screen ships without both modes considered. The PR description must
-call out which mode each interaction belongs to. Default mode is the
-unauthenticated / new-user experience; expert mode is opt-in but sticky.
-Per-screen overrides (a flow that only makes sense in one mode) are
-allowed but must be justified in the PR.
+### What NOT to add
 
-The toggle copy is "Default / Expert" — not "Simple / Advanced" or any
-phrasing that implies the default user is less capable.
+- Do **not** add `localStorage`-backed user-mode flags.
+- Do **not** branch component rendering on a global "expert" boolean.
+- Do **not** require PRs to "call out which mode each interaction
+  belongs to".
+- Do **not** ship two parallel implementations of any screen.
 
 ## Current Product Wedge
 

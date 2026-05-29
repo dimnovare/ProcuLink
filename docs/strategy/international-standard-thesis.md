@@ -7,15 +7,17 @@ _Last updated 2026-05-28._
 ## The bet
 
 ProcuLink is betting that there is room for a **standards-visible,
-dual-persona, multi-channel outbound PO router** that is cheaper, faster to
-configure, and more honest about what it is than the incumbent EDI / B2B
-gateway vendors.
+multi-channel outbound PO router** that is cheaper, faster to configure,
+and more honest about what it is than the incumbent EDI / B2B gateway
+vendors.
 
 The wedge is outbound purchase orders for buyer / procurement teams. The
 durable goal is to become the international standard for outbound B2B PO
 routing: any input format / channel → canonical PO → any output format /
-channel. Best in class for a 30-year procurement veteran. Effortless for a
-six-months-into-the-job procurement analyst.
+channel. ONE great UX that works for a 30-year procurement veteran and
+for a six-months-into-the-job procurement analyst — smart defaults plus
+power features discoverable via the Command Palette, not a user-mode
+toggle.
 
 ---
 
@@ -60,8 +62,8 @@ There is a structural opening for a SaaS that:
 | Dimension | Incumbents (SPS / TrueCommerce / Babelway / Pagero) | ProcuLink |
 |---|---|---|
 | **Time to first delivery** | Weeks to months. Implementation services bill separately. | Under 15 minutes for a novice, under 5 for an expert. Self-serve. |
-| **Standards visibility** | Hidden in the integrator's tooling. The buyer's analyst rarely sees field mappings. | Inline. Every field in expert mode shows the matching UBL / EDIFACT / X12 / cXML / Peppol BIS / ISO 20022 reference. |
-| **Persona** | One density level — usually optimised for the integrator, not the end user. | Dual-persona by design. Novice: wizard, templates, AI defaults. Expert: density, hotkeys, raw view. |
+| **Standards visibility** | Hidden in the integrator's tooling. The buyer's analyst rarely sees field mappings. | Surfaced on demand. Every field can reveal its UBL / EDIFACT / X12 / cXML / Peppol BIS / ISO 20022 reference through an info popover or the Command Palette. |
+| **UX** | Optimised for the integrator, not the end user. Multiple density levels gated behind training. | ONE great experience. Wizard for first-time flows, AI defaults with confidence + provenance, smart defaults from per-industry templates, power features (hotkeys, raw view, standards-mapping popovers) discoverable via the Command Palette (Cmd+K). No user-mode toggle. |
 | **AI** | Bolted on, often opaque. | Provider-neutral interface (OpenAI structured outputs first). Every suggestion shows confidence + provenance + Accept/Edit/Reject. Never auto-applies. |
 | **Pricing** | Per-document or per-trading-partner with high minimums. Enterprise-only. | Flat monthly plans starting at €149. No per-document fees inside the plan limit. Pilot tier is honestly free for 14 days. |
 | **Channel coverage** | Often gated behind a service tier or per-channel charge. | One plan, all supported channels (HTTP / SFTP / SMTP / partner-wrapped AS2 / partner-wrapped PEPPOL / webhook in). |
@@ -69,7 +71,7 @@ There is a structural opening for a SaaS that:
 
 We are not differentiating on "we also have AI" — every vendor in the
 category will have AI by 2027. We are differentiating on **standards
-visibility + dual-persona UX + honest scope** because those are durable
+visibility + one great UX + honest scope** because those are durable
 preferences of the procurement professional buyer, and they require
 discipline rather than capital.
 
@@ -86,7 +88,9 @@ the buyer has — CSV, XLSX, PDF, cXML, UBL, EDIFACT, X12 — and emit whatever
 the supplier requires, in whatever channel they accept. The canonical PO
 model is the foot; every format is a shoe. ProcuLink's job is to make the
 shoe fit, every time, without the procurement analyst learning the
-underlying standards (unless they want to, in expert mode).
+underlying standards (unless they want to — and then a single click on an
+info icon or a Command Palette query reveals the underlying UBL / EDIFACT /
+X12 mapping).
 
 This is the standards + channels axis: depth (every supported format
 matches the relevant ISO / Peppol / EDIFACT / X12 / cXML / ISO 20022
