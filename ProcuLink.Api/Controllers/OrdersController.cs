@@ -336,6 +336,120 @@ public sealed class OrdersController : ControllerBase
         return Accepted(new { status = "transforming" });
     }
 
+    // ── GET /api/orders/{id}/mapping-preview ─────────────────────────────────
+
+    /// <summary>
+    /// Read-only side-by-side mapping preview: source field → canonical PO field → AI-suggested
+    /// supplier code with confidence and provenance.  Safe to call before transform/commit.
+    /// Returns 404 when the order doesn't exist for the authenticated organisation.
+    /// </summary>
+    [HttpGet("{id:guid}/mapping-preview")]
+    [ProducesResponseType(typeof(MappingPreviewDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetMappingPreview(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+
+        // Org-scoped existence check — mirrors the pattern used by GetAudit.
+        var order = await _db.PurchaseOrders
+            .AsNoTracking()
+            .Where(o => o.Id == id && o.OrgId == orgId)
+            .Select(o => new
+            {
+                o.Id,
+                o.SourceFileKey,
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (order is null)
+            return NotFound();
+
+        // Load lines with only the fields we need — no writes, no tracking.
+        var lines = await _db.PurchaseOrderLines
+            .AsNoTracking()
+            .Where(l => l.OrderId == id)
+            .OrderBy(l => l.LineNumber)
+            .Select(l => new
+            {
+                l.LineNumber,
+                l.BuyerItemCode,
+                l.SupplierItemCode,
+                l.Description,
+                l.Quantity,
+                l.Unit,
+                l.UnitPrice,
+                l.Confidence,
+                l.AiSuggestedSupplierItemCode,
+                l.AiSuggestionConfidence,
+                l.AiSuggestionProvenance,
+                l.AiSuggestionReason,
+            })
+            .ToListAsync(ct);
+
+        // Derive source format the same way ListAsync does (from the file key extension).
+        string? sourceFormat = null;
+        if (!string.IsNullOrEmpty(order.SourceFileKey))
+        {
+            var ext = System.IO.Path.GetExtension(order.SourceFileKey).TrimStart('.').ToLowerInvariant();
+            sourceFormat = ext switch
+            {
+                "pdf"            => "pdf",
+                "csv"            => "csv",
+                "xlsx" or "xls"  => "xlsx",
+                "xml" or "cxml"  => "cxml",
+                "edi" or "x12"   => "edi",
+                _                => null,
+            };
+        }
+
+        // Overall detected confidence = average of per-line Confidence values (only when lines exist).
+        double? detectedConfidence = lines.Count > 0
+            ? lines.Average(l => (double)l.Confidence)
+            : null;
+
+        var lineDtos = lines.Select(l =>
+        {
+            var sourceFields = new Dictionary<string, string?>
+            {
+                ["buyerItemCode"] = l.BuyerItemCode,
+                ["description"]   = l.Description,
+                ["quantity"]      = l.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["unit"]          = l.Unit,
+                ["unitPrice"]     = l.UnitPrice.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            };
+
+            // Status: resolved > suggested > unresolved
+            var status = !string.IsNullOrWhiteSpace(l.SupplierItemCode)
+                ? "resolved"
+                : !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode)
+                    ? "suggested"
+                    : "unresolved";
+
+            return new MappingPreviewLineDto(
+                LineNumber:              l.LineNumber,
+                SourceFields:            sourceFields,
+                CanonicalField:          "supplierItemCode",
+                BuyerItemCode:           l.BuyerItemCode,
+                AiSuggestedSupplierCode: l.AiSuggestedSupplierItemCode,
+                Confidence:              l.AiSuggestionConfidence.HasValue
+                                             ? (double?)l.AiSuggestionConfidence.Value
+                                             : null,
+                Provenance:              l.AiSuggestionProvenance,
+                Reason:                  l.AiSuggestionReason,
+                Status:                  status
+            );
+        }).ToList();
+
+        var dto = new MappingPreviewDto(
+            OrderId:            order.Id.ToString(),
+            SourceFormat:       sourceFormat,
+            DetectedConfidence: detectedConfidence,
+            Lines:              lineDtos
+        );
+
+        return Ok(dto);
+    }
+
     // ── GET /api/orders/{id}/audit ────────────────────────────────────────────
 
     /// <summary>
