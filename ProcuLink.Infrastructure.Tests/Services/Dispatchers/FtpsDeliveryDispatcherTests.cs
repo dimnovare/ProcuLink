@@ -1,3 +1,4 @@
+using System.Net.Security;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
@@ -87,5 +88,39 @@ public class FtpsDeliveryDispatcherTests
     {
         FtpsDeliveryDispatcher.SanitiseFileName("").Should().Be("delivery.bin");
         FtpsDeliveryDispatcher.SanitiseFileName("///").Should().Be("delivery.bin");
+    }
+
+    // ── Certificate validation decision logic ────────────────────────────────
+
+    [Fact]
+    public void ShouldAcceptCertificate_NoErrors_AcceptsRegardlessOfFlag()
+    {
+        // A valid certificate (no policy errors) is always accepted.
+        FtpsDeliveryDispatcher.ShouldAcceptCertificate(SslPolicyErrors.None, allowInvalidCertificate: false)
+            .Should().BeTrue("valid cert must always be accepted");
+        FtpsDeliveryDispatcher.ShouldAcceptCertificate(SslPolicyErrors.None, allowInvalidCertificate: true)
+            .Should().BeTrue("valid cert must always be accepted, even with override flag");
+    }
+
+    [Theory]
+    [InlineData(SslPolicyErrors.RemoteCertificateNotAvailable)]
+    [InlineData(SslPolicyErrors.RemoteCertificateNameMismatch)]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors)]
+    public void ShouldAcceptCertificate_PolicyErrors_DefaultFalse_Rejects(SslPolicyErrors errors)
+    {
+        // Secure by default: policy errors are rejected when the override is not set.
+        FtpsDeliveryDispatcher.ShouldAcceptCertificate(errors, allowInvalidCertificate: false)
+            .Should().BeFalse("policy errors must be rejected when allowInvalidCertificate is false (secure default)");
+    }
+
+    [Theory]
+    [InlineData(SslPolicyErrors.RemoteCertificateNotAvailable)]
+    [InlineData(SslPolicyErrors.RemoteCertificateNameMismatch)]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors)]
+    public void ShouldAcceptCertificate_PolicyErrors_ExplicitOverride_Accepts(SslPolicyErrors errors)
+    {
+        // Explicit opt-in override: operator has consciously accepted invalid certs for this supplier.
+        FtpsDeliveryDispatcher.ShouldAcceptCertificate(errors, allowInvalidCertificate: true)
+            .Should().BeTrue("policy errors must be tolerated when allowInvalidCertificate is explicitly true");
     }
 }

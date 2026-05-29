@@ -1,3 +1,4 @@
+using System.Net.Security;
 using System.Text.Json;
 using FluentFTP;
 using FluentFTP.Exceptions;
@@ -83,15 +84,19 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
         var token = linkedCts.Token;
 
+        var allowInvalidCertificate = cfg.AllowInvalidCertificate;
+
         var client = new AsyncFtpClient(host, creds.Username, creds.Password ?? string.Empty, port);
 
-        // TODO: ValidateAnyCertificate = true is a KNOWN LIMITATION.
-        // This accepts any server certificate without validation, including self-signed or
-        // expired certificates. Production deployments should pin or validate the supplier's
-        // specific certificate to prevent man-in-the-middle attacks. Replace this with a
-        // custom certificate validation callback (ValidateCertificate event / FtpCertificateValidation
-        // delegate) that pins the expected thumbprint or issuer for each supplier config.
-        client.Config.ValidateAnyCertificate = true;
+        // Secure by default: reject certificates that do not pass OS/CA validation.
+        // An explicit opt-in escape hatch (AllowInvalidCertificate = true in the per-supplier
+        // delivery config JSON) allows self-signed or expired certificates only when the
+        // operator has consciously accepted the risk for a specific supplier.
+        client.Config.ValidateAnyCertificate = false;
+        client.ValidateCertificate += (_, e) =>
+        {
+            e.Accept = ShouldAcceptCertificate(e.PolicyErrors, allowInvalidCertificate);
+        };
 
         client.Config.EncryptionMode = FtpEncryptionMode.Explicit; // FTPS = explicit TLS (AUTH TLS on port 21)
         client.Config.ConnectTimeout = timeoutMs;
@@ -152,6 +157,19 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         }
     }
 
+    /// <summary>
+    /// Determines whether a server certificate should be accepted.
+    /// Secure by default: accept only when there are no policy errors.
+    /// When <paramref name="allowInvalidCertificate"/> is explicitly <c>true</c> (opt-in per
+    /// supplier config), policy errors are tolerated — this is an operator-conscious override
+    /// for suppliers whose FTPS server uses a self-signed or expired certificate.
+    /// </summary>
+    internal static bool ShouldAcceptCertificate(SslPolicyErrors policyErrors, bool allowInvalidCertificate)
+    {
+        if (policyErrors == SslPolicyErrors.None) return true;
+        return allowInvalidCertificate;
+    }
+
     private static string NormaliseRemoteDir(string? remotePath)
     {
         if (string.IsNullOrWhiteSpace(remotePath)) return ".";
@@ -173,7 +191,8 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         int Port,
         string? RemotePath,
         bool MakeDirectories,
-        int? TimeoutSeconds);
+        int? TimeoutSeconds,
+        bool AllowInvalidCertificate = false);
 
     private sealed record FtpsCredentials(
         string Username,
