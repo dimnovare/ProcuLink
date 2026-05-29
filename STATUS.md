@@ -26,6 +26,16 @@ Proved the safe parallel workflow that prevents a repeat of the collision: **2 a
 
 **339 backend tests** green (123 Transform + 168 Infrastructure + 48 Api). New EF migration verified applying cleanly to dev Postgres (`dotnet ef database update`).
 
+### Safe-parallel batch #2 — 4 agents, 2 repos (2026-05-29 · backend `b131235` / frontend `e494260`)
+
+Pushed parallelism further: **3 backend agents in isolated worktrees + 1 frontend writer (the main session)**, disjoint files, exactly one migration in flight, merged sequentially behind a build+test gate. **355 backend tests** green (123 Transform + 176 Infrastructure + 56 Api); frontend `bun run build` green.
+- **Supplier-rejection / ACK** (`delivered ≠ accepted`): dispatcher 4xx → `rejected_by_supplier` + `RejectionReason` captured; 5xx/network → `delivery_failed`; manual `POST /api/orders/{id}/mark-rejected`. Migration `AddDeliveryRejectionReason`.
+- **Delivery-attempts history**: `GET /api/orders/{id}/delivery-attempts` (`DeliveriesController`) — surfaces retry/dead-letter attempt history for ops.
+- **`BuyerService.OrderCount`**: real per-buyer counts + `LastOrderAge` from canonical JSON, org-scoped (was hardcoded 0).
+- **Frontend**: "Accept all high-confidence (N)" bulk-accept button (→ `accept-ai-suggestions`); delivery retry now uses the dead-letter-aware `/retry-delivery` endpoint.
+
+**Process note:** subagents are sandboxed to the backend (session) repo — cross-repo frontend writes are blocked, so the **frontend writer must be the main session**, not a backend-scoped subagent. Backend agents → isolated worktrees; frontend → main session as sole writer.
+
 ---
 
 ## Where we are: **2026-05-29 P0 parse-failure UX complete · 295 backend tests green · frontend builds clean**
