@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-05-29 Phase 6 in flight — production fixes landed + Group M/N features building · 237 backend tests green**
+## Where we are: **2026-05-29 Phase 6 wave merged — Group M/N/L features all on `main` · 272 backend tests green · 43 frontend Playwright tests**
 
 ### Production fixes landed on `main` (2026-05-29)
 
@@ -27,15 +27,17 @@ Railway/Vercel were broken; all P0s now fixed and on `main`:
 
 The "default vs expert mode" toggle was **removed before adoption** (`5d6f82e` frontend, `6034413` backend docs). Successful B2B SaaS (Linear, Stripe, Notion, Vercel, Railway) ship ONE great experience with smart defaults + progressive disclosure + a Command Palette for power features — not user-mode toggles. Deleted `useViewMode`/`ViewModeToggle`/`proculink_view_mode_v1`. Power-user affordances (standards mappings, raw-view, hotkeys, density) now surface via Command Palette (Cmd+K) + info popovers + per-table column selectors. Locked rule in `CLAUDE.md` "One great experience rule" and `docs/design-system/00-agent-quick-brief.md` "One Great UX (Phase 6+)".
 
-### In-flight build wave (2026-05-29, parallel chips, not yet merged)
+### Build wave merged to `main` (2026-05-29) — all green
 
-- **Group N: SMTP send-out + FTPS delivery dispatchers** — covers the email-only + FTPS supplier tails.
-- **Group M: ANSI X12 850 parser + transformer** — opens the US market; hand-rolled, no commercial EDI library.
-- **Group L: Magic mapping preview** — side-by-side source→canonical→supplier preview with AI suggestions (confidence + provenance + accept/edit/reject) before commit. The flagship "easy" onboarding feature.
-- **Group M: `/library/standards` comparison screen + field standards popovers** — standards-visibility value made visible for everyone (no expert-mode gate).
-- **P1: CI Playwright fix** — finishing; mock-mode tests that used `page.route()` network interception are being guarded behind `PLAYWRIGHT_LIVE=1` (the mock api-client never issues real fetches, so interception was a no-op → false failures).
+- **Group M: ANSI X12 850 parser + transformer** — opens the US market; hand-rolled, no commercial EDI library. Both directions, round-trip tested. `OutputFormat.X12`, registered in Api + Worker, detected by `OrderParserFactory`. `docs/standards-matrix.md` → X12 "supported".
+- **Group N: SMTP send-out + FTPS delivery dispatchers** — covers the email-only + FTPS supplier tails. Registered in Api + Worker delivery DI. `DeliveryProtocolConstants` += smtp, ftps.
+- **Group L: Magic mapping preview** — side-by-side source→canonical→supplier preview with AI suggestions (confidence + provenance + accept/edit/reject) before commit. `/upload/preview/[orderId]` route + `MagicMappingPreview` component, backed by `GET /api/orders/{id}/mapping-preview` (+ DTO + tests).
+- **Group M: `/library/standards` comparison screen + field standards popovers** — typed standards catalog, sidebar + Command Palette entries, `StandardsFieldPopover` surfacing UBL/EDIFACT/X12/cXML refs on demand (no expert-mode gate). Honest status: X12 transform shown "supported", anything not shipped marked "planned".
+- **CI Playwright fix** — mock-mode tests that used `page.route()` network interception are guarded behind `PLAYWRIGHT_LIVE=1` (mock api-client never issues real fetches, so interception was a no-op → false failures).
 
-### Backend test baseline: **237** (107 Transform + 18 Api.Tests + 112 Infrastructure), 0 failures. Frontend: 30+ Playwright tests across spec files, both repos build clean.
+**Note on chip isolation:** these chips ran in the *shared* repo working directory, not isolated worktrees, so backend X12/SMTP/FTPS work landed intermingled and was salvaged → verified green → merged (commit `ec237f3`). Two compile errors fixed during integration (X12 `ReadOnlySpan` across await CS9202; SMTP nonexistent `SmtpErrorCode.MailboxUnavailable`). Future chips should use isolated worktrees.
+
+### Backend test baseline: **272** (123 Transform + 21 Api.Tests + 128 Infrastructure), 0 failures. Frontend: **43 Playwright tests** across 8 spec files. Both repos build clean.
 
 ### Founder configuration still pending (unchanged)
 
