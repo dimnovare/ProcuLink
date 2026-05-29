@@ -342,6 +342,9 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// Magic-mapping field suggester: deterministic heuristic, optionally AI-augmented (no-op without an AI key).
+builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IFieldMappingSuggester, ProcuLink.Transform.Mapping.AiAugmentedFieldMappingSuggester>();
+
 // ──────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 // ──────────────────────────────────────────────────────────────────────────
