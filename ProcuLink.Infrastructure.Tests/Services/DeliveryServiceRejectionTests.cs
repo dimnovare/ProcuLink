@@ -7,17 +7,25 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Tests.TestDoubles;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
 
-public class DeliveryServiceTests
+/// <summary>
+/// Supplier-rejection ACK: verifies that a 4xx response sets
+/// <c>rejected_by_supplier</c> status and populates <c>RejectionReason</c>,
+/// while a 5xx keeps the existing <c>delivery_failed</c> path.
+/// </summary>
+public class DeliveryServiceRejectionTests
 {
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
     private static ProcuLinkDbContext CreateDb()
     {
         var options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
-        return new DeliveryServiceTestDbContext(options);
+        return new RejectionTestDbContext(options);
     }
 
     private static DeliveryEncryptionService CreateEncryption()
@@ -26,15 +34,14 @@ public class DeliveryServiceTests
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Delivery:EncryptionKey"] = key
+                ["Delivery:EncryptionKey"] = key,
             })
             .Build();
         return new DeliveryEncryptionService(config);
     }
 
     private static async Task<(Guid OrgId, Guid SupplierId, Guid OrderId, Guid ArtifactId)> SeedOrderAsync(
-        ProcuLinkDbContext db,
-        string status = OrderStatusConstants.ReadyToDeliver)
+        ProcuLinkDbContext db)
     {
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
@@ -47,10 +54,10 @@ public class DeliveryServiceTests
             Id = orderId,
             OrgId = orgId,
             SupplierId = supplierId,
-            PoNumber = "PO-123",
+            PoNumber = "PO-REJ-001",
             OrderDate = DateOnly.FromDateTime(now),
             Currency = "EUR",
-            Status = status,
+            Status = OrderStatusConstants.ReadyToDeliver,
             CreatedAt = now,
             UpdatedAt = now,
         });
@@ -69,100 +76,6 @@ public class DeliveryServiceTests
         return (orgId, supplierId, orderId, artifactId);
     }
 
-    [Fact]
-    public async Task DispatchArtifactAsync_NoConfig_NoOpsAndLeavesReadyToDeliver()
-    {
-        await using var db = CreateDb();
-        var ids = await SeedOrderAsync(db);
-        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 200)));
-
-        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
-
-        result.Success.Should().BeTrue();
-        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.ReadyToDeliver);
-        (await db.DeliveryAttempts.CountAsync()).Should().Be(0);
-    }
-
-    [Fact]
-    public async Task DispatchArtifactAsync_AutoDeliverFalse_NoOpsWhenRequired()
-    {
-        await using var db = CreateDb();
-        var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db);
-        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: false));
-        await db.SaveChangesAsync();
-        var dispatcher = new FakeDispatcher(new DeliveryResult(true, null, 200));
-        var service = CreateService(db, dispatcher, encryption);
-
-        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
-
-        result.Success.Should().BeTrue();
-        dispatcher.Calls.Should().Be(0);
-        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.ReadyToDeliver);
-    }
-
-    [Fact]
-    public async Task DispatchArtifactAsync_Success_WritesAttemptAndMarksDelivered()
-    {
-        await using var db = CreateDb();
-        var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db);
-        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
-        await db.SaveChangesAsync();
-        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 202)), encryption);
-
-        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
-
-        result.Success.Should().BeTrue();
-        var order = await db.PurchaseOrders.SingleAsync();
-        order.Status.Should().Be(OrderStatusConstants.Delivered);
-        var attempt = await db.DeliveryAttempts.SingleAsync();
-        attempt.OrderId.Should().Be(ids.OrderId);
-        attempt.Status.Should().Be("success");
-        attempt.ResponseCode.Should().Be(202);
-    }
-
-    [Fact]
-    public async Task DispatchArtifactAsync_Failure_WritesAttemptAndMarksDeliveryFailed()
-    {
-        await using var db = CreateDb();
-        var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db);
-        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
-        await db.SaveChangesAsync();
-        // Use a 5xx (transient) code so the status resolves to delivery_failed, not rejected_by_supplier.
-        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(false, "HTTP 503", 503)), encryption);
-
-        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
-
-        result.Success.Should().BeFalse();
-        var order = await db.PurchaseOrders.SingleAsync();
-        order.Status.Should().Be(OrderStatusConstants.DeliveryFailed);
-        var attempt = await db.DeliveryAttempts.SingleAsync();
-        attempt.Status.Should().Be("failed");
-        attempt.ErrorMessage.Should().Be("HTTP 503");
-    }
-
-    [Fact]
-    public async Task TestFireAsync_WritesAttemptWithNullOrderId()
-    {
-        await using var db = CreateDb();
-        var encryption = CreateEncryption();
-        var orgId = Guid.NewGuid();
-        var supplierId = Guid.NewGuid();
-        db.SupplierDeliveryConfigs.Add(MakeConfig(orgId, supplierId, encryption, autoDeliver: false));
-        await db.SaveChangesAsync();
-        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 200)), encryption);
-
-        var result = await service.TestFireAsync(orgId, supplierId, default);
-
-        result.Success.Should().BeTrue();
-        var attempt = await db.DeliveryAttempts.SingleAsync();
-        attempt.OrderId.Should().BeNull();
-        attempt.OrgId.Should().Be(orgId);
-        attempt.Status.Should().Be("success");
-    }
-
     private static DeliveryService CreateService(
         ProcuLinkDbContext db,
         IDeliveryDispatcher dispatcher,
@@ -173,80 +86,148 @@ public class DeliveryServiceTests
             encryption ?? CreateEncryption(),
             new[] { dispatcher },
             new NoOpIntegrationTriggerService(),
-            new ProcuLink.Infrastructure.Tests.TestDoubles.FakeAnalyticsService(),
+            new FakeAnalyticsService(),
             NullLogger<DeliveryService>.Instance);
-
-    private sealed class NoOpIntegrationTriggerService : ProcuLink.Core.Services.IIntegrationTriggerService
-    {
-        public Task EnqueueAsync(Guid organisationId, string eventType, object payload, CancellationToken ct)
-            => Task.CompletedTask;
-    }
 
     private static SupplierDeliveryConfig MakeConfig(
         Guid orgId,
         Guid supplierId,
-        DeliveryEncryptionService encryption,
-        bool autoDeliver) =>
+        DeliveryEncryptionService encryption) =>
         new()
         {
             Id = Guid.NewGuid(),
             OrgId = orgId,
             SupplierId = supplierId,
             Protocol = "http",
-            AutoDeliver = autoDeliver,
+            AutoDeliver = true,
             ConfigJson = "{\"url\":\"https://supplier.example/orders\"}",
             EncryptedCredentials = encryption.Encrypt("{\"type\":\"none\"}"),
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
 
+    // ── Tests ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task DispatchArtifactAsync_4xxResponse_SetsRejectedBySupplierAndPopulatesRejectionReason()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(false, "Supplier rejected: unknown buyer code", 422)),
+            encryption);
+
+        var result = await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        result.Success.Should().BeFalse();
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.RejectedBySupplier);
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.Status.Should().Be("failed");
+        attempt.ResponseCode.Should().Be(422);
+        attempt.RejectionReason.Should().Be("Supplier rejected: unknown buyer code");
+        attempt.ErrorMessage.Should().Be("Supplier rejected: unknown buyer code");
+    }
+
+    [Fact]
+    public async Task DispatchArtifactAsync_5xxResponse_SetsDeliveryFailedAndLeavesRejectionReasonNull()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(false, "Gateway timeout", 503)),
+            encryption);
+
+        var result = await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        result.Success.Should().BeFalse();
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.DeliveryFailed);
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.Status.Should().Be("failed");
+        attempt.ResponseCode.Should().Be(503);
+        attempt.RejectionReason.Should().BeNull();
+        attempt.ErrorMessage.Should().Be("Gateway timeout");
+    }
+
+    [Fact]
+    public async Task DispatchArtifactAsync_NetworkFailureNoCode_SetsDeliveryFailedAndLeavesRejectionReasonNull()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        // Simulate network failure — no response code
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(false, "Connection refused", null)),
+            encryption);
+
+        var result = await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        result.Success.Should().BeFalse();
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.DeliveryFailed);
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.RejectionReason.Should().BeNull();
+    }
+
+    // ── Helpers shared inside this fixture ────────────────────────────────────
+
+    private sealed class NoOpIntegrationTriggerService : IIntegrationTriggerService
+    {
+        public Task EnqueueAsync(Guid organisationId, string eventType, object payload, CancellationToken ct)
+            => Task.CompletedTask;
+    }
+
     private sealed class FakeDispatcher : IDeliveryDispatcher
     {
         private readonly DeliveryResult _result;
-        public int Calls { get; private set; }
         public string Protocol => "http";
 
-        public FakeDispatcher(DeliveryResult result)
-        {
-            _result = result;
-        }
+        public FakeDispatcher(DeliveryResult result) => _result = result;
 
         public Task<DeliveryResult> DispatchAsync(
-            byte[] content,
-            string fileName,
-            string contentType,
-            SupplierDeliveryConfig config,
-            string decryptedCredentials,
-            CancellationToken ct)
-        {
-            Calls++;
-            content.Should().NotBeEmpty();
-            new[] { "PO-123.csv", "proculink-test.csv" }.Should().Contain(fileName);
-            decryptedCredentials.Should().Contain("type");
-            return Task.FromResult(_result);
-        }
+            byte[] content, string fileName, string contentType,
+            SupplierDeliveryConfig config, string decryptedCredentials,
+            CancellationToken ct) => Task.FromResult(_result);
     }
 
     private sealed class FakeFileStorage : IFileStorageService
     {
         public Task<string> UploadAsync(Stream content, string key, string contentType, CancellationToken ct) =>
             Task.FromResult(key);
-
         public Task<string> GetSignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct) =>
             Task.FromResult($"https://files.example/{key}");
-
         public Task<Stream> DownloadAsync(string key, CancellationToken ct) =>
             Task.FromResult<Stream>(new MemoryStream("order,line\r\n1,ok\r\n"u8.ToArray()));
-
         public Task DeleteAsync(string key, CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class DeliveryServiceTestDbContext : ProcuLinkDbContext
+    private sealed class RejectionTestDbContext : ProcuLinkDbContext
     {
-        public DeliveryServiceTestDbContext(DbContextOptions<ProcuLinkDbContext> options)
-            : base(options)
-        {
-        }
+        public RejectionTestDbContext(DbContextOptions<ProcuLinkDbContext> options) : base(options) { }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

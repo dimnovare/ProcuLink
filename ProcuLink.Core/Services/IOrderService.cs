@@ -127,6 +127,19 @@ public interface IOrderService
         CancellationToken ct);
 
     /// <summary>
+    /// Manually mark an order as rejected by the supplier — for example when the
+    /// rejection arrived via email or a phone call rather than an HTTP response.
+    /// Sets status to <c>rejected_by_supplier</c>, writes the rejection reason on
+    /// the most-recent delivery attempt (or creates an audit-only entry), and
+    /// appends a <c>MarkedRejected</c> audit event.
+    /// </summary>
+    Task<Result<PurchaseOrderEntity>> MarkRejectedAsync(
+        Guid organisationId,
+        Guid orderId,
+        string reason,
+        CancellationToken ct);
+
+    /// <summary>
     /// Bulk-accept AI suggestions for all unresolved lines whose
     /// <c>AiSuggestionConfidence</c> is &gt;= <paramref name="minConfidence"/>.
     /// Clears AI suggestion fields on accepted lines, recomputes order status,

@@ -166,9 +166,18 @@ public sealed class DeliveryService : IDeliveryService
     {
         var now = DateTime.UtcNow;
 
+        // Distinguish supplier rejection (4xx) from transient failure (5xx / network).
+        // A 4xx means the supplier received and explicitly rejected the payload —
+        // retrying the exact same payload will not help without a content fix.
+        var isSupplierRejection = !result.Success
+            && result.ResponseCode.HasValue
+            && result.ResponseCode.Value is >= 400 and <= 499;
+
         order.Status = result.Success
             ? OrderStatusConstants.Delivered
-            : OrderStatusConstants.DeliveryFailed;
+            : isSupplierRejection
+                ? OrderStatusConstants.RejectedBySupplier
+                : OrderStatusConstants.DeliveryFailed;
         order.UpdatedAt = now;
 
         // 1-based attempt index within this order's delivery retry sequence.
@@ -187,6 +196,7 @@ public sealed class DeliveryService : IDeliveryService
             AttemptedAt = now,
             ResponseCode = result.ResponseCode,
             ErrorMessage = result.Success ? null : result.ErrorMessage,
+            RejectionReason = isSupplierRejection ? result.ErrorMessage : null,
         });
 
         await _db.SaveChangesAsync(ct);
@@ -219,6 +229,14 @@ public sealed class DeliveryService : IDeliveryService
                 order.OrgId,
                 "order.delivered",
                 new { order_id = order.Id, delivered_at = now },
+                ct);
+        }
+        else if (isSupplierRejection)
+        {
+            _ = _integrationTrigger.EnqueueAsync(
+                order.OrgId,
+                "order.rejected",
+                new { order_id = order.Id, rejected_at = now, reason = result.ErrorMessage },
                 ct);
         }
         else

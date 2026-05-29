@@ -885,6 +885,54 @@ public sealed class OrderService : IOrderService
         return Result<PurchaseOrderEntity>.Ok(entity);
     }
 
+    // ── MarkRejectedAsync ─────────────────────────────────────────────────────
+
+    public async Task<Result<PurchaseOrderEntity>> MarkRejectedAsync(
+        Guid organisationId,
+        Guid orderId,
+        string reason,
+        CancellationToken ct)
+    {
+        var entity = await _db.PurchaseOrders
+            .Include(x => x.Lines)
+            .Include(x => x.OutboundArtifacts)
+            .Where(x => x.Id == orderId && x.OrgId == organisationId)
+            .FirstOrDefaultAsync(ct);
+
+        if (entity is null)
+            return Result<PurchaseOrderEntity>.Fail("Order not found.");
+
+        var now = DateTime.UtcNow;
+        entity.Status    = OrderStatusConstants.RejectedBySupplier;
+        entity.UpdatedAt = now;
+
+        // Write the rejection reason onto the most-recent delivery attempt for this
+        // order (if one exists), so the audit trail shows it in context.
+        var latestAttempt = await _db.DeliveryAttempts
+            .Where(a => a.OrderId == orderId && a.OrgId == organisationId)
+            .OrderByDescending(a => a.AttemptedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (latestAttempt is not null)
+        {
+            latestAttempt.RejectionReason = reason;
+        }
+
+        _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "MarkedRejected", new
+        {
+            reason,
+            markedAt = now,
+        }));
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Order {OrderId} (org {OrgId}) manually marked as rejected. Reason: {Reason}",
+            orderId, organisationId, reason);
+
+        return Result<PurchaseOrderEntity>.Ok(entity);
+    }
+
     // ── AcceptAiSuggestionsAsync ──────────────────────────────────────────────
 
     public async Task<Result<int>> AcceptAiSuggestionsAsync(

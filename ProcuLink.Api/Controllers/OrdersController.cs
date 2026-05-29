@@ -642,6 +642,40 @@ public sealed class OrdersController : ControllerBase
         return Accepted(new { status = "delivering" });
     }
 
+    // ── POST /api/orders/{id}/mark-rejected ──────────────────────────────────
+
+    /// <summary>
+    /// Manually mark an order as rejected by the supplier — for use when the
+    /// rejection arrived out-of-band (email, phone, EDI acknowledgement) rather
+    /// than as an HTTP 4xx response during automated delivery.
+    /// Sets status to <c>rejected_by_supplier</c>, records the reason on the most
+    /// recent delivery attempt, and writes a <c>MarkedRejected</c> audit event.
+    /// </summary>
+    [HttpPost("{id:guid}/mark-rejected")]
+    [ProducesResponseType(typeof(OrderDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MarkRejected(
+        Guid id,
+        [FromBody] MarkRejectedRequest request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Reason))
+            return BadRequest(new { error = "Reason is required." });
+
+        var result = await _orders.MarkRejectedAsync(
+            _tenant.OrganisationId, id, request.Reason.Trim(), ct);
+
+        if (!result.IsSuccess)
+        {
+            if (result.Error == "Order not found.")
+                return NotFound();
+            return BadRequest(new { error = result.Error });
+        }
+
+        return Ok(MapToDto(result.Value!));
+    }
+
     // ── GET /api/orders/dead-letter-count ────────────────────────────────────
 
     /// <summary>

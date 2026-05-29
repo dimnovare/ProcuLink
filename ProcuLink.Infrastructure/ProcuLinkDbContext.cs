@@ -348,6 +348,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasColumnType("timestamptz");
             b.Property(x => x.ResponseCode).HasColumnName("response_code");
             b.Property(x => x.ErrorMessage).HasColumnName("error_message");
+            b.Property(x => x.RejectionReason).HasColumnName("rejection_reason");
             b.HasOne(x => x.Order)
              .WithMany(x => x.DeliveryAttempts)
              .HasForeignKey(x => x.OrderId)

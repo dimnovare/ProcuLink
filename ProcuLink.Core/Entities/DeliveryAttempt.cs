@@ -12,6 +12,11 @@ public class DeliveryAttempt
     public DateTime AttemptedAt { get; set; }
     public int? ResponseCode { get; set; }
     public string? ErrorMessage { get; set; }
+    /// <summary>
+    /// Set when the supplier endpoint returned a 4xx response indicating an
+    /// explicit rejection (as opposed to a transient 5xx / network failure).
+    /// </summary>
+    public string? RejectionReason { get; set; }
     /// <summary>1-based attempt index within an order's delivery retry sequence; 0 for test-fire rows.</summary>
     public int AttemptNumber { get; set; }
 
