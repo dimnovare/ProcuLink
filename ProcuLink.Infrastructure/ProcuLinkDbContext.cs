@@ -40,6 +40,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<AsnPackageLineEntity>         AsnPackageLines           => Set<AsnPackageLineEntity>();
     public DbSet<TenantApiKey>            TenantApiKeys            => Set<TenantApiKey>();
     public DbSet<IntegrationSubscription> IntegrationSubscriptions => Set<IntegrationSubscription>();
+    public DbSet<SchemaFingerprint>       SchemaFingerprints       => Set<SchemaFingerprint>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

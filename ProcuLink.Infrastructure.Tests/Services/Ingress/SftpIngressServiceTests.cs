@@ -272,7 +272,7 @@ public class SftpIngressServiceTests
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid o, Guid s, ExtractedOrder order, string source, CancellationToken ct)
             => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> ParseStoredFileAsync(Guid o, Guid id, CancellationToken ct)
+        public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid o, Guid id, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid o, Guid id, CancellationToken ct)
             => throw new NotImplementedException();
@@ -312,7 +312,7 @@ public class SftpIngressServiceTests
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid o, Guid s, ExtractedOrder order, string source, CancellationToken ct)
             => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> ParseStoredFileAsync(Guid o, Guid id, CancellationToken ct)
+        public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid o, Guid id, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid o, Guid id, CancellationToken ct)
             => throw new NotImplementedException();

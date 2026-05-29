@@ -33,7 +33,19 @@ public sealed record DetectedFormat(
     string? DetectedPoNumber,
     string? DetectedSupplier,
     int? EstimatedLineCount,
-    IReadOnlyList<string> Reasoning);
+    IReadOnlyList<string> Reasoning,
+    /// <summary>
+    /// How many times this org has previously parsed a file with this exact column layout.
+    /// Populated by <see cref="ProcuLink.Core.Services.Detection.FingerprintBoost.Apply"/> when a
+    /// schema fingerprint match is found; null when the layout is new or fingerprinting did not run.
+    /// </summary>
+    int? SeenCount = null,
+    /// <summary>
+    /// Column header names extracted from the file during detection (for CSV/XLSX).
+    /// Passed to <see cref="ISchemaFingerprintService"/> to avoid a second file download.
+    /// Null for header-less formats (XML, EDI, PDF).
+    /// </summary>
+    IReadOnlyList<string>? ColumnHeaders = null);
 
 /// <summary>
 /// Smart "drop any file" format detector. Implementations must:

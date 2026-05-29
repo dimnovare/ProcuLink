@@ -42,17 +42,18 @@ public class ParseOrderJobEmitsFirstUploadParsedTests
         var orderServiceMock = new Mock<IOrderService>();
         orderServiceMock
             .Setup(s => s.ParseStoredFileAsync(orgId, orderId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
+            .ReturnsAsync(Result<ParsedFileOutput>.Ok(new ParsedFileOutput(new PurchaseOrderEntity
             {
                 Id = orderId, OrgId = orgId, Status = OrderStatusConstants.PendingReview,
-            }));
+            }, null, "csv")));
 
         var analytics = new FakeAnalyticsService();
         var job = new ParseOrderJob(
             orderServiceMock.Object,
             NullLogger<ParseOrderJob>.Instance,
             db,
-            analytics);
+            analytics,
+            new Mock<ProcuLink.Core.Services.Detection.ISchemaFingerprintService>().Object);
 
         await job.ExecuteAsync(orderId, orgId, CancellationToken.None);
 
@@ -104,17 +105,18 @@ public class ParseOrderJobEmitsFirstUploadParsedTests
         var orderServiceMock = new Mock<IOrderService>();
         orderServiceMock
             .Setup(s => s.ParseStoredFileAsync(orgId, currentOrderId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
+            .ReturnsAsync(Result<ParsedFileOutput>.Ok(new ParsedFileOutput(new PurchaseOrderEntity
             {
                 Id = currentOrderId, OrgId = orgId, Status = OrderStatusConstants.PendingReview,
-            }));
+            }, null, "csv")));
 
         var analytics = new FakeAnalyticsService();
         var job = new ParseOrderJob(
             orderServiceMock.Object,
             NullLogger<ParseOrderJob>.Instance,
             db,
-            analytics);
+            analytics,
+            new Mock<ProcuLink.Core.Services.Detection.ISchemaFingerprintService>().Object);
 
         await job.ExecuteAsync(currentOrderId, orgId, CancellationToken.None);
 

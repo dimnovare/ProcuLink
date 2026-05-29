@@ -33,7 +33,13 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/5 * * * *");
 
-        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling (each every 5 minutes).");
+        // P0 reliability: detect orders stuck in parsing/transforming (every 15 min).
+        _recurringJobs.AddOrUpdate<StuckOrderDetectionJob>(
+            "stuck-order-detection",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/15 * * * *");
+
+        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling (every 5 min), stuck-order-detection (every 15 min).");
         return base.StartAsync(cancellationToken);
     }
 

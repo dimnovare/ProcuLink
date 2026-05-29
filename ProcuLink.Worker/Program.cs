@@ -139,6 +139,11 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier
 builder.Services.AddScoped<EmailPollingJob>();
 builder.Services.AddScoped<SftpPollingJob>();
 builder.Services.AddScoped<S3PollingJob>();
+// P0 reliability: stuck-order detection sweep + operator retry job.
+builder.Services.AddScoped<IStuckOrderDetectionService, StuckOrderDetectionService>();
+builder.Services.AddScoped<StuckOrderDetectionJob>();
+// ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
+builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
 // ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
 builder.Services.AddScoped<ParseOrderJob>();
 builder.Services.AddHostedService<Worker>();

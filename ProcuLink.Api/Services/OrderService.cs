@@ -8,6 +8,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
+using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Mapping;
@@ -33,6 +34,7 @@ public sealed class OrderService : IOrderService
     private readonly ILogger<OrderService>       _logger;
 
     private readonly IIntegrationTriggerService  _integrationTrigger;
+    private readonly IFormatDetector             _formatDetector;
 
     public OrderService(
         ProcuLinkDbContext             db,
@@ -43,7 +45,8 @@ public sealed class OrderService : IOrderService
         IAiMappingService              aiMappings,
         IEnumerable<ITransformService> transformers,
         ILogger<OrderService>          logger,
-        IIntegrationTriggerService     integrationTrigger)
+        IIntegrationTriggerService     integrationTrigger,
+        IFormatDetector                formatDetector)
     {
         _db                 = db;
         _fileStorage        = fileStorage;
@@ -54,6 +57,7 @@ public sealed class OrderService : IOrderService
         _transformers       = transformers;
         _logger             = logger;
         _integrationTrigger = integrationTrigger;
+        _formatDetector     = formatDetector;
     }
 
     // ── CreateFromFileAsync ───────────────────────────────────────────────────
@@ -382,7 +386,7 @@ public sealed class OrderService : IOrderService
 
     // ── ParseStoredFileAsync ──────────────────────────────────────────────────
 
-    public async Task<Result<PurchaseOrderEntity>> ParseStoredFileAsync(
+    public async Task<Result<ParsedFileOutput>> ParseStoredFileAsync(
         Guid organisationId,
         Guid orderId,
         CancellationToken ct)
@@ -394,7 +398,7 @@ public sealed class OrderService : IOrderService
             .FirstOrDefaultAsync(ct);
 
         if (entity is null)
-            return Result<PurchaseOrderEntity>.Fail("Order not found.");
+            return Result<ParsedFileOutput>.Fail("Order not found.");
 
         // Idempotency guard — only parse if still in "parsing" state
         if (entity.Status != "parsing")
@@ -402,11 +406,11 @@ public sealed class OrderService : IOrderService
             _logger.LogInformation(
                 "Order {OrderId} already processed (status={Status}), skipping parse",
                 orderId, entity.Status);
-            return Result<PurchaseOrderEntity>.Ok(entity);
+            return Result<ParsedFileOutput>.Ok(new ParsedFileOutput(entity, null, "unknown"));
         }
 
         if (string.IsNullOrWhiteSpace(entity.SourceFileKey))
-            return Result<PurchaseOrderEntity>.Fail("Order has no source file key.");
+            return Result<ParsedFileOutput>.Fail("Order has no source file key.");
 
         // Download file from R2/local storage
         Stream fileStream;
@@ -417,13 +421,21 @@ public sealed class OrderService : IOrderService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to download source file {Key}", entity.SourceFileKey);
-            return Result<PurchaseOrderEntity>.Fail($"Could not download source file: {ex.Message}");
+            return Result<ParsedFileOutput>.Fail($"Could not download source file: {ex.Message}");
         }
+
+        // Format + column-header metadata, captured while the buffer is in memory so the
+        // caller (ParseOrderJob) can record the schema fingerprint without re-downloading.
+        DetectedFormat? detected = null;
 
         await using (fileStream)
         {
             using var buffer = new MemoryStream();
             await fileStream.CopyToAsync(buffer, ct);
+
+            // Detect format + column headers (DetectAsync rewinds the buffer to 0). Non-fatal.
+            try { detected = await _formatDetector.DetectAsync(buffer, entity.SourceFileKey, ct); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Format detection failed for order {OrderId} (non-fatal)", orderId); }
 
             var extension = Path.GetExtension(entity.SourceFileKey).ToLowerInvariant();
 
@@ -439,7 +451,7 @@ public sealed class OrderService : IOrderService
                     _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "ParseFailed",
                         new { error = ParseFailureExplain.ForUnsupportedFormat(extension), stage = "parse", detail = ex.Message }));
                     await _db.SaveChangesAsync(ct);
-                    return Result<PurchaseOrderEntity>.Fail(ex.Message);
+                    return Result<ParsedFileOutput>.Fail(ex.Message);
                 }
             }
 
@@ -464,7 +476,7 @@ public sealed class OrderService : IOrderService
                 _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "ParseFailed",
                     new { error = ParseFailureExplain.ForException(extension, ex), stage = "parse", detail = ex.Message }));
                 await _db.SaveChangesAsync(ct);
-                return Result<PurchaseOrderEntity>.Fail($"Could not parse file: {ex.Message}");
+                return Result<ParsedFileOutput>.Fail($"Could not parse file: {ex.Message}");
             }
 
             if (parsedOrder.Lines.Count == 0)
@@ -473,7 +485,7 @@ public sealed class OrderService : IOrderService
                 _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "ParseFailed",
                     new { error = ParseFailureExplain.ForEmptyLines(extension), stage = "parse", detail = "0 lines parsed" }));
                 await _db.SaveChangesAsync(ct);
-                return Result<PurchaseOrderEntity>.Fail("File contains no line items.");
+                return Result<ParsedFileOutput>.Fail("File contains no line items.");
             }
 
             // Auto-resolve lines against item_mappings
@@ -528,7 +540,7 @@ public sealed class OrderService : IOrderService
             {
                 _logger.LogError(
                     "ParseStoredFileAsync: ExecuteUpdateAsync affected 0 rows for order {OrderId}", orderId);
-                return Result<PurchaseOrderEntity>.Fail("Order could not be updated — not found or already deleted.");
+                return Result<ParsedFileOutput>.Fail("Order could not be updated — not found or already deleted.");
             }
 
             // Set the FK on each line before inserting (EF relationship fixup
@@ -558,7 +570,8 @@ public sealed class OrderService : IOrderService
                 orderId, lineEntities.Count, lineEntities.Count(l => l.NeedsReview), entity.Status);
         }
 
-        return Result<PurchaseOrderEntity>.Ok(entity);
+        return Result<ParsedFileOutput>.Ok(
+            new ParsedFileOutput(entity, detected?.ColumnHeaders, detected?.Format ?? "unknown"));
     }
 
     // ── GetByIdAsync ──────────────────────────────────────────────────────────

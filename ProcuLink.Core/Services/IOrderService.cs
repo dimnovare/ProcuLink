@@ -70,8 +70,12 @@ public interface IOrderService
     /// Parse the stored source file for an order in "parsing" status,
     /// auto-resolve item mappings, persist lines, and advance status to
     /// "pending_review" or "ready".  Idempotent — skips if status != "parsing".
+    /// Returns the entity together with column-header metadata detected while
+    /// the file buffer was in memory; pass these to
+    /// <see cref="Detection.ISchemaFingerprintService.RecordParseSuccessAsync"/> to avoid a
+    /// second download.
     /// </summary>
-    Task<Result<PurchaseOrderEntity>> ParseStoredFileAsync(
+    Task<Result<ParsedFileOutput>> ParseStoredFileAsync(
         Guid organisationId,
         Guid orderId,
         CancellationToken ct);

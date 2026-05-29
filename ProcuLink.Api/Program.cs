@@ -299,6 +299,7 @@ builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.Des
 // ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
 builder.Services.AddMemoryCache(); // shared cache used by HmacWebhookVerifier nonce replay store
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
+builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier, ProcuLink.Infrastructure.Services.Webhooks.HmacWebhookVerifier>();
 
 // ── Health check (G5) ─────────────────────────────────────────────────────

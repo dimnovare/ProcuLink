@@ -11,5 +11,6 @@ public static class OrderStatusConstants
     public const string Delivering = "delivering";
     public const string Delivered = "delivered";
     public const string DeliveryFailed = "delivery_failed";
+    public const string DeliveryDeadLetter = "delivery_dead_letter";
     public const string Failed = "failed";
 }

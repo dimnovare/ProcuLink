@@ -2,6 +2,7 @@ using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Detection;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Jobs;
@@ -12,21 +13,24 @@ namespace ProcuLink.Api.Jobs;
 /// </summary>
 public class ParseOrderJob
 {
-    private readonly IOrderService           _orderService;
-    private readonly ILogger<ParseOrderJob>  _logger;
-    private readonly ProcuLinkDbContext      _db;
-    private readonly IAnalyticsService       _analytics;
+    private readonly IOrderService             _orderService;
+    private readonly ILogger<ParseOrderJob>    _logger;
+    private readonly ProcuLinkDbContext        _db;
+    private readonly IAnalyticsService         _analytics;
+    private readonly ISchemaFingerprintService _fingerprints;
 
     public ParseOrderJob(
         IOrderService orderService,
         ILogger<ParseOrderJob> logger,
         ProcuLinkDbContext db,
-        IAnalyticsService analytics)
+        IAnalyticsService analytics,
+        ISchemaFingerprintService fingerprints)
     {
         _orderService = orderService;
         _logger       = logger;
         _db           = db;
         _analytics    = analytics;
+        _fingerprints = fingerprints;
     }
 
     /// <summary>
@@ -52,7 +56,7 @@ public class ParseOrderJob
 
         _logger.LogInformation(
             "ParseOrderJob completed for order {OrderId}, new status={Status}",
-            orderId, result.Value!.Status);
+            orderId, result.Value!.Entity.Status);
 
         // ── First-upload-parsed analytics emission ────────────────────────────
         // Check whether any OTHER parsed order existed for this org. The current
@@ -94,6 +98,25 @@ public class ParseOrderJob
                     ["parser"]   = parser,
                 },
                 ct: ct);
+        }
+
+        // ── Schema fingerprint accumulation (org-scoped moat) ─────────────────
+        // Column headers and format were already detected by OrderService while the
+        // buffer was in memory — pass them here to avoid a second file download.
+        // Idempotent across retries via the order's persisted hash guard.
+        // Non-critical: a fingerprint failure must never fail a successful parse.
+        try
+        {
+            await _fingerprints.RecordParseSuccessAsync(
+                organisationId,
+                orderId,
+                result.Value!.ColumnHeaders,
+                result.Value!.DetectedFormat,
+                ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Schema fingerprint recording failed for order {OrderId} (non-fatal)", orderId);
         }
     }
 

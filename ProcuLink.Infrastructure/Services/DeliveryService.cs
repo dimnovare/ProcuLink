@@ -134,6 +134,7 @@ public sealed class DeliveryService : IDeliveryService
             Channel = config.Protocol,
             Destination = GetDestination(config),
             Status = result.Success ? "success" : "failed",
+            AttemptNumber = 0, // test-fire is not part of an order's retry sequence
             AttemptedAt = DateTime.UtcNow,
             ResponseCode = result.ResponseCode,
             ErrorMessage = result.Success ? null : result.ErrorMessage,
@@ -170,6 +171,10 @@ public sealed class DeliveryService : IDeliveryService
             : OrderStatusConstants.DeliveryFailed;
         order.UpdatedAt = now;
 
+        // 1-based attempt index within this order's delivery retry sequence.
+        var attemptNumber = (await _db.DeliveryAttempts
+            .CountAsync(a => a.OrderId == order.Id && a.OrgId == order.OrgId, ct)) + 1;
+
         _db.DeliveryAttempts.Add(new DeliveryAttempt
         {
             Id = Guid.NewGuid(),
@@ -178,6 +183,7 @@ public sealed class DeliveryService : IDeliveryService
             Channel = config.Protocol,
             Destination = GetDestination(config),
             Status = result.Success ? "success" : "failed",
+            AttemptNumber = attemptNumber,
             AttemptedAt = now,
             ResponseCode = result.ResponseCode,
             ErrorMessage = result.Success ? null : result.ErrorMessage,
@@ -275,5 +281,96 @@ public sealed class DeliveryService : IDeliveryService
         }
 
         return config.Protocol;
+    }
+
+    public async Task<DeliveryResult> RetryDeliveryAsync(
+        Guid orgId,
+        Guid orderId,
+        int maxAttempts,
+        CancellationToken ct)
+    {
+        if (maxAttempts < 1) maxAttempts = 1;
+
+        var order = await _db.PurchaseOrders
+            .Where(x => x.Id == orderId && x.OrgId == orgId)
+            .FirstOrDefaultAsync(ct);
+
+        if (order is null)
+            return new DeliveryResult(false, "Order not found.");
+
+        if (order.Status == OrderStatusConstants.DeliveryDeadLetter)
+            return new DeliveryResult(false, "Order is in dead-letter state — retries are exhausted.");
+
+        if (order.Status == OrderStatusConstants.Delivered)
+            return new DeliveryResult(true, null);
+
+        if (order.Status is not (OrderStatusConstants.DeliveryFailed
+                              or OrderStatusConstants.ReadyToDeliver
+                              or OrderStatusConstants.Delivering))
+            return new DeliveryResult(false, $"Order status '{order.Status}' is not retryable.");
+
+        var priorAttempts = await _db.DeliveryAttempts
+            .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId, ct);
+
+        if (priorAttempts >= maxAttempts)
+        {
+            await DeadLetterAsync(order, priorAttempts, lastError: "Maximum delivery attempts reached.", ct);
+            return new DeliveryResult(false, "Maximum delivery attempts reached — order moved to dead-letter.");
+        }
+
+        var artifact = await _db.OutboundArtifacts
+            .Where(a => a.OrderId == orderId && a.OrgId == orgId)
+            .OrderByDescending(a => a.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (artifact is null)
+            return new DeliveryResult(false, "No outbound artifact found. Transform the order before retrying delivery.");
+
+        var result = await DispatchArtifactAsync(orgId, orderId, artifact.Id, requireAutoDeliver: false, ct);
+
+        if (!result.Success)
+        {
+            var attemptsNow = priorAttempts + 1;
+            if (attemptsNow >= maxAttempts)
+                await DeadLetterAsync(order, attemptsNow, lastError: result.ErrorMessage, ct);
+        }
+
+        return result;
+    }
+
+    private async Task DeadLetterAsync(
+        PurchaseOrderEntity order,
+        int attemptCount,
+        string? lastError,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        order.Status = OrderStatusConstants.DeliveryDeadLetter;
+        order.UpdatedAt = now;
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptCount,
+            lastError,
+            deadLetteredAt = now,
+        });
+
+        _db.AuditEvents.Add(new Core.Entities.AuditEvent
+        {
+            Id = Guid.NewGuid(),
+            OrgId = order.OrgId,
+            UserId = null,
+            EntityType = "Order",
+            EntityId = order.Id,
+            Action = "DeliveryDeadLettered",
+            Payload = System.Text.Json.JsonDocument.Parse(payload),
+            CreatedAt = now,
+        });
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogWarning(
+            "Order {OrderId} (org {OrgId}) dead-lettered after {Attempts} attempt(s). Last error: {Error}",
+            order.Id, order.OrgId, attemptCount, lastError ?? "(none)");
     }
 }

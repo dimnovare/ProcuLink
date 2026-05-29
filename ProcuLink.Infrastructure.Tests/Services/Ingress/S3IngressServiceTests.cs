@@ -313,7 +313,7 @@ public class S3IngressServiceTests
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
             => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> ParseStoredFileAsync(Guid organisationId, Guid orderId, CancellationToken ct)
+        public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid organisationId, Guid orderId, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid organisationId, Guid orderId, CancellationToken ct)
             => throw new NotImplementedException();

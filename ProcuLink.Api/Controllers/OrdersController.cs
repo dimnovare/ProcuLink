@@ -7,8 +7,10 @@ using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Helpers;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Jobs;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -558,6 +560,77 @@ public sealed class OrdersController : ControllerBase
             id, artifact.Id, orgId);
 
         return Accepted(new { status = "delivering" });
+    }
+
+    // ── POST /api/orders/{id}/retry-delivery ─────────────────────────────────
+
+    /// <summary>
+    /// Operator-triggered delivery retry with dead-letter escalation.
+    /// Enqueues <see cref="RetryDeliveryJob"/> that re-dispatches the latest artifact;
+    /// after the attempt cap the order moves to <c>delivery_dead_letter</c>.
+    /// Only valid from <c>delivery_failed</c>.
+    /// </summary>
+    [HttpPost("{id:guid}/retry-delivery")]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RetryDelivery(Guid id, CancellationToken ct)
+    {
+        var orgId     = _tenant.OrganisationId;
+        var getResult = await _orders.GetByIdAsync(orgId, id, ct);
+
+        if (!getResult.IsSuccess)
+            return NotFound();
+
+        var order = getResult.Value!;
+
+        if (order.Status == OrderStatusConstants.DeliveryDeadLetter)
+            return BadRequest(new { error = "Order is in dead-letter state — delivery retries are exhausted." });
+
+        if (order.Status != OrderStatusConstants.DeliveryFailed)
+            return BadRequest(new
+            {
+                error = $"Order must be in 'delivery_failed' status to retry delivery (current: '{order.Status}')."
+            });
+
+        var artifact = order.OutboundArtifacts
+            .OrderByDescending(a => a.CreatedAt)
+            .FirstOrDefault();
+
+        if (artifact is null)
+            return BadRequest(new { error = "No outbound artifact found. Transform the order before retrying delivery." });
+
+        // Optimistic status flip so the UI reflects the retry immediately.
+        var tracked = await _db.PurchaseOrders
+            .Where(o => o.Id == id && o.OrgId == orgId)
+            .FirstOrDefaultAsync(ct);
+        if (tracked is not null)
+        {
+            tracked.Status = OrderStatusConstants.Delivering;
+            tracked.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
+
+        RetryDeliveryJob.Enqueue(_jobs, id, orgId);
+
+        _logger.LogInformation("RetryDeliveryJob enqueued for order {OrderId}, org {OrgId}", id, orgId);
+
+        return Accepted(new { status = "delivering" });
+    }
+
+    // ── GET /api/orders/dead-letter-count ────────────────────────────────────
+
+    /// <summary>
+    /// Ops metric: count of orders in <c>delivery_dead_letter</c> state for this org.
+    /// </summary>
+    [HttpGet("dead-letter-count")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetDeadLetterCount(CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        var count = await _db.PurchaseOrders
+            .CountAsync(o => o.OrgId == orgId && o.Status == OrderStatusConstants.DeliveryDeadLetter, ct);
+        return Ok(new { count });
     }
 
     // ── GET /api/orders/{id}/artifacts/{artifactId}/download ─────────────────

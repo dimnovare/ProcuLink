@@ -3,8 +3,8 @@ using System.Text.Json;
 namespace ProcuLink.Core.Entities;
 
 /// <summary>
-/// EF entity for purchase_orders. Named PurchaseOrderEntity to avoid
-/// collision with ProcuLink.Core.Canonical.PurchaseOrder used by Phase-0 code.
+/// EF entity for purchase_orders. The "Entity" suffix follows the persistence
+/// naming convention used across the data model.
 /// </summary>
 public class PurchaseOrderEntity
 {
@@ -32,6 +32,14 @@ public class PurchaseOrderEntity
 
     /// <summary>True when this order was created via the sample-order onboarding path. Excluded from billing quota.</summary>
     public bool IsSample { get; set; }
+
+    /// <summary>
+    /// Column-layout hash recorded once this order's source file has been fingerprinted
+    /// (see <c>ISchemaFingerprintService</c>). Non-null means the fingerprint upsert already
+    /// counted this order — the guard that makes parse-time fingerprinting idempotent across
+    /// Hangfire retries. Null for orders parsed before fingerprinting or with no column headers.
+    /// </summary>
+    public string? SchemaFingerprintHash { get; set; }
 
     // Navigation
     public Organisation Organisation { get; set; } = null!;

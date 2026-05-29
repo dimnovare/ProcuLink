@@ -12,6 +12,8 @@ public class DeliveryAttempt
     public DateTime AttemptedAt { get; set; }
     public int? ResponseCode { get; set; }
     public string? ErrorMessage { get; set; }
+    /// <summary>1-based attempt index within an order's delivery retry sequence; 0 for test-fire rows.</summary>
+    public int AttemptNumber { get; set; }
 
     // Navigation — Order is optional (null for test-fire rows)
     public PurchaseOrderEntity? Order { get; set; }

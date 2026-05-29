@@ -67,7 +67,8 @@ public class OrderServiceParseAuditTests
             aiMappings.Object,
             Array.Empty<ITransformService>(),
             NullLogger<OrderService>.Instance,
-            integrationTrigger.Object);
+            integrationTrigger.Object,
+            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
     }
 
     private static async Task<(ProcuLinkDbContext db, Guid orgId, Guid orderId)> SeedParsingOrderAsync(

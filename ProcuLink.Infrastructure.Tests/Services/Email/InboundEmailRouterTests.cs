@@ -462,7 +462,7 @@ public class InboundEmailRouterTests
 
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> ParseStoredFileAsync(Guid organisationId, Guid orderId, CancellationToken ct)
+        public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid organisationId, Guid orderId, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid organisationId, Guid orderId, CancellationToken ct)
             => throw new NotImplementedException();

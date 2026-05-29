@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Detection;
 
 namespace ProcuLink.Api.Controllers;
@@ -18,10 +19,17 @@ namespace ProcuLink.Api.Controllers;
 public sealed class FormatDetectionController : ControllerBase
 {
     private readonly IFormatDetector _detector;
+    private readonly ISchemaFingerprintService _fingerprints;
+    private readonly ICurrentTenantService _tenant;
 
-    public FormatDetectionController(IFormatDetector detector)
+    public FormatDetectionController(
+        IFormatDetector detector,
+        ISchemaFingerprintService fingerprints,
+        ICurrentTenantService tenant)
     {
         _detector = detector;
+        _fingerprints = fingerprints;
+        _tenant = tenant;
     }
 
     /// <summary>
@@ -44,6 +52,12 @@ public sealed class FormatDetectionController : ControllerBase
         ms.Position = 0;
 
         var detected = await _detector.DetectAsync(ms, file.FileName, ct);
+
+        // Org-scoped schema-fingerprint boost: if this column layout has been parsed before,
+        // raise confidence and surface "seen N times". No-op when there is no prior match.
+        var match = await _fingerprints.LookupAsync(_tenant.OrganisationId, detected.ColumnHeaders, ct);
+        detected = FingerprintBoost.Apply(detected, match);
+
         return Ok(detected);
     }
 }
