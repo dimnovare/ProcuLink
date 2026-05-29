@@ -379,6 +379,30 @@ app.Lifetime.ApplicationStarted.Register(() =>
         var loggerFactory = scope.ServiceProvider.GetRequiredService<ILoggerFactory>();
         var migLogger = loggerFactory.CreateLogger("ProcuLink.Migrations");
 
+        // ── Phantom-migration reconciliation ─────────────────────────────
+        // Some Wave 3/4 migrations had their SQL applied to the prod DB
+        // out-of-band (or via a previous deploy that crashed mid-migration),
+        // but the __EFMigrationsHistory table doesn't record them as applied.
+        // If we let MigrateAsync() proceed it would try to re-add the
+        // organisations.slug column and Postgres would reject with
+        // 42701 "column already exists". For each known phantom-prone
+        // migration we check a sentinel DB object — if the object exists
+        // AND the migration row is missing, we insert the history row so
+        // MigrateAsync() skips re-applying the SQL.
+        try
+        {
+            await ReconcilePhantomMigrationsAsync(db, migLogger);
+        }
+        catch (Exception ex)
+        {
+            // Sentinel queries can transiently fail on Neon cold-start.
+            // The retry loop below will get another shot; do not abort boot.
+            migLogger.LogWarning(
+                "Phantom-migration reconciliation skipped due to error ({Message}). " +
+                "Proceeding to MigrateAsync — retry loop will handle transient failures.",
+                ex.Message);
+        }
+
         for (var attempt = 1; attempt <= 6; attempt++)
         {
             try
@@ -409,3 +433,114 @@ app.Lifetime.ApplicationStopping.Register(() =>
 });
 
 app.Run();
+
+// ── Phantom-migration helpers ────────────────────────────────────────────
+// Local functions live after app.Run() so they sit at the end of the
+// top-level program; they are still in scope for the lambdas above.
+//
+// Phantom-prone migrations and their sentinel checks. Each entry pairs a
+// migration ID with a SQL boolean expression that is `true` when the
+// migration's SQL has clearly already been applied to the DB. If the
+// sentinel matches AND __EFMigrationsHistory has no row for the migration,
+// we insert one so EF treats it as applied.
+static (string Id, string SentinelDescription, string SentinelSql)[] PhantomMigrations() => new[]
+{
+    ("20260528120215_AddInvoicesAndLines",
+     "table 'invoices' exists",
+     "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'invoices')"),
+    ("20260528120226_AddAdvanceShippingNotices",
+     "table 'advance_shipping_notices' exists",
+     "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'advance_shipping_notices')"),
+    ("20260528120230_AddTenantApiKeysAndOrgSlug",
+     "column 'organisations.slug' exists",
+     "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'organisations' AND column_name = 'slug')"),
+    ("20260528120235_AddIntegrationSubscriptions",
+     "table 'integration_subscriptions' exists",
+     "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'integration_subscriptions')"),
+    ("20260528150709_AddIsSampleFlags",
+     "column 'purchase_orders.is_sample' exists",
+     "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'purchase_orders' AND column_name = 'is_sample')"),
+};
+
+static async Task ReconcilePhantomMigrationsAsync(ProcuLinkDbContext db, ILogger logger)
+{
+    var conn = db.Database.GetDbConnection();
+    if (conn.State != System.Data.ConnectionState.Open)
+        await conn.OpenAsync();
+
+    // Step 1: Does __EFMigrationsHistory exist? If not, MigrateAsync will
+    // create it on first run and there is nothing phantom to reconcile.
+    bool historyTableExists;
+    await using (var cmd = conn.CreateCommand())
+    {
+        cmd.CommandText =
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables " +
+            "WHERE table_schema = 'public' AND table_name = '__EFMigrationsHistory')";
+        var result = await cmd.ExecuteScalarAsync();
+        historyTableExists = result is bool b && b;
+    }
+
+    if (!historyTableExists)
+    {
+        logger.LogInformation(
+            "__EFMigrationsHistory does not exist — fresh database. Skipping phantom-migration check.");
+        return;
+    }
+
+    // Step 2: Read an existing ProductVersion to stay consistent, fallback to 8.0.0.
+    var productVersion = "8.0.0";
+    await using (var cmd = conn.CreateCommand())
+    {
+        cmd.CommandText = "SELECT \"ProductVersion\" FROM \"__EFMigrationsHistory\" LIMIT 1";
+        var result = await cmd.ExecuteScalarAsync();
+        if (result is string s && !string.IsNullOrWhiteSpace(s))
+            productVersion = s;
+    }
+
+    // Step 3: Load applied migration IDs.
+    var appliedIds = new HashSet<string>(StringComparer.Ordinal);
+    await using (var cmd = conn.CreateCommand())
+    {
+        cmd.CommandText = "SELECT \"MigrationId\" FROM \"__EFMigrationsHistory\"";
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            appliedIds.Add(reader.GetString(0));
+    }
+
+    // Step 4: For each phantom-prone migration, check sentinel and insert
+    // history row if needed.
+    foreach (var (id, sentinelDescription, sentinelSql) in PhantomMigrations())
+    {
+        if (appliedIds.Contains(id))
+            continue; // Already recorded — nothing to do.
+
+        bool sentinelExists;
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = sentinelSql;
+            var result = await cmd.ExecuteScalarAsync();
+            sentinelExists = result is bool b && b;
+        }
+
+        if (!sentinelExists)
+            continue; // Genuinely new migration — let MigrateAsync apply it.
+
+        logger.LogWarning(
+            "Phantom migration {Id} detected (sentinel: {Sentinel}). Inserting history row.",
+            id, sentinelDescription);
+
+        await using var insert = conn.CreateCommand();
+        insert.CommandText =
+            "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") " +
+            "VALUES (@migId, @productVersion)";
+        var migIdParam = insert.CreateParameter();
+        migIdParam.ParameterName = "@migId";
+        migIdParam.Value = id;
+        insert.Parameters.Add(migIdParam);
+        var pvParam = insert.CreateParameter();
+        pvParam.ParameterName = "@productVersion";
+        pvParam.Value = productVersion;
+        insert.Parameters.Add(pvParam);
+        await insert.ExecuteNonQueryAsync();
+    }
+}
