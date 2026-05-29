@@ -2,6 +2,8 @@ using System.Threading.RateLimiting;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -23,6 +25,7 @@ using ProcuLink.Infrastructure.Services.Email;
 using ProcuLink.Infrastructure.Services.Erp;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Ocr;
+using ProcuLink.Infrastructure.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
 using ProcuLink.Infrastructure.Storage;
@@ -48,6 +51,30 @@ StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"] ?? string
 // ── Database ───────────────────────────────────────────────────────────────
 builder.Services.AddDbContext<ProcuLinkDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// ── DataProtection ─────────────────────────────────────────────────────────
+// Persist the key ring to Postgres so keys survive container restarts and are
+// shared across multiple API instances (anti-forgery tokens, auth cookies,
+// any IDataProtector consumer). Without this Railway logs:
+//   "Storing keys in a directory '/root/.aspnet/DataProtection-Keys' that may
+//    not be persisted outside of the container."
+//
+// SetApplicationName isolates this app from any sibling .NET app that might
+// share the same DB in the future. Encryption-at-rest is layered on top via
+// AesGcmXmlEncryptor when DataProtection:EncryptionKey is configured —
+// otherwise the keys persist in clear XML in the DB (acceptable for dev).
+builder.Services.AddDataProtection()
+    .PersistKeysToDbContext<ProcuLinkDbContext>()
+    .SetApplicationName("ProcuLink");
+
+if (!string.IsNullOrWhiteSpace(builder.Configuration["DataProtection:EncryptionKey"]))
+{
+    builder.Services.AddTransient<AesGcmXmlDecryptor>();
+    builder.Services.Configure<KeyManagementOptions>(options =>
+    {
+        options.XmlEncryptor = new AesGcmXmlEncryptor(builder.Configuration);
+    });
+}
 
 // ── Authentication — Clerk JWT Bearer + API Key ───────────────────────────
 builder.Services.AddAuthentication(options =>

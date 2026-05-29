@@ -1,15 +1,17 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using ProcuLink.Core.Entities;
 
 namespace ProcuLink.Infrastructure;
 
-public class ProcuLinkDbContext : DbContext
+public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
 {
     public ProcuLinkDbContext(DbContextOptions<ProcuLinkDbContext> options) : base(options) { }
 
     public DbSet<Organisation> Organisations => Set<Organisation>();
+    public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<Membership> Memberships => Set<Membership>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
@@ -659,6 +661,20 @@ public class ProcuLinkDbContext : DbContext
              .WithMany(o => o.ApiKeys)
              .HasForeignKey(k => k.OrganisationId)
              .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── data_protection_keys ──────────────────────────────────────────────────
+        // ASP.NET Core DataProtection key ring (auth cookies, anti-forgery tokens).
+        // Persisted to Postgres so keys survive container restarts and are shared
+        // across multiple API instances. Encryption at rest is handled by
+        // AesGcmXmlEncryptor when DataProtection:EncryptionKey is configured.
+        modelBuilder.Entity<DataProtectionKey>(b =>
+        {
+            b.ToTable("data_protection_keys");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.FriendlyName).HasColumnName("friendly_name");
+            b.Property(x => x.Xml).HasColumnName("xml");
         });
 
         // ── IntegrationSubscription ───────────────────────────────────────────────
