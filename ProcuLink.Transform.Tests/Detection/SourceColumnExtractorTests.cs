@@ -118,21 +118,26 @@ public class SourceColumnExtractorTests
         var result = await Extract(ubl, "order.xml", hint: "ubl");
 
         result.Format.Should().Be("ubl");
-        // Leaf elements (namespace-prefixed) surface for the user to map.
-        result.Columns.Should().Contain("cbc:ID");
-        result.Columns.Should().Contain("cbc:IssueDate");
-        result.Columns.Should().Contain("cbc:DocumentCurrencyCode");
-        result.Columns.Should().Contain("cbc:Quantity");
-        result.Columns.Should().Contain("cbc:PriceAmount");
-        result.Columns.Should().Contain("cbc:Name");
-        // Notable attributes surface as Element@attr.
-        result.Columns.Should().Contain("cbc:Quantity@unitCode");
-        result.Columns.Should().Contain("cbc:PriceAmount@currencyID");
-        // Container elements that only hold child elements are NOT leaves.
-        result.Columns.Should().NotContain("cac:OrderLine");
-        result.Columns.Should().NotContain("cac:Item");
-        // Result is de-duplicated even though cbc:ID appears twice (header + line).
-        result.Columns.Count(c => c == "cbc:ID").Should().Be(1);
+        // Leaf elements surface by bare LocalName — the namespace prefix is dropped so that
+        // prefix style (xmlns:cbc vs declaring the same namespace as default) cannot change
+        // the persisted mapping key.
+        result.Columns.Should().Contain("ID");
+        result.Columns.Should().Contain("IssueDate");
+        result.Columns.Should().Contain("DocumentCurrencyCode");
+        result.Columns.Should().Contain("Quantity");
+        result.Columns.Should().Contain("PriceAmount");
+        result.Columns.Should().Contain("Name");
+        // Notable attributes surface as Element@attr, also by LocalName.
+        result.Columns.Should().Contain("Quantity@unitCode");
+        result.Columns.Should().Contain("PriceAmount@currencyID");
+        // Prefixed forms must NOT leak through any more.
+        result.Columns.Should().NotContain("cbc:ID");
+        result.Columns.Should().NotContain("cbc:Quantity@unitCode");
+        // Container elements that only hold child elements are NOT leaves (by LocalName).
+        result.Columns.Should().NotContain("OrderLine");
+        result.Columns.Should().NotContain("Item");
+        // Result is de-duplicated even though ID appears twice (header + line).
+        result.Columns.Count(c => c == "ID").Should().Be(1);
     }
 
     // ── cXML XML ──────────────────────────────────────────────────────────────

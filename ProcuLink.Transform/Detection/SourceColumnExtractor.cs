@@ -243,10 +243,14 @@ public sealed class SourceColumnExtractor : ISourceColumnExtractor
     /// <list type="bullet">
     ///   <item>leaf-element local-names (elements that carry text and have no element children), and</item>
     ///   <item>attributes rendered as <c>Element@attr</c> when the attribute carries a value
-    ///         (so e.g. <c>OrderRequestHeader@orderID</c> and <c>cbc:Quantity@unitCode</c> surface).</item>
+    ///         (so e.g. <c>OrderRequestHeader@orderID</c> and <c>Quantity@unitCode</c> surface).</item>
     /// </list>
-    /// Namespace prefixes are preserved when present (e.g. <c>cbc:ID</c>) because procurement
-    /// veterans recognise the standards prefix; bare names are used when there is no prefix.
+    /// The column identity is the element/attribute <b>LocalName</b> only — the namespace
+    /// prefix is deliberately dropped. A prefix is a property of the document, not the field:
+    /// two semantically identical UBL Orders (one binding <c>xmlns:cbc</c>, one declaring the
+    /// same namespace as the default) would otherwise emit different names (<c>cbc:ID</c> vs
+    /// <c>ID</c>). Because these strings are the persisted mapping keys, prefix-style differences
+    /// would silently break mapping reuse. Emitting the bare LocalName keeps the identity stable.
     /// </summary>
     private static IReadOnlyList<string> ExtractXml(byte[] bytes)
     {
@@ -281,7 +285,7 @@ public sealed class SourceColumnExtractor : ISourceColumnExtractor
                         elementHasChildStack.Push(true);
                     }
 
-                    var name = QualifiedName(reader);
+                    var name = LocalIdentity(reader);
 
                     // Attributes — record Element@attr for each value-bearing attribute (skip xmlns).
                     if (reader.HasAttributes)
@@ -291,7 +295,7 @@ public sealed class SourceColumnExtractor : ISourceColumnExtractor
                             reader.MoveToAttribute(i);
                             if (IsNamespaceDeclaration(reader)) continue;
                             if (string.IsNullOrWhiteSpace(reader.Value)) continue;
-                            fields.Add($"{name}@{QualifiedName(reader)}");
+                            fields.Add($"{name}@{LocalIdentity(reader)}");
                         }
                         reader.MoveToElement();
                     }
@@ -329,8 +333,15 @@ public sealed class SourceColumnExtractor : ISourceColumnExtractor
         return fields;
     }
 
-    private static string QualifiedName(XmlReader reader) =>
-        string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : $"{reader.Prefix}:{reader.LocalName}";
+    /// <summary>
+    /// Column identity for an XML element or attribute: the <b>LocalName</b> only, with the
+    /// namespace prefix dropped so prefix style cannot change the persisted mapping key.
+    ///
+    /// Known limitation: two leaves that share a LocalName under different namespaces (e.g.
+    /// a buyer-side and supplier-side <c>ID</c>) will collide onto one column identity. A full
+    /// namespace-URI-keyed identity would disambiguate them; that is acceptable future work.
+    /// </summary>
+    private static string LocalIdentity(XmlReader reader) => reader.LocalName;
 
     private static bool IsNamespaceDeclaration(XmlReader reader) =>
         string.Equals(reader.Name, "xmlns", StringComparison.Ordinal)

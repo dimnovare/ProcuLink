@@ -45,7 +45,9 @@ public sealed class MappingSuggestionsController : ControllerBase
     /// <c>columns</c> array returns <c>200 OK</c> with an empty result.
     /// </remarks>
     [HttpPost("{id:guid}/mapping/suggest-fields")]
+    [RequestSizeLimit(MaxRequestBytes)]
     [ProducesResponseType(typeof(IReadOnlyList<FieldMappingSuggestion>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> SuggestFields(
         Guid id,
@@ -61,12 +63,36 @@ public sealed class MappingSuggestionsController : ControllerBase
             return NotFound();
 
         var columns = request?.Columns ?? Array.Empty<string>();
-        if (columns.Count == 0)
+
+        // Bound the work: the heuristic scores every (canonical field × column) pair and runs
+        // several full-length Contains scans per column, so an oversized request would burn CPU/GC.
+        // A real PO file never has hundreds of distinct headers; reject the absurd up front.
+        if (columns.Count > MaxColumns)
+            return ValidationProblem(
+                detail: $"Too many columns: {columns.Count}. A maximum of {MaxColumns} is allowed.",
+                statusCode: StatusCodes.Status400BadRequest);
+
+        // Drop pathologically long individual headers — a column name that long is never a real
+        // header, and a single huge string is the cheapest way to force a Contains-scan spike.
+        var bounded = columns
+            .Where(c => c is not null && c.Length <= MaxColumnNameLength)
+            .ToList();
+
+        if (bounded.Count == 0)
             return Ok(Array.Empty<FieldMappingSuggestion>());
 
-        var suggestions = await _suggester.SuggestFieldMappingsAsync(orgId, id, columns, ct);
+        var suggestions = await _suggester.SuggestFieldMappingsAsync(orgId, id, bounded, ct);
         return Ok(suggestions);
     }
+
+    /// <summary>~256 KB per-request body cap. Overrides the 30 MB Kestrel default for this action.</summary>
+    private const int MaxRequestBytes = 262144;
+
+    /// <summary>Maximum number of source columns accepted in one request (anything more is rejected 400).</summary>
+    private const int MaxColumns = 512;
+
+    /// <summary>Individual column names longer than this are ignored — a header that long is never real.</summary>
+    private const int MaxColumnNameLength = 200;
 }
 
 /// <summary>Request body for <c>POST /api/suppliers/{id}/mapping/suggest-fields</c>.</summary>
