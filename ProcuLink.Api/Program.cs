@@ -248,6 +248,7 @@ builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
 builder.Services.AddSingleton<ITransformService, JsonTransformService>();
+builder.Services.AddSingleton<ITransformService, UblOrderTransformService>(); // Group M Phase 1 — UBL 2.1 Peppol BIS 3.0
 
 // ── Wave 3: Invoice parsers ────────────────────────────────────────────────
 builder.Services.AddSingleton<IInvoiceParser, UblInvoiceParser>();
@@ -264,6 +265,11 @@ builder.Services.AddSingleton<IInvoiceTransformService, JsonInvoiceTransformServ
 // ── Wave 3: Invoice + ASN services ────────────────────────────────────────
 builder.Services.AddScoped<IInvoiceService, ProcuLink.Infrastructure.Services.InvoiceService>();
 builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.DesadvService>();
+
+// ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
+builder.Services.AddMemoryCache(); // shared cache used by HmacWebhookVerifier nonce replay store
+builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
+builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier, ProcuLink.Infrastructure.Services.Webhooks.HmacWebhookVerifier>();
 
 // ── Health check (G5) ─────────────────────────────────────────────────────
 builder.Services.AddHealthChecks();
