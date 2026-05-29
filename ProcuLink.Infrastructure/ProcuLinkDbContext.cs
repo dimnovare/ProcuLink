@@ -102,6 +102,9 @@ public class ProcuLinkDbContext : DbContext
              .HasDefaultValue("")
              .IsRequired();
             b.HasIndex(x => x.Slug).IsUnique();
+            b.Property(x => x.WebhookSecretEncrypted)
+             .HasColumnName("webhook_secret_encrypted")
+             .HasColumnType("text");
         });
 
         // ── users ──────────────────────────────────────────────────────
