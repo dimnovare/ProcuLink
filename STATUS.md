@@ -4,7 +4,46 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-05-28 Group L FULLY SHIPPED — Waves 1+2+3 all merged to `main` both repos · 213 backend tests green · only founder configuration remaining**
+## Where we are: **2026-05-29 Phase 6 in flight — production fixes landed + Group M/N features building · 237 backend tests green**
+
+### Production fixes landed on `main` (2026-05-29)
+
+Railway/Vercel were broken; all P0s now fixed and on `main`:
+
+- **Worker DI gap** (`3028286`) — `IAnalyticsService` + Phase 6 services were unregistered in `ProcuLink.Worker/Program.cs`, so every Hangfire job crashed with "Unable to resolve service IAnalyticsService while activating StripeBillingService". Registered the full transitive graph in the Worker.
+- **Migration idempotency** (`06a8963`) — startup migration runner now tolerates partially-applied state (was crashing on `42701: column "slug" already exists`).
+- **DataProtection key ring** (`6b3f6a0`) — keys now persist to Postgres with optional AES-GCM at-rest encryption (was warning "key may be persisted unencrypted", losing keys on restart).
+- **Vercel hang** (`18b9c55`, `3505c48`) — TanStack Query retries were defaulting to 3× exponential backoff, freezing the UI ~30s when the API was slow. Capped retries + added fetch timeouts. Added `no-hang.spec.ts` regression test + an `(app)` layout error boundary.
+
+### New features shipped to `main` (2026-05-29)
+
+- **UBL 2.1 Order outbound transformer** (Group M) — Peppol BIS 3.0-compatible, round-trips through `UblOrderParser`. `OutputFormat.Ubl`.
+- **SFTP delivery dispatcher** (Group N) — SSH.NET, password + private-key auth, per-supplier AesGcm credentials.
+- **HMAC-verified webhook receive ingress** (Group N) — `POST /api/webhook-ingress/{slug}/{ping,acknowledge,status}`, replay protection (5-min timestamp window + nonce cache), `Organisation.WebhookSecretEncrypted` (AES-GCM).
+- **Smart file-format auto-detect** — `POST /api/upload/detect-format` (magic bytes + content peek + PO metadata extraction) wired into `/upload` as a confidence pill before submit.
+- All Phase 6 services wired in API + Worker DI (`b29da2b`).
+
+### Direction change (2026-05-29): dual-persona dropped → One Great UX
+
+The "default vs expert mode" toggle was **removed before adoption** (`5d6f82e` frontend, `6034413` backend docs). Successful B2B SaaS (Linear, Stripe, Notion, Vercel, Railway) ship ONE great experience with smart defaults + progressive disclosure + a Command Palette for power features — not user-mode toggles. Deleted `useViewMode`/`ViewModeToggle`/`proculink_view_mode_v1`. Power-user affordances (standards mappings, raw-view, hotkeys, density) now surface via Command Palette (Cmd+K) + info popovers + per-table column selectors. Locked rule in `CLAUDE.md` "One great experience rule" and `docs/design-system/00-agent-quick-brief.md` "One Great UX (Phase 6+)".
+
+### In-flight build wave (2026-05-29, parallel chips, not yet merged)
+
+- **Group N: SMTP send-out + FTPS delivery dispatchers** — covers the email-only + FTPS supplier tails.
+- **Group M: ANSI X12 850 parser + transformer** — opens the US market; hand-rolled, no commercial EDI library.
+- **Group L: Magic mapping preview** — side-by-side source→canonical→supplier preview with AI suggestions (confidence + provenance + accept/edit/reject) before commit. The flagship "easy" onboarding feature.
+- **Group M: `/library/standards` comparison screen + field standards popovers** — standards-visibility value made visible for everyone (no expert-mode gate).
+- **P1: CI Playwright fix** — finishing; mock-mode tests that used `page.route()` network interception are being guarded behind `PLAYWRIGHT_LIVE=1` (the mock api-client never issues real fetches, so interception was a no-op → false failures).
+
+### Backend test baseline: **237** (107 Transform + 18 Api.Tests + 112 Infrastructure), 0 failures. Frontend: 30+ Playwright tests across spec files, both repos build clean.
+
+### Founder configuration still pending (unchanged)
+
+PostHog keys, Clerk post-signup redirect, `Frontend:Url`, `NEXT_PUBLIC_STATUS_URL`, `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`, `NEXT_PUBLIC_BOOK_DEMO_URL`, optional supplier-delivery SMTP. See `docs/group-l-go-live-playbook.md`.
+
+---
+
+## Where we were: **2026-05-28 Group L FULLY SHIPPED — Waves 1+2+3 all merged to `main` both repos · 213 backend tests green · only founder configuration remaining**
 
 ### Group L Wave 3 — fully merged to `main` (2026-05-28)
 
