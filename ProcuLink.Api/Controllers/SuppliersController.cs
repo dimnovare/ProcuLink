@@ -7,6 +7,7 @@ using ProcuLink.Core.Canonical;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
@@ -28,6 +29,8 @@ public class SuppliersController : ControllerBase
     private readonly IDeliveryConfigService     _deliveryConfigService;
     private readonly IDeliveryService           _deliveryService;
     private readonly IAnalyticsService          _analytics;
+    private readonly IFileStorageService        _fileStorage;
+    private readonly ISourceColumnExtractor     _sourceColumns;
 
     public SuppliersController(
         ISupplierProfileRepository supplierProfileRepository,
@@ -38,7 +41,9 @@ public class SuppliersController : ControllerBase
         IPoMappingService          poMappingService,
         IDeliveryConfigService     deliveryConfigService,
         IDeliveryService           deliveryService,
-        IAnalyticsService          analytics)
+        IAnalyticsService          analytics,
+        IFileStorageService        fileStorage,
+        ISourceColumnExtractor     sourceColumns)
     {
         _supplierProfileRepository = supplierProfileRepository;
         _mappingService            = mappingService;
@@ -49,6 +54,8 @@ public class SuppliersController : ControllerBase
         _deliveryConfigService     = deliveryConfigService;
         _deliveryService           = deliveryService;
         _analytics                 = analytics;
+        _fileStorage               = fileStorage;
+        _sourceColumns             = sourceColumns;
     }
 
     // ── GET /api/suppliers ────────────────────────────────────────────────────
@@ -485,6 +492,75 @@ public class SuppliersController : ControllerBase
         return Ok(result);
     }
 
+    // ── GET /api/suppliers/{id}/mapping/source-columns ────────────────────────
+
+    /// <summary>
+    /// Returns the SOURCE field names detected in this supplier's most-recent uploaded order
+    /// file, for ANY supported format (CSV/XLSX headers, XML leaf elements + attributes, EDI
+    /// segment tags). Powers the magic-mapping UI so the user can map their own file's columns
+    /// onto the canonical PO model without re-uploading.
+    ///
+    /// Returns 200 with an empty <c>columns</c> array and a <c>hint</c> when the supplier has no
+    /// order with a stored source file yet (e.g. only API/email-extracted orders, or no orders) —
+    /// it does NOT 404 for that case. 404 is reserved for an unknown/foreign supplier id.
+    /// </summary>
+    [HttpGet("{id:guid}/mapping/source-columns")]
+    [ProducesResponseType(typeof(SourceColumnsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetMappingSourceColumns(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+
+        if (!await SupplierExistsAsync(orgId, id, ct))
+            return NotFound();
+
+        // Most-recent order for this supplier that actually has a stored source file.
+        // Orders created via the API/email-body path have a null SourceFileKey and are skipped.
+        var source = await _db.PurchaseOrders
+            .AsNoTracking()
+            .Where(o => o.OrgId == orgId
+                     && o.SupplierId == id
+                     && o.SourceFileKey != null)
+            .OrderByDescending(o => o.CreatedAt)
+            .Select(o => new { o.Id, o.SourceFileKey })
+            .FirstOrDefaultAsync(ct);
+
+        if (source is null || string.IsNullOrWhiteSpace(source.SourceFileKey))
+        {
+            return Ok(new SourceColumnsResponse(
+                Format: "unknown",
+                Columns: Array.Empty<string>(),
+                SourceOrderId: null,
+                Hint: "Upload a sample order for this supplier to detect its columns."));
+        }
+
+        // Download + extract. Storage/extraction failures degrade gracefully to an empty
+        // result with a hint rather than surfacing a 500 to the mapping UI.
+        try
+        {
+            await using var fileStream = await _fileStorage.DownloadAsync(source.SourceFileKey, ct);
+            var extracted = await _sourceColumns.ExtractAsync(fileStream, source.SourceFileKey, null, ct);
+
+            var hint = extracted.Columns.Count == 0
+                ? "We could not detect column names in the latest file for this supplier."
+                : null;
+
+            return Ok(new SourceColumnsResponse(
+                Format: extracted.Format,
+                Columns: extracted.Columns,
+                SourceOrderId: source.Id,
+                Hint: hint));
+        }
+        catch (Exception)
+        {
+            return Ok(new SourceColumnsResponse(
+                Format: "unknown",
+                Columns: Array.Empty<string>(),
+                SourceOrderId: source.Id,
+                Hint: "The latest source file for this supplier could not be read."));
+        }
+    }
+
     // ── GET /api/suppliers/{id}/delivery-config ──────────────────────────────
 
     [HttpGet("{id:guid}/delivery-config")]
@@ -564,3 +640,16 @@ public record TestPoMappingRequest(
     IReadOnlyDictionary<string, string> HeaderRow,
     IReadOnlyList<IReadOnlyDictionary<string, string>> LineRows,
     PoMappingConfig Config);
+
+/// <summary>
+/// Response for <c>GET /api/suppliers/{id}/mapping/source-columns</c>.
+/// </summary>
+/// <param name="Format">Detected format label (csv/xlsx/cxml/ubl/xml/edifact/x12/pdf/unknown).</param>
+/// <param name="Columns">De-duplicated source field names found in the latest source file.</param>
+/// <param name="SourceOrderId">The order whose source file was inspected, or null when none was available.</param>
+/// <param name="Hint">Short user-facing guidance when columns are empty; null when columns were found.</param>
+public record SourceColumnsResponse(
+    string Format,
+    IReadOnlyList<string> Columns,
+    Guid? SourceOrderId,
+    string? Hint);

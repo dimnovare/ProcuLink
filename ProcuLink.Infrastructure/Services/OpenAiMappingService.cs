@@ -39,6 +39,30 @@ public sealed class OpenAiMappingService : IAiMappingService
         }
         """u8.ToArray());
 
+    private static readonly BinaryData FieldMappingSchema = BinaryData.FromBytes("""
+        {
+          "type": "object",
+          "properties": {
+            "mappings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "canonicalField": { "type": "string" },
+                  "suggestedColumn": { "type": "string" },
+                  "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "reason": { "type": "string" }
+                },
+                "required": ["canonicalField", "suggestedColumn", "confidence", "reason"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["mappings"],
+          "additionalProperties": false
+        }
+        """u8.ToArray());
+
     private readonly ChatClient? _client;
     private readonly ILogger<OpenAiMappingService> _logger;
     private readonly string _model;
@@ -231,9 +255,144 @@ public sealed class OpenAiMappingService : IAiMappingService
         }
     }
 
+    public async Task<IReadOnlyList<AiFieldMappingSuggestion>> SuggestFieldMappingsAsync(
+        Guid organisationId,
+        Guid supplierId,
+        IReadOnlyList<string> columns,
+        IReadOnlyList<string> unresolvedCanonicalFields,
+        CancellationToken ct = default)
+    {
+        if (_client is null)
+            return Array.Empty<AiFieldMappingSuggestion>();
+
+        if (columns.Count == 0 || unresolvedCanonicalFields.Count == 0)
+            return Array.Empty<AiFieldMappingSuggestion>();
+
+        // ── Per-org monthly token cap (same pattern as the line suggester) ───
+        await using var trackerScope = _scopeFactory?.CreateAsyncScope();
+        var tracker = trackerScope is not null
+            ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
+            : _trackerFactory?.Invoke();
+
+        if (tracker is not null)
+        {
+            try
+            {
+                if (await tracker.IsAtOrOverLimitAsync(organisationId, ct))
+                {
+                    _logger.LogWarning(
+                        "OpenAI field mapping skipped — org {OrgId} reached monthly token limit {Limit}",
+                        organisationId,
+                        tracker.MonthlyLimit);
+                    return Array.Empty<AiFieldMappingSuggestion>();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "OpenAI cap check failed for org {OrgId}; skipping field mapping to be safe",
+                    organisationId);
+                return Array.Empty<AiFieldMappingSuggestion>();
+            }
+        }
+
+        try
+        {
+            var promptPayload = new
+            {
+                sourceColumns = columns.Take(100).ToArray(),
+                canonicalFieldsNeedingMapping = unresolvedCanonicalFields.Take(20).ToArray()
+            };
+
+            var messages = new List<ChatMessage>
+            {
+                new SystemChatMessage("""
+                    You map a supplier's purchase-order file column headers to ProcuLink's
+                    canonical PO fields. For each canonical field that still needs a mapping,
+                    pick the single best matching source column from the provided list.
+                    Only choose a column when the evidence is reasonable; if no column fits a
+                    field, omit that field from the result. Use confidence 0..1.
+                    suggestedColumn MUST be one of the provided source columns verbatim.
+                    Keep each reason to a short phrase.
+                    """),
+                new UserChatMessage(JsonSerializer.Serialize(promptPayload, JsonOptions))
+            };
+
+            var options = new ChatCompletionOptions
+            {
+                MaxOutputTokenCount = 600,
+                ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
+                    jsonSchemaFormatName: "field_mapping_suggestions",
+                    jsonSchema: FieldMappingSchema,
+                    jsonSchemaIsStrict: true)
+            };
+
+            ChatCompletion completion = await _client.CompleteChatAsync(messages, options, ct);
+
+            if (tracker is not null)
+            {
+                try
+                {
+                    var totalTokens = completion.Usage?.TotalTokenCount ?? 0;
+                    if (totalTokens > 0)
+                        await tracker.IncrementAsync(organisationId, totalTokens, ct);
+                }
+                catch (Exception incEx)
+                {
+                    _logger.LogWarning(
+                        incEx,
+                        "Failed to record AI token usage for org {OrgId}",
+                        organisationId);
+                }
+            }
+
+            var json = completion.Content.FirstOrDefault()?.Text;
+            if (string.IsNullOrWhiteSpace(json))
+                return Array.Empty<AiFieldMappingSuggestion>();
+
+            var dto = JsonSerializer.Deserialize<OpenAiFieldMappingEnvelope>(json, JsonOptions);
+            if (dto?.Mappings is null || dto.Mappings.Count == 0)
+                return Array.Empty<AiFieldMappingSuggestion>();
+
+            // Only trust columns the model was actually given (strict schema can't
+            // enforce an enum here because columns are dynamic).
+            var allowedColumns = new HashSet<string>(columns, StringComparer.OrdinalIgnoreCase);
+
+            return dto.Mappings
+                .Where(m => !string.IsNullOrWhiteSpace(m.CanonicalField)
+                            && !string.IsNullOrWhiteSpace(m.SuggestedColumn)
+                            && allowedColumns.Contains(m.SuggestedColumn.Trim()))
+                .Select(m => new AiFieldMappingSuggestion(
+                    m.CanonicalField.Trim(),
+                    m.SuggestedColumn.Trim(),
+                    Math.Clamp(m.Confidence, 0f, 1f),
+                    m.Reason?.Trim() ?? string.Empty))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "OpenAI field mapping suggestion failed for org {OrgId}, supplier {SupplierId}",
+                organisationId,
+                supplierId);
+            return Array.Empty<AiFieldMappingSuggestion>();
+        }
+    }
+
     private sealed record OpenAiSuggestionDto(
         string SupplierItemCode,
         float Confidence,
         string? Reason,
         string? Provenance);
+
+    private sealed record OpenAiFieldMappingEnvelope(
+        List<OpenAiFieldMappingDto>? Mappings);
+
+    private sealed record OpenAiFieldMappingDto(
+        string CanonicalField,
+        string SuggestedColumn,
+        float Confidence,
+        string? Reason);
 }

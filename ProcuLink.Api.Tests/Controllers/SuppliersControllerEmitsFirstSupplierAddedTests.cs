@@ -43,6 +43,8 @@ public class SuppliersControllerEmitsFirstSupplierAddedTests
         var poMapping    = new Mock<IPoMappingService>();
         var deliveryCfg  = new Mock<IDeliveryConfigService>();
         var delivery     = new Mock<IDeliveryService>();
+        var fileStorage  = new Mock<IFileStorageService>();
+        var sourceCols   = new Mock<ProcuLink.Core.Services.Detection.ISourceColumnExtractor>();
 
         var analytics = new FakeAnalyticsService();
 
@@ -55,7 +57,9 @@ public class SuppliersControllerEmitsFirstSupplierAddedTests
             poMapping.Object,
             deliveryCfg.Object,
             delivery.Object,
-            analytics);
+            analytics,
+            fileStorage.Object,
+            sourceCols.Object);
 
         return (controller, analytics, orgId, db);
     }
