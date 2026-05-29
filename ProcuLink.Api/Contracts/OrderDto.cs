@@ -15,7 +15,9 @@ public record OrderDto(
     IReadOnlyList<OrderLineDto>    Lines,
     IReadOnlyList<ArtifactDto>     Artifacts,
     /// <summary>Buyer name extracted from CanonicalJson; null until parsing completes.</summary>
-    string?    BuyerName = null
+    string?    BuyerName = null,
+    /// <summary>Human-readable error from the newest *Failed audit event; null for non-failed orders.</summary>
+    string?    ErrorMessage = null
 );
 
 /// <summary>Single purchase order line in the API response.</summary>

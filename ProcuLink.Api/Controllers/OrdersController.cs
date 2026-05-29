@@ -216,7 +216,35 @@ public sealed class OrdersController : ControllerBase
         if (!result.IsSuccess)
             return NotFound();
 
-        return Ok(MapToDto(result.Value!));
+        var entity = result.Value!;
+        string? errorMessage = null;
+
+        if (entity.Status is "failed" or "transform_failed" or "delivery_failed")
+        {
+            var payload = await _db.AuditEvents
+                .AsNoTracking()
+                .Where(e => e.EntityId == id
+                         && e.OrgId == _tenant.OrganisationId
+                         && e.EntityType == "Order"
+                         && (e.Action == "ParseFailed"
+                          || e.Action == "TransformFailed"
+                          || e.Action == "DeliveryFailed"))
+                .OrderByDescending(e => e.CreatedAt)
+                .Select(e => e.Payload)
+                .FirstOrDefaultAsync(ct);
+
+            if (payload != null)
+            {
+                try
+                {
+                    if (payload.RootElement.TryGetProperty("error", out var el))
+                        errorMessage = el.GetString();
+                }
+                catch { /* malformed payload — ignore */ }
+            }
+        }
+
+        return Ok(MapToDto(entity, errorMessage));
     }
 
     // ── GET /api/orders/{id}/status ───────────────────────────────────────────
@@ -554,7 +582,7 @@ public sealed class OrdersController : ControllerBase
 
     // ── Mapping helper ────────────────────────────────────────────────────────
 
-    private static OrderDto MapToDto(PurchaseOrderEntity e) => new(
+    private static OrderDto MapToDto(PurchaseOrderEntity e, string? errorMessage = null) => new(
         Id:            e.Id,
         PoNumber:      e.PoNumber,
         SupplierId:    e.SupplierId,
@@ -576,7 +604,8 @@ public sealed class OrdersController : ControllerBase
             .OrderByDescending(a => a.CreatedAt)
             .Select(a => new ArtifactDto(a.Id, a.Format, a.FileKey, a.CreatedAt))
             .ToList(),
-        BuyerName: ExtractBuyerName(e)
+        BuyerName:    ExtractBuyerName(e),
+        ErrorMessage: errorMessage
     );
 
     /// <summary>
