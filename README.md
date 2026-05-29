@@ -15,14 +15,14 @@ current .NET backend/worker solution for a production SaaS.
 ## Repositories
 
 ```text
-C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink
+ProcuLink/                   (this repo)
   ProcuLink.Api              ASP.NET Core 8 API
   ProcuLink.Core             Domain models, constants, service interfaces
   ProcuLink.Infrastructure   EF Core, PostgreSQL, storage, delivery services
   ProcuLink.Transform        CSV/XLSX/PDF parsing and output transforms
   ProcuLink.Worker           Hangfire worker jobs
 
-C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink
+project-proculink/           (sibling repo — checked out alongside this one)
   Next.js 15 App Router frontend
 ```
 
@@ -34,9 +34,11 @@ Frontend repo: https://github.com/dimnovare/project-proculink
 - ORM/database: EF Core 8 + PostgreSQL
 - Jobs: Hangfire + Hangfire.PostgreSql
 - Storage: Cloudflare R2, with local storage fallback in development
-- Auth: Clerk JWT validation
+- Auth: Clerk JWT validation, plus `plk_` API-key scheme for machine-to-machine ingress
 - Billing: Stripe
 - AI mapping: provider-neutral interface, OpenAI structured outputs first
+- Standards: cXML 1.2, UBL 2.1 (Peppol BIS 3.0-compatible), EDIFACT, ANSI X12 850
+- Delivery channels: HTTP/webhook, SFTP, FTPS, SMTP, Erply/Directo ERP
 - Frontend: Next.js 15 App Router, TypeScript, Tailwind, shadcn/ui, TanStack Query
 - Package manager: bun only for frontend
 
@@ -141,7 +143,7 @@ dotnet build ProcuLink.slnx --no-restore
 dotnet test ProcuLink.slnx --no-restore
 ```
 
-Current baseline: **213 tests** (102 Transform + 11 Api.Tests + 100 Infrastructure), 0 failures.
+Current baseline: **272 tests** (123 Transform + 21 Api.Tests + 128 Infrastructure), 0 failures.
 
 ## Configuration files
 
@@ -159,12 +161,17 @@ Implemented baseline:
 
 - Auth, PostgreSQL tenancy, and core order loop
 - Final billing ladder: Pilot, Growth, Operations, Integration, Enterprise
-- PO field mapping engine
-- Supplier delivery configuration, HTTP-first
-- AI mapping suggestions
-- Text-based PDF ingestion
-- ERP delivery adapters for Erply and Directo
+- PO field mapping engine with magic mapping preview (source → canonical → supplier, with AI suggestions, confidence + provenance, accept/edit/reject before commit)
+- AI mapping suggestions (provider-neutral, OpenAI structured outputs first)
+- Input parsers: CSV/XLSX, text-based PDF, cXML 1.2, UBL 2.1, EDIFACT, ANSI X12 850
+- Smart file-format auto-detect (`POST /api/upload/detect-format`)
+- Output transforms: CSV/XLSX, cXML, UBL 2.1 (Peppol BIS 3.0-compatible), X12 850
+- Supplier delivery channels: HTTP/webhook, SFTP, FTPS, SMTP, Erply/Directo ERP
+- HMAC-verified inbound webhook ingress with replay protection
 - IMAP email polling for CSV/XLSX/PDF order attachments
+- Invoice + ASN canonical models (UBL 2.1 invoice parser; CSV/XML/JSON invoice transforms)
+- Zapier/Make.com integration layer: `plk_` API keys, org slug, integration subscriptions, signed trigger firing
+- In-app standards comparison screen + per-field standards popovers (UBL / EDIFACT / X12 / cXML refs on demand)
 
 Read [STATUS.md](./STATUS.md) before starting new work. It is the current handoff
 source of truth.
@@ -182,25 +189,42 @@ Current rules:
 - Read `docs/design-system/00-agent-quick-brief.md` first for UI work
 - Locked visual direction: Direction 4, The Bridge Layer, supported by Direction 3, System Identity
 
-## Phase 5 Roadmap
+## Roadmap — Phase 6: International Standard
 
-The grouped roadmap is documented in:
+ProcuLink's product thesis is to become the **international standard for
+outbound B2B purchase order routing**: any input format / channel → canonical
+PO → any output format / channel. Depth for 30-year procurement veterans,
+effortless for first-time users, cost-effective versus SPS Commerce /
+TrueCommerce / Babelway / Pagero.
+
+Source of truth for the forward plan:
 
 ```text
-docs\superpowers\plans\2026-05-26-production-hardening-roadmap.md
+docs\superpowers\plans\2026-05-28-phase-6-international-standard-roadmap.md
 ```
 
-Next group:
+| Horizon | Theme | Timeline |
+|---|---|---|
+| 1 | Production Ready + Effortless | next 4–6 weeks |
+| 2 | Standards Backbone + Channel Breadth | Q4 2026 |
+| 3 | Network Effects | Q1 2027+ |
 
-```text
-Group I — UI/UX production polish + responsive QA
-```
+Shipped to `main` (2026-05-29): UBL 2.1 outbound transformer, ANSI X12 850
+parser/transformer, SFTP + FTPS + SMTP delivery, HMAC webhook ingress, smart
+format auto-detect, magic mapping preview, and the standards comparison screen.
+Earlier groups (Stripe billing, PO mapping engine, AI suggestions, PDF
+ingestion, ERP connectors, IMAP polling, cXML 1.2, Invoice/ASN models,
+Zapier/Make.com layer) are all complete.
 
-Then:
+**UX direction:** ProcuLink ships ONE great experience — smart defaults +
+progressive disclosure + a Command Palette (Cmd+K) for power features. The
+earlier "default vs expert mode" toggle was dropped before adoption. Standards
+visibility surfaces via info popovers and the Command Palette, never behind a
+user-mode flag.
 
-- Group J — Live end-to-end QA + deployment hardening
-- Group K — Standards + engine hardening
-- Group L — Trust, onboarding + commercial readiness
+Remaining before production launch is largely founder configuration (PostHog
+keys, Clerk post-signup redirect, status/Loom/demo URLs, optional SMTP) plus
+live deployed end-to-end QA. See [STATUS.md](./STATUS.md).
 
 ## License
 
