@@ -70,6 +70,11 @@ builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 // Wave 4: IntegrationTriggerService is needed by OrderService and DeliveryService.
 // Register it here so Worker DI validation passes (same as API/Program.cs line 198).
 builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService>();
+// Analytics (PostHog) — required by StripeBillingService (resolved via IBillingService
+// in EmailPollingJob) and ParseOrderJob. No-op when Analytics:PostHog:ApiKey is absent.
+// Mirrors API/Program.cs lines 189-190.
+builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
+builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
@@ -82,6 +87,7 @@ builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
+builder.Services.AddScoped<IDeliveryDispatcher, SftpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
@@ -96,6 +102,7 @@ builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
 builder.Services.AddSingleton<ITransformService, JsonTransformService>();
+builder.Services.AddSingleton<ITransformService, UblOrderTransformService>(); // Group M Phase 1 — UBL 2.1 Peppol BIS 3.0
 
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
@@ -117,6 +124,14 @@ else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
 }
 
+// ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
+// Mirrors API/Program.cs lines 270-272. Currently used only by API controllers,
+// but registered here too so future background jobs in this dep graph
+// (e.g. retry queue, ACK round-trip) can resolve them without a second DI fix.
+builder.Services.AddMemoryCache(); // shared cache used by HmacWebhookVerifier nonce replay store
+builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
+builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier, ProcuLink.Infrastructure.Services.Webhooks.HmacWebhookVerifier>();
+
 builder.Services.AddScoped<EmailPollingJob>();
 builder.Services.AddScoped<SftpPollingJob>();
 builder.Services.AddScoped<S3PollingJob>();
@@ -125,6 +140,15 @@ builder.Services.AddScoped<ParseOrderJob>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();
+
+// ── Analytics graceful flush on shutdown ─────────────────────────────────
+// Mirrors API/Program.cs lines 405-409 — drain queued PostHog events on
+// SIGTERM before the Hangfire server stops accepting work.
+host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.Register(() =>
+{
+    var svc = host.Services.GetRequiredService<IAnalyticsService>();
+    try { svc.FlushAsync(default).GetAwaiter().GetResult(); } catch { /* swallow */ }
+});
 
 // ── Startup configuration validation ─────────────────────────────────────
 // Fails fast in Production with a single combined error listing every missing
