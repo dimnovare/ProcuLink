@@ -18,6 +18,14 @@ The 7 build/cleanup chips had run in the **shared** repo checkouts (not isolated
 
 **Process lesson:** chips MUST run in isolated git worktrees — shared-checkout collisions caused the wipes. Recovery used a dangling commit + an out-of-repo backup (both deleted now the work is on `main`). Only `project-proculink/.claude/launch.json` (local config) left uncommitted.
 
+### Safe-parallel batch via isolated worktrees (2026-05-29, validated · `870fb0a`)
+
+Proved the safe parallel workflow that prevents a repeat of the collision: **2 agents ran concurrently in isolated git worktrees** (zero file collision), each verified green alone, then merged **sequentially behind a build+test gate**. Shipped:
+- **FTPS TLS cert hardening** — secure-by-default validation + opt-in `allowInvalidCertificate` per-supplier flag (replaces the `ValidateAnyCertificate=true` hole).
+- **Bulk-accept high-confidence AI suggestions** — `POST /api/orders/{id}/accept-ai-suggestions?minConfidence=` + `OrderService.AcceptAiSuggestionsAsync`.
+
+**339 backend tests** green (123 Transform + 168 Infrastructure + 48 Api). New EF migration verified applying cleanly to dev Postgres (`dotnet ef database update`).
+
 ---
 
 ## Where we are: **2026-05-29 P0 parse-failure UX complete · 295 backend tests green · frontend builds clean**
