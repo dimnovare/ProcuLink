@@ -125,4 +125,17 @@ public interface IOrderService
         IReadOnlyList<LineResolution> resolutions,
         bool saveMappings,
         CancellationToken ct);
+
+    /// <summary>
+    /// Bulk-accept AI suggestions for all unresolved lines whose
+    /// <c>AiSuggestionConfidence</c> is &gt;= <paramref name="minConfidence"/>.
+    /// Clears AI suggestion fields on accepted lines, recomputes order status,
+    /// and writes an audit event.
+    /// Returns the count of lines that were accepted.
+    /// </summary>
+    Task<Result<int>> AcceptAiSuggestionsAsync(
+        Guid organisationId,
+        Guid orderId,
+        double minConfidence,
+        CancellationToken ct);
 }

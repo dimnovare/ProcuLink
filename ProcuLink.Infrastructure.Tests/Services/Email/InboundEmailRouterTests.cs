@@ -474,6 +474,8 @@ public class InboundEmailRouterTests
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> ResolveAsync(Guid organisationId, Guid orderId, IReadOnlyList<LineResolution> resolutions, bool saveMappings, CancellationToken ct)
             => throw new NotImplementedException();
+        public Task<Result<int>> AcceptAiSuggestionsAsync(Guid organisationId, Guid orderId, double minConfidence, CancellationToken ct)
+            => throw new NotImplementedException();
     }
 
     /// <summary>

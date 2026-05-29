@@ -366,6 +366,30 @@ public sealed class OrdersController : ControllerBase
         return Accepted(new { status = "transforming" });
     }
 
+    // ── POST /api/orders/{id}/accept-ai-suggestions ──────────────────────────
+
+    /// <summary>
+    /// Bulk-accept AI mapping suggestions for all unresolved lines whose
+    /// confidence is at or above the supplied threshold (default 0.85).
+    /// Returns { accepted: N } — the count of lines that were accepted.
+    /// </summary>
+    [HttpPost("{id:guid}/accept-ai-suggestions")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AcceptAiSuggestions(
+        Guid id,
+        [FromQuery] double minConfidence = 0.85,
+        CancellationToken ct = default)
+    {
+        var result = await _orders.AcceptAiSuggestionsAsync(
+            _tenant.OrganisationId, id, minConfidence, ct);
+
+        if (!result.IsSuccess)
+            return NotFound();
+
+        return Ok(new { accepted = result.Value });
+    }
+
     // ── GET /api/orders/{id}/mapping-preview ─────────────────────────────────
 
     /// <summary>
