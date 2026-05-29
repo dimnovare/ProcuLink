@@ -15,7 +15,7 @@ public static class ParseFailureExplain
         };
 
     public static string ForUnsupportedFormat(string extension) =>
-        $"Unsupported file format '{extension}'. Supported: CSV, XLSX, PDF, XML (cXML/UBL/Peppol), EDI (EDIFACT).";
+        $"Unsupported file format '{extension.ToLowerInvariant()}'. Supported: CSV, XLSX, PDF, XML (cXML/UBL/Peppol), EDI (EDIFACT).";
 
     public static string ForException(string extension, Exception ex)
     {
