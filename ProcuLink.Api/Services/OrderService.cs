@@ -432,8 +432,9 @@ public sealed class OrderService : IOrderService
         {
             using var buffer = new MemoryStream();
             await fileStream.CopyToAsync(buffer, ct);
+            buffer.Position = 0; // DetectAsync reads from the current position — rewind so it sees the content.
 
-            // Detect format + column headers (DetectAsync rewinds the buffer to 0). Non-fatal.
+            // Detect format + column headers (fed to the schema-fingerprint recorder). Non-fatal.
             try { detected = await _formatDetector.DetectAsync(buffer, entity.SourceFileKey, ct); }
             catch (Exception ex) { _logger.LogWarning(ex, "Format detection failed for order {OrderId} (non-fatal)", orderId); }
 
