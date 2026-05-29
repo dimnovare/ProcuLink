@@ -181,10 +181,9 @@ builder.Services.AddCors(options =>
 });
 
 // ── Repositories ──────────────────────────────────────────────────────────
-// IOrderRepository / EfOrderRepository kept for SuppliersController (Phase 2 services use DbContext directly).
-builder.Services.AddScoped<IOrderRepository, EfOrderRepository>();
+// Supplier profiles still flow through the repository; orders and item mappings
+// use DbContext directly via their services (legacy order/item-mapping repos removed).
 builder.Services.AddScoped<ISupplierProfileRepository, EfSupplierProfileRepository>();
-builder.Services.AddScoped<IItemMappingRepository, EfItemMappingRepository>();
 
 // ── File storage ───────────────────────────────────────────────────────────
 // Use LocalFileStorageService in dev when R2 credentials are absent.
@@ -379,12 +378,19 @@ if (app.Environment.IsDevelopment())
     app.UseHangfireDashboard("/hangfire");
 }
 
-// Railway terminates TLS at the load balancer; the container only needs HTTP.
-// Unconditional HTTPS redirect causes the Railway healthchecker to receive 307, not 200.
-if (app.Environment.IsDevelopment())
-{
-    app.UseHttpsRedirection();
-}
+// HTTPS redirection is intentionally NOT enabled in any environment:
+//  - Production: Railway terminates TLS at the load balancer; the container
+//    only serves HTTP, so a 307 from the app makes the Railway health check fail.
+//  - Development: the Next.js frontend (http://localhost:8082) calls the API at
+//    http://localhost:5223 (NEXT_PUBLIC_API_BASE_URL). A dev http→https 307 to
+//    https://localhost:7230 breaks the CORS *preflight* on the first cross-origin
+//    call — browsers never follow redirects for an OPTIONS preflight — which
+//    surfaced as "/orders/[id] → Order Not Found" on first navigation while the
+//    same order loaded fine elsewhere. Both the HTTP and HTTPS Kestrel endpoints
+//    are served directly (see Properties/launchSettings.json `https` profile:
+//    "https://localhost:7230;http://localhost:5223"), so no redirect is needed.
+// If you reintroduce HTTPS redirection it MUST sit after UseCors and must not
+// apply to the frontend's HTTP origin, or first-call CORS will break again.
 app.UseCors("AllowFrontend");
 
 // Pipeline order: Authenticate → resolve tenant → rate-limit → Authorize → controllers
