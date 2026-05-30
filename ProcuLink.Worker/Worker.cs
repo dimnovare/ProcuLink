@@ -39,7 +39,13 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/15 * * * *");
 
-        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling (every 5 min), stuck-order-detection (every 15 min).");
+        // Group O reliability: flag deliveries that miss their SLA confirmation window (every 15 min).
+        _recurringJobs.AddOrUpdate<DeliverySlaSweepJob>(
+            "delivery-sla-sweep",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/15 * * * *");
+
+        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling (every 5 min), stuck-order-detection + delivery-sla-sweep (every 15 min).");
         return base.StartAsync(cancellationToken);
     }
 

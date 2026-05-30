@@ -247,8 +247,18 @@ builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService
 builder.Services.AddScoped<IValidationRuleService, ValidationRuleService>();
 builder.Services.AddScoped<IOutputTemplateService, OutputTemplateService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
+// Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
+builder.Services.AddSingleton(sp =>
+{
+    var opts = new ProcuLink.Core.Services.Delivery.DeliveryReliabilityOptions();
+    builder.Configuration
+        .GetSection(ProcuLink.Core.Services.Delivery.DeliveryReliabilityOptions.SectionName)
+        .Bind(opts);
+    return opts;
+});
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
+builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();

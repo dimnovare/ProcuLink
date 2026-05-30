@@ -41,6 +41,20 @@ public class PurchaseOrderEntity
     /// </summary>
     public string? SchemaFingerprintHash { get; set; }
 
+    /// <summary>
+    /// SLA timer: UTC deadline by which this order must be confirmed delivered. Set when delivery
+    /// first starts (status → <c>delivering</c>), using the configured SLA window. Cleared (null)
+    /// once the order is confirmed delivered. Null for orders that have not begun delivery.
+    /// </summary>
+    public DateTime? DeliveryDueAt { get; set; }
+
+    /// <summary>
+    /// SLA timer: set true by the SLA sweep when <see cref="DeliveryDueAt"/> elapses without a
+    /// confirmed delivery. Surfaced to operators as a breached-SLA signal. Reset to false whenever
+    /// a fresh delivery attempt starts (a new SLA window opens).
+    /// </summary>
+    public bool SlaBreached { get; set; }
+
     // Navigation
     public Organisation Organisation { get; set; } = null!;
     public Supplier Supplier { get; set; } = null!;
