@@ -36,6 +36,47 @@ public sealed class ItemMappingService : IItemMappingService
     }
 
     /// <inheritdoc/>
+    public async Task<IReadOnlyDictionary<string, string?>> ResolveManyAsync(
+        Guid orgId, Guid supplierId, IEnumerable<string> buyerItemCodes, CancellationToken ct)
+    {
+        // Distinct, trimmed, non-blank set of codes to look up. Keyed case-sensitively
+        // to mirror ResolveAsync (BuyerItemCode == normalised) exact matching.
+        var requested = buyerItemCodes
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Select(c => c.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        // Seed every requested code with null so callers can treat the dictionary as
+        // total over the (non-blank) input set — a missing key never throws.
+        var result = new Dictionary<string, string?>(requested.Count, StringComparer.Ordinal);
+        foreach (var code in requested)
+            result[code] = null;
+
+        if (requested.Count == 0)
+            return result;
+
+        // One org+supplier-scoped IN query for all codes instead of N point lookups.
+        var rows = await _db.ItemMappings
+            .AsNoTracking()
+            .Where(m => m.OrgId == orgId
+                     && m.SupplierId == supplierId
+                     && requested.Contains(m.BuyerItemCode))
+            .Select(m => new { m.BuyerItemCode, m.SupplierItemCode })
+            .ToListAsync(ct);
+
+        foreach (var row in rows)
+        {
+            // Only overwrite a key that was actually requested (case-sensitive) so
+            // behaviour matches ResolveAsync even if the DB collation is broader.
+            if (result.ContainsKey(row.BuyerItemCode))
+                result[row.BuyerItemCode] = row.SupplierItemCode;
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc/>
     public async Task UpsertAsync(
         Guid orgId, Guid supplierId,
         string buyerItemCode, string supplierItemCode,

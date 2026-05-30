@@ -36,6 +36,10 @@ public class OrderServiceParseAuditTests
             .Setup(s => s.ResolveAsync(
                 It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string?)null);
+        itemMappings
+            .Setup(s => s.ResolveManyAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyDictionary<string, string?>)new Dictionary<string, string?>());
 
         var poMappings = new Mock<IPoMappingService>();
         poMappings
@@ -51,6 +55,13 @@ public class OrderServiceParseAuditTests
                 It.IsAny<IReadOnlyList<AiMappingCandidate>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((AiMappingSuggestion?)null);
+        aiMappings
+            .Setup(s => s.SuggestSupplierItemCodesAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<AiMappingLineContext>>(),
+                It.IsAny<IReadOnlyList<AiMappingCandidate>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyDictionary<int, AiMappingSuggestion>)new Dictionary<int, AiMappingSuggestion>());
 
         var integrationTrigger = new Mock<IIntegrationTriggerService>();
         integrationTrigger

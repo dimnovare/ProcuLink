@@ -120,28 +120,15 @@ public sealed class OrderService : IOrderService
         if (parsedOrder.Lines.Count == 0)
             return Result<PurchaseOrderEntity>.Fail("File contains no line items.");
 
-        // 6. Auto-resolve each line against the item_mappings table
-        var lineEntities   = new List<PurchaseOrderLineEntity>(parsedOrder.Lines.Count);
-        bool anyUnresolved = false;
-        var aiSuggestionCount = 0;
+        // 6. Auto-resolve all lines against item_mappings, then batch-suggest for the
+        //    leftovers — one IN query + at most one AI call for the whole order.
         var supplierName = await GetSupplierNameAsync(organisationId, supplierId, ct);
         var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
+        var lineEntities = await BuildLineEntitiesAsync(
+            organisationId, supplierId, supplierName, parsedOrder.Lines, aiCandidates, ct);
 
-        foreach (var line in parsedOrder.Lines)
-        {
-            var lineEntity = await BuildLineEntityAsync(
-                organisationId,
-                supplierId,
-                supplierName,
-                line,
-                aiCandidates,
-                ct);
-
-            if (lineEntity.NeedsReview) anyUnresolved = true;
-            if (!string.IsNullOrWhiteSpace(lineEntity.AiSuggestedSupplierItemCode)) aiSuggestionCount++;
-
-            lineEntities.Add(lineEntity);
-        }
+        bool anyUnresolved    = lineEntities.Any(l => l.NeedsReview);
+        var  aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
 
         // 7. Build the order entity
         var now = DateTime.UtcNow;
@@ -300,26 +287,12 @@ public sealed class OrderService : IOrderService
             UnitPrice:     l.UnitPrice
         )).ToList();
 
-        var lineEntities      = new List<PurchaseOrderLineEntity>(parsedLines.Count);
-        var anyUnresolved     = false;
-        var aiSuggestionCount = 0;
-        var aiCandidates      = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
+        var aiCandidates  = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
+        var lineEntities  = await BuildLineEntitiesAsync(
+            organisationId, supplierId, supplier.Name, parsedLines, aiCandidates, ct);
 
-        foreach (var line in parsedLines)
-        {
-            var lineEntity = await BuildLineEntityAsync(
-                organisationId,
-                supplierId,
-                supplier.Name,
-                line,
-                aiCandidates,
-                ct);
-
-            if (lineEntity.NeedsReview) anyUnresolved = true;
-            if (!string.IsNullOrWhiteSpace(lineEntity.AiSuggestedSupplierItemCode)) aiSuggestionCount++;
-
-            lineEntities.Add(lineEntity);
-        }
+        var anyUnresolved     = lineEntities.Any(l => l.NeedsReview);
+        var aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
 
         var orderId = Guid.NewGuid();
         var now     = DateTime.UtcNow;
@@ -495,29 +468,15 @@ public sealed class OrderService : IOrderService
                 return Result<ParsedFileOutput>.Fail("File contains no line items.");
             }
 
-            // Auto-resolve lines against item_mappings
-            var lineEntities   = new List<PurchaseOrderLineEntity>(parsedOrder.Lines.Count);
-            bool anyUnresolved = false;
-            var aiSuggestionCount = 0;
+            // Auto-resolve lines against item_mappings (batched), then one AI call for leftovers
             var supplierName = entity.Supplier?.Name
                                ?? await GetSupplierNameAsync(organisationId, entity.SupplierId, ct);
             var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, entity.SupplierId, ct);
+            var lineEntities = await BuildLineEntitiesAsync(
+                organisationId, entity.SupplierId, supplierName, parsedOrder.Lines, aiCandidates, ct);
 
-            foreach (var line in parsedOrder.Lines)
-            {
-                var lineEntity = await BuildLineEntityAsync(
-                    organisationId,
-                    entity.SupplierId,
-                    supplierName,
-                    line,
-                    aiCandidates,
-                    ct);
-
-                if (lineEntity.NeedsReview) anyUnresolved = true;
-                if (!string.IsNullOrWhiteSpace(lineEntity.AiSuggestedSupplierItemCode)) aiSuggestionCount++;
-
-                lineEntities.Add(lineEntity);
-            }
+            bool anyUnresolved    = lineEntities.Any(l => l.NeedsReview);
+            var  aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
 
             // ── Persist parsed results ────────────────────────────────────────
             // Use ExecuteUpdateAsync for the parent row so we bypass EF's change
@@ -1000,53 +959,92 @@ public sealed class OrderService : IOrderService
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private async Task<PurchaseOrderLineEntity> BuildLineEntityAsync(
+    /// <summary>
+    /// Builds line entities for a whole parsed order in two batched passes instead of
+    /// per-line round-trips:
+    ///  1. one org+supplier-scoped <c>IN</c> query resolves every buyer item code;
+    ///  2. one structured-output AI call suggests codes for the lines still unresolved.
+    /// Per-line field mapping and NeedsReview semantics are identical to the previous
+    /// one-line-at-a-time path.
+    /// </summary>
+    private async Task<List<PurchaseOrderLineEntity>> BuildLineEntitiesAsync(
         Guid organisationId,
         Guid supplierId,
         string supplierName,
-        ParsedOrderLine line,
+        IReadOnlyList<ParsedOrderLine> lines,
         IReadOnlyList<AiMappingCandidate> aiCandidates,
         CancellationToken ct)
     {
-        var supplierCode = await _mappings.ResolveAsync(
-            organisationId, supplierId, line.BuyerItemCode, ct);
+        // Pass 1 — deterministic resolve for every line in a single query.
+        var resolvedMap = await _mappings.ResolveManyAsync(
+            organisationId,
+            supplierId,
+            lines.Select(l => l.BuyerItemCode),
+            ct);
 
-        bool resolved = !string.IsNullOrWhiteSpace(supplierCode);
-        AiMappingSuggestion? suggestion = null;
-
-        if (!resolved)
+        // Lookup helper mirroring ResolveManyAsync's trimmed, case-sensitive keys.
+        static string? ResolveFromMap(IReadOnlyDictionary<string, string?> map, string? buyerItemCode)
         {
-            suggestion = await _aiMappings.SuggestSupplierItemCodeAsync(
+            if (string.IsNullOrWhiteSpace(buyerItemCode)) return null;
+            return map.TryGetValue(buyerItemCode.Trim(), out var code) ? code : null;
+        }
+
+        // Pass 2 — gather the still-unresolved lines and make ONE batched AI call.
+        var unresolvedContexts = lines
+            .Where(l => string.IsNullOrWhiteSpace(ResolveFromMap(resolvedMap, l.BuyerItemCode)))
+            .Select(l => new AiMappingLineContext(
+                l.LineNumber,
+                l.BuyerItemCode,
+                l.Description,
+                l.Quantity,
+                l.Unit))
+            .ToList();
+
+        IReadOnlyDictionary<int, AiMappingSuggestion> suggestions =
+            new Dictionary<int, AiMappingSuggestion>();
+
+        if (unresolvedContexts.Count > 0)
+        {
+            suggestions = await _aiMappings.SuggestSupplierItemCodesAsync(
                 organisationId,
                 supplierId,
                 supplierName,
-                new AiMappingLineContext(
-                    line.LineNumber,
-                    line.BuyerItemCode,
-                    line.Description,
-                    line.Quantity,
-                    line.Unit),
+                unresolvedContexts,
                 aiCandidates,
                 ct);
         }
 
-        return new PurchaseOrderLineEntity
+        // Materialise entities from the in-memory dictionaries — no further I/O.
+        var entities = new List<PurchaseOrderLineEntity>(lines.Count);
+        foreach (var line in lines)
         {
-            Id               = Guid.NewGuid(),
-            LineNumber       = line.LineNumber,
-            BuyerItemCode    = line.BuyerItemCode,
-            SupplierItemCode = supplierCode,
-            Description      = line.Description,
-            Quantity         = line.Quantity,
-            Unit             = line.Unit,
-            UnitPrice        = line.UnitPrice ?? 0m,
-            Confidence       = resolved ? 1.0f : 0.0f,
-            NeedsReview      = !resolved,
-            AiSuggestedSupplierItemCode = suggestion?.SupplierItemCode,
-            AiSuggestionConfidence = suggestion?.Confidence,
-            AiSuggestionReason = suggestion?.Reason,
-            AiSuggestionProvenance = suggestion?.Provenance
-        };
+            var supplierCode = ResolveFromMap(resolvedMap, line.BuyerItemCode);
+            bool resolved = !string.IsNullOrWhiteSpace(supplierCode);
+
+            AiMappingSuggestion? suggestion = null;
+            if (!resolved)
+                suggestions.TryGetValue(line.LineNumber, out suggestion);
+
+            entities.Add(new PurchaseOrderLineEntity
+            {
+                Id               = Guid.NewGuid(),
+                LineNumber       = line.LineNumber,
+                BuyerItemCode    = line.BuyerItemCode,
+                SupplierItemCode = supplierCode,
+                Description      = line.Description,
+                Quantity         = line.Quantity,
+                Unit             = line.Unit,
+                UnitPrice        = line.UnitPrice ?? 0m,
+                Confidence       = resolved ? 1.0f : 0.0f,
+                NeedsReview      = !resolved,
+                AiSuggestedSupplierItemCode = suggestion?.SupplierItemCode,
+                AiSuggestionConfidence = suggestion?.Confidence,
+                AiSuggestionReason = suggestion?.Reason,
+                AiSuggestionProvenance = suggestion?.Provenance
+            });
+        }
+
+        return entities;
     }
 
     private async Task<string> GetSupplierNameAsync(

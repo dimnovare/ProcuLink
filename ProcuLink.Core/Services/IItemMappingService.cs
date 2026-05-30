@@ -15,6 +15,20 @@ public interface IItemMappingService
     Task<string?> ResolveAsync(
         Guid orgId, Guid supplierId, string buyerItemCode, CancellationToken ct);
 
+    /// <summary>
+    /// Batch exact-match lookup. Resolves every supplied buyer item code in a single
+    /// org+supplier-scoped <c>WHERE BuyerItemCode IN (...)</c> query, avoiding N
+    /// round-trips when auto-resolving a multi-line order.
+    /// </summary>
+    /// <returns>
+    /// A dictionary keyed by the <b>trimmed</b> buyer item code. Every requested,
+    /// non-blank code is present as a key; the value is the resolved supplier item
+    /// code, or <c>null</c> when no mapping exists. Blank/whitespace codes are skipped.
+    /// Buyer-code matching is case-sensitive, identical to <see cref="ResolveAsync"/>.
+    /// </returns>
+    Task<IReadOnlyDictionary<string, string?>> ResolveManyAsync(
+        Guid orgId, Guid supplierId, IEnumerable<string> buyerItemCodes, CancellationToken ct);
+
     /// <summary>Insert or update a mapping. Updates confidence and source if the row exists.</summary>
     Task UpsertAsync(
         Guid orgId, Guid supplierId,
