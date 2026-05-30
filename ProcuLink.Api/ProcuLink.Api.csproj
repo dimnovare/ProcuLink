@@ -33,6 +33,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Fixtures\sample-order.csv" />
+    <EmbeddedResource Include="Fixtures\po-templates\erply.json" />
+    <EmbeddedResource Include="Fixtures\po-templates\directo.json" />
   </ItemGroup>
 
 </Project>

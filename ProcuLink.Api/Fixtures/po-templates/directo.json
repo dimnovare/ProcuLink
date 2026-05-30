@@ -1,0 +1,52 @@
+{
+  "id": "directo",
+  "erp": "Directo",
+  "name": "Directo PO starter",
+  "description": "Maps Directo REST API CSV export columns to ProcuLink canonical fields. Verify column names against your actual export before saving.",
+  "config": {
+    "hasHeaderRecord": true,
+    "separator": ",",
+    "header": {
+      "PoNumber": {
+        "externalField": "number",
+        "fieldManipulators": []
+      },
+      "OrderDate": {
+        "externalField": "date",
+        "fieldManipulators": [
+          { "type": "DateFormat", "params": ["yyyy-MM-dd", "yyyy-MM-dd"] }
+        ]
+      },
+      "BuyerName": {
+        "externalField": "customer_name",
+        "fieldManipulators": []
+      },
+      "Currency": {
+        "externalField": "currency",
+        "fieldManipulators": []
+      }
+    },
+    "lines": {
+      "BuyerItemCode": {
+        "externalField": "row_item",
+        "fieldManipulators": []
+      },
+      "Description": {
+        "externalField": "row_description",
+        "fieldManipulators": []
+      },
+      "Quantity": {
+        "externalField": "row_quantity",
+        "fieldManipulators": []
+      },
+      "Unit": {
+        "externalField": "unit",
+        "fieldManipulators": []
+      },
+      "UnitPrice": {
+        "externalField": "row_price",
+        "fieldManipulators": []
+      }
+    }
+  }
+}

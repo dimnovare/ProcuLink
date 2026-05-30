@@ -1,0 +1,52 @@
+{
+  "id": "erply",
+  "erp": "Erply",
+  "name": "Erply PO starter",
+  "description": "Maps Erply getPurchaseDocuments CSV export columns to ProcuLink canonical fields. Verify column names against your actual export before saving.",
+  "config": {
+    "hasHeaderRecord": true,
+    "separator": ",",
+    "header": {
+      "PoNumber": {
+        "externalField": "number",
+        "fieldManipulators": []
+      },
+      "OrderDate": {
+        "externalField": "date",
+        "fieldManipulators": [
+          { "type": "DateFormat", "params": ["yyyy-MM-dd", "yyyy-MM-dd"] }
+        ]
+      },
+      "BuyerName": {
+        "externalField": "clientName",
+        "fieldManipulators": []
+      },
+      "Currency": {
+        "externalField": "currencyCode",
+        "fieldManipulators": []
+      }
+    },
+    "lines": {
+      "BuyerItemCode": {
+        "externalField": "code",
+        "fieldManipulators": []
+      },
+      "Description": {
+        "externalField": "itemName",
+        "fieldManipulators": []
+      },
+      "Quantity": {
+        "externalField": "amount",
+        "fieldManipulators": []
+      },
+      "Unit": {
+        "externalField": "unitName",
+        "fieldManipulators": []
+      },
+      "UnitPrice": {
+        "externalField": "price",
+        "fieldManipulators": []
+      }
+    }
+  }
+}
