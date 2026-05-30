@@ -10,6 +10,7 @@ using Microsoft.IdentityModel.Tokens;
 using ProcuLink.Api.Auth;
 using ProcuLink.Api.Middleware;
 using ProcuLink.Api.Services;
+using ProcuLink.Api.Services.StarterTemplates;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Delivery;
@@ -77,6 +78,17 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["DataProtection:EncryptionK
 }
 
 // ── Authentication — Clerk JWT Bearer + API Key ───────────────────────────
+// Authorized parties (Clerk `azp`) = this app's frontend origin(s), same source as CORS below.
+// Binds session tokens to this application (see ClerkTokenValidation / OnTokenValidated).
+var authorizedParties = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "http://localhost:3000",   // Next.js default dev port
+    "http://localhost:8082",   // ProcuLink frontend dev port
+};
+foreach (var origin in (builder.Configuration["Frontend:Url"] ?? string.Empty)
+             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    authorizedParties.Add(origin);
+
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -91,8 +103,20 @@ builder.Services.AddAuthentication(options =>
     options.MapInboundClaims = false;
     options.TokenValidationParameters = new TokenValidationParameters
     {
+        // Clerk session tokens carry `azp` (authorized party), not a standard `aud`, so
+        // ASP.NET audience validation is off and the binding is enforced via `azp` below.
         ValidateAudience = false,
         NameClaimType = "sub",
+    };
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = context =>
+        {
+            var azp = context.Principal?.FindFirst("azp")?.Value;
+            if (!ClerkTokenValidation.IsAuthorizedParty(azp, authorizedParties))
+                context.Fail("Token 'azp' is not an authorized party for this application.");
+            return Task.CompletedTask;
+        },
     };
 })
 .AddScheme<ApiKeyAuthOptions, ApiKeyAuthHandler>("ApiKey", _ => { });
@@ -210,6 +234,9 @@ else
     builder.Services.AddScoped<IEmailSender, ConsoleEmailSender>();
 
 builder.Services.AddScoped<ISupportContactService, SupportContactService>();
+
+// ── Starter PO mapping templates — static, read-only, cached ─────────────
+builder.Services.AddSingleton<IStarterTemplateService, StarterTemplateService>();
 
 // ── Analytics (PostHog) — no-op when key absent ──────────────────────────
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));

@@ -32,7 +32,11 @@ zone goes active after the registrar (**Zone**) finishes DNSSEC-off and switches
 | CNAME | `www` | `cname.vercel-dns.com` | Vercel |
 | CNAME | `api` | `example.invalid` | Railway (custom domain) |
 | TXT | `_railway-verify.api` | `railway-verify=a055cfa8a4df5617495d04a71344dfb0a4ac30dc2cb5b61d99b55e6deca1d3ae` | Railway (verification) |
-| CNAME | `clerk` / `accounts` / `clkmail` … | *from Clerk prod instance* | Clerk (if/when prod instance created) |
+| CNAME | `accounts` | `accounts.clerk.services` | Clerk prod (account portal) |
+| CNAME | `clerk` | `frontend-api.clerk.services` | Clerk prod (frontend API) |
+| CNAME | `clk._domainkey` | `dkim1.6r8s20hhxs0o.clerk.services` | Clerk prod (DKIM) |
+| CNAME | `clk2._domainkey` | `dkim2.6r8s20hhxs0o.clerk.services` | Clerk prod (DKIM) |
+| CNAME | `clkmail` | `mail.6r8s20hhxs0o.clerk.services` | Clerk prod (email) |
 
 ## Env changes at cutover
 
