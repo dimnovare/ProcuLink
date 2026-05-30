@@ -2,7 +2,26 @@ using ProcuLink.Core.Entities;
 
 namespace ProcuLink.Core.Services;
 
-public enum OutputFormat { Xml, Csv, CXml, Json, Ubl, X12 }
+public enum OutputFormat
+{
+    // ── Entity-based outbound transforms (ITransformService) ──────────────────
+    // Serialize a fully-resolved PurchaseOrderEntity from the delivery pipeline.
+    Xml,
+    Csv,
+    CXml,
+    Json,
+    Ubl,
+    X12,
+
+    // ── Canonical-model outbound transforms (IParsedOrderTransform) ───────────
+    // Serialize a ParsedOrder (the pre-resolution canonical PO model produced by
+    // the inbound parsers). Selected via ParsedOrderTransformFactory. These are
+    // intentionally distinct enum values from the entity-based Ubl / X12 above so
+    // the two transform families never collide on the same value.
+    UblOrder,
+    X12_850,
+    EdifactOrders,
+}
 
 /// <summary>
 /// Builds a formatted outbound document from a fully-resolved purchase order.
