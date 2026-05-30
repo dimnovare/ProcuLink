@@ -41,6 +41,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<TenantApiKey>            TenantApiKeys            => Set<TenantApiKey>();
     public DbSet<IntegrationSubscription> IntegrationSubscriptions => Set<IntegrationSubscription>();
     public DbSet<SchemaFingerprint>       SchemaFingerprints       => Set<SchemaFingerprint>();
+    public DbSet<OrderConfirmationEntity>     OrderConfirmations     => Set<OrderConfirmationEntity>();
+    public DbSet<OrderConfirmationLineEntity> OrderConfirmationLines => Set<OrderConfirmationLineEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -273,6 +275,12 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // (SlaBreached, DeliveryDueAt): DeliverySlaSweep — NOT sla_breached AND delivery_due_at < now.
             b.HasIndex(x => new { x.SlaBreached, x.DeliveryDueAt })
              .HasDatabaseName("IX_purchase_orders_sla_breached_delivery_due_at");
+            // (OrgId, SupplierId): order-list query filtered/grouped by supplier within a tenant.
+            b.HasIndex(x => new { x.OrgId, x.SupplierId })
+             .HasDatabaseName("IX_purchase_orders_org_id_supplier_id");
+            // NOTE: no (OrgId, BuyerId) index — purchase_orders has no buyer_id column. The buyer is
+            // correlated in-memory via CanonicalJson["buyerName"] (see BuyerService), so there is no
+            // column to index. If a first-class buyer_id FK is added later, add (OrgId, BuyerId) then.
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.PurchaseOrders)
              .HasForeignKey(x => x.OrgId);
@@ -742,6 +750,71 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasIndex(x => new { x.OrganisationId, x.ColumnNameHash })
              .IsUnique()
              .HasDatabaseName("IX_schema_fingerprints_org_id_column_name_hash");
+        });
+
+        // ── order_confirmations ────────────────────────────────────────────────────
+        // Supplier acknowledgements of a purchase order (inbound counterpart to the PO).
+        modelBuilder.Entity<OrderConfirmationEntity>(b =>
+        {
+            b.ToTable("order_confirmations");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.PurchaseOrderId).HasColumnName("purchase_order_id");
+            b.Property(x => x.Status).HasColumnName("status").IsRequired();
+            b.Property(x => x.SupplierReference).HasColumnName("supplier_reference");
+            b.Property(x => x.Source).HasColumnName("source").IsRequired();
+            b.Property(x => x.SourceFileName).HasColumnName("source_file_name");
+            b.Property(x => x.SourceFileKey).HasColumnName("source_file_key");
+            b.Property(x => x.ReceivedAt).HasColumnName("received_at").HasColumnType("timestamptz");
+            b.Property(x => x.Notes).HasColumnName("notes");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            // (OrgId, PurchaseOrderId): list confirmations for an order; completion-blocking check.
+            b.HasIndex(x => new { x.OrgId, x.PurchaseOrderId })
+             .HasDatabaseName("IX_order_confirmations_org_id_purchase_order_id");
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
+            b.HasOne(x => x.PurchaseOrder)
+             .WithMany()
+             .HasForeignKey(x => x.PurchaseOrderId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── order_confirmation_lines ───────────────────────────────────────────────
+        modelBuilder.Entity<OrderConfirmationLineEntity>(b =>
+        {
+            b.ToTable("order_confirmation_lines");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrderConfirmationId).HasColumnName("order_confirmation_id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.PurchaseOrderLineId).HasColumnName("purchase_order_line_id");
+            b.Property(x => x.LineNumber).HasColumnName("line_number");
+            b.Property(x => x.BuyerItemCode).HasColumnName("buyer_item_code");
+            b.Property(x => x.SupplierItemCode).HasColumnName("supplier_item_code");
+            b.Property(x => x.OrderedQuantity).HasColumnName("ordered_quantity").HasColumnType("numeric(18,4)");
+            b.Property(x => x.OrderedUnitPrice).HasColumnName("ordered_unit_price").HasColumnType("numeric(18,4)");
+            b.Property(x => x.OrderedDeliveryDate).HasColumnName("ordered_delivery_date");
+            b.Property(x => x.ConfirmedQuantity).HasColumnName("confirmed_quantity").HasColumnType("numeric(18,4)");
+            b.Property(x => x.ConfirmedUnitPrice).HasColumnName("confirmed_unit_price").HasColumnType("numeric(18,4)");
+            b.Property(x => x.ConfirmedDeliveryDate).HasColumnName("confirmed_delivery_date");
+            b.Property(x => x.State).HasColumnName("state").IsRequired();
+            b.Property(x => x.Note).HasColumnName("note");
+            b.HasIndex(x => x.OrderConfirmationId)
+             .HasDatabaseName("IX_order_confirmation_lines_order_confirmation_id");
+            b.HasOne(x => x.OrderConfirmation)
+             .WithMany(c => c.Lines)
+             .HasForeignKey(x => x.OrderConfirmationId)
+             .OnDelete(DeleteBehavior.Cascade);
+            // Reference the ordered PO line without a cascade: deleting a PO line should not
+            // silently delete confirmation history. Optional FK (extra/unknown lines allowed).
+            b.HasOne(x => x.PurchaseOrderLine)
+             .WithMany()
+             .HasForeignKey(x => x.PurchaseOrderLineId)
+             .IsRequired(false)
+             .OnDelete(DeleteBehavior.Restrict);
         });
     }
 
