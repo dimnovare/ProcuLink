@@ -172,21 +172,23 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         catch (Renci.SshNet.Common.SshException) { /* already exists or permission */ }
     }
 
-    private static string NormaliseRemoteDir(string? remotePath)
+    // internal static (not private) so the pure path/filename logic can be unit-tested
+    // directly via InternalsVisibleTo without standing up a live SFTP server.
+    internal static string NormaliseRemoteDir(string? remotePath)
     {
         if (string.IsNullOrWhiteSpace(remotePath)) return ".";
         var trimmed = remotePath.Replace('\\', '/').Trim();
         return trimmed.StartsWith('/') ? trimmed : $"./{trimmed}";
     }
 
-    private static string SanitiseFileName(string fileName)
+    internal static string SanitiseFileName(string fileName)
     {
         if (string.IsNullOrWhiteSpace(fileName)) return "delivery.bin";
         var safe = new string(fileName.Select(c => char.IsLetterOrDigit(c) || c is '.' or '_' or '-' ? c : '_').ToArray());
         return safe.Trim('_').Length > 0 ? safe : "delivery.bin";
     }
 
-    private static string GetDirectoryPath(string remotePath)
+    internal static string GetDirectoryPath(string remotePath)
     {
         var lastSlash = remotePath.LastIndexOf('/');
         return lastSlash <= 0 ? "/" : remotePath[..lastSlash];
