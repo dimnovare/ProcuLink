@@ -116,19 +116,23 @@ public class EdifactParsedOrderTransformTests
     }
 
     [Fact]
-    public void Transform_ReleaseEscapesDelimiterCharactersInFreeText()
+    public async Task Transform_ReleaseEscapesDelimiterCharactersInFreeText_AndRoundTrips()
     {
         // A description containing the EDIFACT release char '?', a component
         // separator ':', and an element separator '+' must be release-escaped on
         // write (each special char prefixed with '?') so it cannot corrupt the
-        // segment structure. This asserts the transform-side ISO 9735 contract.
+        // segment structure. This asserts the transform-side ISO 9735 contract AND
+        // that EdifactOrderParser recovers the original value byte-for-byte — the
+        // parser unescapes exactly once (regression for the former double-unescape).
+        const string tricky = "Cable 2:1 ratio? a+b";
         var svc    = new EdifactParsedOrderTransform();
         var source = SampleOrder(new List<ParsedOrderLine>
         {
-            new(LineNumber: 1, BuyerItemCode: "ITEM-1", Description: "Cable 2:1 ratio? a+b", Quantity: 1m, Unit: "EA", UnitPrice: 9.99m),
+            new(LineNumber: 1, BuyerItemCode: "ITEM-1", Description: tricky, Quantity: 1m, Unit: "EA", UnitPrice: 9.99m),
         });
 
-        var edi = svc.Transform(source, OutputFormat.EdifactOrders).AsText();
+        var result = svc.Transform(source, OutputFormat.EdifactOrders);
+        var edi    = result.AsText();
 
         // ':' -> '?:'   '?' -> '??'   '+' -> '?+'
         edi.Should().Contain("Cable 2?:1 ratio?? a?+b");
@@ -138,5 +142,12 @@ public class EdifactParsedOrderTransformTests
         SplitSegments(edi).Count(s => s.StartsWith("IMD")).Should().Be(1);
         SplitSegments(edi).Count(s => s.StartsWith("UNH")).Should().Be(1);
         SplitSegments(edi).Count(s => s.StartsWith("UNT")).Should().Be(1);
+
+        // Full round-trip: the parser must recover the original free text exactly.
+        using var stream = new MemoryStream(result.Content);
+        var parsed = await new EdifactOrderParser().ParseAsync(stream, CancellationToken.None);
+
+        parsed.Lines.Should().HaveCount(1);
+        parsed.Lines[0].Description.Should().Be(tricky);
     }
 }
