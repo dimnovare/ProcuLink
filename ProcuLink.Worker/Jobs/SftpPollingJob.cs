@@ -1,36 +1,35 @@
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
-using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Worker.Jobs;
 
 /// <summary>
-/// Hangfire recurring job that polls all SFTP-enabled organisations for new
-/// purchase-order files every 5 minutes, mirroring the cadence of
-/// <see cref="EmailPollingJob"/>.
+/// Recurring dispatcher job (every 5 min): enumerates all SFTP-enabled organisations
+/// and enqueues one <see cref="SftpPollOrgJob"/> child job per org.
+/// Each child runs independently so a slow or hung SFTP server cannot block other orgs.
 /// </summary>
 public sealed class SftpPollingJob
 {
     private readonly ProcuLinkDbContext _db;
-    private readonly ISftpIngressService _sftpIngress;
+    private readonly IBackgroundJobClient _jobs;
     private readonly ILogger<SftpPollingJob> _logger;
 
     public SftpPollingJob(
         ProcuLinkDbContext db,
-        ISftpIngressService sftpIngress,
+        IBackgroundJobClient jobs,
         ILogger<SftpPollingJob> logger)
     {
         _db = db;
-        _sftpIngress = sftpIngress;
+        _jobs = jobs;
         _logger = logger;
     }
 
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
-        _logger.LogInformation("SFTP polling run started.");
+        _logger.LogInformation("SFTP polling dispatcher run started.");
 
         var enabledOrgIds = await _db.Set<SftpIngressConfig>()
             .AsNoTracking()
@@ -39,33 +38,13 @@ public sealed class SftpPollingJob
             .Distinct()
             .ToListAsync(ct);
 
-        _logger.LogInformation("SFTP polling: found {Count} org(s) with enabled SFTP config.", enabledOrgIds.Count);
-
-        var polled = 0;
-        var skipped = 0;
-        var totalFiles = 0;
+        _logger.LogInformation("SFTP polling dispatcher: found {Count} org(s) with enabled SFTP config. Enqueuing child jobs.", enabledOrgIds.Count);
 
         foreach (var orgId in enabledOrgIds)
         {
-            try
-            {
-                var count = await _sftpIngress.PollAsync(orgId, ct);
-                totalFiles += count;
-                polled++;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "SFTP polling failed for org {OrgId}.", orgId);
-                skipped++;
-            }
+            _jobs.Enqueue<SftpPollOrgJob>(j => j.ExecuteAsync(orgId, CancellationToken.None));
         }
 
-        _logger.LogInformation(
-            "SFTP polling run complete. Polled={Polled}, Errored={Errored}, FilesImported={Files}.",
-            polled, skipped, totalFiles);
+        _logger.LogInformation("SFTP polling dispatcher: enqueued {Count} SftpPollOrgJob(s).", enabledOrgIds.Count);
     }
 }

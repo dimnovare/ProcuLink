@@ -1,36 +1,35 @@
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
-using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Worker.Jobs;
 
 /// <summary>
-/// Hangfire recurring job that polls all S3/R2-enabled organisations for new
-/// purchase-order files, mirroring the cadence of <see cref="SftpPollingJob"/>
-/// and <see cref="EmailPollingJob"/>.
+/// Recurring dispatcher job (every 5 min): enumerates all S3/R2-enabled organisations
+/// and enqueues one <see cref="S3PollOrgJob"/> child job per org.
+/// Each child runs independently so a slow or hung S3 endpoint cannot block other orgs.
 /// </summary>
 public sealed class S3PollingJob
 {
     private readonly ProcuLinkDbContext _db;
-    private readonly IS3IngressService _s3Ingress;
+    private readonly IBackgroundJobClient _jobs;
     private readonly ILogger<S3PollingJob> _logger;
 
     public S3PollingJob(
         ProcuLinkDbContext db,
-        IS3IngressService s3Ingress,
+        IBackgroundJobClient jobs,
         ILogger<S3PollingJob> logger)
     {
         _db = db;
-        _s3Ingress = s3Ingress;
+        _jobs = jobs;
         _logger = logger;
     }
 
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
-        _logger.LogInformation("S3 polling run started.");
+        _logger.LogInformation("S3 polling dispatcher run started.");
 
         var enabledOrgIds = await _db.Set<S3IngressConfig>()
             .AsNoTracking()
@@ -39,33 +38,13 @@ public sealed class S3PollingJob
             .Distinct()
             .ToListAsync(ct);
 
-        _logger.LogInformation("S3 polling: found {Count} org(s) with enabled S3 config.", enabledOrgIds.Count);
-
-        var polled = 0;
-        var errored = 0;
-        var totalFiles = 0;
+        _logger.LogInformation("S3 polling dispatcher: found {Count} org(s) with enabled S3 config. Enqueuing child jobs.", enabledOrgIds.Count);
 
         foreach (var orgId in enabledOrgIds)
         {
-            try
-            {
-                var count = await _s3Ingress.PollAsync(orgId, ct);
-                totalFiles += count;
-                polled++;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "S3 polling failed for org {OrgId}.", orgId);
-                errored++;
-            }
+            _jobs.Enqueue<S3PollOrgJob>(j => j.ExecuteAsync(orgId, CancellationToken.None));
         }
 
-        _logger.LogInformation(
-            "S3 polling run complete. Polled={Polled}, Errored={Errored}, FilesImported={Files}.",
-            polled, errored, totalFiles);
+        _logger.LogInformation("S3 polling dispatcher: enqueued {Count} S3PollOrgJob(s).", enabledOrgIds.Count);
     }
 }

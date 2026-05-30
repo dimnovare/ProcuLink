@@ -1,205 +1,48 @@
 using Hangfire;
-using MailKit;
-using MailKit.Net.Imap;
-using MailKit.Search;
-using MailKit.Security;
 using Microsoft.EntityFrameworkCore;
-using MimeKit;
-using ProcuLink.Api.Jobs;
-using ProcuLink.Core.Constants;
-using ProcuLink.Core.Services;
-using ProcuLink.Core.Services.Email;
 using ProcuLink.Infrastructure;
-using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Worker.Jobs;
 
+/// <summary>
+/// Recurring dispatcher job (every 5 min): enumerates all organisations that have an
+/// email config and enqueues one <see cref="EmailPollOrgJob"/> child job per org.
+/// Each child runs independently so a slow or hung IMAP server cannot block other orgs.
+/// </summary>
 public sealed class EmailPollingJob
 {
-    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".csv",
-        ".xlsx",
-        ".pdf"
-    };
-
     private readonly ProcuLinkDbContext _db;
-    private readonly DeliveryEncryptionService _encryption;
-    private readonly IOrderService _orders;
     private readonly IBackgroundJobClient _jobs;
-    private readonly IBillingService _billing;
-    private readonly IEmailSettingsService _emailSettings;
     private readonly ILogger<EmailPollingJob> _logger;
 
     public EmailPollingJob(
         ProcuLinkDbContext db,
-        DeliveryEncryptionService encryption,
-        IOrderService orders,
         IBackgroundJobClient jobs,
-        IBillingService billing,
-        IEmailSettingsService emailSettings,
         ILogger<EmailPollingJob> logger)
     {
         _db = db;
-        _encryption = encryption;
-        _orders = orders;
         _jobs = jobs;
-        _billing = billing;
-        _emailSettings = emailSettings;
         _logger = logger;
     }
 
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
-        _logger.LogInformation("Email polling run started.");
+        _logger.LogInformation("Email polling dispatcher run started.");
 
-        var orgConfigs = await _db.Organisations
+        var orgIds = await _db.Organisations
             .AsNoTracking()
             .Where(x => x.EmailConfigJson != "{}")
-            .Select(x => new { x.Id, x.EmailConfigJson })
+            .Select(x => x.Id)
             .ToListAsync(ct);
 
-        _logger.LogInformation("Email polling: found {Count} org(s) with email config.", orgConfigs.Count);
+        _logger.LogInformation("Email polling dispatcher: found {Count} org(s) with email config. Enqueuing child jobs.", orgIds.Count);
 
-        var polled = 0;
-        var skipped = 0;
-
-        foreach (var org in orgConfigs)
+        foreach (var orgId in orgIds)
         {
-            var config = EmailPollingConfig.FromJson(org.EmailConfigJson);
-            if (!config.Enabled)
-            {
-                _logger.LogInformation("Skipping email polling for org {OrgId}: polling is disabled in config.", org.Id);
-                skipped++;
-                continue;
-            }
-
-            if (!await _billing.HasFeatureAsync(org.Id, BillingFeature.EmailIngestion, ct))
-            {
-                _logger.LogInformation("Skipping email polling for org {OrgId}: plan does not include email ingestion.", org.Id);
-                skipped++;
-                continue;
-            }
-
-            try
-            {
-                await PollOrganisationAsync(org.Id, config, ct);
-                polled++;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Email polling failed for org {OrgId}.", org.Id);
-            }
+            _jobs.Enqueue<EmailPollOrgJob>(j => j.ExecuteAsync(orgId, CancellationToken.None));
         }
 
-        _logger.LogInformation("Email polling run complete. Polled={Polled}, Skipped={Skipped}.", polled, skipped);
-    }
-
-    private async Task PollOrganisationAsync(Guid orgId, EmailPollingConfig config, CancellationToken ct)
-    {
-        if (config.DefaultSupplierId is null || string.IsNullOrWhiteSpace(config.Host) || string.IsNullOrWhiteSpace(config.Username))
-        {
-            _logger.LogWarning("Skipping email polling for org {OrgId}: email config is incomplete (host/username/supplierId missing).", orgId);
-            return;
-        }
-
-        var password = string.IsNullOrWhiteSpace(config.PasswordCiphertext)
-            ? string.Empty
-            : _encryption.Decrypt(config.PasswordCiphertext);
-
-        if (password is null)
-        {
-            _logger.LogWarning("Skipping email polling for org {OrgId}: IMAP password could not be decrypted.", orgId);
-            return;
-        }
-
-        _logger.LogInformation(
-            "Polling IMAP for org {OrgId}: {User}@{Host}:{Port} folder={Folder}",
-            orgId, config.Username, config.Host, config.Port, config.Folder);
-
-        using var client = new ImapClient();
-        await client.ConnectAsync(
-            config.Host,
-            config.Port,
-            config.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable,
-            ct);
-        await client.AuthenticateAsync(config.Username, password, ct);
-
-        var folder = await client.GetFolderAsync(config.Folder, ct);
-        await folder.OpenAsync(FolderAccess.ReadWrite, ct);
-
-        var unseen = await folder.SearchAsync(SearchQuery.NotSeen, ct);
-        _logger.LogInformation("Org {OrgId}: {UnseenCount} unseen message(s) in {Folder}.", orgId, unseen.Count, config.Folder);
-
-        var queued = 0;
-        foreach (var uid in unseen)
-        {
-            var message = await folder.GetMessageAsync(uid, ct);
-            var processed = await ProcessMessageAsync(orgId, config.DefaultSupplierId.Value, message, ct);
-            if (processed)
-            {
-                await folder.AddFlagsAsync(uid, MessageFlags.Seen, silent: true, ct);
-                queued++;
-            }
-        }
-
-        if (queued > 0)
-            _logger.LogInformation("Org {OrgId}: queued {Queued} parse job(s) from email attachments.", orgId, queued);
-
-        await client.DisconnectAsync(quit: true, ct);
-        await _emailSettings.MarkPolledAsync(orgId, DateTime.UtcNow, ct);
-
-        _logger.LogInformation("IMAP poll complete for org {OrgId}. Unseen={Unseen}, ParseJobsQueued={Queued}.", orgId, unseen.Count, queued);
-    }
-
-    private async Task<bool> ProcessMessageAsync(Guid orgId, Guid supplierId, MimeMessage message, CancellationToken ct)
-    {
-        var processedAny = false;
-
-        foreach (var attachment in message.Attachments)
-        {
-            if (attachment is not MimePart part)
-                continue;
-
-            var fileName = string.IsNullOrWhiteSpace(part.FileName)
-                ? $"email-attachment-{Guid.NewGuid():N}.dat"
-                : part.FileName;
-            var extension = Path.GetExtension(fileName);
-
-            if (!SupportedExtensions.Contains(extension))
-                continue;
-
-            if (part.Content is null)
-                continue;
-
-            await using var stream = new MemoryStream();
-            await part.Content.DecodeToAsync(stream, ct);
-            stream.Position = 0;
-
-            var contentType = string.IsNullOrWhiteSpace(part.ContentType.MimeType)
-                ? "application/octet-stream"
-                : part.ContentType.MimeType;
-
-            var result = await _orders.CreateStubAsync(orgId, supplierId, stream, fileName, contentType, ct);
-            if (!result.IsSuccess)
-            {
-                _logger.LogWarning(
-                    "Email attachment {FileName} for org {OrgId} could not create order: {Error}",
-                    fileName,
-                    orgId,
-                    result.Error);
-                continue;
-            }
-
-            ParseOrderJob.Enqueue(_jobs, result.Value!.Id, orgId);
-            processedAny = true;
-        }
-
-        return processedAny;
+        _logger.LogInformation("Email polling dispatcher: enqueued {Count} EmailPollOrgJob(s).", orgIds.Count);
     }
 }
