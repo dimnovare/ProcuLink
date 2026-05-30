@@ -305,7 +305,13 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
 
             if (released)
             {
-                // Escaped character — emit literally.
+                // Escaped character. Tokenizing only needs to NOT treat an escaped
+                // segment terminator as a real terminator — it must PRESERVE the
+                // release sequence (both the release char and the escaped char) so
+                // that release-unescaping happens exactly once, later, at the
+                // component split in SplitRespectingRelease. Consuming the release
+                // here (as a naive "emit literally") would unescape a second time.
+                current.Append(d.Release);
                 current.Append(c);
                 released = false;
                 continue;
@@ -334,6 +340,10 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
             current.Append(c);
         }
 
+        // A dangling release char at the very end is malformed, but preserve it so
+        // tokenizing is lossless (the downstream split decides how to treat it).
+        if (released) current.Append(d.Release);
+
         // Capture trailing segment without terminator (lenient)
         var tail = current.ToString().Trim('\r', '\n', ' ', '\t');
         if (tail.Length > 0)
@@ -344,7 +354,10 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
 
     private static Segment ParseSegment(string raw, Delimiters d)
     {
-        var elementParts = SplitRespectingRelease(raw, d.Element, d.Release);
+        // Split into elements while PRESERVING release sequences: an escaped element
+        // delimiter must not split, but its release prefix is kept intact so the
+        // component split below is the single point that unescapes.
+        var elementParts = SplitPreservingRelease(raw, d.Element, d.Release);
         if (elementParts.Count == 0)
             throw new EdifactParseException("Encountered empty segment.");
 
@@ -353,6 +366,9 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
 
         for (int i = 1; i < elementParts.Count; i++)
         {
+            // Component split is the LEAF split and the ONLY place release-escaping is
+            // removed. Every element value (even a simple single-component element)
+            // passes through here, so each leaf value is unescaped exactly once.
             var comps = SplitRespectingRelease(elementParts[i], d.Component, d.Release);
             elements.Add(comps);
         }
@@ -360,6 +376,59 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
         return new Segment(tag, elements);
     }
 
+    /// <summary>
+    /// Splits <paramref name="input"/> on every UNescaped <paramref name="delimiter"/>,
+    /// but leaves release sequences intact in the output (the release char and the
+    /// char it escapes are both preserved). Used for the segment and element splits,
+    /// which must respect — but not consume — escaping so that the final component
+    /// split (<see cref="SplitRespectingRelease"/>) performs the single unescape.
+    /// </summary>
+    private static List<string> SplitPreservingRelease(string input, char delimiter, char release)
+    {
+        var result = new List<string>();
+        var sb     = new StringBuilder();
+        var esc    = false;
+
+        foreach (var c in input)
+        {
+            if (esc)
+            {
+                // Preserve the whole release sequence for the leaf split to unescape.
+                sb.Append(release);
+                sb.Append(c);
+                esc = false;
+                continue;
+            }
+
+            if (c == release)
+            {
+                esc = true;
+                continue;
+            }
+
+            if (c == delimiter)
+            {
+                result.Add(sb.ToString());
+                sb.Clear();
+                continue;
+            }
+
+            sb.Append(c);
+        }
+
+        // Lossless: keep a dangling release char rather than silently dropping it.
+        if (esc) sb.Append(release);
+
+        result.Add(sb.ToString());
+        return result;
+    }
+
+    /// <summary>
+    /// Splits <paramref name="input"/> on every UNescaped <paramref name="delimiter"/>
+    /// and removes release escaping (the release char is dropped, the next char is
+    /// taken literally). This is the LEAF split — release-unescaping happens here and
+    /// nowhere else, so a value is never unescaped twice.
+    /// </summary>
     private static List<string> SplitRespectingRelease(string input, char delimiter, char release)
     {
         var result = new List<string>();

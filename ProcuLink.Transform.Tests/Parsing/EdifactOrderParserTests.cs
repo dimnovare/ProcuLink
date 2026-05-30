@@ -1,5 +1,7 @@
 using System.Text;
 using FluentAssertions;
+using ProcuLink.Core.Services;
+using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
 
 namespace ProcuLink.Transform.Tests.Parsing;
@@ -214,6 +216,40 @@ public class EdifactOrderParserTests
         result.Lines[0].Quantity.Should().Be(7m);
         result.Lines[0].Unit.Should().Be("PCE");
         result.Lines[0].UnitPrice.Should().Be(3.50m);
+    }
+
+    // ── Release-escape round-trip (regression) ────────────────────────────────
+
+    [Fact]
+    public async Task ParseAsync_RoundTripsFreeTextContainingReleaseAndDelimiterChars()
+    {
+        // Regression: the parser must release-unescape EXACTLY ONCE. A free-text
+        // description containing the release char '?', the component separator ':',
+        // and the element separator '+' is release-escaped by
+        // EdifactParsedOrderTransform on write; the parser must recover it
+        // byte-for-byte. Previously the value was unescaped multiple times (once
+        // while tokenizing segments, again while splitting elements and components),
+        // so the now-bare ':' mis-split the value and the now-bare '?' was dropped —
+        // "Cable 2:1 ratio? a+b" parsed back as "Cable 2 1 ratio a".
+        const string tricky = "Cable 2:1 ratio? a+b";
+
+        var source = new ParsedOrder(
+            PoNumber:  "PO-ESC-001",
+            OrderDate: new DateTime(2026, 5, 30),
+            BuyerName: "Acme Buyer Ltd",
+            Currency:  "EUR",
+            Lines: new List<ParsedOrderLine>
+            {
+                new(LineNumber: 1, BuyerItemCode: "ITEM-1", Description: tricky, Quantity: 1m, Unit: "EA", UnitPrice: 9.99m),
+            });
+
+        var edi = new EdifactParsedOrderTransform().Transform(source, OutputFormat.EdifactOrders);
+
+        using var stream = new MemoryStream(edi.Content);
+        var parsed = await new EdifactOrderParser().ParseAsync(stream, CancellationToken.None);
+
+        parsed.Lines.Should().HaveCount(1);
+        parsed.Lines[0].Description.Should().Be(tricky);
     }
 
     // ── Error paths ───────────────────────────────────────────────────────────

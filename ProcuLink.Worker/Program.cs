@@ -108,6 +108,12 @@ builder.Services.AddSingleton<ITransformService, JsonTransformService>();
 builder.Services.AddSingleton<ITransformService, UblOrderTransformService>(); // Group M Phase 1 — UBL 2.1 Peppol BIS 3.0
 builder.Services.AddSingleton<ITransformService, X12TransformService>(); // Group M — ANSI X12 850
 
+// ── Canonical-model output transforms (ParsedOrder → standards document) ────
+builder.Services.AddSingleton<IParsedOrderTransform, UblParsedOrderTransform>();     // UBL 2.1 Order
+builder.Services.AddSingleton<IParsedOrderTransform, X12ParsedOrderTransform>();     // ANSI X12 850
+builder.Services.AddSingleton<IParsedOrderTransform, EdifactParsedOrderTransform>(); // UN/EDIFACT ORDERS D.96A
+builder.Services.AddSingleton<ParsedOrderTransformFactory>();
+
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
 builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
