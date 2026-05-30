@@ -661,6 +661,173 @@ public sealed class OrderService : IOrderService
         return Result<IReadOnlyList<PurchaseOrderSummary>>.Ok(summaries);
     }
 
+    // ── ListPagedAsync ────────────────────────────────────────────────────────
+
+    public async Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(
+        Guid      organisationId,
+        int       page,
+        int       pageSize,
+        string?   status,
+        Guid?     supplierId,
+        string?   search,
+        DateTime? dateFrom,
+        DateTime? dateTo,
+        CancellationToken ct)
+    {
+        // ── Step 1: build base query with SQL-filterable predicates ────────────
+        // Org scope is mandatory on every query — never omit.
+        var baseQuery = _db.PurchaseOrders
+            .AsNoTracking()
+            .Where(o => o.OrgId == organisationId);
+
+        if (!string.IsNullOrWhiteSpace(status))
+            baseQuery = baseQuery.Where(o => o.Status == status);
+
+        if (supplierId.HasValue)
+            baseQuery = baseQuery.Where(o => o.SupplierId == supplierId.Value);
+
+        if (dateFrom.HasValue)
+            baseQuery = baseQuery.Where(o => o.CreatedAt >= dateFrom.Value);
+
+        if (dateTo.HasValue)
+            baseQuery = baseQuery.Where(o => o.CreatedAt <= dateTo.Value);
+
+        // ── Step 2: project rows — buyer name lives in canonical_json (jsonb) so
+        //    it must be pulled into memory for the search post-filter. ──────────
+        var allRows = await baseQuery
+            .OrderByDescending(o => o.CreatedAt)
+            .Select(o => new
+            {
+                o.Id,
+                o.PoNumber,
+                SupplierName  = o.Supplier != null ? o.Supplier.Name : "Unknown Supplier",
+                o.OrderDate,
+                o.Status,
+                o.CreatedAt,
+                o.Currency,
+                o.SourceFileKey,
+                o.CanonicalJson,
+            })
+            .ToListAsync(ct);
+
+        // ── Step 3: in-memory search filter (PO number OR supplier name OR buyer name) ─
+        var trimmedSearch = search?.Trim();
+        var filtered = allRows;
+        if (!string.IsNullOrWhiteSpace(trimmedSearch))
+        {
+            filtered = allRows.Where(o =>
+            {
+                if (o.PoNumber.Contains(trimmedSearch, StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (o.SupplierName.Contains(trimmedSearch, StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                // Extract buyer name from canonical JSON (populated after parsing).
+                if (o.CanonicalJson is not null)
+                {
+                    try
+                    {
+                        var root = o.CanonicalJson.RootElement;
+                        if (root.TryGetProperty("buyerName", out var el))
+                        {
+                            var bn = el.GetString();
+                            if (bn is not null && bn.Contains(trimmedSearch, StringComparison.OrdinalIgnoreCase))
+                                return true;
+                        }
+                        else if (root.TryGetProperty("BuyerName", out var el2))
+                        {
+                            var bn = el2.GetString();
+                            if (bn is not null && bn.Contains(trimmedSearch, StringComparison.OrdinalIgnoreCase))
+                                return true;
+                        }
+                    }
+                    catch { /* malformed JSON — ignore */ }
+                }
+
+                return false;
+            }).ToList();
+        }
+
+        // ── Step 4: totalCount on the filtered set ────────────────────────────
+        var totalCount = filtered.Count;
+
+        if (totalCount == 0)
+            return Result<(IReadOnlyList<PurchaseOrderSummary>, int)>.Ok(
+                (Array.Empty<PurchaseOrderSummary>(), 0));
+
+        // ── Step 5: paginate ──────────────────────────────────────────────────
+        var skip  = (page - 1) * pageSize;
+        var paged = filtered.Skip(skip).Take(pageSize).ToList();
+
+        // ── Step 6: aggregate line counts for the page subset only ────────────
+        var pagedIds = paged.Select(o => o.Id).ToList();
+
+        var lineCounts = await _db.PurchaseOrderLines
+            .AsNoTracking()
+            .Where(l => pagedIds.Contains(l.OrderId))
+            .GroupBy(l => l.OrderId)
+            .Select(g => new
+            {
+                OrderId    = g.Key,
+                Total      = g.Count(),
+                Unresolved = g.Count(l => l.NeedsReview),
+                TotalValue = g.Sum(l => l.Quantity * l.UnitPrice),
+            })
+            .ToDictionaryAsync(g => g.OrderId, ct);
+
+        // ── Step 7: project to PurchaseOrderSummary ───────────────────────────
+        var summaries = paged.Select(o =>
+        {
+            lineCounts.TryGetValue(o.Id, out var lc);
+
+            string? buyerName = null;
+            if (o.CanonicalJson is not null)
+            {
+                try
+                {
+                    var root = o.CanonicalJson.RootElement;
+                    if (root.TryGetProperty("buyerName", out var el))
+                        buyerName = el.GetString();
+                    else if (root.TryGetProperty("BuyerName", out var el2))
+                        buyerName = el2.GetString();
+                }
+                catch { /* malformed JSON — ignore */ }
+            }
+
+            string? sourceFormat = null;
+            if (!string.IsNullOrEmpty(o.SourceFileKey))
+            {
+                var ext = System.IO.Path.GetExtension(o.SourceFileKey).TrimStart('.').ToLowerInvariant();
+                sourceFormat = ext switch
+                {
+                    "pdf"           => "pdf",
+                    "csv"           => "csv",
+                    "xlsx" or "xls" => "xlsx",
+                    "xml" or "cxml" => "cxml",
+                    "edi" or "x12"  => "edi",
+                    _               => null,
+                };
+            }
+
+            return new PurchaseOrderSummary(
+                o.Id,
+                o.PoNumber,
+                o.SupplierName,
+                buyerName,
+                o.OrderDate,
+                o.Status,
+                lc?.Total      ?? 0,
+                lc?.Unresolved ?? 0,
+                lc?.TotalValue ?? 0m,
+                o.Currency,
+                sourceFormat,
+                o.CreatedAt);
+        }).ToList();
+
+        return Result<(IReadOnlyList<PurchaseOrderSummary>, int)>.Ok(
+            ((IReadOnlyList<PurchaseOrderSummary>)summaries, totalCount));
+    }
+
     // ── TransformAsync ────────────────────────────────────────────────────────
 
     public async Task<Result<TransformResponse>> TransformAsync(

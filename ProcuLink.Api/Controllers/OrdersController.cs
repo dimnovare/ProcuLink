@@ -196,13 +196,38 @@ public sealed class OrdersController : ControllerBase
 
     // ── GET /api/orders ───────────────────────────────────────────────────────
 
-    /// <summary>List all orders for the authenticated organisation, newest first.</summary>
+    /// <summary>
+    /// List orders for the authenticated organisation, newest first.
+    /// Supports pagination and filtering by status, supplierId, date range, and
+    /// a free-text search over PO number, supplier name, and buyer name.
+    /// </summary>
+    /// <param name="query">Pagination and filter parameters.</param>
+    /// <param name="ct">Cancellation token.</param>
     [HttpGet]
-    [ProducesResponseType(typeof(IReadOnlyList<PurchaseOrderSummary>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> List(CancellationToken ct)
+    [ProducesResponseType(typeof(PaginatedResult<PurchaseOrderSummary>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> List([FromQuery] OrderListQuery query, CancellationToken ct)
     {
-        var result = await _orders.ListAsync(_tenant.OrganisationId, ct);
-        return Ok(result.Value);
+        // Clamp page and pageSize to valid ranges.
+        var page     = Math.Max(1, query.Page);
+        var pageSize = Math.Clamp(query.PageSize, 1, 100);
+
+        var result = await _orders.ListPagedAsync(
+            _tenant.OrganisationId,
+            page,
+            pageSize,
+            query.Status,
+            query.SupplierId,
+            query.Search,
+            query.DateFrom,
+            query.DateTo,
+            ct);
+
+        if (!result.IsSuccess)
+            return BadRequest(new { error = result.Error });
+
+        var (items, totalCount) = result.Value;
+        return Ok(new PaginatedResult<PurchaseOrderSummary>(items, totalCount, page, pageSize));
     }
 
     // ── GET /api/orders/{id} ──────────────────────────────────────────────────

@@ -92,6 +92,35 @@ public interface IOrderService
         CancellationToken ct);
 
     /// <summary>
+    /// Paginated, filtered list of orders for the org.
+    /// Filters are applied before pagination; totalCount reflects the filtered count.
+    /// Results are ordered newest-first (CreatedAt DESC).
+    /// </summary>
+    /// <param name="organisationId">Tenant scope — every row must match this id.</param>
+    /// <param name="page">1-based page index.</param>
+    /// <param name="pageSize">Items per page, already clamped by the caller.</param>
+    /// <param name="status">Optional status filter (exact match).</param>
+    /// <param name="supplierId">Optional supplier id filter.</param>
+    /// <param name="search">
+    /// Optional case-insensitive substring match over PO number and supplier name
+    /// (evaluated in EF/SQL). Buyer name from canonical_json is matched in memory
+    /// after the database query because it lives in a jsonb column.
+    /// </param>
+    /// <param name="dateFrom">Inclusive lower bound on CreatedAt (UTC).</param>
+    /// <param name="dateTo">Inclusive upper bound on CreatedAt (UTC).</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(
+        Guid       organisationId,
+        int        page,
+        int        pageSize,
+        string?    status,
+        Guid?      supplierId,
+        string?    search,
+        DateTime?  dateFrom,
+        DateTime?  dateTo,
+        CancellationToken ct);
+
+    /// <summary>
     /// Transform a fully-resolved order to XML or CSV, upload the artifact to R2,
     /// persist the outbound_artifacts row, and advance the order status to "ready_to_deliver".
     /// Delivery workflow is responsible for "delivering", "delivered", and "delivery_failed".
