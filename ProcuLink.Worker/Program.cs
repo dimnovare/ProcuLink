@@ -154,8 +154,11 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, Pr
 builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier, ProcuLink.Infrastructure.Services.Webhooks.HmacWebhookVerifier>();
 
 builder.Services.AddScoped<EmailPollingJob>();
+builder.Services.AddScoped<EmailPollOrgJob>();
 builder.Services.AddScoped<SftpPollingJob>();
+builder.Services.AddScoped<SftpPollOrgJob>();
 builder.Services.AddScoped<S3PollingJob>();
+builder.Services.AddScoped<S3PollOrgJob>();
 // P0 reliability: stuck-order detection sweep + operator retry job.
 builder.Services.AddScoped<IStuckOrderDetectionService, StuckOrderDetectionService>();
 builder.Services.AddScoped<StuckOrderDetectionJob>();
