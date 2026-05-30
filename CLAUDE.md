@@ -213,7 +213,47 @@ source. All UI/UX and design decisions run through the local design system,
 
 ---
 
-## Current direction — international standard for outbound PO routing
+## Current direction — WIN THE FIRST CUSTOMERS (freeze features)
+
+> **⚠️ ROADMAP UPDATED 2026-05-30** after the investor-grade + four-lens analyses.
+> Strategic source of truth: [investor-analysis](docs/strategy/2026-05-30-investor-analysis.md)
+> · [four-lens](docs/strategy/2026-05-30-four-lens-product-analysis.md)
+> · [pricing-proposal](docs/strategy/2026-05-30-pricing-proposal.md).
+>
+> **The bottleneck is SELLING, not features.** The core engine (parse → map → validate →
+> transform → deliver, audit trail, AES-GCM credentials) is real and tested — but it was
+> overbuilt ~5×, never shown to a customer, and never run live end-to-end. ProcuLink is a
+> **€1–3M ARR bootstrap** (profitable at €300–500k in 18–24 months), **not** a venture-scale
+> "international standard." Those identities require opposite behaviours; the near-term plan
+> commits to the bootstrap.
+>
+> **Wedge:** Baltic IT distributors/wholesalers on **Erply/Directo**, Estonia-first. Sell to
+> the **buyer** (procurement coordinator — approves €399 without a committee). ICP: 50–400
+> employees, 100–500 POs/mo to 3–20 suppliers, today handled in Excel.
+>
+> **Near-term plan — the ONLY things before the first paid pilot:**
+> 1. **SSRF allowlist (P0 security)** before any live customer data (+ JWT `ValidateAudience=false`,
+>    migration consolidation + fresh-DB apply test). *Cross-tenant `FindAsync` P0 ✅ fixed `54e1cf7`;
+>    all-zero AES-key P0 ✅ fixed `ee7752c` (rotate the dev key out of git once billing lands).*
+> 2. **Erply/Directo starter mapping templates** (JSON config, zero code) — highest sales leverage;
+>    cuts first delivery 45→<15 min.
+> 3. **Exception dashboard** (all-orders-in-exception view) — ~1 day, 1 query + 1 page.
+> 4. **Live end-to-end QA** on Railway + Vercel — one real PO, buyer → supplier, delivered intact.
+> 5. **Pricing ✅ shipped:** Operations €399 anchor · **Distributor €1,499** (2,500 orders / 30 suppliers) ·
+>    Enterprise from €2,500 · per-supplier onboarding fee €500×3 then €150 (waived for design
+>    partners #1–5). *Still TODO: create the Stripe Distributor product + `DistributorPriceId`.*
+> 6. **Extend the pilot 14 → 60 days**, then **put one real Markit PO in front of one real supplier
+>    before writing another line of feature code.**
+>
+> **FREEZE until there are paying customers** (real engineering, but none of it wins customer #1):
+> Zapier/Make layer, invoice/ASN/DESADV, extra EDI formats, cross-org mapping library, RBAC/SCIM,
+> PunchOut, OCR, the standards-comparison screen, i18n, and the old "international standard" breadth
+> (Horizons M/N/O/P/Q/R/S below). The one exception worth finishing: the **Bridge Layer frontend
+> redesign** (`feat/bridge-layer-redesign`) — for demo credibility.
+>
+> **Strategic fork (founder's call):** "Baltic bootstrap" vs "international standard." The analysis
+> recommends bootstrap. **Everything below this box is the earlier (2026-05-28) aspirational plan —
+> now ON HOLD**, kept for reference, not the active roadmap.
 
 ProcuLink's product thesis as of 2026-05-28: become the **international standard
 for outbound B2B purchase order routing**. Any input format / channel →
@@ -365,7 +405,7 @@ Read this before starting new work:
 No remaining Phase 4 C-H group is open. Wave 3 and Wave 4 (Invoice/ASN + Zapier/Make.com) are complete. Group K is complete. **Group L is fully shipped on `main` both repos** — Waves 1 + 2 + 3 all merged, all feature branches deleted local + remote, all chip stashes cleared. The only remaining work is founder configuration (PostHog keys, Clerk post-signup redirect, `NEXT_PUBLIC_STATUS_URL`, `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`, `NEXT_PUBLIC_BOOK_DEMO_URL`, optional SMTP) — see `STATUS.md` "Group L — waiting on founder configuration / external setup" table. Group I (UI polish) is effectively complete through pass 15.
 
 1. Read `STATUS.md`.
-2. Read `docs/superpowers/plans/2026-05-26-production-hardening-roadmap.md`.
+2. Read the current strategy memos in `docs/strategy/` (investor-analysis + four-lens) for priorities.
 3. Read only task-relevant design docs, starting with `docs/design-system/00-agent-quick-brief.md` for Group I.
 4. Use `/superpowers:brainstorm` and `/superpowers:write-plan` for any new task touching 3+ files.
 
@@ -417,7 +457,7 @@ unchecked historical checklist items unless `STATUS.md` explicitly reopens them.
 
 ### Group C — Stripe billing
 **Status:** ✅ Implemented. C2 final billing model reconciliation is also implemented.
-Read `STATUS.md` and `docs/superpowers/specs/2026-05-24-stripe-billing-design.md`
+Read `STATUS.md` and `docs/strategy/2026-05-30-pricing-proposal.md`
 before changing billing code.
 
 Final plan ladder:
