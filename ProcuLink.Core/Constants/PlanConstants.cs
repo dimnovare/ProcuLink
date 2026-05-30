@@ -7,6 +7,7 @@ public static class PlanConstants
     public const string Growth      = "growth";
     public const string Operations  = "operations";
     public const string Integration = "integration";
+    public const string Distributor = "distributor";
     public const string Enterprise  = "enterprise";
 
     public static readonly string[] All =
@@ -15,6 +16,7 @@ public static class PlanConstants
         Growth,
         Operations,
         Integration,
+        Distributor,
         Enterprise,
     ];
 
@@ -31,6 +33,7 @@ public static class PlanConstants
             [Growth]      = (150,              5),
             [Operations]  = (500,              10),
             [Integration] = (1_000,            20),
+            [Distributor] = (2_500,            30),
             [Enterprise]  = (int.MaxValue,     int.MaxValue),
         };
 
@@ -41,7 +44,7 @@ public static class PlanConstants
         Limits.TryGetValue(plan, out var limits) ? limits.Suppliers : PilotSupplierLimit;
 
     public static bool IsPaidPlan(string plan) =>
-        plan is Growth or Operations or Integration or Enterprise;
+        plan is Growth or Operations or Integration or Distributor or Enterprise;
 
     // ── Feature gate: minimum plan required per feature ───────────────────
     private static readonly IReadOnlyDictionary<BillingFeature, string> MinimumPlan =
@@ -66,7 +69,7 @@ public static class PlanConstants
         };
 
     private static readonly List<string> PlanOrder =
-        new() { Pilot, Growth, Operations, Integration, Enterprise };
+        new() { Pilot, Growth, Operations, Integration, Distributor, Enterprise };
 
     public static bool PlanHasFeature(string plan, BillingFeature feature)
     {

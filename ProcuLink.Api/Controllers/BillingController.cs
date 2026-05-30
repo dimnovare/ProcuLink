@@ -49,7 +49,8 @@ public sealed class BillingController : ControllerBase
         [PlanConstants.Growth]      = 1,
         [PlanConstants.Operations]  = 2,
         [PlanConstants.Integration] = 3,
-        [PlanConstants.Enterprise]  = 4,
+        [PlanConstants.Distributor] = 4,
+        [PlanConstants.Enterprise]  = 5,
     };
 
     private static bool IsPlanDowngrade(string? fromPlan, string toPlan) =>
@@ -79,9 +80,9 @@ public sealed class BillingController : ControllerBase
         [FromBody] CheckoutRequest request,
         CancellationToken ct)
     {
-        var validPlans = new[] { PlanConstants.Growth, PlanConstants.Operations, PlanConstants.Integration };
+        var validPlans = new[] { PlanConstants.Growth, PlanConstants.Operations, PlanConstants.Integration, PlanConstants.Distributor };
         if (!validPlans.Contains(request.Plan, StringComparer.OrdinalIgnoreCase))
-            return BadRequest(new { error = $"Invalid plan '{request.Plan}'. Valid: growth, operations, integration." });
+            return BadRequest(new { error = $"Invalid plan '{request.Plan}'. Valid: growth, operations, integration, distributor." });
 
         var frontendUrl = _config["Frontend:Url"] ?? "http://localhost:8082";
         try
@@ -356,6 +357,7 @@ public sealed class BillingController : ControllerBase
         if (priceId == _config["Stripe:GrowthPriceId"]) return PlanConstants.Growth;
         if (priceId == _config["Stripe:OperationsPriceId"]) return PlanConstants.Operations;
         if (priceId == _config["Stripe:IntegrationPriceId"]) return PlanConstants.Integration;
+        if (priceId == _config["Stripe:DistributorPriceId"]) return PlanConstants.Distributor;
         return null;
     }
 }

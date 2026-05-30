@@ -187,6 +187,7 @@ public sealed class StripeBillingService : IBillingService
             PlanConstants.Growth => _config["Stripe:GrowthPriceId"],
             PlanConstants.Operations => _config["Stripe:OperationsPriceId"],
             PlanConstants.Integration => _config["Stripe:IntegrationPriceId"],
+            PlanConstants.Distributor => _config["Stripe:DistributorPriceId"],
             _ => throw new ArgumentException($"No Stripe Checkout for plan '{plan}'.")
         };
 
