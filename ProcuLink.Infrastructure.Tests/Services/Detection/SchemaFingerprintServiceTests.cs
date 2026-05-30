@@ -52,6 +52,29 @@ public class SchemaFingerprintServiceTests
     }
 
     [Fact]
+    public void Model_DeclaresUniqueIndex_OnOrganisationIdAndColumnNameHash()
+    {
+        // The concurrent-insert race-recovery path in RecordParseSuccessAsync only works if the
+        // database actually rejects a duplicate (OrganisationId, ColumnNameHash) with a 23505.
+        // That guarantee lives in the EF model as a UNIQUE index — without it, two concurrent
+        // ParseOrderJob workers for different orders with the same layout both insert, silently
+        // duplicating fingerprints and undercounting ParseSuccessCount. InMemory does not enforce
+        // unique indexes, so we assert the model declares it rather than relying on a runtime throw.
+        using var db = NewDb();
+
+        var entity = db.Model.FindEntityType(typeof(SchemaFingerprint));
+        entity.Should().NotBeNull();
+
+        var hasUniqueIndex = entity!.GetIndexes().Any(ix =>
+            ix.IsUnique &&
+            ix.Properties.Select(p => p.Name).SequenceEqual(
+                new[] { nameof(SchemaFingerprint.OrganisationId), nameof(SchemaFingerprint.ColumnNameHash) }));
+
+        hasUniqueIndex.Should().BeTrue(
+            "a unique index on (OrganisationId, ColumnNameHash) is what makes the race-recovery path reachable");
+    }
+
+    [Fact]
     public async Task RecordParseSuccess_CreatesFingerprint_OnFirstParse()
     {
         var orgId = Guid.NewGuid();
