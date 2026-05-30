@@ -222,6 +222,8 @@ else
 // OrderService is Scoped for the same reason.
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
+builder.Services.AddScoped<IPassportService, PassportService>();
+builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 builder.Services.AddScoped<ISampleOrderService, SampleOrderService>();
 
