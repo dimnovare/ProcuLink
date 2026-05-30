@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Infrastructure;
@@ -18,11 +19,19 @@ public class ApiKeyServiceTests
         return new ApiKeyTestDbContext(opts);
     }
 
+    private static IConfiguration MakeConfig() =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Security:ApiKeyHashSecret"] = "test-hash-secret-at-least-16-chars"
+            })
+            .Build();
+
     [Fact]
     public async Task CreateAsync_ReturnsRawKeyAndEntityWithPrefix()
     {
         var db  = MakeDb();
-        var svc = new ApiKeyService(db);
+        var svc = new ApiKeyService(db, MakeConfig());
         var orgId = Guid.NewGuid();
         db.Organisations.Add(new Organisation
         {
@@ -41,7 +50,7 @@ public class ApiKeyServiceTests
     public async Task RevokeAsync_SetsIsActiveFalse()
     {
         var db  = MakeDb();
-        var svc = new ApiKeyService(db);
+        var svc = new ApiKeyService(db, MakeConfig());
         var orgId = Guid.NewGuid();
         db.Organisations.Add(new Organisation
         {
@@ -61,7 +70,7 @@ public class ApiKeyServiceTests
     public async Task RevokeAsync_WrongOrg_ReturnsFalse()
     {
         var db = MakeDb();
-        var svc = new ApiKeyService(db);
+        var svc = new ApiKeyService(db, MakeConfig());
         var orgId1 = Guid.NewGuid();
         var orgId2 = Guid.NewGuid();
         db.Organisations.Add(new Organisation { Id = orgId1, ClerkOrgId = "a1", Name = "A1", Slug = "a1-aaaa" });
