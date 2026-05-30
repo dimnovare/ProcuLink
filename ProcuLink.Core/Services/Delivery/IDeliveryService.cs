@@ -21,4 +21,10 @@ public interface IDeliveryService
         Guid orderId,
         int maxAttempts,
         CancellationToken ct);
+
+    /// <summary>
+    /// Org-scoped count of real (order-linked) delivery attempts for an order. Used by the
+    /// automatic retry queue to pick the next exponential-backoff step and detect the cap.
+    /// </summary>
+    Task<int> CountDeliveryAttemptsAsync(Guid orgId, Guid orderId, CancellationToken ct);
 }

@@ -247,8 +247,18 @@ builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService
 builder.Services.AddScoped<IValidationRuleService, ValidationRuleService>();
 builder.Services.AddScoped<IOutputTemplateService, OutputTemplateService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
+// Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
+builder.Services.AddSingleton(sp =>
+{
+    var opts = new ProcuLink.Core.Services.Delivery.DeliveryReliabilityOptions();
+    builder.Configuration
+        .GetSection(ProcuLink.Core.Services.Delivery.DeliveryReliabilityOptions.SectionName)
+        .Bind(opts);
+    return opts;
+});
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
+builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
@@ -279,6 +289,15 @@ builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
 builder.Services.AddSingleton<ITransformService, JsonTransformService>();
 builder.Services.AddSingleton<ITransformService, UblOrderTransformService>(); // Group M Phase 1 — UBL 2.1 Peppol BIS 3.0
 builder.Services.AddSingleton<ITransformService, X12TransformService>(); // Group M — ANSI X12 850
+
+// ── Canonical-model output transforms (ProcuLink.Transform) ─────────────────
+// Serialize a ParsedOrder (the pre-resolution canonical model) directly to a
+// standards document. Selected at runtime by ParsedOrderTransformFactory via
+// IEnumerable<IParsedOrderTransform> + CanTransform().
+builder.Services.AddSingleton<IParsedOrderTransform, UblParsedOrderTransform>();     // UBL 2.1 Order
+builder.Services.AddSingleton<IParsedOrderTransform, X12ParsedOrderTransform>();     // ANSI X12 850
+builder.Services.AddSingleton<IParsedOrderTransform, EdifactParsedOrderTransform>(); // UN/EDIFACT ORDERS D.96A
+builder.Services.AddSingleton<ParsedOrderTransformFactory>();
 
 // ── Wave 3: Invoice parsers ────────────────────────────────────────────────
 builder.Services.AddSingleton<IInvoiceParser, UblInvoiceParser>();

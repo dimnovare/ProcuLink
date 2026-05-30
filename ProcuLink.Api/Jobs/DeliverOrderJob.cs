@@ -1,26 +1,40 @@
 using Hangfire;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Infrastructure.Jobs;
 
 namespace ProcuLink.Api.Jobs;
 
 /// <summary>
 /// Hangfire background job: dispatches a transformed outbound artifact through
 /// the supplier delivery workflow. The workflow owns delivery state transitions.
+///
+/// <para>
+/// On a transient delivery failure (5xx / network — <c>DispatchArtifactAsync</c> returns a
+/// failed result without throwing, so Hangfire's own AutomaticRetry does not fire) this job
+/// hands the order to the automatic retry queue (<see cref="RetryDeliveryJob"/>) with the first
+/// exponential-backoff delay. A 4xx supplier rejection is terminal and is left for operator review.
+/// </para>
 /// </summary>
 public class DeliverOrderJob
 {
     private readonly IDeliveryService _deliveryService;
     private readonly IBillingService _billingService;
+    private readonly IBackgroundJobClient _jobs;
+    private readonly DeliveryReliabilityOptions _reliability;
     private readonly ILogger<DeliverOrderJob> _logger;
 
     public DeliverOrderJob(
         IDeliveryService deliveryService,
         IBillingService billingService,
-        ILogger<DeliverOrderJob> logger)
+        IBackgroundJobClient jobs,
+        ILogger<DeliverOrderJob> logger,
+        DeliveryReliabilityOptions? reliability = null)
     {
         _deliveryService = deliveryService;
         _billingService = billingService;
+        _jobs = jobs;
+        _reliability = reliability ?? new DeliveryReliabilityOptions();
         _logger = logger;
     }
 
@@ -53,13 +67,35 @@ public class DeliverOrderJob
             requireAutoDeliver,
             ct);
 
-        if (!result.Success)
+        if (result.Success)
+            return;
+
+        _logger.LogWarning(
+            "DeliverOrderJob finished with delivery failure for order {OrderId}: {Error}",
+            orderId,
+            result.ErrorMessage);
+
+        // A 4xx is an explicit supplier rejection — retrying the same payload won't help, so it
+        // is left for operator review (status 'rejected_by_supplier'). Only transient failures
+        // (5xx / network, no 4xx code) enter the automatic backoff queue.
+        if (result.ResponseCode is >= 400 and <= 499)
+            return;
+
+        var maxAttempts = _reliability.MaxAttempts > 0 ? _reliability.MaxAttempts : RetryDeliveryJob.MaxAttempts;
+        var attemptsMade = await _deliveryService.CountDeliveryAttemptsAsync(organisationId, orderId, ct);
+        if (attemptsMade >= maxAttempts)
         {
             _logger.LogWarning(
-                "DeliverOrderJob finished with delivery failure for order {OrderId}: {Error}",
-                orderId,
-                result.ErrorMessage);
+                "DeliverOrderJob: order {OrderId} already at attempt cap ({Max}); not scheduling auto-retry.",
+                orderId, maxAttempts);
+            return;
         }
+
+        var delay = _reliability.BackoffFor(attemptsMade);
+        RetryDeliveryJob.ScheduleRetry(_jobs, orderId, organisationId, delay);
+        _logger.LogInformation(
+            "DeliverOrderJob: scheduled automatic retry #{Next} for order {OrderId} in {Delay}.",
+            attemptsMade + 1, orderId, delay);
     }
 
     /// <summary>Enqueue automatic post-transform delivery (respects AutoDeliver flag).</summary>

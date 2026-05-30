@@ -1,0 +1,156 @@
+using FluentAssertions;
+using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Infrastructure.Jobs;
+
+namespace ProcuLink.Infrastructure.Tests.Jobs;
+
+/// <summary>
+/// Group O reliability — the automatic delivery retry queue. Verifies that
+/// <see cref="RetryDeliveryJob"/> schedules the next attempt at the configured exponential
+/// backoff after a transient failure, stops on a 4xx supplier rejection, and stops once the
+/// attempt cap is reached (dead-letter already handled inside the service).
+/// <see cref="IDeliveryService"/> is mocked so the scheduling decision is asserted in isolation.
+/// </summary>
+public class RetryDeliveryJobBackoffTests
+{
+    private static readonly DeliveryReliabilityOptions Options =
+        new() { MaxAttempts = 3, BackoffMinutes = new[] { 30, 60, 120 } };
+
+    [Fact]
+    public async Task ExecuteAsync_TransientFailureBelowCap_SchedulesRetryAtBackoffDelay()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        // Transient 5xx failure (no 4xx), one attempt now recorded.
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "HTTP 503", 503));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        var before = DateTime.UtcNow;
+        await job.ExecuteAsync(orderId, orgId, default);
+        var after = DateTime.UtcNow;
+
+        jobs.Captured.Should().HaveCount(1);
+        var state = jobs.Captured.Single().State;
+        state.Should().BeOfType<ScheduledState>();
+        // After 1 failed attempt the next backoff is BackoffMinutes[0] == 30 min.
+        ((ScheduledState)state).EnqueueAt.Should()
+            .BeCloseTo(before.AddMinutes(30), TimeSpan.FromMinutes(1))
+            .And.BeOnOrAfter(before.AddMinutes(30).AddSeconds(-1));
+        _ = after;
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SecondTransientFailure_UsesSecondBackoffStep()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "HTTP 500", 500));
+        // Two attempts recorded → next backoff step is BackoffMinutes[1] == 60 min.
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(2);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        var before = DateTime.UtcNow;
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().HaveCount(1);
+        ((ScheduledState)jobs.Captured.Single().State).EnqueueAt
+            .Should().BeCloseTo(before.AddMinutes(60), TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SupplierRejection_DoesNotSchedule()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        // 4xx = explicit rejection → terminal, never auto-retried.
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "HTTP 422", 422));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AtAttemptCap_DoesNotSchedule()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "Maximum delivery attempts reached — order moved to dead-letter."));
+        // Cap reached → service already dead-lettered; the queue must stop.
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(3);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Success_DoesNotSchedule()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(true, null, 202));
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().BeEmpty();
+        delivery.Verify(d => d.CountDeliveryAttemptsAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never, "a delivered order needs no backoff bookkeeping");
+    }
+
+    /// <summary>
+    /// Captures every <see cref="IBackgroundJobClient.Create"/> call so the scheduled state
+    /// (and its backoff delay) raised by the <c>Schedule&lt;T&gt;</c> extension can be asserted.
+    /// </summary>
+    private sealed class CapturingJobClient : IBackgroundJobClient
+    {
+        public List<(Job Job, IState State)> Captured { get; } = new();
+
+        public string Create(Job job, IState state)
+        {
+            Captured.Add((job, state));
+            return Guid.NewGuid().ToString();
+        }
+
+        public bool ChangeState(string jobId, IState state, string expectedState) => true;
+    }
+}

@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProcuLink.Infrastructure;
@@ -12,9 +13,11 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Infrastructure.Migrations
 {
     [DbContext(typeof(ProcuLinkDbContext))]
-    partial class ProcuLinkDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260530114731_AddDeliveryReliabilityFields")]
+    partial class AddDeliveryReliabilityFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1202,11 +1205,7 @@ namespace ProcuLink.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("OrganisationId", "ColumnNameHash")
-                        .IsUnique()
-                        .HasDatabaseName("IX_schema_fingerprints_org_id_column_name_hash");
-
-                    b.ToTable("SchemaFingerprints", (string)null);
+                    b.ToTable("SchemaFingerprints");
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.SftpIngressConfig", b =>

@@ -5,46 +5,106 @@ using ProcuLink.Core.Services.Delivery;
 namespace ProcuLink.Infrastructure.Jobs;
 
 /// <summary>
-/// Hangfire job: operator-triggered delivery retry/replay with dead-letter
-/// escalation. Delegates to <see cref="IDeliveryService.RetryDeliveryAsync"/>,
-/// which is idempotent and org-scoped and owns the attempt-count / dead-letter
-/// state transitions. After <see cref="MaxAttempts"/> failed delivery attempts the
-/// order is moved to <c>delivery_dead_letter</c> and is no longer retried.
+/// Hangfire job: delivery retry/replay with an automatic exponential-backoff queue and
+/// dead-letter escalation. Delegates to <see cref="IDeliveryService.RetryDeliveryAsync"/>,
+/// which is idempotent and org-scoped and owns the attempt-count / dead-letter state
+/// transitions. After <see cref="DeliveryReliabilityOptions.MaxAttempts"/> failed delivery
+/// attempts the order is moved to <c>delivery_dead_letter</c> and is no longer retried.
+///
+/// <para>
+/// <b>Automatic retry queue:</b> when a retry fails for a transient reason (5xx / network —
+/// not an explicit 4xx supplier rejection) and attempts remain below the cap, the job
+/// <see cref="BackgroundJob.Schedule(System.Linq.Expressions.Expression{Func{System.Threading.Tasks.Task}}, TimeSpan)">schedules</see>
+/// the next attempt after the configured exponential backoff (~30 → 60 → 120 min). The
+/// attempt-count guard inside <c>RetryDeliveryAsync</c> makes the whole chain idempotent:
+/// a duplicated job sees the higher attempt count and either dead-letters or no-ops.
+/// </para>
 /// </summary>
 public class RetryDeliveryJob
 {
-    /// <summary>Total delivery attempts allowed before dead-lettering.</summary>
+    /// <summary>Total delivery attempts allowed before dead-lettering. Mirrors <see cref="DeliveryReliabilityOptions.MaxAttempts"/>.</summary>
     public const int MaxAttempts = 3;
 
     private readonly IDeliveryService _delivery;
+    private readonly IBackgroundJobClient _jobs;
+    private readonly DeliveryReliabilityOptions _options;
     private readonly ILogger<RetryDeliveryJob> _logger;
 
-    public RetryDeliveryJob(IDeliveryService delivery, ILogger<RetryDeliveryJob> logger)
+    public RetryDeliveryJob(
+        IDeliveryService delivery,
+        IBackgroundJobClient jobs,
+        ILogger<RetryDeliveryJob> logger,
+        DeliveryReliabilityOptions? options = null)
     {
         _delivery = delivery;
+        _jobs = jobs;
+        _options = options ?? new DeliveryReliabilityOptions { MaxAttempts = MaxAttempts };
         _logger = logger;
     }
 
-    // No Hangfire AutomaticRetry: retry/backoff semantics live inside
-    // RetryDeliveryAsync (attempt cap + dead-letter), not in Hangfire's queue.
-    // A Hangfire-level retry would double-count attempts.
+    // No Hangfire AutomaticRetry: retry/backoff semantics live inside RetryDeliveryAsync
+    // (attempt cap + dead-letter) and the explicit BackoffFor() schedule below, not in
+    // Hangfire's own retry queue. A Hangfire-level retry would double-count attempts.
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(Guid orderId, Guid organisationId, CancellationToken ct)
     {
+        var maxAttempts = _options.MaxAttempts > 0 ? _options.MaxAttempts : MaxAttempts;
+
         _logger.LogInformation(
             "RetryDeliveryJob starting for order {OrderId}, org {OrgId}", orderId, organisationId);
 
-        var result = await _delivery.RetryDeliveryAsync(organisationId, orderId, MaxAttempts, ct);
+        var result = await _delivery.RetryDeliveryAsync(organisationId, orderId, maxAttempts, ct);
 
         if (result.Success)
+        {
             _logger.LogInformation("RetryDeliveryJob delivered order {OrderId}", orderId);
-        else
+            return;
+        }
+
+        // Count attempts already made so we know which backoff step is next and whether
+        // the cap has been reached. RetryDeliveryAsync has just persisted this attempt.
+        var attemptsMade = await _delivery.CountDeliveryAttemptsAsync(organisationId, orderId, ct);
+
+        if (IsSupplierRejection(result.ResponseCode))
+        {
+            // 4xx: the supplier received and explicitly refused the payload. Retrying the same
+            // bytes will not help — stop the automatic queue and leave it for operator review.
             _logger.LogWarning(
-                "RetryDeliveryJob did not deliver order {OrderId}: {Error}", orderId, result.ErrorMessage);
+                "RetryDeliveryJob: order {OrderId} rejected by supplier (HTTP {Code}); not rescheduling.",
+                orderId, result.ResponseCode);
+            return;
+        }
+
+        if (attemptsMade >= maxAttempts)
+        {
+            // RetryDeliveryAsync already dead-lettered at the cap; nothing more to schedule.
+            _logger.LogWarning(
+                "RetryDeliveryJob: order {OrderId} reached the attempt cap ({Max}); dead-lettered.",
+                orderId, maxAttempts);
+            return;
+        }
+
+        var delay = _options.BackoffFor(attemptsMade);
+        ScheduleRetry(_jobs, orderId, organisationId, delay);
+        _logger.LogWarning(
+            "RetryDeliveryJob: order {OrderId} delivery failed ({Error}); scheduled retry #{Next} in {Delay}.",
+            orderId, result.ErrorMessage, attemptsMade + 1, delay);
     }
 
+    private static bool IsSupplierRejection(int? responseCode) =>
+        responseCode is >= 400 and <= 499;
+
+    /// <summary>Enqueue an immediate operator-triggered retry.</summary>
     public static void Enqueue(IBackgroundJobClient jobs, Guid orderId, Guid organisationId)
     {
         jobs.Enqueue<RetryDeliveryJob>(j => j.ExecuteAsync(orderId, organisationId, CancellationToken.None));
+    }
+
+    /// <summary>Schedule the next automatic retry after the given backoff delay.</summary>
+    public static void ScheduleRetry(
+        IBackgroundJobClient jobs, Guid orderId, Guid organisationId, TimeSpan delay)
+    {
+        jobs.Schedule<RetryDeliveryJob>(
+            j => j.ExecuteAsync(orderId, organisationId, CancellationToken.None), delay);
     }
 }
