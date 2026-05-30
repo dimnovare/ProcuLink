@@ -216,8 +216,11 @@ public sealed class OrderService : IOrderService
         await _fileStorage.UploadAsync(buffer, sourceFileKey, contentType, ct);
         _logger.LogInformation("Uploaded source file to R2: {Key}", sourceFileKey);
 
-        // Load supplier so navigation property is set for MapToDto
-        var supplier = await _db.Suppliers.FindAsync(new object[] { supplierId }, ct);
+        // Load supplier so navigation property is set for MapToDto.
+        // Scope to the caller's org — FindAsync would resolve by PK alone and let
+        // a user in org A reference org B's supplier (cross-tenant injection).
+        var supplier = await _db.Suppliers
+            .FirstOrDefaultAsync(s => s.Id == supplierId && s.OrgId == organisationId, ct);
         if (supplier is null)
             return Result<PurchaseOrderEntity>.Fail("Supplier not found.");
 
@@ -279,7 +282,10 @@ public sealed class OrderService : IOrderService
         if (order is null || order.Lines is null || order.Lines.Count == 0)
             return Result<PurchaseOrderEntity>.Fail("Extracted order contains no line items.");
 
-        var supplier = await _db.Suppliers.FindAsync(new object[] { supplierId }, ct);
+        // Scope to the caller's org — FindAsync would resolve by PK alone and let
+        // a user in org A reference org B's supplier (cross-tenant injection).
+        var supplier = await _db.Suppliers
+            .FirstOrDefaultAsync(s => s.Id == supplierId && s.OrgId == organisationId, ct);
         if (supplier is null)
             return Result<PurchaseOrderEntity>.Fail("Supplier not found.");
 
