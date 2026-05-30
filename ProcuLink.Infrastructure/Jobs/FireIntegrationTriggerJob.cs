@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Jobs;
 
@@ -20,17 +21,20 @@ public class FireIntegrationTriggerJob
     private readonly ProcuLinkDbContext                     _db;
     private readonly IHttpClientFactory                     _http;
     private readonly DeliveryEncryptionService              _enc;
+    private readonly OutboundRequestGuard                   _guard;
     private readonly ILogger<FireIntegrationTriggerJob>     _logger;
 
     public FireIntegrationTriggerJob(
         ProcuLinkDbContext                 db,
         IHttpClientFactory                 http,
         DeliveryEncryptionService          enc,
+        OutboundRequestGuard               guard,
         ILogger<FireIntegrationTriggerJob> logger)
     {
         _db     = db;
         _http   = http;
         _enc    = enc;
+        _guard  = guard;
         _logger = logger;
     }
 
@@ -60,6 +64,19 @@ public class FireIntegrationTriggerJob
                 using var hmac  = new HMACSHA256(secretBytes);
                 sigHeader = $"sha256={Convert.ToHexString(hmac.ComputeHash(dataBytes)).ToLowerInvariant()}";
             }
+        }
+
+        // ── SSRF guard — must pass before any outbound request ────────────────
+        var guardResult = await _guard.ValidateAsync(sub.TargetUrl, ct);
+        if (!guardResult.Allowed)
+        {
+            _logger.LogWarning(
+                "FireIntegrationTriggerJob: SSRF guard blocked webhook to '{Url}' for sub {SubId}: {Reason}",
+                sub.TargetUrl, subscriptionId, guardResult.Reason);
+            // Treat as a delivery failure and apply the existing retry/deactivate flow.
+            await IncrementFailureAsync(sub, ct);
+            throw new InvalidOperationException(
+                $"Webhook delivery blocked: {guardResult.Reason}");
         }
 
         try

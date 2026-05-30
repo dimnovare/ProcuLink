@@ -2,9 +2,11 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure.Services.Dispatchers;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Dispatchers;
 
@@ -31,10 +33,22 @@ public class HttpDeliveryDispatcherTests
         return factory.Object;
     }
 
+    /// <summary>Returns an OutboundRequestGuard configured to allow all private/local targets.</summary>
+    private static OutboundRequestGuard MakePermissiveGuard()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Delivery:AllowPrivateNetworkTargets"] = "true",
+            })
+            .Build();
+        return new OutboundRequestGuard(config, NullLogger<OutboundRequestGuard>.Instance);
+    }
+
     [Fact]
     public async Task Dispatch_200_ReturnsSuccess()
     {
-        var dispatcher = new HttpDeliveryDispatcher(MakeFactory(HttpStatusCode.OK), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = new HttpDeliveryDispatcher(MakeFactory(HttpStatusCode.OK), MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
         var config = MakeConfig("https://example.com/orders");
         var creds = JsonSerializer.Serialize(new { type = "none" });
 
@@ -52,6 +66,7 @@ public class HttpDeliveryDispatcherTests
     {
         var dispatcher = new HttpDeliveryDispatcher(
             MakeFactory(HttpStatusCode.UnprocessableEntity, "Invalid format"),
+            MakePermissiveGuard(),
             NullLogger<HttpDeliveryDispatcher>.Instance);
         var config = MakeConfig("https://example.com/orders");
         var creds = JsonSerializer.Serialize(new { type = "none" });
@@ -78,7 +93,7 @@ public class HttpDeliveryDispatcherTests
         var factory = new Moq.Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient("delivery")).Returns(new HttpClient(handler));
 
-        var dispatcher = new HttpDeliveryDispatcher(factory.Object, NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = new HttpDeliveryDispatcher(factory.Object, MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
         var config = MakeConfig("https://example.com");
         var creds = JsonSerializer.Serialize(new { type = "apikey", header = "X-Api-Key", value = "sk-secret" });
 
@@ -90,7 +105,7 @@ public class HttpDeliveryDispatcherTests
     [Fact]
     public async Task Dispatch_InvalidUrl_ReturnsConfigError()
     {
-        var dispatcher = new HttpDeliveryDispatcher(MakeFactory(HttpStatusCode.OK), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = new HttpDeliveryDispatcher(MakeFactory(HttpStatusCode.OK), MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
         var config = MakeConfig("not a url");
         var creds = JsonSerializer.Serialize(new { type = "none" });
 
@@ -105,7 +120,7 @@ public class HttpDeliveryDispatcherTests
     [Fact]
     public async Task Dispatch_MalformedCredentials_ReturnsGenericFailure()
     {
-        var dispatcher = new HttpDeliveryDispatcher(MakeFactory(HttpStatusCode.OK), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = new HttpDeliveryDispatcher(MakeFactory(HttpStatusCode.OK), MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
         var config = MakeConfig("https://example.com/orders");
 
         var result = await dispatcher.DispatchAsync(
@@ -123,7 +138,7 @@ public class HttpDeliveryDispatcherTests
         var factory = new Moq.Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient("delivery")).Returns(new HttpClient(handler));
 
-        var dispatcher = new HttpDeliveryDispatcher(factory.Object, NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = new HttpDeliveryDispatcher(factory.Object, MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
         var config = MakeConfig("https://example.com/orders");
         config.ConfigJson = JsonSerializer.Serialize(new { url = "https://example.com/orders", method = "POST", timeoutSeconds = 1 });
         var creds = JsonSerializer.Serialize(new { type = "none" });

@@ -247,6 +247,7 @@ builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService
 builder.Services.AddScoped<IValidationRuleService, ValidationRuleService>();
 builder.Services.AddScoped<IOutputTemplateService, OutputTemplateService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
+builder.Services.AddSingleton<OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
 builder.Services.AddSingleton(sp =>
 {

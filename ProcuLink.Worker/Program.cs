@@ -83,6 +83,7 @@ builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
+builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
 // Mirrors API/Program.cs. The Worker executes the scheduled RetryDeliveryJob and the SLA sweep.
 builder.Services.AddSingleton(sp =>

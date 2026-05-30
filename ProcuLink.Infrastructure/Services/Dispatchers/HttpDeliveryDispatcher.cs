@@ -4,12 +4,14 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Dispatchers;
 
 public class HttpDeliveryDispatcher : IDeliveryDispatcher
 {
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly OutboundRequestGuard _guard;
     private readonly ILogger<HttpDeliveryDispatcher> _logger;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -22,9 +24,11 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
 
     public HttpDeliveryDispatcher(
         IHttpClientFactory httpClientFactory,
+        OutboundRequestGuard guard,
         ILogger<HttpDeliveryDispatcher> logger)
     {
         _httpClientFactory = httpClientFactory;
+        _guard = guard;
         _logger = logger;
     }
 
@@ -44,6 +48,16 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
 
             if (!Uri.TryCreate(httpCfg.Url, UriKind.Absolute, out var endpoint))
                 return new DeliveryResult(false, "HTTP delivery endpoint URL is invalid.");
+
+            // ── SSRF guard — must pass before any outbound request ────────────
+            var guardResult = await _guard.ValidateAsync(httpCfg.Url, ct);
+            if (!guardResult.Allowed)
+            {
+                _logger.LogWarning(
+                    "HTTP delivery blocked by SSRF guard for URL '{Url}': {Reason}",
+                    httpCfg.Url, guardResult.Reason);
+                return new DeliveryResult(false, $"Delivery blocked: {guardResult.Reason}");
+            }
 
             var creds = string.IsNullOrEmpty(decryptedCredentials)
                 ? default
