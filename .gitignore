@@ -63,3 +63,6 @@ tmp*
 # Claude temp files
 *claude*-cwd
 .claude/
+
+# Local design reference handoff — not product code
+docs/design_handoff_proculink_redesign/
