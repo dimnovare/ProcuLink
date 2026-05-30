@@ -260,6 +260,19 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // SLA timers (Group O reliability).
             b.Property(x => x.DeliveryDueAt).HasColumnName("delivery_due_at").HasColumnType("timestamptz");
             b.Property(x => x.SlaBreached).HasColumnName("sla_breached").HasDefaultValue(false);
+            // Composite indexes for cross-tenant maintenance sweeps and inbox/list queries.
+            // (OrgId, Status): inbox list — filter by tenant then status bucket.
+            b.HasIndex(x => new { x.OrgId, x.Status })
+             .HasDatabaseName("IX_purchase_orders_org_id_status");
+            // (Status, UpdatedAt): StuckOrderDetection sweep — status IN (...) AND updated_at < cutoff.
+            b.HasIndex(x => new { x.Status, x.UpdatedAt })
+             .HasDatabaseName("IX_purchase_orders_status_updated_at");
+            // (OrgId, CreatedAt): inbox list default sort — org-scoped ORDER BY created_at DESC.
+            b.HasIndex(x => new { x.OrgId, x.CreatedAt })
+             .HasDatabaseName("IX_purchase_orders_org_id_created_at");
+            // (SlaBreached, DeliveryDueAt): DeliverySlaSweep — NOT sla_breached AND delivery_due_at < now.
+            b.HasIndex(x => new { x.SlaBreached, x.DeliveryDueAt })
+             .HasDatabaseName("IX_purchase_orders_sla_breached_delivery_due_at");
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.PurchaseOrders)
              .HasForeignKey(x => x.OrgId);
