@@ -17,15 +17,21 @@ public sealed class ApiKeyAuthOptions : AuthenticationSchemeOptions { }
 public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
 {
     private readonly ProcuLinkDbContext _db;
+    private readonly string _hashSecret;
 
     public ApiKeyAuthHandler(
         IOptionsMonitor<ApiKeyAuthOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
-        ProcuLinkDbContext db)
+        ProcuLinkDbContext db,
+        IConfiguration configuration)
         : base(options, logger, encoder)
     {
         _db = db;
+        _hashSecret = configuration["Security:ApiKeyHashSecret"]
+                      ?? throw new InvalidOperationException(
+                          "Security:ApiKeyHashSecret is not configured. " +
+                          "Set this via environment variable SECURITY__APIKEYHASHSECRET or appsettings.");
     }
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
@@ -37,7 +43,7 @@ public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
         if (string.IsNullOrWhiteSpace(rawKey) || rawKey.Length < 16)
             return AuthenticateResult.Fail("Invalid API key format.");
 
-        var hash = ApiKeyHasher.ComputeHash(rawKey);
+        var hash = ApiKeyHasher.ComputeHash(rawKey, _hashSecret);
 
         var apiKey = await _db.TenantApiKeys
             .Include(k => k.Organisation)

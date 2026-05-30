@@ -14,7 +14,8 @@ public static class StartupConfigurationValidator
 {
     /// <summary>
     /// Required keys for the ASP.NET API service. Postgres, Clerk, R2, Stripe,
-    /// delivery encryption, and the public frontend URL are all hard prerequisites.
+    /// delivery encryption, the API-key hash secret, and the public frontend URL
+    /// are all hard prerequisites.
     /// </summary>
     public static readonly IReadOnlyList<string> ApiRequiredKeys = new[]
     {
@@ -31,6 +32,7 @@ public static class StartupConfigurationValidator
         "Stripe:OperationsPriceId",
         "Stripe:IntegrationPriceId",
         "Delivery:EncryptionKey",
+        "Security:ApiKeyHashSecret",
         "Frontend:Url",
     };
 
@@ -103,6 +105,18 @@ public static class StartupConfigurationValidator
                     new[] { "Delivery:EncryptionKey" });
         }
 
+        // Production hardening: Security:ApiKeyHashSecret must be at least 16 characters
+        // so that the HMAC key has meaningful entropy. A short/default value would let an
+        // attacker with DB read access brute-force the secret.
+        if (isProduction && requiredKeys.Contains("Security:ApiKeyHashSecret"))
+        {
+            var secretError = ValidateApiKeyHashSecret(configuration["Security:ApiKeyHashSecret"]);
+            if (secretError is not null)
+                throw new StartupConfigurationException(
+                    $"{componentName} cannot start in Production: {secretError}",
+                    new[] { "Security:ApiKeyHashSecret" });
+        }
+
         if (missingRequired.Count == 0)
             return;
 
@@ -152,6 +166,26 @@ public static class StartupConfigurationValidator
         if (Array.TrueForAll(key, b => b == 0))
             return "Delivery:EncryptionKey is the all-zero placeholder key — generate a real key " +
                    "(e.g. `openssl rand -base64 32`) and set it via the DELIVERY__ENCRYPTIONKEY environment variable.";
+
+        return null;
+    }
+
+    /// <summary>
+    /// Validates a PRESENT <c>Security:ApiKeyHashSecret</c> value. Returns a
+    /// human-readable error when the secret is shorter than 16 UTF-8 characters
+    /// (too short to provide meaningful HMAC entropy), or <c>null</c> when
+    /// acceptable. A null/blank value returns <c>null</c> because absence is
+    /// handled by the required-key check.
+    /// </summary>
+    public static string? ValidateApiKeyHashSecret(string? secret)
+    {
+        if (string.IsNullOrWhiteSpace(secret))
+            return null;
+
+        if (secret.Length < 16)
+            return "Security:ApiKeyHashSecret is too short (minimum 16 characters). " +
+                   "Generate a strong secret (e.g. `openssl rand -base64 32`) and set it " +
+                   "via the SECURITY__APIKEYHASHSECRET environment variable.";
 
         return null;
     }
