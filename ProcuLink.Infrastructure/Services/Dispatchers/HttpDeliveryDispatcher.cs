@@ -79,7 +79,9 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
 
             return response.IsSuccessStatusCode
                 ? new DeliveryResult(true, null, code)
-                : new DeliveryResult(false, BuildFailureMessage(code, body), code);
+                // Pass the full (DeliveryService-bounded) body as ResponseBody for rejection capture,
+                // while ErrorMessage stays a short human-readable summary.
+                : new DeliveryResult(false, BuildFailureMessage(code, body), code, ResponseBody: NullIfBlank(body));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -129,6 +131,9 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
                 break;
         }
     }
+
+    private static string? NullIfBlank(string? body) =>
+        string.IsNullOrWhiteSpace(body) ? null : body;
 
     private static string BuildFailureMessage(int code, string body)
     {

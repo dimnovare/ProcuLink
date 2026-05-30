@@ -17,6 +17,7 @@ public sealed class DeliveryService : IDeliveryService
     private readonly IReadOnlyDictionary<string, IDeliveryDispatcher> _dispatchers;
     private readonly IIntegrationTriggerService _integrationTrigger;
     private readonly IAnalyticsService _analytics;
+    private readonly DeliveryReliabilityOptions _reliability;
     private readonly ILogger<DeliveryService> _logger;
 
     public DeliveryService(
@@ -26,7 +27,8 @@ public sealed class DeliveryService : IDeliveryService
         IEnumerable<IDeliveryDispatcher> dispatchers,
         IIntegrationTriggerService integrationTrigger,
         IAnalyticsService analytics,
-        ILogger<DeliveryService> logger)
+        ILogger<DeliveryService> logger,
+        DeliveryReliabilityOptions? reliability = null)
     {
         _db = db;
         _fileStorage = fileStorage;
@@ -34,6 +36,7 @@ public sealed class DeliveryService : IDeliveryService
         _dispatchers = dispatchers.ToDictionary(x => x.Protocol, StringComparer.OrdinalIgnoreCase);
         _integrationTrigger = integrationTrigger;
         _analytics = analytics;
+        _reliability = reliability ?? new DeliveryReliabilityOptions();
         _logger = logger;
     }
 
@@ -75,8 +78,14 @@ public sealed class DeliveryService : IDeliveryService
         if (credentials is null)
             return await FailBeforeDispatchAsync(order, artifact, config, "Delivery credentials could not be decrypted.", ct);
 
+        // SLA timer: opening a fresh delivery attempt (re)starts the confirmation window
+        // and clears any prior breach flag. The SLA sweep flags the order if this deadline
+        // passes without a confirmed delivery.
+        var dispatchStart = DateTime.UtcNow;
         order.Status = OrderStatusConstants.Delivering;
-        order.UpdatedAt = DateTime.UtcNow;
+        order.DeliveryDueAt = dispatchStart + _reliability.SlaWindow;
+        order.SlaBreached = false;
+        order.UpdatedAt = dispatchStart;
         await _db.SaveChangesAsync(ct);
 
         byte[] content;
@@ -180,6 +189,14 @@ public sealed class DeliveryService : IDeliveryService
                 : OrderStatusConstants.DeliveryFailed;
         order.UpdatedAt = now;
 
+        // SLA timer: a confirmed delivery closes the SLA window — clear the deadline and breach flag
+        // so the sweep can never flag an already-delivered order.
+        if (result.Success)
+        {
+            order.DeliveryDueAt = null;
+            order.SlaBreached = false;
+        }
+
         // 1-based attempt index within this order's delivery retry sequence.
         var attemptNumber = (await _db.DeliveryAttempts
             .CountAsync(a => a.OrderId == order.Id && a.OrgId == order.OrgId, ct)) + 1;
@@ -197,6 +214,10 @@ public sealed class DeliveryService : IDeliveryService
             ResponseCode = result.ResponseCode,
             ErrorMessage = result.Success ? null : result.ErrorMessage,
             RejectionReason = isSupplierRejection ? result.ErrorMessage : null,
+            // Rejection capture: persist the supplier's raw NACK body verbatim (bounded).
+            ResponseBody = TruncateResponseBody(result.ResponseBody),
+            // ACK round-trip: stamp the confirmation time on a successful dispatch.
+            AcknowledgedAt = result.Success ? now : null,
         });
 
         await _db.SaveChangesAsync(ct);
@@ -228,7 +249,7 @@ public sealed class DeliveryService : IDeliveryService
             _ = _integrationTrigger.EnqueueAsync(
                 order.OrgId,
                 "order.delivered",
-                new { order_id = order.Id, delivered_at = now },
+                new { order_id = order.Id, delivered_at = now, acknowledged_at = now },
                 ct);
         }
         else if (isSupplierRejection)
@@ -283,6 +304,14 @@ public sealed class DeliveryService : IDeliveryService
         "csv" => "text/csv",
         _ => "application/octet-stream",
     };
+
+    private static string? TruncateResponseBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+        return body.Length <= DeliveryAttempt.MaxResponseBodyLength
+            ? body
+            : body[..DeliveryAttempt.MaxResponseBodyLength];
+    }
 
     private static string GetDestination(SupplierDeliveryConfig config)
     {
@@ -356,6 +385,9 @@ public sealed class DeliveryService : IDeliveryService
         return result;
     }
 
+    public Task<int> CountDeliveryAttemptsAsync(Guid orgId, Guid orderId, CancellationToken ct) =>
+        _db.DeliveryAttempts.CountAsync(a => a.OrderId == orderId && a.OrgId == orgId, ct);
+
     private async Task DeadLetterAsync(
         PurchaseOrderEntity order,
         int attemptCount,
@@ -365,6 +397,9 @@ public sealed class DeliveryService : IDeliveryService
         var now = DateTime.UtcNow;
         order.Status = OrderStatusConstants.DeliveryDeadLetter;
         order.UpdatedAt = now;
+        // Dead-letter is terminal: close the SLA window so the sweep never flags an
+        // order whose retries are already exhausted.
+        order.DeliveryDueAt = null;
 
         var payload = System.Text.Json.JsonSerializer.Serialize(new
         {

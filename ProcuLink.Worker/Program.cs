@@ -12,6 +12,7 @@ using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Core.Services.Ocr;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ai;
 using ProcuLink.Infrastructure.Services.Dispatchers;
@@ -82,8 +83,17 @@ builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
+// Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
+// Mirrors API/Program.cs. The Worker executes the scheduled RetryDeliveryJob and the SLA sweep.
+builder.Services.AddSingleton(sp =>
+{
+    var opts = new DeliveryReliabilityOptions();
+    builder.Configuration.GetSection(DeliveryReliabilityOptions.SectionName).Bind(opts);
+    return opts;
+});
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
+builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
@@ -142,6 +152,9 @@ builder.Services.AddScoped<S3PollingJob>();
 // P0 reliability: stuck-order detection sweep + operator retry job.
 builder.Services.AddScoped<IStuckOrderDetectionService, StuckOrderDetectionService>();
 builder.Services.AddScoped<StuckOrderDetectionJob>();
+// Group O reliability: automatic delivery retry queue (scheduled here) + SLA breach sweep.
+builder.Services.AddScoped<RetryDeliveryJob>();
+builder.Services.AddScoped<DeliverySlaSweepJob>();
 // ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
 // ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
