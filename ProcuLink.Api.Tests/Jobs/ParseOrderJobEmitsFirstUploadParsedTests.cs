@@ -53,7 +53,8 @@ public class ParseOrderJobEmitsFirstUploadParsedTests
             NullLogger<ParseOrderJob>.Instance,
             db,
             analytics,
-            new Mock<ProcuLink.Core.Services.Detection.ISchemaFingerprintService>().Object);
+            new Mock<ProcuLink.Core.Services.Detection.ISchemaFingerprintService>().Object,
+            new Mock<ProcuLink.Core.Services.Detection.ISupplierSchemaMappingService>().Object);
 
         await job.ExecuteAsync(orderId, orgId, CancellationToken.None);
 
@@ -116,7 +117,8 @@ public class ParseOrderJobEmitsFirstUploadParsedTests
             NullLogger<ParseOrderJob>.Instance,
             db,
             analytics,
-            new Mock<ProcuLink.Core.Services.Detection.ISchemaFingerprintService>().Object);
+            new Mock<ProcuLink.Core.Services.Detection.ISchemaFingerprintService>().Object,
+            new Mock<ProcuLink.Core.Services.Detection.ISupplierSchemaMappingService>().Object);
 
         await job.ExecuteAsync(currentOrderId, orgId, CancellationToken.None);
 

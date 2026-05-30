@@ -18,19 +18,22 @@ public class ParseOrderJob
     private readonly ProcuLinkDbContext        _db;
     private readonly IAnalyticsService         _analytics;
     private readonly ISchemaFingerprintService _fingerprints;
+    private readonly ISupplierSchemaMappingService _supplierSchemaMappings;
 
     public ParseOrderJob(
         IOrderService orderService,
         ILogger<ParseOrderJob> logger,
         ProcuLinkDbContext db,
         IAnalyticsService analytics,
-        ISchemaFingerprintService fingerprints)
+        ISchemaFingerprintService fingerprints,
+        ISupplierSchemaMappingService supplierSchemaMappings)
     {
-        _orderService = orderService;
-        _logger       = logger;
-        _db           = db;
-        _analytics    = analytics;
-        _fingerprints = fingerprints;
+        _orderService           = orderService;
+        _logger                 = logger;
+        _db                     = db;
+        _analytics              = analytics;
+        _fingerprints           = fingerprints;
+        _supplierSchemaMappings = supplierSchemaMappings;
     }
 
     /// <summary>
@@ -117,6 +120,42 @@ public class ParseOrderJob
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Schema fingerprint recording failed for order {OrderId} (non-fatal)", orderId);
+        }
+
+        // ── Supplier-scoped field-mapping capture (the learning half of the moat) ──
+        // Learn the buyer→supplier item-code mapping observed on this file's resolved lines, keyed
+        // by (supplier, column layout). A later upload of the same layout for the same supplier
+        // replays it to pre-fill suggestions (see OrderService.BuildLineEntityAsync).
+        // Non-critical: a capture failure must never fail a successful parse.
+        try
+        {
+            var parsed = result.Value!.Entity;
+
+            // Only the lines that ARE resolved (deterministic match, or a suggestion already
+            // accepted) carry a trustworthy supplier code worth learning. Unresolved lines and
+            // lines whose code came only from an un-accepted suggestion are excluded.
+            var learnedPairs = parsed.Lines
+                .Where(l => !l.NeedsReview
+                         && !string.IsNullOrWhiteSpace(l.BuyerItemCode)
+                         && !string.IsNullOrWhiteSpace(l.SupplierItemCode))
+                .GroupBy(l => l.BuyerItemCode.Trim().ToLowerInvariant())
+                .ToDictionary(g => g.Key, g => g.First().SupplierItemCode!.Trim());
+
+            if (learnedPairs.Count > 0)
+            {
+                await _supplierSchemaMappings.CaptureAsync(
+                    organisationId,
+                    parsed.SupplierId,
+                    orderId,
+                    result.Value!.ColumnHeaders,
+                    result.Value!.DetectedFormat,
+                    learnedPairs,
+                    ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Supplier schema mapping capture failed for order {OrderId} (non-fatal)", orderId);
         }
     }
 

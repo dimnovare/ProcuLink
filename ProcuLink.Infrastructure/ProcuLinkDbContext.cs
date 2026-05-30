@@ -41,6 +41,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<TenantApiKey>            TenantApiKeys            => Set<TenantApiKey>();
     public DbSet<IntegrationSubscription> IntegrationSubscriptions => Set<IntegrationSubscription>();
     public DbSet<SchemaFingerprint>       SchemaFingerprints       => Set<SchemaFingerprint>();
+    public DbSet<SupplierSchemaMapping>   SupplierSchemaMappings   => Set<SupplierSchemaMapping>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -698,6 +699,39 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             e.HasOne(s => s.Organisation)
              .WithMany(o => o.IntegrationSubscriptions)
              .HasForeignKey(s => s.OrganisationId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── supplier_schema_mappings ──────────────────────────────────────────────
+        // The supplier-scoped field-mapping moat. One row per (org, supplier, column layout)
+        // holding the learned buyer→supplier item-code map for that shape. The unique index is
+        // what makes CaptureAsync a correct upsert (and arms the concurrent-insert race recovery).
+        modelBuilder.Entity<SupplierSchemaMapping>(b =>
+        {
+            b.ToTable("supplier_schema_mappings");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrganisationId).HasColumnName("organisation_id");
+            b.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            b.Property(x => x.ColumnNameHash).HasColumnName("column_name_hash").IsRequired();
+            b.Property(x => x.DetectedFormat).HasColumnName("detected_format").IsRequired();
+            b.Property(x => x.FieldMappingJson)
+             .HasColumnName("field_mapping")
+             .HasColumnType("jsonb")
+             .HasDefaultValue("{}")
+             .IsRequired();
+            b.Property(x => x.LearnedFromOrderId).HasColumnName("learned_from_order_id");
+            b.Property(x => x.ObservationCount).HasColumnName("observation_count");
+            b.Property(x => x.LastLearnedAt).HasColumnName("last_learned_at").HasColumnType("timestamptz");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.HasIndex(x => new { x.OrganisationId, x.SupplierId, x.ColumnNameHash }).IsUnique();
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrganisationId)
+             .OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(x => x.Supplier)
+             .WithMany()
+             .HasForeignKey(x => x.SupplierId)
              .OnDelete(DeleteBehavior.Cascade);
         });
     }

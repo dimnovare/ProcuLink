@@ -35,6 +35,7 @@ public sealed class OrderService : IOrderService
 
     private readonly IIntegrationTriggerService  _integrationTrigger;
     private readonly IFormatDetector             _formatDetector;
+    private readonly ISupplierSchemaMappingService _supplierSchemaMappings;
 
     public OrderService(
         ProcuLinkDbContext             db,
@@ -46,18 +47,20 @@ public sealed class OrderService : IOrderService
         IEnumerable<ITransformService> transformers,
         ILogger<OrderService>          logger,
         IIntegrationTriggerService     integrationTrigger,
-        IFormatDetector                formatDetector)
+        IFormatDetector                formatDetector,
+        ISupplierSchemaMappingService  supplierSchemaMappings)
     {
-        _db                 = db;
-        _fileStorage        = fileStorage;
-        _parserFactory      = parserFactory;
-        _mappings           = mappings;
-        _poMappingService   = poMappingService;
-        _aiMappings         = aiMappings;
-        _transformers       = transformers;
-        _logger             = logger;
-        _integrationTrigger = integrationTrigger;
-        _formatDetector     = formatDetector;
+        _db                     = db;
+        _fileStorage            = fileStorage;
+        _parserFactory          = parserFactory;
+        _mappings               = mappings;
+        _poMappingService       = poMappingService;
+        _aiMappings             = aiMappings;
+        _transformers           = transformers;
+        _logger                 = logger;
+        _integrationTrigger     = integrationTrigger;
+        _formatDetector         = formatDetector;
+        _supplierSchemaMappings = supplierSchemaMappings;
     }
 
     // ── CreateFromFileAsync ───────────────────────────────────────────────────
@@ -497,6 +500,21 @@ public sealed class OrderService : IOrderService
                                ?? await GetSupplierNameAsync(organisationId, entity.SupplierId, ct);
             var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, entity.SupplierId, ct);
 
+            // Schema-fingerprint moat: load the field mapping this org previously learned for THIS
+            // supplier + column layout (if any). Used to pre-fill suggestions on unresolved lines.
+            // Best-effort — a lookup failure must never fail the parse.
+            IReadOnlyDictionary<string, string>? learnedMapping = null;
+            try
+            {
+                var learnedMatch = await _supplierSchemaMappings.LookupAsync(
+                    organisationId, entity.SupplierId, detected?.ColumnHeaders, ct);
+                learnedMapping = learnedMatch?.FieldMapping;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Supplier schema mapping lookup failed for order {OrderId} (non-fatal)", orderId);
+            }
+
             foreach (var line in parsedOrder.Lines)
             {
                 var lineEntity = await BuildLineEntityAsync(
@@ -505,7 +523,8 @@ public sealed class OrderService : IOrderService
                     supplierName,
                     line,
                     aiCandidates,
-                    ct);
+                    ct,
+                    learnedMapping);
 
                 if (lineEntity.NeedsReview) anyUnresolved = true;
                 if (!string.IsNullOrWhiteSpace(lineEntity.AiSuggestedSupplierItemCode)) aiSuggestionCount++;
@@ -879,6 +898,43 @@ public sealed class OrderService : IOrderService
 
         await _db.SaveChangesAsync(ct);
 
+        // ── Schema-fingerprint moat: reinforce the learned mapping (strongest signal) ──
+        // When the user opts to persist mappings, teach the supplier+layout fingerprint every
+        // resolved buyer→supplier pair on the order — keyed by the layout hash recorded at parse
+        // time. Best-effort and idempotent: a failure here must not fail the resolve.
+        if (saveMappings && !string.IsNullOrWhiteSpace(entity.SchemaFingerprintHash))
+        {
+            try
+            {
+                var learnedPairs = entity.Lines
+                    .Where(l => !l.NeedsReview
+                             && !string.IsNullOrWhiteSpace(l.BuyerItemCode)
+                             && !string.IsNullOrWhiteSpace(l.SupplierItemCode))
+                    .GroupBy(l => l.BuyerItemCode.Trim().ToLowerInvariant())
+                    .ToDictionary(g => g.Key, g => g.First().SupplierItemCode!.Trim());
+
+                if (learnedPairs.Count > 0)
+                {
+                    var format = !string.IsNullOrEmpty(entity.SourceFileKey)
+                        ? Path.GetExtension(entity.SourceFileKey).TrimStart('.').ToLowerInvariant()
+                        : "unknown";
+
+                    await _supplierSchemaMappings.ReinforceByHashAsync(
+                        organisationId,
+                        entity.SupplierId,
+                        orderId,
+                        entity.SchemaFingerprintHash,
+                        string.IsNullOrEmpty(format) ? "unknown" : format,
+                        learnedPairs,
+                        ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Supplier schema mapping reinforcement failed for order {OrderId} (non-fatal)", orderId);
+            }
+        }
+
         _logger.LogInformation(
             "Order {OrderId} resolved: {Count} lines, saveMappings={Save}, status={Status}",
             orderId, resolutions.Count, saveMappings, entity.Status);
@@ -1000,7 +1056,8 @@ public sealed class OrderService : IOrderService
         string supplierName,
         ParsedOrderLine line,
         IReadOnlyList<AiMappingCandidate> aiCandidates,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyDictionary<string, string>? learnedMapping = null)
     {
         var supplierCode = await _mappings.ResolveAsync(
             organisationId, supplierId, line.BuyerItemCode, ct);
@@ -1010,18 +1067,28 @@ public sealed class OrderService : IOrderService
 
         if (!resolved)
         {
-            suggestion = await _aiMappings.SuggestSupplierItemCodeAsync(
-                organisationId,
-                supplierId,
-                supplierName,
-                new AiMappingLineContext(
-                    line.LineNumber,
-                    line.BuyerItemCode,
-                    line.Description,
-                    line.Quantity,
-                    line.Unit),
-                aiCandidates,
-                ct);
+            // (1) Schema-fingerprint moat: if this supplier's column layout has been mapped before
+            //     and the learned mapping already knows this buyer code, pre-fill it as a suggestion.
+            //     This is advisory only — it never sets SupplierItemCode (no auto-apply) and never
+            //     runs when a deterministic item-mapping already resolved the line (guarded above).
+            suggestion = LearnedMappingPrefill.TryBuild(line.BuyerItemCode, learnedMapping);
+
+            // (2) Fall back to the AI suggester only when the learned mapping had nothing.
+            if (suggestion is null)
+            {
+                suggestion = await _aiMappings.SuggestSupplierItemCodeAsync(
+                    organisationId,
+                    supplierId,
+                    supplierName,
+                    new AiMappingLineContext(
+                        line.LineNumber,
+                        line.BuyerItemCode,
+                        line.Description,
+                        line.Quantity,
+                        line.Unit),
+                    aiCandidates,
+                    ct);
+            }
         }
 
         return new PurchaseOrderLineEntity

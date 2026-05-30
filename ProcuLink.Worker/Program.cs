@@ -144,6 +144,8 @@ builder.Services.AddScoped<IStuckOrderDetectionService, StuckOrderDetectionServi
 builder.Services.AddScoped<StuckOrderDetectionJob>();
 // ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
+// OrderService (run here while executing ParseOrderJob) learns + replays the supplier-scoped field mapping.
+builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISupplierSchemaMappingService, ProcuLink.Infrastructure.Services.Detection.SupplierSchemaMappingService>();
 // ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
 builder.Services.AddScoped<ParseOrderJob>();
 builder.Services.AddHostedService<Worker>();

@@ -68,7 +68,9 @@ public class OrderServiceAcceptAiSuggestionsTests
             Array.Empty<ITransformService>(),
             NullLogger<OrderService>.Instance,
             integrationTrigger.Object,
-            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
+            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService(),
+            new ProcuLink.Infrastructure.Services.Detection.SupplierSchemaMappingService(
+                db, NullLogger<ProcuLink.Infrastructure.Services.Detection.SupplierSchemaMappingService>.Instance));
     }
 
     private static async Task<(ProcuLinkDbContext db, Guid orgId, Guid orderId)> SeedOrderWithLinesAsync(
