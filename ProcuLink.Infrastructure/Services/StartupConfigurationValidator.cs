@@ -90,6 +90,19 @@ public static class StartupConfigurationValidator
                 componentName, key);
         }
 
+        // Production hardening: a PRESENT Delivery:EncryptionKey must still not be the
+        // all-zero placeholder (or otherwise invalid). Absence is covered by the
+        // missing-key check; this covers a present-but-insecure value, so prod can never
+        // encrypt supplier credentials with a publicly-known key.
+        if (isProduction && requiredKeys.Contains("Delivery:EncryptionKey"))
+        {
+            var keyError = ValidateEncryptionKey(configuration["Delivery:EncryptionKey"]);
+            if (keyError is not null)
+                throw new StartupConfigurationException(
+                    $"{componentName} cannot start in Production: {keyError}",
+                    new[] { "Delivery:EncryptionKey" });
+        }
+
         if (missingRequired.Count == 0)
             return;
 
@@ -110,6 +123,37 @@ public static class StartupConfigurationValidator
                 "{Component} startup ({Env}): required configuration key '{Key}' is not set. This will fail-fast in Production.",
                 componentName, environmentName, key);
         }
+    }
+
+    /// <summary>
+    /// Validates a PRESENT <c>Delivery:EncryptionKey</c> value. Returns a human-readable
+    /// error when the key is insecure/invalid (not a 32-byte base64 string, or the
+    /// all-zero placeholder), or <c>null</c> when acceptable. A null/blank key returns
+    /// <c>null</c> here because absence is handled by the required-key check.
+    /// </summary>
+    public static string? ValidateEncryptionKey(string? base64Key)
+    {
+        if (string.IsNullOrWhiteSpace(base64Key))
+            return null;
+
+        byte[] key;
+        try
+        {
+            key = Convert.FromBase64String(base64Key);
+        }
+        catch (FormatException)
+        {
+            return "Delivery:EncryptionKey is not valid base64; expected a 32-byte base64 string.";
+        }
+
+        if (key.Length != 32)
+            return "Delivery:EncryptionKey must decode to exactly 32 bytes (AES-256).";
+
+        if (Array.TrueForAll(key, b => b == 0))
+            return "Delivery:EncryptionKey is the all-zero placeholder key — generate a real key " +
+                   "(e.g. `openssl rand -base64 32`) and set it via the DELIVERY__ENCRYPTIONKEY environment variable.";
+
+        return null;
     }
 }
 
