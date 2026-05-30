@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProcuLink.Infrastructure;
@@ -12,9 +13,11 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Infrastructure.Migrations
 {
     [DbContext(typeof(ProcuLinkDbContext))]
-    partial class ProcuLinkDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260530120144_AddSchemaFingerprintUniqueIndex")]
+    partial class AddSchemaFingerprintUniqueIndex
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -328,10 +331,6 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
-                    b.Property<DateTime?>("AcknowledgedAt")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("acknowledged_at");
-
                     b.Property<int>("AttemptNumber")
                         .HasColumnType("integer");
 
@@ -364,10 +363,6 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Property<string>("RejectionReason")
                         .HasColumnType("text")
                         .HasColumnName("rejection_reason");
-
-                    b.Property<string>("ResponseBody")
-                        .HasColumnType("text")
-                        .HasColumnName("response_body");
 
                     b.Property<int?>("ResponseCode")
                         .HasColumnType("integer")
@@ -985,10 +980,6 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("currency");
 
-                    b.Property<DateTime?>("DeliveryDueAt")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("delivery_due_at");
-
                     b.Property<bool>("IsSample")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
@@ -1010,12 +1001,6 @@ namespace ProcuLink.Infrastructure.Migrations
 
                     b.Property<string>("SchemaFingerprintHash")
                         .HasColumnType("text");
-
-                    b.Property<bool>("SlaBreached")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false)
-                        .HasColumnName("sla_breached");
 
                     b.Property<string>("SourceFileKey")
                         .HasColumnType("text")

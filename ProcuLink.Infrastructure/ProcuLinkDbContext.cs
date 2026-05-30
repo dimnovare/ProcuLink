@@ -706,6 +706,30 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasForeignKey(s => s.OrganisationId)
              .OnDelete(DeleteBehavior.Cascade);
         });
+
+        // ── SchemaFingerprints ────────────────────────────────────────────────────
+        // The physical table + column names are intentionally kept PascalCase (the EF
+        // default the original migration created) rather than renamed to snake_case like
+        // the rest of the schema. This keeps the migration purely additive — a single
+        // CreateIndex with no RenameTable/RenameColumn — so it is safe on already-deployed
+        // databases. Tradeoff: this one table diverges from the repo snake_case convention;
+        // a deliberate rename can be coordinated later if convention alignment is wanted.
+        //
+        // The unique index on (OrganisationId, ColumnNameHash) is the actual fix: it enforces
+        // one fingerprint row per org+layout at the database level. Without it, two concurrent
+        // ParseOrderJob workers for different orders with the same column layout both INSERT,
+        // silently duplicating fingerprints and undercounting ParseSuccessCount — and the
+        // concurrent-insert race-recovery path in SchemaFingerprintService (which catches the
+        // Postgres 23505 unique violation) is dead code. The index leads with OrganisationId,
+        // so the org-scoped lookup/upsert queries stay index-aligned.
+        modelBuilder.Entity<SchemaFingerprint>(b =>
+        {
+            b.ToTable("SchemaFingerprints");
+            b.HasKey(x => x.Id);
+            b.HasIndex(x => new { x.OrganisationId, x.ColumnNameHash })
+             .IsUnique()
+             .HasDatabaseName("IX_schema_fingerprints_org_id_column_name_hash");
+        });
     }
 
     private static JsonDocument? ParseJsonDoc(string? v) =>
