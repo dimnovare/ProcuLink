@@ -45,7 +45,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<OrderConfirmationLineEntity> OrderConfirmationLines => Set<OrderConfirmationLineEntity>();
     public DbSet<MappingCorrection>  MappingCorrections  { get; set; } = null!;
     public DbSet<PoPassportEvent>    PoPassportEvents    { get; set; } = null!;
-    public DbSet<OrderException>     OrderExceptions     { get; set; } = null!;
+    public DbSet<OrderException>              OrderExceptions              { get; set; } = null!;
+    public DbSet<SupplierAcceptanceProfile>   SupplierAcceptanceProfiles   { get; set; } = null!;
+    public DbSet<SupplierAcceptanceRule>      SupplierAcceptanceRules      { get; set; } = null!;
+    public DbSet<OrderValidationResult>       OrderValidationResults       { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -549,6 +552,68 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasDatabaseName("IX_order_exceptions_org_id_state_severity_created_at");
             b.HasIndex(x => new { x.OrgId, x.OrderId })
              .HasDatabaseName("IX_order_exceptions_org_id_order_id");
+        });
+
+        // ── supplier_acceptance_profiles ────────────────────────────────
+        modelBuilder.Entity<SupplierAcceptanceProfile>(b =>
+        {
+            b.ToTable("supplier_acceptance_profiles");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            b.Property(x => x.VersionNo).HasColumnName("version_no");
+            b.Property(x => x.Status).HasColumnName("status").IsRequired();
+            b.Property(x => x.Protocol).HasColumnName("protocol");
+            b.Property(x => x.OutputFormat).HasColumnName("output_format");
+            b.Property(x => x.EffectiveFrom).HasColumnName("effective_from").HasColumnType("timestamptz");
+            b.Property(x => x.EffectiveTo).HasColumnName("effective_to").HasColumnType("timestamptz");
+            b.Property(x => x.CreatedBy).HasColumnName("created_by");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
+            b.HasMany(x => x.Rules).WithOne(r => r.Profile).HasForeignKey(r => r.ProfileId);
+            b.HasIndex(x => new { x.OrgId, x.SupplierId, x.VersionNo })
+             .IsUnique()
+             .HasDatabaseName("IX_supplier_acceptance_profiles_org_supplier_version");
+            b.HasIndex(x => new { x.OrgId, x.SupplierId, x.Status })
+             .HasDatabaseName("IX_supplier_acceptance_profiles_org_supplier_status");
+        });
+
+        // ── supplier_acceptance_rules ───────────────────────────────────
+        modelBuilder.Entity<SupplierAcceptanceRule>(b =>
+        {
+            b.ToTable("supplier_acceptance_rules");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.ProfileId).HasColumnName("profile_id");
+            b.Property(x => x.Scope).HasColumnName("scope").IsRequired();
+            b.Property(x => x.FieldPath).HasColumnName("field_path").IsRequired();
+            b.Property(x => x.Operator).HasColumnName("operator").IsRequired();
+            b.Property(x => x.ExpectedValue).HasColumnName("expected_value");
+            b.Property(x => x.Severity).HasColumnName("severity").IsRequired();
+            b.Property(x => x.BlockOnFail).HasColumnName("block_on_fail");
+            b.HasIndex(x => x.ProfileId).HasDatabaseName("IX_supplier_acceptance_rules_profile_id");
+        });
+
+        // ── order_validation_results ────────────────────────────────────
+        modelBuilder.Entity<OrderValidationResult>(b =>
+        {
+            b.ToTable("order_validation_results");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.OrderId).HasColumnName("order_id");
+            b.Property(x => x.ProfileId).HasColumnName("profile_id");
+            b.Property(x => x.RuleId).HasColumnName("rule_id");
+            b.Property(x => x.LineNumber).HasColumnName("line_number");
+            b.Property(x => x.Severity).HasColumnName("severity").IsRequired();
+            b.Property(x => x.Status).HasColumnName("status").IsRequired();
+            b.Property(x => x.Code).HasColumnName("code").IsRequired();
+            b.Property(x => x.Message).HasColumnName("message").IsRequired();
+            b.Property(x => x.DetectedAt).HasColumnName("detected_at").HasColumnType("timestamptz");
+            b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
+            b.HasIndex(x => new { x.OrgId, x.OrderId })
+             .HasDatabaseName("IX_order_validation_results_org_id_order_id");
         });
 
         // ── buyers ─────────────────────────────────────────────────────
