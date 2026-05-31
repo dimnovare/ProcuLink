@@ -45,6 +45,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<OrderConfirmationLineEntity> OrderConfirmationLines => Set<OrderConfirmationLineEntity>();
     public DbSet<MappingCorrection>  MappingCorrections  { get; set; } = null!;
     public DbSet<PoPassportEvent>    PoPassportEvents    { get; set; } = null!;
+    public DbSet<OrderException>     OrderExceptions     { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -525,6 +526,29 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasForeignKey(x => x.UserId);
             b.HasIndex(x => new { x.OrgId, x.EntityType, x.EntityId, x.CreatedAt })
              .HasDatabaseName("IX_audit_events_org_id_entity_type_entity_id_created_at");
+        });
+
+        // ── order_exceptions ───────────────────────────────────────────
+        modelBuilder.Entity<OrderException>(b =>
+        {
+            b.ToTable("order_exceptions");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.OrderId).HasColumnName("order_id");
+            b.Property(x => x.LineId).HasColumnName("line_id");
+            b.Property(x => x.Stage).HasColumnName("stage").IsRequired();
+            b.Property(x => x.Code).HasColumnName("code").IsRequired();
+            b.Property(x => x.Severity).HasColumnName("severity").IsRequired();
+            b.Property(x => x.State).HasColumnName("state").IsRequired();
+            b.Property(x => x.Message).HasColumnName("message").IsRequired();
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.ResolvedAt).HasColumnName("resolved_at").HasColumnType("timestamptz");
+            b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
+            b.HasIndex(x => new { x.OrgId, x.State, x.Severity, x.CreatedAt })
+             .HasDatabaseName("IX_order_exceptions_org_id_state_severity_created_at");
+            b.HasIndex(x => new { x.OrgId, x.OrderId })
+             .HasDatabaseName("IX_order_exceptions_org_id_order_id");
         });
 
         // ── buyers ─────────────────────────────────────────────────────
