@@ -6,12 +6,12 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Services;
 
 /// <summary>
-/// Verifies that the Erply and Directo starter templates:
+/// Verifies that the starter templates:
 ///  1. Deserialize correctly from their embedded JSON fixtures.
 ///  2. Round-trip through <see cref="PoMappingEngine.Apply"/> producing a
 ///     fully-populated <see cref="ProcuLink.Transform.Mapping.MappedOrder"/>
 ///     (all canonical header fields + all canonical line fields non-null).
-///  3. GetAll() returns exactly the two expected templates.
+///  3. GetAll() returns the expected template set.
 /// </summary>
 public sealed class StarterTemplateServiceTests
 {
@@ -20,13 +20,35 @@ public sealed class StarterTemplateServiceTests
     // ── GetAll ────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void GetAll_ReturnsExactlyErplyAndDirecto()
+    public void GetAll_ReturnsExpectedTemplates()
     {
         var svc = CreateService();
         var templates = svc.GetAll();
 
-        templates.Should().HaveCount(2);
-        templates.Select(t => t.Id).Should().BeEquivalentTo(["erply", "directo"]);
+        templates.Should().HaveCount(5);
+        templates.Select(t => t.Id).Should().BeEquivalentTo([
+            "generic-csv",
+            "buyer-excel",
+            "cxml-orderrequest",
+            "erply",
+            "directo",
+        ]);
+    }
+
+    [Theory]
+    [InlineData("generic-csv")]
+    [InlineData("buyer-excel")]
+    [InlineData("cxml-orderrequest")]
+    [InlineData("erply")]
+    [InlineData("directo")]
+    public void Fixture_DeserializesToUsablePoMappingConfig(string templateId)
+    {
+        var svc = CreateService();
+        var template = svc.GetAll().Single(t => t.Id == templateId);
+
+        template.Config.Should().NotBeNull();
+        template.Config.Header.Should().ContainKeys("PoNumber", "OrderDate", "BuyerName", "Currency");
+        template.Config.Lines.Should().ContainKeys("BuyerItemCode", "Description", "Quantity", "Unit", "UnitPrice");
     }
 
     // ── Erply fixture ─────────────────────────────────────────────────────────

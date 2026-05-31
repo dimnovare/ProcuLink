@@ -11,10 +11,14 @@ namespace ProcuLink.Api.Services.StarterTemplates;
 public sealed class StarterTemplateService : IStarterTemplateService
 {
     // Each embedded resource name in ProcuLink.Api.dll.
-    // Note: .NET converts hyphens in directory names to underscores in resource names,
-    // so "Fixtures/po-templates/" becomes "ProcuLink.Api.Fixtures.po_templates.".
+    // Note: .NET converts the hyphen in the directory name to an underscore,
+    // so "Fixtures/po-templates/" becomes "ProcuLink.Api.Fixtures.po_templates.";
+    // file-name hyphens are preserved.
     private static readonly string[] FixtureResourceNames =
     [
+        "ProcuLink.Api.Fixtures.po_templates.generic-csv.json",
+        "ProcuLink.Api.Fixtures.po_templates.buyer-excel.json",
+        "ProcuLink.Api.Fixtures.po_templates.cxml-orderrequest.json",
         "ProcuLink.Api.Fixtures.po_templates.erply.json",
         "ProcuLink.Api.Fixtures.po_templates.directo.json",
     ];

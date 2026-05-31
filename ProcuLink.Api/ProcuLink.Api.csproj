@@ -33,6 +33,9 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Fixtures\sample-order.csv" />
+    <EmbeddedResource Include="Fixtures\po-templates\generic-csv.json" />
+    <EmbeddedResource Include="Fixtures\po-templates\buyer-excel.json" />
+    <EmbeddedResource Include="Fixtures\po-templates\cxml-orderrequest.json" />
     <EmbeddedResource Include="Fixtures\po-templates\erply.json" />
     <EmbeddedResource Include="Fixtures\po-templates\directo.json" />
   </ItemGroup>

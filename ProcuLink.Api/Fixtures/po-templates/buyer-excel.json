@@ -1,0 +1,62 @@
+{
+  "id": "buyer-excel",
+  "erp": "Excel",
+  "name": "Buyer Excel order sheet",
+  "description": "Starter mapping for spreadsheet purchase orders exported from procurement teams.",
+  "config": {
+    "hasHeaderRecord": true,
+    "separator": ",",
+    "header": {
+      "PoNumber": {
+        "externalField": "PO No",
+        "fieldManipulators": [
+          { "type": "Trim", "params": [] }
+        ]
+      },
+      "OrderDate": {
+        "externalField": "PO Date",
+        "fieldManipulators": [
+          { "type": "DateFormat", "params": ["dd/MM/yyyy", "yyyy-MM-dd"] }
+        ]
+      },
+      "BuyerName": {
+        "externalField": "Buyer",
+        "fieldManipulators": [
+          { "type": "Trim", "params": [] }
+        ]
+      },
+      "Currency": {
+        "externalField": "Currency",
+        "fieldManipulators": [
+          { "type": "Trim", "params": [] }
+        ]
+      }
+    },
+    "lines": {
+      "BuyerItemCode": {
+        "externalField": "Item code",
+        "fieldManipulators": [
+          { "type": "Trim", "params": [] }
+        ]
+      },
+      "Description": {
+        "externalField": "Item description",
+        "fieldManipulators": []
+      },
+      "Quantity": {
+        "externalField": "Qty",
+        "fieldManipulators": []
+      },
+      "Unit": {
+        "externalField": "UOM",
+        "fieldManipulators": [
+          { "type": "Trim", "params": [] }
+        ]
+      },
+      "UnitPrice": {
+        "externalField": "Net price",
+        "fieldManipulators": []
+      }
+    }
+  }
+}

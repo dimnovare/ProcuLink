@@ -1,0 +1,60 @@
+{
+  "id": "generic-csv",
+  "erp": "CSV",
+  "name": "Generic CSV purchase order",
+  "description": "Starter mapping for common buyer CSV exports with separate header and line columns.",
+  "config": {
+    "hasHeaderRecord": true,
+    "separator": ",",
+    "header": {
+      "PoNumber": {
+        "externalField": "po_number",
+        "fieldManipulators": []
+      },
+      "OrderDate": {
+        "externalField": "order_date",
+        "fieldManipulators": [
+          { "type": "DateFormat", "params": ["yyyy-MM-dd", "yyyy-MM-dd"] }
+        ]
+      },
+      "BuyerName": {
+        "externalField": "buyer_name",
+        "fieldManipulators": []
+      },
+      "SupplierName": {
+        "externalField": "supplier_name",
+        "fieldManipulators": []
+      },
+      "Currency": {
+        "externalField": "currency",
+        "fieldManipulators": [
+          { "type": "Trim", "params": [] }
+        ]
+      }
+    },
+    "lines": {
+      "BuyerItemCode": {
+        "externalField": "buyer_item_code",
+        "fieldManipulators": []
+      },
+      "Description": {
+        "externalField": "description",
+        "fieldManipulators": []
+      },
+      "Quantity": {
+        "externalField": "quantity",
+        "fieldManipulators": []
+      },
+      "Unit": {
+        "externalField": "unit",
+        "fieldManipulators": [
+          { "type": "Trim", "params": [] }
+        ]
+      },
+      "UnitPrice": {
+        "externalField": "unit_price",
+        "fieldManipulators": []
+      }
+    }
+  }
+}

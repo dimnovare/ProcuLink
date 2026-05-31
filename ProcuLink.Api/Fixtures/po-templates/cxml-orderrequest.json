@@ -1,0 +1,62 @@
+{
+  "id": "cxml-orderrequest",
+  "erp": "cXML",
+  "name": "cXML OrderRequest",
+  "description": "Starter mapping for cXML OrderRequest documents from PunchOut/procurement platforms.",
+  "config": {
+    "hasHeaderRecord": false,
+    "separator": ",",
+    "header": {
+      "PoNumber": {
+        "externalField": "Request/OrderRequest/OrderRequestHeader/@orderID",
+        "fieldManipulators": []
+      },
+      "OrderDate": {
+        "externalField": "Request/OrderRequest/OrderRequestHeader/@orderDate",
+        "fieldManipulators": [
+          { "type": "DateFormat", "params": ["yyyy-MM-ddTHH:mm:sszzz", "yyyy-MM-dd"] }
+        ]
+      },
+      "BuyerName": {
+        "externalField": "Request/OrderRequest/OrderRequestHeader/BillTo/Address/Name",
+        "fieldManipulators": []
+      },
+      "SupplierName": {
+        "externalField": "Request/OrderRequest/ItemOut/SupplierID",
+        "fieldManipulators": []
+      },
+      "Currency": {
+        "externalField": "Request/OrderRequest/OrderRequestHeader/Total/Money/@currency",
+        "fieldManipulators": [
+          { "type": "Trim", "params": [] }
+        ]
+      }
+    },
+    "lines": {
+      "BuyerItemCode": {
+        "externalField": "Request/OrderRequest/ItemOut/ItemID/BuyerPartID",
+        "fieldManipulators": []
+      },
+      "SupplierItemCode": {
+        "externalField": "Request/OrderRequest/ItemOut/ItemID/SupplierPartID",
+        "fieldManipulators": []
+      },
+      "Description": {
+        "externalField": "Request/OrderRequest/ItemOut/ItemDetail/Description",
+        "fieldManipulators": []
+      },
+      "Quantity": {
+        "externalField": "Request/OrderRequest/ItemOut/@quantity",
+        "fieldManipulators": []
+      },
+      "Unit": {
+        "externalField": "Request/OrderRequest/ItemOut/ItemDetail/UnitOfMeasure",
+        "fieldManipulators": []
+      },
+      "UnitPrice": {
+        "externalField": "Request/OrderRequest/ItemOut/ItemDetail/UnitPrice/Money",
+        "fieldManipulators": []
+      }
+    }
+  }
+}
