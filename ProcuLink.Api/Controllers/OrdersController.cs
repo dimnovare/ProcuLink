@@ -31,6 +31,7 @@ public sealed class OrdersController : ControllerBase
     private readonly ILogger<OrdersController> _logger;
     private readonly IBillingService           _billing;
     private readonly IIdempotencyService       _idempotency;
+    private readonly IOrderExceptionService    _exceptionService;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -44,15 +45,17 @@ public sealed class OrdersController : ControllerBase
         ProcuLinkDbContext        db,
         ILogger<OrdersController> logger,
         IBillingService           billing,
-        IIdempotencyService       idempotency)
+        IIdempotencyService       idempotency,
+        IOrderExceptionService    exceptionService)
     {
-        _orders      = orders;
-        _tenant      = tenant;
-        _jobs        = jobs;
-        _db          = db;
-        _logger      = logger;
-        _billing     = billing;
-        _idempotency = idempotency;
+        _orders           = orders;
+        _tenant           = tenant;
+        _jobs             = jobs;
+        _db               = db;
+        _logger           = logger;
+        _billing          = billing;
+        _idempotency      = idempotency;
+        _exceptionService = exceptionService;
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -562,6 +565,17 @@ public sealed class OrdersController : ControllerBase
             .ToListAsync(ct);
 
         return Ok(events);
+    }
+
+    // ── GET /api/orders/{id}/exceptions ───────────────────────────────────────
+
+    /// <summary>Returns all exceptions (any state) for this order, newest first.</summary>
+    [HttpGet("{id:guid}/exceptions")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetExceptions(Guid id, CancellationToken ct)
+    {
+        var rows = await _exceptionService.ListForOrderAsync(_tenant.OrganisationId, id, ct);
+        return Ok(rows);
     }
 
     // ── POST /api/orders/{id}/redeliver ──────────────────────────────────────
