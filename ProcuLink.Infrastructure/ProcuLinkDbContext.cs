@@ -237,6 +237,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Organisation)
              .WithMany()
              .HasForeignKey(x => x.OrgId);
+            b.HasIndex(x => new { x.OrgId, x.SupplierId })
+             .IsUnique()
+             .HasDatabaseName("IX_supplier_profiles_org_id_supplier_id");
         });
 
         // ── purchase_orders ────────────────────────────────────────────
@@ -312,6 +315,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Order)
              .WithMany(x => x.Lines)
              .HasForeignKey(x => x.OrderId);
+            b.HasIndex(x => new { x.OrderId, x.NeedsReview })
+             .HasDatabaseName("IX_purchase_order_lines_order_id_needs_review");
         });
 
         // ── item_mappings ──────────────────────────────────────────────
@@ -383,6 +388,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.DeliveryAttempts)
              .HasForeignKey(x => x.OrgId);
+            b.HasIndex(x => new { x.OrgId, x.OrderId, x.AttemptedAt })
+             .HasDatabaseName("IX_delivery_attempts_org_id_order_id_attempted_at");
         });
 
         // ── idempotency_keys ───────────────────────────────────────────
@@ -505,6 +512,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.User)
              .WithMany(x => x.AuditEvents)
              .HasForeignKey(x => x.UserId);
+            b.HasIndex(x => new { x.OrgId, x.EntityType, x.EntityId, x.CreatedAt })
+             .HasDatabaseName("IX_audit_events_org_id_entity_type_entity_id_created_at");
         });
 
         // ── buyers ─────────────────────────────────────────────────────
