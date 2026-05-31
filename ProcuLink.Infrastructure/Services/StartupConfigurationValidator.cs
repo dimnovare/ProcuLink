@@ -31,6 +31,7 @@ public static class StartupConfigurationValidator
         "Stripe:GrowthPriceId",
         "Stripe:OperationsPriceId",
         "Stripe:IntegrationPriceId",
+        "Stripe:DistributorPriceId",
         "Delivery:EncryptionKey",
         "Security:ApiKeyHashSecret",
         "Frontend:Url",
@@ -115,6 +116,31 @@ public static class StartupConfigurationValidator
                 throw new StartupConfigurationException(
                     $"{componentName} cannot start in Production: {secretError}",
                     new[] { "Security:ApiKeyHashSecret" });
+        }
+
+        // Production hardening: DataProtection:EncryptionKey must be set so that ASP.NET Data
+        // Protection keys are encrypted at rest. If absent, the key ring XML is stored in cleartext
+        // in the database — a DB read gives an attacker all session and data-protection keys.
+        if (isProduction && string.IsNullOrWhiteSpace(configuration["DataProtection:EncryptionKey"]))
+        {
+            throw new StartupConfigurationException(
+                $"{componentName} cannot start in Production without DataProtection:EncryptionKey — " +
+                "ASP.NET Data Protection keys would be stored as cleartext XML in the database. " +
+                "Generate a 32-byte base64 key (`openssl rand -base64 32`) and set it via " +
+                "the DATAPROTECTION__ENCRYPTIONKEY environment variable.",
+                new[] { "DataProtection:EncryptionKey" });
+        }
+
+        // Production hardening: Delivery:AllowPrivateNetworkTargets=true bypasses all SSRF
+        // network-range protection for HTTP delivery. This flag exists only for localhost dev testing
+        // and must never reach production.
+        if (isProduction && configuration.GetValue<bool>("Delivery:AllowPrivateNetworkTargets", false))
+        {
+            throw new StartupConfigurationException(
+                $"{componentName} cannot start in Production with Delivery:AllowPrivateNetworkTargets=true — " +
+                "this disables SSRF protection for all tenant-configured HTTP delivery endpoints. " +
+                "Remove or unset the DELIVERY__ALLOWPRIVATENETWORKTARGETS environment variable.",
+                new[] { "Delivery:AllowPrivateNetworkTargets" });
         }
 
         if (missingRequired.Count == 0)

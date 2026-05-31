@@ -100,6 +100,9 @@ public class StartupConfigurationValidatorTests
         foreach (var k in StartupConfigurationValidator.ApiRequiredKeys)
             dict[k] = "configured-value";
         dict["Delivery:EncryptionKey"] = encryptionKey;
+        // DataProtection:EncryptionKey is not in ApiRequiredKeys (it is a separate
+        // production-hardening guard), but Production validation requires it to be set.
+        dict["DataProtection:EncryptionKey"] = ValidKey;
         return new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
     }
 
