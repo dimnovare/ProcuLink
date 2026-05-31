@@ -575,7 +575,8 @@ public sealed class OrdersController : ControllerBase
     public async Task<IActionResult> GetExceptions(Guid id, CancellationToken ct)
     {
         var rows = await _exceptionService.ListForOrderAsync(_tenant.OrganisationId, id, ct);
-        return Ok(rows);
+        return Ok(rows.Select(e => new OrderExceptionDto(
+            e.Id, e.OrderId, e.LineId, e.Stage, e.Code, e.Severity, e.State, e.Message, e.CreatedAt, e.ResolvedAt)));
     }
 
     // ── POST /api/orders/{id}/redeliver ──────────────────────────────────────
