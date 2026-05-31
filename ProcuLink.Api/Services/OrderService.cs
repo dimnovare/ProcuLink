@@ -141,6 +141,9 @@ public sealed class OrderService : IOrderService
             PoNumber     = string.IsNullOrWhiteSpace(parsedOrder.PoNumber)
                                ? $"PO-{now:yyyyMMddHHmmss}"
                                : parsedOrder.PoNumber,
+            BuyerName    = string.IsNullOrWhiteSpace(parsedOrder.BuyerName)
+                               ? null
+                               : parsedOrder.BuyerName.Trim(),
             OrderDate    = parsedOrder.OrderDate.HasValue
                                ? DateOnly.FromDateTime(parsedOrder.OrderDate.Value)
                                : DateOnly.FromDateTime(now),
@@ -322,6 +325,9 @@ public sealed class OrderService : IOrderService
             PoNumber      = string.IsNullOrWhiteSpace(order.PoNumber)
                                 ? $"PO-{now:yyyyMMddHHmmss}"
                                 : order.PoNumber!,
+            BuyerName     = string.IsNullOrWhiteSpace(order.BuyerName)
+                                ? null
+                                : order.BuyerName.Trim(),
             OrderDate     = order.OrderDate.HasValue
                                 ? DateOnly.FromDateTime(order.OrderDate.Value)
                                 : DateOnly.FromDateTime(now),
@@ -502,8 +508,12 @@ public sealed class OrderService : IOrderService
             var newOrderDate = parsedOrder.OrderDate.HasValue
                                 ? DateOnly.FromDateTime(parsedOrder.OrderDate.Value)
                                 : DateOnly.FromDateTime(now);
-            var newCurrency = parsedOrder.Currency ?? "EUR";
-            var newStatus   = anyUnresolved ? "pending_review" : "ready";
+            var newCurrency  = parsedOrder.Currency ?? "EUR";
+            var newStatus    = anyUnresolved ? "pending_review" : "ready";
+            // Denormalise buyer name for SQL search (avoid JSON parse at query time).
+            var newBuyerName = string.IsNullOrWhiteSpace(parsedOrder.BuyerName)
+                                ? null
+                                : parsedOrder.BuyerName.Trim();
 
             var updated = await _db.PurchaseOrders
                 .Where(o => o.Id == orderId && o.OrgId == organisationId)
@@ -512,6 +522,7 @@ public sealed class OrderService : IOrderService
                     .SetProperty(o => o.OrderDate,  newOrderDate)
                     .SetProperty(o => o.Currency,   newCurrency)
                     .SetProperty(o => o.Status,     newStatus)
+                    .SetProperty(o => o.BuyerName,  newBuyerName)
                     .SetProperty(o => o.UpdatedAt,  now), ct);
 
             if (updated == 0)
@@ -543,6 +554,7 @@ public sealed class OrderService : IOrderService
             entity.OrderDate = newOrderDate;
             entity.Currency  = newCurrency;
             entity.Status    = newStatus;
+            entity.BuyerName = newBuyerName;
             entity.UpdatedAt = now;
             entity.Lines.AddRange(lineEntities);
 
@@ -707,74 +719,43 @@ public sealed class OrderService : IOrderService
         if (dateTo.HasValue)
             baseQuery = baseQuery.Where(o => o.CreatedAt <= dateTo.Value);
 
-        // ── Step 2: project rows — buyer name lives in canonical_json (jsonb) so
-        //    it must be pulled into memory for the search post-filter. ──────────
-        var allRows = await baseQuery
+        // ── Step 2 (new): SQL-native search predicate ────────────────────────────
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var trimmedSearch = search.Trim();
+            baseQuery = baseQuery.Where(o =>
+                EF.Functions.ILike(o.PoNumber, $"%{trimmedSearch}%") ||
+                EF.Functions.ILike(o.Supplier!.Name, $"%{trimmedSearch}%") ||
+                (o.BuyerName != null && EF.Functions.ILike(o.BuyerName, $"%{trimmedSearch}%")));
+        }
+
+        // ── Step 3: total count from SQL (no full-table load) ──────────────────
+        var totalCount = await baseQuery.CountAsync(ct);
+        if (totalCount == 0)
+            return Result<(IReadOnlyList<PurchaseOrderSummary>, int)>.Ok(
+                (Array.Empty<PurchaseOrderSummary>(), 0));
+
+        // ── Step 4: paginate in SQL, select minimal columns ────────────────────
+        var skip  = (page - 1) * pageSize;
+        var paged = await baseQuery
             .OrderByDescending(o => o.CreatedAt)
+            .Skip(skip)
+            .Take(pageSize)
             .Select(o => new
             {
                 o.Id,
                 o.PoNumber,
-                SupplierName  = o.Supplier != null ? o.Supplier.Name : "Unknown Supplier",
+                SupplierName = o.Supplier != null ? o.Supplier.Name : "Unknown Supplier",
+                o.BuyerName,
                 o.OrderDate,
                 o.Status,
                 o.CreatedAt,
                 o.Currency,
                 o.SourceFileKey,
-                o.CanonicalJson,
             })
             .ToListAsync(ct);
 
-        // ── Step 3: in-memory search filter (PO number OR supplier name OR buyer name) ─
-        var trimmedSearch = search?.Trim();
-        var filtered = allRows;
-        if (!string.IsNullOrWhiteSpace(trimmedSearch))
-        {
-            filtered = allRows.Where(o =>
-            {
-                if (o.PoNumber.Contains(trimmedSearch, StringComparison.OrdinalIgnoreCase))
-                    return true;
-                if (o.SupplierName.Contains(trimmedSearch, StringComparison.OrdinalIgnoreCase))
-                    return true;
-
-                // Extract buyer name from canonical JSON (populated after parsing).
-                if (o.CanonicalJson is not null)
-                {
-                    try
-                    {
-                        var root = o.CanonicalJson.RootElement;
-                        if (root.TryGetProperty("buyerName", out var el))
-                        {
-                            var bn = el.GetString();
-                            if (bn is not null && bn.Contains(trimmedSearch, StringComparison.OrdinalIgnoreCase))
-                                return true;
-                        }
-                        else if (root.TryGetProperty("BuyerName", out var el2))
-                        {
-                            var bn = el2.GetString();
-                            if (bn is not null && bn.Contains(trimmedSearch, StringComparison.OrdinalIgnoreCase))
-                                return true;
-                        }
-                    }
-                    catch { /* malformed JSON — ignore */ }
-                }
-
-                return false;
-            }).ToList();
-        }
-
-        // ── Step 4: totalCount on the filtered set ────────────────────────────
-        var totalCount = filtered.Count;
-
-        if (totalCount == 0)
-            return Result<(IReadOnlyList<PurchaseOrderSummary>, int)>.Ok(
-                (Array.Empty<PurchaseOrderSummary>(), 0));
-
-        // ── Step 5: paginate ──────────────────────────────────────────────────
-        var skip  = (page - 1) * pageSize;
-        var paged = filtered.Skip(skip).Take(pageSize).ToList();
-
-        // ── Step 6: aggregate line counts for the page subset only ────────────
+        // ── Step 5: aggregate line counts for the page subset only ────────────
         var pagedIds = paged.Select(o => o.Id).ToList();
 
         var lineCounts = await _db.PurchaseOrderLines
@@ -790,24 +771,10 @@ public sealed class OrderService : IOrderService
             })
             .ToDictionaryAsync(g => g.OrderId, ct);
 
-        // ── Step 7: project to PurchaseOrderSummary ───────────────────────────
+        // ── Step 6: project to PurchaseOrderSummary ───────────────────────────
         var summaries = paged.Select(o =>
         {
             lineCounts.TryGetValue(o.Id, out var lc);
-
-            string? buyerName = null;
-            if (o.CanonicalJson is not null)
-            {
-                try
-                {
-                    var root = o.CanonicalJson.RootElement;
-                    if (root.TryGetProperty("buyerName", out var el))
-                        buyerName = el.GetString();
-                    else if (root.TryGetProperty("BuyerName", out var el2))
-                        buyerName = el2.GetString();
-                }
-                catch { /* malformed JSON — ignore */ }
-            }
 
             string? sourceFormat = null;
             if (!string.IsNullOrEmpty(o.SourceFileKey))
@@ -828,7 +795,7 @@ public sealed class OrderService : IOrderService
                 o.Id,
                 o.PoNumber,
                 o.SupplierName,
-                buyerName,
+                o.BuyerName,
                 o.OrderDate,
                 o.Status,
                 lc?.Total      ?? 0,

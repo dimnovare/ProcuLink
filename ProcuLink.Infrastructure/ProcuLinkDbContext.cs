@@ -259,6 +259,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.OrgId).HasColumnName("org_id");
             b.Property(x => x.SupplierId).HasColumnName("supplier_id");
             b.Property(x => x.PoNumber).HasColumnName("po_number").IsRequired();
+            b.Property(x => x.BuyerName).HasColumnName("buyer_name");
             b.Property(x => x.OrderDate).HasColumnName("order_date");
             b.Property(x => x.Currency).HasColumnName("currency").IsRequired();
             b.Property(x => x.Status).HasColumnName("status").IsRequired();
@@ -289,9 +290,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // (OrgId, SupplierId): order-list query filtered/grouped by supplier within a tenant.
             b.HasIndex(x => new { x.OrgId, x.SupplierId })
              .HasDatabaseName("IX_purchase_orders_org_id_supplier_id");
-            // NOTE: no (OrgId, BuyerId) index — purchase_orders has no buyer_id column. The buyer is
-            // correlated in-memory via CanonicalJson["buyerName"] (see BuyerService), so there is no
-            // column to index. If a first-class buyer_id FK is added later, add (OrgId, BuyerId) then.
+            // (OrgId, BuyerName): SQL-native buyer-name search in ListPagedAsync (ILike predicate).
+            b.HasIndex(x => new { x.OrgId, x.BuyerName })
+             .HasDatabaseName("IX_purchase_orders_org_id_buyer_name");
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.PurchaseOrders)
              .HasForeignKey(x => x.OrgId);

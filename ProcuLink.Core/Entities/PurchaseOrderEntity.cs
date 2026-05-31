@@ -12,6 +12,14 @@ public class PurchaseOrderEntity
     public Guid OrgId { get; set; }
     public Guid SupplierId { get; set; }
     public string PoNumber { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Buyer name extracted from CanonicalJson at parse time.
+    /// Null while the order is still parsing or if no buyer name was found.
+    /// Denormalised from CanonicalJson for SQL-filterable search.
+    /// </summary>
+    public string? BuyerName { get; set; }
+
     public DateOnly OrderDate { get; set; }
     public string Currency { get; set; } = string.Empty;
 
