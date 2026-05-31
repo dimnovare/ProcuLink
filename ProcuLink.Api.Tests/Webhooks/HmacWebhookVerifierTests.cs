@@ -2,7 +2,9 @@ using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
@@ -49,7 +51,8 @@ public class HmacWebhookVerifierTests
     {
         var db     = MakeDb();
         var crypto = MakeCrypto();
-        var cache  = new MemoryCache(new MemoryCacheOptions());
+        IDistributedCache cache = new MemoryDistributedCache(
+            Options.Create(new MemoryDistributedCacheOptions()));
         var orgId  = Guid.NewGuid();
         var secret = TestSecret;
 
@@ -203,7 +206,8 @@ public class HmacWebhookVerifierTests
         // Org has no webhook_secret_encrypted set.
         var db     = MakeDb();
         var crypto = MakeCrypto();
-        var cache  = new MemoryCache(new MemoryCacheOptions());
+        IDistributedCache cache = new MemoryDistributedCache(
+            Options.Create(new MemoryDistributedCacheOptions()));
         var orgId  = Guid.NewGuid();
 
         db.Organisations.Add(new Organisation

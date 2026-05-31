@@ -346,7 +346,10 @@ builder.Services.AddScoped<IInvoiceService, ProcuLink.Infrastructure.Services.In
 builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.DesadvService>();
 
 // ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
-builder.Services.AddMemoryCache(); // shared cache used by HmacWebhookVerifier nonce replay store
+// IDistributedCache for HmacWebhookVerifier nonce replay store.
+// MemoryDistributedCache is single-instance; swap for Redis when horizontal scaling is needed:
+//   builder.Services.AddStackExchangeRedisCache(o => o.Configuration = config["Redis:ConnectionString"]);
+builder.Services.AddDistributedMemoryCache();
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
 // Stateless source-column extractor used by the magic-mapping UI (GET /api/suppliers/{id}/mapping/source-columns).

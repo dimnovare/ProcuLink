@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Services.Webhooks;
 
@@ -28,13 +28,13 @@ public sealed class HmacWebhookVerifier : IHmacWebhookVerifier
 
     private readonly ProcuLinkDbContext              _db;
     private readonly DeliveryEncryptionService       _crypto;
-    private readonly IMemoryCache                    _cache;
+    private readonly IDistributedCache               _cache;
     private readonly ILogger<HmacWebhookVerifier>    _logger;
 
     public HmacWebhookVerifier(
         ProcuLinkDbContext              db,
         DeliveryEncryptionService       crypto,
-        IMemoryCache                    cache,
+        IDistributedCache               cache,
         ILogger<HmacWebhookVerifier>    logger)
     {
         _db     = db;
@@ -125,12 +125,20 @@ public sealed class HmacWebhookVerifier : IHmacWebhookVerifier
 
         // 7. Replay-protection nonce check (after signature passes to avoid polluting cache on bad inputs)
         var nonceKey = $"webhook_nonce:{org.Id}:{nonceHeader}";
-        if (_cache.TryGetValue(nonceKey, out _))
+        var existing = await _cache.GetAsync(nonceKey, ct);
+        if (existing is not null)
         {
             _logger.LogWarning("HMAC verify: replayed nonce for org {OrgId}.", org.Id);
             return Fail();
         }
-        _cache.Set(nonceKey, true, TimeSpan.FromSeconds(NonceCacheSeconds));
+        await _cache.SetAsync(
+            nonceKey,
+            new byte[] { 1 },
+            new DistributedCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(NonceCacheSeconds),
+            },
+            ct);
 
         return new HmacVerificationResult(Valid: true, ErrorMessage: null, OrganisationId: org.Id);
     }

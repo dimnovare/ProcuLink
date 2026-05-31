@@ -15,7 +15,7 @@ public sealed record HmacVerificationResult(bool Valid, string? ErrorMessage, Gu
 ///
 /// Replay protection:
 ///   - Timestamp must be within +/- 300 seconds of UtcNow.
-///   - Nonce must not have been seen within the last 600 seconds (via IMemoryCache).
+///   - Nonce must not have been seen within the last 600 seconds (via IDistributedCache).
 ///
 /// Error policy:
 ///   - ANY failure (bad timestamp, unknown slug, missing secret, signature mismatch,

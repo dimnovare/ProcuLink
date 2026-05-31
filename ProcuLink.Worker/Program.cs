@@ -149,7 +149,10 @@ else
 // Mirrors API/Program.cs lines 270-272. Currently used only by API controllers,
 // but registered here too so future background jobs in this dep graph
 // (e.g. retry queue, ACK round-trip) can resolve them without a second DI fix.
-builder.Services.AddMemoryCache(); // shared cache used by HmacWebhookVerifier nonce replay store
+// IDistributedCache for HmacWebhookVerifier nonce replay store.
+// MemoryDistributedCache is single-instance; swap for Redis when horizontal scaling is needed:
+//   builder.Services.AddStackExchangeRedisCache(o => o.Configuration = config["Redis:ConnectionString"]);
+builder.Services.AddDistributedMemoryCache();
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier, ProcuLink.Infrastructure.Services.Webhooks.HmacWebhookVerifier>();
 
