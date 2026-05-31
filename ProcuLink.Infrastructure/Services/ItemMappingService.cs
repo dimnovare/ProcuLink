@@ -104,15 +104,35 @@ public sealed class ItemMappingService : IItemMappingService
                 SupplierItemCode = supplierItemCode.Trim(),
                 Confidence       = source == MappingSource.Manual ? 1.0f : 0.8f,
                 Source           = sourceStr,
+                AppliedCount     = 1,
                 CreatedAt        = now,
                 UpdatedAt        = now
             });
         }
         else
         {
+            var codeChanged = !string.Equals(
+                existing.SupplierItemCode, supplierItemCode.Trim(),
+                StringComparison.OrdinalIgnoreCase);
+
+            if (codeChanged)
+            {
+                _db.MappingCorrections.Add(new MappingCorrection
+                {
+                    Id                  = Guid.NewGuid(),
+                    OrgId               = orgId,
+                    MappingId           = existing.Id,
+                    OldSupplierItemCode = existing.SupplierItemCode,
+                    NewSupplierItemCode = supplierItemCode.Trim(),
+                    Source              = sourceStr,
+                    CorrectedAt         = now,
+                });
+            }
+
             existing.SupplierItemCode = supplierItemCode.Trim();
             existing.Source           = sourceStr;
             existing.Confidence       = source == MappingSource.Manual ? 1.0f : existing.Confidence;
+            existing.AppliedCount    += 1;
             existing.UpdatedAt        = now;
         }
 

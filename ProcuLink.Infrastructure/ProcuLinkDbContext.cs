@@ -43,6 +43,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<SchemaFingerprint>       SchemaFingerprints       => Set<SchemaFingerprint>();
     public DbSet<OrderConfirmationEntity>     OrderConfirmations     => Set<OrderConfirmationEntity>();
     public DbSet<OrderConfirmationLineEntity> OrderConfirmationLines => Set<OrderConfirmationLineEntity>();
+    public DbSet<MappingCorrection> MappingCorrections { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -331,6 +332,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.SupplierItemCode).HasColumnName("supplier_item_code").IsRequired();
             b.Property(x => x.Confidence).HasColumnName("confidence");
             b.Property(x => x.Source).HasColumnName("source").IsRequired();
+            b.Property(x => x.AppliedCount).HasColumnName("applied_count").HasDefaultValue(0);
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             b.HasIndex(x => new { x.OrgId, x.SupplierId, x.BuyerItemCode }).IsUnique();
@@ -340,6 +342,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Supplier)
              .WithMany(x => x.ItemMappings)
              .HasForeignKey(x => x.SupplierId);
+            b.HasMany<MappingCorrection>().WithOne(x => x.Mapping).HasForeignKey(x => x.MappingId);
         });
 
         // ── outbound_artifacts ─────────────────────────────────────────
@@ -824,6 +827,26 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasForeignKey(x => x.PurchaseOrderLineId)
              .IsRequired(false)
              .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ── mapping_corrections ────────────────────────────────────────
+        modelBuilder.Entity<MappingCorrection>(b =>
+        {
+            b.ToTable("mapping_corrections");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.MappingId).HasColumnName("mapping_id");
+            b.Property(x => x.OldSupplierItemCode).HasColumnName("old_supplier_item_code").IsRequired();
+            b.Property(x => x.NewSupplierItemCode).HasColumnName("new_supplier_item_code").IsRequired();
+            b.Property(x => x.Source).HasColumnName("source").IsRequired();
+            b.Property(x => x.CorrectedAt)
+             .HasColumnName("corrected_at")
+             .HasColumnType("timestamptz");
+            b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
+            b.HasOne(x => x.Mapping).WithMany().HasForeignKey(x => x.MappingId);
+            b.HasIndex(x => new { x.OrgId, x.MappingId, x.CorrectedAt })
+             .HasDatabaseName("IX_mapping_corrections_org_id_mapping_id_corrected_at");
         });
     }
 

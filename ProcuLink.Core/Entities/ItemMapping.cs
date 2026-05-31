@@ -12,6 +12,9 @@ public class ItemMapping
     /// <summary>manual | imported | suggested</summary>
     public string Source { get; set; } = "manual";
 
+    /// <summary>How many times this mapping has been applied during order resolution.</summary>
+    public int AppliedCount { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
