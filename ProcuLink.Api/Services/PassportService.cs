@@ -118,11 +118,19 @@ public sealed class PassportService : IPassportService
 
         var supplierProfileDto = BuildSupplierProfile(deliveryConfig, supplierProfile, notes);
 
-        // Validation results are not persisted as structured per-order outcomes today.
-        var validationResults = Array.Empty<PassportValidationResult>();
-        notes.Add("Structured per-order validation results are not persisted; this list is empty by design. "
-                + "Parse failures appear in the timeline as 'ParseFailed' events, and lines still flagged "
-                + "for review are visible via the mapping decisions (source='unresolved').");
+        // Structured per-order validation outcomes, persisted by the acceptance-profile
+        // validate endpoint. Empty until the order has been validated against a profile.
+        var validationResults = await _db.OrderValidationResults
+            .AsNoTracking()
+            .Where(r => r.OrgId == organisationId && r.OrderId == orderId)
+            .OrderBy(r => r.LineNumber)
+            .Select(r => new PassportValidationResult(r.LineNumber, r.Severity, r.Code, r.Message))
+            .ToListAsync(ct);
+
+        if (validationResults.Count == 0)
+            notes.Add("No structured validation results recorded for this order yet. "
+                    + "Parse failures appear in the timeline as 'ParseFailed' events, and lines still flagged "
+                    + "for review are visible via the mapping decisions (source='unresolved').");
 
         var mappingDecisions = lines
             .Select(l => new PassportMappingDecision(

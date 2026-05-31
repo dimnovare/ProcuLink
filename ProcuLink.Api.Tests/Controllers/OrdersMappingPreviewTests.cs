@@ -53,7 +53,8 @@ public class OrdersMappingPreviewTests
             logger,
             billing.Object,
             idempotency.Object,
-            new Mock<IOrderExceptionService>().Object);
+            new Mock<IOrderExceptionService>().Object,
+            new Mock<ISupplierAcceptanceService>().Object);
 
         return (controller, orgId, db);
     }

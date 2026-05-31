@@ -72,7 +72,8 @@ public class OrdersControllerErrorMessageTests
             NullLogger<OrdersController>.Instance,
             new Mock<IBillingService>().Object,
             new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object);
+            new Mock<IOrderExceptionService>().Object,
+            new Mock<ISupplierAcceptanceService>().Object);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 
@@ -120,7 +121,8 @@ public class OrdersControllerErrorMessageTests
             NullLogger<OrdersController>.Instance,
             new Mock<IBillingService>().Object,
             new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object);
+            new Mock<IOrderExceptionService>().Object,
+            new Mock<ISupplierAcceptanceService>().Object);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 

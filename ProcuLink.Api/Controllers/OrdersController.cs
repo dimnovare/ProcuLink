@@ -32,6 +32,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IBillingService           _billing;
     private readonly IIdempotencyService       _idempotency;
     private readonly IOrderExceptionService    _exceptionService;
+    private readonly ISupplierAcceptanceService _acceptance;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -46,7 +47,8 @@ public sealed class OrdersController : ControllerBase
         ILogger<OrdersController> logger,
         IBillingService           billing,
         IIdempotencyService       idempotency,
-        IOrderExceptionService    exceptionService)
+        IOrderExceptionService    exceptionService,
+        ISupplierAcceptanceService acceptance)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -56,6 +58,7 @@ public sealed class OrdersController : ControllerBase
         _billing          = billing;
         _idempotency      = idempotency;
         _exceptionService = exceptionService;
+        _acceptance       = acceptance;
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -392,6 +395,18 @@ public sealed class OrdersController : ControllerBase
             id, formatStr);
 
         return Accepted(new { status = "transforming" });
+    }
+
+    // ── POST /api/orders/{id}/validate ────────────────────────────────────────
+
+    /// <summary>Validate the order against the supplier's active acceptance profile.</summary>
+    [HttpPost("{id:guid}/validate")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Validate(Guid id, CancellationToken ct)
+    {
+        var results = await _acceptance.ValidateOrderAsync(_tenant.OrganisationId, id, ct);
+        return Ok(results.Select(r => new OrderValidationResultDto(
+            r.LineNumber, r.Severity, r.Status, r.Code, r.Message)));
     }
 
     // ── POST /api/orders/{id}/accept-ai-suggestions ──────────────────────────
