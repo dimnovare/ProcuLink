@@ -88,6 +88,41 @@ public class OrderExceptionServiceTests
     }
 
     [Fact]
+    public async Task Reconcile_TransformFailed_OpensTransformException()
+    {
+        var db = MakeDb();
+        var (orgId, orderId) = SeedOrder(db, "transform_failed", false);
+        var svc = new OrderExceptionService(db);
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+        var ex = await db.OrderExceptions.SingleAsync();
+        Assert.Equal("transform_failed", ex.Code);
+        Assert.Equal("error", ex.Severity);
+    }
+
+    [Fact]
+    public async Task Reconcile_DeadLetter_OpensCriticalException()
+    {
+        var db = MakeDb();
+        var (orgId, orderId) = SeedOrder(db, "delivery_dead_letter", false);
+        var svc = new OrderExceptionService(db);
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+        var ex = await db.OrderExceptions.SingleAsync();
+        Assert.Equal("dead_letter", ex.Code);
+        Assert.Equal("critical", ex.Severity);
+    }
+
+    [Fact]
+    public async Task Reconcile_ParseFailed_OpensParseFailedException()
+    {
+        var db = MakeDb();
+        var (orgId, orderId) = SeedOrder(db, "failed", false);
+        var svc = new OrderExceptionService(db);
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+        var ex = await db.OrderExceptions.SingleAsync();
+        Assert.Equal("parse_failed", ex.Code);
+    }
+
+    [Fact]
     public async Task Ignore_ExcludedFromAutoResolve()
     {
         var db = MakeDb();

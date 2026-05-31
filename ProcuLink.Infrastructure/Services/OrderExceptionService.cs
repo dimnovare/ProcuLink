@@ -25,6 +25,8 @@ public sealed class OrderExceptionService : IOrderExceptionService
     {
         if (status == OrderStatusConstants.PendingReview || hasUnresolvedLines)
             return ("unresolved_mapping", "Map", "warning", "Order has lines that need a supplier item code.");
+        if (status == OrderStatusConstants.Failed)
+            return ("parse_failed", "Parse", "error", "Parsing the source file failed for this order.");
         if (status == OrderStatusConstants.TransformFailed)
             return ("transform_failed", "Transform", "error", "Transform failed for this order.");
         if (status == OrderStatusConstants.DeliveryFailed)

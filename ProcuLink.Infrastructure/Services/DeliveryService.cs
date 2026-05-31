@@ -43,11 +43,41 @@ public sealed class DeliveryService : IDeliveryService
         _logger = logger;
     }
 
-    public async Task<DeliveryResult> DispatchArtifactAsync(
+    /// <summary>
+    /// Best-effort exception reconciliation: exception generation is operational
+    /// observability data and must never fail the parent delivery operation.
+    /// </summary>
+    private async Task SafeReconcileExceptionsAsync(Guid orgId, Guid orderId, CancellationToken ct)
+    {
+        try
+        {
+            await _exceptions.ReconcileAsync(orgId, orderId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Exception reconcile failed for order {OrderId} (non-fatal).", orderId);
+        }
+    }
+
+    public Task<DeliveryResult> DispatchArtifactAsync(
         Guid orgId,
         Guid orderId,
         Guid artifactId,
         bool requireAutoDeliver,
+        CancellationToken ct)
+        => DispatchArtifactAsync(orgId, orderId, artifactId, requireAutoDeliver, reconcileFailedAttempt: true, ct);
+
+    // Internal overload. <paramref name="reconcileFailedAttempt"/> lets the retry path opt out
+    // of reconciling a failed attempt it is about to dead-letter: DeadLetterAsync reconciles
+    // once at the end, so reconciling on the failed attempt first would write a transient
+    // delivery_failed exception that the dead-letter reconcile immediately resolves. Successful
+    // attempts always reconcile regardless of this flag.
+    private async Task<DeliveryResult> DispatchArtifactAsync(
+        Guid orgId,
+        Guid orderId,
+        Guid artifactId,
+        bool requireAutoDeliver,
+        bool reconcileFailedAttempt,
         CancellationToken ct)
     {
         var artifact = await _db.OutboundArtifacts
@@ -72,14 +102,14 @@ public sealed class DeliveryService : IDeliveryService
             return new DeliveryResult(true, null);
 
         if (!_dispatchers.TryGetValue(config.Protocol, out var dispatcher))
-            return await FailBeforeDispatchAsync(order, artifact, config, "No dispatcher registered for delivery protocol.", ct);
+            return await FailBeforeDispatchAsync(order, artifact, config, "No dispatcher registered for delivery protocol.", reconcileFailedAttempt, ct);
 
         var credentials = string.IsNullOrWhiteSpace(config.EncryptedCredentials)
             ? string.Empty
             : _encryption.Decrypt(config.EncryptedCredentials);
 
         if (credentials is null)
-            return await FailBeforeDispatchAsync(order, artifact, config, "Delivery credentials could not be decrypted.", ct);
+            return await FailBeforeDispatchAsync(order, artifact, config, "Delivery credentials could not be decrypted.", reconcileFailedAttempt, ct);
 
         // SLA timer: opening a fresh delivery attempt (re)starts the confirmation window
         // and clears any prior breach flag. The SLA sweep flags the order if this deadline
@@ -107,7 +137,7 @@ public sealed class DeliveryService : IDeliveryService
             credentials,
             ct);
 
-        await PersistAttemptAsync(order, artifact, config, result, ct);
+        await PersistAttemptAsync(order, artifact, config, result, ct, reconcile: reconcileFailedAttempt);
         return result;
     }
 
@@ -162,10 +192,11 @@ public sealed class DeliveryService : IDeliveryService
         OutboundArtifact artifact,
         SupplierDeliveryConfig config,
         string error,
+        bool reconcile,
         CancellationToken ct)
     {
         var result = new DeliveryResult(false, error);
-        await PersistAttemptAsync(order, artifact, config, result, ct);
+        await PersistAttemptAsync(order, artifact, config, result, ct, reconcile: reconcile);
         return result;
     }
 
@@ -174,7 +205,8 @@ public sealed class DeliveryService : IDeliveryService
         OutboundArtifact artifact,
         SupplierDeliveryConfig config,
         DeliveryResult result,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool reconcile = true)
     {
         var now = DateTime.UtcNow;
 
@@ -226,8 +258,13 @@ public sealed class DeliveryService : IDeliveryService
         await _db.SaveChangesAsync(ct);
 
         // Reconcile exceptions against the new order status (delivered clears delivery
-        // exceptions; delivery_failed / rejected open the matching exception).
-        await _exceptions.ReconcileAsync(order.OrgId, order.Id, ct);
+        // exceptions; delivery_failed / rejected open the matching exception). Skipped on a
+        // failed attempt that the caller will immediately dead-letter: DeadLetterAsync runs
+        // its own reconcile, so reconciling here would only write a transient delivery_failed
+        // exception that the very next reconcile resolves. A successful attempt always
+        // reconciles regardless of the flag.
+        if (reconcile || result.Success)
+            await SafeReconcileExceptionsAsync(order.OrgId, order.Id, ct);
 
         // ── Wave 4: fire order.delivered / order.failed triggers ──────────────────
         if (result.Success)
@@ -380,14 +417,20 @@ public sealed class DeliveryService : IDeliveryService
         if (artifact is null)
             return new DeliveryResult(false, "No outbound artifact found. Transform the order before retrying delivery.");
 
-        var result = await DispatchArtifactAsync(orgId, orderId, artifact.Id, requireAutoDeliver: false, ct);
+        // If this attempt is the last one allowed, a failure will dead-letter immediately —
+        // DeadLetterAsync runs its own reconcile, so suppress the per-attempt reconcile to
+        // avoid writing a transient delivery_failed exception that gets resolved milliseconds
+        // later. A successful attempt still reconciles inside DispatchArtifactAsync.
+        var willDeadLetterOnFailure = priorAttempts + 1 >= maxAttempts;
 
-        if (!result.Success)
-        {
-            var attemptsNow = priorAttempts + 1;
-            if (attemptsNow >= maxAttempts)
-                await DeadLetterAsync(order, attemptsNow, lastError: result.ErrorMessage, ct);
-        }
+        var result = await DispatchArtifactAsync(
+            orgId, orderId, artifact.Id,
+            requireAutoDeliver: false,
+            reconcileFailedAttempt: !willDeadLetterOnFailure,
+            ct);
+
+        if (!result.Success && willDeadLetterOnFailure)
+            await DeadLetterAsync(order, priorAttempts + 1, lastError: result.ErrorMessage, ct);
 
         return result;
     }
@@ -431,7 +474,7 @@ public sealed class DeliveryService : IDeliveryService
 
         // Reconcile exceptions: dead-letter opens the critical dead_letter exception and
         // supersedes any earlier delivery_failed exception for the order.
-        await _exceptions.ReconcileAsync(order.OrgId, order.Id, ct);
+        await SafeReconcileExceptionsAsync(order.OrgId, order.Id, ct);
 
         _logger.LogWarning(
             "Order {OrderId} (org {OrgId}) dead-lettered after {Attempts} attempt(s). Last error: {Error}",
