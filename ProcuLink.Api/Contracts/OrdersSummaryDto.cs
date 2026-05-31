@@ -6,6 +6,6 @@ namespace ProcuLink.Api.Contracts;
 /// Keys are order status strings (e.g. "pending_review", "delivered").
 /// </summary>
 public record OrdersSummaryDto(
-    Dictionary<string, int> ByStatus,
+    IReadOnlyDictionary<string, int> ByStatus,
     int                     Total
 );
