@@ -45,6 +45,7 @@ public class RetryDeliveryJob
     // No Hangfire AutomaticRetry: retry/backoff semantics live inside RetryDeliveryAsync
     // (attempt cap + dead-letter) and the explicit BackoffFor() schedule below, not in
     // Hangfire's own retry queue. A Hangfire-level retry would double-count attempts.
+    [Queue("delivery-retry")]
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(Guid orderId, Guid organisationId, CancellationToken ct)
     {

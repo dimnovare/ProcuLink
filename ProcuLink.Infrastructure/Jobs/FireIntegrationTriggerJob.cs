@@ -38,6 +38,7 @@ public class FireIntegrationTriggerJob
         _logger = logger;
     }
 
+    [Queue("background")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 30, 120, 600 })]
     public async Task ExecuteAsync(Guid subscriptionId, string payloadJson, CancellationToken ct)
     {

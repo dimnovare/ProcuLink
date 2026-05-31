@@ -34,6 +34,7 @@ public class TransformOrderJob
     }
 
     /// <summary>Entry point called by Hangfire.</summary>
+    [Queue("critical")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 10, 60, 300 })]
     public async Task ExecuteAsync(
         Guid orderId,

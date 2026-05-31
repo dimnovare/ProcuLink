@@ -26,6 +26,7 @@ public sealed class S3PollingJob
         _logger = logger;
     }
 
+    [Queue("polling")]
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(CancellationToken ct)
     {

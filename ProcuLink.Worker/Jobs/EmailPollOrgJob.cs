@@ -58,6 +58,7 @@ public sealed class EmailPollOrgJob
     /// the SEEN flag set on each processed message; re-running after a crash
     /// will skip messages already flagged.
     /// </summary>
+    [Queue("polling")]
     [AutomaticRetry(Attempts = 2)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {

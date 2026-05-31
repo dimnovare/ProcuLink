@@ -52,9 +52,11 @@ builder.Services.AddHangfire(cfg => cfg
     .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString)));
 builder.Services.AddHangfireServer(opts =>
 {
-    // Worker is the sole Hangfire executor — also processes ParseOrderJob enqueued by the API.
-    opts.WorkerCount = 4;
-    opts.Queues = new[] { "default" };
+    // Named queues by workload type — prevents polling bursts from starving parse/delivery.
+    // Priority order: Hangfire processes queues left-to-right, pulling from the next only when
+    // the higher-priority queue is empty.
+    opts.WorkerCount = 10;
+    opts.Queues = new[] { "critical", "delivery-retry", "polling", "background", "default" };
 });
 
 builder.Services.AddHttpClient("delivery", c =>

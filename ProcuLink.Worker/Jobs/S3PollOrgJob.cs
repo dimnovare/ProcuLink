@@ -20,6 +20,7 @@ public sealed class S3PollOrgJob
         _logger = logger;
     }
 
+    [Queue("polling")]
     [AutomaticRetry(Attempts = 2)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {

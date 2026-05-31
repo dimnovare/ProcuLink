@@ -31,6 +31,7 @@ public class ParseInvoiceJob
         _logger        = logger;
     }
 
+    [Queue("critical")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 5, 30, 120 })]
     public async Task ExecuteAsync(Guid invoiceId, Guid organisationId, CancellationToken ct)
     {

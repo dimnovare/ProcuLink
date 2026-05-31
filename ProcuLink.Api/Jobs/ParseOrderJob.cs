@@ -36,6 +36,7 @@ public class ParseOrderJob
     /// <summary>
     /// Entry point called by Hangfire.
     /// </summary>
+    [Queue("critical")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 5, 30, 120 })]
     public async Task ExecuteAsync(Guid orderId, Guid organisationId, CancellationToken ct)
     {

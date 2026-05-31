@@ -25,6 +25,7 @@ public sealed class EmailPollingJob
         _logger = logger;
     }
 
+    [Queue("polling")]
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(CancellationToken ct)
     {

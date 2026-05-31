@@ -20,6 +20,7 @@ public sealed class DeliverySlaSweepJob
         _logger = logger;
     }
 
+    [Queue("background")]
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
