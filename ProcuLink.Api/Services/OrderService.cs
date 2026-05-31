@@ -958,6 +958,13 @@ public sealed class OrderService : IOrderService
                     $"Line {res.LineNumber} does not exist in this order.");
         }
 
+        // Wrap all writes in a transaction so mapping corrections, order status,
+        // audit event, and passport event commit atomically (relational providers only;
+        // the InMemory test provider does not support transactions).
+        await using var tx = _db.Database.IsRelational()
+            ? await _db.Database.BeginTransactionAsync(ct)
+            : null;
+
         // Apply resolutions
         foreach (var res in resolutions)
         {
@@ -996,6 +1003,9 @@ public sealed class OrderService : IOrderService
         await EmitPassportEventAsync(organisationId, orderId, "Map", "Corrected",
             actorType: "user",
             payload: new { linesResolved = resolutions.Count, savedMappings = saveMappings }, ct: ct);
+
+        if (tx is not null)
+            await tx.CommitAsync(ct);
 
         _logger.LogInformation(
             "Order {OrderId} resolved: {Count} lines, saveMappings={Save}, status={Status}",

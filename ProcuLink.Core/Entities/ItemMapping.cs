@@ -12,7 +12,10 @@ public class ItemMapping
     /// <summary>manual | imported | suggested</summary>
     public string Source { get; set; } = "manual";
 
-    /// <summary>How many times this mapping has been applied during order resolution.</summary>
+    /// <summary>
+    /// Number of times this mapping has been saved or reaffirmed via manual
+    /// resolution (UpsertAsync). Not incremented by automatic resolution.
+    /// </summary>
     public int AppliedCount { get; set; }
 
     public DateTime CreatedAt { get; set; }
