@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Dispatchers;
 
@@ -18,6 +19,7 @@ namespace ProcuLink.Infrastructure.Services.Dispatchers;
 public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
 {
     private readonly ILogger<FtpsDeliveryDispatcher> _logger;
+    private readonly OutboundRequestGuard _guard;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -27,9 +29,10 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Ftps;
 
-    public FtpsDeliveryDispatcher(ILogger<FtpsDeliveryDispatcher> logger)
+    public FtpsDeliveryDispatcher(ILogger<FtpsDeliveryDispatcher> logger, OutboundRequestGuard guard)
     {
         _logger = logger;
+        _guard = guard;
     }
 
     public async Task<DeliveryResult> DispatchAsync(
@@ -78,6 +81,11 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         var makeDirectories = cfg.MakeDirectories;
         var timeoutSeconds = cfg.TimeoutSeconds is > 0 ? cfg.TimeoutSeconds!.Value : 30;
         var timeoutMs = timeoutSeconds * 1000;
+
+        // ── SSRF guard ────────────────────────────────────────────────────────
+        var guardResult = await _guard.ValidateHostAsync(host, port, ct);
+        if (!guardResult.Allowed)
+            return new DeliveryResult(false, $"FTPS delivery blocked: {guardResult.Reason}");
 
         // Linked token source so we can enforce our own timeout on top of the caller's token.
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));

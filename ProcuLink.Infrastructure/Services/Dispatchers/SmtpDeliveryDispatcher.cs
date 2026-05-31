@@ -6,6 +6,7 @@ using MimeKit;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Dispatchers;
 
@@ -24,6 +25,7 @@ namespace ProcuLink.Infrastructure.Services.Dispatchers;
 public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
 {
     private readonly ILogger<SmtpDeliveryDispatcher> _logger;
+    private readonly OutboundRequestGuard _guard;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -33,9 +35,10 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Smtp;
 
-    public SmtpDeliveryDispatcher(ILogger<SmtpDeliveryDispatcher> logger)
+    public SmtpDeliveryDispatcher(ILogger<SmtpDeliveryDispatcher> logger, OutboundRequestGuard guard)
     {
         _logger = logger;
+        _guard = guard;
     }
 
     public async Task<DeliveryResult> DispatchAsync(
@@ -116,6 +119,11 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
         var builder = new BodyBuilder { TextBody = body };
         builder.Attachments.Add(attachmentName, content, ContentType.Parse(contentType));
         message.Body = builder.ToMessageBody();
+
+        // ── SSRF guard ────────────────────────────────────────────────────────
+        var guardResult = await _guard.ValidateHostAsync(cfg.Host, port, ct);
+        if (!guardResult.Allowed)
+            return new DeliveryResult(false, $"SMTP delivery blocked: {guardResult.Reason}");
 
         // Dispatch with timeout
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);

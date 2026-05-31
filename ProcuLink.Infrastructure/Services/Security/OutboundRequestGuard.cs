@@ -99,6 +99,60 @@ public sealed class OutboundRequestGuard
         return GuardResult.Allow();
     }
 
+    /// <summary>
+    /// Validates a raw hostname and port for use as an outbound SMTP/SFTP/FTPS target.
+    /// Uses the same DNS resolution and IP-range logic as <see cref="ValidateAsync"/>.
+    /// Returns <c>Allowed = false</c> with a reason when the host is blocked.
+    /// </summary>
+    public async Task<GuardResult> ValidateHostAsync(string host, int port, CancellationToken ct)
+    {
+        var allowPrivate = _configuration.GetValue<bool>("Delivery:AllowPrivateNetworkTargets", false);
+        if (allowPrivate)
+            return GuardResult.Allow();
+
+        if (string.IsNullOrWhiteSpace(host))
+            return GuardResult.Block("Host is required.");
+
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+            return GuardResult.Block("Connections to 'localhost' are not permitted.");
+
+        IPAddress[] addresses;
+        try
+        {
+            addresses = await Dns.GetHostAddressesAsync(host, ct);
+        }
+        catch (SocketException ex)
+        {
+            _logger.LogWarning(
+                "SSRF guard: DNS resolution failed for host '{Host}:{Port}': {Message}",
+                host, port, ex.Message);
+            return GuardResult.Block($"DNS resolution failed for host '{host}': {ex.Message}");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                "SSRF guard: unexpected error resolving host '{Host}': {Message}", host, ex.Message);
+            return GuardResult.Block($"Could not resolve host '{host}'.");
+        }
+
+        if (addresses.Length == 0)
+            return GuardResult.Block($"Host '{host}' resolved to no addresses.");
+
+        foreach (var ip in addresses)
+        {
+            if (IsBlockedAddress(ip))
+            {
+                _logger.LogWarning(
+                    "SSRF guard blocked connection to '{Host}:{Port}': resolved IP {IP} is in a forbidden range.",
+                    host, port, ip);
+                return GuardResult.Block(
+                    $"Connections to internal/private addresses are not permitted (resolved {ip}).");
+            }
+        }
+
+        return GuardResult.Allow();
+    }
+
     // ── IP classification ─────────────────────────────────────────────────────
 
     /// <summary>

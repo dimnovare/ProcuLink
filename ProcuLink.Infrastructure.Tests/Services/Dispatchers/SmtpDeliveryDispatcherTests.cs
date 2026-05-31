@@ -1,17 +1,34 @@
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure.Services.Dispatchers;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Dispatchers;
 
 public class SmtpDeliveryDispatcherTests
 {
+    // Build a guard with AllowPrivateNetworkTargets=true so existing unit tests
+    // that use fictional hostnames (smtp.vendor.test, etc.) are not blocked by
+    // DNS resolution — the guard SSRF logic is tested separately in
+    // OutboundRequestGuardHostTests and OutboundRequestGuardTests.
+    private static OutboundRequestGuard AllowAllGuard()
+    {
+        var cfg = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Delivery:AllowPrivateNetworkTargets"] = "true",
+            })
+            .Build();
+        return new OutboundRequestGuard(cfg, NullLogger<OutboundRequestGuard>.Instance);
+    }
+
     private static SmtpDeliveryDispatcher Dispatcher() =>
-        new(NullLogger<SmtpDeliveryDispatcher>.Instance);
+        new(NullLogger<SmtpDeliveryDispatcher>.Instance, AllowAllGuard());
 
     private static SupplierDeliveryConfig MakeConfig(object config) =>
         new()

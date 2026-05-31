@@ -5,6 +5,7 @@ using Renci.SshNet.Common;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Dispatchers;
 
@@ -17,6 +18,7 @@ namespace ProcuLink.Infrastructure.Services.Dispatchers;
 public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
 {
     private readonly ILogger<SftpDeliveryDispatcher> _logger;
+    private readonly OutboundRequestGuard _guard;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -26,9 +28,10 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Sftp;
 
-    public SftpDeliveryDispatcher(ILogger<SftpDeliveryDispatcher> logger)
+    public SftpDeliveryDispatcher(ILogger<SftpDeliveryDispatcher> logger, OutboundRequestGuard guard)
     {
         _logger = logger;
+        _guard = guard;
     }
 
     public async Task<DeliveryResult> DispatchAsync(
@@ -55,6 +58,11 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
             var port = cfg.Port > 0 ? cfg.Port : 22;
             var remoteDir = NormaliseRemoteDir(cfg.RemotePath);
             var remotePath = $"{remoteDir.TrimEnd('/')}/{SanitiseFileName(fileName)}";
+
+            // ── SSRF guard ────────────────────────────────────────────────────
+            var guardResult = await _guard.ValidateHostAsync(cfg.Host, port, ct);
+            if (!guardResult.Allowed)
+                return new DeliveryResult(false, $"SFTP delivery blocked: {guardResult.Reason}");
 
             var connectionInfo = BuildConnectionInfo(cfg.Host, port, creds);
             var timeoutSeconds = cfg.TimeoutSeconds is > 0 ? cfg.TimeoutSeconds!.Value : 30;
