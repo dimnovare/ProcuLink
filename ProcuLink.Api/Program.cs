@@ -221,6 +221,7 @@ else
 // ItemMappingService is Scoped (DbContext is Scoped).
 // OrderService is Scoped for the same reason.
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
+builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IPassportService, PassportService>();
 builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>();

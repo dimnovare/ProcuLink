@@ -17,6 +17,7 @@ public sealed class DeliveryService : IDeliveryService
     private readonly IReadOnlyDictionary<string, IDeliveryDispatcher> _dispatchers;
     private readonly IIntegrationTriggerService _integrationTrigger;
     private readonly IAnalyticsService _analytics;
+    private readonly IOrderExceptionService _exceptions;
     private readonly DeliveryReliabilityOptions _reliability;
     private readonly ILogger<DeliveryService> _logger;
 
@@ -27,6 +28,7 @@ public sealed class DeliveryService : IDeliveryService
         IEnumerable<IDeliveryDispatcher> dispatchers,
         IIntegrationTriggerService integrationTrigger,
         IAnalyticsService analytics,
+        IOrderExceptionService exceptions,
         ILogger<DeliveryService> logger,
         DeliveryReliabilityOptions? reliability = null)
     {
@@ -36,6 +38,7 @@ public sealed class DeliveryService : IDeliveryService
         _dispatchers = dispatchers.ToDictionary(x => x.Protocol, StringComparer.OrdinalIgnoreCase);
         _integrationTrigger = integrationTrigger;
         _analytics = analytics;
+        _exceptions = exceptions;
         _reliability = reliability ?? new DeliveryReliabilityOptions();
         _logger = logger;
     }
@@ -221,6 +224,10 @@ public sealed class DeliveryService : IDeliveryService
         });
 
         await _db.SaveChangesAsync(ct);
+
+        // Reconcile exceptions against the new order status (delivered clears delivery
+        // exceptions; delivery_failed / rejected open the matching exception).
+        await _exceptions.ReconcileAsync(order.OrgId, order.Id, ct);
 
         // ── Wave 4: fire order.delivered / order.failed triggers ──────────────────
         if (result.Success)
@@ -421,6 +428,10 @@ public sealed class DeliveryService : IDeliveryService
         });
 
         await _db.SaveChangesAsync(ct);
+
+        // Reconcile exceptions: dead-letter opens the critical dead_letter exception and
+        // supersedes any earlier delivery_failed exception for the order.
+        await _exceptions.ReconcileAsync(order.OrgId, order.Id, ct);
 
         _logger.LogWarning(
             "Order {OrderId} (org {OrgId}) dead-lettered after {Attempts} attempt(s). Last error: {Error}",

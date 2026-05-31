@@ -28,6 +28,7 @@ public sealed class OrderService : IOrderService
     private readonly IFileStorageService         _fileStorage;
     private readonly OrderParserFactory          _parserFactory;
     private readonly IItemMappingService         _mappings;
+    private readonly IOrderExceptionService       _exceptions;
     private readonly IPoMappingService           _poMappingService;
     private readonly IAiMappingService           _aiMappings;
     private readonly IEnumerable<ITransformService> _transformers;
@@ -41,6 +42,7 @@ public sealed class OrderService : IOrderService
         IFileStorageService            fileStorage,
         OrderParserFactory             parserFactory,
         IItemMappingService            mappings,
+        IOrderExceptionService         exceptions,
         IPoMappingService              poMappingService,
         IAiMappingService              aiMappings,
         IEnumerable<ITransformService> transformers,
@@ -52,6 +54,7 @@ public sealed class OrderService : IOrderService
         _fileStorage        = fileStorage;
         _parserFactory      = parserFactory;
         _mappings           = mappings;
+        _exceptions         = exceptions;
         _poMappingService   = poMappingService;
         _aiMappings         = aiMappings;
         _transformers       = transformers;
@@ -445,6 +448,7 @@ public sealed class OrderService : IOrderService
                     await _db.SaveChangesAsync(ct);
                     await EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
                         payload: new { error = ParseFailureExplain.ForUnsupportedFormat(extension) }, ct: ct);
+                    await _exceptions.ReconcileAsync(organisationId, orderId, ct);
                     return Result<ParsedFileOutput>.Fail(ex.Message);
                 }
             }
@@ -472,6 +476,7 @@ public sealed class OrderService : IOrderService
                 await _db.SaveChangesAsync(ct);
                 await EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
                     payload: new { error = ex.Message }, ct: ct);
+                await _exceptions.ReconcileAsync(organisationId, orderId, ct);
                 return Result<ParsedFileOutput>.Fail($"Could not parse file: {ex.Message}");
             }
 
@@ -483,6 +488,7 @@ public sealed class OrderService : IOrderService
                 await _db.SaveChangesAsync(ct);
                 await EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
                     payload: new { error = "0 lines parsed" }, ct: ct);
+                await _exceptions.ReconcileAsync(organisationId, orderId, ct);
                 return Result<ParsedFileOutput>.Fail("File contains no line items.");
             }
 
@@ -562,6 +568,8 @@ public sealed class OrderService : IOrderService
                 "Order {OrderId} parsed: {LineCount} lines, {Unresolved} unresolved, status={Status}",
                 orderId, lineEntities.Count, lineEntities.Count(l => l.NeedsReview), entity.Status);
         }
+
+        await _exceptions.ReconcileAsync(organisationId, orderId, ct);
 
         return Result<ParsedFileOutput>.Ok(
             new ParsedFileOutput(entity, detected?.ColumnHeaders, detected?.Format ?? "unknown"));
@@ -1007,6 +1015,8 @@ public sealed class OrderService : IOrderService
         if (tx is not null)
             await tx.CommitAsync(ct);
 
+        await _exceptions.ReconcileAsync(organisationId, orderId, ct);
+
         _logger.LogInformation(
             "Order {OrderId} resolved: {Count} lines, saveMappings={Save}, status={Status}",
             orderId, resolutions.Count, saveMappings, entity.Status);
@@ -1054,6 +1064,8 @@ public sealed class OrderService : IOrderService
         }));
 
         await _db.SaveChangesAsync(ct);
+
+        await _exceptions.ReconcileAsync(organisationId, orderId, ct);
 
         _logger.LogInformation(
             "Order {OrderId} (org {OrgId}) manually marked as rejected. Reason: {Reason}",
@@ -1116,6 +1128,8 @@ public sealed class OrderService : IOrderService
         await EmitPassportEventAsync(organisationId, orderId, "Map", "AiAccepted",
             actorType: "ai",
             payload: new { accepted = acceptedCount }, ct: ct);
+
+        await _exceptions.ReconcileAsync(organisationId, orderId, ct);
 
         _logger.LogInformation(
             "Order {OrderId}: {Count} AI suggestions bulk-accepted (minConfidence={Min}), status={Status}",

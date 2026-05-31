@@ -258,6 +258,7 @@ public class DeliveryServiceRetryTests
             new[] { dispatcher },
             new NoOpIntegrationTriggerService(),
             new FakeAnalyticsService(),
+            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
             NullLogger<DeliveryService>.Instance);
 
     private static SupplierDeliveryConfig MakeConfig(

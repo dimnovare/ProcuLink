@@ -87,6 +87,7 @@ public class OrderServiceCrossTenantSupplierTests
             fileStorage,
             parserFactory,
             itemMappings.Object,
+            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
             poMappings.Object,
             aiMappings.Object,
             Array.Empty<ITransformService>(),

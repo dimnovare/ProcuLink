@@ -227,6 +227,7 @@ public class DeliveryServiceAckAndSlaTests
             new[] { dispatcher },
             new NoOpIntegrationTriggerService(),
             new FakeAnalyticsService(),
+            new OrderExceptionService(db),
             NullLogger<DeliveryService>.Instance,
             options);
 

@@ -81,6 +81,7 @@ public class OrderServiceBatchResolveTests
             fileStorage,
             new OrderParserFactory(new IPurchaseOrderParser[] { new CsvOrderParser(), new XlsxOrderParser(), new PdfOrderParser() }),
             itemMappings,
+            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
             poMappings.Object,
             aiMappings,
             Array.Empty<ITransformService>(),

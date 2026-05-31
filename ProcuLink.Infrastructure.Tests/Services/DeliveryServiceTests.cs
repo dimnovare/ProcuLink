@@ -174,6 +174,7 @@ public class DeliveryServiceTests
             new[] { dispatcher },
             new NoOpIntegrationTriggerService(),
             new ProcuLink.Infrastructure.Tests.TestDoubles.FakeAnalyticsService(),
+            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
             NullLogger<DeliveryService>.Instance);
 
     private sealed class NoOpIntegrationTriggerService : ProcuLink.Core.Services.IIntegrationTriggerService
@@ -255,7 +256,6 @@ public class DeliveryServiceTests
             modelBuilder.Ignore<Membership>();
             modelBuilder.Ignore<Supplier>();
             modelBuilder.Ignore<SupplierProfileEntity>();
-            modelBuilder.Ignore<PurchaseOrderLineEntity>();
             modelBuilder.Ignore<ItemMapping>();
             modelBuilder.Ignore<AuditEvent>();
             modelBuilder.Ignore<SupplierPoMapping>();
@@ -306,6 +306,20 @@ public class DeliveryServiceTests
             {
                 b.HasKey(x => x.Id);
                 b.Ignore(x => x.Order);
+                b.Ignore(x => x.Organisation);
+            });
+
+            // OrderExceptionService.ReconcileAsync (now invoked from DeliveryService)
+            // queries lines + exceptions, so both must be mapped in this trimmed model.
+            modelBuilder.Entity<PurchaseOrderLineEntity>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.Ignore(x => x.Order);
+            });
+
+            modelBuilder.Entity<OrderException>(b =>
+            {
+                b.HasKey(x => x.Id);
                 b.Ignore(x => x.Organisation);
             });
         }

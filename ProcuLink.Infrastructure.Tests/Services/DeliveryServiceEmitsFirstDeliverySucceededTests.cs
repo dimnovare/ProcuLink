@@ -140,6 +140,7 @@ public class DeliveryServiceEmitsFirstDeliverySucceededTests
             new[] { dispatcher },
             new NoOpIntegrationTriggerService(),
             analytics,
+            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
             NullLogger<DeliveryService>.Instance);
 
     private static SupplierDeliveryConfig MakeConfig(
@@ -213,7 +214,6 @@ public class DeliveryServiceEmitsFirstDeliverySucceededTests
             modelBuilder.Ignore<Membership>();
             modelBuilder.Ignore<Supplier>();
             modelBuilder.Ignore<SupplierProfileEntity>();
-            modelBuilder.Ignore<PurchaseOrderLineEntity>();
             modelBuilder.Ignore<ItemMapping>();
             modelBuilder.Ignore<AuditEvent>();
             modelBuilder.Ignore<SupplierPoMapping>();
@@ -264,6 +264,20 @@ public class DeliveryServiceEmitsFirstDeliverySucceededTests
             {
                 b.HasKey(x => x.Id);
                 b.Ignore(x => x.Order);
+                b.Ignore(x => x.Organisation);
+            });
+
+            // OrderExceptionService.ReconcileAsync (invoked from DeliveryService) queries
+            // lines + exceptions, so both must be mapped in this trimmed model.
+            modelBuilder.Entity<PurchaseOrderLineEntity>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.Ignore(x => x.Order);
+            });
+
+            modelBuilder.Entity<OrderException>(b =>
+            {
+                b.HasKey(x => x.Id);
                 b.Ignore(x => x.Organisation);
             });
         }
