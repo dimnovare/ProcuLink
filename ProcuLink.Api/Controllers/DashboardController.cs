@@ -77,14 +77,14 @@ public class DashboardController : ControllerBase
     private static readonly HashSet<string> FailedStatuses = new(StringComparer.Ordinal)
     {
         OrderStatusConstants.Failed, OrderStatusConstants.DeliveryFailed,
-        "transform_failed", OrderStatusConstants.DeliveryDeadLetter,
+        OrderStatusConstants.TransformFailed, OrderStatusConstants.DeliveryDeadLetter,
     };
 
     private static readonly HashSet<string> ExceptionStatuses = new(StringComparer.Ordinal)
     {
         OrderStatusConstants.PendingReview, OrderStatusConstants.Failed,
-        OrderStatusConstants.DeliveryFailed, "transform_failed",
-        OrderStatusConstants.DeliveryDeadLetter,
+        OrderStatusConstants.DeliveryFailed, OrderStatusConstants.TransformFailed,
+        OrderStatusConstants.DeliveryDeadLetter, OrderStatusConstants.RejectedBySupplier,
     };
 
     [HttpGet("topology")]
@@ -106,8 +106,10 @@ public class DashboardController : ControllerBase
             })
             .ToListAsync(ct);
 
-        var supMap  = new Dictionary<string, (string Id, string Name, int Total, int Failed, int Exceptions)>(StringComparer.OrdinalIgnoreCase);
+        // supMap keyed by SupplierId (GUID string) — stable, unique, collision-free
+        var supMap  = new Dictionary<string, (string Id, string Name, int Total, int Failed, int Exceptions)>(StringComparer.Ordinal);
         var buyMap  = new Dictionary<string, (string Id, string Name, int Total)>(StringComparer.OrdinalIgnoreCase);
+        // wireMap key: "{buyerKey}|||{supplierId}"
         var wireMap = new Dictionary<string, (string BuyerKey, string SupplierKey, int Total, int Failed, int Exceptions)>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var row in rows)
@@ -115,9 +117,9 @@ public class DashboardController : ControllerBase
             var isFailed    = FailedStatuses.Contains(row.Status);
             var isException = ExceptionStatuses.Contains(row.Status);
 
-            var sk = row.SupplierName.Trim().ToLowerInvariant();
+            var sk = row.SupplierId.ToString(); // stable GUID string
             if (!supMap.TryGetValue(sk, out var sa))
-                sa = (row.SupplierId.ToString(), row.SupplierName.Trim(), 0, 0, 0);
+                sa = (sk, row.SupplierName.Trim(), 0, 0, 0);
             supMap[sk] = sa with
             {
                 Total      = sa.Total + 1,
@@ -168,14 +170,14 @@ public class DashboardController : ControllerBase
                 s.Total == 0 ? 100 : (int)Math.Round(100.0 * (s.Total - s.Failed) / s.Total)))
             .ToList();
 
-        var buyerIdByKey    = buyMap.ToDictionary(kv => kv.Key, kv => kv.Value.Id);
-        var supplierIdByKey = supMap.ToDictionary(kv => kv.Key, kv => kv.Value.Id);
+        var buyerIdByKey = buyMap.ToDictionary(kv => kv.Key, kv => kv.Value.Id);
 
         var wires = wireMap.Values
             .Select(w =>
             {
                 if (!buyerIdByKey.TryGetValue(w.BuyerKey, out var buyerId)) return null;
-                if (!supplierIdByKey.TryGetValue(w.SupplierKey, out var supplierId)) return null;
+                // w.SupplierKey IS the supplierId (GUID string) — use directly
+                var supplierId = w.SupplierKey;
                 var health = w.Failed > 0 ? "down" : w.Exceptions > 0 ? "risk" : "ok";
                 return new TopologyWireDto(
                     buyerId, supplierId, WeightFor(w.Total), health,
