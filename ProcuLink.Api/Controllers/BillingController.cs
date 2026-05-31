@@ -163,6 +163,12 @@ public sealed class BillingController : ControllerBase
         var signature = Request.Headers["Stripe-Signature"].FirstOrDefault();
         var secret    = _config["Stripe:WebhookSecret"] ?? string.Empty;
 
+        if (string.IsNullOrEmpty(signature))
+        {
+            _logger.LogWarning("Stripe webhook rejected: missing Stripe-Signature header.");
+            return BadRequest(new { error = "Missing signature." });
+        }
+
         Stripe.Event stripeEvent;
         try
         {

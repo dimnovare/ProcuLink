@@ -167,20 +167,34 @@ public class BillingControllerTests
     // ── POST /api/billing/webhook ─────────────────────────────────────────────
 
     [Fact]
+    public async Task Webhook_AbsentStripeSignatureHeader_Returns400()
+    {
+        var (ctrl, _, _, _, _) = Build();
+
+        // No Stripe-Signature header at all — FirstOrDefault() returns null.
+        // Before the null-guard fix, ConstructEvent threw NullReferenceException
+        // (not StripeException), which the catch block missed, returning 500.
+        // The guard must intercept this and return a clean 400.
+        SetHttpContext(ctrl, body: "{}", stripeHeader: null);
+
+        var result = await ctrl.Webhook(CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>(
+            "an absent Stripe-Signature header must return 400, not 500");
+    }
+
+    [Fact]
     public async Task Webhook_MissingStripeSignatureHeader_Returns400()
     {
         var (ctrl, _, _, _, _) = Build();
 
-        // Set Stripe-Signature to an empty string — the Stripe SDK raises StripeException
-        // for a syntactically empty header, which the controller catches and returns 400.
-        // (A truly null header causes an NRE inside the Stripe SDK before the controller
-        // can catch it, which is a known Stripe.net edge-case unrelated to our logic.)
+        // An empty Stripe-Signature string is also rejected by the null-or-empty guard.
         SetHttpContext(ctrl, body: "{}", stripeHeader: string.Empty);
 
         var result = await ctrl.Webhook(CancellationToken.None);
 
         result.Should().BeOfType<BadRequestObjectResult>(
-            "an empty Stripe-Signature must cause signature validation to fail with 400");
+            "an empty Stripe-Signature must return 400");
     }
 
     [Fact]
