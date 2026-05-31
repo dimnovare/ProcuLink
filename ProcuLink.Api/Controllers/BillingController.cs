@@ -218,7 +218,7 @@ public sealed class BillingController : ControllerBase
         }
     }
 
-    private async Task HandleCheckoutCompletedAsync(Stripe.Checkout.Session? session, CancellationToken ct)
+    internal async Task HandleCheckoutCompletedAsync(Stripe.Checkout.Session? session, CancellationToken ct)
     {
         if (session is null) return;
 
@@ -270,7 +270,7 @@ public sealed class BillingController : ControllerBase
             ct:              ct) ?? Task.CompletedTask);
     }
 
-    private async Task HandleSubscriptionUpdatedAsync(Stripe.Subscription? sub, CancellationToken ct)
+    internal async Task HandleSubscriptionUpdatedAsync(Stripe.Subscription? sub, CancellationToken ct)
     {
         if (sub is null) return;
 
@@ -312,7 +312,7 @@ public sealed class BillingController : ControllerBase
         }
     }
 
-    private async Task HandleSubscriptionDeletedAsync(Stripe.Subscription? sub, CancellationToken ct)
+    internal async Task HandleSubscriptionDeletedAsync(Stripe.Subscription? sub, CancellationToken ct)
     {
         if (sub is null) return;
 

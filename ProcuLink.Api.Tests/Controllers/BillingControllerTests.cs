@@ -225,6 +225,116 @@ public class BillingControllerTests
         result.Should().BeOfType<BadRequestObjectResult>();
     }
 
+    // ── Webhook handler unit tests ────────────────────────────────────────────
+
+    [Fact]
+    public async Task HandleCheckoutCompleted_UpgradesOrgPlanAndSetsActiveStatus()
+    {
+        var (ctrl, _, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id             = orgId,
+            Plan           = PlanConstants.Pilot,
+            AccountStatus  = AccountStatusConstants.Trialing,
+            ClerkOrgId     = "org_test",
+            Name           = "Test Org",
+            Slug           = "test-org",
+            TrialStartedAt = DateTime.UtcNow.AddDays(-3),
+        });
+        await db.SaveChangesAsync();
+
+        // SubscriptionId = null skips GetSubscriptionStatusAsync / GetSubscriptionPriceIdAsync
+        // (those hit the real Stripe HTTP API). mappedPlan falls back to the metadata "plan" value.
+        var session = new Stripe.Checkout.Session
+        {
+            Metadata = new Dictionary<string, string>
+            {
+                ["org_id"] = orgId.ToString(),
+                ["plan"]   = PlanConstants.Growth,
+            },
+            Id             = "cs_test_checkout",
+            SubscriptionId = null,
+            CustomerId     = "cus_checkout_test",
+        };
+
+        await ctrl.HandleCheckoutCompletedAsync(session, CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+        updated!.Plan.Should().Be(PlanConstants.Growth);
+        updated.AccountStatus.Should().Be(AccountStatusConstants.Active);
+        updated.StripeCustomerId.Should().Be("cus_checkout_test");
+    }
+
+    [Fact]
+    public async Task HandleSubscriptionDeleted_RevertsOrgToPilotReadOnly()
+    {
+        var (ctrl, _, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id                   = orgId,
+            Plan                 = PlanConstants.Growth,
+            AccountStatus        = AccountStatusConstants.Active,
+            StripeCustomerId     = "cus_del_test",
+            StripeSubscriptionId = "sub_del_test",
+            ClerkOrgId           = "org_del",
+            Name                 = "Del Org",
+            Slug                 = "del-org",
+        });
+        await db.SaveChangesAsync();
+
+        var sub = new Stripe.Subscription
+        {
+            Id         = "sub_del_test",
+            CustomerId = "cus_del_test",
+        };
+
+        await ctrl.HandleSubscriptionDeletedAsync(sub, CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+        updated!.Plan.Should().Be(PlanConstants.Pilot);
+        updated.AccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
+        updated.StripeSubscriptionId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleSubscriptionUpdated_WhenPastDue_SetsAccountStatusPastDue()
+    {
+        var (ctrl, _, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id                   = orgId,
+            Plan                 = PlanConstants.Growth,
+            AccountStatus        = AccountStatusConstants.Active,
+            StripeCustomerId     = "cus_upd_test",
+            StripeSubscriptionId = "sub_upd_test",
+            ClerkOrgId           = "org_upd",
+            Name                 = "Upd Org",
+            Slug                 = "upd-org",
+        });
+        await db.SaveChangesAsync();
+
+        // Empty Items.Data → priceId = null → plan unchanged; Status drives AccountStatus.
+        var sub = new Stripe.Subscription
+        {
+            Id         = "sub_upd_test",
+            CustomerId = "cus_upd_test",
+            Status     = "past_due",
+            Items      = new Stripe.StripeList<Stripe.SubscriptionItem>
+            {
+                Data = new List<Stripe.SubscriptionItem>(),
+            },
+        };
+
+        await ctrl.HandleSubscriptionUpdatedAsync(sub, CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+        updated!.AccountStatus.Should().Be(AccountStatusConstants.PastDue);
+        updated.Plan.Should().Be(PlanConstants.Growth, "plan must be unchanged when no price mapping is found");
+    }
+
     // ── Minimal in-memory DbContext ──────────────────────────────────────────
 
     private sealed class BillingTestDbContext : ProcuLinkDbContext
@@ -238,7 +348,6 @@ public class BillingControllerTests
             modelBuilder.Ignore<Membership>();
             modelBuilder.Ignore<Supplier>();
             modelBuilder.Ignore<SupplierProfileEntity>();
-            modelBuilder.Ignore<PurchaseOrderEntity>();
             modelBuilder.Ignore<PurchaseOrderLineEntity>();
             modelBuilder.Ignore<ItemMapping>();
             modelBuilder.Ignore<OutboundArtifact>();
@@ -277,6 +386,17 @@ public class BillingControllerTests
                 b.Ignore(x => x.AuditEvents);
                 b.Ignore(x => x.ApiKeys);
                 b.Ignore(x => x.IntegrationSubscriptions);
+            });
+
+            // PurchaseOrderEntity is needed by HandleSubscriptionDeletedAsync's AnyAsync query.
+            // CanonicalJson (JsonDocument) and all navigations are ignored for the in-memory provider.
+            modelBuilder.Entity<PurchaseOrderEntity>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.Ignore(x => x.Organisation);
+                b.Ignore(x => x.Supplier);
+                b.Ignore(x => x.Lines);
+                b.Ignore(x => x.CanonicalJson);
             });
         }
     }
