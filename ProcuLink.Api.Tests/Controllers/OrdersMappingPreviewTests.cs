@@ -291,6 +291,7 @@ public class OrdersMappingPreviewTests
             modelBuilder.Ignore<SupplierDeliveryConfig>();
             modelBuilder.Ignore<IdempotencyKey>();
             modelBuilder.Ignore<AiUsageMonthly>();
+            modelBuilder.Ignore<PoPassportEvent>();
             modelBuilder.Ignore<SftpIngressConfig>();
             modelBuilder.Ignore<ImportedSftpFile>();
             modelBuilder.Ignore<S3IngressConfig>();

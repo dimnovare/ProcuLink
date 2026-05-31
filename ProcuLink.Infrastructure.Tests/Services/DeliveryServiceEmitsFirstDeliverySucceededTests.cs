@@ -219,6 +219,7 @@ public class DeliveryServiceEmitsFirstDeliverySucceededTests
             modelBuilder.Ignore<SupplierPoMapping>();
             modelBuilder.Ignore<IdempotencyKey>();
             modelBuilder.Ignore<AiUsageMonthly>();
+            modelBuilder.Ignore<PoPassportEvent>();
             modelBuilder.Ignore<TenantApiKey>();
             modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<SftpIngressConfig>();

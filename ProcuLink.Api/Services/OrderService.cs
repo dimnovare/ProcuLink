@@ -237,6 +237,9 @@ public sealed class OrderService : IOrderService
 
         await _db.SaveChangesAsync(ct);
 
+        await EmitPassportEventAsync(organisationId, orderId, "Upload", "Created",
+            payload: new { source = sourceFileKey }, ct: ct);
+
         // ── Wave 4: fire order.created trigger ───────────────────────────────────
         _ = _integrationTrigger.EnqueueAsync(
             organisationId,
@@ -342,6 +345,9 @@ public sealed class OrderService : IOrderService
 
         await _db.SaveChangesAsync(ct);
 
+        await EmitPassportEventAsync(organisationId, orderId, "Upload", "Created",
+            payload: new { source }, ct: ct);
+
         // ── Wave 4: fire order.created trigger ───────────────────────────────────
         _ = _integrationTrigger.EnqueueAsync(
             organisationId,
@@ -431,6 +437,8 @@ public sealed class OrderService : IOrderService
                     _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "ParseFailed",
                         new { error = ParseFailureExplain.ForUnsupportedFormat(extension), stage = "parse", detail = ex.Message }));
                     await _db.SaveChangesAsync(ct);
+                    await EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
+                        payload: new { error = ParseFailureExplain.ForUnsupportedFormat(extension) }, ct: ct);
                     return Result<ParsedFileOutput>.Fail(ex.Message);
                 }
             }
@@ -456,6 +464,8 @@ public sealed class OrderService : IOrderService
                 _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "ParseFailed",
                     new { error = ParseFailureExplain.ForException(extension, ex), stage = "parse", detail = ex.Message }));
                 await _db.SaveChangesAsync(ct);
+                await EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
+                    payload: new { error = ex.Message }, ct: ct);
                 return Result<ParsedFileOutput>.Fail($"Could not parse file: {ex.Message}");
             }
 
@@ -465,6 +475,8 @@ public sealed class OrderService : IOrderService
                 _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "ParseFailed",
                     new { error = ParseFailureExplain.ForEmptyLines(extension), stage = "parse", detail = "0 lines parsed" }));
                 await _db.SaveChangesAsync(ct);
+                await EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
+                    payload: new { error = "0 lines parsed" }, ct: ct);
                 return Result<ParsedFileOutput>.Fail("File contains no line items.");
             }
 
@@ -522,6 +534,9 @@ public sealed class OrderService : IOrderService
             }));
 
             await _db.SaveChangesAsync(ct);
+
+            await EmitPassportEventAsync(organisationId, orderId, "Parse", "Succeeded",
+                payload: new { lineCount = lineEntities.Count }, ct: ct);
 
             // Reflect changes on the in-memory entity so callers see the final state.
             entity.PoNumber  = newPoNumber;
@@ -1011,6 +1026,10 @@ public sealed class OrderService : IOrderService
 
         await _db.SaveChangesAsync(ct);
 
+        await EmitPassportEventAsync(organisationId, orderId, "Map", "Corrected",
+            actorType: "user",
+            payload: new { linesResolved = resolutions.Count, savedMappings = saveMappings }, ct: ct);
+
         _logger.LogInformation(
             "Order {OrderId} resolved: {Count} lines, saveMappings={Save}, status={Status}",
             orderId, resolutions.Count, saveMappings, entity.Status);
@@ -1116,6 +1135,10 @@ public sealed class OrderService : IOrderService
         }));
 
         await _db.SaveChangesAsync(ct);
+
+        await EmitPassportEventAsync(organisationId, orderId, "Map", "AiAccepted",
+            actorType: "ai",
+            payload: new { accepted = acceptedCount }, ct: ct);
 
         _logger.LogInformation(
             "Order {OrderId}: {Count} AI suggestions bulk-accepted (minConfidence={Min}), status={Status}",
@@ -1334,4 +1357,26 @@ public sealed class OrderService : IOrderService
             Payload    = JsonDocument.Parse(JsonSerializer.Serialize(payload)),
             CreatedAt  = DateTime.UtcNow
         };
+
+    private async Task EmitPassportEventAsync(
+        Guid orgId, Guid orderId,
+        string stage, string eventType,
+        string actorType = "system", string? actorId = null,
+        object? payload = null,
+        CancellationToken ct = default)
+    {
+        _db.PoPassportEvents.Add(new PoPassportEvent
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            OrderId    = orderId,
+            Stage      = stage,
+            EventType  = eventType,
+            ActorType  = actorType,
+            ActorId    = actorId,
+            Payload    = payload is null ? null : JsonSerializer.Serialize(payload),
+            OccurredAt = DateTime.UtcNow,
+        });
+        await _db.SaveChangesAsync(ct);
+    }
 }

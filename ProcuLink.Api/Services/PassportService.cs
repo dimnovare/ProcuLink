@@ -189,6 +189,24 @@ public sealed class PassportService : IPassportService
                 Detail: PayloadText(e.Payload)))
             .ToList();
 
+        // Merge durable passport events into the timeline
+        var passportEventRows = await _db.PoPassportEvents
+            .AsNoTracking()
+            .Where(e => e.OrgId == organisationId && e.OrderId == orderId)
+            .OrderBy(e => e.OccurredAt)
+            .ToListAsync(ct);
+
+        foreach (var row in passportEventRows)
+        {
+            timeline.Add(new PassportTimelineEvent(
+                Action: $"{row.Stage}.{row.EventType}",
+                At:     row.OccurredAt,
+                Detail: row.Payload));
+        }
+
+        // Re-sort after merge
+        timeline.Sort((a, b) => DateTime.Compare(a.At, b.At));
+
         var dto = new PassportDto(
             Order:             orderMeta,
             SourceArtifact:    sourceArtifact,

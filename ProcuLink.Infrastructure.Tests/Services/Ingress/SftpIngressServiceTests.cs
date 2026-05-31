@@ -370,6 +370,7 @@ public class SftpIngressServiceTests
             modelBuilder.Ignore<TenantApiKey>();
             modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<AiUsageMonthly>();
+            modelBuilder.Ignore<PoPassportEvent>();
             modelBuilder.Ignore<AuditEvent>();
             modelBuilder.Ignore<S3IngressConfig>();
             modelBuilder.Ignore<ImportedS3Object>();

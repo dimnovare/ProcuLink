@@ -178,6 +178,7 @@ public class EmailSettingsServiceTests
             modelBuilder.Ignore<TenantApiKey>();
             modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<AiUsageMonthly>();
+            modelBuilder.Ignore<PoPassportEvent>();
             modelBuilder.Ignore<SftpIngressConfig>();
             modelBuilder.Ignore<ImportedSftpFile>();
             modelBuilder.Ignore<S3IngressConfig>();

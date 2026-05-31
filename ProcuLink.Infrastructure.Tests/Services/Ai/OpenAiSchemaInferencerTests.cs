@@ -283,6 +283,7 @@ public class OpenAiSchemaInferencerTests
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
             modelBuilder.Ignore<AsnPackageEntity>();
             modelBuilder.Ignore<AsnPackageLineEntity>();
+            modelBuilder.Ignore<PoPassportEvent>();
 
             modelBuilder.Entity<AiUsageMonthly>(b =>
             {

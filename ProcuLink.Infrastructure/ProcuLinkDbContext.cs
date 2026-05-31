@@ -43,11 +43,18 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<SchemaFingerprint>       SchemaFingerprints       => Set<SchemaFingerprint>();
     public DbSet<OrderConfirmationEntity>     OrderConfirmations     => Set<OrderConfirmationEntity>();
     public DbSet<OrderConfirmationLineEntity> OrderConfirmationLines => Set<OrderConfirmationLineEntity>();
-    public DbSet<MappingCorrection> MappingCorrections { get; set; } = null!;
+    public DbSet<MappingCorrection>  MappingCorrections  { get; set; } = null!;
+    public DbSet<PoPassportEvent>    PoPassportEvents    { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        // Prevent EF's convention scan from treating JsonDocument as an owned entity type.
+        // Without this, any entity with a JsonDocument? property causes EF to attempt
+        // to configure JsonDocument as a related entity, which fails on InMemory and Npgsql.
+        // The HasConversion(jsonDocConverter) calls below handle the actual column mapping.
+        modelBuilder.Ignore<JsonDocument>();
 
         // EF InMemory has no native JsonDocument type handler (Npgsql supplies one for Postgres).
         // Register a string round-trip converter so all providers can materialise these columns.
@@ -847,6 +854,29 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Mapping).WithMany().HasForeignKey(x => x.MappingId);
             b.HasIndex(x => new { x.OrgId, x.MappingId, x.CorrectedAt })
              .HasDatabaseName("IX_mapping_corrections_org_id_mapping_id_corrected_at");
+        });
+
+        // ── po_passport_events ──────────────────────────────────────────
+        modelBuilder.Entity<PoPassportEvent>(b =>
+        {
+            b.ToTable("po_passport_events");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.OrderId).HasColumnName("order_id");
+            b.Property(x => x.Stage).HasColumnName("stage").IsRequired();
+            b.Property(x => x.EventType).HasColumnName("event_type").IsRequired();
+            b.Property(x => x.ActorType).HasColumnName("actor_type").IsRequired();
+            b.Property(x => x.ActorId).HasColumnName("actor_id");
+            b.Property(x => x.Payload)
+             .HasColumnName("payload")
+             .HasColumnType("jsonb");
+            b.Property(x => x.OccurredAt)
+             .HasColumnName("occurred_at")
+             .HasColumnType("timestamptz");
+            b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
+            b.HasIndex(x => new { x.OrgId, x.OrderId, x.OccurredAt })
+             .HasDatabaseName("IX_po_passport_events_org_id_order_id_occurred_at");
         });
     }
 
