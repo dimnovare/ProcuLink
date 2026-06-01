@@ -179,20 +179,26 @@ public sealed class StripeBillingService : IBillingService
         Guid orgId,
         string plan,
         string frontendUrl,
+        string billingInterval,
         CancellationToken ct = default)
     {
         plan = plan.ToLowerInvariant();
-        var priceId = plan switch
+        var interval = NormalizeBillingInterval(billingInterval);
+        var priceId = (plan, interval) switch
         {
-            PlanConstants.Growth => _config["Stripe:GrowthPriceId"],
-            PlanConstants.Operations => _config["Stripe:OperationsPriceId"],
-            PlanConstants.Integration => _config["Stripe:IntegrationPriceId"],
-            PlanConstants.Distributor => _config["Stripe:DistributorPriceId"],
+            (PlanConstants.Growth, "yearly") => _config["Stripe:GrowthYearlyPriceId"],
+            (PlanConstants.Operations, "yearly") => _config["Stripe:OperationsYearlyPriceId"],
+            (PlanConstants.Integration, "yearly") => _config["Stripe:IntegrationYearlyPriceId"],
+            (PlanConstants.Distributor, "yearly") => _config["Stripe:DistributorYearlyPriceId"],
+            (PlanConstants.Growth, _) => _config["Stripe:GrowthPriceId"],
+            (PlanConstants.Operations, _) => _config["Stripe:OperationsPriceId"],
+            (PlanConstants.Integration, _) => _config["Stripe:IntegrationPriceId"],
+            (PlanConstants.Distributor, _) => _config["Stripe:DistributorPriceId"],
             _ => throw new ArgumentException($"No Stripe Checkout for plan '{plan}'.")
         };
 
         if (string.IsNullOrWhiteSpace(priceId))
-            throw new InvalidOperationException($"Stripe price ID not configured for plan '{plan}'.");
+            throw new InvalidOperationException($"Stripe {interval} price ID not configured for plan '{plan}'.");
 
         var org = await LoadOrgAsync(orgId, asTracking: false, ct);
 
@@ -208,14 +214,19 @@ public sealed class StripeBillingService : IBillingService
             },
             SubscriptionData = new SessionSubscriptionDataOptions
             {
-                Metadata = new Dictionary<string, string> { ["plan"] = plan }
+                Metadata = new Dictionary<string, string>
+                {
+                    ["plan"] = plan,
+                    ["billing_interval"] = interval,
+                }
             },
             Metadata = new Dictionary<string, string>
             {
                 ["org_id"] = orgId.ToString(),
-                ["plan"] = plan
+                ["plan"] = plan,
+                ["billing_interval"] = interval,
             },
-            SuccessUrl = $"{frontendUrl}/welcome?upgraded={plan}&session_id={{CHECKOUT_SESSION_ID}}",
+            SuccessUrl = $"{frontendUrl}/welcome?upgraded={plan}&interval={interval}&session_id={{CHECKOUT_SESSION_ID}}",
             CancelUrl  = $"{frontendUrl}/settings",
             AllowPromotionCodes = true,
         };
@@ -323,6 +334,12 @@ public sealed class StripeBillingService : IBillingService
 
     private static string NormalizePlan(string plan) =>
         PlanConstants.All.Contains(plan) ? plan : PlanConstants.Pilot;
+
+    private static string NormalizeBillingInterval(string? billingInterval)
+    {
+        var value = (billingInterval ?? "monthly").Trim().ToLowerInvariant();
+        return value == "yearly" ? "yearly" : "monthly";
+    }
 
     private static bool IsReadOnlyStatus(string status) =>
         status is AccountStatusConstants.TrialExpired

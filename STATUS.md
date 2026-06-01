@@ -96,7 +96,8 @@ PostHog keys, Clerk post-signup redirect, `Frontend:Url`, `NEXT_PUBLIC_STATUS_UR
 ### Group L Wave 3 — fully merged to `main` (2026-05-28)
 
 **Backend — Phase 7.2 — Stripe Checkout `success_url` redirect:**
-- Checkout `success_url` now routes to `{Frontend:Url}/welcome?upgraded={plan}&session_id={CHECKOUT_SESSION_ID}`, `cancel_url` to `{Frontend:Url}/settings`. The `CreateCheckoutSessionAsync` parameter was renamed `returnUrl → frontendUrl` to reflect new semantics.
+- Checkout `success_url` now routes to the primary `{Frontend:Url}/welcome?upgraded={plan}&interval={monthly|yearly}&session_id={CHECKOUT_SESSION_ID}`, `cancel_url` to `{Frontend:Url}/settings`. If `Frontend:Url` is comma-separated for CORS, billing uses the first origin as the absolute redirect origin.
+- Checkout accepts `billingInterval=monthly|yearly`; Stripe webhook price-id mapping recognizes both monthly and yearly price IDs for Growth, Operations, Integration, and Distributor.
 - Stripe webhook handlers (`checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`) now invoke `StripeBillingService.EmitBillingUpgradedAsync` / `EmitBillingDowngradedAsync` / `EmitBillingCancelledAsync` via a cast `_billing as StripeBillingService` in `BillingController` webhook handlers.
 - Plan downgrades detected via rank ordering: `pilot < growth < operations < integration < enterprise`.
 
@@ -664,8 +665,13 @@ Set these in **Railway API service** environment:
 | `Stripe__SecretKey` | Stripe dashboard → API Keys → Secret key (live) |
 | `Stripe__WebhookSecret` | Stripe dashboard → Webhooks → signing secret for Railway URL |
 | `Stripe__GrowthPriceId` | Stripe dashboard → Products → Growth monthly price ID |
+| `Stripe__GrowthYearlyPriceId` | Stripe dashboard → Products → Growth yearly price ID |
 | `Stripe__OperationsPriceId` | Stripe dashboard → Products → Operations monthly price ID |
+| `Stripe__OperationsYearlyPriceId` | Stripe dashboard → Products → Operations yearly price ID |
 | `Stripe__IntegrationPriceId` | Stripe dashboard → Products → Integration monthly price ID |
+| `Stripe__IntegrationYearlyPriceId` | Stripe dashboard → Products → Integration yearly price ID |
+| `Stripe__DistributorPriceId` | Stripe dashboard → Products → Distributor monthly price ID |
+| `Stripe__DistributorYearlyPriceId` | Stripe dashboard → Products → Distributor yearly price ID |
 | `Ai__OpenAI__ApiKey` | OpenAI platform → API keys |
 | `Delivery__EncryptionKey` | Generate: `openssl rand -base64 32` → 32-byte AES-GCM key as base64 |
 | `Frontend__Url` | Vercel deployment URL e.g. `https://proculink.vercel.app` |

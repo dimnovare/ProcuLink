@@ -41,9 +41,13 @@ public class BillingControllerTests
                 ["Stripe:WebhookSecret"]   = webhookSecret ?? "whsec_test_placeholder",
                 ["Frontend:Url"]           = "http://localhost:8082",
                 ["Stripe:GrowthPriceId"]   = "price_growth_test",
+                ["Stripe:GrowthYearlyPriceId"] = "price_growth_yearly_test",
                 ["Stripe:OperationsPriceId"] = "price_ops_test",
+                ["Stripe:OperationsYearlyPriceId"] = "price_ops_yearly_test",
                 ["Stripe:IntegrationPriceId"] = "price_int_test",
+                ["Stripe:IntegrationYearlyPriceId"] = "price_int_yearly_test",
                 ["Stripe:DistributorPriceId"] = "price_dist_test",
+                ["Stripe:DistributorYearlyPriceId"] = "price_dist_yearly_test",
             })
             .Build();
 
@@ -223,6 +227,27 @@ public class BillingControllerTests
             new CheckoutRequest("free_forever"), CancellationToken.None);
 
         result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task CreateCheckout_YearlyInterval_PassesYearlyToBillingService()
+    {
+        var (ctrl, billing, _, orgId, _) = Build();
+
+        billing
+            .Setup(b => b.CreateCheckoutSessionAsync(
+                orgId,
+                PlanConstants.Growth,
+                "http://localhost:8082",
+                "yearly",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("https://checkout.stripe.com/yearly");
+
+        var result = await ctrl.CreateCheckout(
+            new CheckoutRequest(PlanConstants.Growth, "yearly"), CancellationToken.None);
+
+        var ok = result.Should().BeOfType<OkObjectResult>().Subject;
+        ok.Value.Should().BeEquivalentTo(new { url = "https://checkout.stripe.com/yearly" });
     }
 
     // ── Webhook handler unit tests ────────────────────────────────────────────

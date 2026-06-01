@@ -84,10 +84,16 @@ public sealed class BillingController : ControllerBase
         if (!validPlans.Contains(request.Plan, StringComparer.OrdinalIgnoreCase))
             return BadRequest(new { error = $"Invalid plan '{request.Plan}'. Valid: growth, operations, integration, distributor." });
 
-        var frontendUrl = _config["Frontend:Url"] ?? "http://localhost:8082";
+        var frontendUrl = GetPrimaryFrontendUrl();
+        var billingInterval = NormalizeBillingInterval(request.BillingInterval);
         try
         {
-            var url = await _billing.CreateCheckoutSessionAsync(_tenant.OrganisationId, request.Plan.ToLowerInvariant(), frontendUrl, ct);
+            var url = await _billing.CreateCheckoutSessionAsync(
+                _tenant.OrganisationId,
+                request.Plan.ToLowerInvariant(),
+                frontendUrl,
+                billingInterval,
+                ct);
             return Ok(new { url });
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -104,7 +110,7 @@ public sealed class BillingController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> CreatePortal(CancellationToken ct)
     {
-        var returnUrl = $"{_config["Frontend:Url"] ?? "http://localhost:8082"}/settings";
+        var returnUrl = $"{GetPrimaryFrontendUrl()}/settings";
         try
         {
             var url = await _billing.CreatePortalSessionAsync(_tenant.OrganisationId, returnUrl, ct);
@@ -361,13 +367,33 @@ public sealed class BillingController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(priceId)) return null;
         if (priceId == _config["Stripe:GrowthPriceId"]) return PlanConstants.Growth;
+        if (priceId == _config["Stripe:GrowthYearlyPriceId"]) return PlanConstants.Growth;
         if (priceId == _config["Stripe:OperationsPriceId"]) return PlanConstants.Operations;
+        if (priceId == _config["Stripe:OperationsYearlyPriceId"]) return PlanConstants.Operations;
         if (priceId == _config["Stripe:IntegrationPriceId"]) return PlanConstants.Integration;
+        if (priceId == _config["Stripe:IntegrationYearlyPriceId"]) return PlanConstants.Integration;
         if (priceId == _config["Stripe:DistributorPriceId"]) return PlanConstants.Distributor;
+        if (priceId == _config["Stripe:DistributorYearlyPriceId"]) return PlanConstants.Distributor;
         return null;
+    }
+
+    private static string NormalizeBillingInterval(string? billingInterval)
+    {
+        var value = (billingInterval ?? "monthly").Trim().ToLowerInvariant();
+        return value == "yearly" ? "yearly" : "monthly";
+    }
+
+    private string GetPrimaryFrontendUrl()
+    {
+        var configured = _config["Frontend:Url"] ?? "http://localhost:8082";
+        return configured
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault()
+            ?.TrimEnd('/')
+            ?? "http://localhost:8082";
     }
 }
 
 // ── Request DTOs ──────────────────────────────────────────────────────────
 
-public record CheckoutRequest(string Plan);
+public record CheckoutRequest(string Plan, string? BillingInterval = null);
