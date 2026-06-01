@@ -207,15 +207,25 @@ public sealed class OrderService : IOrderService
         var safeFilename = FileNameSanitiser.Sanitise(filename);
         var extension    = FileNameSanitiser.GetExtension(filename);
 
-        // Validate parser exists before touching R2
-        try { _parserFactory.GetParser(extension); }
-        catch (UnsupportedFileFormatException ex) { return Result<PurchaseOrderEntity>.Fail(ex.Message); }
-
         using var buffer = new MemoryStream();
         await fileStream.CopyToAsync(buffer, ct);
 
         if (buffer.Length == 0)
             return Result<PurchaseOrderEntity>.Fail("Uploaded file is empty.");
+
+        // Validate parser exists before touching R2. Use the stream-aware factory
+        // so ambiguous extensions (.xml, .edi, .txt) route to the real parser
+        // by content rather than registration order.
+        try
+        {
+            buffer.Position = 0;
+            _parserFactory.GetParser(extension, buffer);
+            buffer.Position = 0;
+        }
+        catch (UnsupportedFileFormatException ex)
+        {
+            return Result<PurchaseOrderEntity>.Fail(ex.Message);
+        }
 
         // Upload raw file to R2
         var orderId       = Guid.NewGuid();
@@ -479,7 +489,8 @@ public sealed class OrderService : IOrderService
                 }
                 else
                 {
-                    var parser = _parserFactory.GetParser(extension);
+                    var parser = _parserFactory.GetParser(extension, buffer);
+                    buffer.Position = 0;
                     parsedOrder = await parser.ParseAsync(buffer, ct);
                 }
             }
@@ -578,7 +589,7 @@ public sealed class OrderService : IOrderService
             entity.Status    = newStatus;
             entity.BuyerName = newBuyerName;
             entity.UpdatedAt = now;
-            entity.Lines.AddRange(lineEntities);
+            entity.Lines = lineEntities;
 
             _logger.LogInformation(
                 "Order {OrderId} parsed: {LineCount} lines, {Unresolved} unresolved, status={Status}",

@@ -1,5 +1,9 @@
 # Integration Platform Submission Guide
 
+For the live API shape and customer setup notes, read
+[`docs/integrations/ORDER_APIS.md`](ORDER_APIS.md). This file is mainly the
+Zapier/Make submission checklist.
+
 ## Zapier
 
 **Status:** Ready for Zapier Developer Platform review when API is live.
@@ -74,6 +78,8 @@ assert.strictEqual(`sha256=${sig}`, req.headers['x-proculink-signature']);
 ---
 
 ## Inbound API (push orders into ProcuLink)
+
+Canonical reference: [`ORDER_APIS.md`](ORDER_APIS.md).
 
 `POST /api/ingress/{slug}/orders`  
 Auth: `X-ProcuLink-Key: plk_...`

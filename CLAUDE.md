@@ -245,9 +245,15 @@ source. All UI/UX and design decisions run through the local design system,
 > 6. **Extend the pilot 14 → 60 days**, then **put one real Markit PO in front of one real supplier
 >    before writing another line of feature code.**
 >
+> **Current execution focus (2026-06-01):** make the primary PO path boringly reliable:
+> upload -> parse -> review exceptions -> transform -> deliver -> audit. Follow
+> `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`. Do not broaden
+> invoices/ASN/PEPPOL or add new channels until the first PO path has repeatable
+> live happy/error QA.
+>
 > **FREEZE until there are paying customers** (real engineering, but none of it wins customer #1):
 > Zapier/Make layer, invoice/ASN/DESADV, extra EDI formats, cross-org mapping library, RBAC/SCIM,
-> PunchOut, OCR, the standards-comparison screen, i18n, and the old "international standard" breadth
+> PunchOut, OCR productization beyond the existing config-gated fallback, the standards-comparison screen, i18n, and the old "international standard" breadth
 > (Horizons M/N/O/P/Q/R/S below). The one exception worth finishing: the **Bridge Layer frontend
 > redesign** (`feat/bridge-layer-redesign`) — for demo credibility.
 >
@@ -319,10 +325,12 @@ Read this before starting new work:
   - Provider-neutral `IAiMappingService` with OpenAI structured outputs first.
   - Suggestions are stored on purchase order lines and exposed as line metadata.
   - Resolve UI pre-fills suggestions but visibly labels confidence, reason, and provenance.
-- **Group F PDF ingestion is implemented** for text-based purchase-order PDFs.
+- **Group F PDF ingestion is implemented** for text-based purchase-order PDFs, with config-gated OCR fallback.
   - `PdfOrderParser` uses `PdfPig` for text extraction plus conservative header/line parsing.
   - The API accepts `.pdf` uploads, and `FileUploadZone` accepts PDF files.
-  - Scanned/image-only PDFs and OCR are deferred.
+  - Scanned/image-only PDFs call `IDocumentOcrService` only when OCR is configured.
+  - Current provider: `AzureDocumentIntelligenceOcrService` behind `Ocr:Azure:Endpoint` and `Ocr:Azure:ApiKey`; otherwise `NoOpOcrService`.
+  - Production OCR still needs live provider config, test PDFs, and user-facing status/error copy before it is promised in sales.
 - **Group G ERP connectors are implemented** as delivery adapters.
   - `IErpConnector` plus Erply and Directo connectors exist.
   - `erp_erply` and `erp_directo` are accepted delivery protocol values.
@@ -359,6 +367,7 @@ Read this before starting new work:
   - IMAP polling against a real mailbox/app password and supplier profile.
 - **Group K — cXML 1.2 standards hardening is implemented.** `CxmlOrderParser`, `CxmlTransformService`, `OutputFormat.CXml`, standards matrix, canonical PO model docs. Merged to `main` (`2697115`).
 - **Wave 1/2 code completeness verified (2026-05-28):** `EdifactOrderParser` + `UblOrderParser` have real parsing logic (Wave 1 complete). SFTP/S3 ingress, OCR (config-gated), and email-body extractor (API-only by design) are all wired (Wave 2 complete). `EdifactInvoiceParser`/`EdifactDesadvParser` stubs are Wave 3, not Wave 2.
+- **Inbound/API docs:** `docs/integrations/ORDER_APIS.md` is the current reference for browser upload, IMAP, hosted inbound email webhook, inbound REST API, SFTP/S3 polling status, outbound webhook signing, and OCR setup. Hosted inbound email and inbound REST API have backend support; SFTP/S3 polling remains assisted/internal until supplier routing is hardened.
 - **Wave 3 — Invoice + ASN canonical models are implemented** (commit `3fbff22`):
   - `UblInvoiceParser` (full UBL 2.1), `EdifactInvoiceParser` + `EdifactDesadvParser` stubs (EdiFabric licence required; drop-in ready).
   - `InvoiceEntity` / `InvoiceLineEntity` / `AdvanceShippingNoticeEntity` / `AsnPackageEntity` / `AsnPackageLineEntity`.

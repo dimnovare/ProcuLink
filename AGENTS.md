@@ -235,6 +235,13 @@ wires arc, every wire uses the same visible gradient stroke, shared ports fan ou
 alert counters stay tethered to their route, and the legend must not overlap
 buyer/supplier pills.
 
+**Current execution focus (2026-06-01):** make the primary PO path boringly
+reliable: upload -> parse -> review exceptions -> transform -> deliver -> audit.
+Follow `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
+Do not broaden invoices/ASN/PEPPOL or add new channels until this path has
+repeatable live happy/error QA. Intake/API documentation now lives in
+`docs/integrations/ORDER_APIS.md`.
+
 ---
 
 ## Frontend state — current, not historical
@@ -345,11 +352,15 @@ Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level suppl
 - [ ] Future provider option: `ClaudeAiMappingService` may be added later behind the same `IAiMappingService`, but it is not the Group E default.
 
 ### Group F — PDF ingestion
-**Status:** ✅ Implemented for text-based purchase-order PDFs. Scanned/image-only PDFs and OCR are deferred.
+**Status:** ✅ Implemented for text-based purchase-order PDFs, with config-gated OCR fallback.
 
 - [x] Add `PdfPig` to `ProcuLink.Transform`
 - [x] `PdfOrderParser : IPurchaseOrderParser` — text extraction + line parsing
 - [x] Accept `.pdf` in upload endpoint + FileUploadZone
+- [x] `IDocumentOcrService` + `AzureDocumentIntelligenceOcrService` fallback is wired when `Ocr:Azure:Endpoint` and `Ocr:Azure:ApiKey` are configured
+
+Production OCR still needs live provider config, scanned-PO test files, and
+user-facing status/error copy before it is promised in sales.
 
 ### Group G — ERP connectors
 **Status:** ✅ Implemented as delivery adapters for already-generated artifacts. ERP-native order modeling and supplier-specific ERP payload transforms remain future hardening.

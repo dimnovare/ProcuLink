@@ -4,6 +4,29 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-01 — PO reliability pass started · XML parser routing fixed · API/OCR docs added**
+
+Active focus is no longer "add more breadth"; it is **make upload -> parse -> review -> transform -> deliver boringly reliable** for the buyer/procurement PO workflow. Current plan:
+`docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
+
+Landed in this pass:
+- **Async XML parser routing fixed:** `OrderService.CreateStubAsync` and `ParseStoredFileAsync` now use content-aware parser selection for ambiguous files like `.xml`, so UBL/Peppol XML is not accidentally sent through the cXML parser because of DI registration order.
+- **Returned parse entity fixed:** `ParseStoredFileAsync` no longer duplicates newly parsed lines in the returned tracked entity after EF relationship fixup.
+- **Regression test added:** `EndToEndPipelineTests.ParseStoredFileAsync_UblXml_RoutesToUblParserEvenWhenCxmlRegisteredFirst`.
+- **Docs added:** `docs/integrations/ORDER_APIS.md` explains browser upload, IMAP, hosted inbound email webhook, inbound REST API, SFTP/S3 polling status, outbound webhook signing, and OCR setup.
+
+Verification:
+- `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ParseStoredFileAsync_UblXml"` ✅ 1 passed.
+- `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~EndToEndPipelineTests"` ✅ 2 passed.
+- `dotnet build ProcuLink.slnx --no-restore` ✅ 0 errors.
+
+Important product/implementation guidance:
+- Hosted inbound email webhook and inbound REST API have backend support, but should be offered as assisted setup until customer-facing setup docs/screens are complete.
+- SFTP/S3 polling backend exists, but remains assisted/internal until supplier routing is hardened. Do not let pollers import with `Guid.Empty` supplier IDs.
+- Scanned PDF OCR is possible through `IDocumentOcrService` / Azure Document Intelligence. Use OCR provider extraction first; use AI for interpretation, mapping suggestions, confidence, and review. Do not treat the LLM itself as the OCR engine.
+
+---
+
 ## Where we are: **2026-05-29 (late) — chip-collision recovery complete · all build/cleanup chips merged + pushed · 328 backend tests green**
 
 The 7 build/cleanup chips had run in the **shared** repo checkouts (not isolated worktrees) and collided — committing to `main` directly and leaving intermingled, partially-reverted, non-building working trees (repeated `git clean`/reset wipes). After the chips were stopped, this session recovered + completed + merged + **pushed** everything from ground truth (git + build + test), ignoring the contradictory chip narratives.

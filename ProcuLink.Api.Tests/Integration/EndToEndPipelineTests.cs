@@ -731,4 +731,95 @@ public sealed class EndToEndPipelineTests : IAsyncLifetime
             Assert.Contains("Transformed", actions);
         }
     }
+
+    [DockerRequiredFact]
+    public async Task ParseStoredFileAsync_UblXml_RoutesToUblParserEvenWhenCxmlRegisteredFirst()
+    {
+        var factory = _factory!;
+        var ct = CancellationToken.None;
+        var orgGuid = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        using (var scope = factory.NewScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var now = DateTime.UtcNow;
+
+            db.Organisations.Add(new Organisation
+            {
+                Id = orgGuid,
+                ClerkOrgId = "org_UBL_XML",
+                Name = "UBL XML Test Org",
+                Slug = "ubl-xml-test-org",
+                Plan = "operations",
+                AccountStatus = "active",
+                CreatedAt = now,
+            });
+
+            db.Suppliers.Add(new Supplier
+            {
+                Id = supplierId,
+                OrgId = orgGuid,
+                Name = "Globex Supplier",
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        const string ublXml = """
+            <Order xmlns="urn:oasis:names:specification:ubl:schema:xsd:Order-2"
+                   xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
+                   xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2">
+              <cbc:ID>PO-UBL-001</cbc:ID>
+              <cbc:IssueDate>2026-06-01</cbc:IssueDate>
+              <cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
+              <cac:BuyerCustomerParty>
+                <cac:Party>
+                  <cac:PartyName><cbc:Name>Acme Buyer Ltd</cbc:Name></cac:PartyName>
+                </cac:Party>
+              </cac:BuyerCustomerParty>
+              <cac:SellerSupplierParty>
+                <cac:Party>
+                  <cac:PartyName><cbc:Name>Globex Supplier</cbc:Name></cac:PartyName>
+                </cac:Party>
+              </cac:SellerSupplierParty>
+              <cac:OrderLine>
+                <cac:LineItem>
+                  <cbc:ID>1</cbc:ID>
+                  <cbc:Quantity unitCode="EA">3</cbc:Quantity>
+                  <cac:Price><cbc:PriceAmount currencyID="EUR">12.50</cbc:PriceAmount></cac:Price>
+                  <cac:Item>
+                    <cbc:Name>Router bracket</cbc:Name>
+                    <cac:SellersItemIdentification><cbc:ID>SUP-UBL-001</cbc:ID></cac:SellersItemIdentification>
+                  </cac:Item>
+                </cac:LineItem>
+              </cac:OrderLine>
+            </Order>
+            """;
+
+        Guid orderId;
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(ublXml));
+            var stub = await orders.CreateStubAsync(
+                orgGuid, supplierId, stream, "buyer-order.xml", "application/xml", ct);
+
+            Assert.True(stub.IsSuccess, $"CreateStubAsync failed: {stub.Error}");
+            orderId = stub.Value!.Id;
+        }
+
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            var parsed = await orders.ParseStoredFileAsync(orgGuid, orderId, ct);
+
+            Assert.True(parsed.IsSuccess, $"ParseStoredFileAsync failed: {parsed.Error}");
+            Assert.Equal("PO-UBL-001", parsed.Value!.Entity.PoNumber);
+            Assert.Equal("EUR", parsed.Value!.Entity.Currency);
+            Assert.Single(parsed.Value!.Entity.Lines);
+            Assert.Equal("ubl", parsed.Value!.DetectedFormat);
+        }
+    }
 }
