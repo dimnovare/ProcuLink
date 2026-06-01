@@ -4,7 +4,7 @@
 
 **Estimated total time:** 4-6 hours active work, spread however you like. Most actions are independent — see the dependency graph below.
 
-**Last updated:** 2026-05-28
+**Last updated:** 2026-06-01
 
 ---
 
@@ -35,10 +35,10 @@ If you don't already have preferences, these are the defaults this playbook assu
 | Product analytics | **PostHog Cloud EU** | EU residency for GDPR, generous free tier, real funnels |
 | Status page | **Instatus** | Fast setup, ~€20/mo, EU region |
 | Demo booking | **Cal.com** | Open-source, EU-friendly, free tier sufficient |
-| Transactional email | **Postmark** | Best deliverability for transactional, €15/mo |
+| Transactional email | **Resend** | Simple SMTP drop-in for the existing MailKit sender, custom domain support |
 | Walkthrough video | **Loom** | Embed-friendly, free tier covers one short video |
 
-If you prefer alternatives (BetterStack instead of Instatus, Resend instead of Postmark, Calendly instead of Cal.com), the env var names stay the same — only the signup flow steps change.
+If you prefer alternatives (BetterStack instead of Instatus, Postmark/Mailgun instead of Resend, Calendly instead of Cal.com), the env var names stay the same — only the signup flow steps change.
 
 ---
 
@@ -147,7 +147,7 @@ If you prefer alternatives (BetterStack instead of Instatus, Resend instead of P
 
 **Why this matters:** The backend reads `Frontend:Url` to compose Stripe Checkout `success_url`, future password reset links, and any absolute-URL email content. Without it, Stripe redirects to a broken URL after payment.
 
-**Prerequisites:** Your production frontend URL — either a custom domain like `https://proculink.com` or the Vercel-issued URL.
+**Prerequisites:** Your production frontend URL — either a custom domain like `https://proculink.eu` or the Vercel-issued URL.
 
 ### Set the env var
 
@@ -155,7 +155,7 @@ If you prefer alternatives (BetterStack instead of Instatus, Resend instead of P
 
    | Key | Value |
    |---|---|
-   | `Frontend__Url` | `https://proculink.com` (no trailing slash) |
+   | `Frontend__Url` | `https://proculink.eu` (no trailing slash) |
 
 2. Click **Deploy**.
 
@@ -177,13 +177,13 @@ If you prefer alternatives (BetterStack instead of Instatus, Resend instead of P
 
 1. Go to **https://instatus.com** → **Get started for free**.
 2. Sign up. Workspace name: `ProcuLink`.
-3. Create a status page: name it `ProcuLink Status`, default subdomain `proculink.instatus.com`, or set a custom domain `status.proculink.com` (requires DNS CNAME — see Instatus docs).
+3. Create a status page: name it `ProcuLink Status`, default subdomain `proculink.instatus.com`, or set a custom domain `status.proculink.eu` (requires DNS CNAME — see Instatus docs).
 
 ### Configure monitors
 
 4. From the status page admin → **Components** → add:
-   - `API` (web check on `https://api.proculink.com/health` — adjust to your actual Railway URL)
-   - `Frontend` (web check on `https://proculink.com`)
+   - `API` (web check on `https://api.proculink.eu/health` — adjust to your actual Railway URL)
+   - `Frontend` (web check on `https://proculink.eu`)
    - `Worker / Background jobs` (manual updates only — no automated check yet)
    - `Database` (manual updates only)
 5. From the status page admin → **Notifications** → enable email subscriptions for the public to subscribe to incident updates.
@@ -194,13 +194,13 @@ If you prefer alternatives (BetterStack instead of Instatus, Resend instead of P
 
    | Key | Value |
    |---|---|
-   | `NEXT_PUBLIC_STATUS_URL` | `https://status.proculink.com` (or your Instatus subdomain) |
+   | `NEXT_PUBLIC_STATUS_URL` | `https://status.proculink.eu` (or your Instatus subdomain) |
 
 7. Redeploy frontend.
 
 ### Verify
 
-- Open `https://proculink.com` (or any marketing page) → scroll to the footer.
+- Open `https://proculink.eu` (or any marketing page) → scroll to the footer.
 - A new "Status" link should appear in the link row. Click it → Instatus page loads.
 - If the link is missing: confirm Vercel redeployed with the new env var.
 
@@ -225,7 +225,7 @@ If you prefer alternatives (BetterStack instead of Instatus, Resend instead of P
    | 0:10-0:30 | `/upload` → click **Try with sample order** | "Pick a file, or try with our sample order. ProcuLink parses CSV, XLSX, and PDF." |
    | 0:30-0:55 | Review screen — point to parsed lines + AI suggestions | "We extract the lines, suggest item code mappings, and show you exactly what needs review." |
    | 0:55-1:15 | Configure HTTP delivery → test-fire to webhook.site | "Configure how to deliver — HTTP, ERP, or download — and ProcuLink handles the rest." |
-   | 1:15-1:30 | End frame | "Built for procurement teams sending POs out. Start at proculink.com." |
+   | 1:15-1:30 | End frame | "Built for procurement teams sending POs out. Start at proculink.eu." |
 
 3. After recording, click **Share** → toggle privacy to **Public**.
 4. Copy the **embed URL** — should look like `https://www.loom.com/embed/abc123def456`.
@@ -242,7 +242,7 @@ If you prefer alternatives (BetterStack instead of Instatus, Resend instead of P
 
 ### Verify
 
-- Open `https://proculink.com/watch` in an incognito tab.
+- Open `https://proculink.eu/watch` in an incognito tab.
 - The Loom player should embed in a 16:9 frame (was a dashed-border placeholder before).
 - Click play — video plays.
 
@@ -294,39 +294,40 @@ If you prefer alternatives (BetterStack instead of Instatus, Resend instead of P
 
 **Why this matters:** `POST /api/support/contact` accepts requests but routes them to `ConsoleEmailSender` (logs to backend stdout) unless SMTP env vars are set. Support requests are then silently lost.
 
-**Prerequisites:** Decide on a provider (Postmark recommended; Resend, Mailgun, SendGrid, Amazon SES are alternatives).
+**Prerequisites:** Decide on a provider (Resend recommended; Postmark, Mailgun, SendGrid, Amazon SES are alternatives).
 
-### Sign up (Postmark)
+### Sign up (Resend)
 
-1. Go to **https://postmarkapp.com** → Sign up.
+1. Go to **https://resend.com** → Sign up.
 2. **Verify your sending domain:**
-   - Click **Sender Signatures → Add Domain** → enter `proculink.com`.
-   - Postmark provides three DNS records (SPF, DKIM, return-path). Add them to your domain registrar.
+   - Click **Domains → Add Domain** → enter `proculink.eu`.
+   - Resend provides SPF/DKIM DNS records, and optionally return-path/tracking records. Add them in Cloudflare and wait for verification.
    - Click **Verify** — propagation can take up to 48 hours but usually completes within 30 minutes.
-3. **Create a server:** **Servers → + Server** → name `ProcuLink Transactional`. The Color is just visual.
-4. In the new server → **API Tokens** → copy the **Server API Token** (32 chars).
+3. **Create an API key:** **API Keys → Create API Key** with send permission for the verified domain.
+4. Keep the key secret. If it was pasted into chat or logs, rotate it after setting Railway variables.
 
 ### Set env vars on Railway (API service)
 
-5. Railway → API service → Variables. Add five rows:
+5. Railway → API service → Variables. Add these rows:
 
    | Key | Value |
    |---|---|
-   | `Smtp__Host` | `smtp.postmarkapp.com` |
+   | `Smtp__Host` | `smtp.resend.com` |
    | `Smtp__Port` | `587` |
-   | `Smtp__Username` | The Server API Token from step 4 (Postmark uses it as username AND password) |
-   | `Smtp__Password` | The same Server API Token |
-   | `Smtp__From` | `support@proculink.com` (MUST match a verified sender signature in Postmark) |
+   | `Smtp__Username` | `resend` |
+   | `Smtp__Password` | The Resend API key |
+   | `Smtp__From` | `support@proculink.eu` (MUST be on a verified Resend domain) |
+   | `Smtp__SupportTo` | `support@proculink.eu` or the founder inbox/alias that should receive support form submissions |
 
 6. Click **Deploy**.
 
 ### Verify
 
-- Submit a test request via `https://proculink.com/support` — fill the contact form with category `general`, subject `Postmark smoke test`, message `If you see this, SMTP works`.
-- Within 30 seconds, you should receive the email at `support@proculink.com` with subject `[support][general] Postmark smoke test`.
-- In Postmark dashboard → **Activity → Outbound**, see the sent message.
+- Submit a test request via `https://proculink.eu/support` — fill the contact form with category `general`, subject `Resend smoke test`, message `If you see this, SMTP works`.
+- Within 30 seconds, you should receive the email at the configured `Smtp__SupportTo` inbox with subject `[support][general] Resend smoke test`.
+- In Resend dashboard → **Emails**, see the sent message.
 - Also verify the `support_form_submitted` PostHog event fired (Activity → Events filter).
-- If the email never arrives: check Postmark **Activity → Bounces / Suppressions** + Railway logs for SMTP errors. Most common issue is a wrong `Smtp__From` that doesn't match a verified sender.
+- If the email never arrives: check Resend delivery logs + Railway logs for SMTP errors. Most common issue is a wrong `Smtp__From` that does not match the verified domain.
 
 **Time:** 30-60 minutes including DNS propagation.
 
@@ -338,7 +339,7 @@ If you prefer alternatives (BetterStack instead of Instatus, Resend instead of P
 
 ### DPA counter-signature workflow (commitment: 5 business days)
 
-1. **Set up the inbox:** create `legal@proculink.com` (Google Workspace, Microsoft 365, or any email forwarder).
+1. **Set up the inbox:** create `legal@proculink.eu` (Google Workspace, Microsoft 365, or any email forwarder).
 2. **Tracking list:** create a Notion table, Airtable, or Linear list called `DPA Requests` with columns:
    - Customer org name
    - Date received
@@ -346,18 +347,18 @@ If you prefer alternatives (BetterStack instead of Instatus, Resend instead of P
    - Notes
    - Signed PDF (link to file storage)
 3. **Signing tool:** sign up for **DocuSign** (€10-25/mo) or **PandaDoc** (free tier OK for low volume), or use **Tilki.app** for a lightweight free option.
-4. **Inbox rule:** any email to `legal@proculink.com` with subject containing "DPA" or "Data Processing" → label "DPA Pending" + create a tracking row.
+4. **Inbox rule:** any email to `legal@proculink.eu` with subject containing "DPA" or "Data Processing" → label "DPA Pending" + create a tracking row.
 5. **Promise:** when a DPA arrives, sign and return within 5 business days as `/dpa` page commits.
 
 ### Subprocessor change-notification subscriber list
 
-6. **Set up the inbox:** create `privacy@proculink.com`.
+6. **Set up the inbox:** create `privacy@proculink.eu`.
 7. **Subscriber list:** create a Notion/Airtable list called `Subprocessor Notification Subscribers` with columns:
    - Email
    - Date subscribed
    - Last notified date
 8. **Inbox rule:** auto-reply to any email with subject "Subprocessor notifications":
-   > "Thanks — you're subscribed to ProcuLink subprocessor change notifications. We'll email you at least 30 days before adding or replacing any subprocessor listed at https://proculink.com/subprocessors."
+   > "Thanks — you're subscribed to ProcuLink subprocessor change notifications. We'll email you at least 30 days before adding or replacing any subprocessor listed at https://proculink.eu/subprocessors."
    Manually add the sender's email to the list.
 9. **Change-management process:** before editing `(marketing)/subprocessors/page.tsx`:
    - Send an email blast to all subscribers 30 days before the planned change.
@@ -366,7 +367,7 @@ If you prefer alternatives (BetterStack instead of Instatus, Resend instead of P
 
 ### DPA inbox & abuse reporting
 
-10. **Also set up:** `abuse@proculink.com` (referenced on `/aup`) and `security@proculink.com` (referenced on `/security`). These can be aliases to the same human inbox initially.
+10. **Also set up:** `abuse@proculink.eu` (referenced on `/aup`) and `security@proculink.eu` (referenced on `/security`). These can be aliases to the same human inbox initially.
 
 **Time:** 1-2 hours to set up inboxes, tooling, and the tracking lists.
 
@@ -393,7 +394,7 @@ Once all 8 actions are done, run this 20-minute test to confirm everything is co
 10. Open `/watch` in a new tab → Loom video embeds and plays.
 11. Open `/customers` → placeholder cards visible.
 12. Open `/dpa`, `/subprocessors`, `/aup` → all four legal pages render with `ProcuLink OÜ` entity.
-13. Open `/support` → fill the contact form → email arrives at `support@proculink.com` within 30s.
+13. Open `/support` → fill the contact form → email arrives at `support@proculink.eu` within 30s.
 14. Click "Status" in the marketing footer → Instatus page loads.
 
 ### Billing path
@@ -401,7 +402,7 @@ Once all 8 actions are done, run this 20-minute test to confirm everything is co
 15. Open `/settings` → Billing tab while signed in as the Pilot account.
 16. Confirm the "Book a 15-min demo" CTA card is visible.
 17. Click **Upgrade to Growth** → Stripe Checkout in test mode → use card `4242 4242 4242 4242` → complete payment.
-18. Confirm redirect lands at `https://proculink.com/welcome?upgraded=growth&session_id=cs_test_...`.
+18. Confirm redirect lands at `https://proculink.eu/welcome?upgraded=growth&session_id=cs_test_...`.
 19. PostHog check: `billing_upgraded` event with `from_plan=pilot`, `to_plan=growth`.
 
 ### Acceptance
@@ -419,10 +420,10 @@ If any step fails → check the corresponding Action section above's "Verify" su
 | PostHog Cloud EU | Free tier (up to 1M events/mo) | €0 |
 | Instatus | Starter | €20 |
 | Cal.com | Free tier | €0 |
-| Postmark | 10K emails/mo | €15 |
+| Resend | Free/Starter transactional email | €0-20 |
 | Loom | Free tier (one video, public) | €0 |
 | Clerk | Free dev + Hobby production (5K MAU) | €0 |
-| **Total Group-L third-party cost** | | **~€35/mo** |
+| **Total Group-L third-party cost** | | **~€20-40/mo** |
 
 Plus Railway (~€20-50 depending on traffic), Vercel (~€20 Pro), Stripe (% of revenue only), Cloudflare R2 (~€5).
 

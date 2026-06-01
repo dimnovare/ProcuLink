@@ -41,7 +41,7 @@ Founder's vision: any input format, any output format, any ingress channel, one-
 | ERP REST (Erply) | n/a | Supported | `ProcuLink.Infrastructure/Services/Dispatchers/ErpDeliveryDispatchers.cs::ErplyDeliveryDispatcher` |
 | ERP form/XML (Directo) | n/a | Supported | `ProcuLink.Infrastructure/Services/Dispatchers/ErpDeliveryDispatchers.cs::DirectoDeliveryDispatcher` |
 | IMAP poll (attachments) | Supported | n/a | `ProcuLink.Worker/Jobs/EmailPollingJob.cs` (Hangfire every 5 min, MailKit, attachment whitelist `.csv/.xlsx/.pdf`) |
-| SMTP receive (`orders@{tenant}.proculink.app`) | Planned | n/a | None. |
+| SMTP receive (`orders@{tenant}.proculink.eu`) | Planned | n/a | None. |
 | Inbound REST API | Partial (`/api/orders/upload` exists, but designed for browser, not B2B push) | n/a | `OrdersController.cs` |
 | SFTP pull | Planned | Planned | None. Flagged in STATUS.md "deferred until HTTP workflow is production-proven". |
 | SFTP watched directory (host our SFTP, customer drops files) | Planned | n/a | None. |
@@ -81,10 +81,10 @@ Reflects what a solo founder plus one part-time contractor can ship while keepin
 | Channel | Inbound | Outbound | Library / approach |
 |---|---|---|---|
 | Browser upload, HTTP webhook out, Erply/Directo, IMAP poll | Kept | Kept | Already done. |
-| SMTP receive (`orders@{tenant}.proculink.app`) | Supported | n/a | `Postmark Inbound` (managed, $10/mo). Postmark POSTs parsed MIME to `/api/ingress/email/postmark`. Avoids running our own MX. `MimeKit` reused for attachment decoding. |
+| SMTP receive (`orders@{tenant}.proculink.eu`) | Supported | n/a | `Postmark Inbound` (managed, $10/mo). Postmark POSTs parsed MIME to `/api/ingress/email/postmark`. Avoids running our own MX. `MimeKit` reused for attachment decoding. |
 | Inbound REST API (`POST /api/ingress/{tenantSlug}/orders`) | Supported | n/a | New controller. Accepts raw bytes + content-type header. Webhook-style API key auth (per-tenant). Distinct from browser-Clerk upload. |
 | SFTP pull | Supported | Supported | `Renci.SshNet`. Per-supplier config; cron-style poll job. |
-| SFTP watched directory (we host) | Supported | n/a | `Renci.SshNet.SftpServer` (third-party) or host a Docker `atmoz/sftp` and watch via inotify-equivalent. Each tenant gets `sftp.proculink.app/<tenantSlug>/inbox/`. |
+| SFTP watched directory (we host) | Supported | n/a | `Renci.SshNet.SftpServer` (third-party) or host a Docker `atmoz/sftp` and watch via inotify-equivalent. Each tenant gets `sftp.proculink.eu/<tenantSlug>/inbox/`. |
 | FTP / FTPS | Supported (low priority) | Supported (low priority) | `FluentFTP`. Build only if a paying customer asks. |
 | S3 / R2 / Azure Blob event watch | Supported | Supported | `AWSSDK.S3` (R2 is S3-compatible). Customer points their bucket events at our webhook; or we poll their prefix. |
 | OneDrive / SharePoint OAuth folder watch | Supported | n/a | `Microsoft.Graph` SDK. OAuth flow per tenant. |
@@ -108,7 +108,7 @@ Solo-senior-dev days. "Unlocks" = who pays for it. Dependencies = prerequisite r
 | 3 | **UBL 2.1 / Peppol BIS Order 3 output** | 3 | Same archetype as #2; needed for sending POs to Peppol-connected suppliers. | #2 | Same. |
 | 4 | **Inbound REST API + per-tenant API keys** | 3 | Mid-market and large distributors who already have an ERP that can POST. The number-one ask from "we want to integrate" prospects. | None. | ASP.NET Core minimal API; reuse `OrderService.CreateStubAsync`. |
 | 5 | **Free-text email body LLM parsing** | 2 | Small suppliers receiving free-form emails like "Please send 12× SKU-123 by Friday". This is the unique-to-ProcuLink wedge no incumbent offers. | #1 schema inferencer. | OpenAI structured outputs over `ParsedOrder` schema in `EmailPollingJob`. |
-| 6 | **Postmark Inbound SMTP receive** (`orders@<slug>.proculink.app`) | 3 | All archetypes; especially consultants onboarding their SME clients. Customers ask for "just give me an email address" within minutes of the first demo. | None. | Postmark inbound webhook ($10/mo); `MimeKit` for the inbound webhook payload. |
+| 6 | **Postmark Inbound SMTP receive** (`orders@<slug>.proculink.eu`) | 3 | All archetypes; especially consultants onboarding their SME clients. Customers ask for "just give me an email address" within minutes of the first demo. | None. | Postmark inbound webhook ($10/mo); `MimeKit` for the inbound webhook payload. |
 | 7 | **`IIngressChannel` abstraction + refactor existing four ingress paths onto it** | 3 | Internal — but blocks #6, #8, #11, and every future channel. Pay this debt now while there are only four call sites. | None. | None. |
 | 8 | **SFTP pull dispatcher (outbound + inbound)** | 4 | Mid-market and large distributors. SFTP is still the #1 supplier-side integration request in EU industrial procurement. | #7 | `Renci.SshNet`. |
 | 9 | **OCR / scanned PDF input** | 5 | Small suppliers receiving scanned POs from non-digital buyers (still common in EU construction, hospitality, hardware retail). | None. | `Azure Document Intelligence` (paid, prebuilt "invoice/PO" model) primary; `Tesseract` fallback. Behind `BillingFeature.Ocr`. |

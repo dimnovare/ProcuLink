@@ -178,7 +178,7 @@ builder.Services.AddControllers();
 // ── CORS — Next.js frontend ────────────────────────────────────────────────
 // Frontend:Url can be a single URL or a comma-separated list. Supports Vercel
 // preview-deploy wildcard subdomains when configured as e.g.
-//   Frontend:Url=https://proculink.com,https://*.vercel.app
+//   Frontend:Url=https://proculink.eu,https://*.vercel.app
 builder.Services.AddCors(options =>
 {
     var defaultOrigins = new List<string>

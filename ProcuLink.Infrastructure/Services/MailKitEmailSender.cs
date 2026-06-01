@@ -29,7 +29,7 @@ public sealed class MailKitEmailSender : IEmailSender
         var portStr  = _config["Smtp:Port"];
         var username = _config["Smtp:Username"];
         var password = _config["Smtp:Password"];
-        var from     = _config["Smtp:From"] ?? "noreply@proculink.com";
+        var from     = _config["Smtp:From"] ?? "support@proculink.eu";
 
         if (string.IsNullOrWhiteSpace(host))
         {

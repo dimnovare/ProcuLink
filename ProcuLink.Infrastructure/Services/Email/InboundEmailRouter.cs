@@ -54,11 +54,11 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
 
     /// <summary>
     /// Default host suffix used when parsing the recipient address. The full
-    /// recipient is <c>orders@{slug}.proculink.app</c>; if the founder hosts
-    /// the inbound MX on a different domain (e.g. <c>inbound.proculink.app</c>),
+    /// recipient is <c>orders@{slug}.proculink.eu</c>; if the founder hosts
+    /// the inbound MX on a different domain (e.g. <c>inbound.proculink.eu</c>),
     /// override via config <c>Inbound:Postmark:HostSuffix</c>.
     /// </summary>
-    private const string DefaultHostSuffix = ".proculink.app";
+    private const string DefaultHostSuffix = ".proculink.eu";
 
     /// <summary>
     /// Provenance tag stamped on orders the router creates from the email body

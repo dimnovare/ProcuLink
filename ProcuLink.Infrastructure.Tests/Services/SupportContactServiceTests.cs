@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure.Services;
@@ -14,7 +15,7 @@ public class SupportContactServiceTests
     {
         var mail = new FakeEmailSender();
         var analytics = new FakeAnalyticsService();
-        var svc = new SupportContactService(mail, analytics, NullLogger<SupportContactService>.Instance);
+        var svc = new SupportContactService(mail, analytics, EmptyConfig(), NullLogger<SupportContactService>.Instance);
 
         var orgId = Guid.NewGuid();
         await svc.SubmitAsync(
@@ -27,7 +28,7 @@ public class SupportContactServiceTests
         var sent = mail.Sent[0];
         sent.Subject.Should().Contain("[support][bug]");
         sent.Subject.Should().Contain("Cannot upload PDF");
-        sent.To.Should().Be("support@proculink.com");
+        sent.To.Should().Be("support@proculink.eu");
         sent.Body.Should().Contain("u@example.com");
         sent.Body.Should().Contain("/upload");
         sent.Body.Should().Contain("Stack trace");
@@ -45,7 +46,7 @@ public class SupportContactServiceTests
     {
         var mail = new FakeEmailSender();
         var analytics = new FakeAnalyticsService();
-        var svc = new SupportContactService(mail, analytics, NullLogger<SupportContactService>.Instance);
+        var svc = new SupportContactService(mail, analytics, EmptyConfig(), NullLogger<SupportContactService>.Instance);
 
         await svc.SubmitAsync(
             organisationId: null,
@@ -60,4 +61,7 @@ public class SupportContactServiceTests
         analytics.CapturedEvents.Should().BeEmpty(
             "anonymous support submissions should not be tied to an organisation in PostHog");
     }
+
+    private static IConfiguration EmptyConfig() =>
+        new ConfigurationBuilder().Build();
 }

@@ -50,7 +50,7 @@ We do **not** process special-category personal data, biometric data, or data re
 
 For your own personal data held by ProcuLink:
 
-- **Access**: email `privacy@proculink.app` and we respond within 30 days.
+- **Access**: email `privacy@proculink.eu` and we respond within 30 days.
 - **Rectification**: edit in app; for closed accounts, email us.
 - **Erasure ("right to be forgotten")**: documented procedure, fulfilled within 30 days, audit-logged.
 - **Restriction**: email us; we suspend processing while disputes are resolved.
@@ -64,7 +64,7 @@ Your end-users (your suppliers, your buyers) — if they appear as personal data
 
 A standard DPA based on the EU Standard Contractual Clauses (SCCs, 2021 modular) is available on request to all paid plans. Pilot accounts can sign the DPA before going live. Enterprise customers may negotiate amendments.
 
-Email `privacy@proculink.app` to receive the DPA template.
+Email `privacy@proculink.eu` to receive the DPA template.
 
 ## Sub-processors
 
@@ -90,8 +90,8 @@ Customers may disable AI suggestions to eliminate this transfer entirely.
 
 ## Contact
 
-- Privacy questions: `privacy@proculink.app`
-- Security incidents: `security@proculink.app`
+- Privacy questions: `privacy@proculink.eu`
+- Security incidents: `security@proculink.eu`
 - Data Protection Officer: TBC at general availability (Estonia does not currently require a DPO for organisations of ProcuLink's size; we plan to appoint one when we reach the threshold).
 
 ProcuLink OÜ (registration number 17477775) is registered in Tallinn, Estonia, and reports to the Estonian Data Protection Inspectorate (AKI) as required.

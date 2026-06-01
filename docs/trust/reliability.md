@@ -49,7 +49,7 @@ This trail is visible per-order in the app and exportable via the audit API. It 
 
 ## Status page
 
-Public status page at **status.proculink.app** (UptimeRobot-backed, available at general-availability launch). Three monitors:
+Public status page at **status.proculink.eu** (UptimeRobot-backed, available at general-availability launch). Three monitors:
 
 - API endpoint (`/health/live`)
 - Marketing site
@@ -90,7 +90,7 @@ If your business requires stronger guarantees (real-time replication, 4-nines SL
 ## Reporting an issue
 
 - In-app: top-right "Help" → "Report an issue"
-- Email: `support@proculink.app`
-- Critical (production outage on your account): `urgent@proculink.app` — paged immediately on Operations+ plans
+- Email: `support@proculink.eu`
+- Critical (production outage on your account): `urgent@proculink.eu` — paged immediately on Operations+ plans
 
 Please include: organisation name, affected order IDs, what you observed, what you expected, and a screenshot if possible.

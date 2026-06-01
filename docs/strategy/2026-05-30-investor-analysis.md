@@ -183,7 +183,7 @@ real recent POs — Tuesday or Thursday?"
 
 **Four structural fixes (target state):**
 1. **Kill the 1,166-line `OrderService` god-class** → `IngressService` + `MappingResolverService` +
-   `OrderQueryService` + `ExceptionWorkflowService`; introduce a `ProcuLink.Application` project and
+   `OrderQueryService` + `ExceptionWorkflowService`; introduce a `proculink.eulication` project and
    move `ParseStoredFileAsync` fully into the Worker to dissolve the circular-ref.
 2. **Rules-as-data — the anti-spaghetti principle.** *Configurable (versioned rows):* field
    mappings, manipulators, item-code translations, validation rules, output-format-per-supplier,

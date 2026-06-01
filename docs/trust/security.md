@@ -62,7 +62,7 @@ The full sub-processor list is also available on `docs/trust/gdpr.md`.
 
 ## Vulnerability disclosure
 
-Email security issues to `security@proculink.app` (TBC at launch). We respond within 1 business day and credit disclosers in our changelog if requested.
+Email security issues to `security@proculink.eu` (TBC at launch). We respond within 1 business day and credit disclosers in our changelog if requested.
 
 ## What we don't yet have
 

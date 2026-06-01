@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Services;
 
@@ -5,16 +6,22 @@ namespace ProcuLink.Infrastructure.Services;
 
 public sealed class SupportContactService : ISupportContactService
 {
-    private const string SupportInbox = "support@proculink.com";
+    private const string DefaultSupportInbox = "support@proculink.eu";
 
     private readonly IEmailSender _mail;
     private readonly IAnalyticsService _analytics;
+    private readonly IConfiguration _config;
     private readonly ILogger<SupportContactService> _log;
 
-    public SupportContactService(IEmailSender mail, IAnalyticsService analytics, ILogger<SupportContactService> log)
+    public SupportContactService(
+        IEmailSender mail,
+        IAnalyticsService analytics,
+        IConfiguration config,
+        ILogger<SupportContactService> log)
     {
         _mail      = mail;
         _analytics = analytics;
+        _config    = config;
         _log       = log;
     }
 
@@ -34,7 +41,8 @@ public sealed class SupportContactService : ISupportContactService
             "---" + Environment.NewLine + Environment.NewLine +
             req.Message;
 
-        await _mail.SendAsync(SupportInbox, subject, body, ct);
+        var supportInbox = _config["Smtp:SupportTo"] ?? _config["Support:Inbox"] ?? DefaultSupportInbox;
+        await _mail.SendAsync(supportInbox, subject, body, ct);
 
         if (organisationId.HasValue)
         {

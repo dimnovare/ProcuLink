@@ -10,7 +10,7 @@ namespace ProcuLink.Api.Controllers;
 
 /// <summary>
 /// Public webhook endpoint for inbound email channels. Today: Postmark Inbound
-/// (orders@{tenant}.proculink.app). Tomorrow: SendGrid Inbound Parse, or any
+/// (orders@{tenant}.proculink.eu). Tomorrow: SendGrid Inbound Parse, or any
 /// other provider that POSTs a JSON envelope with attachments.
 ///
 /// This controller intentionally does NOT use Clerk authentication — it is a

@@ -36,7 +36,7 @@ public class InboundEmailRouterTests
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.app",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
             Subject:   "PO #12345",
             Attachments: new[]
             {
@@ -74,7 +74,7 @@ public class InboundEmailRouterTests
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.app",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
             Subject:   "Multiple POs",
             Attachments: new[]
             {
@@ -109,7 +109,7 @@ public class InboundEmailRouterTests
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.app",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
             Subject:   "Word doc disguised as PO",
             Attachments: new[]
             {
@@ -142,7 +142,7 @@ public class InboundEmailRouterTests
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
-            ToEmail:   "orders@unknown-tenant.proculink.app",
+            ToEmail:   "orders@unknown-tenant.proculink.eu",
             Subject:   "Mystery PO",
             Attachments: new[]
             {
@@ -175,7 +175,7 @@ public class InboundEmailRouterTests
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.app",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
             Subject:   "PO during read-only",
             Attachments: new[]
             {
@@ -208,7 +208,7 @@ public class InboundEmailRouterTests
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.app",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
             Subject:   "PO after trial",
             Attachments: new[]
             {
@@ -241,7 +241,7 @@ public class InboundEmailRouterTests
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.app",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
             Subject:   "Just a note, no file",
             Attachments: Array.Empty<InboundAttachment>());
 
@@ -269,7 +269,7 @@ public class InboundEmailRouterTests
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.app",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
             Subject:   "Mixed bag",
             Attachments: new[]
             {
@@ -319,7 +319,7 @@ public class InboundEmailRouterTests
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.app",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
             Subject:   "Order request (no attachment)",
             Attachments: Array.Empty<InboundAttachment>(),
             Body: "Hi team, please send 10 of WIDGET-A at 2.50 EUR and 5 of WIDGET-B at 3.00 EUR. Thanks!");
