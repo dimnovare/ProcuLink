@@ -1,6 +1,7 @@
 using System.Threading.RateLimiting;
 using Hangfire;
 using Hangfire.PostgreSql;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
@@ -89,37 +90,57 @@ foreach (var origin in (builder.Configuration["Frontend:Url"] ?? string.Empty)
              .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
     authorizedParties.Add(origin);
 
-builder.Services.AddAuthentication(options =>
+var enableQaAuthBypass =
+    builder.Environment.IsDevelopment()
+    && string.Equals(
+        builder.Configuration["PROCULINK_QA_BYPASS_AUTH"],
+        "true",
+        StringComparison.OrdinalIgnoreCase);
+
+var authBuilder = builder.Services.AddAuthentication(options =>
 {
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme    = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
+    options.DefaultAuthenticateScheme = enableQaAuthBypass
+        ? QaBypassAuthenticationHandler.SchemeName
+        : JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = options.DefaultAuthenticateScheme;
+});
+
+if (enableQaAuthBypass)
 {
-    options.Authority = builder.Configuration["Clerk:Authority"];
-    // Disable legacy claim-type mapping. Without this, JwtBearer renames "sub"
-    // to ClaimTypes.NameIdentifier before claims reach HttpContext.User, which
-    // breaks TenantResolutionMiddleware's `FindFirst("sub")` fallback.
-    options.MapInboundClaims = false;
-    options.TokenValidationParameters = new TokenValidationParameters
+    authBuilder.AddScheme<AuthenticationSchemeOptions, QaBypassAuthenticationHandler>(
+        QaBypassAuthenticationHandler.SchemeName,
+        _ => { });
+}
+else
+{
+    authBuilder.AddJwtBearer(options =>
     {
-        // Clerk session tokens carry `azp` (authorized party), not a standard `aud`, so
-        // ASP.NET audience validation is off and the binding is enforced via `azp` below.
-        ValidateAudience = false,
-        NameClaimType = "sub",
-    };
-    options.Events = new JwtBearerEvents
-    {
-        OnTokenValidated = context =>
+        options.Authority = builder.Configuration["Clerk:Authority"];
+        // Disable legacy claim-type mapping. Without this, JwtBearer renames "sub"
+        // to ClaimTypes.NameIdentifier before claims reach HttpContext.User, which
+        // breaks TenantResolutionMiddleware's `FindFirst("sub")` fallback.
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
         {
-            var azp = context.Principal?.FindFirst("azp")?.Value;
-            if (!ClerkTokenValidation.IsAuthorizedParty(azp, authorizedParties))
-                context.Fail("Token 'azp' is not an authorized party for this application.");
-            return Task.CompletedTask;
-        },
-    };
-})
-.AddScheme<ApiKeyAuthOptions, ApiKeyAuthHandler>("ApiKey", _ => { });
+            // Clerk session tokens carry `azp` (authorized party), not a standard `aud`, so
+            // ASP.NET audience validation is off and the binding is enforced via `azp` below.
+            ValidateAudience = false,
+            NameClaimType = "sub",
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = context =>
+            {
+                var azp = context.Principal?.FindFirst("azp")?.Value;
+                if (!ClerkTokenValidation.IsAuthorizedParty(azp, authorizedParties))
+                    context.Fail("Token 'azp' is not an authorized party for this application.");
+                return Task.CompletedTask;
+            },
+        };
+    });
+}
+
+authBuilder.AddScheme<ApiKeyAuthOptions, ApiKeyAuthHandler>("ApiKey", _ => { });
 
 builder.Services.AddAuthorization();
 

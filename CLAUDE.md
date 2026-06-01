@@ -251,7 +251,9 @@ source. All UI/UX and design decisions run through the local design system,
 > invoices/ASN/PEPPOL or add new channels until the first PO path has repeatable
 > live happy/error QA. Tasks 1-5 are implemented: XML parser routing, returned
 > line state, manual-review E2E, intake docs, and SFTP/S3 default-supplier
-> safety. Task 6 remains: live browser/API happy and error QA.
+> safety. Task 6 is in progress: local live frontend/API upload smoke reaches
+> `/upload/preview/<orderId>` with QA auth bypass, one seeded supplier, and a real
+> CSV. Continue with review -> transform -> delivery happy/error QA before broadening.
 >
 > **FREEZE until there are paying customers** (real engineering, but none of it wins customer #1):
 > Zapier/Make layer, invoice/ASN/DESADV, extra EDI formats, cross-org mapping library, RBAC/SCIM,
@@ -360,6 +362,12 @@ Read this before starting new work:
   - Pass 14: `BridgePageLoader` loading.tsx for 11 missing routes, `InboxView` mobile empty state, global `:focus-visible` ring, sidebar workspace-switcher accessible button, topbar aria-labels.
   - Pass 15: `SpineReview` wired to live `GET /api/orders/{id}` via `useQuery`; `buildNodesFromOrder()` maps Order → SpineNodeData[]; `BuyerName` added to `OrderDto`; loading skeleton + error/not-found gate added.
   - Continue live API/deployment QA for the full first-upload-to-delivery happy/error paths against a running backend before Group J. Group J should turn the current connector/webhook/mapping/rule/template local QA affordances into real persistence/test-fire verification.
+- **Boringly reliable PO loop update (2026-06-01):**
+  - Development-only backend QA auth scheme added: set `PROCULINK_QA_BYPASS_AUTH=true` while `ASPNETCORE_ENVIRONMENT=Development`.
+  - Local live API QA also needs a valid `Delivery__EncryptionKey` (32-byte base64), because supplier/delivery endpoints resolve encrypted delivery config services.
+  - `CsvOrderParser` now removes header punctuation and supports common procurement aliases (`po_number`, `PO Number`, `po`, `line_no`, `qty`, `unit_price`, `sku`, `buyer_code`).
+  - Verified live upload smoke: `PLAYWRIGHT_API_URL=http://localhost:5223 bun run test:e2e:live -- tests/e2e/magic-mapping-preview.spec.ts -g "upload a file and land"` passed.
+  - Still open: live QA from preview through unresolved-line review, save mapping, transform, delivery-config-missing error, manual delivery, and delivery audit/rejection states.
 - **Do not redo C2, D2, E, F, G, H, Wave 3, or Wave 4.** Treat them as implemented unless `STATUS.md` says a regression reopened them.
 - **Manual/live QA still recommended:**
   - Stripe Checkout + Portal + webhook mapping with real Stripe test events.

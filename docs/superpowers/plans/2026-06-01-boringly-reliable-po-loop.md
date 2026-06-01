@@ -252,6 +252,24 @@ Use a CSV sample with one mapped line and one unmapped line. Confirm:
 - transform creates artifact;
 - manual delivery or auto-delivery produces an auditable attempt.
 
+Progress 2026-06-01: local API/frontend smoke is green through upload -> preview.
+Root cause found and fixed before the smoke: the CSV parser only lowercased
+headers and did not normalize punctuation, so common procurement headers such
+as `po_number`, `line_no`, and `unit_price` were not reliably mapped. Added
+`CsvOrderParserTests` for common aliases and spaced headers. Also added a
+development-only backend QA auth scheme (`PROCULINK_QA_BYPASS_AUTH=true`) so
+Playwright can exercise protected API routes locally without a Clerk session.
+
+Verified:
+
+```powershell
+dotnet test ProcuLink.Transform.Tests\ProcuLink.Transform.Tests.csproj --no-restore --filter "FullyQualifiedName~CsvOrderParserTests"
+$env:PLAYWRIGHT_API_URL='http://localhost:5223'; bun run test:e2e:live -- tests/e2e/magic-mapping-preview.spec.ts -g "upload a file and land"
+```
+
+Still required before checking off Step 1: continue from the preview screen
+through unresolved-line review, save mapping, transform, delivery, and audit.
+
 - [ ] **Step 2: Run failure cases**
 
 Confirm the UI gives specific next actions for:

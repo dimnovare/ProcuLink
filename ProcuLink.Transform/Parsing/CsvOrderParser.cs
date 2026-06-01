@@ -41,7 +41,7 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
             Delimiter              = delimiter,
             HeaderValidated        = null!,
             MissingFieldFound      = null!,
-            PrepareHeaderForMatch  = args => args.Header?.ToLowerInvariant().Trim() ?? string.Empty
+            PrepareHeaderForMatch  = args => NormalizeHeader(args.Header)
         };
 
         using var reader = new StreamReader(ms);
@@ -63,6 +63,16 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
         var firstLine = peekReader.ReadLine() ?? string.Empty;
         // If the header row contains ';' and no ',' then the file is semicolon-delimited
         return firstLine.Contains(';') && !firstLine.Contains(',') ? ";" : ",";
+    }
+
+    private static string NormalizeHeader(string? header)
+    {
+        if (string.IsNullOrWhiteSpace(header)) return string.Empty;
+
+        return new string(header
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToLowerInvariant)
+            .ToArray());
     }
 
     private static ParsedOrder BuildParsedOrder(List<RawRow> rows)
@@ -135,15 +145,15 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
     {
         public RawRowMap()
         {
-            Map(m => m.PoNumber     ).Name("ponumber");
+            Map(m => m.PoNumber     ).Name("ponumber", "purchaseordernumber", "ordernumber", "po");
             Map(m => m.OrderDate    ).Name("orderdate");
             Map(m => m.Currency     ).Name("currency");
             Map(m => m.BuyerName    ).Name("buyername");
-            Map(m => m.LineNumber   ).Name("linenumber");
-            Map(m => m.BuyerItemCode).Name("buyeritemcode");
-            Map(m => m.ItemCode     ).Name("itemcode");
+            Map(m => m.LineNumber   ).Name("linenumber", "lineno", "line");
+            Map(m => m.BuyerItemCode).Name("buyeritemcode", "buyercode", "sku");
+            Map(m => m.ItemCode     ).Name("itemcode", "item");
             Map(m => m.Description  ).Name("description");
-            Map(m => m.Quantity     ).Name("quantity");
+            Map(m => m.Quantity     ).Name("quantity", "qty");
             Map(m => m.Unit         ).Name("unit");
             // "price" is an alias for "unitprice"
             Map(m => m.UnitPrice    ).Name("unitprice", "price");

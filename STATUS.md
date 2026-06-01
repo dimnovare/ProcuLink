@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-06-01 — PO reliability pass in progress · pull-ingress supplier routing hardened**
+## Where we are: **2026-06-01 — PO reliability pass in progress · live upload smoke green**
 
 Active focus is no longer "add more breadth"; it is **make upload -> parse -> review -> transform -> deliver boringly reliable** for the buyer/procurement PO workflow. Current plan:
 `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
@@ -16,18 +16,24 @@ Landed in this pass:
 - **Manual review E2E guardrail added:** `EndToEndPipelineTests.ReviewResolveTransformDeliver_UnmappedLine_BlocksThenSavesMappingAndDelivers` proves an unresolved line blocks transform, manual resolution saves the mapping, and the order then transforms/delivers.
 - **Docs added:** `docs/integrations/ORDER_APIS.md` explains browser upload, IMAP, hosted inbound email webhook, inbound REST API, SFTP/S3 polling status, outbound webhook signing, and OCR setup.
 - **Assisted SFTP/S3 pull ingress hardened:** `sftp_ingress_configs` and `s3_ingress_configs` now carry nullable `default_supplier_id`; pollers validate the supplier belongs to the same org and is active before connecting/listing. Unsafe configs return zero and never call `CreateStubAsync` with `Guid.Empty`.
+- **Local live-QA backend auth added:** `PROCULINK_QA_BYPASS_AUTH=true` enables a development-only ASP.NET auth scheme for browser/API smoke tests. It is gated by `IHostEnvironment.IsDevelopment()` and must not be used in production.
+- **CSV alias reliability fixed:** `CsvOrderParser` now normalizes header punctuation and supports common procurement aliases such as `po_number`, `PO Number`, `po`, `line_no`, `qty`, `unit_price`, `sku`, and `buyer_code`.
+- **Live frontend/API upload smoke green:** with local API on `http://localhost:5223`, local frontend on `http://localhost:8082`, QA auth bypass, one seeded supplier, and a real CSV upload, Playwright reaches `/upload/preview/<orderId>` successfully.
 
 Verification:
 - `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ParseStoredFileAsync_UblXml"` ✅ 1 passed.
 - `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ReviewResolveTransformDeliver"` ✅ 1 passed.
 - `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~EndToEndPipelineTests"` ✅ 3 passed.
 - `dotnet test ProcuLink.Infrastructure.Tests\ProcuLink.Infrastructure.Tests.csproj --no-restore --filter "FullyQualifiedName~Ingress"` ✅ 12 passed.
+- `dotnet test ProcuLink.Transform.Tests\ProcuLink.Transform.Tests.csproj --no-restore --filter "FullyQualifiedName~CsvOrderParserTests"` ✅ 2 passed.
+- `PLAYWRIGHT_API_URL=http://localhost:5223 bun run test:e2e:live -- tests/e2e/magic-mapping-preview.spec.ts -g "upload a file and land"` ✅ 1 passed.
 - `dotnet build ProcuLink.slnx --no-restore` ✅ 0 errors.
 
 Important product/implementation guidance:
 - Hosted inbound email webhook and inbound REST API have backend support, but should be offered as assisted setup until customer-facing setup docs/screens are complete.
 - SFTP/S3 polling backend exists and now requires a valid configured default supplier before import. It remains assisted/internal until customer-facing setup/test-fire UX exists.
 - Scanned PDF OCR is possible through `IDocumentOcrService` / Azure Document Intelligence. Use OCR provider extraction first; use AI for interpretation, mapping suggestions, confidence, and review. Do not treat the LLM itself as the OCR engine.
+- Task 6 is not fully closed yet. Next live QA should continue from `/upload/preview/<orderId>` through explicit unresolved-line review, save mapping, transform artifact generation, delivery-config-missing error, manual delivery, and auditable delivery attempt/rejection states.
 
 ---
 

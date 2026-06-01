@@ -235,6 +235,18 @@ wires arc, every wire uses the same visible gradient stroke, shared ports fan ou
 alert counters stay tethered to their route, and the legend must not overlap
 buyer/supplier pills.
 
+2026-06-01 PO reliability update: follow
+`docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md` until Task 6 is
+closed. Tasks 1-5 are implemented and pushed. Task 6 is in progress: local
+frontend/API upload smoke reaches `/upload/preview/<orderId>` with
+`PROCULINK_QA_BYPASS_AUTH=true`, one seeded supplier, and a real CSV. Backend
+QA auth is development-only and also requires a valid 32-byte base64
+`Delivery__EncryptionKey` for endpoints that resolve delivery config services.
+`CsvOrderParser` now handles common aliases (`po_number`, `PO Number`, `po`,
+`line_no`, `qty`, `unit_price`, `sku`, `buyer_code`). Next: live review ->
+save mapping -> transform -> delivery-config-missing error -> manual delivery
+-> delivery audit/rejection QA.
+
 Current execution focus (2026-06-01): make the primary PO path boringly reliable.
 Follow `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
 Tasks 1-5 are implemented: XML parser routing, returned parse line state,
