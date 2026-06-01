@@ -113,7 +113,46 @@ Expected: build succeeds with 0 errors.
 
 ---
 
-### Task 3: Document Intake Channels Honestly
+### Task 3: Lock The Manual Review Path
+
+**Files:**
+- Test: `ProcuLink.Api.Tests/Integration/EndToEndPipelineTests.cs`
+
+- [x] **Step 1: Add a review-path E2E regression**
+
+Add a Docker-backed test where a CSV order parses with one unresolved line. The
+test must assert:
+
+- parse status is `pending_review`;
+- `TransformAsync` fails before resolution;
+- `ResolveAsync` with `saveMappings: true` marks the order `ready`;
+- the new item mapping is persisted;
+- transform + HTTP delivery succeeds;
+- final order status is `delivered`.
+
+- [x] **Step 2: Run the targeted test**
+
+Run:
+
+```powershell
+dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ReviewResolveTransformDeliver"
+```
+
+Expected: 1 passed, 0 failed.
+
+- [x] **Step 3: Re-run E2E class**
+
+Run:
+
+```powershell
+dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~EndToEndPipelineTests"
+```
+
+Expected: 3 passed, 0 failed.
+
+---
+
+### Task 4: Document Intake Channels Honestly
 
 **Files:**
 - Create: `docs/integrations/ORDER_APIS.md`
@@ -147,7 +186,7 @@ mapping/interpretation. Do not tell agents to use an LLM as the OCR engine.
 
 ---
 
-### Task 4: Harden Assisted Pull Intake Before Self-Service
+### Task 5: Harden Assisted Pull Intake Before Self-Service
 
 **Files:**
 - Modify later: `ProcuLink.Core/Entities/SftpIngressConfig.cs`
@@ -182,7 +221,7 @@ Add tests for:
 
 ---
 
-### Task 5: Live UI Happy/Error QA
+### Task 6: Live UI Happy/Error QA
 
 **Files:**
 - Modify later in frontend repo as needed.

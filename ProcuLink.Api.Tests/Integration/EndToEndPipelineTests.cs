@@ -733,6 +733,203 @@ public sealed class EndToEndPipelineTests : IAsyncLifetime
     }
 
     [DockerRequiredFact]
+    public async Task ReviewResolveTransformDeliver_UnmappedLine_BlocksThenSavesMappingAndDelivers()
+    {
+        var factory = _factory!;
+        var http = factory.HttpDispatcher;
+        var ct = CancellationToken.None;
+
+        var orgGuid = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        const string supplierName = "Acme Components";
+        const string deliveryUrl = "https://supplier.example/review-path";
+
+        using (var scope = factory.NewScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var now = DateTime.UtcNow;
+
+            db.Organisations.Add(new Organisation
+            {
+                Id = orgGuid,
+                ClerkOrgId = "org_REVIEW_PATH",
+                Name = "Review Path Buyer",
+                Slug = "review-path-buyer",
+                Plan = "operations",
+                AccountStatus = "active",
+                CreatedAt = now,
+                TrialStartedAt = now,
+                TrialEndsAt = now.AddDays(14),
+            });
+
+            db.Suppliers.Add(new Supplier
+            {
+                Id = supplierId,
+                OrgId = orgGuid,
+                Name = supplierName,
+                CreatedAt = now,
+            });
+
+            db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+            {
+                Id = Guid.NewGuid(),
+                OrgId = orgGuid,
+                SupplierId = supplierId,
+                Protocol = "http",
+                AutoDeliver = true,
+                ConfigJson = JsonSerializer.Serialize(new { url = deliveryUrl }),
+                EncryptedCredentials = string.Empty,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+
+            var mappingConfig = new PoMappingConfig
+            {
+                HasHeaderRecord = true,
+                Separator = ",",
+                Header = new Dictionary<string, FieldMappingEntry>
+                {
+                    ["PoNumber"] = new() { ExternalField = "order_ref" },
+                    ["Currency"] = new() { ExternalField = "ccy" },
+                    ["BuyerName"] = new() { FixedValue = "Review Path Buyer" },
+                },
+                Lines = new Dictionary<string, FieldMappingEntry>
+                {
+                    ["LineNumber"] = new() { ExternalField = "row" },
+                    ["BuyerItemCode"] = new() { ExternalField = "sku" },
+                    ["Description"] = new() { ExternalField = "name" },
+                    ["Quantity"] = new() { ExternalField = "qty" },
+                    ["Unit"] = new() { ExternalField = "uom" },
+                    ["UnitPrice"] = new() { ExternalField = "price" },
+                },
+            };
+
+            db.SupplierPoMappings.Add(new SupplierPoMapping
+            {
+                Id = Guid.NewGuid(),
+                OrgId = orgGuid,
+                SupplierId = supplierId,
+                ConfigJson = JsonSerializer.Serialize(mappingConfig),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        const string csv =
+            "order_ref,ccy,row,sku,name,qty,uom,price\r\n" +
+            "PO-REVIEW-100,EUR,1,BUYER-UNMAPPED,Review Needed Widget,2,EA,9.99\r\n";
+
+        Guid orderId;
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(csv));
+            var stub = await orders.CreateStubAsync(
+                orgGuid, supplierId, stream, "review-needed.csv", "text/csv", ct);
+
+            Assert.True(stub.IsSuccess, $"CreateStubAsync failed: {stub.Error}");
+            orderId = stub.Value!.Id;
+        }
+
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            var parsed = await orders.ParseStoredFileAsync(orgGuid, orderId, ct);
+
+            Assert.True(parsed.IsSuccess, $"ParseStoredFileAsync failed: {parsed.Error}");
+            Assert.Equal(OrderStatusConstants.PendingReview, parsed.Value!.Entity.Status);
+            var line = Assert.Single(parsed.Value!.Entity.Lines);
+            Assert.Equal("BUYER-UNMAPPED", line.BuyerItemCode);
+            Assert.True(line.NeedsReview);
+            Assert.True(string.IsNullOrWhiteSpace(line.SupplierItemCode));
+        }
+
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            var blocked = await orders.TransformAsync(orgGuid, orderId, OutputFormat.Csv, ct);
+
+            Assert.False(blocked.IsSuccess);
+            Assert.Contains("Resolve all lines before transforming", blocked.Error);
+        }
+
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            var resolved = await orders.ResolveAsync(
+                orgGuid,
+                orderId,
+                new[] { new LineResolution(1, "SUP-REVIEW-100") },
+                saveMappings: true,
+                ct);
+
+            Assert.True(resolved.IsSuccess, $"ResolveAsync failed: {resolved.Error}");
+            Assert.Equal(OrderStatusConstants.Ready, resolved.Value!.Status);
+            var line = Assert.Single(resolved.Value.Lines);
+            Assert.False(line.NeedsReview);
+            Assert.Equal("SUP-REVIEW-100", line.SupplierItemCode);
+        }
+
+        using (var scope = factory.NewScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var saved = await db.ItemMappings.AsNoTracking()
+                .SingleOrDefaultAsync(m =>
+                    m.OrgId == orgGuid
+                    && m.SupplierId == supplierId
+                    && m.BuyerItemCode == "BUYER-UNMAPPED", ct);
+
+            Assert.NotNull(saved);
+            Assert.Equal("SUP-REVIEW-100", saved!.SupplierItemCode);
+            Assert.Equal("manual", saved.Source);
+        }
+
+        Guid artifactId;
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            var transformed = await orders.TransformAsync(orgGuid, orderId, OutputFormat.Csv, ct);
+
+            Assert.True(transformed.IsSuccess, $"TransformAsync failed: {transformed.Error}");
+            artifactId = transformed.Value!.ArtifactId;
+        }
+
+        using (var scope = factory.NewScope())
+        {
+            var delivery = scope.ServiceProvider.GetRequiredService<IDeliveryService>();
+            var result = await delivery.DispatchArtifactAsync(
+                orgGuid, orderId, artifactId, requireAutoDeliver: true, ct);
+
+            Assert.True(result.Success, $"Delivery failed: {result.ErrorMessage}");
+            Assert.Equal(200, result.ResponseCode);
+        }
+
+        Assert.Equal(1, http.CallCount);
+        Assert.Equal("PO-REVIEW-100.csv", http.CapturedFileName);
+        Assert.Contains("SUP-REVIEW-100", http.CapturedText);
+        Assert.Contains("Review Needed Widget", http.CapturedText);
+
+        using (var scope = factory.NewScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var order = await db.PurchaseOrders.AsNoTracking()
+                .SingleAsync(o => o.Id == orderId && o.OrgId == orgGuid, ct);
+
+            Assert.Equal(OrderStatusConstants.Delivered, order.Status);
+
+            var attempts = await db.DeliveryAttempts.AsNoTracking()
+                .Where(a => a.OrderId == orderId && a.OrgId == orgGuid)
+                .ToListAsync(ct);
+
+            var attempt = Assert.Single(attempts);
+            Assert.Equal("success", attempt.Status);
+            Assert.Equal(deliveryUrl, attempt.Destination);
+        }
+    }
+
+    [DockerRequiredFact]
     public async Task ParseStoredFileAsync_UblXml_RoutesToUblParserEvenWhenCxmlRegisteredFirst()
     {
         var factory = _factory!;

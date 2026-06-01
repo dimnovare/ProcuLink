@@ -13,11 +13,13 @@ Landed in this pass:
 - **Async XML parser routing fixed:** `OrderService.CreateStubAsync` and `ParseStoredFileAsync` now use content-aware parser selection for ambiguous files like `.xml`, so UBL/Peppol XML is not accidentally sent through the cXML parser because of DI registration order.
 - **Returned parse entity fixed:** `ParseStoredFileAsync` no longer duplicates newly parsed lines in the returned tracked entity after EF relationship fixup.
 - **Regression test added:** `EndToEndPipelineTests.ParseStoredFileAsync_UblXml_RoutesToUblParserEvenWhenCxmlRegisteredFirst`.
+- **Manual review E2E guardrail added:** `EndToEndPipelineTests.ReviewResolveTransformDeliver_UnmappedLine_BlocksThenSavesMappingAndDelivers` proves an unresolved line blocks transform, manual resolution saves the mapping, and the order then transforms/delivers.
 - **Docs added:** `docs/integrations/ORDER_APIS.md` explains browser upload, IMAP, hosted inbound email webhook, inbound REST API, SFTP/S3 polling status, outbound webhook signing, and OCR setup.
 
 Verification:
 - `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ParseStoredFileAsync_UblXml"` ✅ 1 passed.
-- `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~EndToEndPipelineTests"` ✅ 2 passed.
+- `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ReviewResolveTransformDeliver"` ✅ 1 passed.
+- `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~EndToEndPipelineTests"` ✅ 3 passed.
 - `dotnet build ProcuLink.slnx --no-restore` ✅ 0 errors.
 
 Important product/implementation guidance:
