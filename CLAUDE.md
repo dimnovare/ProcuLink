@@ -249,7 +249,9 @@ source. All UI/UX and design decisions run through the local design system,
 > upload -> parse -> review exceptions -> transform -> deliver -> audit. Follow
 > `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`. Do not broaden
 > invoices/ASN/PEPPOL or add new channels until the first PO path has repeatable
-> live happy/error QA.
+> live happy/error QA. Tasks 1-5 are implemented: XML parser routing, returned
+> line state, manual-review E2E, intake docs, and SFTP/S3 default-supplier
+> safety. Task 6 remains: live browser/API happy and error QA.
 >
 > **FREEZE until there are paying customers** (real engineering, but none of it wins customer #1):
 > Zapier/Make layer, invoice/ASN/DESADV, extra EDI formats, cross-org mapping library, RBAC/SCIM,
@@ -367,7 +369,7 @@ Read this before starting new work:
   - IMAP polling against a real mailbox/app password and supplier profile.
 - **Group K — cXML 1.2 standards hardening is implemented.** `CxmlOrderParser`, `CxmlTransformService`, `OutputFormat.CXml`, standards matrix, canonical PO model docs. Merged to `main` (`2697115`).
 - **Wave 1/2 code completeness verified (2026-05-28):** `EdifactOrderParser` + `UblOrderParser` have real parsing logic (Wave 1 complete). SFTP/S3 ingress, OCR (config-gated), and email-body extractor (API-only by design) are all wired (Wave 2 complete). `EdifactInvoiceParser`/`EdifactDesadvParser` stubs are Wave 3, not Wave 2.
-- **Inbound/API docs:** `docs/integrations/ORDER_APIS.md` is the current reference for browser upload, IMAP, hosted inbound email webhook, inbound REST API, SFTP/S3 polling status, outbound webhook signing, and OCR setup. Hosted inbound email and inbound REST API have backend support; SFTP/S3 polling remains assisted/internal until supplier routing is hardened.
+- **Inbound/API docs:** `docs/integrations/ORDER_APIS.md` is the current reference for browser upload, IMAP, hosted inbound email webhook, inbound REST API, SFTP/S3 polling status, outbound webhook signing, and OCR setup. Hosted inbound email and inbound REST API have backend support; SFTP/S3 polling is hardened with `default_supplier_id` and no longer imports with `Guid.Empty`, but remains assisted/internal until setup/test-fire UX exists.
 - **Wave 3 — Invoice + ASN canonical models are implemented** (commit `3fbff22`):
   - `UblInvoiceParser` (full UBL 2.1), `EdifactInvoiceParser` + `EdifactDesadvParser` stubs (EdiFabric licence required; drop-in ready).
   - `InvoiceEntity` / `InvoiceLineEntity` / `AdvanceShippingNoticeEntity` / `AsnPackageEntity` / `AsnPackageLineEntity`.

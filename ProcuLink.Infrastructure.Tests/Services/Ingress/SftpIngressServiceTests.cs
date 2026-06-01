@@ -84,6 +84,26 @@ public class SftpIngressServiceTests
         orders.CreateStubCalls.Should().Be(0);
     }
 
+    // ── 4. Enabled config without supplier → skipped before connecting ──────
+
+    [Fact]
+    public async Task EnabledConfigWithoutDefaultSupplier_ReturnsZero_NoConnectionAttempted()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(db, orgId, isEnabled: true, createDefaultSupplier: false);
+
+        var sftpFactory = new RecordingFakeSftpFactory();
+        var orders = new RecordingOrderService();
+        var svc = MakeService(db, orders, sftpFactory);
+
+        var result = await svc.PollAsync(orgId, default);
+
+        result.Should().Be(0, "pull ingress must not create org-scoped orders without a supplier route");
+        sftpFactory.ConnectCalls.Should().Be(0, "unsafe config must stop before touching the external SFTP server");
+        orders.CreateStubCalls.Should().Be(0);
+    }
+
     // ── 4. Unsupported extension → skipped ───────────────────────────────────
 
     [Fact]
@@ -112,7 +132,7 @@ public class SftpIngressServiceTests
     {
         await using var db = CreateDb();
         var orgId = Guid.NewGuid();
-        await SeedConfigAsync(db, orgId, isEnabled: true);
+        var supplierId = await SeedConfigAsync(db, orgId, isEnabled: true);
 
         const string remotePath = "/incoming/po-new.csv";
         var csvBytes = "header1,header2\r\nval1,val2"u8.ToArray();
@@ -125,6 +145,9 @@ public class SftpIngressServiceTests
 
         result.Should().Be(1, "one new CSV file should produce an import count of 1");
         orders.CreateStubCalls.Should().Be(1, "one stub must be created for the new file");
+        orders.SupplierIds.Should().ContainSingle().Which.Should().Be(
+            supplierId!.Value,
+            "SFTP pull imports must be assigned to the configured supplier, not Guid.Empty");
 
         var dedupe = await db.Set<ImportedSftpFile>()
             .FirstOrDefaultAsync(f => f.OrgId == orgId && f.RemotePath == remotePath);
@@ -158,7 +181,11 @@ public class SftpIngressServiceTests
             NullLogger<SftpIngressService>.Instance);
     }
 
-    private static async Task SeedConfigAsync(ProcuLinkDbContext db, Guid orgId, bool isEnabled)
+    private static async Task<Guid?> SeedConfigAsync(
+        ProcuLinkDbContext db,
+        Guid orgId,
+        bool isEnabled,
+        bool createDefaultSupplier = true)
     {
         // The password is the empty string encrypted with the all-zero 32-byte key.
         var config = new ConfigurationBuilder()
@@ -170,6 +197,19 @@ public class SftpIngressServiceTests
 
         var encryption = new DeliveryEncryptionService(config);
 
+        Guid? supplierId = null;
+        if (createDefaultSupplier)
+        {
+            supplierId = Guid.NewGuid();
+            db.Set<Supplier>().Add(new Supplier
+            {
+                Id = supplierId.Value,
+                OrgId = orgId,
+                Name = "SFTP supplier",
+                CreatedAt = DateTime.UtcNow,
+            });
+        }
+
         db.Set<SftpIngressConfig>().Add(new SftpIngressConfig
         {
             Id = Guid.NewGuid(),
@@ -179,11 +219,13 @@ public class SftpIngressServiceTests
             Username = "testuser",
             EncryptedPassword = encryption.Encrypt("hunter2"),
             RemoteDirectory = "/incoming",
+            DefaultSupplierId = supplierId,
             IsEnabled = isEnabled,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
+        return supplierId;
     }
 
     private static ProcuLinkDbContext CreateDb()
@@ -295,12 +337,14 @@ public class SftpIngressServiceTests
     private sealed class RecordingOrderService : IOrderService
     {
         public int CreateStubCalls { get; private set; }
+        public List<Guid> SupplierIds { get; } = new();
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
             Guid organisationId, Guid supplierId, Stream fileStream,
             string filename, string contentType, CancellationToken ct)
         {
             CreateStubCalls++;
+            SupplierIds.Add(supplierId);
             var stub = new PurchaseOrderEntity
             {
                 Id = Guid.NewGuid(),
@@ -357,7 +401,6 @@ public class SftpIngressServiceTests
             modelBuilder.Ignore<Organisation>();
             modelBuilder.Ignore<AppUser>();
             modelBuilder.Ignore<Membership>();
-            modelBuilder.Ignore<Supplier>();
             modelBuilder.Ignore<SupplierProfileEntity>();
             modelBuilder.Ignore<PurchaseOrderEntity>();
             modelBuilder.Ignore<PurchaseOrderLineEntity>();
@@ -385,6 +428,11 @@ public class SftpIngressServiceTests
 
             // Only materialise the two new entities.
             modelBuilder.Entity<SftpIngressConfig>(b =>
+            {
+                b.HasKey(x => x.Id);
+            });
+
+            modelBuilder.Entity<Supplier>(b =>
             {
                 b.HasKey(x => x.Id);
             });

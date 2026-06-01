@@ -22,8 +22,11 @@ screens.
 | SFTP/S3 polling | Customer gives ProcuLink credentials/prefix to poll | Backend exists, assisted/internal only | Customer can only drop files to SFTP/S3 and we configure routing |
 
 Do not present SFTP/S3 polling as fully self-service yet. The current backend
-pollers can import files, but supplier resolution still needs hardening before
-non-technical users can configure it safely.
+pollers can import files only when a same-organisation active default supplier is
+configured on the ingress row. Unsafe configs are skipped before touching the
+external storage provider and never create orders with placeholder supplier IDs.
+Keep this assisted until the setup UI can test credentials, preview matched
+files, and explain which supplier each file will route to.
 
 ---
 
@@ -244,4 +247,3 @@ Production QA still needed:
 - Upload a known scanned PO PDF.
 - Verify extracted text, parsed header, line count, and failure messaging.
 - Add a customer-facing "scanned PDF/OCR" status in upload/review once tested.
-

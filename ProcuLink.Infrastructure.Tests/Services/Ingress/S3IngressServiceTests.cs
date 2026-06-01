@@ -147,6 +147,37 @@ public class S3IngressServiceTests
             Times.Never);
     }
 
+    // ── 5. Enabled config without supplier → skipped before S3 calls ────────
+
+    [Fact]
+    public async Task EnabledConfigWithoutDefaultSupplier_Returns0AndMakesNoS3Calls()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedConfigAsync(
+            db,
+            isEnabled: true,
+            bucket: "my-bucket",
+            createDefaultSupplier: false);
+
+        var s3 = new Mock<IAmazonS3>(MockBehavior.Strict);
+        var orders = new Mock<IOrderService>(MockBehavior.Strict);
+
+        var svc = MakeService(db, s3.Object, orders.Object);
+
+        var count = await svc.PollAsync(orgId, CancellationToken.None);
+
+        count.Should().Be(0, "pull ingress must not create org-scoped orders without a supplier route");
+        orders.Verify(o =>
+            o.CreateStubAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<Guid>(),
+                It.IsAny<Stream>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
     // ── 5. Happy path: 2 new objects → CreateStubAsync called twice, ─────────
     //       ImportedS3Object rows inserted
 
@@ -189,6 +220,9 @@ public class S3IngressServiceTests
         count.Should().Be(2);
         orders.CalledWith.Should().HaveCount(2);
         orders.CalledWith.Select(c => c.OrgId).Should().AllBeEquivalentTo(orgId);
+        orders.CalledWith.Select(c => c.SupplierId).Should().OnlyContain(
+            supplierId => supplierId != Guid.Empty,
+            "S3 pull imports must be assigned to the configured supplier");
         orders.CalledWith.Select(c => c.FileName).Should().BeEquivalentTo(
             new[] { "po-a.csv", "po-b.xlsx" });
 
@@ -253,10 +287,24 @@ public class S3IngressServiceTests
     private static async Task<Guid> SeedConfigAsync(
         ProcuLinkDbContext db,
         bool isEnabled,
-        string bucket = "test-bucket")
+        string bucket = "test-bucket",
+        bool createDefaultSupplier = true)
     {
         var encryption = MakeEncryption();
         var orgId = Guid.NewGuid();
+        Guid? supplierId = null;
+
+        if (createDefaultSupplier)
+        {
+            supplierId = Guid.NewGuid();
+            db.Set<Supplier>().Add(new Supplier
+            {
+                Id = supplierId.Value,
+                OrgId = orgId,
+                Name = "S3 supplier",
+                CreatedAt = DateTime.UtcNow,
+            });
+        }
 
         db.Set<S3IngressConfig>().Add(new S3IngressConfig
         {
@@ -267,6 +315,7 @@ public class S3IngressServiceTests
             Region           = "eu-west-1",
             AccessKeyId      = "AKIAFAKE",
             EncryptedSecretKey = encryption.Encrypt("fake-secret"),
+            DefaultSupplierId = supplierId,
             IsEnabled        = isEnabled,
             CreatedAt        = DateTime.UtcNow,
             UpdatedAt        = DateTime.UtcNow,
@@ -349,7 +398,6 @@ public class S3IngressServiceTests
             modelBuilder.Ignore<Organisation>();
             modelBuilder.Ignore<AppUser>();
             modelBuilder.Ignore<Membership>();
-            modelBuilder.Ignore<Supplier>();
             modelBuilder.Ignore<SupplierProfileEntity>();
             modelBuilder.Ignore<PurchaseOrderEntity>();
             modelBuilder.Ignore<PurchaseOrderLineEntity>();
@@ -376,6 +424,11 @@ public class S3IngressServiceTests
             modelBuilder.Ignore<AsnPackageLineEntity>();
 
             modelBuilder.Entity<S3IngressConfig>(b =>
+            {
+                b.HasKey(x => x.Id);
+            });
+
+            modelBuilder.Entity<Supplier>(b =>
             {
                 b.HasKey(x => x.Id);
             });

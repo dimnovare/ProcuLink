@@ -195,7 +195,7 @@ mapping/interpretation. Do not tell agents to use an LLM as the OCR engine.
 - Modify later: `ProcuLink.Infrastructure/Services/Ingress/S3IngressService.cs`
 - Test later: `ProcuLink.Infrastructure.Tests/Services/Ingress/*`
 
-- [ ] **Step 1: Add supplier resolution to SFTP/S3 configs**
+- [x] **Step 1: Add supplier resolution to SFTP/S3 configs**
 
 Add one of these explicit routing rules before enabling customer self-service:
 
@@ -205,12 +205,12 @@ pathPattern -> supplierId
 fileNamePattern -> supplierId
 ```
 
-- [ ] **Step 2: Block unsafe imports**
+- [x] **Step 2: Block unsafe imports**
 
 If no supplier can be resolved, the poller must not call `CreateStubAsync` with
 `Guid.Empty`. It must log the skipped object and keep it retryable.
 
-- [ ] **Step 3: Add tests**
+- [x] **Step 3: Add tests**
 
 Add tests for:
 
@@ -218,6 +218,21 @@ Add tests for:
 - no supplier configured skips safely;
 - already-imported file is idempotently ignored;
 - unsupported extension is skipped.
+
+Implemented with nullable `defaultSupplierId` on `sftp_ingress_configs` and
+`s3_ingress_configs`. Pollers now verify the supplier belongs to the same
+organisation and is not soft-deleted before connecting/listing. If no valid
+supplier exists, the poll returns zero, logs a warning, does not touch SFTP/S3,
+and never calls `CreateStubAsync` with `Guid.Empty`.
+
+Verification:
+
+```powershell
+dotnet test ProcuLink.Infrastructure.Tests\ProcuLink.Infrastructure.Tests.csproj --no-restore --filter "FullyQualifiedName~Ingress"
+dotnet build ProcuLink.slnx --no-restore
+```
+
+Result: 12 ingress tests passed; solution build passed.
 
 ---
 

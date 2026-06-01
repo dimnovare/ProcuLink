@@ -30,6 +30,9 @@ public class SftpIngressConfig
     /// <summary>Remote directory to scan for files (e.g. <c>/incoming</c>).</summary>
     public string RemoteDirectory { get; set; } = string.Empty;
 
+    /// <summary>Supplier used when importing files from this assisted pull source.</summary>
+    public Guid? DefaultSupplierId { get; set; }
+
     /// <summary>Whether polling is active for this config.</summary>
     public bool IsEnabled { get; set; }
 

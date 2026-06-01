@@ -63,6 +63,19 @@ public sealed class SftpIngressService : ISftpIngressService
             return 0;
         }
 
+        var supplierId = await ResolveDefaultSupplierIdAsync(
+            organisationId,
+            config.DefaultSupplierId,
+            ct);
+
+        if (supplierId is null)
+        {
+            _logger.LogWarning(
+                "SFTP ingress: org {OrgId} has no valid default supplier. Skipping poll.",
+                organisationId);
+            return 0;
+        }
+
         var password = _encryption.Decrypt(config.EncryptedPassword);
         if (password is null)
         {
@@ -92,7 +105,7 @@ public sealed class SftpIngressService : ISftpIngressService
 
         using (session)
         {
-            return await PollSessionAsync(organisationId, config.RemoteDirectory, session, ct);
+            return await PollSessionAsync(organisationId, supplierId.Value, config.RemoteDirectory, session, ct);
         }
     }
 
@@ -100,6 +113,7 @@ public sealed class SftpIngressService : ISftpIngressService
 
     private async Task<int> PollSessionAsync(
         Guid organisationId,
+        Guid supplierId,
         string remoteDirectory,
         ISftpSession session,
         CancellationToken ct)
@@ -144,12 +158,9 @@ public sealed class SftpIngressService : ISftpIngressService
             var fileName = Path.GetFileName(remotePath);
             var contentType = ExtensionToContentType(extension);
 
-            // CreateStubAsync needs a supplierId — SFTP ingress is org-scoped (no single supplier).
-            // Use Guid.Empty as a placeholder; downstream parsing / review will resolve it.
-            // TODO: once SftpIngressConfig carries a DefaultSupplierId, pass it here.
             var stubResult = await _orderService.CreateStubAsync(
                 organisationId,
-                Guid.Empty,
+                supplierId,
                 fileBytes,
                 fileName,
                 contentType,
@@ -185,6 +196,27 @@ public sealed class SftpIngressService : ISftpIngressService
             organisationId, imported);
 
         return imported;
+    }
+
+    private async Task<Guid?> ResolveDefaultSupplierIdAsync(
+        Guid organisationId,
+        Guid? defaultSupplierId,
+        CancellationToken ct)
+    {
+        if (defaultSupplierId is null || defaultSupplierId == Guid.Empty)
+        {
+            return null;
+        }
+
+        var exists = await _db.Suppliers
+            .AsNoTracking()
+            .AnyAsync(
+                s => s.OrgId == organisationId
+                  && s.Id == defaultSupplierId
+                  && s.DeletedAt == null,
+                ct);
+
+        return exists ? defaultSupplierId.Value : null;
     }
 
     private static string ComputeSha256Hex(Stream stream)

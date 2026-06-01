@@ -69,6 +69,19 @@ public sealed class S3IngressService : IS3IngressService
             return 0;
         }
 
+        var supplierId = await ResolveDefaultSupplierIdAsync(
+            organisationId,
+            config.DefaultSupplierId,
+            ct);
+
+        if (supplierId is null)
+        {
+            _logger.LogWarning(
+                "S3 ingress: org {OrgId} has no valid default supplier. Skipping poll.",
+                organisationId);
+            return 0;
+        }
+
         var secretKey = _encryption.Decrypt(config.EncryptedSecretKey);
         if (secretKey is null)
         {
@@ -157,13 +170,9 @@ public sealed class S3IngressService : IS3IngressService
                 var fileName = Path.GetFileName(s3Object.Key);
                 var contentType = ExtensionToContentType(extension);
 
-                // ── create order stub ────────────────────────────────────────
-                // CreateStubAsync needs a supplierId. S3 ingress is org-scoped
-                // (no single supplier); Guid.Empty is the same placeholder
-                // convention used by SftpIngressService.
                 var stubResult = await _orderService.CreateStubAsync(
                     organisationId,
-                    Guid.Empty,
+                    supplierId.Value,
                     fileBytes,
                     fileName,
                     contentType,
@@ -221,6 +230,27 @@ public sealed class S3IngressService : IS3IngressService
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
+
+    private async Task<Guid?> ResolveDefaultSupplierIdAsync(
+        Guid organisationId,
+        Guid? defaultSupplierId,
+        CancellationToken ct)
+    {
+        if (defaultSupplierId is null || defaultSupplierId == Guid.Empty)
+        {
+            return null;
+        }
+
+        var exists = await _db.Suppliers
+            .AsNoTracking()
+            .AnyAsync(
+                s => s.OrgId == organisationId
+                  && s.Id == defaultSupplierId
+                  && s.DeletedAt == null,
+                ct);
+
+        return exists ? defaultSupplierId.Value : null;
+    }
 
     private static string ExtensionToContentType(string extension) =>
         extension.ToLowerInvariant() switch

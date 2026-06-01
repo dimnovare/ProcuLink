@@ -448,12 +448,17 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Username).HasColumnName("username").IsRequired();
             b.Property(x => x.EncryptedPassword).HasColumnName("encrypted_password").IsRequired();
             b.Property(x => x.RemoteDirectory).HasColumnName("remote_directory").IsRequired();
+            b.Property(x => x.DefaultSupplierId).HasColumnName("default_supplier_id");
             b.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(false);
             b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasOne<Organisation>()
              .WithMany()
              .HasForeignKey(x => x.OrgId);
+            b.HasOne<Supplier>()
+             .WithMany()
+             .HasForeignKey(x => x.DefaultSupplierId)
+             .OnDelete(DeleteBehavior.SetNull);
         });
 
         // ── imported_sftp_files ────────────────────────────────────────
@@ -481,12 +486,17 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Region).HasColumnName("region").IsRequired();
             b.Property(x => x.AccessKeyId).HasColumnName("access_key_id").IsRequired();
             b.Property(x => x.EncryptedSecretKey).HasColumnName("encrypted_secret_key").IsRequired();
+            b.Property(x => x.DefaultSupplierId).HasColumnName("default_supplier_id");
             b.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(false);
             b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasOne<Organisation>()
              .WithMany()
              .HasForeignKey(x => x.OrgId);
+            b.HasOne<Supplier>()
+             .WithMany()
+             .HasForeignKey(x => x.DefaultSupplierId)
+             .OnDelete(DeleteBehavior.SetNull);
         });
 
         // ── imported_s3_objects ────────────────────────────────────────

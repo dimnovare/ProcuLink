@@ -33,6 +33,9 @@ public class S3IngressConfig
     /// <summary>AES-256-GCM ciphertext of the AWS secret access key (base64, same format as delivery credentials).</summary>
     public string EncryptedSecretKey { get; set; } = string.Empty;
 
+    /// <summary>Supplier used when importing files from this assisted pull source.</summary>
+    public Guid? DefaultSupplierId { get; set; }
+
     /// <summary>Whether polling is active for this configuration.</summary>
     public bool IsEnabled { get; set; }
 

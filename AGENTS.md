@@ -235,6 +235,14 @@ wires arc, every wire uses the same visible gradient stroke, shared ports fan ou
 alert counters stay tethered to their route, and the legend must not overlap
 buyer/supplier pills.
 
+Current execution focus (2026-06-01): make the primary PO path boringly reliable.
+Follow `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
+Tasks 1-5 are implemented: XML parser routing, returned parse line state,
+manual-review E2E, intake/API docs, and SFTP/S3 default-supplier safety. Task 6
+remains: live browser/API happy and error QA. SFTP/S3 polling now requires a
+valid same-org active `default_supplier_id` before import and must never call
+`CreateStubAsync` with `Guid.Empty`.
+
 **Current execution focus (2026-06-01):** make the primary PO path boringly
 reliable: upload -> parse -> review exceptions -> transform -> deliver -> audit.
 Follow `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
