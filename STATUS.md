@@ -12,8 +12,8 @@ Active focus is no longer "add more breadth"; it is **make upload -> parse -> re
 Group J/live deployment hardening has started:
 - **Live edge check:** `https://proculink.eu/` and `https://www.proculink.eu/` return 200 from Vercel; `https://api.proculink.eu/health` returns 200 from Railway.
 - **Deployed defect found:** live `/upload` returned a signed-out protected-route 404 instead of a clean sign-in redirect; live `/sitemap.xml` returned 404.
-- **Frontend fix prepared:** `src/middleware.ts` now explicitly redirects signed-out protected app routes to `/sign-in?redirect_url=...`; `src/app/sitemap.ts` and `public/robots.txt` expose public marketing/help pages and disallow protected workspace paths.
-- **Local production verification:** `bun run build` passed; local production server returned `/upload` as `307 -> /sign-in?redirect_url=%2Fupload`, `/sitemap.xml` as 200 XML, and `robots.txt` with the sitemap URL.
+- **Frontend fix pushed + verified live:** `src/middleware.ts` now explicitly redirects signed-out protected app routes to `/sign-in?redirect_url=...`; `src/app/sitemap.ts` and `public/robots.txt` expose public marketing/help pages and disallow protected workspace paths.
+- **Verification:** `bun run build` passed; local production server returned `/upload` as `307 -> /sign-in?redirect_url=%2Fupload`, `/sitemap.xml` as 200 XML, and `robots.txt` with the sitemap URL. After push, live `https://proculink.eu/upload` returns 307 and live `https://proculink.eu/sitemap.xml` returns 200 XML.
 - **Still not complete:** the deployed signed-in PO path still needs a real Clerk production session/test user and production-like Railway env verification before Group J can close.
 
 Landed in this pass:
