@@ -252,7 +252,7 @@ public sealed class OrdersController : ControllerBase
         var entity = result.Value!;
         string? errorMessage = null;
 
-        if (entity.Status is "failed" or "transform_failed" or "delivery_failed")
+        if (entity.Status is "failed" or "transform_failed" or "delivery_failed" or "rejected_by_supplier")
         {
             var payload = await _db.AuditEvents
                 .AsNoTracking()
@@ -283,6 +283,19 @@ public sealed class OrdersController : ControllerBase
                     .Where(a => a.OrderId == id && a.OrgId == _tenant.OrganisationId)
                     .OrderByDescending(a => a.AttemptedAt)
                     .Select(a => a.ErrorMessage)
+                    .FirstOrDefaultAsync(ct);
+            }
+
+            if (errorMessage is null && entity.Status == "rejected_by_supplier")
+            {
+                errorMessage = await _db.DeliveryAttempts
+                    .AsNoTracking()
+                    .Where(a => a.OrderId == id && a.OrgId == _tenant.OrganisationId)
+                    .OrderByDescending(a => a.AttemptedAt)
+                    .Select(a =>
+                        a.RejectionReason ??
+                        a.ResponseBody ??
+                        a.ErrorMessage)
                     .FirstOrDefaultAsync(ct);
             }
         }

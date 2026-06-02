@@ -251,15 +251,18 @@ source. All UI/UX and design decisions run through the local design system,
 > invoices/ASN/PEPPOL or add new channels until the first PO path has repeatable
 > live happy/error QA. Tasks 1-5 are implemented: XML parser routing, returned
 > line state, manual-review E2E, intake docs, and SFTP/S3 default-supplier
-> safety. Task 6 is in progress but the primary browser path is now verified:
+> safety. Task 6 is closed locally. The primary browser path is verified:
 > `PLAYWRIGHT_API_URL=http://localhost:5223 bun run test:e2e:live -- tests/e2e/live-po-loop.spec.ts`
 > drives CSV upload -> `/upload/preview/<orderId>` -> manual supplier-code entry
 > -> save mapping -> `/inbox/<orderId>` -> send/transform/deliver -> missing
 > delivery-config failure panel -> retry feedback. Direct API + Worker smoke also
 > verifies auditable `delivery_attempts`; transform returns 409 while parsing, and
 > delivery failures surface the latest attempt error on `GET /api/orders/{id}`.
-> Remaining Task 6 work: unsupported-format UI, scanned-PDF/OCR-disabled UI,
-> no-supplier-selected UI, and a real supplier rejection response state.
+> Failure-state browser QA is verified by
+> `PLAYWRIGHT_API_URL=http://localhost:5223 bun run test:e2e:live -- tests/e2e/live-po-failure-states.spec.ts`:
+> no supplier available, unsupported file format, scanned/textless PDF with OCR
+> disabled, and supplier HTTP 4xx rejection. Next gate: repeat the same
+> happy/error path against Railway/Vercel before broadening engines or channels.
 >
 > **FREEZE until there are paying customers** (real engineering, but none of it wins customer #1):
 > Zapier/Make layer, invoice/ASN/DESADV, extra EDI formats, cross-org mapping library, RBAC/SCIM,

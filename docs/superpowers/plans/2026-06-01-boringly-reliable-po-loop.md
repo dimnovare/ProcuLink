@@ -296,11 +296,13 @@ Verified:
 $env:PLAYWRIGHT_API_URL='http://localhost:5223'; bun run test:e2e:live -- tests/e2e/live-po-loop.spec.ts
 ```
 
-Remaining delivery/rejection work belongs to Step 2: unsupported-format UI,
-scanned-PDF/OCR-disabled UI, no-supplier-selected UI, and a real supplier
-rejection response state.
+Step 2 is now covered by a live-only Playwright guardrail:
+`project-proculink/tests/e2e/live-po-failure-states.spec.ts`. The test verifies:
+no-supplier upload blocking, unsupported-format guidance, scanned/textless PDF
+parse-failure guidance when OCR is disabled, and a supplier HTTP 4xx rejection
+response surfaced in the review UI.
 
-- [ ] **Step 2: Run failure cases**
+- [x] **Step 2: Run failure cases**
 
 Confirm the UI gives specific next actions for:
 
@@ -309,6 +311,19 @@ Confirm the UI gives specific next actions for:
 - no supplier selected;
 - supplier delivery config missing;
 - supplier rejection response.
+
+Verified 2026-06-02:
+
+```powershell
+$env:PLAYWRIGHT_API_URL='http://localhost:5223'; bun run test:e2e:live -- tests/e2e/live-po-failure-states.spec.ts
+$env:PLAYWRIGHT_API_URL='http://localhost:5223'; bun run test:e2e:live -- tests/e2e/live-po-loop.spec.ts
+bun run build
+dotnet build ProcuLink.slnx --no-restore
+```
+
+Result: 4/4 failure-state live tests passed, 1/1 primary live PO-loop test
+passed, frontend production build passed, backend solution build passed with
+only existing nullable warnings in test projects.
 
 ---
 

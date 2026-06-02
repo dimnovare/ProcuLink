@@ -236,9 +236,9 @@ alert counters stay tethered to their route, and the legend must not overlap
 buyer/supplier pills.
 
 2026-06-02 PO reliability update: follow
-`docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md` until Task 6 is
-closed. Tasks 1-5 are implemented and pushed. Task 6 is in progress, with the
-primary browser path now verified by
+`docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`. Tasks 1-6 are
+implemented locally and Task 6 live browser happy/error QA is green. The primary
+browser path is verified by
 `PLAYWRIGHT_API_URL=http://localhost:5223 bun run test:e2e:live -- tests/e2e/live-po-loop.spec.ts`:
 CSV upload -> `/upload/preview/<orderId>` -> manual supplier-code entry ->
 save mapping -> `/inbox/<orderId>` -> send/transform/deliver -> missing-config
@@ -248,9 +248,10 @@ requires a valid 32-byte base64 `Delivery__EncryptionKey` for endpoints that
 resolve delivery config services. `CsvOrderParser` now handles common aliases
 (`po_number`, `PO Number`, `po`, `line_no`, `qty`, `unit_price`, `sku`,
 `buyer_code`). Transform now returns 409 while parsing, and delivery failures
-surface the latest attempt error on `GET /api/orders/{id}`. Remaining Task 6
-work: unsupported-format UI, scanned-PDF/OCR-disabled UI, no-supplier-selected
-UI, and a real supplier rejection response state.
+surface the latest attempt error on `GET /api/orders/{id}`. Failure-state browser
+QA is verified by `tests/e2e/live-po-failure-states.spec.ts`: no-supplier upload
+blocking, unsupported-format guidance, OCR-disabled scanned/textless PDF
+parse-failure routing, and supplier HTTP 4xx rejection copy.
 
 Current execution focus (2026-06-01): make the primary PO path boringly reliable.
 Follow `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
@@ -260,15 +261,11 @@ remains: live browser/API happy and error QA. SFTP/S3 polling now requires a
 valid same-org active `default_supplier_id` before import and must never call
 `CreateStubAsync` with `Guid.Empty`.
 
-**Current execution focus (2026-06-02):** make the primary PO path boringly
-reliable: upload -> parse -> review exceptions -> transform -> deliver -> audit.
-Follow `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
-Do not broaden invoices/ASN/PEPPOL or add new channels until this path has
-repeatable live happy/error QA. Intake/API documentation now lives in
-`docs/integrations/ORDER_APIS.md`. The API state machine is now verified through
-missing-config delivery failure, and browser click-through QA is verified through
-manual retry feedback. Finish the remaining failure/rejection states before
-calling Task 6 closed.
+**Current execution focus (2026-06-02):** Task 6 is closed locally for the
+primary PO path: upload -> parse -> review exceptions -> transform -> deliver
+-> audit. Do not broaden invoices/ASN/PEPPOL or add new channels until Group J
+repeats the same happy/error path against Railway/Vercel with production-like
+env vars. Intake/API documentation lives in `docs/integrations/ORDER_APIS.md`.
 
 ---
 
