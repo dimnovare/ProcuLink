@@ -241,7 +241,7 @@ Result: 12 ingress tests passed; solution build passed.
 **Files:**
 - Modify later in frontend repo as needed.
 
-- [ ] **Step 1: Run a real upload from browser to API**
+- [x] **Step 1: Run a real upload from browser to API**
 
 Use a CSV sample with one mapped line and one unmapped line. Confirm:
 
@@ -282,10 +282,23 @@ parsing finishes before transforming." Mapping preview now returns `orderStatus`
 and `resolvedSupplierCode`, and the preview UI polls while parsing instead of
 showing an empty table.
 
-Still required before checking off Step 1: run the same path with browser clicks
-from `/upload/preview/<orderId>` through explicit unresolved-line review, save
-mapping, transform, delivery-config-missing UI, manual delivery/retry UI, and
-auditable delivery attempt/rejection states.
+Progress 2026-06-02 (browser): added live-only Playwright coverage in
+`project-proculink/tests/e2e/live-po-loop.spec.ts`. With local API + Worker
+running and `PLAYWRIGHT_API_URL=http://localhost:5223`, the browser now verifies:
+CSV upload -> `/upload/preview/<orderId>` -> explicit unresolved-line review ->
+manual supplier-code entry -> save mapping -> `/inbox/<orderId>` -> send to
+supplier -> transform/delivery -> delivery-config-missing failure panel -> retry
+button keeps the clear missing-config guidance visible.
+
+Verified:
+
+```powershell
+$env:PLAYWRIGHT_API_URL='http://localhost:5223'; bun run test:e2e:live -- tests/e2e/live-po-loop.spec.ts
+```
+
+Remaining delivery/rejection work belongs to Step 2: unsupported-format UI,
+scanned-PDF/OCR-disabled UI, no-supplier-selected UI, and a real supplier
+rejection response state.
 
 - [ ] **Step 2: Run failure cases**
 

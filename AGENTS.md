@@ -237,19 +237,20 @@ buyer/supplier pills.
 
 2026-06-02 PO reliability update: follow
 `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md` until Task 6 is
-closed. Tasks 1-5 are implemented and pushed. Task 6 is in progress: local
-frontend/API upload smoke reaches `/upload/preview/<orderId>`, and direct local
-API + Worker smoke now verifies upload -> parse (`pending_review`) -> mapping
-preview with unresolved lines -> resolve/save mappings -> transform artifact ->
-missing-config `delivery_failed` with auditable delivery attempts. Backend QA
-auth is development-only and also requires a valid 32-byte base64
-`Delivery__EncryptionKey` for endpoints that resolve delivery config services.
-`CsvOrderParser` now handles common aliases (`po_number`, `PO Number`, `po`,
-`line_no`, `qty`, `unit_price`, `sku`, `buyer_code`). Transform now returns 409
-while parsing, and delivery failures surface the latest attempt error on
-`GET /api/orders/{id}`. Next: run the same path with browser clicks through
-review/save/transform/delivery-config-missing UI, manual delivery/retry UI, and
-supplier rejection response states.
+closed. Tasks 1-5 are implemented and pushed. Task 6 is in progress, with the
+primary browser path now verified by
+`PLAYWRIGHT_API_URL=http://localhost:5223 bun run test:e2e:live -- tests/e2e/live-po-loop.spec.ts`:
+CSV upload -> `/upload/preview/<orderId>` -> manual supplier-code entry ->
+save mapping -> `/inbox/<orderId>` -> send/transform/deliver -> missing-config
+failure panel -> retry feedback. Direct local API + Worker smoke also verifies
+auditable `delivery_attempts`. Backend QA auth is development-only and also
+requires a valid 32-byte base64 `Delivery__EncryptionKey` for endpoints that
+resolve delivery config services. `CsvOrderParser` now handles common aliases
+(`po_number`, `PO Number`, `po`, `line_no`, `qty`, `unit_price`, `sku`,
+`buyer_code`). Transform now returns 409 while parsing, and delivery failures
+surface the latest attempt error on `GET /api/orders/{id}`. Remaining Task 6
+work: unsupported-format UI, scanned-PDF/OCR-disabled UI, no-supplier-selected
+UI, and a real supplier rejection response state.
 
 Current execution focus (2026-06-01): make the primary PO path boringly reliable.
 Follow `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
@@ -265,7 +266,9 @@ Follow `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
 Do not broaden invoices/ASN/PEPPOL or add new channels until this path has
 repeatable live happy/error QA. Intake/API documentation now lives in
 `docs/integrations/ORDER_APIS.md`. The API state machine is now verified through
-missing-config delivery failure; browser click-through QA is still the next gate.
+missing-config delivery failure, and browser click-through QA is verified through
+manual retry feedback. Finish the remaining failure/rejection states before
+calling Task 6 closed.
 
 ---
 

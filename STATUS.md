@@ -4,7 +4,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-06-02 — PO reliability pass in progress · live API path verified through delivery failure**
+## Where we are: **2026-06-02 — PO reliability pass in progress · live browser path verified through delivery failure/retry**
 
 Active focus is no longer "add more breadth"; it is **make upload -> parse -> review -> transform -> deliver boringly reliable** for the buyer/procurement PO workflow. Current plan:
 `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
@@ -23,6 +23,7 @@ Landed in this pass:
 - **Mapping preview state clarified:** `GET /api/orders/{id}/mapping-preview` now returns `orderStatus` and `resolvedSupplierCode`; the preview page polls while parsing and shows an explicit no-lines state instead of an empty mapping table.
 - **Missing delivery config is now auditable:** delivery without supplier config records failed `delivery_attempts` with channel `missing_config`, marks the order `delivery_failed`, and `GET /api/orders/{id}` surfaces the latest attempt error as `errorMessage`.
 - **Review send action is real:** the review page's primary send action now calls transform, waits for `ready_to_deliver`, triggers delivery, and surfaces delivered/failed/rejected states rather than only advancing local UI state.
+- **Live browser PO loop guardrail added:** `tests/e2e/live-po-loop.spec.ts` runs only with `PLAYWRIGHT_LIVE=1` and drives the real UI through CSV upload, mapping preview, manual supplier-code entry, save/continue to review, send/transform/deliver, missing delivery-config failure panel, and retry feedback.
 
 Verification:
 - `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ParseStoredFileAsync_UblXml"` ✅ 1 passed.
@@ -35,16 +36,18 @@ Verification:
 - `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~OrdersMappingPreviewTests"` ✅ 3 passed.
 - `dotnet test ProcuLink.Api.Tests\ProcuLink.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~OrdersControllerErrorMessageTests"` ✅ 3 passed.
 - `bun run test:e2e -- tests/e2e/magic-mapping-preview.spec.ts` ✅ 7 passed.
+- `PLAYWRIGHT_API_URL=http://localhost:5223 bun run test:e2e:live -- tests/e2e/live-po-loop.spec.ts` ✅ 1 passed.
 - `dotnet build ProcuLink.slnx --no-restore` ✅ 0 warnings / 0 errors.
 - `bun run build` ✅ production build completed.
 - Local API + Worker live smoke ✅ upload -> parse (`pending_review`) -> mapping preview (3 unresolved lines) -> resolve/save mappings (`ready`) -> transform artifact -> missing-config `delivery_failed` with auditable delivery attempts.
 - Local API race smoke ✅ immediate transform on a still-parsing order returns `409` with "Order is still parsing. Wait until parsing finishes before transforming."
+- Local browser live smoke ✅ upload page -> `/upload/preview/<orderId>` -> explicit unresolved-line review -> save mapping -> `/inbox/<orderId>` -> send to supplier -> missing-config failure panel -> retry button preserves clear failure guidance.
 
 Important product/implementation guidance:
 - Hosted inbound email webhook and inbound REST API have backend support, but should be offered as assisted setup until customer-facing setup docs/screens are complete.
 - SFTP/S3 polling backend exists and now requires a valid configured default supplier before import. It remains assisted/internal until customer-facing setup/test-fire UX exists.
 - Scanned PDF OCR is possible through `IDocumentOcrService` / Azure Document Intelligence. Use OCR provider extraction first; use AI for interpretation, mapping suggestions, confidence, and review. Do not treat the LLM itself as the OCR engine.
-- Task 6 is not fully closed yet. Next live QA should use the browser, not only direct API, to click from `/upload/preview/<orderId>` through explicit unresolved-line review, save mapping, transform, delivery-config-missing UI, manual delivery/retry UI, and supplier rejection response states.
+- Task 6 is mostly through the primary browser path. Remaining live QA before closing it completely: unsupported-format UI, scanned-PDF/OCR-disabled UI, no-supplier-selected UI, and a real supplier rejection response state (configured endpoint/test harness), plus any audit-log assertions wanted for those failure cases.
 
 ---
 
