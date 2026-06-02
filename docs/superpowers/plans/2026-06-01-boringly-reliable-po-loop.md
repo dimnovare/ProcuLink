@@ -267,8 +267,25 @@ dotnet test ProcuLink.Transform.Tests\ProcuLink.Transform.Tests.csproj --no-rest
 $env:PLAYWRIGHT_API_URL='http://localhost:5223'; bun run test:e2e:live -- tests/e2e/magic-mapping-preview.spec.ts -g "upload a file and land"
 ```
 
-Still required before checking off Step 1: continue from the preview screen
-through unresolved-line review, save mapping, transform, delivery, and audit.
+Progress 2026-06-02: direct live API smoke now verifies the rest of the state
+machine with local API + Worker running. A fresh CSV upload parsed to
+`pending_review`, mapping preview returned three unresolved lines, resolving all
+lines with `saveMappings=true` moved the order to `ready`, transform generated
+an XML artifact, and missing supplier delivery config moved the order to
+`delivery_failed` with auditable `delivery_attempts` (`channel=missing_config`).
+`GET /api/orders/{id}` now surfaces the latest delivery-attempt error in
+`errorMessage`.
+
+Also fixed the parsing race: an immediate transform request against a still
+`parsing` order now returns HTTP `409` with "Order is still parsing. Wait until
+parsing finishes before transforming." Mapping preview now returns `orderStatus`
+and `resolvedSupplierCode`, and the preview UI polls while parsing instead of
+showing an empty table.
+
+Still required before checking off Step 1: run the same path with browser clicks
+from `/upload/preview/<orderId>` through explicit unresolved-line review, save
+mapping, transform, delivery-config-missing UI, manual delivery/retry UI, and
+auditable delivery attempt/rejection states.
 
 - [ ] **Step 2: Run failure cases**
 

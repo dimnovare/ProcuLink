@@ -7,6 +7,7 @@ namespace ProcuLink.Api.Contracts;
 /// </summary>
 public record MappingPreviewDto(
     string OrderId,
+    string OrderStatus,
     string? SourceFormat,
     double? DetectedConfidence,
     List<MappingPreviewLineDto> Lines
@@ -22,6 +23,8 @@ public record MappingPreviewLineDto(
     /// <summary>Always "supplierItemCode" — the canonical field this line maps into.</summary>
     string CanonicalField,
     string? BuyerItemCode,
+    /// <summary>Resolved supplier code already saved on the order line; null when the line still needs review.</summary>
+    string? ResolvedSupplierCode,
     /// <summary>AI-suggested supplier code; null when no suggestion exists.</summary>
     string? AiSuggestedSupplierCode,
     /// <summary>AI confidence in [0,1]; null when no suggestion exists. Sourced directly from the stored entity — never fabricated.</summary>

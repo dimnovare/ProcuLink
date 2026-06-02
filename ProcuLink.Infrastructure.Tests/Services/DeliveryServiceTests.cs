@@ -70,7 +70,7 @@ public class DeliveryServiceTests
     }
 
     [Fact]
-    public async Task DispatchArtifactAsync_NoConfig_NoOpsAndLeavesReadyToDeliver()
+    public async Task DispatchArtifactAsync_NoConfig_WritesAttemptAndMarksDeliveryFailed()
     {
         await using var db = CreateDb();
         var ids = await SeedOrderAsync(db);
@@ -78,9 +78,13 @@ public class DeliveryServiceTests
 
         var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
 
-        result.Success.Should().BeTrue();
-        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.ReadyToDeliver);
-        (await db.DeliveryAttempts.CountAsync()).Should().Be(0);
+        result.Success.Should().BeFalse();
+        result.ErrorMessage.Should().Contain("delivery config");
+        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.DeliveryFailed);
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.Status.Should().Be("failed");
+        attempt.Channel.Should().Be("missing_config");
+        attempt.ErrorMessage.Should().Contain("delivery config");
     }
 
     [Fact]

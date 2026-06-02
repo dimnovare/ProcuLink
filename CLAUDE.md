@@ -245,15 +245,20 @@ source. All UI/UX and design decisions run through the local design system,
 > 6. **Extend the pilot 14 → 60 days**, then **put one real Markit PO in front of one real supplier
 >    before writing another line of feature code.**
 >
-> **Current execution focus (2026-06-01):** make the primary PO path boringly reliable:
+> **Current execution focus (2026-06-02):** make the primary PO path boringly reliable:
 > upload -> parse -> review exceptions -> transform -> deliver -> audit. Follow
 > `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`. Do not broaden
 > invoices/ASN/PEPPOL or add new channels until the first PO path has repeatable
 > live happy/error QA. Tasks 1-5 are implemented: XML parser routing, returned
 > line state, manual-review E2E, intake docs, and SFTP/S3 default-supplier
-> safety. Task 6 is in progress: local live frontend/API upload smoke reaches
-> `/upload/preview/<orderId>` with QA auth bypass, one seeded supplier, and a real
-> CSV. Continue with review -> transform -> delivery happy/error QA before broadening.
+> safety. Task 6 is in progress: local live API + Worker smoke now verifies
+> upload -> parse (`pending_review`) -> mapping preview with unresolved lines ->
+> resolve/save mappings -> transform artifact -> missing-config `delivery_failed`
+> with auditable delivery attempts. Transform now returns 409 while parsing, and
+> delivery failures surface the latest attempt error on `GET /api/orders/{id}`.
+> Next: run the same path with browser clicks from `/upload/preview/<orderId>`
+> through review/save/transform/delivery-config-missing UI, manual delivery/retry
+> UI, and supplier rejection response states.
 >
 > **FREEZE until there are paying customers** (real engineering, but none of it wins customer #1):
 > Zapier/Make layer, invoice/ASN/DESADV, extra EDI formats, cross-org mapping library, RBAC/SCIM,

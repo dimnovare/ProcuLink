@@ -110,6 +110,7 @@ public class OrdersMappingPreviewTests
         var dto = ok.Value.Should().BeOfType<MappingPreviewDto>().Subject;
 
         dto.OrderId.Should().Be(orderId.ToString());
+        dto.OrderStatus.Should().Be("pending_review");
         dto.SourceFormat.Should().Be("csv");
         dto.DetectedConfidence.Should().BeApproximately(0.85, 0.001);
         dto.Lines.Should().HaveCount(1);
@@ -118,6 +119,7 @@ public class OrdersMappingPreviewTests
         line.LineNumber.Should().Be(1);
         line.CanonicalField.Should().Be("supplierItemCode");
         line.BuyerItemCode.Should().Be("BUYER-SKU-001");
+        line.ResolvedSupplierCode.Should().BeNull();
         line.AiSuggestedSupplierCode.Should().Be("SUPP-A1");
         line.Confidence.Should().BeApproximately(0.92, 0.001);
         line.Provenance.Should().Be("mapping_library");
@@ -213,6 +215,7 @@ public class OrdersMappingPreviewTests
         dto.Lines.Should().HaveCount(3);
 
         dto.Lines[0].Status.Should().Be("resolved");
+        dto.Lines[0].ResolvedSupplierCode.Should().Be("S-001");
         dto.Lines[0].AiSuggestedSupplierCode.Should().BeNull();
         dto.Lines[0].Confidence.Should().BeNull();
 

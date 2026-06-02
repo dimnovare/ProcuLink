@@ -96,7 +96,7 @@ public sealed class DeliveryService : IDeliveryService
             .FirstOrDefaultAsync(ct);
 
         if (config is null)
-            return new DeliveryResult(true, null);
+            return await FailMissingConfigAsync(order, artifact, reconcileFailedAttempt, ct);
 
         if (requireAutoDeliver && !config.AutoDeliver)
             return new DeliveryResult(true, null);
@@ -197,6 +197,54 @@ public sealed class DeliveryService : IDeliveryService
     {
         var result = new DeliveryResult(false, error);
         await PersistAttemptAsync(order, artifact, config, result, ct, reconcile: reconcile);
+        return result;
+    }
+
+    private async Task<DeliveryResult> FailMissingConfigAsync(
+        PurchaseOrderEntity order,
+        OutboundArtifact artifact,
+        bool reconcile,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        const string error = "Supplier delivery config is missing. Add a delivery endpoint before sending this order.";
+        var result = new DeliveryResult(false, error);
+
+        order.Status = OrderStatusConstants.DeliveryFailed;
+        order.UpdatedAt = now;
+
+        var attemptNumber = (await _db.DeliveryAttempts
+            .CountAsync(a => a.OrderId == order.Id && a.OrgId == order.OrgId, ct)) + 1;
+
+        _db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            OrgId = order.OrgId,
+            Channel = "missing_config",
+            Destination = "supplier delivery config",
+            Status = "failed",
+            AttemptNumber = attemptNumber,
+            AttemptedAt = now,
+            ErrorMessage = error,
+        });
+
+        await _db.SaveChangesAsync(ct);
+
+        if (reconcile)
+            await SafeReconcileExceptionsAsync(order.OrgId, order.Id, ct);
+
+        _ = _integrationTrigger.EnqueueAsync(
+            order.OrgId,
+            "order.failed",
+            new { order_id = order.Id, failed_at = now, error },
+            ct);
+
+        _logger.LogWarning(
+            "Delivery attempt for order {OrderId}, artifact {ArtifactId} failed: missing supplier delivery config.",
+            order.Id,
+            artifact.Id);
+
         return result;
     }
 

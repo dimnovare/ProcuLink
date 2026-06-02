@@ -235,17 +235,21 @@ wires arc, every wire uses the same visible gradient stroke, shared ports fan ou
 alert counters stay tethered to their route, and the legend must not overlap
 buyer/supplier pills.
 
-2026-06-01 PO reliability update: follow
+2026-06-02 PO reliability update: follow
 `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md` until Task 6 is
 closed. Tasks 1-5 are implemented and pushed. Task 6 is in progress: local
-frontend/API upload smoke reaches `/upload/preview/<orderId>` with
-`PROCULINK_QA_BYPASS_AUTH=true`, one seeded supplier, and a real CSV. Backend
-QA auth is development-only and also requires a valid 32-byte base64
+frontend/API upload smoke reaches `/upload/preview/<orderId>`, and direct local
+API + Worker smoke now verifies upload -> parse (`pending_review`) -> mapping
+preview with unresolved lines -> resolve/save mappings -> transform artifact ->
+missing-config `delivery_failed` with auditable delivery attempts. Backend QA
+auth is development-only and also requires a valid 32-byte base64
 `Delivery__EncryptionKey` for endpoints that resolve delivery config services.
 `CsvOrderParser` now handles common aliases (`po_number`, `PO Number`, `po`,
-`line_no`, `qty`, `unit_price`, `sku`, `buyer_code`). Next: live review ->
-save mapping -> transform -> delivery-config-missing error -> manual delivery
--> delivery audit/rejection QA.
+`line_no`, `qty`, `unit_price`, `sku`, `buyer_code`). Transform now returns 409
+while parsing, and delivery failures surface the latest attempt error on
+`GET /api/orders/{id}`. Next: run the same path with browser clicks through
+review/save/transform/delivery-config-missing UI, manual delivery/retry UI, and
+supplier rejection response states.
 
 Current execution focus (2026-06-01): make the primary PO path boringly reliable.
 Follow `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
@@ -255,12 +259,13 @@ remains: live browser/API happy and error QA. SFTP/S3 polling now requires a
 valid same-org active `default_supplier_id` before import and must never call
 `CreateStubAsync` with `Guid.Empty`.
 
-**Current execution focus (2026-06-01):** make the primary PO path boringly
+**Current execution focus (2026-06-02):** make the primary PO path boringly
 reliable: upload -> parse -> review exceptions -> transform -> deliver -> audit.
 Follow `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
 Do not broaden invoices/ASN/PEPPOL or add new channels until this path has
 repeatable live happy/error QA. Intake/API documentation now lives in
-`docs/integrations/ORDER_APIS.md`.
+`docs/integrations/ORDER_APIS.md`. The API state machine is now verified through
+missing-config delivery failure; browser click-through QA is still the next gate.
 
 ---
 

@@ -275,6 +275,16 @@ public sealed class OrdersController : ControllerBase
                 }
                 catch { /* malformed payload — ignore */ }
             }
+
+            if (errorMessage is null && entity.Status == "delivery_failed")
+            {
+                errorMessage = await _db.DeliveryAttempts
+                    .AsNoTracking()
+                    .Where(a => a.OrderId == id && a.OrgId == _tenant.OrganisationId)
+                    .OrderByDescending(a => a.AttemptedAt)
+                    .Select(a => a.ErrorMessage)
+                    .FirstOrDefaultAsync(ct);
+            }
         }
 
         return Ok(MapToDto(entity, errorMessage));
@@ -349,6 +359,7 @@ public sealed class OrdersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
     public async Task<IActionResult> Transform(
         Guid id,
@@ -377,6 +388,18 @@ public sealed class OrdersController : ControllerBase
             return NotFound();
 
         var order = getResult.Value!;
+        if (order.Status == OrderStatusConstants.Parsing || order.Lines.Count == 0)
+            return Conflict(new
+            {
+                error = "Order is still parsing. Wait until parsing finishes before transforming."
+            });
+
+        if (order.Status == OrderStatusConstants.Failed)
+            return BadRequest(new
+            {
+                error = "Order parsing failed. Upload a corrected file before transforming."
+            });
+
         var unresolvedLines = order.Lines.Where(l => l.NeedsReview).Select(l => l.LineNumber).ToList();
         if (unresolvedLines.Count > 0)
             return UnprocessableEntity(new
@@ -454,6 +477,7 @@ public sealed class OrdersController : ControllerBase
             .Select(o => new
             {
                 o.Id,
+                o.Status,
                 o.SourceFileKey,
             })
             .FirstOrDefaultAsync(ct);
@@ -527,6 +551,7 @@ public sealed class OrdersController : ControllerBase
                 SourceFields:            sourceFields,
                 CanonicalField:          "supplierItemCode",
                 BuyerItemCode:           l.BuyerItemCode,
+                ResolvedSupplierCode:    l.SupplierItemCode,
                 AiSuggestedSupplierCode: l.AiSuggestedSupplierItemCode,
                 Confidence:              l.AiSuggestionConfidence.HasValue
                                              ? (double?)l.AiSuggestionConfidence.Value
@@ -539,6 +564,7 @@ public sealed class OrdersController : ControllerBase
 
         var dto = new MappingPreviewDto(
             OrderId:            order.Id.ToString(),
+            OrderStatus:        order.Status,
             SourceFormat:       sourceFormat,
             DetectedConfidence: detectedConfidence,
             Lines:              lineDtos

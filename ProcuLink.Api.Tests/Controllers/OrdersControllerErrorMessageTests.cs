@@ -83,6 +83,70 @@ public class OrdersControllerErrorMessageTests
     }
 
     [Fact]
+    public async Task Get_DeliveryFailedOrderWithLatestAttempt_ReturnsAttemptErrorMessage()
+    {
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        const string attemptMessage =
+            "Supplier delivery config is missing. Add a delivery endpoint before sending this order.";
+
+        await using var db = NewDb();
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id            = Guid.NewGuid(),
+            OrgId         = orgId,
+            OrderId       = orderId,
+            AttemptNumber = 1,
+            Channel       = "missing_config",
+            Destination   = "supplier delivery config",
+            Status        = "failed",
+            AttemptedAt   = DateTime.UtcNow,
+            ErrorMessage  = attemptMessage,
+        });
+        await db.SaveChangesAsync();
+
+        var failedEntity = new PurchaseOrderEntity
+        {
+            Id                = orderId,
+            OrgId             = orgId,
+            SupplierId        = Guid.NewGuid(),
+            PoNumber          = "PO-DELIVERY-FAIL",
+            OrderDate         = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency          = "EUR",
+            Status            = "delivery_failed",
+            CreatedAt         = DateTime.UtcNow,
+            UpdatedAt         = DateTime.UtcNow,
+            Lines             = new List<PurchaseOrderLineEntity>(),
+            OutboundArtifacts = new List<OutboundArtifact>(),
+        };
+
+        var ordersSvc = new Mock<IOrderService>();
+        ordersSvc
+            .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(failedEntity));
+
+        var tenant = new Mock<ICurrentTenantService>();
+        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
+
+        var controller = new OrdersController(
+            ordersSvc.Object,
+            tenant.Object,
+            new Mock<IBackgroundJobClient>().Object,
+            db,
+            NullLogger<OrdersController>.Instance,
+            new Mock<IBillingService>().Object,
+            new Mock<IIdempotencyService>().Object,
+            new Mock<IOrderExceptionService>().Object,
+            new Mock<ISupplierAcceptanceService>().Object);
+
+        var result = await controller.Get(orderId, CancellationToken.None);
+
+        var ok  = Assert.IsType<OkObjectResult>(result);
+        var dto = Assert.IsType<OrderDto>(ok.Value);
+        Assert.Equal(attemptMessage, dto.ErrorMessage);
+    }
+
+    [Fact]
     public async Task Get_ReadyOrder_ReturnsNullErrorMessage()
     {
         var orgId   = Guid.NewGuid();
