@@ -9,6 +9,13 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 Active focus is no longer "add more breadth"; it is **make upload -> parse -> review -> transform -> deliver boringly reliable** for the buyer/procurement PO workflow. Current plan:
 `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
 
+Group J/live deployment hardening has started:
+- **Live edge check:** `https://proculink.eu/` and `https://www.proculink.eu/` return 200 from Vercel; `https://api.proculink.eu/health` returns 200 from Railway.
+- **Deployed defect found:** live `/upload` returned a signed-out protected-route 404 instead of a clean sign-in redirect; live `/sitemap.xml` returned 404.
+- **Frontend fix prepared:** `src/middleware.ts` now explicitly redirects signed-out protected app routes to `/sign-in?redirect_url=...`; `src/app/sitemap.ts` and `public/robots.txt` expose public marketing/help pages and disallow protected workspace paths.
+- **Local production verification:** `bun run build` passed; local production server returned `/upload` as `307 -> /sign-in?redirect_url=%2Fupload`, `/sitemap.xml` as 200 XML, and `robots.txt` with the sitemap URL.
+- **Still not complete:** the deployed signed-in PO path still needs a real Clerk production session/test user and production-like Railway env verification before Group J can close.
+
 Landed in this pass:
 - **Async XML parser routing fixed:** `OrderService.CreateStubAsync` and `ParseStoredFileAsync` now use content-aware parser selection for ambiguous files like `.xml`, so UBL/Peppol XML is not accidentally sent through the cXML parser because of DI registration order.
 - **Returned parse entity fixed:** `ParseStoredFileAsync` no longer duplicates newly parsed lines in the returned tracked entity after EF relationship fixup.
