@@ -27,6 +27,48 @@ using ProcuLink.Worker.Jobs;
 
 var builder = Host.CreateApplicationBuilder(args);
 
+// ── R2 clock-skew diagnostic + correction ──────────────────────────────────
+// R2 returns SignatureDoesNotMatch (not RequestTimeTooSkewed) when the request
+// timestamp is outside tolerance, which defeats the AWS SDK's automatic clock-skew
+// correction (it only triggers on RequestTimeTooSkewed). If this container's clock
+// is skewed, every SigV4 request to R2 fails. We probe R2's Date response header
+// once at startup, log the offset, and apply a global manual correction when the
+// skew is material so all subsequent R2 signing uses the corrected time.
+try
+{
+    var r2Endpoint = builder.Configuration["Storage:R2Endpoint"];
+    if (!string.IsNullOrWhiteSpace(r2Endpoint))
+    {
+        using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        using var probeReq = new HttpRequestMessage(HttpMethod.Head, r2Endpoint);
+        var probeResp = probe.Send(probeReq);
+        var serverDate = probeResp.Headers.Date;
+        var localNow = DateTime.UtcNow;
+        if (serverDate.HasValue)
+        {
+            var offset = serverDate.Value.UtcDateTime - localNow;
+            Console.WriteLine($"[R2-CLOCK] workerUtcNow={localNow:O} r2ServerDate={serverDate.Value.UtcDateTime:O} offsetSeconds={offset.TotalSeconds:F1}");
+            if (Math.Abs(offset.TotalSeconds) > 30)
+            {
+                Amazon.AWSConfigs.ManualClockCorrection = offset;
+                Console.WriteLine($"[R2-CLOCK] applied ManualClockCorrection={offset.TotalSeconds:F1}s");
+            }
+            else
+            {
+                Console.WriteLine("[R2-CLOCK] clock within tolerance; no correction applied.");
+            }
+        }
+        else
+        {
+            Console.WriteLine($"[R2-CLOCK] R2 returned no Date header (status {(int)probeResp.StatusCode}); cannot assess skew.");
+        }
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"[R2-CLOCK] probe failed (non-fatal): {ex.Message}");
+}
+
 // In Production we report ALL missing keys in one error after Build(); to
 // avoid the connection-string line below pre-empting that consolidated report
 // with a single-key error, only fail-fast on the connection string in
