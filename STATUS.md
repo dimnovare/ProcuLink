@@ -4,6 +4,34 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-03 (night) — HTTP delivery deep-dive: CRITICAL Worker-deploy findings + intermittent R2 zombie-container issue**
+
+Set out to prove a *successful* HTTP delivery live (vs the honest-failure already proven). Uncovered two production-critical infra issues and fixed several code bugs. **The single most important finding: the Railway `ProcuLink-Worker` has NO GitHub auto-deploy and had been running stale initial-deploy code for days** — so prior sessions' fixes (db2a6ef DbContext, etc.) never reached the Worker. Full detail in memory: `project-worker-no-autodeploy-zombies`.
+
+**What is PROVEN working live (on a healthy Worker container):**
+- Successful HTTP delivery LOGIC: `POST /api/suppliers/{id}/delivery-config/test-fire` against `postman-echo.com` returned `{success:true, responseCode:200}` — SSRF guard allowed the public host, dispatcher fired, 2xx received.
+- Full pipeline: sample upload → parse (3 lines) → transform (xml artifact, R2 upload) → `ready_to_deliver`, repeatedly. **BuyerName fix (`97204c0`) verified live** — order showed buyer "Northwind Trading OÜ" (was null before).
+- Settings hardcoded-data fix (`21421d1`) verified live earlier.
+
+**Two production-critical infra issues (NOT code bugs):**
+1. **Worker has no auto-deploy** (`watchPatterns: []`). Must deploy manually: `railway up --service ProcuLink-Worker --detach`. The API auto-deploys; the Worker does not.
+2. **Zombie containers from rapid redeploys.** ~8 `railway up`/`redeploy` in quick succession left 2 containers alive (1 replica configured). The zombie intermittently grabs jobs and fails them with R2 `SignatureDoesNotMatch`/403, while the healthy container succeeds → parse/transform/delivery fail intermittently. The live container's clock is fine (−0.3s), so it is overlap, not clock skew. **Fix: clean single-container restart from the Railway dashboard (or scale replicas 1→0→1) — NOT more `railway up`s.** Then re-add the test delivery config and re-run the full delivered proof.
+
+**Code committed this session (all on main, pushed):**
+- `97204c0` BuyerName denormalized-column read · `21421d1` Settings live org/plan
+- `7a92959` R2 `DownloadAsync` pre-signed-URL → `GetObjectAsync` (both work from a healthy container; the real culprit was the zombie)
+- Worker R2 clock-skew probe + correction at startup (defense) · delivery-phase logging in `DeliveryService`
+
+**Stabilization done:** removed the temporary `postman-echo` delivery config from the sample supplier (DELETE → 204), so the sample supplier is back to the proven honest-failure baseline (`delivery_failed: "Supplier delivery config is missing"`) — no hangs/retries.
+
+**Two agent branches READY for review (not merged):**
+- `feat/exception-dashboard` (frontend `project-proculink`, commit `57723c0`) — `/operations/exceptions` page; `bun run build` clean. Frontend-only, safe to merge (Vercel auto-deploys).
+- `feat/erply-directo-templates` (backend, in a worktree, commit `95d5a59`) — apply-template endpoint + design note; 704 tests green. Most of the template layer already existed on main.
+
+**Immediate next steps:** (1) clean-restart the Worker to kill the zombie; (2) re-add a test HTTP delivery config + run one order to `delivered` for the final proof; (3) wire up Worker auto-deploy (GitHub trigger or a deploy step) so it stops drifting; (4) review+merge the two agent branches.
+
+---
+
 ## Where we are: **2026-06-03 (late) — Full QA run + 2 production bugs found and fixed**
 
 Full live QA run against `proculink.eu` with the Chrome browser. All core screens verified. 2 bugs found and fixed.
