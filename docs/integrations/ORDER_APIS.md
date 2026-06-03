@@ -11,6 +11,87 @@ screens.
 
 ---
 
+## Getting started: send your first PO
+
+You do not need an integration to get value on day one. The fastest path is the
+**browser upload** — no developer, no API key, no setup call.
+
+### Option A — Try it with the built-in sample (fastest)
+
+1. Sign in at `https://proculink.eu`.
+2. Click **Try a sample order** on the upload screen.
+3. ProcuLink loads a ready-made 3-line example purchase order, parses it, and
+   walks you through review → mapping → transform → delivery.
+
+This is the quickest way to see the whole flow without preparing a file.
+
+### Option B — Upload your own purchase order (self-service)
+
+1. Add a **supplier** (the company you are sending the PO to).
+2. On the upload screen, drag in a **CSV or XLSX** file (PDF and XML/cXML/UBL are
+   also accepted where supported).
+3. ProcuLink parses the file and shows you the extracted order.
+4. Review the lines. For any item code ProcuLink can't match to the supplier's
+   code, enter the supplier's code once — it remembers the mapping for next time.
+5. ProcuLink transforms the order into the supplier's required format.
+6. Send it. If delivery isn't configured yet, ProcuLink tells you exactly what's
+   missing instead of pretending it sent.
+
+If your file doesn't parse cleanly, the easiest fix is to match the column
+headers in the sample template below.
+
+### Self-service vs assisted setup
+
+Be honest with prospects about which channels they can turn on themselves and
+which need a short setup with us:
+
+| Channel | Mode |
+|---|---|
+| **Browser upload** (CSV/XLSX/PDF/XML) | **Self-service** — works today, no setup |
+| **Sample order** | **Self-service** — one click |
+| IMAP email polling | Self-service UI exists, Integration+ gated |
+| Inbound REST API | Self-service once you create an API key, but it's a developer integration |
+| Hosted inbound email webhook (`orders@…`) | **Assisted setup** — we configure DNS + routing |
+| SFTP/S3 polling | **Assisted setup** — we configure credentials + supplier routing |
+
+Rule of thumb: **browser upload is self-service; inbound REST/email/SFTP/S3 are
+assisted setup** until each has its own test-credentials-and-preview screen.
+
+### Sample CSV template
+
+Copy the rows below into a file named `sample-order.csv` (this is the same
+fixture ProcuLink uses for the built-in sample):
+
+```csv
+po_number,buyer_name,line_no,item_code,description,quantity,unit_price,currency
+DEMO-2026-001,Northwind Trading OÜ,1,ACME-WIDGET-A,Widget A 10mm,12,4.50,EUR
+DEMO-2026-001,Northwind Trading OÜ,2,ACME-WIDGET-B,Widget B 20mm,6,8.25,EUR
+DEMO-2026-001,Northwind Trading OÜ,3,ACME-BRACKET-S,Bracket short,24,1.95,EUR
+```
+
+What each column means:
+
+| Column | Meaning |
+|---|---|
+| `po_number` | Your purchase-order number. Repeat it on every line of the same order. |
+| `buyer_name` | Your company name (the buyer sending the order). |
+| `line_no` | Line number within the order, starting at 1. |
+| `item_code` | The item code as it appears in *your* system (ProcuLink maps it to the supplier's code). |
+| `description` | Free-text description of the item. |
+| `quantity` | How many units you are ordering. |
+| `unit_price` | Price per unit, as a plain number (e.g. `4.50`). |
+| `currency` | ISO currency code, e.g. `EUR`. |
+
+The CSV parser also accepts common header aliases (for example `po`,
+`PO Number`, `qty`, `unit price`, `sku`, `buyer_code`), so an export from your
+ERP will often work without renaming columns.
+
+> TODO: ship a downloadable `.xlsx` version of this template for non-technical
+> buyers who prefer Excel. For now, the CSV above can be opened and saved as
+> `.xlsx` directly in Excel.
+
+---
+
 ## Current intake options
 
 | Channel | Customer setup | Current state | Use when |
