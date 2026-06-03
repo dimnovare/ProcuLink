@@ -243,6 +243,7 @@ else
 // OrderService is Scoped for the same reason.
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
+builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IPassportService, PassportService>();
