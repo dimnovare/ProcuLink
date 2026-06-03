@@ -324,6 +324,100 @@ public class BillingControllerTests
     }
 
     [Fact]
+    public async Task HandleCheckoutCompleted_WithOperationsPlanMetadata_UpgradesToOperationsPlan()
+    {
+        // Verifies that a checkout session with "plan"="operations" in the metadata
+        // (and SubscriptionId = null so no live Stripe HTTP call is made) upgrades
+        // the org from Pilot to Operations, and sets AccountStatus to Active.
+        var db = MakeDb();
+        var (ctrl, _, _, orgId, _) = Build(db);
+
+        db.Organisations.Add(new Organisation
+        {
+            Id             = orgId,
+            Plan           = PlanConstants.Pilot,
+            AccountStatus  = AccountStatusConstants.Trialing,
+            ClerkOrgId     = "org_ops_test",
+            Name           = "Ops Test Org",
+            Slug           = "ops-test-org",
+            TrialStartedAt = DateTime.UtcNow.AddDays(-5),
+        });
+        await db.SaveChangesAsync();
+
+        var session = new Stripe.Checkout.Session
+        {
+            Metadata = new Dictionary<string, string>
+            {
+                ["org_id"] = orgId.ToString(),
+                ["plan"]   = PlanConstants.Operations,
+            },
+            Id             = "cs_test_ops",
+            SubscriptionId = null,   // keeps test offline — no Stripe HTTP call
+            CustomerId     = "cus_ops_test",
+        };
+
+        await ctrl.HandleCheckoutCompletedAsync(session, CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+        updated!.Plan.Should().Be(PlanConstants.Operations,
+            "checkout completed with Operations plan metadata must upgrade the org to Operations");
+        updated.AccountStatus.Should().Be(AccountStatusConstants.Active,
+            "a completed checkout (non-trialing sub) must set AccountStatus to Active");
+        updated.StripeCustomerId.Should().Be("cus_ops_test");
+    }
+
+    [Fact]
+    public async Task HandleSubscriptionDeleted_WhenOrgAlreadyOnPilotWithNoSubscription_DoesNotMutateOrg()
+    {
+        // Guard: if the org is already on Pilot with StripeSubscriptionId == null,
+        // HandleSubscriptionDeletedAsync returns early without mutating anything.
+        // This prevents a cancelled customer from accidentally getting a fresh
+        // read-only reset (which could, in a bug, clear TrialStartedAt and give
+        // them a new window if billing re-read the field).
+        var db = MakeDb();
+        var (ctrl, _, _, orgId, _) = Build(db);
+
+        var originalTrialStart = DateTime.UtcNow.AddDays(-30);
+        var originalTrialEnd   = originalTrialStart.AddDays(14);
+
+        db.Organisations.Add(new Organisation
+        {
+            Id                   = orgId,
+            Plan                 = PlanConstants.Pilot,
+            AccountStatus        = AccountStatusConstants.ReadOnly,
+            StripeCustomerId     = "cus_expired_pilot",
+            StripeSubscriptionId = null,     // already reverted — no active sub
+            ClerkOrgId           = "org_expired",
+            Name                 = "Expired Pilot Org",
+            Slug                 = "expired-pilot-org",
+            TrialStartedAt       = originalTrialStart,
+            TrialEndsAt          = originalTrialEnd,
+        });
+        await db.SaveChangesAsync();
+
+        var sub = new Stripe.Subscription
+        {
+            Id         = "sub_already_cancelled",
+            CustomerId = "cus_expired_pilot",
+        };
+
+        await ctrl.HandleSubscriptionDeletedAsync(sub, CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+
+        // The early-return guard in HandleSubscriptionDeletedAsync fires because
+        // Plan == Pilot AND StripeSubscriptionId is null.  Nothing must change.
+        updated!.Plan.Should().Be(PlanConstants.Pilot,
+            "plan must remain Pilot — handler exits early when already on Pilot with no subscription");
+        updated.AccountStatus.Should().Be(AccountStatusConstants.ReadOnly,
+            "AccountStatus must not be reset — already read-only, handler must not touch it");
+        updated.TrialStartedAt.Should().BeCloseTo(originalTrialStart, TimeSpan.FromSeconds(1),
+            "TrialStartedAt must not change — no fresh trial is granted");
+        updated.StripeSubscriptionId.Should().BeNull(
+            "StripeSubscriptionId must remain null — no mutation occurred");
+    }
+
+    [Fact]
     public async Task HandleSubscriptionUpdated_WhenPastDue_SetsAccountStatusPastDue()
     {
         var (ctrl, _, _, orgId, db) = Build();
