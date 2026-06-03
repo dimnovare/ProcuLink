@@ -4,6 +4,25 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-03 (night) — LIVE GOLDEN PATH PROVEN END-TO-END on proculink.eu · 6 production bugs found+fixed during browser E2E**
+
+Ran the full authenticated golden path in a real browser against `proculink.eu` + `api.proculink.eu`. The loop now works end-to-end with complete auditability:
+**Upload (sample) → Parse (3 lines) → Resolve (mappings saved) → Transform (1 artifact) → Deliver (honest `delivery_failed`: "Supplier delivery config is missing")**, with audit trail (`Parsed`→`Resolved`→`Transformed`) and 3 `delivery_attempts` rows all recorded. This is the documented golden-path "definition of done" (sample supplier has no delivery endpoint, so the honest failure is the correct terminal state).
+
+**6 real production bugs found during live E2E and fixed (all pushed):**
+1. **R2 download signature mismatch (CRITICAL · backend `28bf8d7`)** — THIS was the real "Worker not consuming" root cause. The Worker *was* consuming `ParseOrderJob`, but every parse failed at the R2 download step with "The request signature we calculated does not match the signature you provided" → **258 failed Hangfire jobs**. `R2StorageService.DownloadAsync` used `GetObjectAsync` (SDK chunked GET signing, which R2 rejects). Fixed to use a pre-signed URL + plain HttpClient GET. After the fix, parse jobs succeed (verified: order parsed to 3 lines, `pending_review`). Diagnosed by querying the `hangfire.job`/`hangfire.state` tables directly in Neon (dashboard is disabled in prod).
+2. **Clerk session race (frontend `917cafd`)** — billing/suppliers/upload queries (`retry:false`) fired before Clerk minted a token → 401 → permanent "billing API unavailable" / "Could not load suppliers" banners on a healthy backend. Gated every query on `clerkReady = isLoaded && isSignedIn`, added `retry:1`.
+3. **Hardcoded sidebar workspace (frontend `917cafd`)** — `BridgeSidebar` showed literal "Nordic Distribution / Operations plan" for every user. Wired to live `getBillingStatus().plan` + Clerk `useOrganization().name`.
+4. **SpineReview crash on undefined order (frontend `4426a50`)** — `Cannot read properties of undefined (reading 'status')` error boundary. Initial `== null` guard.
+5. **DbContext concurrency crash in DeliverOrderJob (backend `db2a6ef`)** — fire-and-forget `_ = _integrationTrigger.EnqueueAsync(...)` shares the scoped `ProcuLinkDbContext`; the detached task raced the next query → "A second operation was started on this context instance" → spurious Hangfire retries (3 delivery attempts instead of 1). Awaited all 4 calls in `DeliveryService` + 2 in `OrderService`.
+6. **Cold-load error-gate flash (frontend `4840c06`)** — with the `clerkReady` gate, a disabled TanStack-Query v5 query returns `isLoading:false` + `data:undefined`, so SpineReview's `order == null` check flashed "Failed to load order" on every direct-URL navigation. Fixed: show skeleton while `!clerkReady || isLoading || order === undefined`. Verified: fresh direct-URL load now shows skeleton → order → correct `delivery_failed` FailedPanel.
+
+**Also verified live in-browser:** pricing page shows exactly 5 plans (no Distributor), mobile nav overlay is `fixed inset-0` solid navy (DOM-confirmed), supplier-limit enforcement is correct (Pilot 1-supplier limit returns honest `supplier_limit_reached`), billing/plan pill shows real `Pilot plan · 0/20 orders · 2/1 suppliers · ends 6/14/2026`. Backend still 696 tests green.
+
+**Remaining:** a SUCCESSFUL HTTP delivery (not just honest failure) is still untested live — needs a supplier with a real delivery endpoint configured. Rotate the pasted Clerk secret. Backend `db2a6ef` Railway redeploy assumed auto-deployed from main (verify).
+
+---
+
 ## Where we are: **2026-06-03 (evening) — Launch readiness Phase 0+1+2 complete · Worker live · Phase 3 (E2E smoke + Resend + Sentry) is next**
 
 Active focus: `docs/superpowers/plans/2026-06-03-launch-readiness-roadmap.md`. Phase 0 (Worker) done by founder. Phase 1 (launch shell) and Phase 2 (billing hardening) are now complete.
