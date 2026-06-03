@@ -13,7 +13,7 @@ public record AcceptanceProfileDto(
 
 public record CreateAcceptanceProfileRequest(
     string? Protocol, string? OutputFormat,
-    IReadOnlyList<AcceptanceRuleDto> Rules);
+    IReadOnlyList<AcceptanceRuleDto>? Rules);
 
 public record OrderValidationResultDto(
     int?    LineNumber, string Severity, string Status,

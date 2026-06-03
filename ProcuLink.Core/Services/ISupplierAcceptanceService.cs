@@ -19,6 +19,10 @@ public interface ISupplierAcceptanceService
     /// <summary>Activates a version; archives the previously active one. Returns false if not found.</summary>
     Task<bool> ActivateVersionAsync(Guid orgId, Guid supplierId, int versionNo, CancellationToken ct);
 
-    /// <summary>Evaluates the order against the supplier's active profile, persists + returns results.</summary>
-    Task<IReadOnlyList<OrderValidationResult>> ValidateOrderAsync(Guid orgId, Guid orderId, CancellationToken ct);
+    /// <summary>
+    /// Evaluates the order against the supplier's active profile, persists + returns results.
+    /// Returns null when the order does not exist for this org (caller should 404).
+    /// An empty list means the order exists but has no active profile or no failing rules.
+    /// </summary>
+    Task<IReadOnlyList<OrderValidationResult>?> ValidateOrderAsync(Guid orgId, Guid orderId, CancellationToken ct);
 }

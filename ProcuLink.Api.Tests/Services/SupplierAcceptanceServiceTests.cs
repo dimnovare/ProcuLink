@@ -96,6 +96,7 @@ public class SupplierAcceptanceServiceTests
 
         var results = await svc.ValidateOrderAsync(orgId, orderId, CancellationToken.None);
 
+        Assert.NotNull(results);
         var fail = Assert.Single(results);
         Assert.Equal("fail", fail.Status);
         Assert.Equal(1, fail.LineNumber);
@@ -116,6 +117,16 @@ public class SupplierAcceptanceServiceTests
         await db.SaveChangesAsync();
 
         var results = await svc.ValidateOrderAsync(orgId, orderId, CancellationToken.None);
+        Assert.NotNull(results);
         Assert.Empty(results);
+    }
+
+    [Fact]
+    public async Task ValidateOrder_OrderNotFound_ReturnsNull()
+    {
+        var db = MakeDb();
+        var svc = new SupplierAcceptanceService(db);
+        var results = await svc.ValidateOrderAsync(Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None);
+        Assert.Null(results);
     }
 }

@@ -76,13 +76,13 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         return true;
     }
 
-    public async Task<IReadOnlyList<OrderValidationResult>> ValidateOrderAsync(Guid orgId, Guid orderId, CancellationToken ct)
+    public async Task<IReadOnlyList<OrderValidationResult>?> ValidateOrderAsync(Guid orgId, Guid orderId, CancellationToken ct)
     {
         var order = await _db.PurchaseOrders
             .Include(o => o.Lines)
             .Where(o => o.Id == orderId && o.OrgId == orgId)
             .FirstOrDefaultAsync(ct);
-        if (order is null) return Array.Empty<OrderValidationResult>();
+        if (order is null) return null;
 
         var profile = await GetActiveAsync(orgId, order.SupplierId, ct);
         var now = DateTime.UtcNow;

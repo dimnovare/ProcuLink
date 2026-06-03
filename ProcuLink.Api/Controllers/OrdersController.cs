@@ -438,9 +438,11 @@ public sealed class OrdersController : ControllerBase
     /// <summary>Validate the order against the supplier's active acceptance profile.</summary>
     [HttpPost("{id:guid}/validate")]
     [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Validate(Guid id, CancellationToken ct)
     {
         var results = await _acceptance.ValidateOrderAsync(_tenant.OrganisationId, id, ct);
+        if (results is null) return NotFound();
         return Ok(results.Select(r => new OrderValidationResultDto(
             r.LineNumber, r.Severity, r.Status, r.Code, r.Message)));
     }
