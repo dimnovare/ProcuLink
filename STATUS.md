@@ -4,10 +4,38 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-06-03 — Group J live edge healthy · R2 fixed · Worker parse runner missing**
+## Where we are: **2026-06-03 (evening) — Launch readiness Phase 0+1+2 complete · Worker live · Phase 3 (E2E smoke + Resend + Sentry) is next**
 
-Active focus is no longer "add more breadth"; it is **make upload -> parse -> review -> transform -> deliver boringly reliable** for the buyer/procurement PO workflow. Current plan:
-`docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
+Active focus: `docs/superpowers/plans/2026-06-03-launch-readiness-roadmap.md`. Phase 0 (Worker) done by founder. Phase 1 (launch shell) and Phase 2 (billing hardening) are now complete.
+
+**Phase 0 — live loop ✅**
+- Worker deployed to Railway (`ProcuLink-Worker` service), confirmed consuming jobs (Hangfire started, recurring jobs registered).
+- Golden-path checklist written: `docs/superpowers/launch/golden-path-checklist.md`. Founder runs it on `proculink.eu` as the soft-launch gate.
+
+**Phase 1 — narrow truthful launch shell ✅**
+- **1.A (launch shell):** Already live — `src/lib/launch-flags.ts` + `BridgeSidebar.tsx` filter to 6-item nav (Dashboard, Upload, Inbox, Suppliers, Settings, Help). `NEXT_PUBLIC_LAUNCH_FULL_NAV=true` reveals full nav.
+- **1.B (route fix):** `api-client.ts` supplier-profiles functions corrected to `/api/suppliers/profiles` (was 404ing at `/api/supplier-profiles`).
+- **1.C (mobile nav):** `MarketingNav.tsx` mobile dropdown changed from `absolute` floating panel to `fixed inset-0` full-screen solid overlay — hero no longer bleeds through.
+- **1.D (Distributor hidden):** `hidden: true` on Distributor plan in `plans.ts`; pricing page now shows 5 plans; `integration.next = null` so no upgrade CTA reaches Distributor. `CHECKOUT_PLAN_IDS` filtered.
+- **1.E (truth pass):** `SupplierDockList.tsx` + `DeliveryConfigEditor.tsx` + `SupplierDockProfile.tsx` — all confirmed honest (no fake operational metrics for real users).
+- **1.F (acceptance tab):** `AcceptanceRule`/`AcceptanceProfile`/`OrderValidationResult` types added to `procurement.ts`; api-client functions added (`getAcceptanceProfile`, `saveAcceptanceProfile`, `activateAcceptanceVersion`, `validateOrder`); full Acceptance tab in `SupplierDockProfile` (rule table + rule editor + Save/Activate); Validation panel in `SpineReview` (validate button + per-result display).
+- **1.G (fold exceptions):** `getOrderExceptions` api-client function; open exceptions rendered inline in `SpineReview`; `BridgeDashboard.tsx` stale comment fixed; no exceptions CTA points to hidden `/operations/exceptions`.
+- **0.B (stuck banner):** `SpineReview.tsx` shows amber banner when order has been `parsing` > 2 min. Backend `StuckOrderDetectionJob` threshold is 30 min (flips to `failed` + writes `StuckTimeout` audit event).
+
+**Phase 2 — Stripe billing hardening ✅**
+- **2.A (plan ladder):** `docs/superpowers/launch/pricing-matrix.md` written; `DistributorPriceId` moved from required → optional in `StartupConfigurationValidator` (was blocking production startup without a Distributor Stripe product). Plan limits match spec exactly.
+- **2.B (webhook tests):** 2 new integration tests — `checkout.session.completed → plan upgraded` and `subscription.deleted without active sub → no fresh trial`. 696 backend tests green.
+
+**Phase 2.C (Stripe activation) 🧑‍💼 — after 2026-06-09:** Create live Stripe products, set price-ID env vars in Railway, configure webhook endpoint, test end-to-end in Stripe test mode first.
+
+**Phase 3 — still open:**
+- 3.A: Mobile viewport regression test + golden-path live E2E (needs browser-capable env — Playwright can't launch here).
+- 3.B 🧑‍💼: Resend domain verify + real support-form test.
+- 3.C 🧑‍💼: Confirm Sentry receives prod events.
+
+**Immediate next action for founder:** Run the golden-path checklist on `proculink.eu` — `docs/superpowers/launch/golden-path-checklist.md`. Any failure is a P0 before soft launch.
+
+Active focus: `docs/superpowers/plans/2026-06-01-boringly-reliable-po-loop.md`.
 
 Group J/live deployment hardening has started:
 - **Live edge check:** `https://proculink.eu/` and `https://www.proculink.eu/` return 200 from Vercel; `https://api.proculink.eu/health` returns 200 from Railway.
