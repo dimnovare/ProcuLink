@@ -77,16 +77,24 @@ public sealed class R2StorageService : IFileStorageService, IAsyncDisposable
     /// <inheritdoc/>
     public async Task<Stream> DownloadAsync(string key, CancellationToken ct)
     {
-        // R2 rejects GetObjectAsync with a signature mismatch when the SDK uses
-        // chunked-payload signing for GET requests. Using a pre-signed URL and a
-        // plain HttpClient GET sidesteps the SDK's GET signing entirely.
-        var signedUrl = await GetSignedDownloadUrlAsync(key, TimeSpan.FromMinutes(15), ct);
-        using var http = new HttpClient();
-        var response = await http.GetAsync(signedUrl, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
-        // Read into a MemoryStream so the HttpClient/response can be disposed safely.
+        // Use a direct signed GetObject rather than a pre-signed URL.
+        //
+        // A pre-signed URL bakes X-Amz-Date / X-Amz-Expires into the signature at
+        // generation time using the local clock. On hosts whose clock drifts (observed
+        // on the Railway Worker container) R2 returns 403 SignatureDoesNotMatch because
+        // the offline-signed URL can never self-correct. GetObjectAsync signs each
+        // request live and the SDK auto-corrects clock skew from R2's Date response
+        // header, so it works where the pre-signed URL 403s. This matches what ran
+        // reliably in production before the pre-signed download was introduced.
+        var response = await _client.GetObjectAsync(
+            new GetObjectRequest { BucketName = _bucketName, Key = key }, ct);
+
+        // Copy into a MemoryStream so the S3 response/connection can be disposed safely.
         var ms = new MemoryStream();
-        await response.Content.CopyToAsync(ms, ct);
+        await using (response.ResponseStream)
+        {
+            await response.ResponseStream.CopyToAsync(ms, ct);
+        }
         ms.Position = 0;
         return ms;
     }
