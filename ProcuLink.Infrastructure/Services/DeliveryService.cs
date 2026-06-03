@@ -234,7 +234,10 @@ public sealed class DeliveryService : IDeliveryService
         if (reconcile)
             await SafeReconcileExceptionsAsync(order.OrgId, order.Id, ct);
 
-        _ = _integrationTrigger.EnqueueAsync(
+        // Awaited (not fire-and-forget): IntegrationTriggerService shares this scoped
+        // DbContext, so a detached `_ =` task would race the next query on _db and throw
+        // "A second operation was started on this context instance".
+        await _integrationTrigger.EnqueueAsync(
             order.OrgId,
             "order.failed",
             new { order_id = order.Id, failed_at = now, error },
@@ -338,7 +341,7 @@ public sealed class DeliveryService : IDeliveryService
                     ct: ct);
             }
 
-            _ = _integrationTrigger.EnqueueAsync(
+            await _integrationTrigger.EnqueueAsync(
                 order.OrgId,
                 "order.delivered",
                 new { order_id = order.Id, delivered_at = now, acknowledged_at = now },
@@ -346,7 +349,7 @@ public sealed class DeliveryService : IDeliveryService
         }
         else if (isSupplierRejection)
         {
-            _ = _integrationTrigger.EnqueueAsync(
+            await _integrationTrigger.EnqueueAsync(
                 order.OrgId,
                 "order.rejected",
                 new { order_id = order.Id, rejected_at = now, reason = result.ErrorMessage },
@@ -354,7 +357,7 @@ public sealed class DeliveryService : IDeliveryService
         }
         else
         {
-            _ = _integrationTrigger.EnqueueAsync(
+            await _integrationTrigger.EnqueueAsync(
                 order.OrgId,
                 "order.failed",
                 new { order_id = order.Id, failed_at = now, error = result.ErrorMessage },

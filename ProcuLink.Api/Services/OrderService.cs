@@ -273,7 +273,10 @@ public sealed class OrderService : IOrderService
             payload: new { source = sourceFileKey }, ct: ct);
 
         // ── Wave 4: fire order.created trigger ───────────────────────────────────
-        _ = _integrationTrigger.EnqueueAsync(
+        // Awaited (not fire-and-forget): IntegrationTriggerService shares this scoped
+        // DbContext; a detached task could outlive the request scope and hit a disposed
+        // context, or race a concurrent query on _db.
+        await _integrationTrigger.EnqueueAsync(
             organisationId,
             "order.created",
             new
@@ -384,7 +387,8 @@ public sealed class OrderService : IOrderService
             payload: new { source }, ct: ct);
 
         // ── Wave 4: fire order.created trigger ───────────────────────────────────
-        _ = _integrationTrigger.EnqueueAsync(
+        // Awaited (not fire-and-forget) — see CreateStubAsync for the shared-DbContext rationale.
+        await _integrationTrigger.EnqueueAsync(
             organisationId,
             "order.created",
             new
