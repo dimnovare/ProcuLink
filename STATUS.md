@@ -4,7 +4,23 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-06-03 (night) — HTTP delivery deep-dive: CRITICAL Worker-deploy findings + intermittent R2 zombie-container issue**
+## Where we are: **2026-06-03 (night) — ✅ SUCCESSFUL HTTP DELIVERY PROVEN END-TO-END; root cause was a duplicate worker with a stale R2 secret**
+
+**RESOLVED.** A real order went all the way to `delivered` live (order `e31c3e7c…`, DEMO-2026-001, buyer "Northwind Trading OÜ", delivery attempt **code 200**), verified in the browser UI (status journey Parse✓ Normalize✓ Validate✓ Transform✓ Deliver●, supplier cXML with resolved SUP-001/002/003). Pipeline ran in ~24s, no retries, no hang.
+
+**Root cause of the intermittency (NOT code/clock/orphans):** there are **two worker services** on Railway both consuming the same Hangfire/Neon queue — `aware-amazement` (the canonical GitHub-auto-deploying worker) and `ProcuLink-Worker` (a CLI-only duplicate a prior session created). `aware-amazement`'s `Storage__R2SecretAccessKey` was a **wrong/stale value** (didn't match its access key) → every R2 job on it failed `SignatureDoesNotMatch`; `ProcuLink-Worker` had the correct secret. Jobs landed on either at random → intermittent parse/transform/deliver failures.
+
+**Fix applied:** corrected `aware-amazement`'s R2 secret to the valid value (`railway variables --service aware-amazement --set ...`); it auto-redeployed and the next order delivered first try. Detail + the diagnostic in memory `project-worker-no-autodeploy-zombies`.
+
+**Still TODO (Railway dashboard, ~2 min):** delete the duplicate `ProcuLink-Worker` service so only ONE worker (`aware-amazement`, GitHub-auto-deploy, correct secret) runs. Both work now, so this is cleanup, not urgent. **Also rotate the R2 secret** that was handled in chat.
+
+**Stabilized:** removed the temporary postman-echo test config from the sample supplier (back to honest-failure baseline). The successful-delivery order remains as proof.
+
+**Earlier in the same session (also shipped):**
+
+---
+
+## Where we are: **2026-06-03 (night) — HTTP delivery deep-dive: CRITICAL Worker-deploy findings + intermittent R2 zombie-container issue (SUPERSEDED by the resolution above)**
 
 Set out to prove a *successful* HTTP delivery live (vs the honest-failure already proven). Uncovered two production-critical infra issues and fixed several code bugs. **The single most important finding: the Railway `ProcuLink-Worker` has NO GitHub auto-deploy and had been running stale initial-deploy code for days** — so prior sessions' fixes (db2a6ef DbContext, etc.) never reached the Worker. Full detail in memory: `project-worker-no-autodeploy-zombies`.
 
