@@ -4,6 +4,30 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-03 (late) — Full QA run + 2 production bugs found and fixed**
+
+Full live QA run against `proculink.eu` with the Chrome browser. All core screens verified. 2 bugs found and fixed.
+
+**Test results:**
+- Backend: 696 tests green (219 Transform + 291 Infrastructure + 186 Api.Tests) ✅
+- Frontend build: clean ✅
+- Live browser QA: Landing, Pricing, Dashboard, Upload, Inbox, Order detail, Suppliers, Supplier detail, Settings — all render correctly ✅
+
+**2 bugs found and fixed:**
+
+1. **Settings page hardcoded org/plan (frontend `21421d1`)** — Settings subtitle showed "Nordic Distribution · Operations plan" and workspace name input showed "Nordic Distribution" for every user. Fixed to use `useOrganization().organization?.name` + `getBillingStatus()`.
+
+2. **BuyerName null in order API (backend `97204c0`)** — `ExtractBuyerName` in `OrdersController` only read from `CanonicalJson`, but the async parse job (`ParseStoredFileAsync`) only writes to the denormalized `entity.BuyerName` column and never updates `CanonicalJson`. Result: every uploaded order showed "(parsing...)" for buyer name even after successful parse. Fixed to read the denormalized column first, fall back to `CanonicalJson`.
+
+**Verified live (browser):**
+- Sample order flow: Upload → parse (Worker, 3 lines, EUR 150.30) → SpineReview with full 3-column layout → Supplier output XML → status journey Parse ✅ Normalize ✅ Validate (current) ✅
+- BuyerName fix requires Railway redeploy of `97204c0` to fully verify in production.
+- Settings fix verified live: subtitle now shows real org name + plan ✅.
+
+**SSRF guard + JWT ValidateAudience:** Both P0 items from CLAUDE.md are already fully implemented — `OutboundRequestGuard` covers all RFC-1918/link-local/cloud-metadata ranges, and `ValidateAudience=false` is correct Clerk design compensated by `azp` validation. Neither was a regression or gap.
+
+---
+
 ## Where we are: **2026-06-03 (night) — LIVE GOLDEN PATH PROVEN END-TO-END on proculink.eu · 6 production bugs found+fixed during browser E2E**
 
 Ran the full authenticated golden path in a real browser against `proculink.eu` + `api.proculink.eu`. The loop now works end-to-end with complete auditability:
