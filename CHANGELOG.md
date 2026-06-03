@@ -14,8 +14,8 @@ delivered (HTTP 200), plus the honest `delivery_failed` "missing config" path.
 
 - **Exception dashboard** at `/operations/exceptions` — a single view of all
   orders in an exception/failed state.
-- **Erply/Directo apply-template endpoint** — seeds starter delivery
-  configuration so first supplier setup is near-zero.
+- **Erply/Directo apply-template endpoint** — one-click copies a starter
+  PO field-mapping config into a supplier so first setup is near-zero.
 
 ### Fixed
 
