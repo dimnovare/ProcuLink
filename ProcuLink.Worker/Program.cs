@@ -62,6 +62,29 @@ try
         {
             Console.WriteLine($"[R2-CLOCK] R2 returned no Date header (status {(int)probeResp.StatusCode}); cannot assess skew.");
         }
+
+        // ── R2 signed-request diagnostic ─────────────────────────────────────
+        // Generate a pre-signed GET for a known-existing object and fetch it. On a
+        // 403 the R2 body contains the CanonicalRequest/StringToSign it computed,
+        // which pinpoints the signing mismatch. Also log the generated URL so it can
+        // be diffed against a known-good URL generated off-container.
+        try
+        {
+            var ak  = builder.Configuration["Storage:R2AccessKeyId"]!;
+            var sk  = builder.Configuration["Storage:R2SecretAccessKey"]!;
+            var bkt = builder.Configuration["Storage:R2BucketName"]!;
+            var s3cfg = new Amazon.S3.AmazonS3Config { ServiceURL = r2Endpoint, ForcePathStyle = true, AuthenticationRegion = "auto" };
+            using var s3 = new Amazon.S3.AmazonS3Client(ak, sk, s3cfg);
+            const string knownKey = "00000000-0000-0000-0000-000000000000/a4d9896f-d015-4173-a4d1-ec9dd167c080/artifacts/bcfef4c7-8108-4a58-90d9-a1821b952e12.xml";
+            var signed = s3.GetPreSignedURL(new Amazon.S3.Model.GetPreSignedUrlRequest { BucketName = bkt, Key = knownKey, Verb = Amazon.S3.HttpVerb.GET, Expires = DateTime.UtcNow.AddMinutes(15) });
+            Console.WriteLine($"[R2-DIAG] presignedUrl={signed}");
+            using var dh = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            var dr = dh.GetAsync(signed).GetAwaiter().GetResult();
+            var body = dr.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            Console.WriteLine($"[R2-DIAG] presigned GET status={(int)dr.StatusCode} bodyLen={body.Length}");
+            if (!dr.IsSuccessStatusCode) Console.WriteLine($"[R2-DIAG] body={body.Substring(0, Math.Min(900, body.Length))}");
+        }
+        catch (Exception dex) { Console.WriteLine($"[R2-DIAG] signed-request probe failed: {dex.Message}"); }
     }
 }
 catch (Exception ex)
