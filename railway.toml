@@ -1,5 +1,20 @@
 [build]
 builder = "DOCKERFILE"
+# Only redeploy when build-relevant code/config changes. Doc-only commits
+# (STATUS.md, CLAUDE.md, docs/**) no longer trigger backend/worker redeploys.
+# Positive allowlist (safer than negation): a deploy fires when a changed file
+# matches any pattern; keep this in sync if a new buildable project is added.
+watchPatterns = [
+  "ProcuLink.Api/**",
+  "ProcuLink.Core/**",
+  "ProcuLink.Infrastructure/**",
+  "ProcuLink.Transform/**",
+  "ProcuLink.Worker/**",
+  "Dockerfile",
+  "Dockerfile.worker",
+  "ProcuLink.slnx",
+  "railway.toml",
+]
 
 [deploy]
 restartPolicyType = "ON_FAILURE"
