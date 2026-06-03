@@ -121,6 +121,10 @@ public sealed class DeliveryService : IDeliveryService
         order.UpdatedAt = dispatchStart;
         await _db.SaveChangesAsync(ct);
 
+        _logger.LogInformation(
+            "Delivery {OrderId}: downloading artifact {FileKey} ({Protocol})",
+            orderId, artifact.FileKey, config.Protocol);
+
         byte[] content;
         await using (var stream = await _fileStorage.DownloadAsync(artifact.FileKey, ct))
         {
@@ -129,6 +133,10 @@ public sealed class DeliveryService : IDeliveryService
             content = buffer.ToArray();
         }
 
+        _logger.LogInformation(
+            "Delivery {OrderId}: artifact downloaded ({Bytes} bytes); dispatching via {Protocol}",
+            orderId, content.Length, config.Protocol);
+
         var result = await dispatcher.DispatchAsync(
             content,
             BuildFileName(order, artifact),
@@ -136,6 +144,10 @@ public sealed class DeliveryService : IDeliveryService
             config,
             credentials,
             ct);
+
+        _logger.LogInformation(
+            "Delivery {OrderId}: dispatch returned success={Success} code={Code}",
+            orderId, result.Success, result.ResponseCode);
 
         await PersistAttemptAsync(order, artifact, config, result, ct, reconcile: reconcileFailedAttempt);
         return result;
