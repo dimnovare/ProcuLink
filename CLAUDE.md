@@ -232,13 +232,21 @@ source. All UI/UX and design decisions run through the local design system,
 > employees, 100–500 POs/mo to 3–20 suppliers, today handled in Excel.
 >
 > **Near-term plan — the ONLY things before the first paid pilot:**
-> 1. **SSRF allowlist (P0 security)** before any live customer data (+ JWT `ValidateAudience=false`,
->    migration consolidation + fresh-DB apply test). *Cross-tenant `FindAsync` P0 ✅ fixed `54e1cf7`;
->    all-zero AES-key P0 ✅ fixed `ee7752c` (rotate the dev key out of git once billing lands).*
+> 1. **SSRF allowlist (P0 security) ✅ DONE** — `OutboundRequestGuard` (loopback/RFC-1918/link-local
+>    169.254/cloud-metadata/IPv6 ULA/IPv4-mapped) wired into all 4 dispatchers + full tests. JWT
+>    `ValidateAudience=false` is correct Clerk design (compensated by `azp` validation in
+>    `ClerkTokenValidation`). Cross-tenant `FindAsync` P0 ✅ `54e1cf7`; all-zero AES-key P0 ✅
+>    `ee7752c` (rotate the dev key out of git once billing lands). *Do NOT re-implement these.*
 > 2. **Erply/Directo starter mapping templates** (JSON config, zero code) — highest sales leverage;
->    cuts first delivery 45→<15 min.
-> 3. **Exception dashboard** (all-orders-in-exception view) — ~1 day, 1 query + 1 page.
-> 4. **Live end-to-end QA** on Railway + Vercel — one real PO, buyer → supplier, delivered intact.
+>    cuts first delivery 45→<15 min. **← THE NEXT REAL TASK.** `ErplyConnector`/`DirectoConnector`
+>    delivery adapters exist; what's missing is a starter `PoMappingConfig` JSON + delivery-config
+>    bundle so first setup is near-zero. Brainstorm scope before building (delivery-config vs
+>    field-mapping vs both).
+> 3. **Exception dashboard** (all-orders-in-exception view) — ~1 day. Backend `GET /api/exceptions`
+>    + `ExceptionsController` already exist; only the frontend page is missing.
+> 4. **Live end-to-end QA ✅ PROVEN** on Railway + Vercel (browser, 2026-06-03) — golden path works
+>    end-to-end; honest `delivery_failed` is the correct terminal state for the no-delivery-config
+>    sample supplier. A *successful* HTTP delivery (real endpoint) is still untested live.
 > 5. **Pricing ✅ shipped:** Operations €399 anchor · **Distributor €1,499** (2,500 orders / 30 suppliers) ·
 >    Enterprise from €2,500 · per-supplier onboarding fee €500×3 then €150 (waived for design
 >    partners #1–5). *Still TODO: create the Stripe Distributor product + `DistributorPriceId`.*
