@@ -77,14 +77,18 @@ public sealed class R2StorageService : IFileStorageService, IAsyncDisposable
     /// <inheritdoc/>
     public async Task<Stream> DownloadAsync(string key, CancellationToken ct)
     {
-        var request = new GetObjectRequest
-        {
-            BucketName = _bucketName,
-            Key        = key,
-        };
-
-        var response = await _client.GetObjectAsync(request, ct);
-        return response.ResponseStream;
+        // R2 rejects GetObjectAsync with a signature mismatch when the SDK uses
+        // chunked-payload signing for GET requests. Using a pre-signed URL and a
+        // plain HttpClient GET sidesteps the SDK's GET signing entirely.
+        var signedUrl = await GetSignedDownloadUrlAsync(key, TimeSpan.FromMinutes(15), ct);
+        using var http = new HttpClient();
+        var response = await http.GetAsync(signedUrl, HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+        // Read into a MemoryStream so the HttpClient/response can be disposed safely.
+        var ms = new MemoryStream();
+        await response.Content.CopyToAsync(ms, ct);
+        ms.Position = 0;
+        return ms;
     }
 
     /// <inheritdoc/>
