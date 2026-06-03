@@ -836,17 +836,20 @@ public sealed class OrdersController : ControllerBase
     );
 
     /// <summary>
-    /// Extracts BuyerName from the canonical JSON if parsing has completed.
-    /// Returns null if the order is still parsing or CanonicalJson is absent.
+    /// Extracts BuyerName from the denormalized column (set by the async parse job)
+    /// or falls back to CanonicalJson for orders created via the sync path.
     /// </summary>
     private static string? ExtractBuyerName(PurchaseOrderEntity e)
     {
+        // Prefer the denormalized column — always populated by ParseStoredFileAsync.
+        if (!string.IsNullOrWhiteSpace(e.BuyerName)) return e.BuyerName;
+
+        // Fall back to CanonicalJson for orders created via the sync (non-file) path.
         if (e.CanonicalJson is null) return null;
         try
         {
             if (e.CanonicalJson.RootElement.TryGetProperty("buyerName", out var el))
                 return el.GetString();
-            // camelCase variant
             if (e.CanonicalJson.RootElement.TryGetProperty("BuyerName", out var el2))
                 return el2.GetString();
         }
