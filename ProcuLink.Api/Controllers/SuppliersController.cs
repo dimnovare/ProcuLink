@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Api.Services.StarterTemplates;
 using ProcuLink.Core.Canonical;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -31,6 +32,7 @@ public class SuppliersController : ControllerBase
     private readonly IAnalyticsService          _analytics;
     private readonly IFileStorageService        _fileStorage;
     private readonly ISourceColumnExtractor     _sourceColumns;
+    private readonly IStarterTemplateService    _starterTemplates;
 
     public SuppliersController(
         ISupplierProfileRepository supplierProfileRepository,
@@ -43,7 +45,8 @@ public class SuppliersController : ControllerBase
         IDeliveryService           deliveryService,
         IAnalyticsService          analytics,
         IFileStorageService        fileStorage,
-        ISourceColumnExtractor     sourceColumns)
+        ISourceColumnExtractor     sourceColumns,
+        IStarterTemplateService    starterTemplates)
     {
         _supplierProfileRepository = supplierProfileRepository;
         _mappingService            = mappingService;
@@ -56,6 +59,7 @@ public class SuppliersController : ControllerBase
         _analytics                 = analytics;
         _fileStorage               = fileStorage;
         _sourceColumns             = sourceColumns;
+        _starterTemplates          = starterTemplates;
     }
 
     // ── GET /api/suppliers ────────────────────────────────────────────────────
@@ -492,6 +496,40 @@ public class SuppliersController : ControllerBase
         return Ok(result);
     }
 
+    // ── POST /api/suppliers/{id}/po-mapping/apply-template ────────────────────
+
+    /// <summary>
+    /// Copies a read-only starter mapping template (e.g. "erply", "directo") into
+    /// this supplier's PO mapping config via the existing upsert path. One-click,
+    /// zero-code: the persisted config is identical to PUT-ing the template config.
+    /// Returns the saved <see cref="PoMappingConfig"/> so the editor can show it for review.
+    /// </summary>
+    [HttpPost("{id:guid}/po-mapping/apply-template")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ApplyPoMappingTemplate(
+        Guid id,
+        [FromBody] ApplyPoMappingTemplateRequest request,
+        CancellationToken ct)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.TemplateId))
+            return BadRequest(new { error = "templateId is required." });
+
+        var orgId = _tenant.OrganisationId;
+        var supplier = await _db.Suppliers
+            .Where(s => s.OrgId == orgId && s.Id == id && s.DeletedAt == null)
+            .FirstOrDefaultAsync(ct);
+        if (supplier is null) return NotFound();
+
+        var template = _starterTemplates.GetAll()
+            .FirstOrDefault(t => string.Equals(t.Id, request.TemplateId, StringComparison.OrdinalIgnoreCase));
+        if (template is null)
+            return NotFound(new { error = $"Unknown starter template '{request.TemplateId}'." });
+
+        var saved = await _poMappingService.UpsertAsync(orgId, id, template.Config, ct);
+        return Ok(saved);
+    }
+
     // ── GET /api/suppliers/{id}/mapping/source-columns ────────────────────────
 
     /// <summary>
@@ -640,6 +678,9 @@ public record TestPoMappingRequest(
     IReadOnlyDictionary<string, string> HeaderRow,
     IReadOnlyList<IReadOnlyDictionary<string, string>> LineRows,
     PoMappingConfig Config);
+
+/// <summary>Request to copy a starter mapping template into a supplier's PO mapping config.</summary>
+public record ApplyPoMappingTemplateRequest(string TemplateId);
 
 /// <summary>
 /// Response for <c>GET /api/suppliers/{id}/mapping/source-columns</c>.
