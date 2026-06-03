@@ -27,6 +27,40 @@ using ProcuLink.Worker.Jobs;
 
 var builder = Host.CreateApplicationBuilder(args);
 
+// ── R2 clock-skew correction ────────────────────────────────────────────────
+// R2 returns SignatureDoesNotMatch (not RequestTimeTooSkewed) when a request's
+// timestamp is outside tolerance, which defeats the AWS SDK's automatic clock-skew
+// correction (it only triggers on RequestTimeTooSkewed). A worker container whose
+// clock has drifted therefore fails EVERY SigV4 request to R2 with a signature
+// error — observed intermittently in production. We probe R2's Date response header
+// once at startup and apply a global manual clock correction when the skew is
+// material, so this container's R2 signing always uses R2-relative time.
+try
+{
+    var r2Endpoint = builder.Configuration["Storage:R2Endpoint"];
+    if (!string.IsNullOrWhiteSpace(r2Endpoint))
+    {
+        using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        using var probeReq = new HttpRequestMessage(HttpMethod.Head, r2Endpoint);
+        var probeResp = probe.Send(probeReq);
+        var serverDate = probeResp.Headers.Date;
+        if (serverDate.HasValue)
+        {
+            var offset = serverDate.Value.UtcDateTime - DateTime.UtcNow;
+            Console.WriteLine($"[R2-CLOCK] offsetSeconds={offset.TotalSeconds:F1}");
+            if (Math.Abs(offset.TotalSeconds) > 5)
+            {
+                Amazon.AWSConfigs.ManualClockCorrection = offset;
+                Console.WriteLine($"[R2-CLOCK] applied ManualClockCorrection={offset.TotalSeconds:F1}s");
+            }
+        }
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"[R2-CLOCK] probe failed (non-fatal): {ex.Message}");
+}
+
 // In Production we report ALL missing keys in one error after Build(); to
 // avoid the connection-string line below pre-empting that consolidated report
 // with a single-key error, only fail-fast on the connection string in
