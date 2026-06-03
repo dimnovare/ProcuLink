@@ -31,7 +31,6 @@ public static class StartupConfigurationValidator
         "Stripe:GrowthPriceId",
         "Stripe:OperationsPriceId",
         "Stripe:IntegrationPriceId",
-        "Stripe:DistributorPriceId",
         "Delivery:EncryptionKey",
         "Security:ApiKeyHashSecret",
         "Frontend:Url",
@@ -58,6 +57,14 @@ public static class StartupConfigurationValidator
     {
         "Ai:OpenAI:ApiKey",
         "Sentry:Dsn",
+        // Distributor is not sold at launch — no Stripe product created yet.
+        // Missing price IDs here log a warning but do not block the API from starting.
+        "Stripe:DistributorPriceId",
+        "Stripe:DistributorYearlyPriceId",
+        // Yearly variants for self-serve plans are optional until annual billing is enabled.
+        "Stripe:GrowthYearlyPriceId",
+        "Stripe:OperationsYearlyPriceId",
+        "Stripe:IntegrationYearlyPriceId",
     };
 
     /// <summary>
