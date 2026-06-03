@@ -6,6 +6,38 @@ Purpose: explain the current status, what is working, what is blocked, what is p
 
 ---
 
+## Updated 2026-06-03 (night)
+
+Two P0 blockers from the original version of this brief are now **resolved and
+proven in production**:
+
+- **Background Worker is live.** `ProcuLink.Worker` runs as a single healthy
+  Railway container (service `aware-amazement`), auto-deploys from GitHub, and
+  has the correct R2 secret. It consumes the Hangfire parse / transform /
+  delivery queue.
+- **The full live PO loop is proven end-to-end** on `proculink.eu` /
+  `api.proculink.eu`: sample upload → parse (3 lines, buyer "Northwind Trading
+  OÜ") → resolve → transform (XML artifact) → **delivered (HTTP 200)** against a
+  controlled endpoint, plus the honest `delivery_failed` "missing config" path.
+  Verified in the browser UI and via API; delivery attempts and audit rows were
+  recorded.
+
+Root cause of the prior intermittent failures (now fixed): two worker services
+were sharing the Hangfire queue and `aware-amazement` had a stale/wrong R2
+secret, causing intermittent `SignatureDoesNotMatch`. The secret was corrected
+and the duplicate `ProcuLink-Worker` service deleted, so exactly one worker now
+runs.
+
+Founder-config done since the original brief: **Resend domain verified (email
+works) ✅, Google Search Console set up ✅, PostHog set up ✅.**
+
+Remaining must-dos before paid launch: **Stripe activation** (after company
+registration 2026-06-09) and **rotating the Clerk + R2 secrets** that were
+pasted into chat. The strategic-direction sections below are unchanged; only the
+status facts in this brief have been corrected.
+
+---
+
 ## Executive Summary
 
 ProcuLink is a B2B outbound procurement bridge for buyer/procurement teams that need to send purchase orders to suppliers in the supplier's required format and delivery channel.
@@ -22,11 +54,12 @@ Current live status:
 
 - Marketing frontend is live at `https://proculink.eu`.
 - API health is live at `https://api.proculink.eu/health`.
-- Authentication, CORS, public routes, protected-route redirects, and R2 storage are now working.
-- Sample-order creation and direct CSV upload now work at API level.
-- The current live blocker is background processing: uploaded orders remain `parsing` because the production Hangfire Worker service is not currently running/linked in Railway.
+- Authentication, CORS, public routes, protected-route redirects, and R2 storage are working.
+- Sample-order creation and direct CSV upload work at API level.
+- The background Hangfire Worker (`ProcuLink.Worker`, Railway service `aware-amazement`) is running and consuming the parse/transform/delivery queue. ✅
+- The full live PO loop is proven end-to-end on the live domains: upload → parse → resolve → transform → delivered (HTTP 200), plus the honest `delivery_failed` path. ✅
 
-The next critical step is to deploy `ProcuLink.Worker` as a separate Railway service from `Dockerfile.worker`, with the same production environment variables as the API where required.
+The remaining critical steps before a paid launch are Stripe activation (after company registration on 2026-06-09) and rotating the Clerk + R2 secrets that were pasted into chat.
 
 ---
 
@@ -193,10 +226,9 @@ Working:
 - Cloudflare R2 upload is now working.
 - Sample-order endpoint now returns 200.
 - Direct multipart order upload returns 200 and stores the source file in R2.
+- Uploaded orders now leave `parsing`: the live Worker consumes `ParseOrderJob` and the full upload → parse → resolve → transform → deliver loop is proven on production.
 
-Current blocker:
-
-- Uploaded orders remain in `parsing` because the Hangfire Worker service is not consuming the parse queue in production.
+No open blocker on the API path. Remaining work is Stripe activation and secret rotation (see checklist).
 
 ### Storage
 
@@ -210,31 +242,18 @@ Verified:
 
 ### Background Worker
 
-Current blocker:
+Status: ✅ Live. `ProcuLink.Worker` runs as a single healthy Railway container
+(service `aware-amazement`), built from `Dockerfile.worker`, auto-deploying from
+GitHub, with the correct R2 secret. It consumes the Hangfire parse / transform /
+delivery queue. Proof: a live sample upload parsed (3 lines, buyer "Northwind
+Trading OÜ"), transformed to an XML artifact, and delivered (HTTP 200).
 
-```text
-ProcuLink.Worker is not running as a separate Railway service.
-```
+Root cause of the earlier intermittent failures (now fixed): two worker services
+shared the Hangfire queue and `aware-amazement` had a stale/wrong R2 secret,
+causing intermittent `SignatureDoesNotMatch`. The secret was corrected and the
+duplicate `ProcuLink-Worker` service deleted, so exactly one worker now runs.
 
-Evidence:
-
-- API logs show order stubs are created.
-- API logs show `ParseOrderJob` is enqueued.
-- Orders remain `parsing` for at least 30 seconds.
-- API code intentionally does not run Hangfire server.
-- Worker code and `Dockerfile.worker` exist and are ready.
-
-Required action:
-
-Deploy a separate Railway service:
-
-```text
-Service name: ProcuLink.Worker
-Dockerfile: Dockerfile.worker
-Public domain: not needed
-```
-
-Required Worker environment:
+Worker environment (for reference / future redeploys):
 
 ```text
 ConnectionStrings__DefaultConnection
@@ -258,6 +277,9 @@ Stripe__*
 Ocr__Azure__*
 ```
 
+Operational note: `railway.toml` now uses `watchPatterns` so docs-only commits no
+longer trigger a redeploy of the API/Worker services.
+
 ---
 
 ## What Is Already Implemented
@@ -280,8 +302,8 @@ Implemented:
 
 Production readiness:
 
-- Manual upload is the primary live path.
-- Sample order works at API level after R2 fix.
+- Manual upload is the primary live path and is proven end-to-end in production.
+- Sample order works in production (parses, transforms, delivers) after the R2 secret fix.
 - Inbound REST/email/SFTP/S3 should be treated as assisted setup until self-service UX and live QA are finished.
 
 ### Parsing And Normalization
@@ -307,7 +329,7 @@ Implemented:
 Production readiness:
 
 - Local end-to-end tests pass.
-- Production parse execution is blocked until Worker is deployed.
+- Production parse execution is proven live: the Worker parsed a real sample upload (3 lines) on the live domain.
 
 ### Review And Mapping
 
@@ -325,7 +347,7 @@ Implemented:
 Production readiness:
 
 - Local live QA is green.
-- Production live QA is blocked until Worker parses uploaded orders.
+- Production live QA is proven: a live order was resolved and transformed end-to-end on the live domain.
 
 ### Transform And Delivery
 
@@ -343,13 +365,14 @@ Implemented:
 - retry delivery endpoint,
 - missing delivery config failure state,
 - supplier rejection detail in UI,
-- ERP delivery adapters for Erply and Directo,
-- SFTP/FTPS/SMTP dispatcher infrastructure.
+- ERP delivery adapters for Erply and Directo, plus an Erply/Directo apply-template endpoint that seeds starter delivery config,
+- SFTP/FTPS/SMTP dispatcher infrastructure,
+- exception dashboard at `/operations/exceptions` (all orders in an exception/failed state in one view).
 
 Production readiness:
 
 - Local happy/error paths are green.
-- Production delivery path needs Worker deployment and live test-fire against a controlled endpoint.
+- Production delivery is proven: a live order delivered HTTP 200 against a controlled endpoint, and the missing-config `delivery_failed` path was exercised. A successful delivery against a real supplier endpoint is the remaining live test.
 
 ### Billing
 
@@ -384,46 +407,47 @@ The public pricing UI has also been exploring/including a Distributor plan. Befo
 Implemented or started:
 
 - support/contact endpoint,
-- SMTP/Resend-compatible delivery path planning,
-- PostHog analytics integration is present or planned via env,
+- SMTP/Resend-compatible delivery path — **Resend domain verified, email works ✅**,
+- **PostHog analytics is set up ✅**,
 - cookie consent,
 - legal/trust docs in progress,
-- Google Search Console setup still needs final live verification after domain is stable.
+- **Google Search Console is set up ✅**.
 
 Production readiness:
 
-- Support email delivery needs final Resend/domain/from-address verification.
-- PostHog should be checked after cookie consent and production env are set.
-- Search Console should be configured after sitemap is live and domain ownership is verified.
+- Support email delivery: Resend domain verified and email sends — confirm the
+  support/contact form end-to-end with the final from-address once more under
+  live load.
+- PostHog: set up; confirm events flow after cookie consent in production.
+- Search Console: set up; keep the sitemap submitted and watch indexing.
 
 ---
 
 ## What Is Not Yet Production-Ready
 
-### P0: Worker Service
+### ✅ DONE — Worker Service
 
-Until `ProcuLink.Worker` is running in Railway, the live product cannot complete:
+`ProcuLink.Worker` is live on Railway (service `aware-amazement`) and consuming
+the parse/transform/delivery queue. The live product can now complete:
 
 ```text
 upload -> parse -> review -> transform -> deliver
 ```
 
-Uploads currently store files, but orders remain `parsing`.
+Proof: a live sample upload left `parsing`, parsed 3 lines, transformed, and
+delivered.
 
-### P0: Full Live PO Loop QA
+### ✅ DONE — Full Live PO Loop QA
 
-After Worker deployment, verify:
+Verified end-to-end on `proculink.eu` / `api.proculink.eu` (browser + API,
+2026-06-03 night): upload (sample) → parse (3 lines, buyer "Northwind Trading
+OÜ") → resolve → transform (XML artifact) → **delivered (HTTP 200)** against a
+controlled endpoint, plus the honest `delivery_failed` "missing config" path.
+Delivery attempts and audit rows were recorded.
 
-1. Create/login real user.
-2. Create or select organisation.
-3. Add supplier.
-4. Upload CSV order.
-5. Confirm it leaves `parsing`.
-6. Review extracted order.
-7. Resolve mapping.
-8. Transform.
-9. Deliver or show exact missing-config/delivery failure.
-10. Confirm delivery attempt/audit rows are recorded.
+Remaining live QA still worth doing: a successful HTTP delivery against a real
+supplier endpoint (beyond the controlled test endpoint), and the full
+authenticated browser path across desktop/tablet/mobile.
 
 ### P0: Stripe Before Paid Launch
 
@@ -451,12 +475,11 @@ Current Codex desktop environment cannot launch Playwright Chromium/Chrome/Edge 
 
 ### P1: Email And Support
 
-Before presenting support/contact as live:
+Resend domain is verified and email sends ✅. Remaining polish before presenting
+support/contact as fully live:
 
-- verify Resend domain,
-- add required DNS,
-- set support sender/from address,
-- test contact form delivery,
+- confirm the support sender/from address is the intended one,
+- run one more contact-form delivery test end-to-end,
 - test Gmail "send mail as" if founder wants to reply as `support@proculink.eu` or `hello@proculink.eu`.
 
 ### P1: OCR
@@ -477,7 +500,12 @@ Do not rely on a general LLM as the raw OCR engine for production purchase order
 
 ## Go-Live Plan Toward 2026-06-09
 
-### Phase 1: Make The Live PO Loop Work
+### Phase 1: Make The Live PO Loop Work ✅ DONE (2026-06-03)
+
+All Phase 1 tasks and exit criteria below are complete: the Worker is deployed,
+Hangfire consumes jobs, a live upload left `parsing`, resolved, transformed, and
+delivered HTTP 200, and the missing-config failure path is honest and auditable.
+Kept here for the record.
 
 Goal:
 
@@ -704,13 +732,15 @@ Add visible stuck-state guidance and internal monitoring:
 
 ### Must Do Before Calling It Live
 
-- [ ] Deploy `ProcuLink.Worker` as a separate Railway service.
-- [ ] Copy required env vars to Worker.
-- [ ] Verify Worker consumes `ParseOrderJob`.
-- [ ] Run live upload -> parse -> preview -> review -> transform -> delivery QA.
-- [ ] Verify no primary CTA is dead or misleading.
-- [ ] Verify support/contact email delivery.
-- [ ] Rotate the live Clerk secret that was pasted into chat.
+- [x] Deploy `ProcuLink.Worker` as a separate Railway service. (`aware-amazement`)
+- [x] Copy required env vars to Worker.
+- [x] Verify Worker consumes `ParseOrderJob`.
+- [x] Run live upload -> parse -> preview -> review -> transform -> delivery QA.
+- [x] Resend domain verified / email works.
+- [ ] Verify no primary CTA is dead or misleading. (final UX sweep)
+- [ ] Confirm support/contact email delivery once more under the final from-address.
+- [ ] **Rotate the live Clerk secret that was pasted into chat.**
+- [ ] **Rotate the R2 secret that was pasted into chat.**
 
 ### Must Do Before Taking Payment
 
@@ -726,9 +756,9 @@ Add visible stuck-state guidance and internal monitoring:
 
 ### Should Do Soon After
 
-- [ ] Google Search Console verification.
-- [ ] Submit sitemap.
-- [ ] Configure PostHog production analytics.
+- [x] Google Search Console set up.
+- [ ] Keep sitemap submitted / watch indexing.
+- [x] PostHog set up.
 - [ ] Add uptime/status page.
 - [ ] Add a short product walkthrough video.
 - [ ] Improve public API/intake docs for prospects.
@@ -745,8 +775,9 @@ You are reviewing ProcuLink, a B2B outbound procurement bridge for buyer/procure
 Current live status:
 - proculink.eu and api.proculink.eu are live.
 - Auth, CORS, protected redirects, Clerk production API auth, tenant provisioning, supplier API, sample-order creation, direct CSV upload, and Cloudflare R2 storage are working.
-- Current blocker: uploaded orders stay parsing because ProcuLink.Worker is not deployed/running as a separate Railway Hangfire worker service.
-- Stripe should go live after company registration on 2026-06-09.
+- The Hangfire Worker is live and the full PO loop (upload -> parse -> resolve -> transform -> delivered HTTP 200, plus honest delivery_failed) is proven end-to-end on the live domains.
+- Resend email, Google Search Console, and PostHog are set up.
+- Remaining before charging: Stripe activation after company registration on 2026-06-09, and rotating the Clerk + R2 secrets pasted into chat.
 
 Please analyse:
 1. What must be done before this can be called live?
@@ -761,11 +792,15 @@ Please analyse:
 
 ## Bottom Line
 
-ProcuLink is close to a real live product for the first buyer-side PO use case, but not live-ready until the production Worker runs and the complete PO loop is verified end to end on the live domain.
+ProcuLink is a real live product for the first buyer-side PO use case: the
+production Worker runs and the complete PO loop (upload → parse → resolve →
+transform → delivered, plus the honest failure path) is verified end-to-end on
+the live domain. What remains before charging money is Stripe activation and
+secret rotation, not core engine work.
 
 The right next move is not another broad feature. It is:
 
 ```text
-Deploy Worker -> verify live PO loop -> clean UX rough edges -> activate Stripe after company setup -> onboard first pilot users.
+Clean UX rough edges -> rotate the leaked Clerk + R2 secrets -> activate Stripe after company setup (2026-06-09) -> onboard first pilot users.
 ```
 
