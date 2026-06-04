@@ -6,7 +6,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ## Where we are: **2026-06-04 (later) — supplier-setup trust bundle: real SFTP/FTPS/email + OAuth2 fetch-token delivery, validation clarity, delete supplier, honest claims**
 
-Branch `feat/supplier-setup-trust-bundle` on **both** repos (NOT yet merged/pushed).
+Merged + pushed to `main` on **both** repos (backend `4f676e3`, frontend `7e26713`) — Railway + Vercel deploys triggered; local feature branches deleted.
 Spec + plan in `docs/superpowers/{specs,plans}/2026-06-04-supplier-setup-trust-bundle*`.
 
 **Shipped:**
@@ -22,7 +22,7 @@ Spec + plan in `docs/superpowers/{specs,plans}/2026-06-04-supplier-setup-trust-b
 
 **Verification:** backend `dotnet test ProcuLink.slnx` → **735 green** (220 Transform + 296 Infrastructure + 219 Api). Frontend `bun run build` clean.
 
-**Still to do:** merge + push both branches; live dev-stack round-trip (save/reload each new channel) + a real-endpoint Test-fire (SFTP / mailbox / OAuth token server) — both need a running stack / real supplier creds (founder side).
+**Still to do (not blocking the deploy):** a live dev-stack round-trip (save/reload each new channel through the real API) + a real-endpoint Test-fire (SFTP / mailbox / OAuth token server) — both need a running stack / real supplier creds (founder side). Queued next phases: walkthrough video (logo + "The missing link between buyers and suppliers." intro / "Connecting procurement." outro), then the broad first-client readiness audit.
 
 ---
 
