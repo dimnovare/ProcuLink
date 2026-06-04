@@ -150,6 +150,68 @@ public class HttpDeliveryDispatcherTests
         result.Success.Should().BeFalse();
         result.ErrorMessage.Should().Be("HTTP delivery timed out.");
     }
+
+    [Fact]
+    public async Task Dispatch_OAuth2_FetchesTokenThenSendsBearer()
+    {
+        string? deliveryAuth = null;
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            if (req.RequestUri!.AbsoluteUri.Contains("/oauth/token"))
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                { Content = new StringContent("{\"access_token\":\"tok-123\",\"expires_in\":3600}") };
+            deliveryAuth = req.Headers.Authorization?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("OK") };
+        });
+        var factory = new Moq.Mock<IHttpClientFactory>();
+        factory.Setup(f => f.CreateClient("delivery")).Returns(new HttpClient(handler));
+
+        var dispatcher = new HttpDeliveryDispatcher(factory.Object, MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var config = MakeConfig("https://supplier.example/orders");
+        var creds = JsonSerializer.Serialize(new
+        {
+            type = "oauth2_client_credentials",
+            tokenUrl = "https://supplier.example/oauth/token",
+            clientId = "cid", clientSecret = "secret", scope = "orders.write",
+        });
+
+        var result = await dispatcher.DispatchAsync(
+            Encoding.UTF8.GetBytes("data"), "order.csv", "text/csv", config, creds, default);
+
+        result.Success.Should().BeTrue();
+        deliveryAuth.Should().Be("Bearer tok-123");
+    }
+
+    [Fact]
+    public async Task Dispatch_OAuth2_TokenEndpoint401_FailsWithoutDelivering()
+    {
+        var deliveryCalled = false;
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            if (req.RequestUri!.AbsoluteUri.Contains("/oauth/token"))
+                return new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("nope") };
+            deliveryCalled = true;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("OK") };
+        });
+        var factory = new Moq.Mock<IHttpClientFactory>();
+        factory.Setup(f => f.CreateClient("delivery")).Returns(new HttpClient(handler));
+
+        var dispatcher = new HttpDeliveryDispatcher(factory.Object, MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var config = MakeConfig("https://supplier.example/orders");
+        var creds = JsonSerializer.Serialize(new
+        {
+            type = "oauth2_client_credentials",
+            tokenUrl = "https://supplier.example/oauth/token",
+            clientId = "cid", clientSecret = "secret",
+        });
+
+        var result = await dispatcher.DispatchAsync(
+            Encoding.UTF8.GetBytes("data"), "order.csv", "text/csv", config, creds, default);
+
+        result.Success.Should().BeFalse();
+        result.ErrorMessage.Should().Contain("OAuth token request failed: HTTP 401");
+        deliveryCalled.Should().BeFalse();
+    }
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -188,4 +250,11 @@ file sealed class DelayedHttpMessageHandler(TimeSpan delay) : HttpMessageHandler
             Content = new StringContent("OK")
         };
     }
+}
+
+file sealed class RoutingHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> route) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken)
+        => Task.FromResult(route(request));
 }
