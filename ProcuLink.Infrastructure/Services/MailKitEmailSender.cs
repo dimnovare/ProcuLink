@@ -23,6 +23,9 @@ public sealed class MailKitEmailSender : IEmailSender
         _log    = log;
     }
 
+    /// <inheritdoc/>
+    public bool CanDeliver => true;
+
     public async Task SendAsync(string to, string subject, string body, CancellationToken ct = default)
     {
         var host     = _config["Smtp:Host"];

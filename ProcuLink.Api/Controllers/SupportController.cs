@@ -44,12 +44,17 @@ public sealed class SupportController : ControllerBase
 
         var enriched = req with { UserAgent = userAgent };
 
-        await _support.SubmitAsync(orgId, userId, enriched, ct);
+        var result = await _support.SubmitAsync(orgId, userId, enriched, ct);
 
         _logger.LogInformation(
-            "Support contact accepted: org={Org} user={User} category={Category}",
-            orgId?.ToString() ?? "(anon)", userId ?? "(none)", req.Category);
+            "Support contact accepted: org={Org} user={User} category={Category} delivered={Delivered}",
+            orgId?.ToString() ?? "(anon)", userId ?? "(none)", req.Category, result.Delivered);
 
-        return Ok(new { ok = true });
+        return Ok(new
+        {
+            ok           = true,
+            delivered    = result.Delivered,
+            contactEmail = result.ContactEmail,
+        });
     }
 }
