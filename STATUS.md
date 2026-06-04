@@ -19,6 +19,10 @@ Merged + pushed to `main` both repos (backend `42c4bc3`, frontend `1dabf97`) —
 
 **Still founder/live side:** end-to-end "send in the supplier's format" round-trip (needs the running stack); SFTP/S3/email pull need real external sources to prove; hosted-email live receipt needs the inbound MX + Postmark domain (one-time infra). Deferred follow-ups: a "your inbound address" UI card (moot until the email domain exists) and a full E2E format-routing test.
 
+**Capability copy reconciled to reality (frontend `d4b8d00`):** standards catalog X12 850 → `supported` (parse + transform); help/delivery-config now lists all six channels + OAuth2; help/order-intake-options says SFTP/S3/email are self-serve (was "assisted"); one-pager delivery line includes SFTP/FTPS/email. The public `/formats` page is the canonical capability matrix; the in-app `/library/standards` catalog (`catalog.ts`) is the data source of truth.
+
+**NEXT — handed to a fresh chip: the walkthrough VIDEO.** Pipeline: `project-proculink/scripts/demo-video/` (README has the run/verify/ship handoff). Wanted: better intro/outro (logo + "The missing link between buyers and suppliers." intro · "Connecting procurement." outro), NO scrolling, a real working walkthrough; pass `ELEVENLABS_API_KEY` (voice id `onwK4e9ZLuTAKqWW03F9`, founder-provided) for VO. Memory: `project-walkthrough-video-state`, `project-canonical-design-source` (visual canonical), `project-preview-server-contention`.
+
 ---
 
 ## Where we are: **2026-06-04 (later) — supplier-setup trust bundle: real SFTP/FTPS/email + OAuth2 fetch-token delivery, validation clarity, delete supplier, honest claims**
