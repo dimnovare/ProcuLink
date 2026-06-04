@@ -4,6 +4,28 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-04 — post-delivery hardening wave shipped (6 parallel agent streams + CI green-up). Single healthy worker. Founder config is the only blocker left.**
+
+After proving live delivery (entry below), ran a multi-agent hardening wave. **All merged + pushed to `main` on both repos; both repos clean; backend 715 tests green; frontend builds clean (46 routes).** Worktrees cleaned (one stale `agent-af8320626fea9c2a1` worktree predates this session).
+
+**Shipped this wave:**
+- **Apply-template UI** (frontend) — "Apply Erply/Directo starter template ▾" in the PO mapping editor (`PoMappingEditor`/`SupplierDockProfile`) calling the merged `POST /api/suppliers/{id}/po-mapping/apply-template`. Confirm banner + live refresh.
+- **Operator job-health** — backend `OpsController`: `GET /api/ops/health` (problem-state counts), `GET /api/ops/dead-letter`, `POST /api/ops/orders/{id}/requeue-delivery` (fills a real gap — the existing `retry-delivery` rejects dead-lettered orders). New `IOpsHealthService`. +11 tests → **715**. Frontend page `/operations/health` (tiles + dead-letter table + requeue).
+- **Exception dashboard** — `/operations/exceptions` (shipped just before this wave).
+- **Docs/changelog** — `live-readiness-brief.md` corrected to Worker-live reality; `CHANGELOG.md` created (root); onboarding "send your first PO" + sample CSV added to `docs/integrations/ORDER_APIS.md`.
+- **Frontend truth audit** — fixed 5 real trust bugs: Settings "6 people have access" (hardcoded → Clerk `membersCount`), Settings "Save changes" (did nothing → `organization.update()` with validation), Templates "Export" (fake toast → real download), Webhooks live-edit fake "saved" → honest msg, removed dead "Manage" button + read-only currency. `AUDIT-FINDINGS.md` in frontend root. No demo-data leaks remain.
+- **ClerkProvider build-hardening** — `src/app/layout.tsx` now ALWAYS mounts `<ClerkProvider>` so keyless builds (no `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`) don't crash prerender. Both keyed + keyless builds verified.
+- **Connectors honest-save** — the fake "Connector configuration saved" now routes to the supplier Delivery tab (where config actually lives); Test-fire kept.
+- **Infra:** `railway.toml` `watchPatterns` so doc-only commits don't redeploy backend/worker. **Deleted the duplicate `ProcuLink-Worker` Railway service** — now ONE worker (`aware-amazement`, GitHub-auto-deploy, correct R2 secret). Post-cleanup delivery re-verified `delivered` (code 200) on the single worker.
+
+**CI fix (frontend Playwright):** 5 mock-mode e2e tests failed because this session's Clerk-race fix (`917cafd`) gated queries on `clerkReady` with no mock bypass → mock mode (no Clerk session) starved them. Fixed `SpineReview`/`UploadWorkbench`/`BridgeSidebar`/`SupplierDockList` to `isApiMockMode || clerkReady`. The 5th (sample-order nav) was a next-dev cold-compile timing flake → widened its `waitForURL` timeout. Verified locally with the CI env (mock + placeholder Clerk key + `CI=true`). See memory `clerkReady-mock-bypass` for how to run the suite like CI.
+
+**Two flagged-not-done (low priority):** Connectors-page edit "saved" was the one fixed; the other flagged item (a second connector affordance) is in `AUDIT-FINDINGS.md`. No open blockers.
+
+**ONLY remaining (founder/external):** Stripe activation (after company registration 2026-06-09 — products/prices/env/webhook); **rotate the Clerk + R2 secrets pasted in chat**. Optional: uptime/status page. Resend/GSC/PostHog already done per founder.
+
+---
+
 ## Where we are: **2026-06-03 (night) — ✅ SUCCESSFUL HTTP DELIVERY PROVEN END-TO-END; root cause was a duplicate worker with a stale R2 secret**
 
 **RESOLVED.** A real order went all the way to `delivered` live (order `e31c3e7c…`, DEMO-2026-001, buyer "Northwind Trading OÜ", delivery attempt **code 200**), verified in the browser UI (status journey Parse✓ Normalize✓ Validate✓ Transform✓ Deliver●, supplier cXML with resolved SUP-001/002/003). Pipeline ran in ~24s, no retries, no hang.

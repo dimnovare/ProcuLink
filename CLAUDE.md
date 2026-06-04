@@ -237,16 +237,17 @@ source. All UI/UX and design decisions run through the local design system,
 >    `ValidateAudience=false` is correct Clerk design (compensated by `azp` validation in
 >    `ClerkTokenValidation`). Cross-tenant `FindAsync` P0 ✅ `54e1cf7`; all-zero AES-key P0 ✅
 >    `ee7752c` (rotate the dev key out of git once billing lands). *Do NOT re-implement these.*
-> 2. **Erply/Directo starter mapping templates** (JSON config, zero code) — highest sales leverage;
->    cuts first delivery 45→<15 min. **← THE NEXT REAL TASK.** `ErplyConnector`/`DirectoConnector`
->    delivery adapters exist; what's missing is a starter `PoMappingConfig` JSON + delivery-config
->    bundle so first setup is near-zero. Brainstorm scope before building (delivery-config vs
->    field-mapping vs both).
-> 3. **Exception dashboard** (all-orders-in-exception view) — ~1 day. Backend `GET /api/exceptions`
->    + `ExceptionsController` already exist; only the frontend page is missing.
-> 4. **Live end-to-end QA ✅ PROVEN** on Railway + Vercel (browser, 2026-06-03) — golden path works
->    end-to-end; honest `delivery_failed` is the correct terminal state for the no-delivery-config
->    sample supplier. A *successful* HTTP delivery (real endpoint) is still untested live.
+> 2. **Erply/Directo starter mapping templates ✅ DONE** — embedded fixtures + `StarterTemplateService`
+>    + `GET /api/po-mapping-templates` + `POST /api/suppliers/{id}/po-mapping/apply-template`, and a
+>    one-click "Apply starter template" control in the PO mapping editor. *Human must still verify the
+>    assumed Erply/Directo column names against a real export (see
+>    `docs/superpowers/specs/2026-06-03-erply-directo-mapping-templates.md`).*
+> 3. **Exception dashboard ✅ DONE** — `/operations/exceptions` shipped; plus a new operator
+>    `/operations/health` view (`/api/ops/health` + dead-letter + requeue).
+> 4. **Live end-to-end QA ✅ PROVEN incl. SUCCESSFUL delivery** — a real order reached `delivered`
+>    (code 200) live against a controlled endpoint (2026-06-03 night), browser + API verified, single
+>    worker. Honest `delivery_failed` path also proven. *Only a delivery against a real SUPPLIER's
+>    endpoint remains untested (needs a real supplier).*
 > 5. **Pricing ✅ shipped:** Operations €399 anchor · **Distributor €1,499** (2,500 orders / 30 suppliers) ·
 >    Enterprise from €2,500 · per-supplier onboarding fee €500×3 then €150 (waived for design
 >    partners #1–5). *Still TODO: create the Stripe Distributor product + `DistributorPriceId`.*
