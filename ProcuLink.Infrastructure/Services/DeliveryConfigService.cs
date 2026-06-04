@@ -13,6 +13,10 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         DeliveryProtocolConstants.All,
         StringComparer.OrdinalIgnoreCase);
 
+    private static readonly HashSet<string> AllowedOutputFormats = new(
+        new[] { "xml", "csv", "cxml", "json", "ubl", "x12" },
+        StringComparer.OrdinalIgnoreCase);
+
     private readonly ProcuLinkDbContext _db;
     private readonly DeliveryEncryptionService _encryption;
 
@@ -66,6 +70,7 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         existing.Protocol = protocol;
         existing.AutoDeliver = request.AutoDeliver;
         existing.ConfigJson = request.ConfigJson;
+        existing.OutputFormat = NormalizeOutputFormat(request.OutputFormat);
         existing.UpdatedAt = now;
 
         if (request.CredentialsJson is not null)
@@ -103,7 +108,18 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             hasCredentials,
             hasCredentials ? CredentialsMask : null,
             config.CreatedAt,
-            config.UpdatedAt);
+            config.UpdatedAt,
+            config.OutputFormat);
+    }
+
+    private static string? NormalizeOutputFormat(string? format)
+    {
+        if (string.IsNullOrWhiteSpace(format)) return null;
+        var normalized = format.Trim().ToLowerInvariant();
+        if (!AllowedOutputFormats.Contains(normalized))
+            throw new ArgumentException(
+                "Output format must be one of: xml, csv, cxml, json, ubl, x12.", nameof(format));
+        return normalized;
     }
 
     private static string NormalizeProtocol(string protocol)

@@ -211,6 +211,42 @@ public class DeliveryConfigServiceTests
             .WithMessage("Delivery protocol must be http, sftp, ftp, ftps, smtp, erp_erply, or erp_directo.*");
     }
 
+    [Fact]
+    public async Task UpsertAsync_NormalizesAndPersistsOutputFormat()
+    {
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        var saved = await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest("http", false, "{\"url\":\"https://a.example\"}", null, "CXML"),
+            default);
+
+        saved.OutputFormat.Should().Be("cxml");
+
+        var fetched = await service.GetAsync(orgId, supplierId, default);
+        fetched!.OutputFormat.Should().Be("cxml");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_RejectsUnknownOutputFormat()
+    {
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+
+        var act = () => service.UpsertAsync(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            new UpsertDeliveryConfigRequest("http", false, "{\"url\":\"https://a.example\"}", null, "edifact"),
+            default);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("Output format must be one of: xml, csv, cxml, json, ubl, x12.*");
+    }
+
     private sealed class DeliveryConfigTestDbContext : ProcuLinkDbContext
     {
         public DeliveryConfigTestDbContext(DbContextOptions<ProcuLinkDbContext> options)

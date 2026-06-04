@@ -39,6 +39,10 @@ public sealed class OrdersController : ControllerBase
     /// <summary>Max accepted length for Idempotency-Key — guards against accidental garbage. </summary>
     private const int MaxIdempotencyKeyLength = 200;
 
+    /// <summary>Output formats reachable via transform — each maps to a registered ITransformService.</summary>
+    private static readonly HashSet<string> AllowedTransformFormats =
+        new(StringComparer.OrdinalIgnoreCase) { "xml", "csv", "cxml", "json", "ubl", "x12" };
+
     public OrdersController(
         IOrderService             orders,
         ICurrentTenantService     tenant,
@@ -379,10 +383,6 @@ public sealed class OrdersController : ControllerBase
         [FromBody] TransformRequest request,
         CancellationToken ct)
     {
-        var formatStr = request.Format?.ToLowerInvariant();
-        if (formatStr != "xml" && formatStr != "csv" && formatStr != "json" && formatStr != "cxml")
-            return BadRequest(new { error = "Format must be 'xml', 'csv', 'json', or 'cxml'." });
-
         var limitCheck = await _billing.CheckOrderLimitAsync(_tenant.OrganisationId, ct);
         if (!limitCheck.Allowed)
         {
@@ -423,8 +423,29 @@ public sealed class OrdersController : ControllerBase
         if (order.Status == "transforming")
             return Accepted(new { status = "transforming" }); // already in progress
 
+        // Resolve the output format: an explicit request format wins (e.g. a manual download);
+        // otherwise fall back to the supplier's configured delivery format so "send to supplier"
+        // auto-uses the format that supplier requires; otherwise a safe default.
+        var formatStr = request.Format?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(formatStr))
+        {
+            var supplierFormat = await (
+                from o in _db.PurchaseOrders.AsNoTracking()
+                join c in _db.SupplierDeliveryConfigs.AsNoTracking()
+                    on new { o.OrgId, o.SupplierId } equals new { c.OrgId, c.SupplierId }
+                where o.Id == id && o.OrgId == _tenant.OrganisationId
+                select c.OutputFormat
+            ).FirstOrDefaultAsync(ct);
+            formatStr = supplierFormat?.Trim().ToLowerInvariant();
+        }
+        if (string.IsNullOrEmpty(formatStr))
+            formatStr = "xml"; // safe default when neither the request nor the supplier specifies one
+
+        if (!AllowedTransformFormats.Contains(formatStr))
+            return BadRequest(new { error = "Format must be one of: xml, csv, cxml, json, ubl, x12." });
+
         // Enqueue transform job
-        TransformOrderJob.Enqueue(_jobs, id, _tenant.OrganisationId, formatStr!);
+        TransformOrderJob.Enqueue(_jobs, id, _tenant.OrganisationId, formatStr);
 
         _logger.LogInformation(
             "TransformOrderJob enqueued for order {OrderId}, format={Format}",
