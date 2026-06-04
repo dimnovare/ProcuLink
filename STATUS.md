@@ -4,6 +4,28 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-04 (later) — supplier-setup trust bundle: real SFTP/FTPS/email + OAuth2 fetch-token delivery, validation clarity, delete supplier, honest claims**
+
+Branch `feat/supplier-setup-trust-bundle` on **both** repos (NOT yet merged/pushed).
+Spec + plan in `docs/superpowers/{specs,plans}/2026-06-04-supplier-setup-trust-bundle*`.
+
+**Shipped:**
+- **Delivery channels (frontend) now real:** `DeliveryConfigEditor` is protocol-aware — SFTP (password/key), FTPS (+ opt-in allow-invalid-cert), Email/SMTP (from/recipients + advanced subject/body/attachment), each emitting exactly the camelCase JSON its dispatcher parses. Fixed the FTPS option that saved protocol `ftp` (a protocol with no dispatcher). Backend dispatchers already existed + were tested.
+- **HTTP OAuth2 fetch-token (backend + UI):** new `oauth2_client_credentials` mode on `HttpDeliveryDispatcher` — fetches a fresh bearer token from the supplier's token endpoint before each delivery (token URL SSRF-guarded; token never stored/logged); standard OAuth2 defaults + advanced overrides (`commit 3acfaf9`). 2 new dispatcher tests.
+- **Validation-rule clarity:** "How validation works" explainer; Field is now a per-scope dropdown of ONLY backend-resolvable paths (kills silently-dead rules); operators aligned with the backend (added `in`/`min`/`max`); "+ Add common rule" quick-pick.
+- **Delete supplier:** header action + confirm dialog → soft-delete → back to list. Removed the redundant "Configure delivery" button.
+- **Honest claims:** upload hint, how-it-works delivery-output badges (EDIFACT/X12 → CSV/JSON — no production outbound transformer), and help delivery copy reconciled to real capability.
+
+**Verified channel matrix (offer ⇔ works):**
+- Delivery — every offered protocol has passing dispatcher tests: HTTP (+OAuth2), SFTP, FTPS, SMTP; Erply/Directo via `ErpConnectorTests`. *(unit-level proof; a real SFTP/mailbox/token-endpoint Test-fire is founder-side.)*
+- Import — every accepted upload format has a parser test: CSV, XLSX (new `XlsxOrderParserTests`), PDF, cXML, UBL, EDIFACT, X12.
+
+**Verification:** backend `dotnet test ProcuLink.slnx` → **735 green** (220 Transform + 296 Infrastructure + 219 Api). Frontend `bun run build` clean.
+
+**Still to do:** merge + push both branches; live dev-stack round-trip (save/reload each new channel) + a real-endpoint Test-fire (SFTP / mailbox / OAuth token server) — both need a running stack / real supplier creds (founder side).
+
+---
+
 ## Where we are: **2026-06-04 — post-delivery hardening wave shipped (6 parallel agent streams + CI green-up). Single healthy worker. Founder config is the only blocker left.**
 
 After proving live delivery (entry below), ran a multi-agent hardening wave. **All merged + pushed to `main` on both repos; both repos clean; backend 715 tests green; frontend builds clean (46 routes).** Worktrees cleaned (one stale `agent-af8320626fea9c2a1` worktree predates this session).
