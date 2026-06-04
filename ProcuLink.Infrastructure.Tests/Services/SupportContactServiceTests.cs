@@ -10,15 +10,22 @@ namespace ProcuLink.Infrastructure.Tests.Services;
 
 public class SupportContactServiceTests
 {
+    // ── helper ───────────────────────────────────────────────────────────────
+
+    private static SupportContactService Make(FakeEmailSender mail, FakeAnalyticsService analytics, IConfiguration? config = null)
+        => new(mail, analytics, config ?? EmptyConfig(), NullLogger<SupportContactService>.Instance);
+
+    // ── existing behaviour (still passing) ───────────────────────────────────
+
     [Fact]
     public async Task SubmitAsync_SendsEmail_WithExpectedSubjectAndCategory()
     {
-        var mail = new FakeEmailSender();
+        var mail      = new FakeEmailSender(canDeliver: true);
         var analytics = new FakeAnalyticsService();
-        var svc = new SupportContactService(mail, analytics, EmptyConfig(), NullLogger<SupportContactService>.Instance);
+        var svc       = Make(mail, analytics);
 
         var orgId = Guid.NewGuid();
-        await svc.SubmitAsync(
+        var result = await svc.SubmitAsync(
             orgId,
             "user_abc",
             new SupportContactRequest("bug", "Cannot upload PDF", "Stack trace …", "u@example.com", "Mozilla/5", "/upload"),
@@ -44,9 +51,9 @@ public class SupportContactServiceTests
     [Fact]
     public async Task SubmitAsync_DoesNotEmitAnalytics_WhenAnonymous()
     {
-        var mail = new FakeEmailSender();
+        var mail      = new FakeEmailSender(canDeliver: true);
         var analytics = new FakeAnalyticsService();
-        var svc = new SupportContactService(mail, analytics, EmptyConfig(), NullLogger<SupportContactService>.Instance);
+        var svc       = Make(mail, analytics);
 
         await svc.SubmitAsync(
             organisationId: null,
@@ -61,6 +68,64 @@ public class SupportContactServiceTests
         analytics.CapturedEvents.Should().BeEmpty(
             "anonymous support submissions should not be tied to an organisation in PostHog");
     }
+
+    // ── new: delivered flag truthfulness ─────────────────────────────────────
+
+    [Fact]
+    public async Task SubmitAsync_ReturnsDelivered_True_WhenSmtpSenderConfigured()
+    {
+        // Simulate MailKitEmailSender (CanDeliver = true)
+        var mail      = new FakeEmailSender(canDeliver: true);
+        var analytics = new FakeAnalyticsService();
+        var svc       = Make(mail, analytics);
+
+        var result = await svc.SubmitAsync(
+            Guid.NewGuid(), "user_1",
+            new SupportContactRequest("billing", "Invoice question", "Body.", null, null, null),
+            CancellationToken.None);
+
+        result.Delivered.Should().BeTrue("MailKitEmailSender has SMTP configured");
+        result.ContactEmail.Should().Be("support@proculink.eu");
+    }
+
+    [Fact]
+    public async Task SubmitAsync_ReturnsDelivered_False_WhenConsoleOnlySender()
+    {
+        // Simulate ConsoleEmailSender (CanDeliver = false — no SMTP host)
+        var mail      = new FakeEmailSender(canDeliver: false);
+        var analytics = new FakeAnalyticsService();
+        var svc       = Make(mail, analytics);
+
+        var result = await svc.SubmitAsync(
+            Guid.NewGuid(), "user_2",
+            new SupportContactRequest("general", "Dev question", "Body.", null, null, null),
+            CancellationToken.None);
+
+        result.Delivered.Should().BeFalse("ConsoleEmailSender only logs — no SMTP configured");
+        result.ContactEmail.Should().Be("support@proculink.eu",
+            "caller still needs the fallback address to show the user");
+
+        // The email body was still captured (logged), just not truly sent
+        mail.Sent.Should().HaveCount(1, "ConsoleEmailSender still records the call in the fake");
+    }
+
+    [Fact]
+    public async Task SubmitAsync_AnalyticsEvent_IncludesDeliveredFlag()
+    {
+        var mail      = new FakeEmailSender(canDeliver: false);
+        var analytics = new FakeAnalyticsService();
+        var svc       = Make(mail, analytics);
+
+        var orgId = Guid.NewGuid();
+        await svc.SubmitAsync(orgId, "user_3",
+            new SupportContactRequest("feature", "Request", "Body.", null, null, "/dashboard"),
+            CancellationToken.None);
+
+        var ev = analytics.CapturedEvents.Single(e => e.EventName == "support_form_submitted");
+        ev.Properties["delivered"].Should().Be(false);
+    }
+
+    // ── helper ───────────────────────────────────────────────────────────────
 
     private static IConfiguration EmptyConfig() =>
         new ConfigurationBuilder().Build();

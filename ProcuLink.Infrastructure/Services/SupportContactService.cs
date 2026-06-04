@@ -25,7 +25,7 @@ public sealed class SupportContactService : ISupportContactService
         _log       = log;
     }
 
-    public async Task SubmitAsync(
+    public async Task<SupportContactResult> SubmitAsync(
         Guid? organisationId,
         string? userId,
         SupportContactRequest req,
@@ -42,6 +42,10 @@ public sealed class SupportContactService : ISupportContactService
             req.Message;
 
         var supportInbox = _config["Smtp:SupportTo"] ?? _config["Support:Inbox"] ?? DefaultSupportInbox;
+
+        // Snapshot before sending so the result is always accurate even if the sender swallows
+        // exceptions (MailKitEmailSender does).
+        bool delivered = _mail.CanDeliver;
         await _mail.SendAsync(supportInbox, subject, body, ct);
 
         if (organisationId.HasValue)
@@ -52,14 +56,17 @@ public sealed class SupportContactService : ISupportContactService
                 eventName: "support_form_submitted",
                 properties: new Dictionary<string, object?>
                 {
-                    ["category"] = req.Category,
-                    ["route"]    = req.Route ?? "(none)",
+                    ["category"]  = req.Category,
+                    ["route"]     = req.Route ?? "(none)",
+                    ["delivered"] = delivered,
                 },
                 ct: ct);
         }
 
         _log.LogInformation(
-            "Support contact submitted: org={Org} user={User} category={Category} route={Route}",
-            organisationId?.ToString() ?? "(none)", userId ?? "(none)", req.Category, req.Route ?? "(none)");
+            "Support contact submitted: org={Org} user={User} category={Category} route={Route} delivered={Delivered}",
+            organisationId?.ToString() ?? "(none)", userId ?? "(none)", req.Category, req.Route ?? "(none)", delivered);
+
+        return new SupportContactResult(delivered, supportInbox);
     }
 }

@@ -14,6 +14,9 @@ public sealed class ConsoleEmailSender : IEmailSender
 
     public ConsoleEmailSender(ILogger<ConsoleEmailSender> log) => _log = log;
 
+    /// <inheritdoc/>
+    public bool CanDeliver => false;
+
     public Task SendAsync(string to, string subject, string body, CancellationToken ct = default)
     {
         _log.LogInformation(

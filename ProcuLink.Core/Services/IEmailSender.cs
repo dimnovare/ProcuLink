@@ -8,5 +8,12 @@ namespace ProcuLink.Core.Services;
 /// </summary>
 public interface IEmailSender
 {
+    /// <summary>
+    /// <c>true</c> when this implementation can actually transmit email (SMTP configured).
+    /// <c>false</c> for fallback/dev senders that only log — callers can use this to give
+    /// honest feedback to users rather than implying the email was sent.
+    /// </summary>
+    bool CanDeliver { get; }
+
     Task SendAsync(string to, string subject, string body, CancellationToken ct = default);
 }
