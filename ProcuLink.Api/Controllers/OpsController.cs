@@ -59,17 +59,21 @@ public sealed class OpsController : ControllerBase
     {
         var s = await _health.GetHealthAsync(_tenant.OrganisationId, ct);
         return Ok(new OpsHealthDto(
-            ParsingStuck:          s.ParsingStuck,
-            DeliveringStuck:       s.DeliveringStuck,
-            TransformFailed:       s.TransformFailed,
-            DeliveryFailed:        s.DeliveryFailed,
-            DeliveryDeadLetter:    s.DeliveryDeadLetter,
-            RejectedBySupplier:    s.RejectedBySupplier,
-            Failed:                s.Failed,
-            SlaBreached:           s.SlaBreached,
-            OpenExceptions:        s.OpenExceptions,
-            StuckThresholdMinutes: s.StuckThresholdMinutes,
-            TotalProblemOrders:    s.TotalProblemOrders));
+            ParsingStuck:                 s.ParsingStuck,
+            DeliveringStuck:              s.DeliveringStuck,
+            TransformFailed:              s.TransformFailed,
+            DeliveryFailed:               s.DeliveryFailed,
+            DeliveryDeadLetter:           s.DeliveryDeadLetter,
+            RejectedBySupplier:           s.RejectedBySupplier,
+            Failed:                       s.Failed,
+            SlaBreached:                  s.SlaBreached,
+            OpenExceptions:               s.OpenExceptions,
+            StuckThresholdMinutes:        s.StuckThresholdMinutes,
+            TotalProblemOrders:           s.TotalProblemOrders,
+            ActiveWorkers:                s.ActiveWorkers,
+            LastWorkerHeartbeatUtc:       s.LastWorkerHeartbeatUtc,
+            SecondsSinceWorkerHeartbeat:  s.SecondsSinceWorkerHeartbeat,
+            WorkerHealthy:                s.WorkerHealthy));
     }
 
     // ── GET /api/ops/dead-letter ──────────────────────────────────────────────

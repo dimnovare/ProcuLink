@@ -1,3 +1,4 @@
+using Hangfire.Storage;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
@@ -13,9 +14,20 @@ public sealed class OpsHealthService : IOpsHealthService
     /// </summary>
     public TimeSpan StuckThreshold { get; } = TimeSpan.FromMinutes(30);
 
-    private readonly ProcuLinkDbContext _db;
+    /// <summary>
+    /// A heartbeat older than this is treated as a dead/missing worker.
+    /// Hangfire's default HeartbeatInterval is 30 s; we allow 2× leeway.
+    /// </summary>
+    private static readonly TimeSpan WorkerHeartbeatDeadline = TimeSpan.FromSeconds(60);
 
-    public OpsHealthService(ProcuLinkDbContext db) => _db = db;
+    private readonly ProcuLinkDbContext _db;
+    private readonly IMonitoringApi?    _monitoring;
+
+    public OpsHealthService(ProcuLinkDbContext db, IMonitoringApi? monitoring = null)
+    {
+        _db         = db;
+        _monitoring = monitoring;
+    }
 
     public async Task<OpsHealthSummary> GetHealthAsync(Guid organisationId, CancellationToken ct)
     {
@@ -52,17 +64,63 @@ public sealed class OpsHealthService : IOpsHealthService
         var openExceptions = await _db.OrderExceptions
             .CountAsync(e => e.OrgId == organisationId && e.State == "open", ct);
 
+        // ── Worker / Hangfire-server health ──────────────────────────────────────
+        var (activeWorkers, lastHeartbeat, secondsSince, workerHealthy) = GetWorkerHealth();
+
         return new OpsHealthSummary(
-            ParsingStuck:           parsingStuck,
-            DeliveringStuck:        deliveringStuck,
-            TransformFailed:        Count(OrderStatusConstants.TransformFailed),
-            DeliveryFailed:         Count(OrderStatusConstants.DeliveryFailed),
-            DeliveryDeadLetter:     Count(OrderStatusConstants.DeliveryDeadLetter),
-            RejectedBySupplier:     Count(OrderStatusConstants.RejectedBySupplier),
-            Failed:                 Count(OrderStatusConstants.Failed),
-            SlaBreached:            slaBreached,
-            OpenExceptions:         openExceptions,
-            StuckThresholdMinutes:  (int)StuckThreshold.TotalMinutes);
+            ParsingStuck:                 parsingStuck,
+            DeliveringStuck:              deliveringStuck,
+            TransformFailed:              Count(OrderStatusConstants.TransformFailed),
+            DeliveryFailed:               Count(OrderStatusConstants.DeliveryFailed),
+            DeliveryDeadLetter:           Count(OrderStatusConstants.DeliveryDeadLetter),
+            RejectedBySupplier:           Count(OrderStatusConstants.RejectedBySupplier),
+            Failed:                       Count(OrderStatusConstants.Failed),
+            SlaBreached:                  slaBreached,
+            OpenExceptions:               openExceptions,
+            StuckThresholdMinutes:        (int)StuckThreshold.TotalMinutes,
+            ActiveWorkers:                activeWorkers,
+            LastWorkerHeartbeatUtc:       lastHeartbeat,
+            SecondsSinceWorkerHeartbeat:  secondsSince,
+            WorkerHealthy:                workerHealthy);
+    }
+
+    /// <summary>
+    /// Queries the Hangfire monitoring API for registered server heartbeats.
+    /// Returns safe defaults when the monitoring API is unavailable or throws.
+    /// </summary>
+    private (int activeWorkers, DateTime? lastHeartbeat, double? secondsSince, bool healthy)
+        GetWorkerHealth()
+    {
+        try
+        {
+            var api = _monitoring ?? Hangfire.JobStorage.Current?.GetMonitoringApi();
+            if (api is null)
+                return (0, null, null, false);
+
+            var servers = api.Servers();
+            if (servers is null || servers.Count == 0)
+                return (0, null, null, false);
+
+            var now          = DateTime.UtcNow;
+            var lastHeartbeat = servers
+                .Select(s => s.Heartbeat)
+                .Where(h => h.HasValue)
+                .Select(h => h!.Value)
+                .DefaultIfEmpty()
+                .Max();
+
+            if (lastHeartbeat == default)
+                return (servers.Count, null, null, false);
+
+            var age     = (now - lastHeartbeat).TotalSeconds;
+            var healthy = age <= WorkerHeartbeatDeadline.TotalSeconds;
+            return (servers.Count, lastHeartbeat, age, healthy);
+        }
+        catch
+        {
+            // Monitoring API unavailable (e.g. storage not yet ready, test environment).
+            return (0, null, null, false);
+        }
     }
 
     public async Task<IReadOnlyList<DeadLetterOrder>> ListDeadLetterAsync(

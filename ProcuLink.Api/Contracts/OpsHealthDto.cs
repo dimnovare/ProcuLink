@@ -16,6 +16,10 @@ namespace ProcuLink.Api.Contracts;
 /// <param name="OpenExceptions">Total open <c>OrderException</c> rows for the org.</param>
 /// <param name="StuckThresholdMinutes">The age threshold (minutes) used for the *Stuck counts.</param>
 /// <param name="TotalProblemOrders">Sum of all problematic order counts above (excludes OpenExceptions).</param>
+/// <param name="ActiveWorkers">Number of Hangfire server processes currently registered.</param>
+/// <param name="LastWorkerHeartbeatUtc">Most-recent heartbeat timestamp across all Hangfire servers. Null if no servers registered.</param>
+/// <param name="SecondsSinceWorkerHeartbeat">Seconds elapsed since the most-recent heartbeat. Null if no servers registered.</param>
+/// <param name="WorkerHealthy">True iff at least one Hangfire server sent a heartbeat within the last 60 seconds.</param>
 public record OpsHealthDto(
     int ParsingStuck,
     int DeliveringStuck,
@@ -27,7 +31,11 @@ public record OpsHealthDto(
     int SlaBreached,
     int OpenExceptions,
     int StuckThresholdMinutes,
-    int TotalProblemOrders
+    int TotalProblemOrders,
+    int        ActiveWorkers,
+    DateTime?  LastWorkerHeartbeatUtc,
+    double?    SecondsSinceWorkerHeartbeat,
+    bool       WorkerHealthy
 );
 
 /// <summary>
