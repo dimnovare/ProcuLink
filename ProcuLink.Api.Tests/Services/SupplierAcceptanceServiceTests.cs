@@ -129,4 +129,55 @@ public class SupplierAcceptanceServiceTests
         var results = await svc.ValidateOrderAsync(Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None);
         Assert.Null(results);
     }
+
+    [Fact]
+    public async Task GetLatestAsync_NoDraftOrActive_ReturnsNull()
+    {
+        var db = MakeDb();
+        var svc = new SupplierAcceptanceService(db);
+        var orgId = Guid.NewGuid(); var supplierId = Guid.NewGuid();
+
+        var result = await svc.GetLatestAsync(orgId, supplierId, CancellationToken.None);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetLatestAsync_OnlyDraftExists_ReturnsDraft()
+    {
+        var db = MakeDb();
+        var svc = new SupplierAcceptanceService(db);
+        var orgId = Guid.NewGuid(); var supplierId = Guid.NewGuid();
+
+        var draft = await svc.CreateVersionAsync(orgId, supplierId, null, "xml",
+            new[] { RequiredSupplierCode() }, null, CancellationToken.None);
+
+        var result = await svc.GetLatestAsync(orgId, supplierId, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal(draft.Id, result.Id);
+        Assert.Equal("draft", result.Status);
+    }
+
+    [Fact]
+    public async Task GetLatestAsync_ActiveExists_ReturnsActive()
+    {
+        var db = MakeDb();
+        var svc = new SupplierAcceptanceService(db);
+        var orgId = Guid.NewGuid(); var supplierId = Guid.NewGuid();
+
+        var v1 = await svc.CreateVersionAsync(orgId, supplierId, null, "xml",
+            new[] { RequiredSupplierCode() }, null, CancellationToken.None);
+        await svc.ActivateVersionAsync(orgId, supplierId, v1.VersionNo, CancellationToken.None);
+
+        // Create a second draft on top of the active version
+        await svc.CreateVersionAsync(orgId, supplierId, null, "xml",
+            new[] { RequiredSupplierCode() }, null, CancellationToken.None);
+
+        var result = await svc.GetLatestAsync(orgId, supplierId, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal("active", result.Status);
+        Assert.Equal(v1.VersionNo, result.VersionNo);
+    }
 }

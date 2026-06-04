@@ -5,7 +5,7 @@ public record AcceptanceRuleDto(
     string? ExpectedValue, string Severity, bool BlockOnFail);
 
 public record AcceptanceProfileDto(
-    Guid    Id, int VersionNo, string Status,
+    Guid    Id, Guid SupplierId, int VersionNo, string Status,
     string? Protocol, string? OutputFormat,
     DateTime? EffectiveFrom, DateTime? EffectiveTo,
     DateTime CreatedAt,
