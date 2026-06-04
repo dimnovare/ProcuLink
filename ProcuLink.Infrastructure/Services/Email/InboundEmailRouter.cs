@@ -15,11 +15,11 @@ namespace ProcuLink.Infrastructure.Services.Email;
 /// Inbound Parse) into the existing CreateStub + ParseOrderJob pipeline.
 /// </summary>
 /// <remarks>
-/// Today's tenant resolution is config-driven: <c>Inbound:Postmark:TenantMapping:{slug}</c>
-/// → org-id GUID. This is a deliberate workaround until the founder adds an
-/// <c>OrgSlug</c> column to the <c>organisations</c> table. Once that column
-/// exists, the resolver can replace the config lookup with a DB query without
-/// touching the controller or the interface contract.
+/// Tenant resolution routes on the organisation's own unique <c>Slug</c> (auto-generated
+/// at org creation), so any org can receive orders at <c>orders@{slug}.proculink.eu</c>
+/// with no per-org setup. An explicit <c>Inbound:Postmark:TenantMapping:{slug}</c> config
+/// entry is still honoured as an override/fallback. (Live receipt also needs the inbound
+/// MX + Postmark domain configured — that is one-time infra, not per-org.)
 /// </remarks>
 public sealed class InboundEmailRouter : IInboundEmailRouter
 {
@@ -104,7 +104,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 $"Recipient '{payload.ToEmail}' does not look like an inbound ProcuLink address.");
         }
 
-        var orgId = ResolveOrgIdFromSlug(slug);
+        var orgId = await ResolveOrgIdFromSlugAsync(slug, ct);
         if (orgId is null)
         {
             _logger.LogWarning("Inbound email rejected: no tenant mapping for slug {Slug}.", slug);
@@ -313,13 +313,19 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         return string.IsNullOrWhiteSpace(configured) ? DefaultHostSuffix : configured;
     }
 
-    private Guid? ResolveOrgIdFromSlug(string slug)
+    private async Task<Guid?> ResolveOrgIdFromSlugAsync(string slug, CancellationToken ct)
     {
-        // Until OrgSlug is added to the organisations table, we rely on a
-        // configurable mapping: Inbound:Postmark:TenantMapping:{slug} = "<guid>".
+        // Primary: the org's own unique Slug (auto-generated at creation) — no per-org config.
+        var orgId = await _db.Organisations
+            .AsNoTracking()
+            .Where(o => o.Slug == slug)
+            .Select(o => (Guid?)o.Id)
+            .FirstOrDefaultAsync(ct);
+        if (orgId is not null)
+            return orgId;
+
+        // Fallback/override: explicit config mapping Inbound:Postmark:TenantMapping:{slug}.
         var raw = _config[$"Inbound:Postmark:TenantMapping:{slug}"];
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
         return Guid.TryParse(raw, out var id) ? id : (Guid?)null;
     }
 
