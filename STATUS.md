@@ -4,6 +4,23 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-04 (latest) — output-format routing, all formats reachable, self-serve SFTP/S3/email ingest, public /formats page**
+
+Merged + pushed to `main` both repos (backend `42c4bc3`, frontend `1dabf97`) — Railway + Vercel redeploying; Railway applies migration `AddDeliveryConfigOutputFormat` (one nullable `output_format` column) on startup. Local feature branches deleted.
+
+**Shipped:**
+- **All 6 output formats reachable + per-supplier picker:** widened the transform whitelist (`{xml,csv,json,cxml}` → all six incl. `ubl`/`x12` — those transform engines already existed, just whitelist-blocked). "Output format" dropdown on the Delivery tab (`SupplierDeliveryConfig.OutputFormat`).
+- **Supplier-driven delivery:** transform `format` is now optional → resolves request → supplier's configured format → default(`xml`). "Send to supplier" no longer hardcodes xml. Removed the duplicate protocol/format fields from the Validation-rules tab (Delivery tab is the single source).
+- **Self-serve SFTP & S3/R2 pull:** new `GET/PUT /api/settings/{sftp,s3}` (encrypted creds via `DeliveryEncryptionService`, billing-gated SftpIngestion/S3Ingestion) + two Settings tabs. Were DB-row-only before.
+- **Hosted inbound email:** `InboundEmailRouter` routes on the org's unique `Slug` (no per-org config); `Inbound:Postmark:TenantMapping` kept as fallback.
+- **Public `/formats` capability page:** every import/delivery method + format tagged Supported / Configurable / On request / Planned; linked in nav + sitemap. Honest by design.
+
+**Verification:** backend `dotnet test ProcuLink.slnx` **740 green** (new DeliveryConfigService + PullIngressSettingsService tests). Frontend `bun run build` clean, 47 routes (incl. `/formats`).
+
+**Still founder/live side:** end-to-end "send in the supplier's format" round-trip (needs the running stack); SFTP/S3/email pull need real external sources to prove; hosted-email live receipt needs the inbound MX + Postmark domain (one-time infra). Deferred follow-ups: a "your inbound address" UI card (moot until the email domain exists) and a full E2E format-routing test.
+
+---
+
 ## Where we are: **2026-06-04 (later) — supplier-setup trust bundle: real SFTP/FTPS/email + OAuth2 fetch-token delivery, validation clarity, delete supplier, honest claims**
 
 Merged + pushed to `main` on **both** repos (backend `4f676e3`, frontend `7e26713`) — Railway + Vercel deploys triggered; local feature branches deleted.
