@@ -18,6 +18,13 @@ public class SupplierDeliveryConfig
     /// <summary>Authenticated encrypted credential payload. Empty string means no credentials configured.</summary>
     public string EncryptedCredentials { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The output format this supplier requires — one of 'xml' | 'csv' | 'cxml' | 'json' | 'ubl' | 'x12'.
+    /// When set, "send to supplier" auto-transforms the order into this format before delivery.
+    /// Null means the caller must specify a format explicitly.
+    /// </summary>
+    public string? OutputFormat { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

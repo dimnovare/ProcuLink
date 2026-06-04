@@ -4,7 +4,8 @@ public sealed record UpsertDeliveryConfigRequest(
     string Protocol,
     bool AutoDeliver,
     string ConfigJson,
-    string? CredentialsJson);
+    string? CredentialsJson,
+    string? OutputFormat = null);
 
 public sealed record DeliveryConfigResponse(
     Guid SupplierId,
@@ -14,7 +15,8 @@ public sealed record DeliveryConfigResponse(
     bool HasCredentials,
     string? CredentialsDisplay,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    string? OutputFormat);
 
 public sealed record DeliveryTestResult(
     bool Success,
