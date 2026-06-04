@@ -183,6 +183,12 @@ builder.Services.AddHangfire(cfg => cfg
 // The API only enqueues jobs; running a server here would cause it to try to
 // deserialize ProcuLink.Worker types (e.g. EmailPollingJob) that it can't load.
 
+// Register the Hangfire monitoring API so OpsHealthService can read server heartbeats.
+// JobStorage is registered as a singleton by AddHangfire; we expose IMonitoringApi
+// as a scoped factory wrapper (GetMonitoringApi() is cheap — one lock-free snapshot).
+builder.Services.AddScoped<Hangfire.Storage.IMonitoringApi>(sp =>
+    sp.GetRequiredService<Hangfire.JobStorage>().GetMonitoringApi());
+
 // ── HTTP client for webhook delivery ──────────────────────────────────────
 builder.Services.AddHttpClient("delivery", c =>
 {

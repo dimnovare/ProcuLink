@@ -35,7 +35,11 @@ public sealed record OpsHealthSummary(
     int Failed,
     int SlaBreached,
     int OpenExceptions,
-    int StuckThresholdMinutes)
+    int StuckThresholdMinutes,
+    int       ActiveWorkers             = 0,
+    DateTime? LastWorkerHeartbeatUtc    = null,
+    double?   SecondsSinceWorkerHeartbeat = null,
+    bool      WorkerHealthy             = false)
 {
     /// <summary>Sum of all problematic order counts (excludes OpenExceptions, which can overlap order states).</summary>
     public int TotalProblemOrders =>
