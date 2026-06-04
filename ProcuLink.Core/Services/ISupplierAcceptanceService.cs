@@ -9,6 +9,9 @@ public record AcceptanceRuleInput(
 public interface ISupplierAcceptanceService
 {
     Task<SupplierAcceptanceProfile?> GetActiveAsync(Guid orgId, Guid supplierId, CancellationToken ct);
+
+    /// <summary>Returns the active version if one exists; otherwise the latest non-archived draft.</summary>
+    Task<SupplierAcceptanceProfile?> GetLatestAsync(Guid orgId, Guid supplierId, CancellationToken ct);
     Task<IReadOnlyList<SupplierAcceptanceProfile>> ListVersionsAsync(Guid orgId, Guid supplierId, CancellationToken ct);
 
     /// <summary>Creates a new draft version (next version number) with the given rules.</summary>

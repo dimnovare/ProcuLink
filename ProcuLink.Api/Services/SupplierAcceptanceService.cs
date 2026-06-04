@@ -17,6 +17,14 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
             .Where(p => p.OrgId == orgId && p.SupplierId == supplierId && p.Status == "active")
             .FirstOrDefaultAsync(ct);
 
+    public async Task<SupplierAcceptanceProfile?> GetLatestAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
+        await _db.SupplierAcceptanceProfiles
+            .Include(p => p.Rules)
+            .Where(p => p.OrgId == orgId && p.SupplierId == supplierId && p.Status != "archived")
+            .OrderByDescending(p => p.Status == "active")
+            .ThenByDescending(p => p.VersionNo)
+            .FirstOrDefaultAsync(ct);
+
     public async Task<IReadOnlyList<SupplierAcceptanceProfile>> ListVersionsAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
         await _db.SupplierAcceptanceProfiles
             .Include(p => p.Rules)
@@ -176,6 +184,23 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
                 return double.TryParse(actual, NumberStyles.Any, CultureInfo.InvariantCulture, out var a2)
                     && double.TryParse(rule.ExpectedValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var m2)
                     && a2 <= m2;
+            case "not_equals":
+                return !string.Equals(actual, rule.ExpectedValue, StringComparison.OrdinalIgnoreCase);
+            case "contains":
+                return actual is not null
+                    && actual.Contains(rule.ExpectedValue ?? "", StringComparison.OrdinalIgnoreCase);
+            case "greater_than":
+                return double.TryParse(actual, NumberStyles.Any, CultureInfo.InvariantCulture, out var a3)
+                    && double.TryParse(rule.ExpectedValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var m3)
+                    && a3 > m3;
+            case "less_than":
+                return double.TryParse(actual, NumberStyles.Any, CultureInfo.InvariantCulture, out var a4)
+                    && double.TryParse(rule.ExpectedValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var m4)
+                    && a4 < m4;
+            case "max_length":
+                return actual is not null
+                    && int.TryParse(rule.ExpectedValue, NumberStyles.None, CultureInfo.InvariantCulture, out var maxLen)
+                    && actual.Length <= maxLen;
             default:
                 return true; // unknown operator → non-blocking pass
         }

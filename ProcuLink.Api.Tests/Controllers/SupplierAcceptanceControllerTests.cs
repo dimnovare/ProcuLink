@@ -59,7 +59,7 @@ public class SupplierAcceptanceControllerTests
     {
         var (ctrl, svc, orgId, supplierId) = Build();
 
-        svc.Setup(s => s.GetActiveAsync(orgId, supplierId, It.IsAny<CancellationToken>()))
+        svc.Setup(s => s.GetLatestAsync(orgId, supplierId, It.IsAny<CancellationToken>()))
            .ReturnsAsync((SupplierAcceptanceProfile?)null);
 
         var result = await ctrl.GetActive(supplierId, CancellationToken.None);
@@ -72,7 +72,7 @@ public class SupplierAcceptanceControllerTests
     {
         var (ctrl, svc, orgId, supplierId) = Build();
 
-        svc.Setup(s => s.GetActiveAsync(orgId, supplierId, It.IsAny<CancellationToken>()))
+        svc.Setup(s => s.GetLatestAsync(orgId, supplierId, It.IsAny<CancellationToken>()))
            .ReturnsAsync(MakeProfile(orgId, supplierId));
 
         var result = await ctrl.GetActive(supplierId, CancellationToken.None);

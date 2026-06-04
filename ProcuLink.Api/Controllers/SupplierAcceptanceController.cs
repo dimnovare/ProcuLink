@@ -25,7 +25,7 @@ public sealed class SupplierAcceptanceController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetActive(Guid supplierId, CancellationToken ct)
     {
-        var p = await _service.GetActiveAsync(_tenant.OrganisationId, supplierId, ct);
+        var p = await _service.GetLatestAsync(_tenant.OrganisationId, supplierId, ct);
         return p is null ? NotFound() : Ok(ToDto(p));
     }
 
@@ -59,7 +59,7 @@ public sealed class SupplierAcceptanceController : ControllerBase
             ? NoContent() : NotFound();
 
     private static AcceptanceProfileDto ToDto(SupplierAcceptanceProfile p) => new(
-        p.Id, p.VersionNo, p.Status, p.Protocol, p.OutputFormat,
+        p.Id, p.SupplierId, p.VersionNo, p.Status, p.Protocol, p.OutputFormat,
         p.EffectiveFrom, p.EffectiveTo, p.CreatedAt,
         p.Rules.Select(r => new AcceptanceRuleDto(
             r.Id, r.Scope, r.FieldPath, r.Operator, r.ExpectedValue, r.Severity, r.BlockOnFail)).ToList());
