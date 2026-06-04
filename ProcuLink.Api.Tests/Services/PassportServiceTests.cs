@@ -396,4 +396,55 @@ public class PassportServiceTests
         Assert.Null(p.SourceArtifact.DetectedFormat);
         Assert.Contains(p.Notes, n => n.Contains("No stored source file"));
     }
+
+    // ── BuyerName column preferred over CanonicalJson ─────────────────────────────
+
+    /// <summary>
+    /// An order where the async parse job has written the buyer name to the
+    /// denormalized <c>BuyerName</c> column but <c>CanonicalJson</c> is null
+    /// (the file-upload path) must still expose the buyer name in the passport.
+    /// </summary>
+    [Fact]
+    public async Task GetAsync_BuyerNameColumnSet_CanonicalJsonNull_ReturnsBuyerNameFromColumn()
+    {
+        await using var db = NewDb();
+
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var orderId    = Guid.NewGuid();
+        var t0         = new DateTime(2026, 6, 4, 10, 0, 0, DateTimeKind.Utc);
+
+        db.Suppliers.Add(new Supplier
+        {
+            Id        = supplierId,
+            OrgId     = orgId,
+            Name      = "Baltic Supplies OÜ",
+            CreatedAt = t0,
+        });
+
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id            = orderId,
+            OrgId         = orgId,
+            SupplierId    = supplierId,
+            PoNumber      = "PO-BUYERNAME-001",
+            OrderDate     = DateOnly.FromDateTime(t0),
+            Currency      = "EUR",
+            Status        = OrderStatusConstants.Ready,
+            SourceFileKey = "org/ord/po.csv",
+            // Denormalized column set by ParseStoredFileAsync; CanonicalJson left null.
+            BuyerName     = "REDACTED-NAME",
+            CanonicalJson = null,
+            CreatedAt     = t0,
+            UpdatedAt     = t0.AddMinutes(1),
+        });
+
+        await db.SaveChangesAsync();
+
+        var svc = new PassportService(db);
+        var result = await svc.GetAsync(orgId, orderId, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("REDACTED-NAME", result.Value!.Order.BuyerName);
+    }
 }

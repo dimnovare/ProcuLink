@@ -96,7 +96,7 @@ public sealed class PassportService : IPassportService
             Status:       order.Status,
             SupplierId:   order.SupplierId,
             SupplierName: order.Supplier?.Name ?? "Unknown Supplier",
-            BuyerName:    ExtractBuyerName(order.CanonicalJson),
+            BuyerName:    ExtractBuyerName(order),
             Currency:     order.Currency,
             OrderDate:    order.OrderDate.ToString("yyyy-MM-dd"),
             CreatedAt:    order.CreatedAt,
@@ -310,12 +310,20 @@ public sealed class PassportService : IPassportService
         return "unresolved";
     }
 
-    private static string? ExtractBuyerName(JsonDocument? canonicalJson)
+    /// <summary>
+    /// Extracts BuyerName from the denormalized column (set by the async parse job)
+    /// or falls back to CanonicalJson for orders created via the sync path.
+    /// </summary>
+    private static string? ExtractBuyerName(PurchaseOrderEntity order)
     {
-        if (canonicalJson is null) return null;
+        // Prefer the denormalized column — always populated by ParseStoredFileAsync.
+        if (!string.IsNullOrWhiteSpace(order.BuyerName)) return order.BuyerName;
+
+        // Fall back to CanonicalJson for orders created via the sync (non-file) path.
+        if (order.CanonicalJson is null) return null;
         try
         {
-            var root = canonicalJson.RootElement;
+            var root = order.CanonicalJson.RootElement;
             if (root.TryGetProperty("buyerName", out var el))
                 return el.GetString();
             if (root.TryGetProperty("BuyerName", out var el2))
