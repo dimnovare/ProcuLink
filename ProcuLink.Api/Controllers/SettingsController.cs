@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Controllers;
@@ -15,20 +16,27 @@ public sealed class SettingsController : ControllerBase
 {
     private readonly ICurrentTenantService _tenant;
     private readonly IEmailSettingsService _emailSettings;
+    private readonly IPullIngressSettingsService _pullIngress;
     private readonly IBillingService _billing;
     private readonly ProcuLinkDbContext _db;
 
     public SettingsController(
         ICurrentTenantService tenant,
         IEmailSettingsService emailSettings,
+        IPullIngressSettingsService pullIngress,
         IBillingService billing,
         ProcuLinkDbContext db)
     {
         _tenant = tenant;
         _emailSettings = emailSettings;
+        _pullIngress = pullIngress;
         _billing = billing;
         _db = db;
     }
+
+    private async Task<bool> SupplierExistsAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
+        await _db.Suppliers.AsNoTracking()
+            .AnyAsync(x => x.OrgId == orgId && x.Id == supplierId && x.DeletedAt == null, ct);
 
     [HttpGet("email")]
     [ProducesResponseType(typeof(EmailSettingsResponse), StatusCodes.Status200OK)]
@@ -85,5 +93,87 @@ public sealed class SettingsController : ControllerBase
 
         var result = await _emailSettings.UpdateAsync(orgId, request, ct);
         return Ok(result);
+    }
+
+    // ── SFTP pull ─────────────────────────────────────────────────────────────
+
+    [HttpGet("sftp")]
+    [ProducesResponseType(typeof(SftpIngressResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetSftp(CancellationToken ct)
+        => Ok(await _pullIngress.GetSftpAsync(_tenant.OrganisationId, ct));
+
+    [HttpPut("sftp")]
+    [ProducesResponseType(typeof(SftpIngressResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UpdateSftp([FromBody] UpdateSftpIngressRequest request, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+
+        if (request.Enabled && !await _billing.HasFeatureAsync(orgId, BillingFeature.SftpIngestion, ct))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "sftp_ingestion_requires_integration", upgradeUrl = "/settings" });
+
+        if (request.Enabled)
+        {
+            if (string.IsNullOrWhiteSpace(request.Host))
+                return BadRequest(new { error = "SFTP host is required." });
+            if (string.IsNullOrWhiteSpace(request.Username))
+                return BadRequest(new { error = "SFTP username is required." });
+            if (request.DefaultSupplierId is null || request.DefaultSupplierId == Guid.Empty)
+                return BadRequest(new { error = "Default supplier is required." });
+
+            var current = await _pullIngress.GetSftpAsync(orgId, ct);
+            var hasPassword = !string.IsNullOrWhiteSpace(request.Password) || (request.Password is null && current.HasPassword);
+            if (!hasPassword)
+                return BadRequest(new { error = "SFTP password is required." });
+        }
+
+        if (request.DefaultSupplierId is { } supplierId && supplierId != Guid.Empty &&
+            !await SupplierExistsAsync(orgId, supplierId, ct))
+            return BadRequest(new { error = "Default supplier was not found." });
+
+        return Ok(await _pullIngress.UpdateSftpAsync(orgId, request, ct));
+    }
+
+    // ── S3 / R2 pull ──────────────────────────────────────────────────────────
+
+    [HttpGet("s3")]
+    [ProducesResponseType(typeof(S3IngressResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetS3(CancellationToken ct)
+        => Ok(await _pullIngress.GetS3Async(_tenant.OrganisationId, ct));
+
+    [HttpPut("s3")]
+    [ProducesResponseType(typeof(S3IngressResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UpdateS3([FromBody] UpdateS3IngressRequest request, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+
+        if (request.Enabled && !await _billing.HasFeatureAsync(orgId, BillingFeature.S3Ingestion, ct))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "s3_ingestion_requires_integration", upgradeUrl = "/settings" });
+
+        if (request.Enabled)
+        {
+            if (string.IsNullOrWhiteSpace(request.BucketName))
+                return BadRequest(new { error = "Bucket name is required." });
+            if (string.IsNullOrWhiteSpace(request.Region))
+                return BadRequest(new { error = "Region is required." });
+            if (string.IsNullOrWhiteSpace(request.AccessKeyId))
+                return BadRequest(new { error = "Access key ID is required." });
+            if (request.DefaultSupplierId is null || request.DefaultSupplierId == Guid.Empty)
+                return BadRequest(new { error = "Default supplier is required." });
+
+            var current = await _pullIngress.GetS3Async(orgId, ct);
+            var hasSecret = !string.IsNullOrWhiteSpace(request.SecretKey) || (request.SecretKey is null && current.HasSecretKey);
+            if (!hasSecret)
+                return BadRequest(new { error = "Secret access key is required." });
+        }
+
+        if (request.DefaultSupplierId is { } supplierId && supplierId != Guid.Empty &&
+            !await SupplierExistsAsync(orgId, supplierId, ct))
+            return BadRequest(new { error = "Default supplier was not found." });
+
+        return Ok(await _pullIngress.UpdateS3Async(orgId, request, ct));
     }
 }

@@ -274,6 +274,7 @@ builder.Services.AddSingleton<IStarterTemplateService, StarterTemplateService>()
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
+builder.Services.AddScoped<ProcuLink.Core.Services.Ingress.IPullIngressSettingsService, ProcuLink.Infrastructure.Services.PullIngressSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddScoped<IIdempotencyService, IdempotencyService>();
