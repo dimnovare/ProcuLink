@@ -139,7 +139,7 @@ public class OrderServicePdfRoutingTests
     }
 
     [Fact]
-    public async Task ParsePdfAsync_SelfHostedOcrOrg_UsesDeterministicParser_NeverCallsOpenAi()
+    public async Task ParsePdfAsync_SelfHostedOcrOrg_RoutesToDeterministicParser_BypassesExtractor()
     {
         var orgId = Guid.NewGuid();
         var db = NewDb();

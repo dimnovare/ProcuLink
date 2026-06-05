@@ -116,7 +116,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         var org = await _db.Organisations
             .AsNoTracking()
             .Where(o => o.Id == orgId.Value)
-            .Select(o => new { o.Id, o.AccountStatus, o.EmailConfigJson })
+            .Select(o => new { o.Id, o.AccountStatus, o.EmailConfigJson, o.SelfHostedOcr })
             .FirstOrDefaultAsync(ct);
 
         if (org is null)
@@ -223,7 +223,9 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         // extracting a purchase order from the email body itself. The extractor
         // is a no-op without an OpenAI key, so this is safe in unit tests and
         // local dev where the body field is set but the AI provider is absent.
-        if (created.Count == 0 && !string.IsNullOrWhiteSpace(payload.Body))
+        // No-egress orgs are excluded: the body extractor sends the prose to OpenAI,
+        // which would violate the no-data-leaves guarantee.
+        if (created.Count == 0 && !string.IsNullOrWhiteSpace(payload.Body) && !org.SelfHostedOcr)
         {
             try
             {

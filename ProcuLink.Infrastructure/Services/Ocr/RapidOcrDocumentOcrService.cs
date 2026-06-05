@@ -25,7 +25,11 @@ public sealed class RapidOcrDocumentOcrService : IDocumentOcrService, IDisposabl
     private readonly bool _enabled;
     private readonly IPdfRasterizer _rasterizer;
     private readonly ILogger<RapidOcrDocumentOcrService> _logger;
-    private readonly object _gate = new();
+    // Serialize OCR — RapidOcr.Detect on one instance isn't documented as concurrency-safe.
+    // A SemaphoreSlim (not lock) so a waiting Hangfire worker RELEASES its thread while it
+    // waits (the worker pool is WorkerCount=10): only the one running OCR pins a thread, so
+    // a burst of OCR jobs can't starve unrelated parse/delivery work.
+    private readonly SemaphoreSlim _gate = new(1, 1);
     private RapidOcr? _ocr;
 
     public RapidOcrDocumentOcrService(
@@ -60,23 +64,22 @@ public sealed class RapidOcrDocumentOcrService : IDocumentOcrService, IDisposabl
         var pages = _rasterizer.RenderPagesPng(bytes, MaxOcrPages);
         if (pages.Count == 0) return string.Empty;
 
+        var acquired = false;
         try
         {
+            await _gate.WaitAsync(ct);
+            acquired = true;
+
             var sb = new StringBuilder();
-            // RapidOcr/ONNX inference is CPU-bound and not documented as concurrency-safe
-            // on a single instance — serialize. The worker runs single-concurrency anyway.
-            lock (_gate)
+            _ocr ??= InitOcr(); // one-time model load (lazy)
+            foreach (var png in pages)
             {
-                _ocr ??= InitOcr();
-                foreach (var png in pages)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    using var bitmap = SKBitmap.Decode(png);
-                    if (bitmap is null) continue;
-                    var result = _ocr.Detect(bitmap, RapidOcrOptions.Default);
-                    if (!string.IsNullOrWhiteSpace(result?.StrRes))
-                        sb.AppendLine(result.StrRes);
-                }
+                ct.ThrowIfCancellationRequested();
+                using var bitmap = SKBitmap.Decode(png);
+                if (bitmap is null) continue;
+                var result = _ocr.Detect(bitmap, RapidOcrOptions.Default);
+                if (!string.IsNullOrWhiteSpace(result?.StrRes))
+                    sb.AppendLine(result.StrRes);
             }
             return sb.ToString();
         }
@@ -84,6 +87,10 @@ public sealed class RapidOcrDocumentOcrService : IDocumentOcrService, IDisposabl
         {
             _logger.LogWarning(ex, "Self-hosted OCR extraction failed.");
             return string.Empty;
+        }
+        finally
+        {
+            if (acquired) _gate.Release();
         }
     }
 
@@ -96,10 +103,8 @@ public sealed class RapidOcrDocumentOcrService : IDocumentOcrService, IDisposabl
 
     public void Dispose()
     {
-        lock (_gate)
-        {
-            (_ocr as IDisposable)?.Dispose();
-            _ocr = null;
-        }
+        (_ocr as IDisposable)?.Dispose();
+        _ocr = null;
+        _gate.Dispose();
     }
 }

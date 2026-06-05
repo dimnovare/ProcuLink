@@ -304,4 +304,48 @@ public class OrderServiceBatchResolveTests
         Assert.Equal(0.2m, line.TaxRate);
         Assert.Equal(new DateOnly(2026, 6, 30), line.DeliveryDate);
     }
+
+    // No-egress guarantee: a SelfHostedOcr org's line data (buyer codes/descriptions) must
+    // NEVER be sent to OpenAI for SKU mapping — the single chokepoint is BuildLineEntitiesAsync.
+    [Fact]
+    public async Task BuildLineEntities_NoEgressOrg_NeverCallsAiMapping()
+    {
+        var (db, orgId, supplierId) = await SeedSupplierAsync();
+        db.Organisations.Add(new Organisation
+        {
+            Id = orgId, ClerkOrgId = "clerk", Name = "No-Egress Co", Slug = "no-egress",
+            SelfHostedOcr = true, CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        // Line is unresolved → without the no-egress gate this WOULD call the AI mapper.
+        var itemMappings = new Mock<IItemMappingService>();
+        itemMappings
+            .Setup(s => s.ResolveManyAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyDictionary<string, string?>)new Dictionary<string, string?>());
+
+        // Strict — ANY call to the AI mapper fails the test.
+        var aiMappings = new Mock<IAiMappingService>(MockBehavior.Strict);
+
+        var svc = Build(db, FileStorageMock().Object, itemMappings.Object, aiMappings.Object);
+
+        var extracted = new ExtractedOrder(
+            "PO-NOEGRESS", null, "Buyer", "EUR",
+            new[] { new ExtractedOrderLine(1, "UNRESOLVED-CODE", "Widget", 4, "PCS", 10m) });
+
+        var result = await svc.CreateStubFromParsedOrderAsync(orgId, supplierId, extracted, "test", CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        // The line stays unresolved (human review) — no AI suggestion, no egress.
+        var line = await db.PurchaseOrderLines.AsNoTracking().FirstAsync(l => l.OrderId == result.Value!.Id);
+        Assert.Null(line.SupplierItemCode);
+        Assert.Null(line.AiSuggestedSupplierItemCode);
+        aiMappings.Verify(
+            s => s.SuggestSupplierItemCodesAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<AiMappingLineContext>>(),
+                It.IsAny<IReadOnlyList<AiMappingCandidate>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never, "a no-egress org's line data must never be sent to OpenAI");
+    }
 }

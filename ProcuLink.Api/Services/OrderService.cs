@@ -1422,7 +1422,17 @@ public sealed class OrderService : IOrderService
         IReadOnlyDictionary<int, AiMappingSuggestion> suggestions =
             new Dictionary<int, AiMappingSuggestion>();
 
-        if (unresolvedContexts.Count > 0)
+        // No-egress orgs: never send line data (buyer codes/descriptions) to OpenAI for
+        // SKU mapping. This is the single chokepoint for AI suggestions across EVERY
+        // ingress path (PDF/CSV/XLSX/email/REST), so gating it here keeps the no-egress
+        // guarantee whole. Unresolved lines simply go to human review (the safe default).
+        var noEgress = await _db.Organisations
+            .AsNoTracking()
+            .Where(o => o.Id == organisationId)
+            .Select(o => o.SelfHostedOcr)
+            .FirstOrDefaultAsync(ct);
+
+        if (unresolvedContexts.Count > 0 && !noEgress)
         {
             suggestions = await _aiMappings.SuggestSupplierItemCodesAsync(
                 organisationId,
