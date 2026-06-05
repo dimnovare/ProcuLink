@@ -181,6 +181,14 @@ Include the exact JSON body with `supplierId`, `orderNumber`, `orderDate`,
 
 - [x] **Step 3: Add OCR explanation**
 
+> **⚠️ SUPERSEDED (2026-06-05)** by
+> [`docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md`](2026-06-05-pdf-llm-extraction.md).
+> The shipped PDF path is now **text→LLM structured extraction** (PdfPig text layer →
+> OpenAI structured output, with a number-vs-source anti-hallucination check), not an
+> OCR provider. Azure Document Intelligence was removed entirely. Scanned/image-only
+> PDFs (no text layer) are **not yet supported** — a vision-LLM fallback is planned, not
+> built. The guidance below is retained for history only.
+
 Document that scanned PDFs should use OCR provider extraction first, then AI for
 mapping/interpretation. Do not tell agents to use an LLM as the OCR engine.
 

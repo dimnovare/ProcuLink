@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OpenAI.Chat;
@@ -313,20 +314,22 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
     }
 
     // ─── DTOs for OpenAI structured outputs ─────────────────────────────────
+    // Snake_case [JsonPropertyName] required: the schema uses snake_case keys and
+    // JsonSerializerDefaults.Web would otherwise map to camelCase and bind null.
 
-    private sealed record ExtractionDto(
-        double                            Confidence,
-        string?                           PoNumber,
-        string?                           OrderDate,
-        string?                           Currency,
-        string?                           BuyerName,
-        IReadOnlyList<ExtractionLineDto>? Lines);
+    internal sealed record ExtractionDto(
+        [property: JsonPropertyName("confidence")] double                            Confidence,
+        [property: JsonPropertyName("po_number")]  string?                           PoNumber,
+        [property: JsonPropertyName("order_date")] string?                           OrderDate,
+        [property: JsonPropertyName("currency")]   string?                           Currency,
+        [property: JsonPropertyName("buyer_name")] string?                           BuyerName,
+        [property: JsonPropertyName("lines")]      IReadOnlyList<ExtractionLineDto>? Lines);
 
-    private sealed record ExtractionLineDto(
-        int     LineNumber,
-        string? BuyerItemCode,
-        string? Description,
-        double? Quantity,
-        string? Unit,
-        double? UnitPrice);
+    internal sealed record ExtractionLineDto(
+        [property: JsonPropertyName("line_number")]     int     LineNumber,
+        [property: JsonPropertyName("buyer_item_code")] string? BuyerItemCode,
+        [property: JsonPropertyName("description")]      string? Description,
+        [property: JsonPropertyName("quantity")]        double? Quantity,
+        [property: JsonPropertyName("unit")]            string? Unit,
+        [property: JsonPropertyName("unit_price")]      double? UnitPrice);
 }

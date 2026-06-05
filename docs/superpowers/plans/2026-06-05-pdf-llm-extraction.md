@@ -117,3 +117,24 @@ Update user-facing claims only once shipped. Full inventory:
 - **Privacy:** real customer PO data → OpenAI requires an **EU-residency project + DPA + zero-retention**; note this in the docs and keep the no-egress (Phase 3) path on the roadmap.
 - Keep backend tests green at every step; bun for frontend.
 - This touches ≥3 files → it's a real feature: plan/execute carefully, `/code-review` at the end.
+
+---
+
+## Adversarial review (2026-06-05) — fixed vs deferred
+
+Multi-agent review of the Phase 1 diff (correctness / security-tenancy / reuse lenses).
+
+**Fixed in-branch (each with a regression test):**
+- **HIGH** — space-joined numbers were merged as a thousands group (`"125 500"` → `125500`), so real lines tripped the anti-hallucination check → systematic false review flags (PdfPig joins words with single spaces). Removed the space from the grouped-thousands regex; space-separated numbers are now distinct.
+- **MED** — genuine 3-decimal values (`"1.234"`) were read only as thousands → false flags. The source-number set now also carries the decimal reading of ambiguous 3-trailing-digit tokens.
+- **MED** — unbounded LLM input could overshoot the per-org token cap in a single call. Source text is capped (`MaxSourceChars = 60k`) before the call.
+- **LOW** — a duplicate model `line_number` over-flagged sibling lines. Lines are numbered positionally (`idx+1`) — unique, stable join keys for the review overlay + mapping.
+- **LOW** — `double→decimal` overflow/NaN could throw from the pure `ValidateAndMap`. Guarded (`TryToDecimal`); malformed numbers flag the line instead of throwing.
+- **LOW** — a `Guid.Empty` org id fell open on the cap. `ExtractAsync` now fails closed for a missing tenant before any OpenAI call.
+- Added a snake_case JSON-binding unit test proving the `[JsonPropertyName]` DTO attributes work (no live call).
+
+**Deferred (documented, not blocking Phase 1):**
+- **MED** — anti-hallucination number-presence is matched document-wide, so a hallucinated value that coincides with another printed number can pass, and the arithmetic cross-check only runs when a line amount is stated. It's a defense-in-depth net, **not a correctness guarantee** (benchmark showed 0 hallucinations). Proximity-aware matching is a future enhancement.
+- **MED** — PDF intake has no byte-size cap on the SFTP/S3/IMAP ingress channels, and PdfPig parsing isn't time/resource-bounded (a decompression-bomb PDF could DoS the worker). **Pre-existing** (the regex parser already calls PdfPig unbounded) and platform-level — track as ingress hardening, not specific to this feature.
+- **MED** — customer PO text egresses to OpenAI gated only by key presence; there is no per-org enablement / data-residency enforcement in code. The spec already requires an EU-residency OpenAI project + DPA + zero-retention before enabling in prod; a per-org opt-in flag is a compliance follow-up. The no-key default is safe.
+- **HIGH (separate file, out of scope)** — the sibling `OpenAiEmailBodyOrderExtractor` has the same snake_case→camelCase binding bug this extractor avoids (its DTOs lack `[JsonPropertyName]`, so email-body PO fields bind null under `JsonSerializerDefaults.Web`). Spun off as its own task.

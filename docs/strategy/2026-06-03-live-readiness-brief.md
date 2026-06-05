@@ -144,7 +144,7 @@ Stack:
 - Clerk auth
 - Stripe billing code already implemented, but live Stripe activation is pending
 - OpenAI-first provider-neutral AI mapping suggestions
-- PDF text extraction with OCR provider fallback support
+- PDF text→LLM extraction (PdfPig text layer → OpenAI structured output, number-vs-source validated; deterministic column-parser fallback when no key/offline)
 
 Important backend processes:
 
@@ -274,8 +274,11 @@ Optional/depending on enabled features:
 Analytics__PostHog__ApiKey
 Smtp__*
 Stripe__*
-Ocr__Azure__*
+Ai__OpenAI__ExtractionModel   # optional; falls back to Ai__OpenAI__MappingModel, then gpt-5-mini
 ```
+
+(`Ocr__Azure__*` is gone — Azure Document Intelligence was removed entirely. PDF
+extraction now uses the OpenAI key already listed above.)
 
 Operational note: `railway.toml` now uses `watchPatterns` so docs-only commits no
 longer trigger a redeploy of the API/Worker services.
@@ -293,8 +296,11 @@ Implemented:
 - CSV/XLSX upload path,
 - XML routing improvements,
 - cXML/UBL/Peppol parser routing,
-- PDF text extraction,
-- OCR service interface with Azure Document Intelligence fallback when configured,
+- PDF text→LLM extraction (PdfPig text layer → OpenAI structured output, with a
+  number-vs-source anti-hallucination check; deterministic column-parser fallback
+  when no OpenAI key/offline/low-confidence),
+- `IDocumentOcrService` seam kept but wired to a no-op (Azure Document Intelligence
+  removed entirely; reserved for a future self-hosted engine),
 - inbound REST API for structured order payloads,
 - hosted inbound email webhook backend support,
 - IMAP polling backend/settings UI,
@@ -320,7 +326,9 @@ Implemented:
   - `sku`,
   - `buyer_code`.
 - XLSX parser.
-- text-based PDF parser.
+- text-based PDF: text→LLM extractor (PdfPig text layer → OpenAI structured
+  output, numbers validated against source) as the primary path, with the
+  deterministic column parser as the offline/no-key fallback.
 - cXML parser.
 - UBL parser.
 - EDIFACT and X12 parser work has been started/implemented in code paths.
@@ -482,19 +490,27 @@ support/contact as fully live:
 - run one more contact-form delivery test end-to-end,
 - test Gmail "send mail as" if founder wants to reply as `support@proculink.eu` or `hello@proculink.eu`.
 
-### P1: OCR
+### P1: Scanned / image-only PDFs
 
-Scanned PDFs are possible through the OCR service interface, but production OCR should not be promised until a provider is configured and tested with real scanned POs.
+**Updated 2026-06-05.** Text-based PDFs now ship via text→LLM extraction (the
+primary path; PdfPig text layer → OpenAI structured output, numbers validated
+against the source). Azure Document Intelligence was removed entirely.
 
-The recommended architecture remains:
+What is **not** built yet: scanned / image-only PDFs with no text layer. They fail
+with a clear message ("This PDF looks scanned or image-only — we couldn't extract
+any text."). A vision-LLM fallback (rasterize via PDFtoImage + SkiaSharp) is a
+planned Phase 2, and a self-hosted no-egress OCR engine (RapidOcrNet) is a planned
+Phase 3 — neither should be promised until built and tested with real scanned POs.
+
+Architecture for the planned scanned-PDF path:
 
 ```text
-OCR provider extracts text/tables
-AI interprets/matches/suggests mappings/confidence
-human reviews uncertain fields
+rasterize page -> vision-LLM (or self-hosted OCR) extracts text
+LLM structures into the canonical ParsedOrder
+numbers validated against source; suspect lines flagged for review
 ```
 
-Do not rely on a general LLM as the raw OCR engine for production purchase orders.
+See `docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md`.
 
 ---
 
@@ -655,7 +671,10 @@ The product should win because:
 - operators review only exceptions,
 - suppliers can have different rules/channels.
 
-AI is valuable, but the product should not be positioned as "AI reads a PDF".
+AI is valuable — and text-based PDFs do now use an LLM to structure the extracted
+text (with numbers validated against the source) — but the product should not be
+positioned as "AI magically reads any PDF". Scanned/image-only PDFs are not
+supported yet, and the win is the reliable end-to-end loop, not the extractor alone.
 
 Better:
 
@@ -671,7 +690,7 @@ Good next expansion order:
 2. Supplier output templates and HTTP/webhook delivery.
 3. Email intake and inbound REST API self-service docs.
 4. SFTP/S3 assisted intake.
-5. Scanned PDF OCR with provider configuration.
+5. Scanned/image-only PDF support via vision-LLM fallback (planned Phase 2), then self-hosted no-egress OCR (planned Phase 3).
 6. ERP-specific adapters.
 7. Invoices/ASNs/PEPPOL once PO loop is trusted.
 
@@ -681,7 +700,7 @@ Good next expansion order:
 
 ### Risk 1: Too Much Breadth Before Reliability
 
-If invoices, ASNs, PEPPOL, every OCR case, and every connector are pushed before the PO loop is live, the product will look broad but fragile.
+If invoices, ASNs, PEPPOL, every scanned-PDF case, and every connector are pushed before the PO loop is live, the product will look broad but fragile.
 
 Mitigation:
 

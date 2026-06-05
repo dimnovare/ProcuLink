@@ -32,6 +32,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Allow internal test-only methods (e.g. OrderService PDF routing) to be reachable from Api.Tests. -->
+    <InternalsVisibleTo Include="ProcuLink.Api.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Fixtures\sample-order.csv" />
     <EmbeddedResource Include="Fixtures\po-templates\generic-csv.json" />
     <EmbeddedResource Include="Fixtures\po-templates\buyer-excel.json" />

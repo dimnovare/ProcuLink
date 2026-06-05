@@ -16,8 +16,8 @@ Founder's vision: any input format, any output format, any ingress channel, one-
 |---|---|---|---|
 | CSV (buyer template) | Supported | Supported | `ProcuLink.Transform/Parsing/CsvOrderParser.cs`, `ProcuLink.Transform/Output/CsvTransformService.cs` |
 | XLSX (buyer template) | Supported | Won't-build (Q3) | `ProcuLink.Transform/Parsing/XlsxOrderParser.cs` (input only; XLSX output deferred — suppliers do not consume XLSX in EU) |
-| Text-based PDF | Supported | Won't-build (Q3) | `ProcuLink.Transform/Parsing/PdfOrderParser.cs` (PdfPig 0.1.14). PDF output rejected — no supplier ingests PDF as a data interchange format. |
-| Scanned PDF / image OCR | Planned | n/a | None. Marked deferred in `docs/standards-matrix.md`. |
+| Text-based PDF | Supported | Won't-build (Q3) | Primary path = text→LLM extraction: PdfPig 0.1.14 pulls the PDF text layer, OpenAI structures it into canonical `ParsedOrder` (strict JSON schema, anti-hallucination checks). Deterministic `ProcuLink.Transform/Parsing/PdfOrderParser.cs` is the no-key/offline fallback. Digital text only. PDF output rejected — no supplier ingests PDF as a data interchange format. |
+| Scanned PDF / image OCR | Planned | n/a | Not yet supported (no text layer; fails with a clear "scanned or image-only" message). Vision-LLM fallback (PDFtoImage + SkiaSharp) planned Phase 2; self-hosted RapidOcrNet planned Phase 3. Azure Document Intelligence removed. See `docs/standards-matrix.md`. |
 | cXML 1.2 | Supported | Supported | `ProcuLink.Transform/Parsing/CxmlOrderParser.cs`, `ProcuLink.Transform/Output/CxmlTransformService.cs` |
 | Plain XML (generic `PurchaseOrder` envelope) | Won't-build | Supported | `ProcuLink.Transform/Output/XmlTransformService.cs`. Input is unbounded; output is fine. |
 | JSON / API payload | Partial (inline `System.Text.Json` in `OrderService`) | Supported | `ProcuLink.Transform/Output/JsonTransformService.cs`. No standalone `IPurchaseOrderParser` for JSON ingress. |
@@ -74,7 +74,7 @@ Reflects what a solo founder plus one part-time contractor can ship while keepin
 | JSONL | Supported | Supported | Trivial — wrap `JsonTransformService` with newline-delimited iteration. |
 | XLS legacy (BIFF8) | Supported | Won't-build | `NPOI` for read. XLS output is not needed. |
 | Free-text email body (LLM) | Supported | n/a | Extract body text in `EmailPollingJob`, pass to OpenAI structured outputs against the `ParsedOrder` schema. The `ISchemaInferencer` slot (see §4) makes this a 1-day add once that abstraction exists. |
-| Scanned PDF / image PO (OCR) | Supported | n/a | Azure Document Intelligence (paid, accurate, line-item aware) is the primary. `Tesseract` (free, OCR-only, no line-item structure) is the fallback. Behind `BillingFeature.Ocr`. |
+| Scanned PDF / image PO (OCR) | Planned | n/a | Not yet built. Vision-LLM fallback (`PDFtoImage` + `SkiaSharp`, both MIT — rasterize then send to the same OpenAI extractor) is the primary planned path (Phase 2); self-hosted no-egress `RapidOcrNet` (Apache-2.0) is the offline fallback (Phase 3). Behind a future `BillingFeature.Ocr`. (Text-based PDFs are already handled today via text→LLM extraction.) |
 
 ### 2.2 Channel target
 
@@ -111,7 +111,7 @@ Solo-senior-dev days. "Unlocks" = who pays for it. Dependencies = prerequisite r
 | 6 | **Postmark Inbound SMTP receive** (`orders@<slug>.proculink.eu`) | 3 | All archetypes; especially consultants onboarding their SME clients. Customers ask for "just give me an email address" within minutes of the first demo. | None. | Postmark inbound webhook ($10/mo); `MimeKit` for the inbound webhook payload. |
 | 7 | **`IIngressChannel` abstraction + refactor existing four ingress paths onto it** | 3 | Internal — but blocks #6, #8, #11, and every future channel. Pay this debt now while there are only four call sites. | None. | None. |
 | 8 | **SFTP pull dispatcher (outbound + inbound)** | 4 | Mid-market and large distributors. SFTP is still the #1 supplier-side integration request in EU industrial procurement. | #7 | `Renci.SshNet`. |
-| 9 | **OCR / scanned PDF input** | 5 | Small suppliers receiving scanned POs from non-digital buyers (still common in EU construction, hospitality, hardware retail). | None. | `Azure Document Intelligence` (paid, prebuilt "invoice/PO" model) primary; `Tesseract` fallback. Behind `BillingFeature.Ocr`. |
+| 9 | **OCR / scanned PDF input** | 5 | Small suppliers receiving scanned POs from non-digital buyers (still common in EU construction, hospitality, hardware retail). | None. | Vision-LLM (`PDFtoImage` + `SkiaSharp`, both MIT — rasterize → existing OpenAI extractor) primary (Phase 2); self-hosted `RapidOcrNet` (Apache-2.0) offline fallback (Phase 3). Behind a future `BillingFeature.Ocr`. |
 | 10 | **EDIFACT ORDERS input** | 8 | Mid-market suppliers integrating with large EU buyer (every retail chain, every automotive tier-1). The single biggest "we cannot use you without this" gate. | #7, EdiFabric license. | `EdiFabric` (commercial). |
 | 11 | **EDIFACT ORDERS output** | 4 | Same as #10 for buyer-side flows pushing to large suppliers. | #10 | EdiFabric. |
 | 12 | **EDIFACT ORDRSP output** | 4 | Suppliers needing to acknowledge orders back to buyers. Always pairs with #10. | #10 | EdiFabric. |
@@ -273,7 +273,7 @@ Add EDIFACT family (#10-12), Shopify (#13), Peppol via Storecove (#15), Make.com
 - **Peppol** — Storecove (NL, simple REST) or B2Brouter (ES, broader EU). Pick Storecove first.
 - **Zapier listing** — review takes ~6 weeks. Build the integration first, submit, then unblock the marketing claim.
 - **AS2** — Babelway (BE) or MessageXchange (AU/EU). Both expose REST that abstracts AS2 cert exchange.
-- **OCR fallback** — Cloudmersive only if Azure Document Intelligence pricing scales badly past 1,000 docs/month/customer.
+- **OCR for scanned PDFs** — when Phase 2/3 are built, prefer the vision-LLM path (`PDFtoImage` + `SkiaSharp`, reusing the existing OpenAI extractor) with self-hosted `RapidOcrNet` for no-egress customers; no Azure Document Intelligence dependency.
 
 ---
 

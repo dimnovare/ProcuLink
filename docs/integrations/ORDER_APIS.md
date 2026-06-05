@@ -295,36 +295,48 @@ function verify(rawBody, signatureHeader, secret) {
 
 ---
 
-## OCR for scanned PDFs
+## PDF parsing (text→LLM extraction)
 
-Yes, ProcuLink can use OCR for scanned/image-only PDFs, but the reliable shape
-is:
+ProcuLink parses **digital text-based PDFs** today. The shape is:
 
 ```text
-OCR engine extracts text/tables → parser normalizes → AI suggests uncertain mappings
+PdfPig extracts the PDF text layer → OpenAI structures it into a canonical order → AI suggests uncertain mappings downstream
 ```
 
-Do not make the LLM the OCR engine. Use a document OCR provider first, then use
-AI for field interpretation, mapping suggestions, confidence, and explanation.
+The PDF text layer is already exact, so we do not OCR it — PdfPig reads the
+embedded text, then an OpenAI extractor turns it into a structured order
+against a strict JSON schema mirroring the canonical `ParsedOrder` (PO number,
+order date, buyer, currency, and per-line: line number, buyer item code,
+description, quantity, unit, unit price). No supplier item code is produced by
+the LLM — that is resolved downstream by the mapping engine.
+
+Anti-hallucination safety net: every number the extractor emits must appear
+verbatim in the source text, and quantity × unit price must reconcile with the
+stated line amount. Suspect lines are flagged "needs review" so they surface in
+`/operations/exceptions` instead of being delivered blind.
 
 Current backend:
 
-- `PdfOrderParser` extracts text with PdfPig.
-- If no text is found and OCR is configured, it calls `IDocumentOcrService`.
-- `AzureDocumentIntelligenceOcrService` is the current provider.
-- If `Ocr:Azure:Endpoint` or `Ocr:Azure:ApiKey` is missing, `NoOpOcrService`
-  disables OCR safely.
+- `PdfPig` extracts the PDF text layer.
+- The OpenAI extractor structures that text into the canonical order (primary path).
+- A deterministic fixed-column `PdfOrderParser` is the **fallback** — used when
+  no OpenAI key is configured, offline, or extraction fails / returns low confidence.
 
 Required environment:
 
 ```text
-Ocr__Azure__Endpoint=https://<resource>.cognitiveservices.azure.com/
-Ocr__Azure__ApiKey=<secret>
+Ai__OpenAI__ApiKey=<secret>
+# optional — falls back to Ai__OpenAI__MappingModel, then gpt-5-mini
+Ai__OpenAI__ExtractionModel=gpt-5-mini
 ```
 
-Production QA still needed:
+The extractor is a safe **no-op** when no OpenAI key is set; the deterministic
+fallback parser runs instead. Sending real customer PO text to OpenAI requires
+an EU-residency OpenAI project + DPA + zero-retention.
 
-- Configure Azure Document Intelligence in Railway.
-- Upload a known scanned PO PDF.
-- Verify extracted text, parsed header, line count, and failure messaging.
-- Add a customer-facing "scanned PDF/OCR" status in upload/review once tested.
+**Scanned / image-only PDFs are not supported yet.** A PDF with no text layer
+fails with a clear "This PDF looks scanned or image-only — we couldn't extract
+any text." message. A vision-LLM fallback (rasterize via PDFtoImage + SkiaSharp,
+then the same OpenAI extractor) is planned (Phase 2); a self-hosted no-egress
+OCR engine (RapidOcrNet) is planned (Phase 3). Azure Document Intelligence has
+been removed.

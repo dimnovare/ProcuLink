@@ -1,8 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using ProcuLink.Core.Services.Ocr;
-using UglyToad.PdfPig;
-using UglyToad.PdfPig.Content;
 
 namespace ProcuLink.Transform.Parsing;
 
@@ -56,15 +54,7 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
         await fileStream.CopyToAsync(ms, ct);
         var bytes = ms.ToArray();
 
-        List<string> textLines;
-        using (var pdfStream = new MemoryStream(bytes))
-        using (var document  = PdfDocument.Open(pdfStream))
-        {
-            textLines = ExtractTextLines(document)
-                .Select(NormalizeWhitespace)
-                .Where(line => !string.IsNullOrWhiteSpace(line))
-                .ToList();
-        }
+        var textLines = PdfTextExtractor.ExtractLines(bytes).ToList();
 
         // OCR fallback for scanned / image-only PDFs (no-op when OCR provider not configured).
         if (textLines.Count == 0 && _ocrService is { IsAvailable: true })
@@ -73,10 +63,8 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
             var ocrText = await _ocrService.ExtractTextAsync(ocrStream, "application/pdf", ct);
             if (!string.IsNullOrWhiteSpace(ocrText))
             {
-                textLines = SplitPageText(ocrText)
-                    .Select(NormalizeWhitespace)
-                    .Where(line => !string.IsNullOrWhiteSpace(line))
-                    .ToList();
+                textLines = PdfTextExtractor.NormalizeLines(
+                    PdfTextExtractor.SplitPageText(ocrText)).ToList();
             }
         }
 
@@ -89,42 +77,6 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
             BuyerName: FindFirstValue(textLines, BuyerRegex),
             Currency:  FindFirstValue(textLines, CurrencyRegex)?.ToUpperInvariant(),
             Lines:     ParseLines(textLines));
-    }
-
-    private static IEnumerable<string> ExtractTextLines(PdfDocument document)
-    {
-        foreach (var page in document.GetPages())
-        {
-            var words = page.GetWords().ToList();
-            if (words.Count == 0)
-            {
-                foreach (var line in SplitPageText(page.Text))
-                    yield return line;
-                continue;
-            }
-
-            foreach (var line in WordsToLines(words))
-                yield return line;
-        }
-    }
-
-    private static IEnumerable<string> WordsToLines(IReadOnlyCollection<Word> words)
-    {
-        return words
-            .GroupBy(word => Math.Round(word.BoundingBox.Bottom / 4.0) * 4.0)
-            .OrderByDescending(group => group.Key)
-            .Select(group => string.Join(" ",
-                group.OrderBy(word => word.BoundingBox.Left)
-                    .Select(word => word.Text)));
-    }
-
-    private static IEnumerable<string> SplitPageText(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            yield break;
-
-        foreach (var line in text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries))
-            yield return line;
     }
 
     private static IReadOnlyList<ParsedOrderLine> ParseLines(IEnumerable<string> lines)
@@ -208,9 +160,6 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
             ? result
             : null;
     }
-
-    private static string NormalizeWhitespace(string value) =>
-        Regex.Replace(value, @"\s+", " ").Trim();
 
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

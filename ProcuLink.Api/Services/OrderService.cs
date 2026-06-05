@@ -36,6 +36,7 @@ public sealed class OrderService : IOrderService
 
     private readonly IIntegrationTriggerService  _integrationTrigger;
     private readonly IFormatDetector             _formatDetector;
+    private readonly IStructuredOrderExtractor?  _structuredExtractor;
 
     public OrderService(
         ProcuLinkDbContext             db,
@@ -48,19 +49,21 @@ public sealed class OrderService : IOrderService
         IEnumerable<ITransformService> transformers,
         ILogger<OrderService>          logger,
         IIntegrationTriggerService     integrationTrigger,
-        IFormatDetector                formatDetector)
+        IFormatDetector                formatDetector,
+        IStructuredOrderExtractor?     structuredExtractor = null)
     {
-        _db                 = db;
-        _fileStorage        = fileStorage;
-        _parserFactory      = parserFactory;
-        _mappings           = mappings;
-        _exceptions         = exceptions;
-        _poMappingService   = poMappingService;
-        _aiMappings         = aiMappings;
-        _transformers       = transformers;
-        _logger             = logger;
-        _integrationTrigger = integrationTrigger;
-        _formatDetector     = formatDetector;
+        _db                  = db;
+        _fileStorage         = fileStorage;
+        _parserFactory       = parserFactory;
+        _mappings            = mappings;
+        _exceptions          = exceptions;
+        _poMappingService    = poMappingService;
+        _aiMappings          = aiMappings;
+        _transformers        = transformers;
+        _logger              = logger;
+        _integrationTrigger  = integrationTrigger;
+        _formatDetector      = formatDetector;
+        _structuredExtractor = structuredExtractor;
     }
 
     /// <summary>
@@ -485,9 +488,17 @@ public sealed class OrderService : IOrderService
 
             buffer.Position = 0;
             ParsedOrder parsedOrder;
+            IReadOnlyCollection<int> structuredReviewLineNumbers = Array.Empty<int>();
             try
             {
-                if (poMapping is not null && extension == ".csv")
+                if (extension == ".pdf")
+                {
+                    // Primary PDF path: text → LLM structured extraction, with a
+                    // deterministic-parser fallback. See ParsePdfAsync.
+                    (parsedOrder, structuredReviewLineNumbers) =
+                        await ParsePdfAsync(buffer.ToArray(), organisationId, orderId, ct);
+                }
+                else if (poMapping is not null && extension == ".csv")
                 {
                     parsedOrder = await ParseWithMappingTemplateAsync(buffer.ToArray(), poMapping, ct);
                 }
@@ -529,6 +540,10 @@ public sealed class OrderService : IOrderService
             var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, entity.SupplierId, ct);
             var lineEntities = await BuildLineEntitiesAsync(
                 organisationId, entity.SupplierId, supplierName, parsedOrder.Lines, aiCandidates, ct);
+
+            // Overlay structured-extraction review flags so a numerically-suspect
+            // line surfaces in /operations/exceptions rather than being delivered blind.
+            ApplyExtractionReviewFlags(lineEntities, structuredReviewLineNumbers);
 
             bool anyUnresolved    = lineEntities.Any(l => l.NeedsReview);
             var  aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
@@ -1179,6 +1194,83 @@ public sealed class OrderService : IOrderService
     /// Per-line field mapping and NeedsReview semantics are identical to the previous
     /// one-line-at-a-time path.
     /// </summary>
+    /// <summary>
+    /// Routes a PDF to the LLM structured extractor when one is available and it
+    /// returns a confident order with lines; otherwise falls back to the
+    /// deterministic <c>PdfOrderParser</c>. Returns the parsed order plus the set
+    /// of line numbers the extractor flagged for review (empty for the fallback).
+    /// </summary>
+    internal async Task<(ParsedOrder parsed, IReadOnlyCollection<int> reviewLineNumbers)> ParsePdfAsync(
+        byte[] bytes, Guid organisationId, Guid orderId, CancellationToken ct)
+    {
+        if (_structuredExtractor is { IsAvailable: true })
+        {
+            StructuredExtractionResult extraction;
+            using (var pdfBuffer = new MemoryStream(bytes))
+                extraction = await _structuredExtractor.ExtractAsync(
+                    pdfBuffer, "application/pdf", organisationId, ct);
+
+            if (extraction is { Success: true, Order: { Lines.Count: > 0 } extractedOrder })
+            {
+                _logger.LogInformation(
+                    "Order {OrderId}: PDF parsed via structured extractor — {Lines} lines, {Review} flagged for review.",
+                    orderId, extractedOrder.Lines.Count, extraction.ReviewLineNumbers.Count);
+                return (MapExtractedToParsed(extractedOrder), extraction.ReviewLineNumbers);
+            }
+
+            _logger.LogInformation(
+                "Order {OrderId}: structured PDF extraction unavailable/failed ({Reason}); falling back to deterministic parser.",
+                orderId, extraction.FailureReason ?? "unknown");
+        }
+
+        var parser = _parserFactory.GetParser(".pdf");
+        using var stream = new MemoryStream(bytes);
+        var parsed = await parser.ParseAsync(stream, ct);
+        return (parsed, Array.Empty<int>());
+    }
+
+    /// <summary>
+    /// Forces every line the structured extractor flagged (a number that did not
+    /// appear in the source text, or a quantity × unit price that did not reconcile
+    /// with the stated amount) to "needs review" — even if its code resolved
+    /// deterministically — and caps its confidence so it surfaces for a human.
+    /// </summary>
+    internal static void ApplyExtractionReviewFlags(
+        IReadOnlyList<PurchaseOrderLineEntity> lines,
+        IReadOnlyCollection<int> reviewLineNumbers)
+    {
+        if (reviewLineNumbers.Count == 0) return;
+
+        var reviewSet = reviewLineNumbers.ToHashSet();
+        foreach (var le in lines)
+        {
+            if (!reviewSet.Contains(le.LineNumber)) continue;
+            le.NeedsReview = true;
+            if (le.Confidence > 0.5f) le.Confidence = 0.5f;
+        }
+    }
+
+    /// <summary>
+    /// Projects a canonical <see cref="ExtractedOrder"/> (from the LLM PDF extractor,
+    /// which lives in Core and cannot reference Transform) onto the Transform-layer
+    /// <see cref="ParsedOrder"/> so the rest of the parse pipeline is unchanged.
+    /// SupplierItemCode is intentionally never carried across — it is resolved
+    /// downstream in <see cref="BuildLineEntitiesAsync"/>.
+    /// </summary>
+    private static ParsedOrder MapExtractedToParsed(ExtractedOrder o) =>
+        new(
+            o.PoNumber,
+            o.OrderDate,
+            o.BuyerName,
+            o.Currency,
+            o.Lines.Select(l => new ParsedOrderLine(
+                l.LineNumber,
+                l.BuyerItemCode,
+                l.Description,
+                l.Quantity,
+                l.Unit,
+                l.UnitPrice)).ToList());
+
     private async Task<List<PurchaseOrderLineEntity>> BuildLineEntitiesAsync(
         Guid organisationId,
         Guid supplierId,

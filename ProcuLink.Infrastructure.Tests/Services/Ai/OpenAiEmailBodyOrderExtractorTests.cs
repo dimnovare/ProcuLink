@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -183,6 +184,43 @@ public class OpenAiEmailBodyOrderExtractorTests
         result.Success.Should().BeFalse("whitespace-only body is effectively empty");
         result.Order.Should().BeNull();
         result.FailureReason.Should().NotBeNullOrWhiteSpace();
+    }
+
+    // ── DTO snake_case binding (regression guard) ────────────────────────────
+
+    [Fact]
+    public void ExtractionDto_BindsSnakeCaseJson_UnderWebDefaults()
+    {
+        // The OpenAI structured-output schema emits snake_case keys, but the DTO is
+        // deserialized with JsonSerializerDefaults.Web (camelCase). Without explicit
+        // [JsonPropertyName] attributes every multi-word field binds to null/default,
+        // silently dropping the PO number, buyer name, item codes, and unit prices.
+        const string json = """
+            {
+              "confidence": 0.9,
+              "po_number": "PO-1",
+              "order_date": "2026-05-20",
+              "currency": "EUR",
+              "buyer_name": "Acme",
+              "lines": [
+                { "line_number": 2, "buyer_item_code": "ABC", "description": "Widget",
+                  "quantity": 4, "unit": "PCS", "unit_price": 12.5 }
+              ]
+            }
+            """;
+
+        var dto = JsonSerializer.Deserialize<OpenAiEmailBodyOrderExtractor.ExtractionDto>(
+            json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        dto.Should().NotBeNull();
+        dto!.PoNumber.Should().Be("PO-1");
+        dto.OrderDate.Should().Be("2026-05-20");
+        dto.BuyerName.Should().Be("Acme");
+        dto.Currency.Should().Be("EUR");
+        dto.Lines.Should().ContainSingle();
+        dto.Lines![0].LineNumber.Should().Be(2);
+        dto.Lines[0].BuyerItemCode.Should().Be("ABC");
+        dto.Lines[0].UnitPrice.Should().Be(12.5);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

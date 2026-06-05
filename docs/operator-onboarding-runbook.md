@@ -166,8 +166,8 @@ The parser is auto-selected from the file extension, with content-sniffing for X
 |---|---|---|---|
 | **CSV** | `.csv` | Smart header aliasing (`po_number`/`PO Number`/`po`, `qty`, `line_no`, `sku`, `unit_price`…), delimiter sniff | PROD-PROVEN |
 | **Excel** | `.xlsx` | First worksheet | TESTED |
-| **PDF (text)** | `.pdf` | Extracts text + parses header/lines | TESTED |
-| **PDF (scanned/image)** | `.pdf` | Needs Azure OCR (`Ocr:Azure:Endpoint`/`ApiKey`). Without it, scanned PDFs fail | CONFIG-GATED |
+| **PDF (text)** | `.pdf` | PdfPig extracts the text layer, then an OpenAI extractor (set `Ai:OpenAI:ApiKey`) structures it into the canonical order. Every emitted number must appear verbatim in the source and qty×price must reconcile, else the line is flagged "needs review". Without an OpenAI key (or if extraction fails/low-confidence), falls back to the deterministic column parser | TESTED |
+| **PDF (scanned/image)** | `.pdf` | **Not yet supported** — image-only PDFs with no text layer fail with "This PDF looks scanned or image-only — we couldn't extract any text." A vision-LLM fallback is planned, not built. No Azure/OCR provider is used | NOT SUPPORTED |
 | **cXML 1.2** | `.cxml` (or `.xml`) | OrderRequest | TESTED |
 | **UBL 2.1 / Peppol** | `.xml` | Auto-detected by content; `.ubl` is **not** accepted — send as `.xml` | TESTED |
 | **EDIFACT ORDERS** | `.edi` (or `.txt` sniffed) | Hand-rolled parser (no commercial EDI lib) | TESTED |
