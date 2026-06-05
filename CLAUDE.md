@@ -347,12 +347,11 @@ Read this before starting new work:
   - Provider-neutral `IAiMappingService` with OpenAI structured outputs first.
   - Suggestions are stored on purchase order lines and exposed as line metadata.
   - Resolve UI pre-fills suggestions but visibly labels confidence, reason, and provenance.
-- **Group F PDF ingestion is implemented** for text-based purchase-order PDFs, with config-gated OCR fallback.
-  - `PdfOrderParser` uses `PdfPig` for text extraction plus conservative header/line parsing.
-  - The API accepts `.pdf` uploads, and `FileUploadZone` accepts PDF files.
-  - Scanned/image-only PDFs call `IDocumentOcrService` only when OCR is configured.
-  - Current provider: `AzureDocumentIntelligenceOcrService` behind `Ocr:Azure:Endpoint` and `Ocr:Azure:ApiKey`; otherwise `NoOpOcrService`.
-  - Production OCR still needs live provider config, test PDFs, and user-facing status/error copy before it is promised in sales.
+- **Group F PDF ingestion — BEING REWORKED 2026-06-05 to text→LLM extraction** (spec: `docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md`; benchmark-proven on 22 real Markit docs). Build in progress on a feature branch (chip).
+  - **New direction:** the PRIMARY PDF path is **text→LLM structured extraction** → canonical `ParsedOrder`. PdfPig extracts the (already-exact) digital text; an OpenAI extractor structures it (strict JSON schema, per-org `IAiUsageTracker` cap, anti-hallucination validation: numbers must appear in source + qty×price≈amount). The brittle fixed-column regex `PdfOrderParser` is kept ONLY as a no-key/offline fallback.
+  - Vision LLM = fallback for no-text PDFs (Phase 2, rasterize via PDFtoImage+SkiaSharp, both MIT — never Ghostscript/poppler). Self-hosted **RapidOcrNet** (Apache-2.0) = no-egress fallback (Phase 3).
+  - **`AzureDocumentIntelligenceOcrService` is being REMOVED** (along with `Azure.AI.DocumentIntelligence` + `Ocr:Azure:*`). `IDocumentOcrService`/`NoOpOcrService` are kept (repurposed for the self-hosted engine).
+  - Privacy: real customer PO data → OpenAI needs an EU-residency project + DPA + zero-retention; the extractor is no-op without a key (safe default). User-facing capability copy is reconciled only once shipped (offer⇔works).
 - **Group G ERP connectors are implemented** as delivery adapters.
   - `IErpConnector` plus Erply and Directo connectors exist.
   - `erp_erply` and `erp_directo` are accepted delivery protocol values.

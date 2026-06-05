@@ -4,6 +4,12 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-05 (later) — PDF parsing strategy decided: text→LLM extraction (benchmark-proven on 22 real docs), build handed to a chip**
+
+**Decision (canonical):** replace the brittle regex `PdfOrderParser` + paid Azure Document Intelligence with **text→LLM structured extraction** as the PRIMARY PDF path. Proven on **22 real Markit POs+invoices** (Danfoss/ABB/REDACTED-PARTY/Veolia/Aperam/REDACTED-PARTY/Siemens/Continental/REDACTED-PARTY/Rheinbahn/ANDRITZ/REDACTED-PARTY/LähiTapiola/Somfy/BeCom/UFP/CEVA/DNV): **22/22 parsed, 60 lines, 177/177 numbers verbatim in source (no hallucination), 98.3% qty×price=amount**, across EN/DE/FR/PL/FI + 6 currencies, zero templates. Real corpus is **20/20 digital-text, 0 scanned** → OCR is the edge case. Cost ~€0.0005/doc on the existing OpenAI key — replaces both DocParser.com and Azure DI. Spec + full doc-reconcile inventory: **`docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md`**. Benchmark harness: `~/pl_bench.py` (against `~/Downloads/POs`). **Build is being executed by a chip** (multi-agent, feature branch). Canonical model (`ParsedOrder` 5 header + 6 line fields) is the extraction schema; supplier/totals/tax/per-line-date enrichment is a noted Phase-4 follow-up.
+
+---
+
 ## Where we are: **2026-06-05 — real-endpoint test-fires merged to main; S3→R2 ServiceUrl fix proven live + deployed; inbound-email PROVEN end-to-end in prod (real email → order); walkthrough video v6 + frontend audit fixes shipped**
 
 Long multi-workstream session across frontend (`project-proculink`) + backend (`ProcuLink`).
@@ -270,7 +276,7 @@ Verification:
 Important product/implementation guidance:
 - Hosted inbound email webhook and inbound REST API have backend support, but should be offered as assisted setup until customer-facing setup docs/screens are complete.
 - SFTP/S3 polling backend exists and now requires a valid configured default supplier before import. It remains assisted/internal until customer-facing setup/test-fire UX exists.
-- Scanned PDF OCR is possible through `IDocumentOcrService` / Azure Document Intelligence. Use OCR provider extraction first; use AI for interpretation, mapping suggestions, confidence, and review. Do not treat the LLM itself as the OCR engine.
+- **PDF strategy SUPERSEDED 2026-06-05** (see top section + `docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md`): real Markit corpus is digital-text, not scanned, and brittle regex/templates fail on it. New direction: **text→LLM structured extraction is the PRIMARY PDF path** (the LLM IS the extractor on the digital text), vision LLM is the no-text fallback, self-hosted RapidOcrNet is the no-egress fallback, and **Azure Document Intelligence is being removed**. The earlier "do not treat the LLM as the OCR engine" guidance is reversed for digital PDFs (no OCR step needed — the text layer is already exact).
 - Task 6 of `2026-06-01-boringly-reliable-po-loop.md` is closed locally. Next gate is Group J/live deployment hardening: repeat the same PO happy/error path against Railway/Vercel with production-like env vars, then only broaden standards/engines once the deployed bridge is equally boring.
 
 ---
