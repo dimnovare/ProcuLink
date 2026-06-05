@@ -31,7 +31,8 @@ public sealed record UpdateS3IngressRequest(
     string Region,
     string AccessKeyId,
     string? SecretKey,           // null = keep saved, "" = clear, value = replace
-    Guid? DefaultSupplierId);
+    Guid? DefaultSupplierId,
+    string? ServiceUrl = null);  // R2/MinIO endpoint; null/"" = standard AWS endpoint from region
 
 public sealed record S3IngressResponse(
     bool Enabled,
@@ -42,7 +43,8 @@ public sealed record S3IngressResponse(
     Guid? DefaultSupplierId,
     bool HasSecretKey,
     string? SecretKeyDisplay,    // "********" or null — never the ciphertext
-    DateTime? UpdatedAt);
+    DateTime? UpdatedAt,
+    string? ServiceUrl = null);  // R2/MinIO endpoint, or null for standard AWS
 
 /// <summary>
 /// Self-serve read/write of the per-org SFTP and S3/R2 pull-ingress configs.

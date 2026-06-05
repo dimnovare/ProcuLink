@@ -97,6 +97,7 @@ public sealed class PullIngressSettingsService : IPullIngressSettingsService
         cfg.BucketName = Normalize(request.BucketName);
         cfg.KeyPrefix = Normalize(request.KeyPrefix);
         cfg.Region = Normalize(request.Region);
+        cfg.ServiceUrl = string.IsNullOrWhiteSpace(request.ServiceUrl) ? null : request.ServiceUrl.Trim();
         cfg.AccessKeyId = Normalize(request.AccessKeyId);
         cfg.DefaultSupplierId = request.DefaultSupplierId;
         cfg.IsEnabled = request.Enabled;
@@ -128,12 +129,12 @@ public sealed class PullIngressSettingsService : IPullIngressSettingsService
     private static S3IngressResponse ToS3Response(S3IngressConfig? c)
     {
         if (c is null)
-            return new S3IngressResponse(false, string.Empty, string.Empty, string.Empty, string.Empty, null, false, null, null);
+            return new S3IngressResponse(false, string.Empty, string.Empty, string.Empty, string.Empty, null, false, null, null, null);
 
         var has = !string.IsNullOrWhiteSpace(c.EncryptedSecretKey);
         return new S3IngressResponse(
             c.IsEnabled, c.BucketName, c.KeyPrefix, c.Region, c.AccessKeyId, c.DefaultSupplierId,
-            has, has ? Mask : null, c.UpdatedAt);
+            has, has ? Mask : null, c.UpdatedAt, c.ServiceUrl);
     }
 
     private static string Normalize(string? value) => value?.Trim() ?? string.Empty;
