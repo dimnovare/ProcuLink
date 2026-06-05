@@ -172,6 +172,9 @@ builder.Services.AddScoped<IS3IngressService, S3IngressService>();
 // Email-body NLP runs in the API's InboundEmailController scope (Postmark webhook),
 // not in Worker jobs. Registering it here triggers DI validation failure at Host.Build().
 
+// PDF rasterizer for the vision fallback (scanned/no-text PDFs). The Worker runs
+// ParseOrderJob, so it needs the same registration as the API.
+builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
 // Primary PDF path: text → LLM structured extraction. The Worker runs ParseOrderJob,
 // so it must register the same singleton extractor as the API (orgId is a method
 // param + tracker resolved via IServiceScopeFactory — no ICurrentTenantService).

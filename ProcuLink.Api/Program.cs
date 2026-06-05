@@ -289,6 +289,9 @@ builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
 builder.Services.AddScoped<IS3IngressService, S3IngressService>();
 
+// PDF rasterizer for the vision fallback (scanned/no-text PDFs). Self-contained
+// PDFium + SkiaSharp natives — no extra system packages on the Debian base.
+builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
 // Primary PDF path: text → LLM structured extraction (no-op without an OpenAI key,
 // so the deterministic PdfOrderParser stays the fallback). Singleton + per-call
 // IServiceScopeFactory tracker resolution so the same instance is valid in the Worker.
