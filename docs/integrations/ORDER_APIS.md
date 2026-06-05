@@ -331,12 +331,19 @@ Ai__OpenAI__ExtractionModel=gpt-5-mini
 ```
 
 The extractor is a safe **no-op** when no OpenAI key is set; the deterministic
-fallback parser runs instead. Sending real customer PO text to OpenAI requires
-an EU-residency OpenAI project + DPA + zero-retention.
+fallback parser runs instead. Sending real customer PO data to OpenAI — text for
+text-based PDFs, and rasterized page **images** for the scanned-PDF vision
+fallback — requires an EU-residency OpenAI project + DPA + zero-retention.
 
-**Scanned / image-only PDFs are not supported yet.** A PDF with no text layer
-fails with a clear "This PDF looks scanned or image-only — we couldn't extract
-any text." message. A vision-LLM fallback (rasterize via PDFtoImage + SkiaSharp,
-then the same OpenAI extractor) is planned (Phase 2); a self-hosted no-egress
-OCR engine (RapidOcrNet) is planned (Phase 3). Azure Document Intelligence has
-been removed.
+**Scanned / image-only PDFs fall back to AI vision (review-flagged).** When
+PdfPig finds no text layer, ProcuLink rasterizes the leading pages (PDFtoImage +
+SkiaSharp) and sends the page images to the vision-capable OpenAI model under
+the same strict schema. This needs the same `Ai__OpenAI__ApiKey` — with no key
+it is a no-op and the scanned PDF fails. Because there is no text layer to
+verify numbers against, **every** line from a scanned PDF is flagged "needs
+review" and surfaces in `/operations/exceptions` / order review — it is
+assisted, never delivered blind. A scanned PDF the vision model still can't read
+fails with the clear "This PDF looks scanned or image-only — we couldn't extract
+any text." message. No Azure provider is used; Azure Document Intelligence has
+been removed. A self-hosted no-egress OCR engine (RapidOcrNet) for customers who
+cannot send images to OpenAI is still planned (Phase 3).

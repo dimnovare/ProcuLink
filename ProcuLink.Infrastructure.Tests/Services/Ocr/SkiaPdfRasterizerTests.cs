@@ -3,6 +3,7 @@ using System.Text;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Infrastructure.Services.Ocr;
+using SkiaSharp;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Ocr;
 
@@ -37,6 +38,52 @@ public class SkiaPdfRasterizerTests
         New().RenderPagesPng(Array.Empty<byte>(), 3).Should().BeEmpty();
         New().RenderPagesPng(Encoding.ASCII.GetBytes("not a pdf"), 3).Should().BeEmpty();
         New().RenderPagesPng(CreatePdf("x"), 0).Should().BeEmpty("maxPages 0 → nothing");
+    }
+
+    [Fact]
+    public void RenderPagesPng_HugeMediaBox_IsDimensionBounded()
+    {
+        // A tiny PDF declaring a 200in x 200in page. Without a dimension cap this would
+        // rasterize to a multi-GB bitmap (OOM the worker). The cap must bound it.
+        var pdf = CreateBlankPagePdf(14400, 14400);
+
+        var pages = New().RenderPagesPng(pdf, 1);
+
+        pages.Should().ContainSingle();
+        using var bmp = SKBitmap.Decode(pages[0]);
+        bmp.Width.Should().BeLessThanOrEqualTo(2500);
+        bmp.Height.Should().BeLessThanOrEqualTo(2500);
+    }
+
+    // A blank single page with the given MediaBox (no content/text).
+    private static byte[] CreateBlankPagePdf(int w, int h)
+    {
+        var objects = new[]
+        {
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+            "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+            string.Create(CultureInfo.InvariantCulture, $"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] >>\nendobj\n"),
+        };
+        var pdf = new StringBuilder();
+        pdf.AppendLine("%PDF-1.4");
+        var offsets = new List<int> { 0 };
+        foreach (var obj in objects)
+        {
+            offsets.Add(Encoding.ASCII.GetByteCount(pdf.ToString()));
+            pdf.Append(obj);
+        }
+        var xrefOffset = Encoding.ASCII.GetByteCount(pdf.ToString());
+        pdf.AppendLine("xref");
+        pdf.AppendLine("0 4");
+        pdf.AppendLine("0000000000 65535 f ");
+        for (var i = 1; i <= 3; i++)
+            pdf.AppendLine(offsets[i].ToString("D10", CultureInfo.InvariantCulture) + " 00000 n ");
+        pdf.AppendLine("trailer");
+        pdf.AppendLine("<< /Size 4 /Root 1 0 R >>");
+        pdf.AppendLine("startxref");
+        pdf.AppendLine(xrefOffset.ToString(CultureInfo.InvariantCulture));
+        pdf.AppendLine("%%EOF");
+        return Encoding.ASCII.GetBytes(pdf.ToString());
     }
 
     // Minimal valid text PDF (mirrors ProcuLink.Transform.Tests.PdfOrderParserTests).

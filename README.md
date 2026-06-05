@@ -163,7 +163,7 @@ Implemented baseline:
 - Final billing ladder: Pilot, Growth, Operations, Integration, Enterprise
 - PO field mapping engine with magic mapping preview (source → canonical → supplier, with AI suggestions, confidence + provenance, accept/edit/reject before commit)
 - AI mapping suggestions (provider-neutral, OpenAI structured outputs first)
-- Input parsers: CSV/XLSX, text-based PDF (text→LLM extraction via PdfPig + OpenAI, with number-vs-source validation; deterministic column-parser fallback when no key/offline), cXML 1.2, UBL 2.1, EDIFACT, ANSI X12 850
+- Input parsers: CSV/XLSX, text-based PDF (text→LLM extraction via PdfPig + OpenAI, with number-vs-source validation; deterministic column-parser fallback when no key/offline), scanned/image-only PDF (AI vision fallback — rasterize via PDFtoImage + SkiaSharp → vision-capable OpenAI model; every line flagged for human review), cXML 1.2, UBL 2.1, EDIFACT, ANSI X12 850
 - Smart file-format auto-detect (`POST /api/upload/detect-format`)
 - Output transforms: CSV/XLSX, cXML, UBL 2.1 (Peppol BIS 3.0-compatible), X12 850
 - Supplier delivery channels: HTTP/webhook, SFTP, FTPS, SMTP, Erply/Directo ERP

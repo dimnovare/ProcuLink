@@ -15,7 +15,13 @@ namespace ProcuLink.Infrastructure.Services.Ocr;
 /// </summary>
 public sealed class SkiaPdfRasterizer : IPdfRasterizer
 {
-    private const int RenderDpi = 200;
+    // Bound each rasterized page to fit a MaxRenderSide x MaxRenderSide box (aspect
+    // preserved). PDF page dimensions are independent of file byte size — a tiny PDF
+    // can declare a 200-inch MediaBox, which at a fixed DPI would rasterize to a
+    // multi-GB bitmap and OOM the (single) worker. Sizing to a fixed pixel box caps
+    // each bitmap to ~MaxRenderSide^2 x 4 bytes regardless of the declared page size,
+    // while staying high-res enough for vision/OCR of a page.
+    private const int MaxRenderSide = 2500;
     private readonly ILogger<SkiaPdfRasterizer> _logger;
 
     public SkiaPdfRasterizer(ILogger<SkiaPdfRasterizer> logger) => _logger = logger;
@@ -32,10 +38,12 @@ public sealed class SkiaPdfRasterizer : IPdfRasterizer
             var pageCount = Conversion.GetPageCount(pdfBytes);
             var take = Math.Min(pageCount, maxPages);
 
+            // Width + Height + WithAspectRatio → scale to fit the box, never exceeding it.
+            var options = new RenderOptions(Width: MaxRenderSide, Height: MaxRenderSide, WithAspectRatio: true);
+
             for (var i = 0; i < take; i++)
             {
-                using var bitmap = Conversion.ToImage(
-                    pdfBytes, page: i, password: null, options: new RenderOptions(Dpi: RenderDpi));
+                using var bitmap = Conversion.ToImage(pdfBytes, page: i, password: null, options: options);
                 using var data = bitmap.Encode(SKEncodedImageFormat.Png, 90);
                 if (data is not null && data.Size > 0)
                     pages.Add(data.ToArray());
