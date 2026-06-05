@@ -135,6 +135,39 @@ public class OrderServicePdfRoutingTests
     }
 
     [Fact]
+    public async Task ParsePdfAsync_CarriesEnrichmentAndDocType_FromExtractor()
+    {
+        var orgId = Guid.NewGuid();
+
+        var extractor = new Mock<IStructuredOrderExtractor>();
+        extractor.SetupGet(e => e.IsAvailable).Returns(true);
+        extractor
+            .Setup(e => e.ExtractAsync(It.IsAny<Stream>(), "application/pdf", orgId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new StructuredExtractionResult(
+                Success: true, Confidence: 0.9,
+                Order: new ExtractedOrder(
+                    "INV-9", new DateTime(2026, 5, 20), "Acme", "EUR",
+                    new[] { new ExtractedOrderLine(1, "ABC", "Widget", 4, "PCS", 10m, LineAmount: 40m, TaxRate: 0.2m, DeliveryDate: new DateOnly(2026, 6, 30)) },
+                    SupplierName: "Supplier Co", SubTotal: 40m, TaxTotal: 8m, GrandTotal: 48m,
+                    PaymentTerms: "Net 30", DocumentType: "invoice"),
+                FailureReason: null, ReviewLineNumbers: Array.Empty<int>()));
+
+        var svc = BuildService(extractor.Object);
+
+        var (parsed, _) = await svc.ParsePdfAsync(
+            Encoding.UTF8.GetBytes("not a real pdf"), orgId, Guid.NewGuid(), CancellationToken.None);
+
+        parsed.DocumentType.Should().Be("invoice");
+        parsed.SupplierName.Should().Be("Supplier Co");
+        parsed.GrandTotal.Should().Be(48m);
+        parsed.TaxTotal.Should().Be(8m);
+        parsed.PaymentTerms.Should().Be("Net 30");
+        parsed.Lines[0].LineAmount.Should().Be(40m);
+        parsed.Lines[0].TaxRate.Should().Be(0.2m);
+        parsed.Lines[0].DeliveryDate.Should().Be(new DateOnly(2026, 6, 30));
+    }
+
+    [Fact]
     public void ApplyExtractionReviewFlags_ForcesNeedsReview_OnFlaggedLinesOnly()
     {
         var lines = new List<PurchaseOrderLineEntity>

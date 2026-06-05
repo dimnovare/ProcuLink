@@ -21,6 +21,12 @@ public class PurchaseOrderLineEntity
     public string? AiSuggestionReason { get; set; }
     public string? AiSuggestionProvenance { get; set; }
 
+    // ── Phase 4 enrichment (nullable; populated by the LLM PDF extractor) ──
+    /// <summary>Printed extended line total (quantity × unit price), when stated.</summary>
+    public decimal? LineAmount { get; set; }
+    public decimal? TaxRate { get; set; }
+    public DateOnly? DeliveryDate { get; set; }
+
     // Navigation
     public PurchaseOrderEntity Order { get; set; } = null!;
 }

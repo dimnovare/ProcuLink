@@ -11,7 +11,11 @@ public sealed record ExtractedOrderLine(
     string? Description,
     decimal Quantity,
     string? Unit,
-    decimal? UnitPrice
+    decimal? UnitPrice,
+    // Phase 4 enrichment (optional — additive, defaulted so existing callers are unaffected).
+    decimal? LineAmount = null,
+    decimal? TaxRate = null,
+    DateOnly? DeliveryDate = null
 );
 
 /// <summary>
@@ -24,7 +28,14 @@ public sealed record ExtractedOrder(
     DateTime? OrderDate,
     string? BuyerName,
     string? Currency,
-    IReadOnlyList<ExtractedOrderLine> Lines
+    IReadOnlyList<ExtractedOrderLine> Lines,
+    // Phase 4 enrichment + doc-type classification (additive, defaulted).
+    string? SupplierName = null,
+    decimal? SubTotal = null,
+    decimal? TaxTotal = null,
+    decimal? GrandTotal = null,
+    string? PaymentTerms = null,
+    string? DocumentType = null
 );
 
 /// <summary>

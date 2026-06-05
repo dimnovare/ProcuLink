@@ -300,6 +300,62 @@ public class OpenAiPdfOrderExtractorTests
         dto.Lines[0].LineAmount.Should().Be(50);
     }
 
+    // ── Phase 4: enrichment + doc-type classification ───────────────────────
+
+    [Fact]
+    public void ValidateAndMap_CapturesEnrichmentAndDocumentType()
+    {
+        const string source = "1 ABC Widget 4 PCS 12.50 50.00";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "INV-1", OrderDate: "2026-05-20", Currency: "EUR", BuyerName: "Acme",
+            Lines: new[]
+            {
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(
+                    1, "ABC", "Widget", 4, "PCS", 12.50, 50.00,
+                    TaxRate: 0.20, DeliveryDate: "2026-06-30"),
+            },
+            DocumentType: "invoice",
+            SupplierName: "Supplier Co",
+            PaymentTerms: "Net 30",
+            SubTotal: 50.00,
+            TaxTotal: 10.00,
+            GrandTotal: 60.00);
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Success.Should().BeTrue();
+        result.Order!.DocumentType.Should().Be("invoice");
+        result.Order.SupplierName.Should().Be("Supplier Co");
+        result.Order.PaymentTerms.Should().Be("Net 30");
+        result.Order.SubTotal.Should().Be(50.00m);
+        result.Order.TaxTotal.Should().Be(10.00m);
+        result.Order.GrandTotal.Should().Be(60.00m);
+
+        var line = result.Order.Lines[0];
+        line.LineAmount.Should().Be(50.00m);
+        line.TaxRate.Should().Be(0.20m);
+        line.DeliveryDate.Should().Be(new DateOnly(2026, 6, 30));
+    }
+
+    [Theory]
+    [InlineData("invoice", "invoice")]
+    [InlineData("INVOICE", "invoice")]
+    [InlineData("purchase_order", "purchase_order")]
+    [InlineData("purchase order", "purchase_order")]
+    [InlineData("something", "other")]
+    public void ValidateAndMap_NormalizesDocumentType(string raw, string expected)
+    {
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "P", OrderDate: "", Currency: "EUR", BuyerName: "A",
+            Lines: new[] { new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "X", "Y", 1, "PCS", 0, 0) },
+            DocumentType: raw);
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "1 X Y 1 PCS");
+
+        result.Order!.DocumentType.Should().Be(expected);
+    }
+
     // ── Plumbing: no-op when no key ──────────────────────────────────────────
 
     [Fact]

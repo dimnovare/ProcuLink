@@ -561,21 +561,38 @@ public sealed class OrderService : IOrderService
                                 ? DateOnly.FromDateTime(parsedOrder.OrderDate.Value)
                                 : DateOnly.FromDateTime(now);
             var newCurrency  = parsedOrder.Currency ?? "EUR";
-            var newStatus    = anyUnresolved ? "pending_review" : "ready";
+            // Phase 4: an LLM doc-type of "invoice" forces review — an invoice arrived on
+            // the PO path (there is no invoice routing here) and must not be silently
+            // transformed and delivered as a purchase order.
+            var isInvoice = string.Equals(parsedOrder.DocumentType, "invoice", StringComparison.OrdinalIgnoreCase);
+            var newStatus    = (anyUnresolved || isInvoice) ? "pending_review" : "ready";
             // Denormalise buyer name for SQL search (avoid JSON parse at query time).
             var newBuyerName = string.IsNullOrWhiteSpace(parsedOrder.BuyerName)
                                 ? null
                                 : parsedOrder.BuyerName.Trim();
+            // Phase 4 enrichment header fields (nullable; only the LLM PDF path populates these).
+            var newSupplierName = string.IsNullOrWhiteSpace(parsedOrder.SupplierName) ? null : parsedOrder.SupplierName.Trim();
+            var newPaymentTerms = string.IsNullOrWhiteSpace(parsedOrder.PaymentTerms) ? null : parsedOrder.PaymentTerms.Trim();
+            var newDocumentType = string.IsNullOrWhiteSpace(parsedOrder.DocumentType) ? null : parsedOrder.DocumentType.Trim();
+            var newSubTotal   = parsedOrder.SubTotal;
+            var newTaxTotal   = parsedOrder.TaxTotal;
+            var newGrandTotal = parsedOrder.GrandTotal;
 
             var updated = await _db.PurchaseOrders
                 .Where(o => o.Id == orderId && o.OrgId == organisationId)
                 .ExecuteUpdateAsync(s => s
-                    .SetProperty(o => o.PoNumber,   newPoNumber)
-                    .SetProperty(o => o.OrderDate,  newOrderDate)
-                    .SetProperty(o => o.Currency,   newCurrency)
-                    .SetProperty(o => o.Status,     newStatus)
-                    .SetProperty(o => o.BuyerName,  newBuyerName)
-                    .SetProperty(o => o.UpdatedAt,  now), ct);
+                    .SetProperty(o => o.PoNumber,     newPoNumber)
+                    .SetProperty(o => o.OrderDate,    newOrderDate)
+                    .SetProperty(o => o.Currency,     newCurrency)
+                    .SetProperty(o => o.Status,       newStatus)
+                    .SetProperty(o => o.BuyerName,    newBuyerName)
+                    .SetProperty(o => o.SupplierName, newSupplierName)
+                    .SetProperty(o => o.SubTotal,     newSubTotal)
+                    .SetProperty(o => o.TaxTotal,     newTaxTotal)
+                    .SetProperty(o => o.GrandTotal,   newGrandTotal)
+                    .SetProperty(o => o.PaymentTerms, newPaymentTerms)
+                    .SetProperty(o => o.DocumentType, newDocumentType)
+                    .SetProperty(o => o.UpdatedAt,    now), ct);
 
             if (updated == 0)
             {
@@ -594,7 +611,17 @@ public sealed class OrderService : IOrderService
                 unresolvedCount = lineEntities.Count(l => l.NeedsReview),
                 aiSuggestionCount,
                 newStatus,
+                documentType    = newDocumentType,
+                classifiedAsInvoice = isInvoice,
             }));
+            if (isInvoice)
+            {
+                _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "ClassifiedAsInvoice", new
+                {
+                    note = "This document looks like an invoice, not a purchase order — flagged for review before delivery.",
+                    grandTotal = newGrandTotal,
+                }));
+            }
 
             await _db.SaveChangesAsync(ct);
 
@@ -607,6 +634,12 @@ public sealed class OrderService : IOrderService
             entity.Currency  = newCurrency;
             entity.Status    = newStatus;
             entity.BuyerName = newBuyerName;
+            entity.SupplierName = newSupplierName;
+            entity.SubTotal     = newSubTotal;
+            entity.TaxTotal     = newTaxTotal;
+            entity.GrandTotal   = newGrandTotal;
+            entity.PaymentTerms = newPaymentTerms;
+            entity.DocumentType = newDocumentType;
             entity.UpdatedAt = now;
             entity.Lines = lineEntities;
 
@@ -1269,7 +1302,16 @@ public sealed class OrderService : IOrderService
                 l.Description,
                 l.Quantity,
                 l.Unit,
-                l.UnitPrice)).ToList());
+                l.UnitPrice,
+                LineAmount: l.LineAmount,
+                TaxRate: l.TaxRate,
+                DeliveryDate: l.DeliveryDate)).ToList(),
+            SupplierName: o.SupplierName,
+            SubTotal: o.SubTotal,
+            TaxTotal: o.TaxTotal,
+            GrandTotal: o.GrandTotal,
+            PaymentTerms: o.PaymentTerms,
+            DocumentType: o.DocumentType);
 
     private async Task<List<PurchaseOrderLineEntity>> BuildLineEntitiesAsync(
         Guid organisationId,
@@ -1344,7 +1386,11 @@ public sealed class OrderService : IOrderService
                 AiSuggestedSupplierItemCode = suggestion?.SupplierItemCode,
                 AiSuggestionConfidence = suggestion?.Confidence,
                 AiSuggestionReason = suggestion?.Reason,
-                AiSuggestionProvenance = suggestion?.Provenance
+                AiSuggestionProvenance = suggestion?.Provenance,
+                // Phase 4 enrichment (carried from the parsed line; null for parsers that don't emit it).
+                LineAmount = line.LineAmount,
+                TaxRate = line.TaxRate,
+                DeliveryDate = line.DeliveryDate
             });
         }
 
