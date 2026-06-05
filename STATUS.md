@@ -4,7 +4,26 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-06-04 (latest) — output-format routing, all formats reachable, self-serve SFTP/S3/email ingest, public /formats page**
+## Where we are: **2026-06-05 — real-endpoint test-fires merged to main; S3→R2 ServiceUrl fix proven live + deployed; inbound-email transport proven (Worker live); walkthrough video v6 + frontend audit fixes shipped**
+
+Long multi-workstream session across frontend (`project-proculink`) + backend (`ProcuLink`).
+
+**Frontend — shipped to `main` (Vercel) + verified (build + e2e + visual):**
+- **Walkthrough video v6** live on `/watch` (R2 `proculink-public/marketing/walkthrough.mp4`): logo'd intro/outro cards ("The missing link between buyers and suppliers." / "Connecting procurement." + CTA), no-scroll real product loop, real **ElevenLabs Music** bed (replaced the synth drone). Pipeline: `project-proculink/scripts/demo-video/` (memory `project-walkthrough-video-state`).
+- **Audit-driven fixes — 2 batches, ~33 agents / 5 workflows** (commits up to `e0b4919` + `3ff1ddb`): landing-page **honesty** (removed fabricated logo wall / "Maria Koppel" testimonial / invented metrics → honest format strip + capability facts + generic hero names), brand-green sweep (`#28C55E`→`#2E8E3A`, 17 files), responsive+a11y pass (mobile nav full-screen panel, MagicMapping mobile cards, order-review tablet stacking, ops-health cards, **inbox getRowId** correctness bug, dialog a11y…), dead-code purge (−1,900 LOC), "lane"→"connection" copy, CLAUDE.md §9 vocab refresh. Confirmed **Group L Wave 2 already merged**; mock gating sound.
+
+**Backend — real-endpoint test-fires PROVEN + MERGED to `main`** (merge `b417bed`, pushed; Railway auto-deploying): live-gated (`PROCULINK_LIVE_ENDPOINT_TESTS=1`) integration tests fire the PRODUCTION code at REAL endpoints — full guide in `docs/live-endpoint-test-fires.md`. Verified: **HTTP+OAuth2 delivery** (Cloudflare Worker), HTTP plain, **SMTP delivery** (Ethereal, IMAP-verified), **SFTP delivery** (atmoz), **SFTP ingress**, **IMAP ingress** (Ethereal IMAP via `EmailPollOrgJob`), **S3/R2 ingress** (real Cloudflare R2 bucket). Tests no-op in CI when the flag is unset (verified).
+
+**✅ a/b/c DONE (2026-06-05):**
+- **(a) S3→R2 ServiceUrl fix — DONE + PROVEN LIVE.** Added nullable `ServiceUrl` to `S3IngressConfig` (+ EF mapping + migration `AddS3IngressServiceUrl`, single additive nullable `text` column; `has-pending-model-changes` = none). `S3IngressService` now passes `config.ServiceUrl`; settings DTO/API (`UpdateS3IngressRequest`/`S3IngressResponse`) + `PullIngressSettingsService` carry it; frontend **Settings → S3/R2 pull** got an "Endpoint URL" field (frontend pushed to Vercel, `25ee10d`). Proven: `Live_S3Ingress_RealPollImportsFile` ran the real `AmazonS3Client` (ServiceURL set) against a real R2 bucket (`proculink-livetest-ingest`) — listed + downloaded + imported a PO CSV (count ≥ 1). **Full backend suite green: 747 passed, 0 failed.**
+- **(b) Live inbound email — TRANSPORT PROVEN; one founder switch remains.** Cloudflare Email Routing (already enabled on `proculink.eu`; CF MX in place — not touched) → new **Email Worker** `proculink-inbound-email` (postal-mime; scratch dir `~/proculink-inbound-worker`) → live `api.proculink.eu` inbound webhook. Added a non-disruptive rule `inbound@proculink.eu → Worker`. Sent a **real email** with a CSV attachment (direct-to-MX SMTP, SPF-authorised via a throwaway `livetest.proculink.eu` TXT, since deleted); Worker tail confirmed `attachments=1` parsed and POSTed to prod. **Blocker (founder/Railway, can't do without access):** prod `Inbound:Postmark:WebhookToken` is **unset** → backend returns 401 "Inbound webhook is not configured." Set it on Railway to the Worker secret value in `~/.proculink-inbound-token.txt`, and point `DEFAULT_TENANT_SLUG` (or use `inbound+{slug}@`) at a real org slug that has a supplier. Backend order-creation half is green-tested (`InboundEmailRouterTests`).
+- **(c) Merge — DONE.** `feat/live-endpoint-test-fires` (+ S3 fix) merged `--no-ff` to `main` (`b417bed`) and pushed. Migration is additive/nullable; API applies migrations on startup (retry loop + phantom reconciler). `curl https://api.proculink.eu/health` = **200**, stable across the deploy window. (Exact deployed SHA not independently confirmable from outside — no anonymous version endpoint, no Railway/DB access — but health stable + additive migration = safe.)
+
+**🧑‍💼 Founder-side / ROTATE NOW (chat-exposed):** rotate **Clerk, R2, ElevenLabs, and the Cloudflare API token**, and **delete `~/.proculink-cf-creds.env`**. Also (this session, throwaway): delete `~/.proculink-r2-livetest.env` + the `proculink-livetest-r2-readonly` CF API token + the `proculink-livetest-ingest` R2 bucket once done; keep `~/.proculink-inbound-token.txt` until you've set the Railway webhook token. Deletable older cruft: the `proculink-livetest` delivery Worker + KV. Stripe activation still pending. FTPS delivery test deprioritized.
+
+---
+
+## Where we are: **2026-06-04 — output-format routing, all formats reachable, self-serve SFTP/S3/email ingest, public /formats page**
 
 Merged + pushed to `main` both repos (backend `42c4bc3`, frontend `1dabf97`) — Railway + Vercel redeploying; Railway applies migration `AddDeliveryConfigOutputFormat` (one nullable `output_format` column) on startup. Local feature branches deleted.
 
