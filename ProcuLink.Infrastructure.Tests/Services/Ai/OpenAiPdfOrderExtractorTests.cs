@@ -167,6 +167,28 @@ public class OpenAiPdfOrderExtractorTests
     }
 
     [Fact]
+    public void ValidateAndMap_EuSpaceGroupedThousands_AreNotFalseFlagged()
+    {
+        // EU/Baltic convention: a space groups thousands ("1 250,00" = 1250.00).
+        // PdfPig emits these space-joined; the merged reading must still match so a
+        // correctly-extracted line for the Baltic ICP isn't sent to review.
+        const string source = "Quantity 3 Unit price 1 250,00 Amount 3 750,00";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR", BuyerName: "Baltic OU",
+            Lines: new[]
+            {
+                // 3 x 1250.00 = 3750.00 — internally consistent.
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "WIDGET", "Widget", 3, "PCS", 1250.00, 3750.00),
+            });
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Success.Should().BeTrue();
+        result.ReviewLineNumbers.Should().BeEmpty("space-grouped 1 250,00 / 3 750,00 must match the emitted values");
+    }
+
+    [Fact]
     public void ValidateAndMap_GenuineThreeDecimalValue_IsNotFlagged()
     {
         // "1.234" printed as a 3-decimal unit price must still match even though the

@@ -381,7 +381,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     // Number-like runs: an optional grouped-thousands form (at least one
     // [.,]ddd group) OR a plain integer/decimal. A regular space is NOT a
     // thousands separator here — PdfPig joins distinct words with single spaces,
-    // so "4 500" must tokenise as two numbers (4, 500), never one (4500).
+    // so "4 500" must tokenise as two numbers (4, 500), never one (4500). The
+    // EU/Baltic space-grouped form ("1 250,00") is recovered separately below.
     private static readonly Regex NumberToken = new(
         @"\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?",
         RegexOptions.Compiled);
@@ -391,6 +392,11 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     private static readonly Regex AmbiguousThreeDecimal = new(
         @"^\d{1,3}[.,]\d{3}$", RegexOptions.Compiled);
 
+    // A single space/NBSP sitting BETWEEN two digits is a thousands separator in
+    // EU/Baltic print ("1 250,00"). \x20 = regular space,   = no-break space.
+    private static readonly Regex InterDigitSpace = new(
+        @"(?<=\d)[\x20 ](?=\d)", RegexOptions.Compiled);
+
     private static HashSet<decimal> ExtractSourceNumbers(string sourceText)
     {
         var set = new HashSet<decimal>();
@@ -398,6 +404,18 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 
         foreach (Match m in NumberToken.Matches(sourceText))
             AddNumberCandidates(m.Value, set);
+
+        // Recover space/NBSP-grouped thousands ("1 250,00" -> 1250.00): collapse the
+        // inter-digit spaces and tokenise the copy too. The split readings (1, 250.00)
+        // are already in the set from the pass above; this only ADDS the merged value.
+        // Membership-only — extra candidates make matching more lenient, never cause a
+        // false review flag.
+        var collapsed = InterDigitSpace.Replace(sourceText, string.Empty);
+        if (!string.Equals(collapsed, sourceText, StringComparison.Ordinal))
+        {
+            foreach (Match m in NumberToken.Matches(collapsed))
+                AddNumberCandidates(m.Value, set);
+        }
 
         return set;
     }
@@ -409,8 +427,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 
         // For the ambiguous 3-trailing-digit case, ALSO add the decimal reading so a
         // correctly-emitted 1.234 still matches its source even though TryParseLoose
-        // read the printed "1.234" as grouped thousands (1234). Membership-only — this
-        // only makes matching more lenient, never more strict.
+        // read the printed "1.234" as grouped thousands (1234). Membership-only.
         if (AmbiguousThreeDecimal.IsMatch(token)
             && decimal.TryParse(token.Replace(',', '.'), NumberStyles.Number, CultureInfo.InvariantCulture, out var asDecimal))
         {
