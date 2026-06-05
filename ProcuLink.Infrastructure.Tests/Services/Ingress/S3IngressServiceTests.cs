@@ -236,6 +236,58 @@ public class S3IngressServiceTests
         imported.Select(x => x.BucketName).Should().AllBe("my-bucket");
     }
 
+    // ── LIVE: real S3/R2 poll against a real bucket ──────────────────────────
+    // Gated behind PROCULINK_LIVE_ENDPOINT_TESTS=1; connects to a real
+    // S3-compatible bucket (env PROCULINK_LIVE_S3_*) with the PRODUCTION
+    // AmazonS3ClientFactory, lists + downloads a real PO file, and imports it.
+    // Proves Cloudflare R2 ingest works end-to-end through the new ServiceUrl
+    // column — the gap previously documented in docs/live-endpoint-test-fires.md.
+    [Fact]
+    [Trait("Category", "LiveEndpoint")]
+    public async Task Live_S3Ingress_RealPollImportsFile()
+    {
+        if (Environment.GetEnvironmentVariable("PROCULINK_LIVE_ENDPOINT_TESTS") != "1") return;
+        var bucket = Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_BUCKET") ?? "";
+        if (string.IsNullOrEmpty(bucket)) return;
+
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var encryption = MakeEncryption();
+
+        db.Set<Supplier>().Add(new Supplier
+        { Id = supplierId, OrgId = orgId, Name = "Live S3/R2 supplier", CreatedAt = DateTime.UtcNow });
+        db.Set<S3IngressConfig>().Add(new S3IngressConfig
+        {
+            Id                 = Guid.NewGuid(),
+            OrgId              = orgId,
+            BucketName         = bucket,
+            KeyPrefix          = Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_PREFIX") ?? string.Empty,
+            Region             = Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_REGION") ?? "auto",
+            ServiceUrl         = Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_ENDPOINT"),
+            AccessKeyId        = Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_ACCESS_KEY") ?? "",
+            EncryptedSecretKey = encryption.Encrypt(Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_SECRET") ?? ""),
+            DefaultSupplierId  = supplierId,
+            IsEnabled          = true,
+            CreatedAt          = DateTime.UtcNow,
+            UpdatedAt          = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var orders = new FakeOrderService();
+        var svc = new S3IngressService(
+            db, orders, encryption, new AmazonS3ClientFactory(),
+            NullLogger<S3IngressService>.Instance);
+
+        var imported = await svc.PollAsync(orgId, default);
+
+        imported.Should().BeGreaterThanOrEqualTo(1,
+            "the real S3/R2 poll should import at least one PO file from the bucket");
+        orders.CalledWith.Should().NotBeEmpty();
+        orders.CalledWith.Select(c => c.SupplierId).Should().AllBeEquivalentTo(
+            supplierId, "imports must be routed to the configured default supplier");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static S3IngressService MakeService(

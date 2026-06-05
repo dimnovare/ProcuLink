@@ -27,6 +27,14 @@ public class S3IngressConfig
     /// <summary>AWS region identifier (e.g. <c>eu-west-1</c>, or <c>auto</c> for Cloudflare R2).</summary>
     public string Region { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Optional non-AWS S3-compatible endpoint URL. Required for Cloudflare R2
+    /// (e.g. <c>https://&lt;accountid&gt;.r2.cloudflarestorage.com</c>) and other
+    /// S3-compatible stores (MinIO, Backblaze B2, Wasabi). When null/empty the
+    /// client resolves the standard AWS endpoint from <see cref="Region"/>.
+    /// </summary>
+    public string? ServiceUrl { get; set; }
+
     /// <summary>AWS access key ID used to authenticate against the bucket.</summary>
     public string AccessKeyId { get; set; } = string.Empty;
 

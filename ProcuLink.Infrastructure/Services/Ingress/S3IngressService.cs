@@ -91,14 +91,14 @@ public sealed class S3IngressService : IS3IngressService
             return 0;
         }
 
-        // S3IngressConfig does not yet carry a per-org ServiceUrl; pass null so
-        // the factory resolves the AWS endpoint from the region. R2 (custom
-        // endpoint) support will follow once the entity gains a ServiceUrl column.
+        // Pass the per-org ServiceUrl when set (Cloudflare R2 / MinIO / other
+        // S3-compatible stores). When null/empty the factory resolves the
+        // standard AWS endpoint from the region.
         var s3Client = _s3ClientFactory.Create(
             config.AccessKeyId,
             secretKey,
             config.Region,
-            serviceUrl: null);
+            serviceUrl: string.IsNullOrWhiteSpace(config.ServiceUrl) ? null : config.ServiceUrl);
 
         _logger.LogInformation(
             "S3 ingress: listing bucket={Bucket} prefix={Prefix} for org {OrgId}.",

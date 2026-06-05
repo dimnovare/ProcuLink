@@ -156,6 +156,56 @@ public class SftpIngressServiceTests
         dedupe!.FileHash.Should().NotBeNullOrEmpty("SHA-256 hash must be stored");
     }
 
+    // ── LIVE: real SFTP poll against a real SFTP server ──────────────────────
+    // Gated behind PROCULINK_LIVE_ENDPOINT_TESTS=1; connects to a real SFTP
+    // server (env PROCULINK_LIVE_SFTP_*) with the PRODUCTION RenciSftpClientFactory,
+    // lists + downloads a real PO file, and imports it via the in-memory DbContext.
+    [Fact]
+    [Trait("Category", "LiveEndpoint")]
+    public async Task Live_SftpIngress_RealPollImportsFile()
+    {
+        if (Environment.GetEnvironmentVariable("PROCULINK_LIVE_ENDPOINT_TESTS") != "1") return;
+        var host = Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_HOST") ?? "";
+        if (string.IsNullOrEmpty(host)) return;
+
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        var encConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            { ["Delivery:EncryptionKey"] = Convert.ToBase64String(new byte[32]) })
+            .Build();
+        var encryption = new DeliveryEncryptionService(encConfig);
+
+        db.Set<Supplier>().Add(new Supplier
+        { Id = supplierId, OrgId = orgId, Name = "Live SFTP supplier", CreatedAt = DateTime.UtcNow });
+        db.Set<SftpIngressConfig>().Add(new SftpIngressConfig
+        {
+            Id = Guid.NewGuid(),
+            OrgId = orgId,
+            Host = host,
+            Port = int.TryParse(Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_PORT"), out var p) ? p : 22,
+            Username = Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_USER") ?? "",
+            EncryptedPassword = encryption.Encrypt(Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_PASS") ?? ""),
+            RemoteDirectory = Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_INGEST_DIR") ?? "/upload",
+            DefaultSupplierId = supplierId,
+            IsEnabled = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var orders = new RecordingOrderService();
+        var svc = MakeService(db, orders, new RenciSftpClientFactory());
+
+        var imported = await svc.PollAsync(orgId, default);
+
+        imported.Should().BeGreaterThanOrEqualTo(1, "the real SFTP poll should import at least one PO file from the server");
+        orders.CreateStubCalls.Should().BeGreaterThanOrEqualTo(1);
+        orders.SupplierIds.Should().Contain(supplierId, "imports must be routed to the configured default supplier");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static SftpIngressService MakeService(

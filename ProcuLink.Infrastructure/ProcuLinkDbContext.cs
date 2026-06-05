@@ -485,6 +485,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.BucketName).HasColumnName("bucket_name").IsRequired();
             b.Property(x => x.KeyPrefix).HasColumnName("key_prefix").IsRequired();
             b.Property(x => x.Region).HasColumnName("region").IsRequired();
+            b.Property(x => x.ServiceUrl).HasColumnName("service_url");
             b.Property(x => x.AccessKeyId).HasColumnName("access_key_id").IsRequired();
             b.Property(x => x.EncryptedSecretKey).HasColumnName("encrypted_secret_key").IsRequired();
             b.Property(x => x.DefaultSupplierId).HasColumnName("default_supplier_id");
