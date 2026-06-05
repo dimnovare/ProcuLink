@@ -7,6 +7,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
+using ProcuLink.Core.Services.Ingress;
 
 namespace ProcuLink.Infrastructure.Services.Email;
 
@@ -187,6 +188,20 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 _logger.LogWarning(
                     "Inbound email attachment {FileName} for org {OrgId} has empty content — skipping.",
                     att.FileName, org.Id);
+                continue;
+            }
+
+            // Size cap — skip oversized attachments before the parse pipeline.
+            if (att.Content.Length > IngressLimits.MaxFileBytes)
+            {
+                _logger.LogWarning(
+                    "Inbound email attachment {FileName} for org {OrgId} is {Bytes} bytes (> {Max} byte cap) — skipping.",
+                    att.FileName, org.Id, att.Content.Length, IngressLimits.MaxFileBytes);
+                await WriteAuditAsync(
+                    org.Id,
+                    "inbound_email.attachment_skipped_too_large",
+                    payload with { Attachments = new[] { Strip(att) } },
+                    ct);
                 continue;
             }
 

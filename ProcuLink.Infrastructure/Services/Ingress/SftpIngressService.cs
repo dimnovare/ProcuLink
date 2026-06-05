@@ -152,6 +152,16 @@ public sealed class SftpIngressService : ISftpIngressService
 
             // ── download + hash ───────────────────────────────────────────────
             using var fileBytes = session.DownloadFile(remotePath);
+
+            // Size cap — skip oversized files before they enter the parse pipeline.
+            if (fileBytes.Length > IngressLimits.MaxFileBytes)
+            {
+                _logger.LogWarning(
+                    "SFTP ingress: org {OrgId} — skipping {Path} ({Bytes} bytes > {Max} byte cap).",
+                    organisationId, remotePath, fileBytes.Length, IngressLimits.MaxFileBytes);
+                continue;
+            }
+
             var hash = ComputeSha256Hex(fileBytes);
             fileBytes.Position = 0;
 

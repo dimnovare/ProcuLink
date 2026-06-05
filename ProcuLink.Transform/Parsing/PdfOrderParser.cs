@@ -54,7 +54,8 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
         await fileStream.CopyToAsync(ms, ct);
         var bytes = ms.ToArray();
 
-        var textLines = PdfTextExtractor.ExtractLines(bytes).ToList();
+        // Timeout-bounded so a pathological PDF can't hang the parse pipeline indefinitely.
+        var textLines = (await PdfTextExtractor.ExtractLinesAsync(bytes, ct)).ToList();
 
         // OCR fallback for scanned / image-only PDFs (no-op when OCR provider not configured).
         if (textLines.Count == 0 && _ocrService is { IsAvailable: true })

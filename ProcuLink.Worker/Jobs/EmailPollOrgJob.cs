@@ -9,6 +9,7 @@ using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 
@@ -168,6 +169,16 @@ public sealed class EmailPollOrgJob
 
             await using var stream = new MemoryStream();
             await part.Content.DecodeToAsync(stream, ct);
+
+            // Size cap — skip oversized attachments before the parse pipeline.
+            if (stream.Length > IngressLimits.MaxFileBytes)
+            {
+                _logger.LogWarning(
+                    "EmailPollOrgJob: skipping attachment {FileName} for org {OrgId} ({Bytes} bytes > {Max} byte cap).",
+                    fileName, orgId, stream.Length, IngressLimits.MaxFileBytes);
+                continue;
+            }
+
             stream.Position = 0;
 
             var contentType = string.IsNullOrWhiteSpace(part.ContentType.MimeType)

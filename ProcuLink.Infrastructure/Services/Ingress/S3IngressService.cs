@@ -147,6 +147,18 @@ public sealed class S3IngressService : IS3IngressService
                     continue;
                 }
 
+                // ── size cap (pre-download, server-reported size) ─────────────
+                // Skip oversized objects before we even download them. Size is
+                // server-reported (nullable); a post-download re-check below is the
+                // defense-in-depth guard for an understated/missing size.
+                if (s3Object.Size is > IngressLimits.MaxFileBytes)
+                {
+                    _logger.LogWarning(
+                        "S3 ingress: org {OrgId} — skipping {Key} ({Bytes} bytes > {Max} byte cap).",
+                        organisationId, s3Object.Key, s3Object.Size, IngressLimits.MaxFileBytes);
+                    continue;
+                }
+
                 // ── download ─────────────────────────────────────────────────
                 GetObjectResponse getResponse;
                 try
@@ -165,6 +177,16 @@ public sealed class S3IngressService : IS3IngressService
                 await using var responseStream = getResponse.ResponseStream;
                 using var fileBytes = new MemoryStream();
                 await responseStream.CopyToAsync(fileBytes, ct);
+
+                // Defense-in-depth: re-check actual bytes in case the server under-reported Size.
+                if (fileBytes.Length > IngressLimits.MaxFileBytes)
+                {
+                    _logger.LogWarning(
+                        "S3 ingress: org {OrgId} — skipping {Key} after download ({Bytes} bytes > {Max} byte cap).",
+                        organisationId, s3Object.Key, fileBytes.Length, IngressLimits.MaxFileBytes);
+                    continue;
+                }
+
                 fileBytes.Position = 0;
 
                 var fileName = Path.GetFileName(s3Object.Key);

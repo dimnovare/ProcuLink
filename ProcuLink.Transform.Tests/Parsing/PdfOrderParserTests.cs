@@ -87,6 +87,33 @@ public class PdfOrderParserTests
         lines.Should().OnlyContain(l => !string.IsNullOrWhiteSpace(l));
     }
 
+    [Fact]
+    public async Task PdfTextExtractor_ExtractLinesAsync_MatchesSyncResult()
+    {
+        var bytes = CreatePdf(
+            "PO Number: PO-2026-008412",
+            "1 HEI-PLT-09 Mounting plate 90mm 4 PCS 12.50");
+
+        var sync  = PdfTextExtractor.ExtractLines(bytes);
+        var async = await PdfTextExtractor.ExtractLinesAsync(bytes, CancellationToken.None);
+
+        async.Should().BeEquivalentTo(sync, o => o.WithStrictOrdering(),
+            "the timeout-bounded overload must produce the same lines as the synchronous one");
+    }
+
+    [Fact]
+    public async Task PdfTextExtractor_ExtractLinesAsync_AlreadyCancelledToken_Throws()
+    {
+        var bytes = CreatePdf("PO Number: PO-CANCEL", "1 ABC Widget 2 PCS 5.00");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var act = async () => await PdfTextExtractor.ExtractLinesAsync(bytes, cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "an already-cancelled token must fail fast rather than parse");
+    }
+
     private static byte[] CreatePdf(params string[] lines)
     {
         var content = new StringBuilder();

@@ -221,7 +221,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         string sourceText;
         try
         {
-            sourceText = PdfTextExtractor.ExtractText(bytes);
+            // Timeout-bounded so a pathological PDF can't hang the parse pipeline indefinitely.
+            sourceText = await PdfTextExtractor.ExtractTextAsync(bytes, ct);
         }
         catch (Exception ex)
         {
