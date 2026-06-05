@@ -17,7 +17,7 @@ namespace ProcuLink.Worker;
 /// NEVER blocks host start, and never throws. Worker-only by design — the API hosts no
 /// Hangfire server and never executes OCR.
 /// </summary>
-public sealed class OcrWarmupHostedService : IHostedService
+public sealed class OcrWarmupHostedService : IHostedService, IDisposable
 {
     private readonly IDocumentOcrService _ocr;
     private readonly IConfiguration _config;
@@ -66,4 +66,6 @@ public sealed class OcrWarmupHostedService : IHostedService
         _cts.Cancel();
         return Task.CompletedTask;
     }
+
+    public void Dispose() => _cts.Dispose();
 }
