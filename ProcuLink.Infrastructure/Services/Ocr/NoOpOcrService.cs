@@ -3,11 +3,13 @@ using ProcuLink.Core.Services.Ocr;
 namespace ProcuLink.Infrastructure.Services.Ocr;
 
 /// <summary>
-/// No-op implementation of <see cref="IDocumentOcrService"/> used when
-/// <c>Ocr:Azure:Endpoint</c> or <c>Ocr:Azure:ApiKey</c> are not configured.
+/// Default no-op implementation of <see cref="IDocumentOcrService"/>. PDF parsing's
+/// primary path is text → LLM structured extraction; this seam is reserved for the
+/// planned self-hosted, no-egress OCR engine (for scanned/image-only PDFs) and stays
+/// a safe no-op until one is wired.
 ///
-/// Registered by the DI container as the fallback so that <c>PdfOrderParser</c>
-/// can always resolve an <see cref="IDocumentOcrService"/> without nullability guards.
+/// Registered by the DI container so that <c>PdfOrderParser</c> can always resolve an
+/// <see cref="IDocumentOcrService"/> without nullability guards.
 /// </summary>
 public sealed class NoOpOcrService : IDocumentOcrService
 {

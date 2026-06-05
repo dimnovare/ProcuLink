@@ -172,15 +172,12 @@ builder.Services.AddScoped<IS3IngressService, S3IngressService>();
 // Email-body NLP runs in the API's InboundEmailController scope (Postmark webhook),
 // not in Worker jobs. Registering it here triggers DI validation failure at Host.Build().
 
-if (!string.IsNullOrWhiteSpace(builder.Configuration["Ocr:Azure:Endpoint"])
-    && !string.IsNullOrWhiteSpace(builder.Configuration["Ocr:Azure:ApiKey"]))
-{
-    builder.Services.AddSingleton<IDocumentOcrService, AzureDocumentIntelligenceOcrService>();
-}
-else
-{
-    builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
-}
+// Primary PDF path: text → LLM structured extraction. The Worker runs ParseOrderJob,
+// so it must register the same singleton extractor as the API (orgId is a method
+// param + tracker resolved via IServiceScopeFactory — no ICurrentTenantService).
+builder.Services.AddSingleton<IStructuredOrderExtractor, OpenAiPdfOrderExtractor>();
+// OCR seam kept for the planned self-hosted no-egress engine; no provider wired today.
+builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
 
 // ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
 // Mirrors API/Program.cs lines 270-272. Currently used only by API controllers,

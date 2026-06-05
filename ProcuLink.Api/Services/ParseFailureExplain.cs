@@ -9,7 +9,7 @@ public static class ParseFailureExplain
     public static string ForEmptyLines(string extension) =>
         extension.ToLowerInvariant() switch
         {
-            ".pdf"                    => "This PDF looks scanned or image-only — we couldn't extract any text. OCR isn't enabled; export a text-based PDF or upload a CSV/XLSX instead.",
+            ".pdf"                    => "This PDF looks scanned or image-only — we couldn't extract any text. Export a text-based PDF, or upload a CSV/XLSX instead.",
             ".csv" or ".xlsx" or ".xls" => "No line-table columns detected. We couldn't find recognisable item columns (item code, quantity, unit price). Check the header row or map columns using a PO template.",
             _                         => "The document was read but contained zero line items.",
         };

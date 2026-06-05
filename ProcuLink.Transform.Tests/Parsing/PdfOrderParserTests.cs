@@ -62,6 +62,31 @@ public class PdfOrderParserTests
         result.Lines.Should().BeEmpty();
     }
 
+    [Fact]
+    public void PdfTextExtractor_ExtractText_ReturnsTextLayerInReadingOrder()
+    {
+        var bytes = CreatePdf(
+            "PO Number: PO-2026-008412",
+            "1 HEI-PLT-09 Mounting plate 90mm 4 PCS 12.50");
+
+        var text = PdfTextExtractor.ExtractText(bytes);
+
+        text.Should().Contain("PO-2026-008412");
+        text.Should().Contain("HEI-PLT-09");
+        text.Should().Contain("12.50");
+    }
+
+    [Fact]
+    public void PdfTextExtractor_ExtractLines_DropsBlankLines()
+    {
+        var bytes = CreatePdf("Currency: EUR", "1 ABC Widget 2 PCS 5.00");
+
+        var lines = PdfTextExtractor.ExtractLines(bytes);
+
+        lines.Should().NotBeEmpty();
+        lines.Should().OnlyContain(l => !string.IsNullOrWhiteSpace(l));
+    }
+
     private static byte[] CreatePdf(params string[] lines)
     {
         var content = new StringBuilder();
