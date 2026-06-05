@@ -5,7 +5,9 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using OpenAI.Chat;
 using ProcuLink.Core.Services.Ai;
+using ProcuLink.Core.Services.Ocr;
 using ProcuLink.Infrastructure.Services.Ai;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Ai;
@@ -418,15 +420,91 @@ public class OpenAiPdfOrderExtractorTests
             Times.Never);
     }
 
+    // ── Phase 2: vision fallback routing (no text layer) ─────────────────────
+
+    [Fact]
+    public async Task ExtractAsync_NoTextLayer_WithRasterizer_RoutesToVision()
+    {
+        // A no-text PDF + a wired rasterizer → the extractor takes the vision path.
+        // The rasterizer returns no pages, so it short-circuits to a failure BEFORE
+        // any OpenAI call (deterministic, no network).
+        var rasterizer = new Mock<IPdfRasterizer>();
+        rasterizer.Setup(r => r.RenderPagesPng(It.IsAny<byte[]>(), It.IsAny<int>()))
+                  .Returns(Array.Empty<byte[]>());
+
+        var extractor = CreateExtractor(
+            new Dictionary<string, string?> { ["Ai:Provider"] = "openai", ["Ai:OpenAI:ApiKey"] = "sk-test-key" },
+            tracker: null,
+            overrideClient: new ChatClient("gpt-4o-mini", "sk-test-key"),
+            rasterizer: rasterizer.Object);
+
+        await using var pdf = new MemoryStream(CreateNoTextPdf());
+        var result = await extractor.ExtractAsync(pdf, "application/pdf", Guid.NewGuid(), CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        rasterizer.Verify(r => r.RenderPagesPng(It.IsAny<byte[]>(), It.IsAny<int>()), Times.Once,
+            "no text layer must route to the vision rasterizer");
+    }
+
+    [Fact]
+    public async Task ExtractAsync_NoTextLayer_NoRasterizer_FailsForDeterministicFallback()
+    {
+        var extractor = CreateExtractor(
+            new Dictionary<string, string?> { ["Ai:Provider"] = "openai", ["Ai:OpenAI:ApiKey"] = "sk-test-key" },
+            tracker: null,
+            overrideClient: new ChatClient("gpt-4o-mini", "sk-test-key"),
+            rasterizer: null); // no vision
+
+        await using var pdf = new MemoryStream(CreateNoTextPdf());
+        var result = await extractor.ExtractAsync(pdf, "application/pdf", Guid.NewGuid(), CancellationToken.None);
+
+        result.Success.Should().BeFalse("no rasterizer → caller falls back to the deterministic parser");
+        result.FailureReason.Should().Contain("text layer");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static OpenAiPdfOrderExtractor CreateExtractor(
         Dictionary<string, string?> config,
-        IAiUsageTracker? tracker)
+        IAiUsageTracker? tracker,
+        ChatClient? overrideClient = null,
+        IPdfRasterizer? rasterizer = null)
     {
         var cfg = new ConfigurationBuilder().AddInMemoryCollection(config).Build();
         return new OpenAiPdfOrderExtractor(
-            cfg, NullLogger<OpenAiPdfOrderExtractor>.Instance, tracker);
+            cfg, NullLogger<OpenAiPdfOrderExtractor>.Instance, tracker, overrideClient, rasterizer);
+    }
+
+    // A 1-page PDF with no /Contents → no text layer (PdfPig extracts nothing),
+    // which drives the vision fallback branch.
+    private static byte[] CreateNoTextPdf()
+    {
+        var objects = new[]
+        {
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+            "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n",
+        };
+        var pdf = new StringBuilder();
+        pdf.AppendLine("%PDF-1.4");
+        var offsets = new List<int> { 0 };
+        foreach (var obj in objects)
+        {
+            offsets.Add(Encoding.ASCII.GetByteCount(pdf.ToString()));
+            pdf.Append(obj);
+        }
+        var xrefOffset = Encoding.ASCII.GetByteCount(pdf.ToString());
+        pdf.AppendLine("xref");
+        pdf.AppendLine("0 4");
+        pdf.AppendLine("0000000000 65535 f ");
+        for (var i = 1; i <= 3; i++)
+            pdf.AppendLine(offsets[i].ToString("D10", CultureInfo.InvariantCulture) + " 00000 n ");
+        pdf.AppendLine("trailer");
+        pdf.AppendLine("<< /Size 4 /Root 1 0 R >>");
+        pdf.AppendLine("startxref");
+        pdf.AppendLine(xrefOffset.ToString(CultureInfo.InvariantCulture));
+        pdf.AppendLine("%%EOF");
+        return Encoding.ASCII.GetBytes(pdf.ToString());
     }
 
     // Minimal valid text PDF (mirrors ProcuLink.Transform.Tests.PdfOrderParserTests).

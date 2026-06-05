@@ -4,6 +4,8 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Infrastructure.Services.Ai;
+using ProcuLink.Infrastructure.Services.Ocr;
+using SkiaSharp;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Ai;
 
@@ -75,6 +77,82 @@ public class OpenAiPdfOrderExtractorLiveTests
         first.BuyerItemCode.Should().Be("HEI-PLT-09");
         first.Quantity.Should().Be(4m);
         first.UnitPrice.Should().Be(12.50m);
+    }
+
+    [Fact]
+    public async Task ExtractAsync_ScannedImageOnlyPdf_ExtractsViaVision()
+    {
+        if (!Enabled) return; // no-op unless explicitly enabled with a key
+
+        var apiKey = Environment.GetEnvironmentVariable("Ai__OpenAI__ApiKey")!;
+        var model = Environment.GetEnvironmentVariable("Ai__OpenAI__ExtractionModel");
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Ai:Provider"] = "openai",
+                ["Ai:OpenAI:ApiKey"] = apiKey,
+                ["Ai:OpenAI:ExtractionModel"] = string.IsNullOrWhiteSpace(model) ? "gpt-4o-mini" : model, // vision-capable
+            })
+            .Build();
+
+        // Build a real PO as TEXT, then bake it into an IMAGE-ONLY PDF (no text layer)
+        // so PdfPig finds nothing and the extractor must use the vision path.
+        var textPdf = CreatePdf(
+            "PURCHASE ORDER",
+            "PO Number: PO-2026-008412",
+            "Buyer: Heinrich Industries OU",
+            "Currency: EUR",
+            "Line  Item Code   Description          Qty  Unit  Unit Price",
+            "1     HEI-PLT-09  Mounting plate 90mm  4    PCS   12.50",
+            "2     HEI-BRK-40  Steel bracket        8    PCS   7.25");
+
+        var rasterizer = new SkiaPdfRasterizer(NullLogger<SkiaPdfRasterizer>.Instance);
+        var png = rasterizer.RenderPagesPng(textPdf, 1).Single();
+        using var bmp = SKBitmap.Decode(png);
+        using var jpeg = bmp.Encode(SKEncodedImageFormat.Jpeg, 90);
+        var imageOnlyPdf = CreateImageOnlyPdf(jpeg.ToArray(), bmp.Width, bmp.Height);
+
+        var extractor = new OpenAiPdfOrderExtractor(
+            config, NullLogger<OpenAiPdfOrderExtractor>.Instance, scopeFactory: null, rasterizer: rasterizer);
+
+        await using var stream = new MemoryStream(imageOnlyPdf);
+        var result = await extractor.ExtractAsync(stream, "application/pdf", Guid.NewGuid(), CancellationToken.None);
+
+        result.Success.Should().BeTrue("the vision model should read the rendered PO");
+        result.Order!.Lines.Should().NotBeEmpty();
+        // Vision extraction has no text layer to verify against → every line flagged for review.
+        result.ReviewLineNumbers.Should().HaveCount(result.Order.Lines.Count);
+    }
+
+    // Embeds a JPEG as the sole content of a 1-page PDF (no text layer) — a synthetic
+    // "scanned" document for exercising the vision path.
+    private static byte[] CreateImageOnlyPdf(byte[] jpeg, int w, int h)
+    {
+        var body = new List<byte>();
+        var offsets = new int[6];
+        void Ascii(string s) => body.AddRange(Encoding.ASCII.GetBytes(s));
+
+        Ascii("%PDF-1.4\n");
+        offsets[1] = body.Count; Ascii("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        offsets[2] = body.Count; Ascii("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+        offsets[3] = body.Count; Ascii(string.Create(CultureInfo.InvariantCulture,
+            $"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>\nendobj\n"));
+        var content = Encoding.ASCII.GetBytes(string.Create(CultureInfo.InvariantCulture, $"q {w} 0 0 {h} 0 0 cm /Im0 Do Q"));
+        offsets[4] = body.Count;
+        Ascii(string.Create(CultureInfo.InvariantCulture, $"4 0 obj\n<< /Length {content.Length} >>\nstream\n"));
+        body.AddRange(content); Ascii("\nendstream\nendobj\n");
+        offsets[5] = body.Count;
+        Ascii(string.Create(CultureInfo.InvariantCulture,
+            $"5 0 obj\n<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {jpeg.Length} >>\nstream\n"));
+        body.AddRange(jpeg); Ascii("\nendstream\nendobj\n");
+
+        var xref = body.Count;
+        var sb = new StringBuilder();
+        sb.Append("xref\n0 6\n0000000000 65535 f \n");
+        for (var i = 1; i <= 5; i++) sb.Append(offsets[i].ToString("D10", CultureInfo.InvariantCulture) + " 00000 n \n");
+        sb.Append(string.Create(CultureInfo.InvariantCulture, $"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"));
+        Ascii(sb.ToString());
+        return body.ToArray();
     }
 
     // Minimal valid text PDF (mirrors ProcuLink.Transform.Tests.PdfOrderParserTests).

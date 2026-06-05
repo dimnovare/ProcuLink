@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenAI.Chat;
 using ProcuLink.Core.Services.Ai;
+using ProcuLink.Core.Services.Ocr;
 using ProcuLink.Transform.Parsing;
 
 namespace ProcuLink.Infrastructure.Services.Ai;
@@ -41,6 +42,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     // per-org monthly token cap in a single call. ~60k chars ≈ ~15k input tokens,
     // comfortably above any real multi-page PO/invoice.
     private const int MaxSourceChars = 60_000;
+    // Vision fallback: how many leading pages of a scanned PDF to rasterize + send.
+    private const int MaxVisionPages = 3;
     private static readonly TimeSpan OpenAiCallTimeout = TimeSpan.FromSeconds(60);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -89,10 +92,11 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         """u8.ToArray());
 
     private const string SystemPrompt =
-        "You extract a purchase order (or invoice) from the plain text of a supplier PDF. " +
+        "You extract a purchase order (or invoice) from a supplier PDF — its extracted " +
+        "text, or a scanned image of it. " +
         "Return ONLY structured data matching the schema. Copy numbers and codes " +
         "EXACTLY as printed — never invent, round, or compute a value that is not " +
-        "in the text. Use the document's own line/item codes as buyer_item_code. " +
+        "in the document. Use the document's own line/item codes as buyer_item_code. " +
         "Leave a string field empty and a number 0 when the document does not state it. " +
         "Set line_amount to the printed line total (quantity x unit price) when shown, else 0. " +
         "buyer_name = the ordering/buying party; supplier_name = the issuing vendor/seller. " +
@@ -110,11 +114,14 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     // tracker directly via the internal ctor instead.
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly Func<IAiUsageTracker?>? _trackerFactory;
+    // Optional vision fallback for scanned / no-text PDFs. Null → no vision (text-only).
+    private readonly IPdfRasterizer? _rasterizer;
 
     public OpenAiPdfOrderExtractor(
         IConfiguration configuration,
         ILogger<OpenAiPdfOrderExtractor> logger,
-        IServiceScopeFactory? scopeFactory = null)
+        IServiceScopeFactory? scopeFactory = null,
+        IPdfRasterizer? rasterizer = null)
     {
         _logger = logger;
         _model = configuration["Ai:OpenAI:ExtractionModel"]
@@ -132,6 +139,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 
         _scopeFactory = scopeFactory;
         _trackerFactory = null;
+        _rasterizer = rasterizer;
     }
 
     /// <summary>
@@ -143,7 +151,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         IConfiguration configuration,
         ILogger<OpenAiPdfOrderExtractor> logger,
         IAiUsageTracker? tracker,
-        ChatClient? overrideClient = null)
+        ChatClient? overrideClient = null,
+        IPdfRasterizer? rasterizer = null)
     {
         _logger = logger;
         _model = configuration["Ai:OpenAI:ExtractionModel"]
@@ -165,6 +174,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 
         _scopeFactory = null;
         _trackerFactory = () => tracker;
+        _rasterizer = rasterizer;
     }
 
     public bool IsAvailable => _client is not null;
@@ -198,8 +208,16 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             return StructuredExtractionResult.Fail("Could not read document.");
         }
 
-        // ── Text layer (Phase 1). No text → fall back to deterministic parsing
-        // (a vision fallback for scanned PDFs is a later phase). ──────────────
+        // ── Per-org monthly token cap (applies to BOTH the text and vision paths) ──
+        await using var trackerScope = _scopeFactory?.CreateAsyncScope();
+        var tracker = trackerScope is not null
+            ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
+            : _trackerFactory?.Invoke();
+
+        if (await IsAtOrOverCapAsync(tracker, organisationId, ct))
+            return StructuredExtractionResult.Fail("Organisation AI usage cap reached.");
+
+        // ── Text layer (primary). PdfPig extracts the digital text; the LLM structures it. ──
         string sourceText;
         try
         {
@@ -211,8 +229,14 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             return StructuredExtractionResult.Fail("Could not read PDF text layer.");
         }
 
+        // No text layer → scanned / image-only PDF. Use the vision fallback when a
+        // rasterizer is wired; otherwise the orchestrator falls back to deterministic parsing.
         if (string.IsNullOrWhiteSpace(sourceText))
+        {
+            if (_rasterizer is not null)
+                return await ExtractViaVisionAsync(bytes, organisationId, tracker, ct);
             return StructuredExtractionResult.Fail("PDF has no extractable text layer.");
+        }
 
         // Bound the input so one oversized document can't overshoot the token cap.
         if (sourceText.Length > MaxSourceChars)
@@ -222,15 +246,6 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 sourceText.Length, MaxSourceChars, organisationId);
             sourceText = sourceText[..MaxSourceChars];
         }
-
-        // ── Per-org monthly token cap ────────────────────────────────────────
-        await using var trackerScope = _scopeFactory?.CreateAsyncScope();
-        var tracker = trackerScope is not null
-            ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
-            : _trackerFactory?.Invoke();
-
-        if (await IsAtOrOverCapAsync(tracker, organisationId, ct))
-            return StructuredExtractionResult.Fail("Organisation AI usage cap reached.");
 
         // ── OpenAI strict-JSON structured extraction ─────────────────────────
         try
@@ -280,6 +295,97 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         {
             _logger.LogWarning(ex, "PDF extraction failed (org {OrgId}).", organisationId);
             return StructuredExtractionResult.Fail("AI request failed.");
+        }
+    }
+
+    // ─── Vision fallback (scanned / image-only PDFs) ─────────────────────────
+
+    /// <summary>
+    /// Vision path for PDFs with no text layer: rasterize the leading pages and send
+    /// them as images to the (vision-capable) model with the same strict schema.
+    /// Because there is no text layer to verify numbers against, EVERY extracted line
+    /// is flagged for human review — scanned extraction is inherently lower-trust.
+    /// Never throws.
+    /// </summary>
+    private async Task<StructuredExtractionResult> ExtractViaVisionAsync(
+        byte[] bytes, Guid organisationId, IAiUsageTracker? tracker, CancellationToken ct)
+    {
+        IReadOnlyList<byte[]> pages;
+        try
+        {
+            pages = _rasterizer!.RenderPagesPng(bytes, MaxVisionPages);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Vision extraction: rasterization failed (org {OrgId}).", organisationId);
+            return StructuredExtractionResult.Fail("Could not rasterise the PDF for vision extraction.");
+        }
+
+        if (pages.Count == 0)
+            return StructuredExtractionResult.Fail("PDF has no extractable text layer and could not be rasterised.");
+
+        try
+        {
+            var parts = new List<ChatMessageContentPart>
+            {
+                ChatMessageContentPart.CreateTextPart(
+                    "This is a scanned/image PDF with no text layer. Extract the purchase order " +
+                    "or invoice from the image(s) per the schema. Copy every code and number exactly."),
+            };
+            foreach (var png in pages)
+                parts.Add(ChatMessageContentPart.CreateImagePart(
+                    BinaryData.FromBytes(png), "image/png", ChatImageDetailLevel.High));
+
+            var messages = new List<ChatMessage>
+            {
+                new SystemChatMessage(SystemPrompt),
+                new UserChatMessage(parts),
+            };
+
+            var completion = await CompleteWithTimeoutAsync(
+                messages,
+                new ChatCompletionOptions
+                {
+                    MaxOutputTokenCount = ExtractionMaxTokens,
+                    ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
+                        jsonSchemaFormatName: "purchase_order_extraction",
+                        jsonSchema: ExtractionJsonSchema,
+                        jsonSchemaIsStrict: true),
+                },
+                ct);
+
+            await RecordUsageAsync(tracker, organisationId, completion.Usage?.TotalTokenCount ?? 0, ct);
+
+            var json = completion.Content.FirstOrDefault()?.Text;
+            if (string.IsNullOrWhiteSpace(json))
+                return StructuredExtractionResult.Fail("AI returned empty response.");
+
+            var dto = JsonSerializer.Deserialize<ExtractionDto>(json, JsonOptions);
+            if (dto is null)
+                return StructuredExtractionResult.Fail("AI response could not be parsed.");
+
+            // No text layer to verify against → map with an empty source, then force
+            // EVERY line into review (scanned extraction is inherently lower-trust).
+            var result = ValidateAndMap(dto, string.Empty);
+            if (result.Success && result.Order is not null)
+            {
+                var allLines = result.Order.Lines.Select(l => l.LineNumber).ToArray();
+                result = result with { ReviewLineNumbers = allLines };
+                _logger.LogInformation(
+                    "Order vision-extracted from {Pages} scanned page(s) (org {OrgId}) — all {Lines} lines flagged for review.",
+                    pages.Count, organisationId, allLines.Length);
+            }
+            return result;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Vision extraction timed out (org {OrgId}).", organisationId);
+            return StructuredExtractionResult.Fail("AI request timed out.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Vision extraction failed (org {OrgId}).", organisationId);
+            return StructuredExtractionResult.Fail("AI vision request failed.");
         }
     }
 
