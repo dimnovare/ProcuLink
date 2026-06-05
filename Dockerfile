@@ -14,6 +14,15 @@ RUN dotnet publish ProcuLink.Api/ProcuLink.Api.csproj --no-restore -c Release -o
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
+
+# Native deps for the self-hosted OCR engine (RapidOcrNet / PP-OCRv5):
+#   libgomp1       — OpenMP runtime required by ONNX Runtime (libonnxruntime.so)
+#   libfontconfig1 — required by RapidOcrNet's SkiaSharp.NativeAssets.Linux (full variant)
+# Docker-verified on this base image; see docs/verification/native-deps.md.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 libfontconfig1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/out .
 
 EXPOSE 8080

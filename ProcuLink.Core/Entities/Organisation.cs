@@ -43,6 +43,14 @@ public class Organisation
     /// </summary>
     public string? WebhookSecretEncrypted { get; set; }
 
+    /// <summary>
+    /// When true, this org's PDFs are parsed with NO egress to OpenAI: scanned/textless
+    /// pages are OCR'd by the self-hosted RapidOcrNet engine and parsed deterministically,
+    /// never sent to the OpenAI text/vision extractor. Additive; defaults to false
+    /// (existing behaviour). Only effective when the engine is enabled (NoEgressOcr:Enabled).
+    /// </summary>
+    public bool SelfHostedOcr { get; set; }
+
     // Navigation
     public List<Membership> Memberships { get; set; } = new();
     public List<Supplier> Suppliers { get; set; } = new();

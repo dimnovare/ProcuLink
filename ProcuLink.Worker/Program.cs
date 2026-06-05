@@ -179,8 +179,12 @@ builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
 // so it must register the same singleton extractor as the API (orgId is a method
 // param + tracker resolved via IServiceScopeFactory — no ICurrentTenantService).
 builder.Services.AddSingleton<IStructuredOrderExtractor, OpenAiPdfOrderExtractor>();
-// OCR seam kept for the planned self-hosted no-egress engine; no provider wired today.
-builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
+// OCR seam. The Worker runs ParseOrderJob, so this is where self-hosted OCR executes.
+// Opt-in (RapidOcrNet) only when enabled — otherwise a no-op (no models loaded).
+if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
+    builder.Services.AddSingleton<IDocumentOcrService, RapidOcrDocumentOcrService>();
+else
+    builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
 
 // ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
 // Mirrors API/Program.cs lines 270-272. Currently used only by API controllers,

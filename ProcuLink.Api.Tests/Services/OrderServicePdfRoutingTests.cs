@@ -27,11 +27,15 @@ namespace ProcuLink.Api.Tests.Services;
 /// </summary>
 public class OrderServicePdfRoutingTests
 {
-    private static OrderService BuildService(IStructuredOrderExtractor? extractor)
-    {
-        var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>()
+    private static ProcuLinkDbContext NewDb() =>
+        new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
+    private static OrderService BuildService(IStructuredOrderExtractor? extractor) =>
+        BuildService(NewDb(), extractor);
+
+    private static OrderService BuildService(ProcuLinkDbContext db, IStructuredOrderExtractor? extractor)
+    {
         var parserFactory = new OrderParserFactory(new IPurchaseOrderParser[]
         {
             new CsvOrderParser(),
@@ -132,6 +136,37 @@ public class OrderServicePdfRoutingTests
         parsed.PoNumber.Should().Be("PO-DET-2");
         parsed.Lines.Should().ContainSingle();
         review.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ParsePdfAsync_SelfHostedOcrOrg_UsesDeterministicParser_NeverCallsOpenAi()
+    {
+        var orgId = Guid.NewGuid();
+        var db = NewDb();
+        db.Organisations.Add(new Organisation
+        {
+            Id = orgId, ClerkOrgId = "clerk", Name = "No-Egress Co", Slug = "no-egress",
+            SelfHostedOcr = true, CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        // Extractor is available — but a no-egress org must NEVER reach it.
+        var extractor = new Mock<IStructuredOrderExtractor>();
+        extractor.SetupGet(e => e.IsAvailable).Returns(true);
+
+        var svc = BuildService(db, extractor.Object);
+
+        var (parsed, review) = await svc.ParsePdfAsync(
+            CreatePdf("PO Number: PO-NOEGRESS", "1 DET-CODE Widget 4 PCS 12.50"),
+            orgId, Guid.NewGuid(), CancellationToken.None);
+
+        parsed.PoNumber.Should().Be("PO-NOEGRESS");
+        parsed.Lines.Should().ContainSingle();
+        parsed.Lines[0].BuyerItemCode.Should().Be("DET-CODE");
+        review.Should().BeEmpty();
+        extractor.Verify(
+            e => e.ExtractAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never, "a no-egress org's PDF data must never be sent to OpenAI");
     }
 
     [Fact]

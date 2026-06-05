@@ -15,6 +15,16 @@ RUN dotnet publish ProcuLink.Worker/ProcuLink.Worker.csproj --no-restore -c Rele
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
+
+# Native deps for the self-hosted OCR engine (RapidOcrNet / PP-OCRv5). The Worker runs
+# ParseOrderJob, so this is where OCR actually executes.
+#   libgomp1       — OpenMP runtime required by ONNX Runtime (libonnxruntime.so)
+#   libfontconfig1 — required by RapidOcrNet's SkiaSharp.NativeAssets.Linux (full variant)
+# Docker-verified on this base image; see docs/verification/native-deps.md.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 libfontconfig1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/out .
 
 # Worker does not expose HTTP; PORT env var is ignored but set by Railway anyway

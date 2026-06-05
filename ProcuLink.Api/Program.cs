@@ -296,8 +296,12 @@ builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
 // so the deterministic PdfOrderParser stays the fallback). Singleton + per-call
 // IServiceScopeFactory tracker resolution so the same instance is valid in the Worker.
 builder.Services.AddSingleton<IStructuredOrderExtractor, OpenAiPdfOrderExtractor>();
-// OCR seam kept for the planned self-hosted no-egress engine; no provider wired today.
-builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
+// OCR seam. Opt-in self-hosted no-egress engine (RapidOcrNet) only when enabled —
+// otherwise a no-op, so the ~12MB models + ONNX session are never loaded.
+if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
+    builder.Services.AddSingleton<IDocumentOcrService, RapidOcrDocumentOcrService>();
+else
+    builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddScoped<IBuyerService, BuyerService>();
 // ── Wave 4: API keys + integration subscriptions ──────────────────────────
