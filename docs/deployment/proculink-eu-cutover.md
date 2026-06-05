@@ -52,8 +52,8 @@ zone goes active after the registrar (**Zone**) finishes DNSSEC-off and switches
 - [ ] API `/health` returns 200 over `https://api.proculink.eu`.
 
 ## Still requires dashboards (not CLI)
-- **Clerk production instance** ⚠️ biggest gotcha — current `Clerk__Authority` is the **dev** instance (`golden-alpaca-43.clerk.accounts.dev`). Create a prod instance, set domain `clerk.proculink.eu` (adds its own Cloudflare CNAMEs), then swap `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` + `CLERK_SECRET_KEY` (Vercel) and `Clerk__Authority` (Railway, both services). The `clerk` CLI can manage config-as-code but not provision the prod domain.
-- **Stripe** — point the webhook to `https://api.proculink.eu/api/billing/webhook`; confirm `Stripe__WebhookSecret`. Create the **Distributor €1,499/mo price** and set `Stripe__DistributorPriceId` (already a key on Railway).
+- **Clerk production instance** ✅ DONE (verified 2026-06-05) — `Clerk__Authority = https://clerk.proculink.eu` and the shipped frontend carries a `pk_live_…` key. The dev instance (`golden-alpaca-43`) is no longer in use.
+- **Stripe** ⏳ — keys + all four price IDs (incl. Distributor) are already set on Railway, but in **test-mode / pre-company account**. The live-mode swap (create live products, set `sk_live_`/`whsec_`/live price IDs, repoint the webhook to `https://api.proculink.eu/api/billing/webhook`) is the **June-9 go-live gate**. Step-by-step: **`docs/deployment/stripe-go-live-checklist.md`**.
 
 ## Optional founder-config vars (features stay hidden until set — not blockers)
 `NEXT_PUBLIC_STATUS_URL`, `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`, `NEXT_PUBLIC_BOOK_DEMO_URL`.
@@ -62,7 +62,8 @@ zone goes active after the registrar (**Zone**) finishes DNSSEC-off and switches
 - ✅ 2026-05-30 — Railway custom domain `api.proculink.eu` (port 8080) added (dashboard; CLI `railway domain` returns Unauthorized — likely account/plan gate on custom domains).
 - ✅ 2026-05-30 — Worker `DataProtection__EncryptionKey` copied from API → parity True.
 - ✅ Already configured (despite STATUS "pending"): Vercel PostHog keys, Clerk post-signup redirect (`NEXT_PUBLIC_CLERK_SIGN_UP_FORCE_REDIRECT_URL`), Sentry.
-- ⏳ Pending: Zone DNSSEC-off + NS switch → Cloudflare zone active → add DNS records above → flip env URLs → Clerk prod instance → Stripe webhook URL.
+- ✅ 2026-06-05 — Zone active; `proculink.eu` + `api.proculink.eu` live (200); `Frontend__Url` on prod domain; `NEXT_PUBLIC_USE_MOCK=false`; **Clerk prod instance live** (`clerk.proculink.eu`, `pk_live_…`); all backend secrets set. **Only remaining gate: Stripe live-mode swap (June 9) — `docs/deployment/stripe-go-live-checklist.md`.**
+- ⏳ Pending (founder): Stripe live-mode swap; rotate chat-exposed secrets (Clerk/R2/ElevenLabs/CF); fresh-signup prod dogfood before customer #1.
 
 ## CLI access (this machine)
 Railway ✅ (`redacted@example.invalid`), Vercel ✅ (`dimnovare-9994`), Cloudflare/wrangler ✅, Clerk CLI not installed. No `gh`.
