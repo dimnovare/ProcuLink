@@ -25,7 +25,11 @@ namespace ProcuLink.Infrastructure.Services.Ai;
 ///     deterministic regex <c>PdfOrderParser</c>.
 ///   • Anti-hallucination validation: every emitted number must appear in the
 ///     source text and quantity × unit price must reconcile with the stated line
-///     amount, otherwise the line is flagged for human review.
+///     amount, otherwise the line is flagged for human review. (This is a
+///     defense-in-depth net, not a correctness guarantee — number presence is
+///     matched document-wide, so a hallucinated value that coincides with another
+///     printed number can pass; the cross-check only runs when a line amount is
+///     stated.)
 ///   • Never throws — all failure paths return Success=false.
 /// </summary>
 public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
@@ -33,6 +37,10 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     private const string DefaultModel = "gpt-5-mini";
     internal const double ConfidenceThreshold = 0.6;
     private const int ExtractionMaxTokens = 4000;
+    // Cap the text we send so a pathological multi-hundred-page PDF can't blow the
+    // per-org monthly token cap in a single call. ~60k chars ≈ ~15k input tokens,
+    // comfortably above any real multi-page PO/invoice.
+    private const int MaxSourceChars = 60_000;
     private static readonly TimeSpan OpenAiCallTimeout = TimeSpan.FromSeconds(60);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -78,7 +86,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         "EXACTLY as printed — never invent, round, or compute a value that is not " +
         "in the text. Use the document's own line/item codes as buyer_item_code. " +
         "Leave a string field empty and a number 0 when the document does not state it. " +
-        "Set line_amount to the printed line total (quantity × unit price) when shown, else 0. " +
+        "Set line_amount to the printed line total (quantity x unit price) when shown, else 0. " +
         "Set confidence 0.0-1.0 based on how clearly the text is a real purchase order.";
 
     private readonly ChatClient? _client;
@@ -157,6 +165,11 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         if (_client is null)
             return StructuredExtractionResult.Fail("AI provider not configured.");
 
+        // No tenant context → refuse, so the per-org cap can never be bypassed by a
+        // caller that forgot to thread the org id (fail closed, not open).
+        if (organisationId == Guid.Empty)
+            return StructuredExtractionResult.Fail("No organisation context for AI extraction.");
+
         // Buffer the document so we can extract text (and, in a later phase,
         // rasterise for a vision fallback) over the same bytes.
         byte[] bytes;
@@ -187,6 +200,15 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 
         if (string.IsNullOrWhiteSpace(sourceText))
             return StructuredExtractionResult.Fail("PDF has no extractable text layer.");
+
+        // Bound the input so one oversized document can't overshoot the token cap.
+        if (sourceText.Length > MaxSourceChars)
+        {
+            _logger.LogWarning(
+                "PDF extraction: source text {Len} chars exceeds {Max}; truncating before the LLM call (org {OrgId}).",
+                sourceText.Length, MaxSourceChars, organisationId);
+            sourceText = sourceText[..MaxSourceChars];
+        }
 
         // ── Per-org monthly token cap ────────────────────────────────────────
         await using var trackerScope = _scopeFactory?.CreateAsyncScope();
@@ -258,6 +280,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     /// emitted numbers do not appear in the source text, or whose
     /// quantity × unit price does not reconcile with the stated line amount, is
     /// reported in <see cref="StructuredExtractionResult.ReviewLineNumbers"/>.
+    /// Pure and never throws — malformed numbers (NaN/overflow) flag the line rather
+    /// than propagating.
     /// </summary>
     internal static StructuredExtractionResult ValidateAndMap(ExtractionDto dto, string sourceText)
     {
@@ -279,20 +303,39 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         for (var idx = 0; idx < rawLines.Count; idx++)
         {
             var l = rawLines[idx];
-            var lineNumber = l.LineNumber > 0 ? l.LineNumber : idx + 1;
-            var quantity = (decimal)(l.Quantity ?? 0);
-            decimal? unitPrice = l.UnitPrice.HasValue ? (decimal)l.UnitPrice.Value : null;
-            decimal? lineAmount = l.LineAmount.HasValue ? (decimal)l.LineAmount.Value : null;
+            // Positional line number — a stable, unique join key for the downstream
+            // review overlay and mapping. The model's own line_number is unreliable
+            // (it may duplicate or echo a "Pos" column), so we don't trust it here.
+            var lineNumber = idx + 1;
 
             var needsReview = false;
+
+            // Convert numbers safely — a NaN/Infinity/out-of-range value from the
+            // model flags the line instead of throwing.
+            if (!TryToDecimal(l.Quantity, out var quantity) && l.Quantity is not null)
+                needsReview = true;
+
+            decimal? unitPrice = null;
+            if (l.UnitPrice is not null)
+            {
+                if (TryToDecimal(l.UnitPrice, out var up)) unitPrice = up;
+                else needsReview = true;
+            }
+
+            decimal? lineAmount = null;
+            if (l.LineAmount is not null)
+            {
+                if (TryToDecimal(l.LineAmount, out var la)) lineAmount = la;
+                else needsReview = true;
+            }
 
             // Anti-hallucination: every emitted number must appear verbatim in the
             // source text. A zero quantity means "not stated" and is not checked.
             if (quantity != 0m && !NumberAppearsInSource(quantity, sourceNumbers))
                 needsReview = true;
-            if (unitPrice is { } up && up != 0m && !NumberAppearsInSource(up, sourceNumbers))
+            if (unitPrice is { } up2 && up2 != 0m && !NumberAppearsInSource(up2, sourceNumbers))
                 needsReview = true;
-            if (lineAmount is { } la && la != 0m && !NumberAppearsInSource(la, sourceNumbers))
+            if (lineAmount is { } la2 && la2 != 0m && !NumberAppearsInSource(la2, sourceNumbers))
                 needsReview = true;
 
             // Arithmetic: quantity × unit price must reconcile with the stated line amount.
@@ -336,12 +379,17 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     // ─── Anti-hallucination number matching ──────────────────────────────────
 
     // Number-like runs: an optional grouped-thousands form (at least one
-    // [sep]ddd group) OR a plain integer/decimal. Space/NBSP are only treated as
-    // thousands separators when they group exactly three digits, so distinct
-    // numbers separated by a single space are NOT merged.
+    // [.,]ddd group) OR a plain integer/decimal. A regular space is NOT a
+    // thousands separator here — PdfPig joins distinct words with single spaces,
+    // so "4 500" must tokenise as two numbers (4, 500), never one (4500).
     private static readonly Regex NumberToken = new(
-        @"\d{1,3}(?:[  .,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?",
+        @"\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?",
         RegexOptions.Compiled);
+
+    // A single-separator token with exactly 3 trailing digits (e.g. "1.234",
+    // "1,500") is ambiguous: grouped thousands OR a genuine 3-decimal value.
+    private static readonly Regex AmbiguousThreeDecimal = new(
+        @"^\d{1,3}[.,]\d{3}$", RegexOptions.Compiled);
 
     private static HashSet<decimal> ExtractSourceNumbers(string sourceText)
     {
@@ -349,11 +397,25 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         if (string.IsNullOrEmpty(sourceText)) return set;
 
         foreach (Match m in NumberToken.Matches(sourceText))
-        {
-            if (TryParseLoose(m.Value, out var value))
-                set.Add(Normalize(value));
-        }
+            AddNumberCandidates(m.Value, set);
+
         return set;
+    }
+
+    private static void AddNumberCandidates(string token, HashSet<decimal> set)
+    {
+        if (TryParseLoose(token, out var primary))
+            set.Add(Normalize(primary));
+
+        // For the ambiguous 3-trailing-digit case, ALSO add the decimal reading so a
+        // correctly-emitted 1.234 still matches its source even though TryParseLoose
+        // read the printed "1.234" as grouped thousands (1234). Membership-only — this
+        // only makes matching more lenient, never more strict.
+        if (AmbiguousThreeDecimal.IsMatch(token)
+            && decimal.TryParse(token.Replace(',', '.'), NumberStyles.Number, CultureInfo.InvariantCulture, out var asDecimal))
+        {
+            set.Add(Normalize(asDecimal));
+        }
     }
 
     private static bool NumberAppearsInSource(decimal value, HashSet<decimal> sourceNumbers) =>
@@ -363,6 +425,22 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     private static decimal Normalize(decimal value) => Math.Round(value, 4, MidpointRounding.AwayFromZero);
 
     /// <summary>
+    /// Safely converts a model-supplied double to decimal. Returns false (rather
+    /// than throwing) for null, NaN, Infinity, or out-of-decimal-range values, so
+    /// the pure <see cref="ValidateAndMap"/> honours its never-throw contract.
+    /// </summary>
+    private static bool TryToDecimal(double? d, out decimal value)
+    {
+        value = 0m;
+        if (d is null) return false;
+        var x = d.Value;
+        if (double.IsNaN(x) || double.IsInfinity(x)) return false;
+        if (x is > 7.9e28 or < -7.9e28) return false; // outside decimal's range
+        try { value = (decimal)x; return true; }
+        catch (OverflowException) { return false; }
+    }
+
+    /// <summary>
     /// Parses a printed number token into a decimal, resolving European vs Anglo
     /// thousands/decimal separators. Lenient by design — its only consumer is the
     /// anti-hallucination "does this number appear in the source" check.
@@ -370,8 +448,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     private static bool TryParseLoose(string token, out decimal value)
     {
         value = 0m;
-        // Normalise NBSP to a regular space, then drop spaces (thousands separators).
-        var t = token.Replace(' ', ' ').Trim().Replace(" ", string.Empty);
+        var t = token.Trim();
         if (t.Length == 0) return false;
 
         var dots = t.Count(c => c == '.');
@@ -417,6 +494,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 
         // Single occurrence: a 3-digit trailing group is ambiguous and read as
         // thousands ("1.234" / "1,500"); any other length is a decimal fraction.
+        // (The decimal reading of the 3-digit case is added separately in
+        // AddNumberCandidates so a genuine 3dp value still matches.)
         var trailing = t.Length - t.IndexOf(sep) - 1;
         return trailing == 3
             ? t.Replace(sep.ToString(), string.Empty)

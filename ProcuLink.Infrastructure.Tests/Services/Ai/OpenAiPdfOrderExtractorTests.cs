@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -140,6 +141,141 @@ public class OpenAiPdfOrderExtractorTests
 
         result.Success.Should().BeFalse();
         result.Order.Should().BeNull();
+    }
+
+    // ── ValidateAndMap: review-flag regression fixes ────────────────────────
+
+    [Fact]
+    public void ValidateAndMap_SpaceSeparatedNumbers_AreNotMergedAsThousands()
+    {
+        // Regression: "125 500" (price 125, amount 500) must tokenise as two numbers,
+        // not one grouped "125 500" = 125500 — otherwise both trip the source check.
+        const string source = "1 WIDGET-X 4 PCS 125 500";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR", BuyerName: "Acme",
+            Lines: new[]
+            {
+                // 4 x 125 = 500 — internally consistent, every number in the source.
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "WIDGET-X", "Widget", 4, "PCS", 125, 500),
+            });
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Success.Should().BeTrue();
+        result.ReviewLineNumbers.Should().BeEmpty("125 and 500 both appear verbatim in the source");
+    }
+
+    [Fact]
+    public void ValidateAndMap_GenuineThreeDecimalValue_IsNotFlagged()
+    {
+        // "1.234" printed as a 3-decimal unit price must still match even though the
+        // loose parser also reads it as grouped thousands (1234).
+        const string source = "1 WIDGET 2 KG 1.234";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR", BuyerName: "Acme",
+            Lines: new[]
+            {
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "WIDGET", "Widget", 2, "KG", 1.234, 0),
+            });
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Success.Should().BeTrue();
+        result.ReviewLineNumbers.Should().BeEmpty("the 3-decimal unit price appears in the source");
+    }
+
+    [Fact]
+    public void ValidateAndMap_DuplicateModelLineNumbers_AreRenumberedPositionally()
+    {
+        // The model echoes the same line_number for both lines; only the second is
+        // suspect. Positional numbering must target exactly the suspect line.
+        const string source = "1 AA 3 PCS 10.00 30.00 2 BB 5 PCS 20.00 100.00";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR", BuyerName: "Acme",
+            Lines: new[]
+            {
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(7, "AA", "First", 3, "PCS", 10.00, 30.00),
+                // unit_price 777 never appears in source → suspect.
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(7, "BB", "Second", 5, "PCS", 777.00, 100.00),
+            });
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Success.Should().BeTrue();
+        result.Order!.Lines.Select(l => l.LineNumber).Should().Equal(1, 2);
+        result.ReviewLineNumbers.Should().Equal(new[] { 2 });
+    }
+
+    [Fact]
+    public void ValidateAndMap_OverflowingNumber_FlagsLineWithoutThrowing()
+    {
+        const string source = "1 WIDGET 1 PCS";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR", BuyerName: "Acme",
+            Lines: new[]
+            {
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "WIDGET", "Widget", 1e40, "PCS", 0, 0),
+            });
+
+        var act = () => OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        var result = act.Should().NotThrow().Subject;
+        result.Success.Should().BeTrue();
+        result.ReviewLineNumbers.Should().Contain(1, "an out-of-range quantity must be flagged, not thrown");
+        result.Order!.Lines[0].Quantity.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task ExtractAsync_EmptyOrganisationId_FailsClosed()
+    {
+        var extractor = CreateExtractor(
+            new Dictionary<string, string?>
+            {
+                ["Ai:Provider"] = "openai",
+                ["Ai:OpenAI:ApiKey"] = "sk-test-key",
+            },
+            tracker: null);
+
+        await using var pdf = new MemoryStream(CreatePdf("PO Number: PO-1", "1 ABC Widget 4 PCS 12.50"));
+        var result = await extractor.ExtractAsync(pdf, "application/pdf", Guid.Empty, CancellationToken.None);
+
+        result.Success.Should().BeFalse("a missing tenant must never reach the uncapped OpenAI call");
+    }
+
+    // ── Snake_case JSON binding (proves the [JsonPropertyName] attributes work) ─
+
+    [Fact]
+    public void ExtractionDto_BindsSnakeCaseJson_UnderWebDefaults()
+    {
+        const string json = """
+            {
+              "confidence": 0.9,
+              "po_number": "PO-1",
+              "order_date": "2026-05-20",
+              "currency": "EUR",
+              "buyer_name": "Acme",
+              "lines": [
+                { "line_number": 2, "buyer_item_code": "ABC", "description": "Widget",
+                  "quantity": 4, "unit": "PCS", "unit_price": 12.5, "line_amount": 50 }
+              ]
+            }
+            """;
+
+        var dto = JsonSerializer.Deserialize<OpenAiPdfOrderExtractor.ExtractionDto>(
+            json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        dto.Should().NotBeNull();
+        dto!.PoNumber.Should().Be("PO-1");
+        dto.BuyerName.Should().Be("Acme");
+        dto.Currency.Should().Be("EUR");
+        dto.Lines.Should().ContainSingle();
+        dto.Lines![0].BuyerItemCode.Should().Be("ABC");
+        dto.Lines[0].UnitPrice.Should().Be(12.5);
+        dto.Lines[0].LineAmount.Should().Be(50);
     }
 
     // ── Plumbing: no-op when no key ──────────────────────────────────────────
