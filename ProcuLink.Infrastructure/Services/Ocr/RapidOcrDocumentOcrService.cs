@@ -94,6 +94,39 @@ public sealed class RapidOcrDocumentOcrService : IDocumentOcrService, IDisposabl
         }
     }
 
+    /// <summary>
+    /// Eagerly loads the OCR models so the FIRST scanned-PDF OCR after a deploy doesn't
+    /// pay the multi-second <c>InitModels()</c> cost inside a Hangfire job. No-op when the
+    /// engine is disabled. Idempotent and concurrency-safe: it shares the same
+    /// <see cref="_gate"/> + <c>_ocr ??=</c> lazy-init guard as <see cref="ExtractTextAsync"/>,
+    /// so a job that arrives mid-warm reuses the warmed instance and never double-loads.
+    /// Never throws — a warm-up failure degrades to the existing lazy-on-first-use path.
+    /// </summary>
+    public async Task WarmAsync(CancellationToken ct = default)
+    {
+        if (!_enabled) return;
+
+        var acquired = false;
+        try
+        {
+            await _gate.WaitAsync(ct);
+            acquired = true;
+            _ocr ??= InitOcr(); // one-time model load (shares the lazy-init guard)
+        }
+        catch (OperationCanceledException)
+        {
+            // Host shutting down before warm-up finished — fine, lazy path still works.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Self-hosted OCR warm-up failed (non-fatal); will lazy-load on first use.");
+        }
+        finally
+        {
+            if (acquired) _gate.Release();
+        }
+    }
+
     private static RapidOcr InitOcr()
     {
         var ocr = new RapidOcr();
