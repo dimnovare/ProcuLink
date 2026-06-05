@@ -15,13 +15,15 @@ RUN dotnet publish ProcuLink.Api/ProcuLink.Api.csproj --no-restore -c Release -o
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 
-# Native deps for the self-hosted OCR engine (RapidOcrNet / PP-OCRv5):
-#   libgomp1       — OpenMP runtime required by ONNX Runtime (libonnxruntime.so)
-#   libfontconfig1 — required by RapidOcrNet's SkiaSharp.NativeAssets.Linux (full variant)
-# Docker-verified on this base image; see docs/verification/native-deps.md.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 libfontconfig1 \
-    && rm -rf /var/lib/apt/lists/*
+# NOTE: the OCR/vision native system deps (libgomp1 for ONNX Runtime, libfontconfig1 for
+# the full SkiaSharp) are intentionally NOT installed in the API image, and the direct
+# RapidOcrNet ref (the ~12 MB PP-OCRv5 models) is dropped from ProcuLink.Api.csproj. PDF
+# parsing / OCR / page rasterization run ONLY in the Worker (the sole Hangfire executor) —
+# the API just creates a stub + enqueues, so it never dlopen's libonnxruntime / libSkiaSharp
+# / libpdfium (those .so still flow transitively but are never loaded in-process). This
+# removes the models + apt layer from the API image. If the API ever loads any of those
+# natives in-process (a Hangfire server, a synchronous parse path, OR any SkiaSharp/ONNX/
+# image work), restore this apt layer (and the csproj model ref).
 
 COPY --from=build /app/out .
 
