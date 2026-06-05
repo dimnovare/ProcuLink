@@ -4,7 +4,16 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-06-05 (latest) — ALL 4 PDF-extraction phases SHIPPED + MERGED to `main`**
+## Where we are: **2026-06-06 (latest) — overnight hardening batch SHIPPED + MERGED (deferred PDF items + Phase 4 UI)**
+
+> Five additive tracks merged to backend `main` as `dac804f` (Railway healthy, /health 200 through deploy) + frontend `main` `82bbfa6` (Vercel). **798 backend tests green** (224 Transform + 343 Infra + 231 Api); adversarial-reviewed (3/4 dimensions clean, 1 LOW CTS-dispose hygiene fix). Local live golden-path **PASSED** end to end (upload→parse→resolve→transform→`delivery_failed` with the honest "delivery config missing" error; audit = 3 events; 1 delivery attempt).
+> - **perf(ocr) `8f24d3d`** — warm self-hosted OCR models at Worker boot (no first-scan cold start); no-op unless `NoEgressOcr:Enabled`; never blocks host start.
+> - **harden(ingress) `1b3e141`** — 10 MB byte cap (`IngressLimits.MaxFileBytes`, matches HTTP) on SFTP/S3/IMAP/inbound-email before `CreateStubAsync`; + a 45 s `PdfPig` parse timeout (linked-CTS async overloads) so a pathological PDF can't hang a Worker thread.
+> - **feat(api) `b3ca8c3`** — `OrderDto`/`OrderLineDto` now expose Phase 4 enrichment (totals/payment terms/document type/`documentSupplierName` + per-line amount/tax/delivery date); all nullable → null for CSV. Frontend `feat/pdf-phase4-ui` surfaces them (invoice badge, document-totals block, per-line enrichment) conditionally.
+> - **build(api) `26c3065`** — dropped the Worker-only OCR deps (~12 MB PP-OCRv5 models + `libgomp1`/`libfontconfig1` apt layer) from the **API** image (OCR runs only in the Worker). Docker-build + boot-against-Postgres gated. Worker image unchanged.
+> - **docs(plan) `d8e4e24`** — invoice-pipeline rerouting **deferred** with a written plan (`docs/superpowers/plans/2026-06-06-invoice-rerouting-plan.md`) — needs a PO↔invoice link migration + relational test; not shipped (founder review).
+
+## Where we are: **2026-06-05 — ALL 4 PDF-extraction phases SHIPPED + MERGED to `main`**
 
 > Phase 3 (self-hosted no-egress OCR, RapidOcrNet) merged to backend `main` as `6ad1382` (Railway auto-deploying — rebuilds both Docker images with the `libgomp1`+`libfontconfig1` apt layer + ~12 MB PP-OCRv5 models and applies the additive `AddSelfHostedOcrFlag` migration; `https://api.proculink.eu/health` stayed 200 through the rolling deploy). Frontend security copy (opt-in no-egress note) merged `f6246b8` (Vercel). A post-merge adversarial review then caught a FIFTH OpenAI touchpoint — the "magic auto-map" field suggester (`OpenAiMappingService.SuggestFieldMappingsAsync`) — which was ungated; closed at the `IAiMappingService` chokepoint (+ defense-in-depth on the SKU paths) with tests. **789 backend tests green** (222 Transform + 338 Infra + 229 Api). Ships **dormant by default** — `NoEgressOcr:Enabled` is unset in prod, so `NoOpOcrService` is registered and no models load; the founder enables it per-org via the operator runbook §2.7. The no-egress guarantee is **whole**: PDF/scanned, AI mapping (line-SKU + field auto-map), email-body NLP, AND the AI schema-inference tool are all gated off OpenAI for a no-egress org.
 
