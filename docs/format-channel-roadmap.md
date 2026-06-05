@@ -17,7 +17,7 @@ Founder's vision: any input format, any output format, any ingress channel, one-
 | CSV (buyer template) | Supported | Supported | `ProcuLink.Transform/Parsing/CsvOrderParser.cs`, `ProcuLink.Transform/Output/CsvTransformService.cs` |
 | XLSX (buyer template) | Supported | Won't-build (Q3) | `ProcuLink.Transform/Parsing/XlsxOrderParser.cs` (input only; XLSX output deferred — suppliers do not consume XLSX in EU) |
 | Text-based PDF | Supported | Won't-build (Q3) | Primary path = text→LLM extraction: PdfPig 0.1.14 pulls the PDF text layer, OpenAI structures it into canonical `ParsedOrder` (strict JSON schema, anti-hallucination checks). Deterministic `ProcuLink.Transform/Parsing/PdfOrderParser.cs` is the no-key/offline fallback. Digital text only. PDF output rejected — no supplier ingests PDF as a data interchange format. |
-| Scanned PDF / image OCR | Supported via AI vision (review-flagged) | n/a | When PdfPig finds no text layer, leading pages are rasterized (PDFtoImage + SkiaSharp, both permissive; self-contained native assets, no Dockerfile change) and sent to the vision-capable OpenAI model under the same strict schema. No text layer means no number verification, so **every** line is flagged for human review (surfaces in `/operations/exceptions`) — assisted, not silent. Illegible scans still fail with the "scanned or image-only" message. Self-hosted no-egress RapidOcrNet still planned (Phase 3). Azure Document Intelligence removed. See `docs/standards-matrix.md`. |
+| Scanned PDF / image OCR | Supported via AI vision (review-flagged) | n/a | When PdfPig finds no text layer, leading pages are rasterized (PDFtoImage + SkiaSharp, both permissive; self-contained native assets, no Dockerfile change) and sent to the vision-capable OpenAI model under the same strict schema. No text layer means no number verification, so **every** line is flagged for human review (surfaces in `/operations/exceptions`) — assisted, not silent. Illegible scans still fail with the "scanned or image-only" message. Self-hosted no-egress OCR (RapidOcrNet, Apache-2.0) is now **shipped as an opt-in enterprise/config capability** (Phase 3) — for orgs marked no-egress, scanned pages are OCR'd in-process with no OpenAI call (still review-flagged). Azure Document Intelligence removed. See `docs/standards-matrix.md`. |
 | cXML 1.2 | Supported | Supported | `ProcuLink.Transform/Parsing/CxmlOrderParser.cs`, `ProcuLink.Transform/Output/CxmlTransformService.cs` |
 | Plain XML (generic `PurchaseOrder` envelope) | Won't-build | Supported | `ProcuLink.Transform/Output/XmlTransformService.cs`. Input is unbounded; output is fine. |
 | JSON / API payload | Partial (inline `System.Text.Json` in `OrderService`) | Supported | `ProcuLink.Transform/Output/JsonTransformService.cs`. No standalone `IPurchaseOrderParser` for JSON ingress. |
@@ -74,7 +74,7 @@ Reflects what a solo founder plus one part-time contractor can ship while keepin
 | JSONL | Supported | Supported | Trivial — wrap `JsonTransformService` with newline-delimited iteration. |
 | XLS legacy (BIFF8) | Supported | Won't-build | `NPOI` for read. XLS output is not needed. |
 | Free-text email body (LLM) | Supported | n/a | Extract body text in `EmailPollingJob`, pass to OpenAI structured outputs against the `ParsedOrder` schema. The `ISchemaInferencer` slot (see §4) makes this a 1-day add once that abstraction exists. |
-| Scanned PDF / image PO (OCR) | Supported via AI vision (review-flagged) | n/a | Shipped (Phase 2): no text layer → rasterize leading pages (`PDFtoImage` + `SkiaSharp`, both MIT) → vision-capable OpenAI extractor under the same strict schema; every line flagged for human review (no text to verify numbers); illegible scans still fail. Self-hosted no-egress `RapidOcrNet` (Apache-2.0) offline fallback still planned (Phase 3), behind a future `BillingFeature.Ocr`. (Text-based PDFs are handled via text→LLM extraction.) |
+| Scanned PDF / image PO (OCR) | Supported via AI vision (review-flagged) | n/a | Shipped (Phase 2): no text layer → rasterize leading pages (`PDFtoImage` + `SkiaSharp`, both MIT) → vision-capable OpenAI extractor under the same strict schema; every line flagged for human review (no text to verify numbers); illegible scans still fail. Self-hosted no-egress `RapidOcrNet` (Apache-2.0, PP-OCRv5 via ONNX Runtime, in-process, no network) is now **shipped (Phase 3) as an opt-in** offline path for no-egress orgs — still review-flagged. Enabled per-org by an operator (global `NoEgressOcr:Enabled` + per-org `SelfHostedOcr`), not a self-serve toggle. (Text-based PDFs are handled via text→LLM extraction.) |
 
 ### 2.2 Channel target
 
@@ -111,7 +111,7 @@ Solo-senior-dev days. "Unlocks" = who pays for it. Dependencies = prerequisite r
 | 6 | **Postmark Inbound SMTP receive** (`orders@<slug>.proculink.eu`) | 3 | All archetypes; especially consultants onboarding their SME clients. Customers ask for "just give me an email address" within minutes of the first demo. | None. | Postmark inbound webhook ($10/mo); `MimeKit` for the inbound webhook payload. |
 | 7 | **`IIngressChannel` abstraction + refactor existing four ingress paths onto it** | 3 | Internal — but blocks #6, #8, #11, and every future channel. Pay this debt now while there are only four call sites. | None. | None. |
 | 8 | **SFTP pull dispatcher (outbound + inbound)** | 4 | Mid-market and large distributors. SFTP is still the #1 supplier-side integration request in EU industrial procurement. | #7 | `Renci.SshNet`. |
-| 9 | **Self-hosted no-egress OCR (scanned PDF)** | 5 | Customers who cannot send document images to OpenAI (data-residency-strict buyers). The AI vision path (`PDFtoImage` + `SkiaSharp` → OpenAI, review-flagged) already ships for everyone else. | None. | Self-hosted `RapidOcrNet` (Apache-2.0) offline fallback (Phase 3). Behind a future `BillingFeature.Ocr`. |
+| 9 | **Self-hosted no-egress OCR (scanned PDF)** — ✅ **shipped (Phase 3)** | 5 | Customers who cannot send document images to OpenAI (data-residency-strict buyers). The AI vision path (`PDFtoImage` + `SkiaSharp` → OpenAI, review-flagged) ships for everyone else. | None. | Self-hosted `RapidOcrNet` (Apache-2.0) in-process offline path; opt-in per-org via operator config (`NoEgressOcr:Enabled` + `SelfHostedOcr`), ships dormant by default. |
 | 10 | **EDIFACT ORDERS input** | 8 | Mid-market suppliers integrating with large EU buyer (every retail chain, every automotive tier-1). The single biggest "we cannot use you without this" gate. | #7, EdiFabric license. | `EdiFabric` (commercial). |
 | 11 | **EDIFACT ORDERS output** | 4 | Same as #10 for buyer-side flows pushing to large suppliers. | #10 | EdiFabric. |
 | 12 | **EDIFACT ORDRSP output** | 4 | Suppliers needing to acknowledge orders back to buyers. Always pairs with #10. | #10 | EdiFabric. |
@@ -198,6 +198,8 @@ Three rules.
 
 The activation flow that ships in build #1 (10 days, two-week calendar). This is the actual differentiator.
 
+> No-egress note: for orgs marked no-egress (`SelfHostedOcr=true`), the AI schema-inference tool (`SchemaInferenceController` / `OpenAiSchemaInferencer`) is gated off and returns empty — those orgs use the manual mapping editor — so the no-egress guarantee covers the whole ingest/parse pipeline (no OpenAI touchpoint).
+
 ### 5.1 Screen-by-screen frontend flow
 
 1. **Drop zone (`/upload`)** — user drags a sample order file. `FileUploadZone` accepts any extension we recognize (CSV, XLSX, PDF, XML, EDIFACT, UBL, JSON, JSONL, fixed-width). Today caps at `.csv/.xlsx/.pdf` — expand the accept list.
@@ -255,7 +257,7 @@ Realistic for one full-time developer: builds #1 (one-click wizard, 10d), #4 (In
 
 ### 6.2 Solo founder, one quarter (June-August 2026)
 
-Add #2+#3 (UBL/Peppol, 7d), #5 (free-text email LLM, 2d), #8 (SFTP pull, 4d), #9 (self-hosted no-egress OCR, 5d), #14 (network-effect mapping, 5d). Cumulative ~42 days, fits 13 weeks with buffer for support and bugfixes.
+Add #2+#3 (UBL/Peppol, 7d), #5 (free-text email LLM, 2d), #8 (SFTP pull, 4d), #14 (network-effect mapping, 5d). (#9 self-hosted no-egress OCR is already shipped.) Cumulative ~37 days, fits 13 weeks with buffer for support and bugfixes.
 
 ### 6.3 Solo founder, one year (June 2026-May 2027)
 
@@ -273,7 +275,7 @@ Add EDIFACT family (#10-12), Shopify (#13), Peppol via Storecove (#15), Make.com
 - **Peppol** — Storecove (NL, simple REST) or B2Brouter (ES, broader EU). Pick Storecove first.
 - **Zapier listing** — review takes ~6 weeks. Build the integration first, submit, then unblock the marketing claim.
 - **AS2** — Babelway (BE) or MessageXchange (AU/EU). Both expose REST that abstracts AS2 cert exchange.
-- **OCR for scanned PDFs** — the AI vision path (`PDFtoImage` + `SkiaSharp`, reusing the existing OpenAI extractor, review-flagged) already ships (Phase 2); self-hosted `RapidOcrNet` for no-egress customers is still Phase 3. No Azure Document Intelligence dependency.
+- **OCR for scanned PDFs** — the AI vision path (`PDFtoImage` + `SkiaSharp`, reusing the existing OpenAI extractor, review-flagged) ships (Phase 2); self-hosted no-egress `RapidOcrNet` for data-residency-strict customers is now shipped too (Phase 3, in-process, opt-in per-org). No partnership and no Azure Document Intelligence dependency.
 
 ---
 

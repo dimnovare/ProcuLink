@@ -345,5 +345,35 @@ review" and surfaces in `/operations/exceptions` / order review — it is
 assisted, never delivered blind. A scanned PDF the vision model still can't read
 fails with the clear "This PDF looks scanned or image-only — we couldn't extract
 any text." message. No Azure provider is used; Azure Document Intelligence has
-been removed. A self-hosted no-egress OCR engine (RapidOcrNet) for customers who
-cannot send images to OpenAI is still planned (Phase 3).
+been removed.
+
+**Self-hosted no-egress OCR (opt-in, enterprise).** A self-hosted OCR engine
+(`RapidOcrDocumentOcrService`, backed by **RapidOcrNet** — PP-OCRv5 via ONNX
+Runtime, Apache-2.0 code *and* weights, ~12 MB bundled models, in-process, no GPU,
+no external network calls) is now **available** for customers who cannot send
+images to OpenAI. It implements the existing `IDocumentOcrService` seam. Enabling
+it is an operator action, not a self-serve UI toggle, and requires two opt-ins:
+
+- **Globally**, set `NoEgressOcr:Enabled=true` (Railway env form
+  `NoEgressOcr__Enabled=true`) on **both** the API and the Worker. This registers
+  the real engine instead of the no-op. Left unset (the default), no models load
+  and the deploy is byte-for-byte unchanged — it ships dormant and safe.
+- **Per organisation**, set `Organisation.SelfHostedOcr=true` (DB column
+  `self_hosted_ocr`) to mark that org as no-egress.
+
+For a no-egress org, the **entire** ingest/parse pipeline is no-egress — nothing
+sends that org's data to OpenAI. PDFs are routed to the deterministic parser;
+scanned / image-only pages are OCR'd in-process by RapidOcrNet (no OpenAI vision);
+AI SKU mapping, email-body NLP extraction, and the one-click AI schema-inference
+setup tool are all gated (unresolved lines go to human review; the org uses the
+manual mapping editor). There is no remaining OpenAI touchpoint in the ingest/parse
+path for such an org.
+
+The honest caveat still holds: even with self-hosted OCR there is no text layer to
+verify numbers against, so **every** line from a scanned PDF is review-flagged and
+surfaces in `/operations/exceptions` / order review — assisted, never delivered
+blind. An illegible scan still fails with the same "scanned or image-only" message.
+For non-no-egress orgs the text/vision PDF path continues to use OpenAI
+(`gpt-4o-mini`) and still needs the EU-residency project + DPA + zero-retention
+above. The Dockerfiles add `libgomp1` + `libfontconfig1` to the runtime stage for
+this engine.
