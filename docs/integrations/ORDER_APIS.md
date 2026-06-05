@@ -364,10 +364,11 @@ it is an operator action, not a self-serve UI toggle, and requires two opt-ins:
 For a no-egress org, the **entire** ingest/parse pipeline is no-egress — nothing
 sends that org's data to OpenAI. PDFs are routed to the deterministic parser;
 scanned / image-only pages are OCR'd in-process by RapidOcrNet (no OpenAI vision);
-AI SKU mapping, email-body NLP extraction, and the one-click AI schema-inference
-setup tool are all gated (unresolved lines go to human review; the org uses the
-manual mapping editor). There is no remaining OpenAI touchpoint in the ingest/parse
-path for such an org.
+AI mapping — both line-level SKU suggestions and the magic auto-map field suggester
+(`OpenAiMappingService`) — email-body NLP extraction, and the one-click AI
+schema-inference setup tool are all gated (unresolved lines go to human review; the
+org uses the manual mapping editor). There is no remaining OpenAI touchpoint in the
+ingest/parse path for such an org.
 
 The honest caveat still holds: even with self-hosted OCR there is no text layer to
 verify numbers against, so **every** line from a scanned PDF is review-flagged and

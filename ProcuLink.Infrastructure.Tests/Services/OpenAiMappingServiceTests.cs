@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Infrastructure.Services;
 
@@ -123,6 +124,63 @@ public class OpenAiMappingServiceTests
         result.Should().BeEmpty();
     }
 
+    // ── No-egress gate (Organisation.SelfHostedOcr) ─────────────────────────────
+    // This is the single IAiMappingService chokepoint: a no-egress org must never have
+    // its line data OR its source column headers (the "magic auto-map" path) sent to
+    // OpenAI, even with a key configured. The short-circuit runs BEFORE the cap check,
+    // so a strict tracker (no setups) proves OpenAI is never reached.
+
+    [Fact]
+    public async Task SuggestFieldMappingsAsync_NoEgressOrg_ReturnsEmptyWithoutCallingOpenAi()
+    {
+        var tracker = new Mock<IAiUsageTracker>(MockBehavior.Strict);
+
+        var service = CreateServiceWithNoEgress(
+            new Dictionary<string, string?>
+            {
+                ["Ai:Provider"]      = "openai",
+                ["Ai:OpenAI:ApiKey"] = "sk-test-key",
+            },
+            tracker: tracker.Object,
+            noEgress: true);
+
+        var result = await service.SuggestFieldMappingsAsync(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            new[] { "Item No", "Qty", "Unit Price" },
+            new[] { "lines[].SupplierItemCode", "lines[].Quantity" });
+
+        result.Should().BeEmpty("no-egress orgs never send source column headers to OpenAI");
+        // Strict mock would have thrown if the cap check (IsAtOrOverLimitAsync) ran.
+    }
+
+    [Fact]
+    public async Task SuggestSupplierItemCodesAsync_NoEgressOrg_ReturnsEmptyWithoutCallingOpenAi()
+    {
+        var tracker = new Mock<IAiUsageTracker>(MockBehavior.Strict);
+
+        var service = CreateServiceWithNoEgress(
+            new Dictionary<string, string?>
+            {
+                ["Ai:Provider"]      = "openai",
+                ["Ai:OpenAI:ApiKey"] = "sk-test-key",
+            },
+            tracker: tracker.Object,
+            noEgress: true);
+
+        var result = await service.SuggestSupplierItemCodesAsync(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "Acme Components",
+            new[]
+            {
+                new AiMappingLineContext(1, "HEI-PLT-09", "Mounting plate 90mm", 4, "PCS"),
+            },
+            Array.Empty<AiMappingCandidate>());
+
+        result.Should().BeEmpty("no-egress orgs never send line data to OpenAI");
+    }
+
     private static OpenAiMappingService CreateService(Dictionary<string, string?> values)
     {
         var configuration = new ConfigurationBuilder()
@@ -132,5 +190,26 @@ public class OpenAiMappingServiceTests
         return new OpenAiMappingService(
             configuration,
             NullLogger<OpenAiMappingService>.Instance);
+    }
+
+    private static OpenAiMappingService CreateServiceWithNoEgress(
+        Dictionary<string, string?> values,
+        IAiUsageTracker?            tracker,
+        bool                        noEgress)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+
+        // Internal test ctor: a configured key constructs a real ChatClient (so we get
+        // past the _client-null guard), and noEgressCheck forces the short-circuit
+        // without a DbContext. If the gate failed, the strict tracker / live client
+        // would be reached and the test would fail.
+        return new OpenAiMappingService(
+            configuration,
+            NullLogger<OpenAiMappingService>.Instance,
+            tracker,
+            overrideClient: null,
+            noEgressCheck: noEgress ? (_, _) => Task.FromResult(true) : null);
     }
 }

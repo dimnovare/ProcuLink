@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -113,6 +114,9 @@ public sealed class OpenAiMappingService : IAiMappingService
     // we fall back to the inner factory instead.
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly Func<IAiUsageTracker?>? _trackerFactory;
+    // Test seam: lets a unit test force the no-egress short-circuit without a DbContext.
+    // In production this stays null and the org flag is read from a per-call scoped DbContext.
+    private readonly Func<Guid, CancellationToken, Task<bool>>? _noEgressCheck;
 
     public OpenAiMappingService(
         IConfiguration configuration,
@@ -133,6 +137,7 @@ public sealed class OpenAiMappingService : IAiMappingService
 
         _scopeFactory = scopeFactory;
         _trackerFactory = null;
+        _noEgressCheck = null;
     }
 
     /// <summary>
@@ -145,7 +150,8 @@ public sealed class OpenAiMappingService : IAiMappingService
         IConfiguration configuration,
         ILogger<OpenAiMappingService> logger,
         IAiUsageTracker? tracker,
-        ChatClient? overrideClient = null)
+        ChatClient? overrideClient = null,
+        Func<Guid, CancellationToken, Task<bool>>? noEgressCheck = null)
     {
         _logger = logger;
         _model = configuration["Ai:OpenAI:MappingModel"] ?? DefaultModel;
@@ -165,6 +171,42 @@ public sealed class OpenAiMappingService : IAiMappingService
 
         _scopeFactory = null;
         _trackerFactory = () => tracker;
+        _noEgressCheck = noEgressCheck;
+    }
+
+    /// <summary>
+    /// True when the org opted into no-egress (<c>Organisation.SelfHostedOcr</c>) and
+    /// must therefore never have its mapping data (line codes/descriptions or source
+    /// column headers) sent to OpenAI. This is the single chokepoint that keeps the
+    /// no-egress guarantee whole for EVERY <see cref="IAiMappingService"/> caller —
+    /// including the "magic auto-map" field suggester. Fails SAFE: if the flag cannot
+    /// be read we treat the org as no-egress (skip OpenAI), mirroring the cap-check's
+    /// fail-closed behaviour. Returns false for the no-tenant (<see cref="Guid.Empty"/>)
+    /// case so the existing no-key / cap tests are unaffected. The flag is read from the
+    /// same per-call scope used for the usage tracker (this service is a singleton, so it
+    /// cannot hold a scoped DbContext directly).
+    /// </summary>
+    private async Task<bool> IsNoEgressOrgAsync(
+        IServiceProvider? scopedProvider, Guid organisationId, CancellationToken ct)
+    {
+        if (organisationId == Guid.Empty) return false;
+        try
+        {
+            if (_noEgressCheck is not null) return await _noEgressCheck(organisationId, ct);
+            var db = scopedProvider?.GetService<ProcuLinkDbContext>();
+            if (db is null) return false;
+            return await db.Organisations
+                .AsNoTracking()
+                .Where(o => o.Id == organisationId)
+                .Select(o => o.SelfHostedOcr)
+                .FirstOrDefaultAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "No-egress check failed for org {OrgId}; skipping OpenAI mapping to be safe.", organisationId);
+            return true;
+        }
     }
 
     public async Task<AiMappingSuggestion?> SuggestSupplierItemCodeAsync(
@@ -191,6 +233,14 @@ public sealed class OpenAiMappingService : IAiMappingService
         var tracker = trackerScope is not null
             ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
             : _trackerFactory?.Invoke();
+
+        // No-egress orgs never send line data to OpenAI (single chokepoint for IAiMappingService).
+        if (await IsNoEgressOrgAsync(trackerScope?.ServiceProvider, organisationId, ct))
+        {
+            _logger.LogInformation(
+                "OpenAI mapping skipped — org {OrgId} is no-egress (self-hosted OCR).", organisationId);
+            return null;
+        }
 
         if (tracker is not null)
         {
@@ -324,6 +374,14 @@ public sealed class OpenAiMappingService : IAiMappingService
         var tracker = trackerScope is not null
             ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
             : _trackerFactory?.Invoke();
+
+        // No-egress orgs never send line data to OpenAI (single chokepoint for IAiMappingService).
+        if (await IsNoEgressOrgAsync(trackerScope?.ServiceProvider, organisationId, ct))
+        {
+            _logger.LogInformation(
+                "OpenAI batch mapping skipped — org {OrgId} is no-egress (self-hosted OCR).", organisationId);
+            return empty;
+        }
 
         if (tracker is not null)
         {
@@ -464,6 +522,16 @@ public sealed class OpenAiMappingService : IAiMappingService
         var tracker = trackerScope is not null
             ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
             : _trackerFactory?.Invoke();
+
+        // No-egress orgs never send source column headers to OpenAI. This closes the
+        // "magic auto-map" field-suggestion touchpoint so the no-egress guarantee is
+        // whole; AiAugmentedFieldMappingSuggester degrades to heuristic-only on empty.
+        if (await IsNoEgressOrgAsync(trackerScope?.ServiceProvider, organisationId, ct))
+        {
+            _logger.LogInformation(
+                "OpenAI field mapping skipped — org {OrgId} is no-egress (self-hosted OCR).", organisationId);
+            return Array.Empty<AiFieldMappingSuggestion>();
+        }
 
         if (tracker is not null)
         {

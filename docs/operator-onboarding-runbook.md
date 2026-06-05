@@ -173,10 +173,11 @@ toggle. It needs two opt-ins:
 
 **Effect for a flagged org:** the whole ingest/parse pipeline stops sending that org's
 data to OpenAI. PDFs route to the deterministic parser; scanned/image-only pages are
-OCR'd **locally** by RapidOcrNet (no OpenAI vision); AI SKU mapping, email-body NLP, and
-the one-click AI schema-inference setup tool are all skipped (unresolved lines go to
-human review; the schema tool returns empty → use the manual PO Mapping editor). There is
-no remaining OpenAI touchpoint in ingest/parse for that org.
+OCR'd **locally** by RapidOcrNet (no OpenAI vision); AI mapping (both line-level SKU
+suggestions and the magic auto-map field suggester), email-body NLP, and the one-click AI
+schema-inference setup tool are all skipped (unresolved lines go to human review; the AI
+tools return empty → use the manual PO Mapping editor). There is no remaining OpenAI
+touchpoint in ingest/parse for that org.
 
 **Caveats (unchanged):** scanned PDFs are still **assisted, not silent** — with no text
 layer to verify numbers against, every scanned line is review-flagged in
