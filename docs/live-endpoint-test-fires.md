@@ -79,36 +79,36 @@ carry an "Endpoint URL" field. Proven live against a real Cloudflare R2 bucket
 (`Live_S3Ingress_RealPollImportsFile`): the production `AmazonS3Client` (with
 `ServiceURL` set) listed, downloaded and imported a real PO CSV.
 
-## Inbound email — transport proven live; one founder switch remains
+## Inbound email — FULLY PROVEN in production (2026-06-05)
 
-**Wired and proven (no Postmark account needed):**
-- Cloudflare Email Routing is already enabled on `proculink.eu` (CF MX in place).
-- An **Email Worker** `proculink-inbound-email` (scratch dir
-  `~/proculink-inbound-worker`, `postal-mime`) parses the raw MIME, extracts the PO
-  attachment(s), synthesises the recipient the backend expects
-  (`orders@{slug}.proculink.eu`; slug from a `+subaddress` else the `DEFAULT_TENANT_SLUG`
-  var), and POSTs the Postmark-shaped JSON to
-  `https://api.proculink.eu/api/inbound-email/postmark` with the
-  `X-Postmark-Server-Token` header (Worker secret `INBOUND_WEBHOOK_TOKEN`).
-- A non-disruptive Email Routing rule `inbound@proculink.eu → Worker` is live.
-- **Verified with a REAL email** (direct-to-MX SMTP, SPF-authorised via a throwaway
-  `livetest.proculink.eu` TXT, since removed): Worker tail showed
-  `envelope_to=inbound@proculink.eu → slug=demo attachments=1 backend_status=401
-  backend_body={"error":"Inbound webhook is not configured."}` — the full chain
-  (MX → Email Routing → Worker → MIME parse → JSON → live backend) works.
+A real email with a CSV attachment to `inbound@proculink.eu` created a real order
+in the prod DB end-to-end:
+`real SMTP → CF MX → Email Routing rule → proculink-inbound-email Worker →
+MIME parse (postal-mime) → Postmark JSON → api.proculink.eu inbound webhook →
+order created → Worker parse job → CSV parsed`. The order reached `pending_review`
+with 1 parsed line (org `personal-workspace-d3be`).
 
-**The only remaining step (founder / Railway):**
-1. Set `Inbound:Postmark:WebhookToken` on the `api.proculink.eu` Railway service to
-   the value of the Worker secret (saved to `~/.proculink-inbound-token.txt`), then
-   the backend will accept the POST instead of returning 401.
-2. Point the Worker var `DEFAULT_TENANT_SLUG` (or use `inbound+{slug}@proculink.eu`)
-   at a **real org slug**, and ensure that org has at least one supplier (the router
-   rejects orgs with no supplier). Decide the production addressing scheme:
-   apex `inbound+{slug}@` sub-addressing vs a wildcard subdomain for the native
-   `orders@{slug}.proculink.eu` UX.
+**What's wired (no Postmark account needed):**
+- Cloudflare Email Routing already enabled on `proculink.eu` (CF MX; **untouched**).
+- **Email Worker** `proculink-inbound-email` (scratch dir `~/proculink-inbound-worker`,
+  `postal-mime`): parses raw MIME, extracts attachment(s), synthesises the recipient
+  the backend expects (`orders@{slug}.proculink.eu`; slug from a `+subaddress` else the
+  `DEFAULT_TENANT_SLUG` var), POSTs the Postmark-shaped JSON to
+  `https://api.proculink.eu/api/inbound-email/postmark` with `X-Postmark-Server-Token`
+  (Worker secret `INBOUND_WEBHOOK_TOKEN`).
+- Non-disruptive Email Routing rule `inbound@proculink.eu → Worker` is live.
+- **Backend config set:** `Inbound__Postmark__WebhookToken` is set on the `ProcuLink`
+  Railway service (= the Worker secret). `DEFAULT_TENANT_SLUG=personal-workspace-d3be`.
 
-The backend order-creation half (CSV-attachment Postmark payload → order stub +
-parse job) is covered green by `InboundEmailRouterTests`
+**Production rollout notes for multi-tenant:** plain `inbound@proculink.eu` currently
+maps to the single `DEFAULT_TENANT_SLUG`. For many orgs, either (a) use
+`inbound+{slug}@proculink.eu` sub-addressing (the Worker already reads the `+slug`;
+add a matching Email Routing rule / catch-all), or (b) put the slug in a subdomain for
+the native `orders@{slug}.proculink.eu` UX (needs wildcard-subdomain MX). Any target org
+must have at least one supplier (the router rejects orgs without one) and a non-blocked
+account status (`ReadOnly`/`TrialExpired` are rejected).
+
+The backend order-creation logic is also covered green by `InboundEmailRouterTests`
 (`HappyPath_SingleCsvAttachment_CreatesOneOrderAndEnqueuesParseJob`, etc.).
 
 ## Still not provable here
