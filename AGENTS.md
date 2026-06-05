@@ -377,15 +377,24 @@ Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level suppl
 - [ ] Future provider option: `ClaudeAiMappingService` may be added later behind the same `IAiMappingService`, but it is not the Group E default.
 
 ### Group F — PDF ingestion
-**Status:** ✅ Implemented for text-based purchase-order PDFs, with config-gated OCR fallback.
+**Status:** ✅ Implemented for text-based purchase-order PDFs. Primary path is
+text→LLM structured extraction (see `docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md`).
 
 - [x] Add `PdfPig` to `ProcuLink.Transform`
-- [x] `PdfOrderParser : IPurchaseOrderParser` — text extraction + line parsing
+- [x] PdfPig extracts the PDF text layer, then an OpenAI extractor (strict JSON
+  schema mirroring the canonical `ParsedOrder`) produces the structured order.
+  Anti-hallucination safety net: every emitted number must appear verbatim in the
+  source and qty×price must reconcile, else the line is flagged "needs review".
+- [x] `PdfOrderParser` (fixed-column parser) is retained only as the deterministic
+  fallback — used when there is no OpenAI key, offline, or extraction fails/low-confidence.
 - [x] Accept `.pdf` in upload endpoint + FileUploadZone
-- [x] `IDocumentOcrService` + `AzureDocumentIntelligenceOcrService` fallback is wired when `Ocr:Azure:Endpoint` and `Ocr:Azure:ApiKey` are configured
+- [x] Config: `Ai:OpenAI:ExtractionModel` (falls back to `Ai:OpenAI:MappingModel`,
+  then `gpt-5-mini`). No-op extractor when no OpenAI key is set.
 
-Production OCR still needs live provider config, scanned-PO test files, and
-user-facing status/error copy before it is promised in sales.
+Azure Document Intelligence is removed entirely (package + service + `Ocr:Azure:*`
+config keys gone). The `IDocumentOcrService`/`NoOpOcrService` seam is kept but wired
+to a no-op, reserved for a future self-hosted engine. Scanned/image-only PDFs are
+**not yet supported** (vision-LLM fallback is planned, not built).
 
 ### Group G — ERP connectors
 **Status:** ✅ Implemented as delivery adapters for already-generated artifacts. ERP-native order modeling and supplier-specific ERP payload transforms remain future hardening.

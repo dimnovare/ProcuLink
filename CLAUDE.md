@@ -347,11 +347,11 @@ Read this before starting new work:
   - Provider-neutral `IAiMappingService` with OpenAI structured outputs first.
   - Suggestions are stored on purchase order lines and exposed as line metadata.
   - Resolve UI pre-fills suggestions but visibly labels confidence, reason, and provenance.
-- **Group F PDF ingestion — BEING REWORKED 2026-06-05 to text→LLM extraction** (spec: `docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md`; benchmark-proven on 22 real Markit docs). Build in progress on a feature branch (chip).
-  - **New direction:** the PRIMARY PDF path is **text→LLM structured extraction** → canonical `ParsedOrder`. PdfPig extracts the (already-exact) digital text; an OpenAI extractor structures it (strict JSON schema, per-org `IAiUsageTracker` cap, anti-hallucination validation: numbers must appear in source + qty×price≈amount). The brittle fixed-column regex `PdfOrderParser` is kept ONLY as a no-key/offline fallback.
-  - Vision LLM = fallback for no-text PDFs (Phase 2, rasterize via PDFtoImage+SkiaSharp, both MIT — never Ghostscript/poppler). Self-hosted **RapidOcrNet** (Apache-2.0) = no-egress fallback (Phase 3).
-  - **`AzureDocumentIntelligenceOcrService` is being REMOVED** (along with `Azure.AI.DocumentIntelligence` + `Ocr:Azure:*`). `IDocumentOcrService`/`NoOpOcrService` are kept (repurposed for the self-hosted engine).
-  - Privacy: real customer PO data → OpenAI needs an EU-residency project + DPA + zero-retention; the extractor is no-op without a key (safe default). User-facing capability copy is reconciled only once shipped (offer⇔works).
+- **Group F PDF ingestion — Phase 1 text→LLM extraction IMPLEMENTED 2026-06-05 on `feat/pdf-llm-extraction`** (branch pushed, not merged — founder review; all 758 backend tests green). Spec: `docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md`; benchmark-proven on 22 real Markit docs.
+  - **Shipped (Phase 1):** the PRIMARY PDF path is **text→LLM structured extraction** → canonical `ParsedOrder`. PdfPig extracts the digital text layer; an OpenAI extractor structures it (strict JSON schema mirroring the canonical model — 5 header + 6 line fields; the LLM never emits a supplier item code, resolved downstream). Anti-hallucination validation: every emitted number must appear verbatim in the source text, and qty×unit-price must reconcile with the stated line amount; suspect lines are flagged "needs review" so they surface in `/operations/exceptions` instead of delivering blind. The fixed-column regex `PdfOrderParser` is now the deterministic FALLBACK only (no OpenAI key / offline / extraction fails or low-confidence). New config key `Ai:OpenAI:ExtractionModel` (falls back to `Ai:OpenAI:MappingModel`, then `gpt-5-mini`); extractor is a safe no-op when no key is set.
+  - **Azure Document Intelligence REMOVED ENTIRELY:** the `Azure.AI.DocumentIntelligence` package, `AzureDocumentIntelligenceOcrService`, and all `Ocr:Azure:*` / `Ocr__Azure__*` config keys are gone. The `IDocumentOcrService` + `NoOpOcrService` seam is KEPT but wired to a no-op (reserved for a future self-hosted engine).
+  - **Still pending (NOT built — do not claim as available):** scanned / image-only PDFs (no text layer) are NOT supported — they still fail with "This PDF looks scanned or image-only — we couldn't extract any text." Vision-LLM fallback for them is **Phase 2** (PDFtoImage + SkiaSharp, both MIT — never Ghostscript/poppler). Self-hosted no-egress OCR (**RapidOcrNet**, Apache-2.0) is **Phase 3**. Supplier/totals/tax/per-line-delivery-date enrichment + a PO-vs-invoice classifier are **Phase 4**.
+  - Privacy: real customer PO text → OpenAI needs an EU-residency project + DPA + zero-retention; the extractor is a no-op without a key (safe default). OpenAI is now the document-extraction processor; Azure Document Intelligence is no longer a subprocessor. User-facing capability copy is reconciled to reality (offer⇔works).
 - **Group G ERP connectors are implemented** as delivery adapters.
   - `IErpConnector` plus Erply and Directo connectors exist.
   - `erp_erply` and `erp_directo` are accepted delivery protocol values.
@@ -558,10 +558,11 @@ Decision: **Do not hardwire Anthropic/Claude for Group E.** For line-level suppl
 - [ ] Future provider option: `ClaudeAiMappingService` may be added later behind the same `IAiMappingService`, but it is not the Group E default.
 
 ### Group F — PDF ingestion
-**Status:** ✅ Implemented for text-based purchase-order PDFs. Scanned/image-only PDFs and OCR are deferred.
+**Status:** ✅ Implemented for text-based purchase-order PDFs. **Phase 1 text→LLM extraction is the PRIMARY path** (`feat/pdf-llm-extraction`, branch pushed/not merged, 758 backend tests green); the regex `PdfOrderParser` is now the deterministic fallback. Azure Document Intelligence removed entirely. Scanned/image-only PDFs (vision fallback) = Phase 2; self-hosted OCR = Phase 3; supplier/totals/tax enrichment + PO-vs-invoice classifier = Phase 4 — none built yet.
 
 - [x] Add `PdfPig` to `ProcuLink.Transform`
-- [x] `PdfOrderParser : IPurchaseOrderParser` — text extraction + line parsing
+- [x] `PdfOrderParser : IPurchaseOrderParser` — text extraction + line parsing (now the deterministic fallback)
+- [x] Text→LLM structured extraction (PdfPig text → OpenAI strict JSON schema → canonical `ParsedOrder`), with verbatim-number + qty×price anti-hallucination validation flagging suspect lines for review
 - [x] Accept `.pdf` in upload endpoint + FileUploadZone
 
 ### Group G — ERP connectors

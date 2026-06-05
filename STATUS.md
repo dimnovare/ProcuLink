@@ -4,9 +4,15 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-06-05 (later) — PDF parsing strategy decided: text→LLM extraction (benchmark-proven on 22 real docs), build handed to a chip**
+## Where we are: **2026-06-05 (later) — PDF text→LLM extraction Phase 1 SHIPPED on `feat/pdf-llm-extraction` (branch pushed, not merged — founder reviews)**
 
-**Decision (canonical):** replace the brittle regex `PdfOrderParser` + paid Azure Document Intelligence with **text→LLM structured extraction** as the PRIMARY PDF path. Proven on **22 real Markit POs+invoices** (Danfoss/ABB/REDACTED-PARTY/Veolia/Aperam/REDACTED-PARTY/Siemens/Continental/REDACTED-PARTY/Rheinbahn/ANDRITZ/REDACTED-PARTY/LähiTapiola/Somfy/BeCom/UFP/CEVA/DNV): **22/22 parsed, 60 lines, 177/177 numbers verbatim in source (no hallucination), 98.3% qty×price=amount**, across EN/DE/FR/PL/FI + 6 currencies, zero templates. Real corpus is **20/20 digital-text, 0 scanned** → OCR is the edge case. Cost ~€0.0005/doc on the existing OpenAI key — replaces both DocParser.com and Azure DI. Spec + full doc-reconcile inventory: **`docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md`**. Benchmark harness: `~/pl_bench.py` (against `~/Downloads/POs`). **Build is being executed by a chip** (multi-agent, feature branch). Canonical model (`ParsedOrder` 5 header + 6 line fields) is the extraction schema; supplier/totals/tax/per-line-date enrichment is a noted Phase-4 follow-up.
+**Shipped (Phase 1):** the brittle regex `PdfOrderParser` + paid Azure Document Intelligence are replaced by **text→LLM structured extraction** as the PRIMARY PDF path. PdfPig extracts the digital text layer; an OpenAI extractor structures it into the canonical `ParsedOrder` (strict JSON schema — 5 header + 6 line fields; the LLM never emits a supplier item code, resolved downstream). **Anti-hallucination validation:** every emitted number must appear verbatim in the source text, and qty×unit-price must reconcile with the stated line amount; suspect lines are flagged "needs review" so they surface in `/operations/exceptions` instead of delivering blind. The regex `PdfOrderParser` is now the deterministic FALLBACK only (no OpenAI key / offline / extraction fails or low-confidence). New config key `Ai:OpenAI:ExtractionModel` (falls back to `Ai:OpenAI:MappingModel`, then `gpt-5-mini`); extractor is a safe no-op without a key. **Azure Document Intelligence removed entirely** (`Azure.AI.DocumentIntelligence` package + `AzureDocumentIntelligenceOcrService` + all `Ocr:Azure:*`/`Ocr__Azure__*` keys gone); the `IDocumentOcrService` + `NoOpOcrService` seam is kept but wired to a no-op (reserved for a future self-hosted engine). **758 backend tests green.**
+
+Benchmark evidence (in repo): **22 real Markit POs+invoices** (Danfoss/ABB/REDACTED-PARTY/Veolia/Aperam/REDACTED-PARTY/Siemens/Continental/REDACTED-PARTY/Rheinbahn/ANDRITZ/REDACTED-PARTY/LähiTapiola/Somfy/BeCom/UFP/CEVA/DNV): **22/22 parsed, 177/177 numbers verbatim in source (no hallucination), ~98% qty×price=amount**, across EN/DE/FR/PL/FI + 6 currencies, zero templates. Cost ~€0.0005/doc on the existing OpenAI key. Spec + full doc-reconcile inventory: **`docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md`**. Benchmark harness: `~/pl_bench.py` (against `~/Downloads/POs`).
+
+**Deferred (NOT built — do not claim as available):** scanned / image-only PDFs (no text layer) are NOT supported — they still fail with "This PDF looks scanned or image-only — we couldn't extract any text." Vision-LLM fallback = **Phase 2** (PDFtoImage + SkiaSharp, both MIT). Self-hosted no-egress OCR (RapidOcrNet, Apache-2.0) = **Phase 3**. Supplier/totals/tax/per-line-delivery-date enrichment + a PO-vs-invoice classifier = **Phase 4**.
+
+**Privacy:** sending real customer PO text to OpenAI needs an EU-residency OpenAI project + DPA + zero-retention; the extractor is a no-op without a key. OpenAI is now the document-extraction processor; **Azure Document Intelligence is no longer a subprocessor.**
 
 ---
 
@@ -411,7 +417,7 @@ PostHog keys, Clerk post-signup redirect, `Frontend:Url`, `NEXT_PUBLIC_STATUS_UR
 - **Known issue — `/orders/[id]` shows "Order Not Found"**: `OrderDetailPage` at the `/orders/[id]` route makes no API calls and shows "Order Not Found". The same order loads correctly at `/inbox/[orderId]` via `SpineReview`. Root cause: likely stale TanStack Query error cache from a CORS failure on `http://localhost:5223` during first navigation (the HTTP port redirects to HTTPS, breaking CORS preflight). Logged as a separate fix task.
 - **Wave 1 + Wave 2 code completeness verified** (2026-05-28):
   - Wave 1 (`EdifactOrderParser`, `UblOrderParser`): real parsing logic — no `NotImplementedException`. Committed `c395b6c`, `2bd4ecd`.
-  - Wave 2 (SFTP/S3 ingress, `AzureDocumentIntelligenceOcrService`, `IEmailBodyOrderExtractor`): all committed and wired. OCR config-gated (`NoOpOcrService` fallback when `Ocr:Azure:Endpoint` absent — by design). `IEmailBodyOrderExtractor` intentionally API-only (HttpContext dependency; Worker comment documents this).
+  - Wave 2 (SFTP/S3 ingress, ~~`AzureDocumentIntelligenceOcrService`~~, `IEmailBodyOrderExtractor`): all committed and wired. _(Superseded 2026-06-05: the Azure OCR service and all `Ocr:Azure:*` config were removed — see the PDF text→LLM section at the top of this file. The `IDocumentOcrService`/`NoOpOcrService` seam is kept, now a no-op reserved for a future self-hosted engine.)_ `IEmailBodyOrderExtractor` intentionally API-only (HttpContext dependency; Worker comment documents this).
   - Stubs that exist (`EdifactInvoiceParser`, `EdifactDesadvParser` throwing `NotImplementedException`) are Wave 3/invoice domain — out of scope.
 - **End-to-end smoke test confirmed**: background task logs show CSV upload → `ParseOrderJob` (Worker) → `status=pending_review` in one run. All three recurring jobs (email-polling, sftp-polling, s3-polling) fired without errors.
 - **API running**: `https://localhost:7230` (HTTPS Kestrel), `http://localhost:5223` redirects to HTTPS. Worker running. Frontend at `http://localhost:8082`.
@@ -708,7 +714,7 @@ Verification:
 
 ## Group F — PDF ingestion ✅ (May 25 2026)
 
-**Status: Implemented for text-based purchase-order PDFs. Scanned/image-only PDFs and OCR are intentionally deferred.**
+**Status: Implemented for text-based purchase-order PDFs.** _(Superseded 2026-06-05: text→LLM structured extraction is now the PRIMARY PDF path and the regex `PdfOrderParser` below is the deterministic fallback; Azure Document Intelligence was removed. See the "PDF text→LLM extraction Phase 1 SHIPPED" section at the top of this file. Scanned/image-only PDFs are still NOT supported — Phase 2.)_
 
 Backend (`ProcuLink`):
 - Added `PdfPig` package to `ProcuLink.Transform`.
@@ -800,7 +806,7 @@ Deferred from H:
 | **C2** | Final billing model reconciliation | **Implemented — live Stripe QA still recommended** |
 | **D2** | Buyer-side supplier delivery config (HTTP-first path) | **Implemented — live manual QA still recommended** |
 | **E** | AI mapping suggestions — provider-neutral, OpenAI structured outputs first | **Implemented — live OpenAI QA still recommended** |
-| **F** | PDF ingestion (`PdfPig`) | **Implemented — text-based PDFs only; OCR deferred** |
+| **F** | PDF ingestion (`PdfPig`) | **Implemented — text→LLM extraction is the PRIMARY path (`feat/pdf-llm-extraction`, pushed/unmerged); regex parser is fallback; Azure DI removed; scanned/image-only = Phase 2 (not built)** |
 | **G** | ERP connectors (Erply, Directo) | **Implemented — live ERP sandbox QA still recommended** |
 | **H** | Email polling (IMAP/MailKit) | **Implemented — live IMAP mailbox QA still recommended** |
 | **I** | UI/UX production polish + responsive QA | **In progress — pass 15 complete** |

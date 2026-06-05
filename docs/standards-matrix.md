@@ -39,13 +39,13 @@ Status values used throughout:
 | **OpenPEPPOL transport (AS4)** | Peppol AS4 profile | n/a (transport, not document) | planned (Horizon 2 — Group N, partner-wrapped via Pagero / Tradeshift) | AS4 between Access Points | — | [Peppol AS4 profile](https://docs.peppol.eu/edelivery/as4/specification/) |
 | **AS2 / AS4 (drummond)** | RFC 4130 (AS2), AS4 profile | n/a (transport) | planned (Horizon 2 — Group N, partner-wrap via mendelson / DragonAS2 first) | AS2 / AS4 | — | [RFC 4130](https://datatracker.ietf.org/doc/html/rfc4130) |
 | **ISO 20022 — purchase-side reference** | 2013+ | reference-only (Horizon 2 — Group M) | reference-only | n/a | Mapping documented from canonical PO model to ISO 20022 procurement-relevant concepts. No transport in scope. | [ISO 20022](https://www.iso20022.org/) |
-| **Internal canonical PO** | n/a | supported (`ParsedOrder` / `ParsedOrderLine`) | supported (CSV / XML / cXML / JSON-partial) | n/a (in-memory) | All implemented parsers populate this; all implemented transformers emit from it. | This repo — `ProcuLink.Core/Models/ParsedOrder.cs`, `docs/canonical-po-model.md` |
+| **Internal canonical PO** | n/a | supported (`ParsedOrder` / `ParsedOrderLine`) | supported (CSV / XML / cXML / JSON-partial) | n/a (in-memory) | All implemented parsers populate this; all implemented transformers emit from it. | This repo — `ProcuLink.Transform/Parsing/ParsedOrder.cs`, `docs/canonical-po-model.md` |
 | **Supplier CSV (buyer-defined template)** | n/a | supported (`CsvOrderParser`) | supported (`CsvTransformService`) | HTTPS upload, SFTP, email attachment | Column alias matching; delimiter auto-detection (`,`/`;`); RFC 4180 escaping on output | n/a |
 | **Supplier XLSX (buyer-defined template)** | n/a | supported (`XlsxOrderParser`) | n/a | HTTPS upload | ClosedXML; first worksheet only; header-row matching with multi-alias columns | n/a |
 | **Supplier XML (generic envelope)** | n/a | n/a | supported (`XmlTransformService`) | HTTPS POST, SFTP, email attachment | Generic `<PurchaseOrder>` envelope — not cXML | n/a |
 | **JSON / REST PO payload** | n/a | partial (inline in `OrderService` via `System.Text.Json`) | planned (Horizon 2 — Group M, dedicated `JsonTransformService`) | HTTPS POST (webhook), API ingress | Header + line via canonical JSON stored in `CanonicalJson`. No standalone `IPurchaseOrderParser` yet. | n/a |
-| **Text-based PDF (PO layout)** | n/a | supported (`PdfOrderParser` via PdfPig 0.1.14) | n/a | HTTPS upload, email attachment | Regex header + line extraction; conservative parsing; non-scanned only | [PdfPig](https://github.com/UglyToad/PdfPig) |
-| **Scanned PDF / OCR** | n/a | deferred | n/a | HTTPS upload, email attachment | Azure Document Intelligence config-gated stub exists (`AzureDocumentIntelligenceOcrService`); falls back to `NoOpOcrService` when key absent | [Azure Document Intelligence](https://learn.microsoft.com/azure/ai-services/document-intelligence/) |
+| **Text-based PDF (PO layout)** | n/a | supported (text→LLM extraction; deterministic `PdfOrderParser` fallback) | n/a | HTTPS upload, email attachment | Digital text only (scanned/image-only not yet supported). PdfPig 0.1.14 extracts the PDF text layer; OpenAI structures it into canonical `ParsedOrder` under a strict JSON schema with anti-hallucination checks (emitted numbers must appear verbatim in source; qty×price must reconcile with line amount, else "needs review"). Falls back to the deterministic fixed-column `PdfOrderParser` when no OpenAI key, offline, or extraction fails/low-confidence. | [PdfPig](https://github.com/UglyToad/PdfPig) |
+| **Scanned PDF / OCR** | n/a | not yet supported | n/a | HTTPS upload, email attachment | No text layer to extract; upload fails with a clear "scanned or image-only" message. Vision-LLM fallback (PDFtoImage + SkiaSharp) is planned (Phase 2); self-hosted no-egress OCR (RapidOcrNet) planned (Phase 3). Azure Document Intelligence has been removed. | — |
 
 ### Headline reading guide
 
@@ -83,8 +83,8 @@ name the class and the test fixture.
 | **Supplier XML output template** | Output | `ProcuLink.Transform.Output.XmlTransformService` | No unresolved lines; generic `<PurchaseOrder>` envelope | — | Operations | Not cXML — plain `<PurchaseOrder>` |
 | **JSON / API payload** | Input | partial (`OrderService` inline `System.Text.Json`) | Header + line fields from canonical JSON in `CanonicalJson`; no dedicated parser class | — | Growth | No standalone `IPurchaseOrderParser` |
 | **JSON / API payload** | Output | planned (Horizon 2 — Group M, `JsonTransformService` + `OutputFormat.Json`) | — | — | Growth | Emit canonical JSON as API response artifact |
-| **Text-based PDF** | Input | `ProcuLink.Transform.Parsing.PdfOrderParser` (PdfPig 0.1.14) | Regex header + line extraction; non-scanned only | `ProcuLink.Transform.Tests/Parsing/PdfOrderParserTests.cs` (inline) | Operations | Conservative parsing |
-| **Scanned PDF / OCR** | Input | config-gated stub (`AzureDocumentIntelligenceOcrService` → `NoOpOcrService` fallback) | — | — | Integration | Real OCR enabled when `Ocr:Azure:Endpoint` set |
+| **Text-based PDF** | Input | text→LLM extraction (PdfPig 0.1.14 text layer + OpenAI structured extraction); deterministic `ProcuLink.Transform.Parsing.PdfOrderParser` fallback | Strict JSON schema mirroring canonical `ParsedOrder`; anti-hallucination checks (numbers verbatim in source; qty×price≈line amount → else "needs review"); digital text only, non-scanned | benchmark over 22 real Markit POs/invoices (22/22 parsed, 177/177 numbers verbatim); `ProcuLink.Transform.Tests/Parsing/PdfOrderParserTests.cs` (inline) | Operations | Extractor is a safe no-op without an OpenAI key, then deterministic fallback runs |
+| **Scanned PDF / OCR** | Input | not yet supported (no text layer) | — | — | Integration | Vision-LLM fallback (PDFtoImage + SkiaSharp) planned Phase 2; self-hosted RapidOcrNet planned Phase 3. `IDocumentOcrService`/`NoOpOcrService` seam retained as a no-op; Azure Document Intelligence removed |
 
 ### Invoice + ASN (Wave 3, parallel to PO standards)
 
@@ -158,7 +158,9 @@ gated behind a user-mode toggle.
 
 Gate enforcement: `BillingFeature.Cxml` is defined in
 `ProcuLink.Core/Constants/BillingFeature.cs`. UBL/Peppol, EDIFACT, X12, and
-OCR gates will use new `BillingFeature` values when those parsers ship.
+the future scanned-PDF/OCR gates will use new `BillingFeature` values when
+those parsers ship. (Text-PDF input via text→LLM extraction is already
+supported at the Operations gate.)
 
 ---
 
@@ -189,8 +191,10 @@ Horizon 3 — Group S priorities (P2P loop closure):
 
 7. **UBL Invoice 2.1 output + Peppol BIS Invoice 3.0** — natural follow-on
    from the Wave 3 inbound invoice model.
-8. **OCR / scanned PDF** — Azure Document Intelligence behind
-   `BillingFeature.Ocr`; required for customers without structured PO files.
+8. **Scanned / image-only PDF** — vision-LLM fallback (PDFtoImage + SkiaSharp)
+   in Phase 2, self-hosted no-egress OCR (RapidOcrNet) in Phase 3, behind a
+   future `BillingFeature.Ocr`; required for customers without a digital text
+   layer. (Text-based PDFs are already handled today via text→LLM extraction.)
 
 Order changes if pilot demand reorders them.
 

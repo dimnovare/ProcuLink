@@ -57,7 +57,7 @@ EDI requires IT involvement, months of onboarding, and per-document transaction 
 
 ## 5. Proof Points (working features, can be shown today)
 
-- Upload CSV, XLSX, PDF (text-based), or XML purchase orders — parsing, canonical model, and artifact output all implemented and tested (60 passing unit tests across transform and infrastructure).
+- Upload CSV, XLSX, PDF (text-based), or XML purchase orders — parsing, canonical model, and artifact output all implemented and tested (60 passing unit tests across transform and infrastructure). Text-based PDFs use a text→LLM extractor (PdfPig text layer → OpenAI structured output) with an anti-hallucination safety net (every emitted number must appear verbatim in the source; qty×price must reconcile, else the line is flagged for review). Benchmarked on 22 real Markit POs/invoices: 22/22 parsed, 177/177 numbers verbatim in source, EN/DE/FR/PL/FI and 6 currencies, no templates.
 - Visual PO mapping editor with 8 field manipulators; mapping stored as JSONB per supplier; import/export as JSON.
 - AI item code suggestions via OpenAI structured outputs; confidence + reason + provenance displayed in review UI; never auto-applied.
 - Configurable validation rule engine with error/warning/info severity.
@@ -75,7 +75,7 @@ EDI requires IT involvement, months of onboarding, and per-document transaction 
 - **Live end-to-end QA not complete.** Clerk auth, Stripe Checkout/webhooks, upload-to-delivery pipeline, IMAP polling, ERP connectors, and CORS have not been verified against deployed Railway/Vercel services. Group J is in progress. Do not tell prospects the product is in production until Group J passes.
 - **Stats on the landing page are fabricated.** "84% auto-processed", "1m 42s avg crossing time", "€4.20 cost per crossing", and "99.7% uptime SLA" have no empirical basis. Remove or replace with honest claims before any external promotion.
 - **No customer proof points yet.** Zero published case studies, testimonials, or logos. The "Real results from teams" section header is false — there are no teams using this in production yet.
-- **OCR/scanned PDF not supported.** Only text-layer PDFs are parsed. Scanned purchase orders will silently fail or produce empty output.
+- **Scanned/image-only PDF not supported.** Only text-layer PDFs are parsed (via the text→LLM extractor). Scanned purchase orders with no text layer fail with a clear message ("This PDF looks scanned or image-only — we couldn't extract any text."). A vision-LLM fallback is planned, not built. There is no OCR provider — Azure Document Intelligence was removed.
 - **SFTP/FTP dispatchers deferred.** Code exists but live QA has not been done. Do not position SFTP delivery as ready without a live test.
 - **UBL/PEPPOL BIS Order input not yet implemented.** Group K has cXML; UBL and PEPPOL are next.
 - **No onboarding flow, demo data, or trust/security pages.** Group L is planned but not started. First-time users hit an empty workspace with no guidance.
@@ -89,7 +89,7 @@ EDI requires IT involvement, months of onboarding, and per-document transaction 
 The stats strip ("84% auto-processed", "1m 42s", "€4.20", "99.7% SLA") is the highest-risk copy on the site. If a prospect asks for the source, there is none. Replace with honest, capability-based statements: e.g. "CSV, XLSX, PDF, XML — one upload format" / "8 field manipulators, no code" / "Every delivery attempt audited" / "AI-suggested item code resolution".
 
 **Landing page — "AI extraction" feature card overpromises.**
-"PDFs, emails, EDI, XLSX — our engine pulls structured data from any format with per-field confidence scores" is not accurate. Per-field confidence scores are on item code AI suggestions, not on the parser output. EDI is not a supported input yet (cXML is in a branch). Rewrite: "CSV, XLSX, PDF, and XML purchase orders parsed into a canonical model — with AI-suggested item code resolution when codes don't match."
+"PDFs, emails, EDI, XLSX — our engine pulls structured data from any format with per-field confidence scores" is not accurate. Text-based PDFs use a text→LLM extractor that validates numbers against the source and flags suspect lines for review, and item-code AI suggestions carry confidence/provenance — but "any format" overstates it (scanned/image-only PDFs are not supported; EDIFACT/X12 input is reached only by content-sniffing, see the runbook). Rewrite: "CSV, XLSX, text-based PDF, and XML purchase orders parsed into a canonical model — PDF numbers checked against the source — with AI-suggested item code resolution when codes don't match."
 
 **Landing page — "One-click crossing" feature card.**
 "cXML, EDI, or API — delivered to the supplier dock" overstates EDI readiness. Change to "cXML or HTTP webhook — delivered to the supplier dock."
