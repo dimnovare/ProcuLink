@@ -17,6 +17,12 @@ namespace ProcuLink.Transform.Parsing;
 public static class PdfTextExtractor
 {
     /// <summary>
+    /// Generous upper bound on a single PdfPig parse so a pathological / hostile PDF
+    /// can't hang a Worker thread indefinitely. Comfortably above any real PO/invoice.
+    /// </summary>
+    public static readonly TimeSpan DefaultParseTimeout = TimeSpan.FromSeconds(45);
+
+    /// <summary>
     /// Extracts normalised, non-empty text lines from a PDF byte buffer, in
     /// reading order. Empty when the PDF has no text layer.
     /// </summary>
@@ -34,6 +40,45 @@ public static class PdfTextExtractor
     /// </summary>
     public static string ExtractText(byte[] pdfBytes) =>
         string.Join("\n", ExtractLines(pdfBytes));
+
+    /// <summary>
+    /// Timeout-bounded <see cref="ExtractLines(byte[])"/>. PdfPig's parse is synchronous
+    /// and not cooperatively cancellable, so this bounds the CALLER's wait: on timeout (or
+    /// external cancellation) the in-flight parse task is abandoned and a
+    /// <see cref="TimeoutException"/> (resp. <see cref="OperationCanceledException"/>) is
+    /// thrown, which the callers map to a clean parse failure / deterministic fallback —
+    /// the pipeline is never blocked indefinitely on one document.
+    /// </summary>
+    public static Task<IReadOnlyList<string>> ExtractLinesAsync(byte[] pdfBytes, CancellationToken ct = default) =>
+        ExtractLinesAsync(pdfBytes, DefaultParseTimeout, ct);
+
+    /// <inheritdoc cref="ExtractLinesAsync(byte[], CancellationToken)"/>
+    public static async Task<IReadOnlyList<string>> ExtractLinesAsync(
+        byte[] pdfBytes, TimeSpan timeout, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested(); // fail fast on an already-cancelled token
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+
+        var work = Task.Run(() => ExtractLines(pdfBytes), CancellationToken.None);
+        var finished = await Task.WhenAny(work, Task.Delay(Timeout.Infinite, cts.Token)).ConfigureAwait(false);
+        if (finished == work)
+            return await work.ConfigureAwait(false);
+
+        // Timed out or externally cancelled — abandon the (leaked) parse task and surface
+        // the right exception. External cancellation wins over the timeout classification.
+        ct.ThrowIfCancellationRequested();
+        throw new TimeoutException($"PDF text extraction exceeded {timeout.TotalSeconds:0}s.");
+    }
+
+    /// <summary>Timeout-bounded <see cref="ExtractText(byte[])"/>. See <see cref="ExtractLinesAsync(byte[], CancellationToken)"/>.</summary>
+    public static async Task<string> ExtractTextAsync(byte[] pdfBytes, CancellationToken ct = default) =>
+        string.Join("\n", await ExtractLinesAsync(pdfBytes, ct).ConfigureAwait(false));
+
+    /// <inheritdoc cref="ExtractTextAsync(byte[], CancellationToken)"/>
+    public static async Task<string> ExtractTextAsync(byte[] pdfBytes, TimeSpan timeout, CancellationToken ct = default) =>
+        string.Join("\n", await ExtractLinesAsync(pdfBytes, timeout, ct).ConfigureAwait(false));
 
     /// <summary>
     /// Normalises whitespace on each line and drops blanks. Public so callers

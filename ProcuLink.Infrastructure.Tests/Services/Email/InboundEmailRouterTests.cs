@@ -8,6 +8,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Email;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Email;
@@ -285,6 +286,36 @@ public class InboundEmailRouterTests
         result.CreatedOrderIds.Should().HaveCount(2,
             "only the .csv and .xml attachments are in the supported set");
         orders.CalledWith.Select(c => c.FileName).Should().BeEquivalentTo(new[] { "po.csv", "backup.xml" });
+    }
+
+    // ── 8b. Oversized attachment → skipped before CreateStubAsync ────────────
+
+    [Fact]
+    public async Task OversizedAttachment_IsSkipped_NeverReachesCreateStub()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "Huge PO",
+            Attachments: new[]
+            {
+                new InboundAttachment("huge.csv", "text/csv", new byte[IngressLimits.MaxFileBytes + 1]),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeTrue("the message was valid even though the attachment was too large");
+        result.CreatedOrderIds.Should().BeEmpty();
+        orders.CalledWith.Should().BeEmpty("an oversized attachment must never reach CreateStubAsync");
+        enqueuer.Calls.Should().BeEmpty();
     }
 
     // ── 9. Email-body NLP fallback ───────────────────────────────────────────

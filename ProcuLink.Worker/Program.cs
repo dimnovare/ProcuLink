@@ -214,6 +214,9 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintS
 // ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
 builder.Services.AddScoped<ParseOrderJob>();
 builder.Services.AddHostedService<Worker>();
+// Warm the self-hosted OCR models at startup (no-op unless NoEgressOcr:Enabled) so the
+// first scanned-PDF OCR after a deploy doesn't pay the model-load cost inside a job.
+builder.Services.AddHostedService<ProcuLink.Worker.OcrWarmupHostedService>();
 
 var host = builder.Build();
 

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
 
@@ -123,6 +124,28 @@ public class SftpIngressServiceTests
 
         result.Should().Be(0, ".docx is not an accepted extension");
         orders.CreateStubCalls.Should().Be(0, "unsupported file must never reach CreateStubAsync");
+    }
+
+    // ── Oversized file → skipped before CreateStubAsync ──────────────────────
+
+    [Fact]
+    public async Task OversizedFile_IsSkipped_NeverReachesCreateStub()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(db, orgId, isEnabled: true);
+
+        const string remotePath = "/incoming/huge.csv";
+        var huge = new byte[IngressLimits.MaxFileBytes + 1];
+
+        var fakeSftp = new SingleFileFakeSftpFactory(remotePath, huge);
+        var orders = new RecordingOrderService();
+        var svc = MakeService(db, orders, fakeSftp);
+
+        var result = await svc.PollAsync(orgId, default);
+
+        result.Should().Be(0, "an oversized file must not be imported");
+        orders.CreateStubCalls.Should().Be(0, "oversized file must never reach CreateStubAsync");
     }
 
     // ── 5. Happy path: new CSV file → imported, dedupe record written ────────

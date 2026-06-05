@@ -846,14 +846,26 @@ public sealed class OrdersController : ControllerBase
             .Select(l => new OrderLineDto(
                 l.Id, l.LineNumber, l.BuyerItemCode, l.SupplierItemCode,
                 l.Description, l.Quantity, l.Unit, l.UnitPrice,
-                l.Confidence, l.NeedsReview, MapAiSuggestion(l)))
+                l.Confidence, l.NeedsReview, MapAiSuggestion(l),
+                // Phase 4 per-line enrichment (null for parsers that don't emit it).
+                LineAmount:   l.LineAmount,
+                TaxRate:      l.TaxRate,
+                DeliveryDate: l.DeliveryDate?.ToString("yyyy-MM-dd")))
             .ToList(),
         Artifacts: e.OutboundArtifacts
             .OrderByDescending(a => a.CreatedAt)
             .Select(a => new ArtifactDto(a.Id, a.Format, a.FileKey, a.CreatedAt))
             .ToList(),
         BuyerName:    ExtractBuyerName(e),
-        ErrorMessage: errorMessage
+        ErrorMessage: errorMessage,
+        // Phase 4 header enrichment. DocumentSupplierName is the extracted (as-printed)
+        // supplier name — distinct from the resolved SupplierName (e.Supplier.Name) above.
+        SubTotal:             e.SubTotal,
+        TaxTotal:             e.TaxTotal,
+        GrandTotal:           e.GrandTotal,
+        PaymentTerms:         e.PaymentTerms,
+        DocumentType:         e.DocumentType,
+        DocumentSupplierName: e.SupplierName
     );
 
     /// <summary>

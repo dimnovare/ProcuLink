@@ -147,6 +147,48 @@ public class S3IngressServiceTests
             Times.Never);
     }
 
+    // ── 4b. Oversized object (Size > cap) → skipped before download ─────────
+
+    [Fact]
+    public async Task OversizedObject_IsSkippedBeforeDownload_CreateStubNotCalled()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedConfigAsync(db, isEnabled: true, bucket: "my-bucket");
+
+        // Strict s3: only ListObjectsV2Async is set up — a download attempt (GetObjectAsync)
+        // would throw, proving the size cap skips the object BEFORE downloading it.
+        var s3 = new Mock<IAmazonS3>(MockBehavior.Strict);
+        s3.Setup(c => c.ListObjectsV2Async(
+                It.IsAny<ListObjectsV2Request>(),
+                It.IsAny<CancellationToken>()))
+          .ReturnsAsync(new ListObjectsV2Response
+          {
+              S3Objects = new List<S3Object>
+              {
+                  new() { Key = "incoming/huge.csv", ETag = "\"huge-etag\"", Size = IngressLimits.MaxFileBytes + 1 },
+              },
+              IsTruncated = false,
+          });
+
+        var orders = new Mock<IOrderService>(MockBehavior.Strict);
+
+        var svc = MakeService(db, s3.Object, orders.Object);
+
+        var count = await svc.PollAsync(orgId, CancellationToken.None);
+
+        count.Should().Be(0, "an oversized object must be skipped before download");
+        s3.Verify(c => c.GetObjectAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        orders.Verify(o =>
+            o.CreateStubAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<Guid>(),
+                It.IsAny<Stream>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
     // ── 5. Enabled config without supplier → skipped before S3 calls ────────
 
     [Fact]

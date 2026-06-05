@@ -57,6 +57,34 @@ public class RapidOcrDocumentOcrServiceTests
         text.Should().Contain("2026");
     }
 
+    [Fact]
+    public async Task WarmAsync_WhenDisabled_IsNoOp_AndDoesNotThrow()
+    {
+        var svc = Create(enabled: false);
+
+        // Must complete quickly without loading any models or throwing.
+        await svc.WarmAsync(CancellationToken.None);
+
+        svc.IsAvailable.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WarmAsync_WhenEnabled_LoadsModels_IsIdempotent_AndEngineStillUsable()
+    {
+        var svc = Create(enabled: true);
+
+        // Idempotent: warming twice must not throw or double-load.
+        await svc.WarmAsync(CancellationToken.None);
+        await svc.WarmAsync(CancellationToken.None);
+
+        // After warm-up the engine is usable and the gate is intact — a real OCR still works.
+        await using var pdf = new MemoryStream(CreatePdf("PURCHASE ORDER 20260012345"));
+        var text = await svc.ExtractTextAsync(pdf, "application/pdf", CancellationToken.None);
+
+        text.Should().NotBeNullOrWhiteSpace("warming must not break the OCR gate");
+        text.Should().Contain("2026");
+    }
+
     // Minimal valid text PDF.
     private static byte[] CreatePdf(params string[] lines)
     {

@@ -17,7 +17,21 @@ public record OrderDto(
     /// <summary>Buyer name extracted from CanonicalJson; null until parsing completes.</summary>
     string?    BuyerName = null,
     /// <summary>Human-readable error from the newest *Failed audit event; null for non-failed orders.</summary>
-    string?    ErrorMessage = null
+    string?    ErrorMessage = null,
+    // ── Phase 4 enrichment (nullable; only the LLM PDF/email paths populate these) ──
+    /// <summary>Order subtotal as extracted from the source document; null when not captured.</summary>
+    decimal?   SubTotal = null,
+    /// <summary>Total tax as extracted from the source document; null when not captured.</summary>
+    decimal?   TaxTotal = null,
+    /// <summary>Grand total as extracted from the source document; null when not captured.</summary>
+    decimal?   GrandTotal = null,
+    /// <summary>Payment terms as extracted from the source document; null when not captured.</summary>
+    string?    PaymentTerms = null,
+    /// <summary>Classified document type: "purchase_order" | "invoice" | "other"; null when not classified.</summary>
+    string?    DocumentType = null,
+    /// <summary>Supplier name AS PRINTED ON THE DOCUMENT (extracted). Distinct from the resolved
+    /// <see cref="SupplierName"/> (Supplier.Name). Null when not captured.</summary>
+    string?    DocumentSupplierName = null
 );
 
 /// <summary>Single purchase order line in the API response.</summary>
@@ -32,7 +46,14 @@ public record OrderLineDto(
     decimal  UnitPrice,
     float    Confidence,
     bool     NeedsReview,
-    AiMappingSuggestionDto? AiSuggestion
+    AiMappingSuggestionDto? AiSuggestion,
+    // ── Phase 4 per-line enrichment (nullable; only the LLM PDF/email paths populate these) ──
+    /// <summary>Line amount as extracted from the source document; null when not captured.</summary>
+    decimal? LineAmount = null,
+    /// <summary>Per-line tax rate (percent) as extracted; null when not captured.</summary>
+    decimal? TaxRate = null,
+    /// <summary>Per-line delivery date as ISO yyyy-MM-dd; null when not captured.</summary>
+    string?  DeliveryDate = null
 );
 
 public record AiMappingSuggestionDto(
