@@ -254,4 +254,54 @@ public class OrderServiceBatchResolveTests
             It.IsAny<IReadOnlyList<AiMappingCandidate>>(),
             It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    // Phase 4: the email/REST ingress path (CreateStubFromParsedOrderAsync) must carry
+    // enrichment through AND apply the invoice-classification safety force — consistent
+    // with the PDF path. (Persists via the change tracker → InMemory-OK.)
+    [Fact]
+    public async Task CreateStubFromParsedOrderAsync_CarriesEnrichment_AndFlagsInvoiceForReview()
+    {
+        var (db, orgId, supplierId) = await SeedSupplierAsync();
+
+        var itemMappings = new Mock<IItemMappingService>();
+        itemMappings
+            .Setup(s => s.ResolveManyAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyDictionary<string, string?>)new Dictionary<string, string?> { ["ABC"] = "SUP-1" });
+
+        var aiMappings = new Mock<IAiMappingService>();
+        aiMappings
+            .Setup(s => s.SuggestSupplierItemCodesAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<AiMappingLineContext>>(),
+                It.IsAny<IReadOnlyList<AiMappingCandidate>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyDictionary<int, AiMappingSuggestion>)new Dictionary<int, AiMappingSuggestion>());
+
+        var svc = Build(db, FileStorageMock().Object, itemMappings.Object, aiMappings.Object);
+
+        var extracted = new ExtractedOrder(
+            "INV-7", new DateTime(2026, 5, 20), "Acme", "EUR",
+            new[] { new ExtractedOrderLine(1, "ABC", "Widget", 4, "PCS", 10m, LineAmount: 40m, TaxRate: 0.2m, DeliveryDate: new DateOnly(2026, 6, 30)) },
+            SupplierName: "Supplier Co", SubTotal: 40m, TaxTotal: 8m, GrandTotal: 48m,
+            PaymentTerms: "Net 30", DocumentType: "Invoice"); // odd casing → must normalize
+
+        var result = await svc.CreateStubFromParsedOrderAsync(orgId, supplierId, extracted, "email", CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var orderId = result.Value!.Id;
+
+        var order = await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId);
+        Assert.Equal("invoice", order.DocumentType);        // normalized from "Invoice"
+        Assert.Equal("pending_review", order.Status);       // invoice forces review even though the line resolved
+        Assert.Equal("Supplier Co", order.SupplierName);
+        Assert.Equal(48m, order.GrandTotal);
+        Assert.Equal(8m, order.TaxTotal);
+        Assert.Equal("Net 30", order.PaymentTerms);
+
+        var line = await db.PurchaseOrderLines.AsNoTracking().FirstAsync(l => l.OrderId == orderId);
+        Assert.Equal("SUP-1", line.SupplierItemCode);        // resolved deterministically
+        Assert.Equal(40m, line.LineAmount);
+        Assert.Equal(0.2m, line.TaxRate);
+        Assert.Equal(new DateOnly(2026, 6, 30), line.DeliveryDate);
+    }
 }

@@ -325,7 +325,10 @@ public sealed class OrderService : IOrderService
             Description:   l.Description,
             Quantity:      l.Quantity,
             Unit:          l.Unit,
-            UnitPrice:     l.UnitPrice
+            UnitPrice:     l.UnitPrice,
+            LineAmount:    l.LineAmount,
+            TaxRate:       l.TaxRate,
+            DeliveryDate:  l.DeliveryDate
         )).ToList();
 
         var aiCandidates  = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
@@ -334,6 +337,13 @@ public sealed class OrderService : IOrderService
 
         var anyUnresolved     = lineEntities.Any(l => l.NeedsReview);
         var aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
+
+        // Phase 4: same invoice-classification safety as the PDF path — an invoice
+        // received via email/REST must not be silently treated as a deliverable PO.
+        var documentType  = NormalizeDocumentType(order.DocumentType);
+        var isInvoice     = documentType == "invoice";
+        var supplierName  = string.IsNullOrWhiteSpace(order.SupplierName) ? null : order.SupplierName.Trim();
+        var paymentTerms  = string.IsNullOrWhiteSpace(order.PaymentTerms) ? null : order.PaymentTerms.Trim();
 
         var orderId = Guid.NewGuid();
         var now     = DateTime.UtcNow;
@@ -344,10 +354,16 @@ public sealed class OrderService : IOrderService
         var canonicalPayload = new
         {
             source,
-            buyerName = order.BuyerName,
-            poNumber  = order.PoNumber,
-            orderDate = order.OrderDate,
-            currency  = order.Currency,
+            buyerName    = order.BuyerName,
+            poNumber     = order.PoNumber,
+            orderDate    = order.OrderDate,
+            currency     = order.Currency,
+            supplierName,
+            paymentTerms,
+            documentType,
+            subTotal     = order.SubTotal,
+            taxTotal     = order.TaxTotal,
+            grandTotal   = order.GrandTotal,
         };
         var canonicalJson = JsonDocument.Parse(JsonSerializer.Serialize(canonicalPayload));
 
@@ -367,12 +383,19 @@ public sealed class OrderService : IOrderService
                                 ? DateOnly.FromDateTime(order.OrderDate.Value)
                                 : DateOnly.FromDateTime(now),
             Currency      = order.Currency ?? "EUR",
-            Status        = anyUnresolved ? "pending_review" : "ready",
+            Status        = (anyUnresolved || isInvoice) ? "pending_review" : "ready",
             SourceFileKey = null,
             CanonicalJson = canonicalJson,
             CreatedAt     = now,
             UpdatedAt     = now,
             Lines         = lineEntities,
+            // Phase 4 enrichment.
+            SupplierName  = supplierName,
+            SubTotal      = order.SubTotal,
+            TaxTotal      = order.TaxTotal,
+            GrandTotal    = order.GrandTotal,
+            PaymentTerms  = paymentTerms,
+            DocumentType  = documentType,
         };
 
         _db.PurchaseOrders.Add(entity);
@@ -382,7 +405,17 @@ public sealed class OrderService : IOrderService
             lineCount       = lineEntities.Count,
             unresolvedCount = lineEntities.Count(l => l.NeedsReview),
             aiSuggestionCount,
+            documentType,
+            classifiedAsInvoice = isInvoice,
         }));
+        if (isInvoice)
+        {
+            _db.AuditEvents.Add(BuildAuditEvent(organisationId, orderId, "ClassifiedAsInvoice", new
+            {
+                note = "This document looks like an invoice, not a purchase order — flagged for review before delivery.",
+                grandTotal = order.GrandTotal,
+            }));
+        }
 
         await _db.SaveChangesAsync(ct);
 
@@ -564,7 +597,11 @@ public sealed class OrderService : IOrderService
             // Phase 4: an LLM doc-type of "invoice" forces review — an invoice arrived on
             // the PO path (there is no invoice routing here) and must not be silently
             // transformed and delivered as a purchase order.
-            var isInvoice = string.Equals(parsedOrder.DocumentType, "invoice", StringComparison.OrdinalIgnoreCase);
+            // Normalise the doc-type here too (defense-in-depth): the LLM extractor
+            // already normalises, but a future IStructuredOrderExtractor must not be
+            // able to bypass the invoice safety force with an odd-cased value.
+            var newDocumentType = NormalizeDocumentType(parsedOrder.DocumentType);
+            var isInvoice = newDocumentType == "invoice";
             var newStatus    = (anyUnresolved || isInvoice) ? "pending_review" : "ready";
             // Denormalise buyer name for SQL search (avoid JSON parse at query time).
             var newBuyerName = string.IsNullOrWhiteSpace(parsedOrder.BuyerName)
@@ -573,7 +610,6 @@ public sealed class OrderService : IOrderService
             // Phase 4 enrichment header fields (nullable; only the LLM PDF path populates these).
             var newSupplierName = string.IsNullOrWhiteSpace(parsedOrder.SupplierName) ? null : parsedOrder.SupplierName.Trim();
             var newPaymentTerms = string.IsNullOrWhiteSpace(parsedOrder.PaymentTerms) ? null : parsedOrder.PaymentTerms.Trim();
-            var newDocumentType = string.IsNullOrWhiteSpace(parsedOrder.DocumentType) ? null : parsedOrder.DocumentType.Trim();
             var newSubTotal   = parsedOrder.SubTotal;
             var newTaxTotal   = parsedOrder.TaxTotal;
             var newGrandTotal = parsedOrder.GrandTotal;
@@ -1290,6 +1326,23 @@ public sealed class OrderService : IOrderService
     /// SupplierItemCode is intentionally never carried across — it is resolved
     /// downstream in <see cref="BuildLineEntitiesAsync"/>.
     /// </summary>
+    /// <summary>
+    /// Normalises a document-type to "purchase_order" | "invoice" | "other" (null if
+    /// absent), regardless of which extractor produced it — so the invoice safety
+    /// classification and the persisted value are canonical across every ingress path.
+    /// Mirrors <c>OpenAiPdfOrderExtractor.NormalizeDocumentType</c>.
+    /// </summary>
+    internal static string? NormalizeDocumentType(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "invoice" => "invoice",
+            "purchase_order" or "purchase order" or "po" or "order" => "purchase_order",
+            _ => "other",
+        };
+    }
+
     private static ParsedOrder MapExtractedToParsed(ExtractedOrder o) =>
         new(
             o.PoNumber,
