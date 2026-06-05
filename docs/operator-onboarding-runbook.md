@@ -156,6 +156,36 @@ Six ways orders get in. Pick whichever fits the client. You can use more than on
   Key ID** is the token id and the **Secret** is the SHA-256 of the token value. Set
   `Region=auto` and `ServiceUrl=https://<accountid>.r2.cloudflarestorage.com`.
 
+### 2.7 Enabling no-egress (self-hosted) OCR for an org  **(CONFIG-GATED · enterprise)**
+
+For a buyer who can't have document data leave their environment, you can put an org
+into **no-egress** mode. This is an operator/config capability, **not** a self-serve UI
+toggle. It needs two opt-ins:
+
+1. **Turn on the engine globally.** Set `NoEgressOcr:Enabled=true` (Railway env form:
+   `NoEgressOcr__Enabled=true`) on **both** the ProcuLink API service **and** the Worker
+   service, then redeploy. This swaps the default no-op for the self-hosted
+   **RapidOcrNet** engine (PP-OCRv5 via ONNX Runtime, Apache-2.0 code + weights, ~12 MB
+   models bundled, in-process, no GPU, no external calls). The runtime deps it needs
+   (`libgomp1`, `libfontconfig1`) are already in both Dockerfiles — no image change.
+2. **Flag the org.** Set that org's `self_hosted_ocr` column to `true`
+   (`Organisation.SelfHostedOcr`) to mark it no-egress.
+
+**Effect for a flagged org:** the whole ingest/parse pipeline stops sending that org's
+data to OpenAI. PDFs route to the deterministic parser; scanned/image-only pages are
+OCR'd **locally** by RapidOcrNet (no OpenAI vision); AI SKU mapping, email-body NLP, and
+the one-click AI schema-inference setup tool are all skipped (unresolved lines go to
+human review; the schema tool returns empty → use the manual PO Mapping editor). There is
+no remaining OpenAI touchpoint in ingest/parse for that org.
+
+**Caveats (unchanged):** scanned PDFs are still **assisted, not silent** — with no text
+layer to verify numbers against, every scanned line is review-flagged in
+`/operations/exceptions`, and an illegible scan still fails with the "scanned or
+image-only" message. Leaving `NoEgressOcr:Enabled` unset keeps the default deploy
+byte-for-byte unchanged (no models loaded, no-op engine). For non-no-egress orgs the
+text/vision PDF path still uses OpenAI (`gpt-4o-mini`) and still needs an EU-residency
+project + DPA + zero-retention.
+
 ---
 
 ## 3. INPUT formats (what files parse)
@@ -167,7 +197,7 @@ The parser is auto-selected from the file extension, with content-sniffing for X
 | **CSV** | `.csv` | Smart header aliasing (`po_number`/`PO Number`/`po`, `qty`, `line_no`, `sku`, `unit_price`…), delimiter sniff | PROD-PROVEN |
 | **Excel** | `.xlsx` | First worksheet | TESTED |
 | **PDF (text)** | `.pdf` | PdfPig extracts the text layer, then an OpenAI extractor (set `Ai:OpenAI:ApiKey`) structures it into the canonical order. Every emitted number must appear verbatim in the source and qty×price must reconcile, else the line is flagged "needs review". Without an OpenAI key (or if extraction fails/low-confidence), falls back to the deterministic column parser | TESTED |
-| **PDF (scanned/image)** | `.pdf` | **Supported via AI vision (review-flagged).** When there's no text layer, ProcuLink rasterizes the leading pages (PDFtoImage + SkiaSharp) and sends the images to the vision-capable OpenAI model (needs `Ai:OpenAI:ApiKey`). No text layer means no number verification, so **every** line is flagged "needs review" and surfaces in `/operations/exceptions` — assisted, not silent. Illegible scans still fail with "This PDF looks scanned or image-only — we couldn't extract any text." No Azure provider. Self-hosted no-egress OCR still planned (Phase 3) | TESTED (review-flagged) |
+| **PDF (scanned/image)** | `.pdf` | **Supported via AI vision (review-flagged).** When there's no text layer, ProcuLink rasterizes the leading pages (PDFtoImage + SkiaSharp) and sends the images to the vision-capable OpenAI model (needs `Ai:OpenAI:ApiKey`). No text layer means no number verification, so **every** line is flagged "needs review" and surfaces in `/operations/exceptions` — assisted, not silent. Illegible scans still fail with "This PDF looks scanned or image-only — we couldn't extract any text." No Azure provider. For orgs that can't send data to OpenAI, self-hosted no-egress OCR is now available as an opt-in — see §2.7 | TESTED (review-flagged) |
 | **cXML 1.2** | `.cxml` (or `.xml`) | OrderRequest | TESTED |
 | **UBL 2.1 / Peppol** | `.xml` | Auto-detected by content; `.ubl` is **not** accepted — send as `.xml` | TESTED |
 | **EDIFACT ORDERS** | `.edi` (or `.txt` sniffed) | Hand-rolled parser (no commercial EDI lib) | TESTED |

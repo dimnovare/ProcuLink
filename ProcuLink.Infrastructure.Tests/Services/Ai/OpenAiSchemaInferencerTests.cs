@@ -122,6 +122,65 @@ public class OpenAiSchemaInferencerTests
         result.Fields.Should().BeEmpty("cap-check failure must fail safe, not bypass the cap");
     }
 
+    // ── No-egress gate (Organisation.SelfHostedOcr) ──────────────────────────
+
+    [Fact]
+    public async Task InferSchemaAsync_NoEgressOrg_DoesNotCallOpenAiAndReturnsEmpty()
+    {
+        // Provider + key configured, but the org opted into no-egress (self-hosted OCR).
+        // The inferencer must short-circuit BEFORE the cap check or any OpenAI dispatch.
+        // A strict tracker (no setups) proves the cap check is never even reached.
+        var orgId = Guid.NewGuid();
+        var tracker = new Mock<IAiUsageTracker>(MockBehavior.Strict);
+
+        var inferencer = CreateInferencer(
+            config: new Dictionary<string, string?>
+            {
+                ["Ai:Provider"]      = "openai",
+                ["Ai:OpenAI:ApiKey"] = "sk-test-key",
+            },
+            tracker:  tracker.Object,
+            orgId:    orgId,
+            noEgress: true);
+
+        await using var sample = StreamOf("PoNumber,OrderDate\nPO-1,2026-05-28\n");
+        var result = await inferencer.InferSchemaAsync(sample, "sample.csv", "text/csv", CancellationToken.None);
+
+        result.Fields.Should().BeEmpty("no-egress orgs never send sample data to OpenAI");
+        result.FileType.Should().Be("unknown");
+        // Strict mock would have thrown if the cap check (IsAtOrOverLimitAsync) ran.
+    }
+
+    [Fact]
+    public async Task ProposeMappingAsync_NoEgressOrg_ReturnsEmptyMapping()
+    {
+        var orgId = Guid.NewGuid();
+        var tracker = new Mock<IAiUsageTracker>(MockBehavior.Strict);
+
+        var inferencer = CreateInferencer(
+            config: new Dictionary<string, string?>
+            {
+                ["Ai:Provider"]      = "openai",
+                ["Ai:OpenAI:ApiKey"] = "sk-test-key",
+            },
+            tracker:  tracker.Object,
+            orgId:    orgId,
+            noEgress: true);
+
+        var schema = new InferredSchema(
+            FileType: "csv",
+            Fields: new[]
+            {
+                new SchemaField("PoNumber", "PoNumber", "string", new[] { "PO-1" }),
+            },
+            SampleRows: Array.Empty<IReadOnlyDictionary<string,string?>>());
+
+        var proposal = await inferencer.ProposeMappingAsync(schema, CancellationToken.None);
+
+        proposal.Mappings.Should().BeEmpty("no-egress orgs never send field data to OpenAI");
+        // Strict mock would have thrown if the cap check ran.
+    }
+
     // ── Proposal path ────────────────────────────────────────────────────────
 
     [Fact]
@@ -211,26 +270,30 @@ public class OpenAiSchemaInferencerTests
     private static OpenAiSchemaInferencer CreateInferencer(
         Dictionary<string, string?> config,
         IAiUsageTracker?            tracker,
-        Guid                        orgId)
+        Guid                        orgId,
+        bool                        noEgress = false)
     {
         var cfg = new ConfigurationBuilder().AddInMemoryCollection(config).Build();
-        return CreateInferencer(cfg, tracker, orgId);
+        return CreateInferencer(cfg, tracker, orgId, noEgress);
     }
 
     private static OpenAiSchemaInferencer CreateInferencer(
         IConfiguration  cfg,
         IAiUsageTracker? tracker,
-        Guid             orgId)
+        Guid             orgId,
+        bool             noEgress = false)
     {
         // Internal test ctor: bypasses ICurrentTenantService and lets us inject
         // a Func<Guid> for the org id. Pass overrideClient=null so the API-key
         // presence check still gates whether a ChatClient is constructed.
+        // noEgressCheck lets a test force the no-egress short-circuit without a DbContext.
         return new OpenAiSchemaInferencer(
             cfg,
             NullLogger<OpenAiSchemaInferencer>.Instance,
             tracker,
             () => orgId,
-            overrideClient: null);
+            overrideClient: null,
+            noEgressCheck: noEgress ? (_, _) => Task.FromResult(true) : null);
     }
 
     private static MemoryStream StreamOf(string text) =>

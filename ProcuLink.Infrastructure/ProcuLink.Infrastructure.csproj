@@ -4,6 +4,9 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- PDFtoImage's Conversion APIs carry [SupportedOSPlatform] attributes; this is a
+         Linux/Windows server app, so the platform-compat analyzer (CA1416) is noise. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +23,11 @@
          bundles PDFium (BSD-3) + SkiaSharp.NativeAssets.Linux.NoDependencies (self-contained,
          no apt/fontconfig needed) — verified loading on the Debian aspnet:8.0 base image. -->
     <PackageReference Include="PDFtoImage" Version="5.2.1" />
+    <!-- Self-hosted, no-egress OCR (Phase 3): RapidOcrNet (Apache-2.0) runs PP-OCRv5
+         via ONNX Runtime. Bundles ~12MB models. Native deps on the Debian base:
+         libgomp1 (ONNX) + libfontconfig1 (its SkiaSharp) — added to both Dockerfiles
+         (Docker-verified; see docs/verification/native-deps.md). -->
+    <PackageReference Include="RapidOcrNet" Version="2.0.0" />
     <PackageReference Include="PostHog" Version="2.7.1" />
     <PackageReference Include="SSH.NET" Version="2024.2.0" />
     <PackageReference Include="Hangfire.Core" Version="1.8.18" />

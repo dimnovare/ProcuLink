@@ -122,6 +122,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.WebhookSecretEncrypted)
              .HasColumnName("webhook_secret_encrypted")
              .HasColumnType("text");
+            b.Property(x => x.SelfHostedOcr)
+             .HasColumnName("self_hosted_ocr")
+             .HasDefaultValue(false);
         });
 
         // ── users ──────────────────────────────────────────────────────

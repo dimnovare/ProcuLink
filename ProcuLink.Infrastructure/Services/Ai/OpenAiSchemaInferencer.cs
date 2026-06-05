@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OpenAI.Chat;
@@ -15,6 +16,10 @@ namespace ProcuLink.Infrastructure.Services.Ai;
 ///
 /// Mirrors <see cref="OpenAiMappingService"/>:
 ///   • No-op (empty schema / empty mapping) when <c>Ai:OpenAI:ApiKey</c> is missing.
+///   • No-op (empty schema / empty mapping) for no-egress orgs
+///     (<c>Organisation.SelfHostedOcr</c>) — this one-click setup tool is the last
+///     explicit OpenAI touchpoint, so gating it here keeps the no-egress guarantee
+///     whole alongside the PDF / SKU-mapping / email-body gates.
 ///   • Uses OpenAI structured outputs (JSON Schema, strict mode) for inference + proposal.
 ///   • Enforces the per-org monthly token cap via <see cref="IAiUsageTracker"/>.
 ///   • 30 second hard timeout per OpenAI call.
@@ -103,12 +108,15 @@ public sealed class OpenAiSchemaInferencer : ISchemaInferencer
     private readonly IAiUsageTracker?             _tracker;
     private readonly ICurrentTenantService?       _tenant;
     private readonly Func<Guid>?                  _testOrgIdProvider;
+    private readonly ProcuLinkDbContext?          _db;
+    private readonly Func<Guid, CancellationToken, Task<bool>>? _noEgressCheck;
 
     public OpenAiSchemaInferencer(
         IConfiguration             configuration,
         ILogger<OpenAiSchemaInferencer> logger,
         ICurrentTenantService      tenant,
-        IAiUsageTracker            tracker)
+        IAiUsageTracker            tracker,
+        ProcuLinkDbContext         db)
     {
         _logger  = logger;
         _model   = configuration["Ai:OpenAI:InferenceModel"]
@@ -116,6 +124,7 @@ public sealed class OpenAiSchemaInferencer : ISchemaInferencer
                    ?? DefaultModel;
         _tenant  = tenant;
         _tracker = tracker;
+        _db      = db;
 
         var provider = configuration["Ai:Provider"];
         var apiKey   = configuration["Ai:OpenAI:ApiKey"];
@@ -141,7 +150,8 @@ public sealed class OpenAiSchemaInferencer : ISchemaInferencer
         ILogger<OpenAiSchemaInferencer> logger,
         IAiUsageTracker?           tracker,
         Func<Guid>                 orgIdProvider,
-        ChatClient?                overrideClient = null)
+        ChatClient?                overrideClient = null,
+        Func<Guid, CancellationToken, Task<bool>>? noEgressCheck = null)
     {
         _logger  = logger;
         _model   = configuration["Ai:OpenAI:InferenceModel"]
@@ -150,6 +160,8 @@ public sealed class OpenAiSchemaInferencer : ISchemaInferencer
         _tracker = tracker;
         _tenant  = null;
         _testOrgIdProvider = orgIdProvider;
+        _db      = null;
+        _noEgressCheck = noEgressCheck;
 
         var provider = configuration["Ai:Provider"];
         var apiKey   = configuration["Ai:OpenAI:ApiKey"];
@@ -180,6 +192,16 @@ public sealed class OpenAiSchemaInferencer : ISchemaInferencer
         }
 
         var orgId = ResolveOrgIdOrEmpty();
+
+        // No-egress orgs must never send sample data to OpenAI — this one-click setup
+        // tool is an explicit OpenAI action, so it is gated alongside the PDF / SKU /
+        // email-body paths. They fall back to the deterministic manual mapping editor.
+        if (await IsNoEgressOrgAsync(orgId, ct))
+        {
+            _logger.LogInformation(
+                "Schema inference skipped — org {OrgId} is no-egress (self-hosted OCR).", orgId);
+            return EmptySchema;
+        }
 
         // Per-org monthly token cap — never bypass when the check throws.
         if (await IsAtOrOverCapAsync(orgId, ct))
@@ -291,6 +313,14 @@ public sealed class OpenAiSchemaInferencer : ISchemaInferencer
 
         var orgId = ResolveOrgIdOrEmpty();
 
+        // No-egress orgs never send field data to OpenAI (see InferSchemaAsync).
+        if (await IsNoEgressOrgAsync(orgId, ct))
+        {
+            _logger.LogInformation(
+                "Mapping proposal skipped — org {OrgId} is no-egress (self-hosted OCR).", orgId);
+            return EmptyMapping;
+        }
+
         if (await IsAtOrOverCapAsync(orgId, ct))
             return EmptyMapping;
 
@@ -377,6 +407,35 @@ public sealed class OpenAiSchemaInferencer : ISchemaInferencer
         {
             _logger.LogWarning(ex, "ICurrentTenantService.OrganisationId unavailable — treating as no-tenant.");
             return Guid.Empty;
+        }
+    }
+
+    /// <summary>
+    /// True when the org opted into no-egress (<c>Organisation.SelfHostedOcr</c>) and
+    /// therefore must never have its sample/field data sent to OpenAI. Fails SAFE: if
+    /// the flag cannot be read we treat the org as no-egress (skip OpenAI) rather than
+    /// risk leaking data — mirroring <see cref="IsAtOrOverCapAsync"/>'s fail-closed
+    /// behaviour. Returns false for the no-tenant (Guid.Empty) case so the existing
+    /// no-key / cap tests are unaffected.
+    /// </summary>
+    private async Task<bool> IsNoEgressOrgAsync(Guid orgId, CancellationToken ct)
+    {
+        if (orgId == Guid.Empty) return false;
+        try
+        {
+            if (_noEgressCheck is not null) return await _noEgressCheck(orgId, ct);
+            if (_db is null) return false;
+            return await _db.Organisations
+                .AsNoTracking()
+                .Where(o => o.Id == orgId)
+                .Select(o => o.SelfHostedOcr)
+                .FirstOrDefaultAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "No-egress check failed for org {OrgId}; skipping AI schema inference to be safe.", orgId);
+            return true;
         }
     }
 

@@ -23,6 +23,9 @@
     <PackageReference Include="Sentry.AspNetCore" Version="6.5.0" />
     <PackageReference Include="Stripe.net" Version="51.1.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+    <!-- Direct ref so RapidOcrNet's PP-OCRv5 models land in the API publish output
+         (transitive PackageCopyToOutput from Infrastructure doesn't flow). -->
+    <PackageReference Include="RapidOcrNet" Version="2.0.0" />
   </ItemGroup>
 
   <ItemGroup>

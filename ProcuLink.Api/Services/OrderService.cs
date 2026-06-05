@@ -1272,6 +1272,26 @@ public sealed class OrderService : IOrderService
     internal async Task<(ParsedOrder parsed, IReadOnlyCollection<int> reviewLineNumbers)> ParsePdfAsync(
         byte[] bytes, Guid organisationId, Guid orderId, CancellationToken ct)
     {
+        // No-egress orgs: never send PDF data to OpenAI. Use the deterministic parser,
+        // whose OCR fallback (the self-hosted RapidOcrNet engine, when enabled) handles
+        // scanned pages. Routed purely on the org flag — even if the engine isn't
+        // deployed, a no-egress org's data still never leaves (scanned just fails safe).
+        var selfHostedOcr = await _db.Organisations
+            .AsNoTracking()
+            .Where(o => o.Id == organisationId)
+            .Select(o => o.SelfHostedOcr)
+            .FirstOrDefaultAsync(ct);
+
+        if (selfHostedOcr)
+        {
+            _logger.LogInformation(
+                "Order {OrderId}: org {OrgId} is no-egress — parsing PDF deterministically (self-hosted OCR for scanned pages).",
+                orderId, organisationId);
+            var noEgressParser = _parserFactory.GetParser(".pdf");
+            using var noEgressStream = new MemoryStream(bytes);
+            return (await noEgressParser.ParseAsync(noEgressStream, ct), Array.Empty<int>());
+        }
+
         if (_structuredExtractor is { IsAvailable: true })
         {
             StructuredExtractionResult extraction;
@@ -1402,7 +1422,17 @@ public sealed class OrderService : IOrderService
         IReadOnlyDictionary<int, AiMappingSuggestion> suggestions =
             new Dictionary<int, AiMappingSuggestion>();
 
-        if (unresolvedContexts.Count > 0)
+        // No-egress orgs: never send line data (buyer codes/descriptions) to OpenAI for
+        // SKU mapping. This is the single chokepoint for AI suggestions across EVERY
+        // ingress path (PDF/CSV/XLSX/email/REST), so gating it here keeps the no-egress
+        // guarantee whole. Unresolved lines simply go to human review (the safe default).
+        var noEgress = await _db.Organisations
+            .AsNoTracking()
+            .Where(o => o.Id == organisationId)
+            .Select(o => o.SelfHostedOcr)
+            .FirstOrDefaultAsync(ct);
+
+        if (unresolvedContexts.Count > 0 && !noEgress)
         {
             suggestions = await _aiMappings.SuggestSupplierItemCodesAsync(
                 organisationId,

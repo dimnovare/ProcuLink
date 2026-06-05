@@ -45,7 +45,7 @@ Status values used throughout:
 | **Supplier XML (generic envelope)** | n/a | n/a | supported (`XmlTransformService`) | HTTPS POST, SFTP, email attachment | Generic `<PurchaseOrder>` envelope — not cXML | n/a |
 | **JSON / REST PO payload** | n/a | partial (inline in `OrderService` via `System.Text.Json`) | planned (Horizon 2 — Group M, dedicated `JsonTransformService`) | HTTPS POST (webhook), API ingress | Header + line via canonical JSON stored in `CanonicalJson`. No standalone `IPurchaseOrderParser` yet. | n/a |
 | **Text-based PDF (PO layout)** | n/a | supported (text→LLM extraction; deterministic `PdfOrderParser` fallback) | n/a | HTTPS upload, email attachment | Digital text layer (scanned/image-only PDFs route to the AI vision fallback — see the next row). PdfPig 0.1.14 extracts the PDF text layer; OpenAI structures it into canonical `ParsedOrder` under a strict JSON schema with anti-hallucination checks (emitted numbers must appear verbatim in source; qty×price must reconcile with line amount, else "needs review"). Falls back to the deterministic fixed-column `PdfOrderParser` when no OpenAI key, offline, or extraction fails/low-confidence. | [PdfPig](https://github.com/UglyToad/PdfPig) |
-| **Scanned PDF / OCR** | n/a | supported via AI vision (review-flagged) | n/a | HTTPS upload, email attachment | When PdfPig finds no text layer, the leading pages are rasterized (PDFtoImage + SkiaSharp, both permissive; self-contained native assets, no Dockerfile/system-package change) and sent to the vision-capable OpenAI model under the same strict schema. Because there is no text layer to verify numbers against, **every** line is flagged for human review (surfaces in `/operations/exceptions` / order review) — assisted, not silent. A scanned PDF the vision model still can't read fails with the "scanned or image-only" message. Self-hosted no-egress OCR (RapidOcrNet) is still planned (Phase 3). Azure Document Intelligence has been removed. | — |
+| **Scanned PDF / OCR** | n/a | supported via AI vision (review-flagged) | n/a | HTTPS upload, email attachment | When PdfPig finds no text layer, the leading pages are rasterized (PDFtoImage + SkiaSharp, both permissive; self-contained native assets, no Dockerfile/system-package change) and sent to the vision-capable OpenAI model under the same strict schema. Because there is no text layer to verify numbers against, **every** line is flagged for human review (surfaces in `/operations/exceptions` / order review) — assisted, not silent. A scanned PDF the vision model still can't read fails with the "scanned or image-only" message. **Self-hosted, no-egress OCR (RapidOcrNet 2.0.0, PP-OCRv5 via ONNX Runtime, Apache-2.0 code + weights, in-process, no network calls) is now AVAILABLE as an opt-in enterprise capability** — for a no-egress org the whole document ingest/parse pipeline routes to the deterministic parser with image pages OCR'd in-process (no OpenAI vision), and those lines are still review-flagged. Off by default (`NoEgressOcr:Enabled` unset → `NoOpOcrService`). Azure Document Intelligence has been removed. | — |
 
 ### Headline reading guide
 
@@ -84,7 +84,7 @@ name the class and the test fixture.
 | **JSON / API payload** | Input | partial (`OrderService` inline `System.Text.Json`) | Header + line fields from canonical JSON in `CanonicalJson`; no dedicated parser class | — | Growth | No standalone `IPurchaseOrderParser` |
 | **JSON / API payload** | Output | planned (Horizon 2 — Group M, `JsonTransformService` + `OutputFormat.Json`) | — | — | Growth | Emit canonical JSON as API response artifact |
 | **Text-based PDF** | Input | text→LLM extraction (PdfPig 0.1.14 text layer + OpenAI structured extraction); deterministic `ProcuLink.Transform.Parsing.PdfOrderParser` fallback | Strict JSON schema mirroring canonical `ParsedOrder`; anti-hallucination checks (numbers verbatim in source; qty×price≈line amount → else "needs review"); digital text only, non-scanned | benchmark over 22 real Markit POs/invoices (22/22 parsed, 177/177 numbers verbatim); `ProcuLink.Transform.Tests/Parsing/PdfOrderParserTests.cs` (inline) | Operations | Extractor is a safe no-op without an OpenAI key, then deterministic fallback runs |
-| **Scanned PDF / OCR** | Input | supported via AI vision (review-flagged) | Rasterize leading pages (PDFtoImage + SkiaSharp) when no text layer → vision-capable OpenAI model under the strict canonical schema; every line flagged for human review (no text layer to verify numbers); illegible scans still fail with the "scanned or image-only" message | live-verified end to end (image-only PDF → vision → structured order on gpt-4o-mini) | Integration | Self-hosted no-egress RapidOcrNet still planned Phase 3. `IDocumentOcrService`/`NoOpOcrService` seam retained; Azure Document Intelligence removed |
+| **Scanned PDF / OCR** | Input | supported via AI vision (review-flagged) | Rasterize leading pages (PDFtoImage + SkiaSharp) when no text layer → vision-capable OpenAI model under the strict canonical schema; every line flagged for human review (no text layer to verify numbers); illegible scans still fail with the "scanned or image-only" message | live-verified end to end (image-only PDF → vision → structured order on gpt-4o-mini) | Integration | Self-hosted, no-egress RapidOcrNet OCR now available as an opt-in enterprise capability (`RapidOcrDocumentOcrService`, RapidOcrNet 2.0.0 / PP-OCRv5 ONNX, Apache-2.0 code + weights, in-process, no egress) — requires global `NoEgressOcr:Enabled=true` on API + Worker **and** per-org `Organisation.SelfHostedOcr=true`; for a no-egress org the entire ingest/parse pipeline (PDF, AI SKU mapping, email-body NLP, AI schema inference) is gated so nothing reaches OpenAI, and scanned lines stay review-flagged. Off by default → `NoOpOcrService`. `IDocumentOcrService`/`NoOpOcrService` seam retained; Azure Document Intelligence removed |
 
 ### Invoice + ASN (Wave 3, parallel to PO standards)
 
@@ -160,8 +160,10 @@ Gate enforcement: `BillingFeature.Cxml` is defined in
 `ProcuLink.Core/Constants/BillingFeature.cs`. UBL/Peppol, EDIFACT, and X12
 will use new `BillingFeature` values when those parsers ship. (Text-PDF input
 via text→LLM extraction is already supported at the Operations gate; scanned
-PDF via AI vision — review-flagged — is supported, and the future self-hosted
-no-egress OCR engine will gate behind its own `BillingFeature` value.)
+PDF via AI vision — review-flagged — is supported, and the self-hosted no-egress
+OCR engine (RapidOcrNet) is now available as an opt-in enterprise capability,
+enabled per-org by an operator rather than via a self-serve `BillingFeature`
+toggle.)
 
 ---
 
@@ -192,10 +194,13 @@ Horizon 3 — Group S priorities (P2P loop closure):
 
 7. **UBL Invoice 2.1 output + Peppol BIS Invoice 3.0** — natural follow-on
    from the Wave 3 inbound invoice model.
-8. **Self-hosted no-egress OCR (RapidOcrNet)** — Phase 3, behind a future
-   `BillingFeature.Ocr`; for customers who cannot send document images to
-   OpenAI. (Scanned / image-only PDFs are already handled today via the AI
-   vision fallback — review-flagged; text-based PDFs via text→LLM extraction.)
+8. **Self-hosted no-egress OCR (RapidOcrNet)** — ✅ SHIPPED (PDF-extraction
+   roadmap Phase 3) as an opt-in enterprise capability for customers who cannot
+   send document images to OpenAI; enabled by an operator via global
+   `NoEgressOcr:Enabled=true` (API + Worker) plus per-org
+   `Organisation.SelfHostedOcr=true`, not a self-serve toggle. (Scanned /
+   image-only PDFs are also handled via the AI vision fallback —
+   review-flagged; text-based PDFs via text→LLM extraction.)
 
 Order changes if pilot demand reorders them.
 
