@@ -11,5 +11,9 @@ public record ParsedOrderLine(
     string? Description,
     decimal Quantity,
     string? Unit,
-    decimal? UnitPrice
+    decimal? UnitPrice,
+    // Phase 4 enrichment (optional — additive, defaulted so existing parsers are unaffected).
+    decimal? LineAmount = null,
+    decimal? TaxRate = null,
+    DateOnly? DeliveryDate = null
 );

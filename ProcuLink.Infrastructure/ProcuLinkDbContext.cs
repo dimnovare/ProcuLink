@@ -279,6 +279,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // SLA timers (Group O reliability).
             b.Property(x => x.DeliveryDueAt).HasColumnName("delivery_due_at").HasColumnType("timestamptz");
             b.Property(x => x.SlaBreached).HasColumnName("sla_breached").HasDefaultValue(false);
+            // Phase 4 enrichment + doc-type classification (nullable).
+            b.Property(x => x.SupplierName).HasColumnName("supplier_name");
+            b.Property(x => x.SubTotal).HasColumnName("sub_total").HasColumnType("numeric(18,4)");
+            b.Property(x => x.TaxTotal).HasColumnName("tax_total").HasColumnType("numeric(18,4)");
+            b.Property(x => x.GrandTotal).HasColumnName("grand_total").HasColumnType("numeric(18,4)");
+            b.Property(x => x.PaymentTerms).HasColumnName("payment_terms");
+            b.Property(x => x.DocumentType).HasColumnName("document_type");
             // Composite indexes for cross-tenant maintenance sweeps and inbox/list queries.
             // (OrgId, Status): inbox list — filter by tenant then status bucket.
             b.HasIndex(x => new { x.OrgId, x.Status })
@@ -326,6 +333,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.AiSuggestionConfidence).HasColumnName("ai_suggestion_confidence");
             b.Property(x => x.AiSuggestionReason).HasColumnName("ai_suggestion_reason");
             b.Property(x => x.AiSuggestionProvenance).HasColumnName("ai_suggestion_provenance");
+            // Phase 4 enrichment (nullable).
+            b.Property(x => x.LineAmount).HasColumnName("line_amount").HasColumnType("numeric(18,4)");
+            b.Property(x => x.TaxRate).HasColumnName("tax_rate").HasColumnType("numeric(7,4)");
+            b.Property(x => x.DeliveryDate).HasColumnName("delivery_date");
             b.HasOne(x => x.Order)
              .WithMany(x => x.Lines)
              .HasForeignKey(x => x.OrderId);

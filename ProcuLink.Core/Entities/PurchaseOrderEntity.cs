@@ -63,6 +63,20 @@ public class PurchaseOrderEntity
     /// </summary>
     public bool SlaBreached { get; set; }
 
+    // ── Phase 4 enrichment (nullable; populated by the LLM PDF extractor) ──────
+    /// <summary>Supplier/vendor name as printed on the document (distinct from the resolved Supplier).</summary>
+    public string? SupplierName { get; set; }
+    public decimal? SubTotal { get; set; }
+    public decimal? TaxTotal { get; set; }
+    public decimal? GrandTotal { get; set; }
+    public string? PaymentTerms { get; set; }
+    /// <summary>
+    /// "purchase_order" | "invoice" | "other" — the LLM's document-type classification.
+    /// An "invoice" classification flags the order for review (it arrived on the PO path
+    /// with no invoice routing), so it isn't silently transformed and delivered as a PO.
+    /// </summary>
+    public string? DocumentType { get; set; }
+
     // Navigation
     public Organisation Organisation { get; set; } = null!;
     public Supplier Supplier { get; set; } = null!;

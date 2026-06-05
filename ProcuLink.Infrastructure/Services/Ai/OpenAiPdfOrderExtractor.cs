@@ -52,11 +52,17 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         {
           "type": "object",
           "properties": {
-            "confidence": { "type": "number" },
-            "po_number":  { "type": "string" },
-            "order_date": { "type": "string" },
-            "currency":   { "type": "string" },
-            "buyer_name": { "type": "string" },
+            "confidence":    { "type": "number" },
+            "document_type": { "type": "string", "enum": ["purchase_order", "invoice", "other"] },
+            "po_number":     { "type": "string" },
+            "order_date":    { "type": "string" },
+            "currency":      { "type": "string" },
+            "buyer_name":    { "type": "string" },
+            "supplier_name": { "type": "string" },
+            "payment_terms": { "type": "string" },
+            "sub_total":     { "type": "number" },
+            "tax_total":     { "type": "number" },
+            "grand_total":   { "type": "number" },
             "lines": {
               "type": "array",
               "items": {
@@ -68,26 +74,33 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                   "quantity":        { "type": "number" },
                   "unit":            { "type": "string" },
                   "unit_price":      { "type": "number" },
-                  "line_amount":     { "type": "number" }
+                  "line_amount":     { "type": "number" },
+                  "tax_rate":        { "type": "number" },
+                  "delivery_date":   { "type": "string" }
                 },
-                "required": ["line_number", "buyer_item_code", "description", "quantity", "unit", "unit_price", "line_amount"],
+                "required": ["line_number", "buyer_item_code", "description", "quantity", "unit", "unit_price", "line_amount", "tax_rate", "delivery_date"],
                 "additionalProperties": false
               }
             }
           },
-          "required": ["confidence", "po_number", "order_date", "currency", "buyer_name", "lines"],
+          "required": ["confidence", "document_type", "po_number", "order_date", "currency", "buyer_name", "supplier_name", "payment_terms", "sub_total", "tax_total", "grand_total", "lines"],
           "additionalProperties": false
         }
         """u8.ToArray());
 
     private const string SystemPrompt =
-        "You extract a purchase order from the plain text of a supplier PDF. " +
+        "You extract a purchase order (or invoice) from the plain text of a supplier PDF. " +
         "Return ONLY structured data matching the schema. Copy numbers and codes " +
         "EXACTLY as printed — never invent, round, or compute a value that is not " +
         "in the text. Use the document's own line/item codes as buyer_item_code. " +
         "Leave a string field empty and a number 0 when the document does not state it. " +
         "Set line_amount to the printed line total (quantity x unit price) when shown, else 0. " +
-        "Set confidence 0.0-1.0 based on how clearly the text is a real purchase order.";
+        "buyer_name = the ordering/buying party; supplier_name = the issuing vendor/seller. " +
+        "sub_total/tax_total/grand_total = the document's stated totals when present, else 0. " +
+        "delivery_date = the line's requested/printed delivery date as YYYY-MM-DD, else empty. " +
+        "Classify document_type: 'invoice' if it is a bill/invoice (e.g. titled Invoice, has an " +
+        "invoice number / amount due), 'purchase_order' if it is an order being placed, else 'other'. " +
+        "Set confidence 0.0-1.0 based on how clearly the text is a real purchase order or invoice.";
 
     private readonly ChatClient? _client;
     private readonly ILogger<OpenAiPdfOrderExtractor> _logger;
@@ -350,13 +363,20 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             if (needsReview)
                 reviewLineNumbers.Add(lineNumber);
 
+            // Phase 4 enrichment (captured as metadata; not gated by anti-hallucination).
+            decimal? taxRate = TryToDecimal(l.TaxRate, out var tr) ? tr : null;
+            DateOnly? deliveryDate = ParseDateOnly(l.DeliveryDate);
+
             lines.Add(new ExtractedOrderLine(
                 LineNumber: lineNumber,
                 BuyerItemCode: l.BuyerItemCode?.Trim() ?? string.Empty,
                 Description: string.IsNullOrWhiteSpace(l.Description) ? null : l.Description.Trim(),
                 Quantity: quantity,
                 Unit: string.IsNullOrWhiteSpace(l.Unit) ? null : l.Unit.Trim(),
-                UnitPrice: unitPrice));
+                UnitPrice: unitPrice,
+                LineAmount: lineAmount,
+                TaxRate: taxRate,
+                DeliveryDate: deliveryDate));
         }
 
         DateTime? orderDate = null;
@@ -371,9 +391,34 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             OrderDate: orderDate,
             BuyerName: string.IsNullOrWhiteSpace(dto.BuyerName) ? null : dto.BuyerName.Trim(),
             Currency: string.IsNullOrWhiteSpace(dto.Currency) ? null : dto.Currency.Trim(),
-            Lines: lines);
+            Lines: lines,
+            SupplierName: string.IsNullOrWhiteSpace(dto.SupplierName) ? null : dto.SupplierName.Trim(),
+            SubTotal: TryToDecimal(dto.SubTotal, out var sub) ? sub : null,
+            TaxTotal: TryToDecimal(dto.TaxTotal, out var tax) ? tax : null,
+            GrandTotal: TryToDecimal(dto.GrandTotal, out var grand) ? grand : null,
+            PaymentTerms: string.IsNullOrWhiteSpace(dto.PaymentTerms) ? null : dto.PaymentTerms.Trim(),
+            DocumentType: NormalizeDocumentType(dto.DocumentType));
 
         return new StructuredExtractionResult(true, confidence, order, null, reviewLineNumbers);
+    }
+
+    private static DateOnly? ParseDateOnly(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && DateOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
+            ? d
+            : null;
+
+    /// <summary>Normalises the model's doc-type to one of "purchase_order" | "invoice" | "other" (null if absent).</summary>
+    private static string? NormalizeDocumentType(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var v = value.Trim().ToLowerInvariant();
+        return v switch
+        {
+            "invoice" => "invoice",
+            "purchase_order" or "purchase order" or "po" or "order" => "purchase_order",
+            _ => "other",
+        };
     }
 
     // ─── Anti-hallucination number matching ──────────────────────────────────
@@ -576,7 +621,13 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         [property: JsonPropertyName("order_date")] string? OrderDate,
         [property: JsonPropertyName("currency")] string? Currency,
         [property: JsonPropertyName("buyer_name")] string? BuyerName,
-        [property: JsonPropertyName("lines")] IReadOnlyList<ExtractionLineDto>? Lines);
+        [property: JsonPropertyName("lines")] IReadOnlyList<ExtractionLineDto>? Lines,
+        [property: JsonPropertyName("document_type")] string? DocumentType = null,
+        [property: JsonPropertyName("supplier_name")] string? SupplierName = null,
+        [property: JsonPropertyName("payment_terms")] string? PaymentTerms = null,
+        [property: JsonPropertyName("sub_total")] double? SubTotal = null,
+        [property: JsonPropertyName("tax_total")] double? TaxTotal = null,
+        [property: JsonPropertyName("grand_total")] double? GrandTotal = null);
 
     internal sealed record ExtractionLineDto(
         [property: JsonPropertyName("line_number")] int LineNumber,
@@ -585,5 +636,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         [property: JsonPropertyName("quantity")] double? Quantity,
         [property: JsonPropertyName("unit")] string? Unit,
         [property: JsonPropertyName("unit_price")] double? UnitPrice,
-        [property: JsonPropertyName("line_amount")] double? LineAmount);
+        [property: JsonPropertyName("line_amount")] double? LineAmount,
+        [property: JsonPropertyName("tax_rate")] double? TaxRate = null,
+        [property: JsonPropertyName("delivery_date")] string? DeliveryDate = null);
 }
