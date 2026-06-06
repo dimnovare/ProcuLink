@@ -29,6 +29,18 @@ public class OrganisationSettingsServiceTests
     }
 
     [Fact]
+    public async Task GetAsync_ReturnsOrgSlug()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, slug: "nordic-distribution-ab12");
+        var service = new OrganisationSettingsService(db);
+
+        var result = await service.GetAsync(orgId, default);
+
+        result.Slug.Should().Be("nordic-distribution-ab12");
+    }
+
+    [Fact]
     public async Task UpdateDirectionAsync_Inbound_Persists()
     {
         await using var db = CreateDb();
@@ -59,7 +71,7 @@ public class OrganisationSettingsServiceTests
         (await service.GetAsync(orgB, default)).Direction.Should().Be(OrderDirection.Outbound);
     }
 
-    private static async Task<Guid> SeedOrgAsync(ProcuLinkDbContext db)
+    private static async Task<Guid> SeedOrgAsync(ProcuLinkDbContext db, string? slug = null)
     {
         var orgId = Guid.NewGuid();
         db.Organisations.Add(new Organisation
@@ -67,6 +79,7 @@ public class OrganisationSettingsServiceTests
             Id = orgId,
             ClerkOrgId = $"org_{orgId:N}",
             Name = "Nordic Distribution",
+            Slug = slug ?? $"nordic-distribution-{orgId:N}"[..24],
             CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();

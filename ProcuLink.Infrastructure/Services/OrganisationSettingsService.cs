@@ -14,13 +14,15 @@ public sealed class OrganisationSettingsService : IOrganisationSettingsService
 
     public async Task<OrgSettingsResponse> GetAsync(Guid orgId, CancellationToken ct)
     {
-        var direction = await _db.Organisations
+        var settings = await _db.Organisations
             .AsNoTracking()
             .Where(x => x.Id == orgId)
-            .Select(x => x.OrderDirection)
+            .Select(x => new { x.OrderDirection, x.Slug })
             .FirstOrDefaultAsync(ct);
 
-        return new OrgSettingsResponse(direction);
+        return new OrgSettingsResponse(
+            settings?.OrderDirection ?? default,
+            settings?.Slug ?? string.Empty);
     }
 
     public async Task<OrgSettingsResponse> UpdateDirectionAsync(
@@ -36,6 +38,6 @@ public sealed class OrganisationSettingsService : IOrganisationSettingsService
         org.OrderDirection = req.Direction;
         await _db.SaveChangesAsync(ct);
 
-        return new OrgSettingsResponse(org.OrderDirection);
+        return new OrgSettingsResponse(org.OrderDirection, org.Slug);
     }
 }

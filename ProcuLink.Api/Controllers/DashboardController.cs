@@ -93,6 +93,12 @@ public class DashboardController : ControllerBase
     {
         var orgId = _tenant.OrganisationId;
 
+        // Supplier "health" is presented to the user as an acceptance rate over the
+        // LAST 30 DAYS, so the figure must only count orders inside that window —
+        // otherwise an all-time average silently contradicts its own label. UTC to
+        // match the clock source used elsewhere in this controller (GetStats).
+        var supplierHealthCutoff = DateTime.UtcNow.AddDays(-30);
+
         var rows = await _db.PurchaseOrders
             .AsNoTracking()
             .Where(o => o.OrgId == orgId)
@@ -102,6 +108,7 @@ public class DashboardController : ControllerBase
                 o.SupplierId,
                 SupplierName = o.Supplier != null ? o.Supplier.Name : "Unknown",
                 o.Status,
+                o.CreatedAt,
                 o.CanonicalJson,
             })
             .ToListAsync(ct);
@@ -117,15 +124,22 @@ public class DashboardController : ControllerBase
             var isFailed    = FailedStatuses.Contains(row.Status);
             var isException = ExceptionStatuses.Contains(row.Status);
 
+            // Supplier health is a "last 30 days" acceptance rate — only orders inside
+            // that window feed its Total/Failed counts. Buyer + wire aggregations below
+            // stay all-time (their labels do not claim a window), so this filter is
+            // scoped to supMap only.
             var sk = row.SupplierId.ToString(); // stable GUID string
-            if (!supMap.TryGetValue(sk, out var sa))
-                sa = (sk, row.SupplierName.Trim(), 0, 0, 0);
-            supMap[sk] = sa with
+            if (row.CreatedAt >= supplierHealthCutoff)
             {
-                Total      = sa.Total + 1,
-                Failed     = sa.Failed + (isFailed ? 1 : 0),
-                Exceptions = sa.Exceptions + (isException ? 1 : 0),
-            };
+                if (!supMap.TryGetValue(sk, out var sa))
+                    sa = (sk, row.SupplierName.Trim(), 0, 0, 0);
+                supMap[sk] = sa with
+                {
+                    Total      = sa.Total + 1,
+                    Failed     = sa.Failed + (isFailed ? 1 : 0),
+                    Exceptions = sa.Exceptions + (isException ? 1 : 0),
+                };
+            }
 
             string? buyerName = null;
             if (row.CanonicalJson is not null)
