@@ -68,6 +68,32 @@ public class OpenAiPdfOrderExtractorTests
         result.Order.Lines[1].BuyerItemCode.Should().Be("HEI-BRK-40");
     }
 
+    // ── SystemPrompt: deterministic party-role wording (regression for buyer/supplier swap) ──
+
+    [Fact]
+    public void SystemPrompt_ContainsDeterministicPartyRoleLanguage()
+    {
+        // Regression guard for the founder-found bug where the extractor swapped the
+        // buyer and supplier names (it picked the system-customer name as the buyer).
+        // The fix is the deterministic, label-driven role wording in the system prompt;
+        // assert the load-bearing phrases stay present so a future edit can't silently
+        // regress to the old ambiguous "issuing vendor/seller" definition.
+        var prompt = OpenAiPdfOrderExtractor.SystemPrompt;
+
+        // For a purchase order the buyer is the ISSUER/originator, not "the seller".
+        prompt.Should().Contain("ISSUED");
+        prompt.Should().Contain("PLACED");
+        // Roles invert for an invoice.
+        prompt.Should().Contain("INVOICE the roles INVERT");
+        // Do not assume a familiar name is the buyer — assign purely from labels.
+        prompt.Should().Contain("Do NOT assume");
+        prompt.Should().Contain("PURELY from the document");
+        // The two parties must be distinct.
+        prompt.Should().Contain("MUST be two DIFFERENT parties");
+        // The old ambiguous definition must be gone.
+        prompt.Should().NotContain("supplier_name = the issuing vendor/seller");
+    }
+
     // ── ValidateAndMap: anti-hallucination (number not in source) ────────────
 
     [Fact]

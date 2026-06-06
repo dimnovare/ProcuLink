@@ -60,8 +60,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             "po_number":     { "type": "string" },
             "order_date":    { "type": "string" },
             "currency":      { "type": "string" },
-            "buyer_name":    { "type": "string" },
-            "supplier_name": { "type": "string" },
+            "buyer_name":    { "type": "string", "description": "The organisation that ISSUED/PLACED the order (the originator on whose header it is raised). On an invoice instead the bill-to customer. Assign from document labels, never from which name is familiar." },
+            "supplier_name": { "type": "string", "description": "The party the order is ADDRESSED TO that will fulfil it (the recipient vendor/seller). On an invoice instead the issuing seller. Must differ from buyer_name." },
             "payment_terms": { "type": "string" },
             "sub_total":     { "type": "number" },
             "tax_total":     { "type": "number" },
@@ -91,7 +91,9 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         }
         """u8.ToArray());
 
-    private const string SystemPrompt =
+    // Exposed internal so a non-gated regression test can assert the deterministic
+    // role language is present (the party-role wording is the fix for buyer/supplier swaps).
+    internal const string SystemPrompt =
         "You extract a purchase order (or invoice) from a supplier PDF — its extracted " +
         "text, or a scanned image of it. " +
         "Return ONLY structured data matching the schema. Copy numbers and codes " +
@@ -99,7 +101,18 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         "in the document. Use the document's own line/item codes as buyer_item_code. " +
         "Leave a string field empty and a number 0 when the document does not state it. " +
         "Set line_amount to the printed line total (quantity x unit price) when shown, else 0. " +
-        "buyer_name = the ordering/buying party; supplier_name = the issuing vendor/seller. " +
+        // ── Party-role assignment (deterministic, document-driven) ──
+        "Assign the two parties PURELY from the document's own labels and structure. " +
+        "For a PURCHASE ORDER: buyer_name = the organisation that ISSUED / PLACED the order " +
+        "(the originator — the party on whose letterhead/header the order is raised, labelled " +
+        "e.g. 'ordered by', 'bill to', 'buyer', 'from'); supplier_name = the party the order is " +
+        "ADDRESSED TO and that will fulfil it (labelled e.g. 'supplier', 'vendor', 'to', " +
+        "'deliver from', 'sold by'). " +
+        "For an INVOICE the roles INVERT: supplier_name = the issuing seller; " +
+        "buyer_name = the bill-to customer. " +
+        "Do NOT assume any particular company name is the buyer — a familiar name may be the " +
+        "recipient OR the issuer, and a company name merely appearing in the header does not " +
+        "make it the buyer. buyer_name and supplier_name MUST be two DIFFERENT parties. " +
         "sub_total/tax_total/grand_total = the document's stated totals when present, else 0. " +
         "delivery_date = the line's requested/printed delivery date as YYYY-MM-DD, else empty. " +
         "Classify document_type: 'invoice' if it is a bill/invoice (e.g. titled Invoice, has an " +
