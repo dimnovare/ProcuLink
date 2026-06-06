@@ -25,6 +25,7 @@ public class StartupConfigurationValidatorTests
             ["Stripe:GrowthPriceId"]                = "x",
             ["Stripe:OperationsPriceId"]            = "x",
             ["Stripe:IntegrationPriceId"]           = "x",
+            ["Stripe:DistributorPriceId"]           = "x",
             ["Delivery:EncryptionKey"]              = key32,
             ["Delivery:AllowPrivateNetworkTargets"] = "false",
             ["Security:ApiKeyHashSecret"]           = "a-sufficiently-long-secret-value-here",
@@ -50,13 +51,13 @@ public class StartupConfigurationValidatorTests
     }
 
     [Fact]
-    public void Validate_DistributorPriceId_Missing_DoesNotThrow()
+    public void Validate_DistributorPriceId_Missing_Throws()
     {
-        // Distributor is not sold at launch — its price ID is optional and must
-        // not block the API from starting in Production.
+        // Distributor is now a sold, self-serve tier, so its monthly price ID is a
+        // required production key (like Growth/Operations/Integration) — a missing
+        // value must fail-fast, not silently break Distributor Checkout.
         var cfg = AllValid(("Stripe:DistributorPriceId", ""));
-        // Should not throw — missing optional key logs a warning only.
-        ValidateProd(cfg);
+        Assert.Throws<StartupConfigurationException>(() => ValidateProd(cfg));
     }
 
     [Fact]

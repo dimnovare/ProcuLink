@@ -252,9 +252,15 @@ source. All UI/UX and design decisions run through the local design system,
 >    Enterprise from €2,500 · per-supplier onboarding fee €500×3 then €150 (waived for design
 >    partners #1–5). **Distributor is now SHOWN on /pricing as a contact-sales tier (2026-06-06)** — it
 >    is the ICP tier (Baltic IT distributors); it had been `hidden`, which left the pricing footer note
->    referencing a plan customers couldn't see (the founder's actual complaint, NOT the fee). Self-serve
->    checkout stays off (`isCheckout:false`) until the Stripe product exists. *Still TODO: create the
->    Stripe Distributor product + `DistributorPriceId` to make it self-serve.*
+>    referencing a plan customers couldn't see (the founder's actual complaint, NOT the fee). **Distributor
+>    is now SELF-SERVE (2026-06-06):** the Stripe Distributor product + monthly/yearly prices already exist
+>    and are verified active (`Stripe:DistributorPriceId`=`price_1Tcq7Y…` €1,499/mo + a yearly price, both
+>    active in the TEST account — same mode as every other tier, live-swap is the June-9 gate), and the
+>    backend `CreateCheckoutSessionAsync` already maps `distributor`→that price. Flipped frontend
+>    `isCheckout:true` + "Upgrade to Distributor"; promoted `Stripe:DistributorPriceId` to a REQUIRED prod
+>    key (it is a sold tier). The earlier "Still TODO: create the Stripe product" note was STALE — it was
+>    already done in Stripe+Railway; only the frontend flag + comments lagged. *(Annual-billing UI for all
+>    tiers — the `*YearlyPriceId`s exist but no UI toggle — remains a separate latent capability.)*
 > 6. **Extend the pilot 14 → 60 days**, then **put one real Markit PO in front of one real supplier
 >    before writing another line of feature code.**
 >

@@ -31,6 +31,9 @@ public static class StartupConfigurationValidator
         "Stripe:GrowthPriceId",
         "Stripe:OperationsPriceId",
         "Stripe:IntegrationPriceId",
+        // Distributor is a sold, self-serve tier (Stripe product + price exist), so its
+        // monthly price ID is required in Production like the other self-serve plans.
+        "Stripe:DistributorPriceId",
         "Delivery:EncryptionKey",
         "Security:ApiKeyHashSecret",
         "Frontend:Url",
@@ -57,11 +60,10 @@ public static class StartupConfigurationValidator
     {
         "Ai:OpenAI:ApiKey",
         "Sentry:Dsn",
-        // Distributor is not sold at launch — no Stripe product created yet.
-        // Missing price IDs here log a warning but do not block the API from starting.
-        "Stripe:DistributorPriceId",
+        // Yearly price variants are optional until annual billing is exposed in the
+        // pricing UI. (The MONTHLY Distributor price is required — see ApiRequiredKeys
+        // above — because Distributor is a sold, self-serve tier.)
         "Stripe:DistributorYearlyPriceId",
-        // Yearly variants for self-serve plans are optional until annual billing is enabled.
         "Stripe:GrowthYearlyPriceId",
         "Stripe:OperationsYearlyPriceId",
         "Stripe:IntegrationYearlyPriceId",

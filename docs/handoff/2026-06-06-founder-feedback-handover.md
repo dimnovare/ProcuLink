@@ -6,6 +6,32 @@ evidence. Repos: backend `C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink`
 
 ---
 
+## ✅ BUILD-ROUND STATUS (2026-06-06, later) — the four items are now built + merged
+
+- **§1 buyer/supplier swap → FIXED + LIVE-VERIFIED.** `OpenAiPdfOrderExtractor` SystemPrompt now assigns
+  buyer/supplier from the document's own labels (PO: buyer = issuer/"ordered by"/"bill to"; supplier =
+  recipient/"supplier"/"vendor"; inverted for invoices), explicitly NOT from the familiar system-customer
+  name, and enforces buyer≠supplier. Committed gated live test (`PROCULINK_LIVE_AI_TESTS=1`) RUN with the
+  real key on `gpt-4o-mini`: **6/6 pass** — Danfoss/REDACTED-PARTY/ABB fixtures (Markit stays supplier) AND
+  the real 22-PDF corpus. Backend `main` `32b29d1`, **830 tests green**.
+- **§2 mobile responsive → SHIPPED.** All issues a–f fixed; frontend `main` `59eb9d3`, build clean.
+- **§3 owner/admin → BACKEND SHIPPED (adversarial security review CLEAN, 0 holes); frontend `/admin` in
+  progress.** `/api/admin/{overview,organisations,invoices}` behind an env-allowlist `[AdminOnly]` gate
+  (fail-closed; `Admin__UserIds`/`Admin__Emails`, user-id OR email); DB-computed MRR + Stripe reconcile;
+  one-off Stripe invoicing. 27 security tests. ⚠️ **Founder: set `Admin__UserIds` (your prod Clerk
+  user-id) in Railway** to gain access.
+- **§4 Distributor → SELF-SERVE (it was already done in Stripe; the docs lied).** Verified live via the
+  Stripe API: product + `€1,499/mo` + `€14,928/yr` prices ACTIVE (TEST mode like every tier). Backend
+  checkout already mapped `distributor`→price. Flipped frontend `isCheckout:true` + "Upgrade to
+  Distributor" (`0ee27ae`); promoted `Stripe:DistributorPriceId` to a required prod key.
+- **NEW — party model: founder chose "support both directions"** → DESIGNED (per-org `OrderDirection`;
+  data model already direction-agnostic, so v1 = one column + one settings endpoint + a frontend label
+  source-of-truth; defers the Supplier→Counterparty remodel). 3 UX questions pending the founder.
+
+_Original section text retained below for reference._
+
+---
+
 ## 1. Real-PO testing — DONE this session (with one real bug found)
 
 The founder was right that no test had ever run the **real** `C:\Users\Dmitri.REDACTED-PARTY\Downloads\POs`
