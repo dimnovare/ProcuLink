@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Services;
 using ProcuLink.Api.Tests.TestDoubles;
 using ProcuLink.Core.Constants;
@@ -254,18 +255,51 @@ public class StripeBillingServicePricingTests
         await db.SaveChangesAsync();
         var svc = MakeService(db);
 
+        // The billing key is now PERIOD-based ("{orgId}:{periodStart:O}"), not the
+        // invoice id — see BillingController.BuildPeriodBillingKey.
+        var periodStart = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var key = BillingController.BuildPeriodBillingKey(org.Id, periodStart);
+        key.Should().Be($"{org.Id}:{periodStart:O}", "billing key = {orgId}:{periodStart:O}");
+
         // First call bills 10 orders × €0.50 = €5.00 = 500 cents.
-        var first = await svc.BillOverageForInvoiceAsync(org.Id, "in_period_jan", overageOrders: 10);
+        var first = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10);
         first.AlreadyBilled.Should().BeFalse();
         first.OverageOrders.Should().Be(10);
         first.AmountCents.Should().Be(500);
 
-        // Repeated webhook with the SAME key — must be a no-op, never a second charge.
-        var second = await svc.BillOverageForInvoiceAsync(org.Id, "in_period_jan", overageOrders: 10);
-        second.AlreadyBilled.Should().BeTrue("a replay of the same billing key must not double-bill");
+        // Repeated webhook with the SAME period key — must be a no-op, never a second charge.
+        var second = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10);
+        second.AlreadyBilled.Should().BeTrue("a replay of the same period key must not double-bill");
 
-        db.OverageBillingRecords.Count(r => r.OrgId == org.Id && r.BillingKey == "in_period_jan")
-            .Should().Be(1, "exactly one ledger row per (org, billing key)");
+        db.OverageBillingRecords.Count(r => r.OrgId == org.Id && r.BillingKey == key)
+            .Should().Be(1, "exactly one ledger row per (org, billing period)");
+    }
+
+    [Fact]
+    public async Task BillOverage_SamePeriodAcrossDifferentInvoiceIds_DoesNotDoubleBill()
+    {
+        // The vector fix #1 closes: Stripe voids + re-issues an invoice for the SAME
+        // period under a NEW invoice id. With a period-based key both invoices map to
+        // the same billing key, so the second is a no-op. (An invoice-id-based key
+        // would have produced two distinct keys ⇒ a double-bill.)
+        var db = MakeDb();
+        var org = Org(PlanConstants.Operations, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+        var svc = MakeService(db);
+
+        var periodStart = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+        // Both calls derive the SAME key from the same period, regardless of invoice id.
+        var keyFromFirstInvoice  = BillingController.BuildPeriodBillingKey(org.Id, periodStart);
+        var keyFromSecondInvoice = BillingController.BuildPeriodBillingKey(org.Id, periodStart);
+        keyFromFirstInvoice.Should().Be(keyFromSecondInvoice, "same period ⇒ same key, even if Stripe re-issues the invoice");
+
+        var first  = await svc.BillOverageForInvoiceAsync(org.Id, keyFromFirstInvoice,  overageOrders: 5);
+        var second = await svc.BillOverageForInvoiceAsync(org.Id, keyFromSecondInvoice, overageOrders: 5);
+
+        first.AlreadyBilled.Should().BeFalse();
+        second.AlreadyBilled.Should().BeTrue("a re-issued invoice for the same period must not double-bill");
+        db.OverageBillingRecords.Count(r => r.OrgId == org.Id).Should().Be(1, "one ledger row per billing period");
     }
 
     [Fact]

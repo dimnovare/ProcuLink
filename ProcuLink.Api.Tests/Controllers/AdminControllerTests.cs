@@ -326,6 +326,27 @@ public class AdminControllerTests
     }
 
     [Fact]
+    public async Task SetOrganisationLimits_AbsurdExtendTrialDays_Returns400_NotOverflow500()
+    {
+        // An absurd extension (well beyond DateTime.MaxValue when added to UtcNow)
+        // would throw ArgumentOutOfRangeException inside AddDays and — with no global
+        // exception handler — surface as a 500. The upper-bound guard must turn it
+        // into a clean 400 instead. We must reach SetOrganisationLimits WITHOUT it
+        // throwing.
+        var db = MakeDb();
+        var org = Org("Epsilon", PlanConstants.Pilot, AccountStatusConstants.Trialing);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationLimits(
+            org.Id, new SetOrgLimitsRequest(ExtendTrialDays: int.MaxValue), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>(
+            "an absurd extendTrialDays must be a clean 400, never an unhandled overflow → 500");
+    }
+
+    [Fact]
     public async Task SetOrganisationLimits_UnknownOrg_Returns404()
     {
         var ctrl = Build(MakeDb());

@@ -8,10 +8,14 @@ namespace ProcuLink.Core.Entities;
 /// billing period.
 ///
 /// <para>
-/// <see cref="BillingKey"/> is the natural key of the thing being billed — in
-/// practice the Stripe invoice id the overage line was attached to (e.g.
-/// <c>in_123</c>). Two different invoices ⇒ two legitimate charges; the same
-/// invoice replayed ⇒ a duplicate-key violation that the service swallows.
+/// <see cref="BillingKey"/> is the natural key of the BILLING PERIOD being billed
+/// — <c>{orgId}:{periodStart:O}</c> (see
+/// <c>BillingController.BuildPeriodBillingKey</c>). Keying on the period (not the
+/// Stripe invoice id) means a voided + re-issued or recreated draft invoice for the
+/// SAME period maps to the same key, so a second charge is blocked even though the
+/// invoice id differs. Two different periods ⇒ two legitimate charges; the same
+/// period replayed under any invoice id ⇒ a duplicate-key violation the service
+/// swallows.
 /// </para>
 /// </summary>
 public class OverageBillingRecord
@@ -22,8 +26,8 @@ public class OverageBillingRecord
     public Guid OrgId { get; set; }
 
     /// <summary>
-    /// Natural key for the period/invoice this overage was billed against
-    /// (typically the Stripe invoice id). Unique per org.
+    /// Natural key for the billing period this overage was billed against —
+    /// <c>{orgId}:{periodStart:O}</c>. Unique per org.
     /// </summary>
     public string BillingKey { get; set; } = string.Empty;
 

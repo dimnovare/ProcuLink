@@ -358,9 +358,11 @@ public sealed class BillingController : ControllerBase
     /// <summary>
     /// On <c>invoice.created</c> (the period boundary for a subscription), bill the
     /// just-closed period's per-order overage as a Stripe invoice item, keyed on the
-    /// invoice id so a webhook replay never double-bills. Only subscription invoices
-    /// for an org we recognise are processed; all others are ignored. Never throws on
-    /// the unconfigured/no-customer path and never blocks anything.
+    /// BILLING PERIOD (not the invoice id) so a webhook replay — or a voided/re-issued
+    /// invoice with a NEW id covering the same period — never double-bills. Only
+    /// subscription invoices for an org we recognise are processed; all others are
+    /// ignored. Never throws on the unconfigured/no-customer path and never blocks
+    /// anything.
     /// </summary>
     internal async Task HandleInvoiceCreatedAsync(Stripe.Invoice? invoice, CancellationToken ct)
     {
@@ -391,14 +393,27 @@ public sealed class BillingController : ControllerBase
             org.Id, periodStart, periodEnd, ct);
         if (overageOrders <= 0) return;
 
-        // Idempotent: keyed on the invoice id. A replay is a no-op.
+        // Idempotent: keyed on the BILLING PERIOD ("{orgId}:{periodStart:O}"), NOT the
+        // invoice id. The same period maps to the same key, so the unique
+        // (org_id, billing_key) row blocks a second charge even if Stripe emits a new
+        // invoice id for the same/overlapping period (e.g. a voided + re-issued draft).
+        var billingKey = BuildPeriodBillingKey(org.Id, periodStart);
         var result = await BillingEvents.BillOverageForInvoiceAsync(
-            org.Id, invoice.Id, overageOrders, ct);
+            org.Id, billingKey, overageOrders, ct);
 
         _logger.LogInformation(
-            "invoice.created overage for org {OrgId}: {Orders} orders, alreadyBilled={Already}, item={Item}",
-            org.Id, result.OverageOrders, result.AlreadyBilled, result.StripeItemId);
+            "invoice.created overage for org {OrgId}: {Orders} orders, period={Period}, alreadyBilled={Already}, item={Item}",
+            org.Id, result.OverageOrders, billingKey, result.AlreadyBilled, result.StripeItemId);
     }
+
+    /// <summary>
+    /// Period-based idempotency key for order overage: <c>{orgId}:{periodStart:O}</c>.
+    /// Deriving the key from the billing period (rather than the Stripe invoice id)
+    /// means a re-issued/recreated invoice for the same period maps to the same key,
+    /// so the unique (org_id, billing_key) ledger row prevents a double-bill.
+    /// </summary>
+    internal static string BuildPeriodBillingKey(Guid orgId, DateTime periodStart) =>
+        $"{orgId}:{DateTime.SpecifyKind(periodStart, DateTimeKind.Utc):O}";
 
     private async Task<string?> GetSubscriptionPriceIdAsync(string subscriptionId, CancellationToken ct)
     {
