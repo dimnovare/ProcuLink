@@ -148,12 +148,19 @@ public interface IOrderService
     /// Optionally saves new mappings to the item_mappings table for future auto-resolution.
     /// Recomputes order status: ready if all lines resolved, pending_review otherwise.
     /// </summary>
+    /// <param name="header">
+    /// Optional corrected header fields (order date / buyer name / currency). Each is
+    /// applied only when non-null/non-blank; null means "no change". For buyer name BOTH
+    /// the denormalised <c>buyer_name</c> column AND canonical_json are updated so the read
+    /// path stays consistent. Pass <c>null</c> (the default) for a lines-only resolve.
+    /// </param>
     Task<Result<PurchaseOrderEntity>> ResolveAsync(
         Guid organisationId,
         Guid orderId,
         IReadOnlyList<LineResolution> resolutions,
         bool saveMappings,
-        CancellationToken ct);
+        CancellationToken ct,
+        ResolveHeaderFields? header = null);
 
     /// <summary>
     /// Manually mark an order as rejected by the supplier — for example when the

@@ -348,11 +348,40 @@ public sealed class OrdersController : ControllerBase
             .Select(r => new Core.Services.LineResolution(r.LineNumber, r.SupplierItemCode))
             .ToList();
 
+        // Validate + parse optional header corrections (order date / buyer name / currency).
+        // PO number + supplier are not accepted here — they stay read-only.
+        DateOnly? orderDate = null;
+        if (request.OrderDate is not null && !string.IsNullOrWhiteSpace(request.OrderDate))
+        {
+            if (!DateOnly.TryParse(
+                    request.OrderDate.Trim(),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out var parsedDate))
+                return BadRequest(new { error = $"OrderDate '{request.OrderDate}' is not a valid date (expected yyyy-MM-dd)." });
+            orderDate = parsedDate;
+        }
+
+        string? currency = null;
+        if (request.Currency is not null && !string.IsNullOrWhiteSpace(request.Currency))
+        {
+            var c = request.Currency.Trim();
+            if (c.Length != 3 || !c.All(char.IsLetter))
+                return BadRequest(new { error = "Currency must be a 3-letter alpha code (e.g. EUR)." });
+            currency = c.ToUpperInvariant();
+        }
+
+        // Buyer name: trim; whitespace-only is treated as no-change (null).
+        var buyerName = string.IsNullOrWhiteSpace(request.BuyerName) ? null : request.BuyerName.Trim();
+
+        var header = new Core.Services.ResolveHeaderFields(orderDate, buyerName, currency);
+
         var result = await _orders.ResolveAsync(
             _tenant.OrganisationId, id,
             resolutions,
             request.SaveMappings,
-            ct);
+            ct,
+            header);
 
         if (!result.IsSuccess)
         {
