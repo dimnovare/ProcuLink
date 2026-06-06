@@ -136,20 +136,30 @@ MRR should be DB-computed (fast, approximate) or Stripe-sourced (accurate, the r
 
 ---
 
-## 4. Pricing copy — DONE this session
+## 4. Pricing — the real issue was the MISSING DISTRIBUTOR card — DONE this session
 
-The false **"€500/supplier ×3 then €150, waived for design partners"** onboarding-fee claim is retired
-(founder, 2026-06-06). Fixed + pushed (frontend `93469c5`, backend `4a5c496`):
-- `src/lib/plans.ts` `SETUP_FEE_NOTE` → "hands-on, founder-led supplier onboarding — we configure your
-  suppliers with you during setup" (no fee).
-- `src/app/(marketing)/pricing/page.tsx` comment, `src/components/marketing/ROICalculator.tsx` fine
-  print (ROI math already used `setup=0`), `CLAUDE.md` pricing line.
+**Correction:** the founder clarified the `/pricing` footer was wrong **not because of the fee** but
+because it named "Operations, Integration, and **Distributor**" while the **Distributor plan was not
+shown on the page** (`hidden: true` in `plans.ts`). The fee model (€500×3 then €150, waived for design
+partners #1–5) **is real and stays**. (An earlier mis-fix that retired the fee copy was reverted.)
 
-**Still TODO:** (a) confirm the FINAL onboarding wording with the founder (is founder-led onboarding
-free/included, or is there a new fee?); (b) revise the **dated 2026-05-30 strategy memos**
-(`docs/strategy/2026-05-30-pricing-proposal.md`, `…-investor-analysis.md`) and
-`docs/deployment/stripe-go-live-checklist.md` which still reference the old fee model — left as
-historical records, founder to decide whether to revise.
+**Business-model analysis:** the Distributor tier (€1,499/mo · 2,500 orders · 30 suppliers) is the
+**ICP tier** — CLAUDE.md's wedge is "Baltic IT distributors/wholesalers," and the real-PO test
+confirmed the actual user (Markit) IS a high-volume distributor. It also fills the €999→€2,500 ladder
+gap between Integration and Enterprise. Hiding it meant the target customer never saw "their" tier.
+
+**Fixed + pushed** (frontend, backend `CLAUDE.md`): **Distributor is now SHOWN on `/pricing`** as a
+**contact-sales** tier (`hidden:false`, `cta:"Contact sales"→SALES`). Self-serve checkout stays OFF
+(`isCheckout:false`) until a Stripe Distributor product exists, so no broken Checkout — verified:
+`CHECKOUT_PLAN_IDS` (and the in-app `BillingSection`) filter on `isCheckout && !hidden` so Distributor
+is excluded from self-serve; `recommendPlanByOrders` already had Distributor in its ladder. The 3-col
+grid now shows a clean 3×2 (6 tiers) instead of the gapped 3+2. The original fee footer note is
+restored and is now consistent (Distributor is shown). `SETUP_FEE_NOTE`, the page comment, and the
+`ROICalculator` fine print are back to the real fee model.
+
+**Still TODO:** create the **Stripe Distributor product + `DistributorPriceId`** to make Distributor
+self-serve (then flip `isCheckout:true` + a checkout CTA). The dated 2026-05-30 strategy memos +
+`stripe-go-live-checklist.md` already describe the fee model correctly (no change needed).
 
 ---
 

@@ -249,10 +249,12 @@ source. All UI/UX and design decisions run through the local design system,
 >    worker. Honest `delivery_failed` path also proven. *Only a delivery against a real SUPPLIER's
 >    endpoint remains untested (needs a real supplier).*
 > 5. **Pricing ✅ shipped:** Operations €399 anchor · **Distributor €1,499** (2,500 orders / 30 suppliers) ·
->    Enterprise from €2,500. **The per-supplier onboarding fee (€500×3 then €150) is RETIRED (founder, 2026-06-06)** —
->    higher tiers now include hands-on founder-led onboarding with no separate fee; user-facing copy reconciled
->    (`plans.ts` `SETUP_FEE_NOTE`, `pricing/page.tsx`, `ROICalculator.tsx`). *Still TODO: create the Stripe
->    Distributor product + `DistributorPriceId`; revise the dated 2026-05-30 strategy memos + stripe-go-live-checklist.*
+>    Enterprise from €2,500 · per-supplier onboarding fee €500×3 then €150 (waived for design
+>    partners #1–5). **Distributor is now SHOWN on /pricing as a contact-sales tier (2026-06-06)** — it
+>    is the ICP tier (Baltic IT distributors); it had been `hidden`, which left the pricing footer note
+>    referencing a plan customers couldn't see (the founder's actual complaint, NOT the fee). Self-serve
+>    checkout stays off (`isCheckout:false`) until the Stripe product exists. *Still TODO: create the
+>    Stripe Distributor product + `DistributorPriceId` to make it self-serve.*
 > 6. **Extend the pilot 14 → 60 days**, then **put one real Markit PO in front of one real supplier
 >    before writing another line of feature code.**
 >
