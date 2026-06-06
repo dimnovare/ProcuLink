@@ -831,7 +831,22 @@ public sealed class OrderService : IOrderService
             .Where(o => o.OrgId == organisationId);
 
         if (!string.IsNullOrWhiteSpace(status))
-            baseQuery = baseQuery.Where(o => o.Status == status);
+        {
+            // The UI renders all five failure statuses as one red "Failed" pill, so a
+            // status=failed filter must match the whole failure bucket — not just the
+            // literal "failed" status (which would silently drop transform_failed,
+            // delivery_failed, delivery_dead_letter, and rejected_by_supplier). Every
+            // other status stays an exact match.
+            if (status == OrderStatusConstants.Failed)
+            {
+                var failureBucket = OrderStatusConstants.FailureBucket.ToArray();
+                baseQuery = baseQuery.Where(o => failureBucket.Contains(o.Status));
+            }
+            else
+            {
+                baseQuery = baseQuery.Where(o => o.Status == status);
+            }
+        }
 
         if (supplierId.HasValue)
             baseQuery = baseQuery.Where(o => o.SupplierId == supplierId.Value);
