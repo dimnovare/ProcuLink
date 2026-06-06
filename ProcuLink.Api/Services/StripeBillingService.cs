@@ -239,6 +239,127 @@ public sealed class StripeBillingService : IBillingService
         return session.Url;
     }
 
+    // ── Admin: MRR reconciliation against Stripe ──────────────────────────
+    /// <summary>
+    /// Sums the monthly-normalised amount of all ACTIVE/trialing Stripe
+    /// subscriptions across the whole account (this is cross-tenant; only the
+    /// admin surface calls it). Yearly subscriptions are divided by 12.
+    /// Returns null when Stripe is not configured (no SecretKey) — the caller
+    /// must treat a null as "not reconciled" and fall back to the DB number.
+    /// Never throws on the unconfigured path and never logs the key.
+    /// </summary>
+    public async Task<decimal?> GetStripeMrrAsync(CancellationToken ct = default)
+    {
+        if (!IsStripeConfigured()) return null;
+
+        decimal totalMrrCents = 0m;
+        var service = new SubscriptionService();
+        var options = new SubscriptionListOptions
+        {
+            Status = "active",
+            Limit  = 100,
+        };
+
+        // Page through every active subscription.
+        await foreach (var sub in service.ListAutoPagingAsync(options, cancellationToken: ct))
+        {
+            foreach (var item in sub.Items?.Data ?? new List<SubscriptionItem>())
+            {
+                var price = item.Price;
+                if (price?.UnitAmount is not { } unitAmount) continue;
+                var quantity = item.Quantity > 0 ? item.Quantity : 1; // SubscriptionItem.Quantity is non-nullable Int64
+                var lineCents = (decimal)unitAmount * quantity;
+
+                // Normalise to a monthly figure.
+                var interval      = price.Recurring?.Interval;          // "month" | "year" | "week" | "day"
+                var intervalCount = price.Recurring?.IntervalCount ?? 1;
+                var monthlyCents = interval switch
+                {
+                    "year"  => intervalCount > 0 ? lineCents / (12m * intervalCount) : lineCents / 12m,
+                    "month" => intervalCount > 0 ? lineCents / intervalCount : lineCents,
+                    "week"  => lineCents * 52m / 12m,
+                    "day"   => lineCents * 365m / 12m,
+                    _       => lineCents,
+                };
+                totalMrrCents += monthlyCents;
+            }
+        }
+
+        return Math.Round(totalMrrCents / 100m, 2);
+    }
+
+    // ── Admin: create a one-off invoice ───────────────────────────────────
+    /// <summary>
+    /// Creates a one-off (manual) Stripe invoice for an org's Stripe customer:
+    /// adds each line item, finalises the invoice (so Stripe generates the PDF,
+    /// VAT, and hosted payment link), and returns its identifiers. Founder-led
+    /// onboarding / higher-tier setup flows through this.
+    ///
+    /// Throws <see cref="BillingNotConfiguredException"/> when Stripe is not
+    /// configured — the controller maps that to a clean 4xx, never a 500, and
+    /// the Stripe secret is never logged.
+    /// </summary>
+    public async Task<InvoiceCreationResult> CreateInvoiceAsync(
+        Guid orgId,
+        IReadOnlyList<InvoiceLineItemInput> lineItems,
+        string? currency = null,
+        CancellationToken ct = default)
+    {
+        if (!IsStripeConfigured())
+            throw new BillingNotConfiguredException("Stripe is not configured; cannot create an invoice.");
+
+        if (lineItems is null || lineItems.Count == 0)
+            throw new ArgumentException("At least one line item is required.", nameof(lineItems));
+
+        var org = await LoadOrgAsync(orgId, asTracking: false, ct);
+        if (string.IsNullOrWhiteSpace(org.StripeCustomerId))
+            throw new InvalidOperationException("This organisation has no Stripe customer; cannot create an invoice.");
+
+        var cur = string.IsNullOrWhiteSpace(currency) ? "eur" : currency.Trim().ToLowerInvariant();
+
+        // 1) Create a draft invoice the items will attach to (auto_advance=false
+        //    so we control finalisation explicitly).
+        var invoiceService = new InvoiceService();
+        var draft = await invoiceService.CreateAsync(new InvoiceCreateOptions
+        {
+            Customer            = org.StripeCustomerId,
+            Currency            = cur,
+            CollectionMethod    = "send_invoice",
+            DaysUntilDue        = 14,
+            AutoAdvance         = false,
+            Metadata            = new Dictionary<string, string> { ["org_id"] = orgId.ToString() },
+        }, cancellationToken: ct);
+
+        // 2) Attach each line item to that specific invoice.
+        var itemService = new InvoiceItemService();
+        foreach (var li in lineItems)
+        {
+            // InvoiceItem.Amount is the TOTAL line amount (cents); compute it from
+            // unit price × quantity ourselves, then record the quantity for display.
+            var qty = li.Quantity <= 0 ? 1 : li.Quantity;
+            await itemService.CreateAsync(new InvoiceItemCreateOptions
+            {
+                Customer    = org.StripeCustomerId,
+                Invoice     = draft.Id,
+                Currency    = cur,
+                Amount      = li.AmountCents * qty,
+                Description = li.Description,
+            }, cancellationToken: ct);
+        }
+
+        // 3) Finalise so Stripe produces the PDF + hosted payment link.
+        var finalised = await invoiceService.FinalizeInvoiceAsync(
+            draft.Id, new InvoiceFinalizeOptions { AutoAdvance = true }, cancellationToken: ct);
+
+        return new InvoiceCreationResult(
+            InvoiceId:        finalised.Id,
+            HostedInvoiceUrl: finalised.HostedInvoiceUrl,
+            Status:           finalised.Status);
+    }
+
+    private bool IsStripeConfigured() =>
+        !string.IsNullOrWhiteSpace(_config["Stripe:SecretKey"]);
+
     public async Task<string> CreatePortalSessionAsync(
         Guid orgId,
         string returnUrl,
@@ -346,4 +467,20 @@ public sealed class StripeBillingService : IBillingService
             or AccountStatusConstants.ReadOnly
             or AccountStatusConstants.PastDue
             or AccountStatusConstants.Cancelled;
+}
+
+/// <summary>One line of a manual admin invoice. Amount is in the smallest currency unit (cents).</summary>
+public sealed record InvoiceLineItemInput(string Description, long AmountCents, int Quantity);
+
+/// <summary>Identifiers returned after a one-off Stripe invoice is finalised.</summary>
+public sealed record InvoiceCreationResult(string InvoiceId, string? HostedInvoiceUrl, string Status);
+
+/// <summary>
+/// Thrown by billing operations that require a configured Stripe account when
+/// no <c>Stripe:SecretKey</c> is set. Controllers map this to a clean 4xx
+/// (never a 500); the secret is never included in the message or logged.
+/// </summary>
+public sealed class BillingNotConfiguredException : Exception
+{
+    public BillingNotConfiguredException(string message) : base(message) { }
 }

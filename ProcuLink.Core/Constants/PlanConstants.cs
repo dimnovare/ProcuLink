@@ -43,6 +43,29 @@ public static class PlanConstants
     public static int GetSupplierLimit(string plan) =>
         Limits.TryGetValue(plan, out var limits) ? limits.Suppliers : PilotSupplierLimit;
 
+    // ── Monthly list price in EUR per plan (the published /pricing ladder) ──
+    // Used by the admin overview to compute a DB-side MRR estimate from active
+    // paid orgs. Pilot is €0 (trial, no Stripe). Enterprise is contact-sales
+    // with no fixed list price, so it contributes €0 to the DB estimate — its
+    // real revenue only shows up via the Stripe reconciliation path.
+    public static readonly IReadOnlyDictionary<string, decimal> MonthlyPriceEur =
+        new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Pilot]       = 0m,
+            [Growth]      = 149m,
+            [Operations]  = 399m,
+            [Integration] = 999m,
+            [Distributor] = 1_499m,
+            [Enterprise]  = 0m,   // custom — not a fixed list price
+        };
+
+    /// <summary>
+    /// Published monthly list price (EUR) for a plan, or 0 when the plan has no
+    /// fixed list price (Pilot, Enterprise) or is unrecognised.
+    /// </summary>
+    public static decimal GetMonthlyPriceEur(string plan) =>
+        MonthlyPriceEur.TryGetValue(plan ?? string.Empty, out var price) ? price : 0m;
+
     public static bool IsPaidPlan(string plan) =>
         plan is Growth or Operations or Integration or Distributor or Enterprise;
 
