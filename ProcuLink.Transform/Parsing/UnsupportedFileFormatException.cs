@@ -10,7 +10,7 @@ public sealed class UnsupportedFileFormatException : Exception
     public string FileExtension { get; }
 
     public UnsupportedFileFormatException(string fileExtension)
-        : base($"No parser is registered for file extension '{fileExtension}'. Supported formats: .csv, .xlsx")
+        : base($"No parser is registered for file extension '{fileExtension}'. Supported formats: .csv, .xlsx, .pdf, .xml (cXML/UBL/Peppol), .cxml, .edi (EDIFACT/X12), .x12, .txt")
     {
         FileExtension = fileExtension;
     }

@@ -94,11 +94,14 @@ public sealed class OrdersController : ControllerBase
                 new { error = "File exceeds the 10 MB upload limit." });
 
         var extension = FileNameSanitiser.GetExtension(file.FileName);
-        // Whitelist: CSV, XLSX, PDF (text), XML (cXML or UBL/Peppol), cXML (explicit), EDI (EDIFACT), TXT (EDIFACT-sniffed)
+        // Whitelist: CSV, XLSX, PDF (text), XML (cXML or UBL/Peppol), cXML (explicit),
+        // EDI (EDIFACT or X12-sniffed), X12 (explicit ANSI X12 850), TXT (EDIFACT/X12-sniffed).
+        // .x12 is included because X12OrderParser.CanParse(".x12") is true and the factory
+        // content-sniffs ISA/ST*850 — without it the UI advertised "X12" but rejected .x12 files.
         if (extension != ".csv" && extension != ".xlsx" && extension != ".pdf"
             && extension != ".xml" && extension != ".cxml"
-            && extension != ".edi" && extension != ".txt")
-            return BadRequest(new { error = "Supported formats: CSV, XLSX, PDF, XML (cXML/UBL/Peppol), EDI (EDIFACT)." });
+            && extension != ".edi" && extension != ".x12" && extension != ".txt")
+            return BadRequest(new { error = "Supported formats: CSV, XLSX, PDF, XML (cXML/UBL/Peppol), EDI (EDIFACT/X12)." });
 
         if (supplierId == Guid.Empty)
             return BadRequest(new { error = "supplierId is required." });
