@@ -1072,7 +1072,8 @@ public sealed class OrderService : IOrderService
         Guid orderId,
         IReadOnlyList<LineResolution> resolutions,
         bool saveMappings,
-        CancellationToken ct)
+        CancellationToken ct,
+        ResolveHeaderFields? header = null)
     {
         // Load with tracking so EF picks up property changes on the line entities
         var entity = await _db.PurchaseOrders
@@ -1125,6 +1126,43 @@ public sealed class OrderService : IOrderService
             }
         }
 
+        // Apply optional header-field corrections. Null/blank = no change per field.
+        // The read path (GET /api/orders/{id} → MapToDto) sources OrderDate and Currency
+        // from the columns, and BuyerName column-first with a canonical_json fallback.
+        // We therefore write the columns AND mirror into canonical_json so the two stay
+        // consistent (the buyer-name denormalisation split is the reason header edits were
+        // dropped before — see CLAUDE.md). PO number + supplier are not accepted here.
+        var changedHeaderFields = new List<string>();
+        if (header is not null && header.HasAnyChange)
+        {
+            var canonicalUpdates = new Dictionary<string, object?>();
+
+            if (header.OrderDate.HasValue)
+            {
+                entity.OrderDate = header.OrderDate.Value;
+                canonicalUpdates["orderDate"] = header.OrderDate.Value.ToString("yyyy-MM-dd");
+                changedHeaderFields.Add("orderDate");
+            }
+
+            if (!string.IsNullOrWhiteSpace(header.Currency))
+            {
+                entity.Currency = header.Currency.Trim().ToUpperInvariant();
+                canonicalUpdates["currency"] = entity.Currency;
+                changedHeaderFields.Add("currency");
+            }
+
+            if (!string.IsNullOrWhiteSpace(header.BuyerName))
+            {
+                var trimmed = header.BuyerName.Trim();
+                entity.BuyerName = trimmed;                 // denormalised column
+                canonicalUpdates["buyerName"] = trimmed;    // canonical_json mirror
+                changedHeaderFields.Add("buyerName");
+            }
+
+            if (canonicalUpdates.Count > 0)
+                entity.CanonicalJson = MergeCanonicalJson(entity.CanonicalJson, canonicalUpdates);
+        }
+
         // Recompute order status
         entity.Status    = entity.Lines.Any(l => l.NeedsReview) ? "pending_review" : "ready";
         entity.UpdatedAt = DateTime.UtcNow;
@@ -1133,7 +1171,8 @@ public sealed class OrderService : IOrderService
         {
             lineCount    = resolutions.Count,
             savedMappings = saveMappings,
-            newStatus    = entity.Status
+            newStatus    = entity.Status,
+            headerFieldsChanged = changedHeaderFields
         }));
 
         await _db.SaveChangesAsync(ct);
@@ -1152,6 +1191,47 @@ public sealed class OrderService : IOrderService
             orderId, resolutions.Count, saveMappings, entity.Status);
 
         return Result<PurchaseOrderEntity>.Ok(entity);
+    }
+
+    /// <summary>
+    /// Returns a new <see cref="JsonDocument"/> equal to <paramref name="existing"/> with the
+    /// supplied keys added or overwritten. Existing properties are preserved verbatim; the
+    /// updated keys are written as strings (header corrections are always string-valued).
+    /// A null/missing source document yields a document containing only the updates.
+    /// Used by ResolveAsync to keep canonical_json consistent with the denormalised header
+    /// columns after a user edits header fields on the review screen.
+    /// </summary>
+    private static JsonDocument MergeCanonicalJson(
+        JsonDocument? existing,
+        IReadOnlyDictionary<string, object?> updates)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+
+            // Copy through every existing property except the ones we're overwriting.
+            if (existing is not null && existing.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in existing.RootElement.EnumerateObject())
+                {
+                    if (updates.ContainsKey(prop.Name)) continue; // overwritten below
+                    prop.WriteTo(writer);
+                }
+            }
+
+            // Write (add or overwrite) the corrected header keys.
+            foreach (var kvp in updates)
+            {
+                writer.WritePropertyName(kvp.Key);
+                if (kvp.Value is null) writer.WriteNullValue();
+                else writer.WriteStringValue(kvp.Value.ToString());
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(buffer.ToArray());
     }
 
     // ── MarkRejectedAsync ─────────────────────────────────────────────────────
