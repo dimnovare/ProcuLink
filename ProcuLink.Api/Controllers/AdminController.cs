@@ -23,6 +23,13 @@ namespace ProcuLink.Api.Controllers;
 [AdminOnly]
 public sealed class AdminController : ControllerBase
 {
+    /// <summary>
+    /// Upper bound for the admin Pilot trial extension (10 years). Beyond this,
+    /// <see cref="DateTime.AddDays"/> risks overflow which — absent a global
+    /// exception handler — would surface as a 500. A real extension is days/weeks.
+    /// </summary>
+    private const int MaxExtendTrialDays = 3650;
+
     private readonly ProcuLinkDbContext       _db;
     private readonly IBillingService          _billing;
     private readonly IConfiguration           _config;
@@ -255,6 +262,11 @@ public sealed class AdminController : ControllerBase
             return BadRequest(new { error = "supplierLimitOverride must be non-negative." });
         if (request.ExtendTrialDays is < 0)
             return BadRequest(new { error = "extendTrialDays must be non-negative." });
+        // Upper bound: an absurd value would overflow DateTime.UtcNow.AddDays and,
+        // with no global exception handler, surface as a 500. Cap at 10 years and
+        // return a clean 400 instead. (10 years is far beyond any real Pilot extension.)
+        if (request.ExtendTrialDays is > MaxExtendTrialDays)
+            return BadRequest(new { error = $"extendTrialDays must not exceed {MaxExtendTrialDays} (10 years)." });
 
         // Cross-tenant by design — the org is targeted by route id (admin surface).
         var org = await _db.Organisations.FirstOrDefaultAsync(o => o.Id == id, ct);

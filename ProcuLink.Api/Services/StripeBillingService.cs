@@ -397,7 +397,10 @@ public sealed class StripeBillingService : IBillingService
     /// (orgId, <paramref name="billingKey"/>) is inserted first; the unique index
     /// means a replayed webhook / Hangfire retry hits a duplicate-key violation
     /// that is swallowed — never a second invoice item. <paramref name="billingKey"/>
-    /// is normally the Stripe invoice id.</para>
+    /// is the BILLING-PERIOD key (<c>{orgId}:{periodStart:O}</c>), NOT the Stripe
+    /// invoice id, so a re-issued invoice for the same period cannot double-bill.
+    /// The same key is also passed to Stripe as the request <c>Idempotency-Key</c>
+    /// for defense-in-depth on top of the DB ledger.</para>
     ///
     /// <para>Safe when Stripe is NOT configured: it records the computed overage
     /// (so the number is auditable) but creates no Stripe item and never throws.
@@ -405,7 +408,7 @@ public sealed class StripeBillingService : IBillingService
     /// caller must never let this block an order.</para>
     /// </summary>
     /// <param name="orgId">Organisation to bill.</param>
-    /// <param name="billingKey">Natural idempotency key (Stripe invoice id).</param>
+    /// <param name="billingKey">Period-based idempotency key (<c>{orgId}:{periodStart:O}</c>).</param>
     /// <param name="overageOrders">Orders above the cap for the period being closed.</param>
     public async Task<OverageBillingResult> BillOverageForInvoiceAsync(
         Guid orgId,
@@ -484,7 +487,12 @@ public sealed class StripeBillingService : IBillingService
                 ["billing_key"] = billingKey,
                 ["kind"]        = "order_overage",
             },
-        }, cancellationToken: ct);
+        },
+        // Defense-in-depth on top of the DB ledger: make the Stripe call itself
+        // idempotent on the same period-based billing key, so even a retry that
+        // races past the ledger guard cannot create a duplicate invoice item.
+        new RequestOptions { IdempotencyKey = billingKey },
+        cancellationToken: ct);
 
         // Persist the Stripe item id back onto the (tracked) ledger row.
         var saved = await _db.OverageBillingRecords
