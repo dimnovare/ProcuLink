@@ -125,6 +125,12 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.SelfHostedOcr)
              .HasColumnName("self_hosted_ocr")
              .HasDefaultValue(false);
+            b.Property(x => x.OrderDirection)
+             .HasColumnName("order_direction")
+             .HasConversion<string>()
+             .HasMaxLength(16)
+             .HasDefaultValue(OrderDirection.Outbound)
+             .IsRequired();
         });
 
         // ── users ──────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Organisation;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Controllers;
@@ -17,6 +18,7 @@ public sealed class SettingsController : ControllerBase
     private readonly ICurrentTenantService _tenant;
     private readonly IEmailSettingsService _emailSettings;
     private readonly IPullIngressSettingsService _pullIngress;
+    private readonly IOrganisationSettingsService _orgSettings;
     private readonly IBillingService _billing;
     private readonly ProcuLinkDbContext _db;
 
@@ -24,12 +26,14 @@ public sealed class SettingsController : ControllerBase
         ICurrentTenantService tenant,
         IEmailSettingsService emailSettings,
         IPullIngressSettingsService pullIngress,
+        IOrganisationSettingsService orgSettings,
         IBillingService billing,
         ProcuLinkDbContext db)
     {
         _tenant = tenant;
         _emailSettings = emailSettings;
         _pullIngress = pullIngress;
+        _orgSettings = orgSettings;
         _billing = billing;
         _db = db;
     }
@@ -37,6 +41,19 @@ public sealed class SettingsController : ControllerBase
     private async Task<bool> SupplierExistsAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
         await _db.Suppliers.AsNoTracking()
             .AnyAsync(x => x.OrgId == orgId && x.Id == supplierId && x.DeletedAt == null, ct);
+
+    // ── Organisation settings (order direction) ────────────────────────────────
+    // Order direction is a free per-org presentation flag — no billing gate.
+
+    [HttpGet("organisation")]
+    [ProducesResponseType(typeof(OrgSettingsResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetOrganisation(CancellationToken ct)
+        => Ok(await _orgSettings.GetAsync(_tenant.OrganisationId, ct));
+
+    [HttpPut("organisation")]
+    [ProducesResponseType(typeof(OrgSettingsResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> UpdateOrganisation([FromBody] UpdateOrderDirectionRequest req, CancellationToken ct)
+        => Ok(await _orgSettings.UpdateDirectionAsync(_tenant.OrganisationId, req, ct));
 
     [HttpGet("email")]
     [ProducesResponseType(typeof(EmailSettingsResponse), StatusCodes.Status200OK)]

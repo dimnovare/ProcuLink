@@ -51,6 +51,15 @@ public class Organisation
     /// </summary>
     public bool SelfHostedOcr { get; set; }
 
+    /// <summary>
+    /// Per-org presentation flag for the primary order flow. Outbound (default) =
+    /// this org is the buyer sending POs out; Inbound = this org is the supplier
+    /// receiving customer POs. Direction-agnostic data model underneath — this only
+    /// changes how the flow is framed for the org. Additive; defaults to Outbound
+    /// (existing behaviour). Does NOT affect delivery routing or the Supplier entity.
+    /// </summary>
+    public OrderDirection OrderDirection { get; set; } = OrderDirection.Outbound;
+
     // Navigation
     public List<Membership> Memberships { get; set; } = new();
     public List<Supplier> Suppliers { get; set; } = new();
