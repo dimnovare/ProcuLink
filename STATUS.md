@@ -4,7 +4,16 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Where we are: **2026-06-06 (latest) — overnight hardening batch SHIPPED + MERGED (deferred PDF items + Phase 4 UI)**
+## Where we are: **2026-06-06 (latest) — founder-feedback round: real-PO tests RUN, pricing copy fixed; mobile + admin area scoped**
+
+> Full handover: **`docs/handoff/2026-06-06-founder-feedback-handover.md`**. New chip opened for the remaining build.
+> - **Real-PO testing ✅ RUN (first time on the real corpus).** `~/pl_bench.py` on the 22 real `~/Downloads/POs` PDFs with the **prod model `gpt-4o-mini`**: **22/22 parsed, 180/180 numbers verbatim (100%), 60/60 qty×price=amount (100%)** across NOK/EUR/DKK/PLN/CZK/GBP + EN/DE/FR/PL/FI. AND a **true .NET-pipeline E2E** (PdfPig + `OpenAiPdfOrderExtractor`, local API+Worker, real key) on 3 real PDFs (Danfoss/ABB/REDACTED-PARTY): all numbers/lines/totals correct, lines → `pending_review` as designed. **🐞 Found: buyer/supplier party roles swapped on 2/3 POs** (numbers perfect; only the party-name assignment is unreliable) — fix the extractor prompt + add a committed real-PO test. Also a product question: Markit *receives* customer POs (inbound), opposite of the "buyer sends PO out" model.
+> - **Pricing copy ✅ FIXED + pushed** (frontend `93469c5`, backend `4a5c496`). The false "€500/supplier ×3 then €150, waived for design partners" onboarding-fee claim is retired → "hands-on founder-led onboarding, no separate fee" (`plans.ts` `SETUP_FEE_NOTE`, `pricing/page.tsx`, `ROICalculator.tsx`, `CLAUDE.md`). TODO: confirm final wording; revise dated 2026-05-30 strategy memos + stripe-go-live-checklist.
+> - **Dashboard fake "last 10 min" filter ✅ REMOVED + pushed** (`BridgeDashboard.tsx`) — was a static span + dead chevron implying a non-existent time filter.
+> - **Mobile responsive overhaul — TODO (scoped).** Notifications panel clips; inbox dead filter row + broken buyer→supplier rail + cramped cards; order-detail header buttons overlap the PO title (hidden text); email-intake header cramped. Component+line map in the handover. Needs a careful dedicated pass.
+> - **Owner/admin area — TODO (designed).** `/admin` for who-bought-which-plan + MRR/ARR/health + manual Stripe invoice generation; env admin allowlist (cross-tenant, airtight auth). Phased plan in the handover.
+
+## Where we are: **2026-06-06 — overnight hardening batch SHIPPED + MERGED (deferred PDF items + Phase 4 UI)**
 
 > Five additive tracks merged to backend `main` as `dac804f` (Railway healthy, /health 200 through deploy) + frontend `main` `82bbfa6` (Vercel). **798 backend tests green** (224 Transform + 343 Infra + 231 Api); adversarial-reviewed (3/4 dimensions clean, 1 LOW CTS-dispose hygiene fix). Local live golden-path **PASSED** end to end (upload→parse→resolve→transform→`delivery_failed` with the honest "delivery config missing" error; audit = 3 events; 1 delivery attempt).
 > - **perf(ocr) `8f24d3d`** — warm self-hosted OCR models at Worker boot (no first-scan cold start); no-op unless `NoEgressOcr:Enabled`; never blocks host start.
