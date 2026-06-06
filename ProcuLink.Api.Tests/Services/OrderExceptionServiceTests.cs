@@ -137,4 +137,85 @@ public class OrderExceptionServiceTests
         Assert.Equal(0, await db.OrderExceptions.CountAsync(e => e.State == "open"));
         Assert.Equal(1, await db.OrderExceptions.CountAsync(e => e.State == "ignored"));
     }
+
+    // ── FIX 2: resolve-vs-recreate honesty ──────────────────────────────────────
+
+    /// <summary>
+    /// (i) Condition gone → Reconcile AUTO-RESOLVES the open row and does NOT recreate it.
+    /// Net effect: exactly one row, in the resolved state (the loop closes honestly).
+    /// </summary>
+    [Fact]
+    public async Task Reconcile_ConditionGone_AutoResolvesAndDoesNotRecreate()
+    {
+        var db = MakeDb();
+        var (orgId, orderId) = SeedOrder(db, "delivery_failed", false);
+        var svc = new OrderExceptionService(db);
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+        Assert.Equal(1, await db.OrderExceptions.CountAsync(e => e.State == "open"));
+
+        // Fix the order — delivery succeeded.
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status = "delivered";
+        await db.SaveChangesAsync();
+
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+
+        // Open row auto-resolved; nothing recreated.
+        Assert.Equal(0, await db.OrderExceptions.CountAsync(e => e.State == "open"));
+        Assert.Equal(1, await db.OrderExceptions.CountAsync(e => e.State == "resolved"));
+        Assert.Equal(1, await db.OrderExceptions.CountAsync());
+    }
+
+    /// <summary>
+    /// (ii) Condition persists → a manual resolve on a still-broken order is NOT silently
+    /// honoured: because the cause is still there, Reconcile recreates a fresh open row so
+    /// the genuine problem stays visible. (The frontend swaps list "Resolve" for "Open order"
+    /// for such codes, but Reconcile remains the source of truth for clearing.)
+    /// </summary>
+    [Fact]
+    public async Task Reconcile_ConditionPersistsAfterManualResolve_RecreatesOpen()
+    {
+        var db = MakeDb();
+        var (orgId, orderId) = SeedOrder(db, "delivery_failed", false);
+        var svc = new OrderExceptionService(db);
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+        var ex = await db.OrderExceptions.SingleAsync();
+
+        // Operator manually resolves — but the order is still delivery_failed.
+        await svc.ResolveAsync(orgId, ex.Id, CancellationToken.None);
+        Assert.Equal(0, await db.OrderExceptions.CountAsync(e => e.State == "open"));
+
+        // Next pipeline touch: condition still holds → recreate an open row.
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+        Assert.Equal(1, await db.OrderExceptions.CountAsync(e => e.State == "open"));
+        Assert.Equal(1, await db.OrderExceptions.CountAsync(e => e.State == "resolved"));
+    }
+
+    /// <summary>
+    /// (iii) A resolved row whose condition is GONE is never resurrected, no matter how many
+    /// times Reconcile runs (dedup considers resolved rows; `problem` can't match a cleared code).
+    /// </summary>
+    [Fact]
+    public async Task Reconcile_ResolvedRowForClearedCondition_IsNotResurrected()
+    {
+        var db = MakeDb();
+        var (orgId, orderId) = SeedOrder(db, "transform_failed", false);
+        var svc = new OrderExceptionService(db);
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+        var ex = await db.OrderExceptions.SingleAsync();
+
+        // Operator resolves AND the order is genuinely fixed (transform succeeded).
+        await svc.ResolveAsync(orgId, ex.Id, CancellationToken.None);
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status = "delivered";
+        await db.SaveChangesAsync();
+
+        // Reconcile repeatedly — the resolved row must stay resolved, never resurrected as open.
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+
+        Assert.Equal(0, await db.OrderExceptions.CountAsync(e => e.State == "open"));
+        Assert.Equal(1, await db.OrderExceptions.CountAsync(e => e.State == "resolved"));
+        Assert.Equal(1, await db.OrderExceptions.CountAsync());
+    }
 }

@@ -303,6 +303,103 @@ public class OrderServiceListPagedTests
         Assert.All(items, i => Assert.Equal("delivered", i.Status));
     }
 
+    /// <summary>
+    /// The UI renders all five failure statuses as one red "Failed" pill, so filtering
+    /// status=failed must return the WHOLE failure bucket — not just literal "failed".
+    /// </summary>
+    [Fact]
+    public async Task ListPagedAsync_StatusFilterFailed_ReturnsWholeFailureBucket()
+    {
+        var db         = NewDb();
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var baseTime   = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "S", CreatedAt = baseTime });
+
+        // One order in every failure status + two non-failure statuses that must be excluded.
+        var statuses = new[]
+        {
+            "failed",
+            "transform_failed",
+            "delivery_failed",
+            "delivery_dead_letter",
+            "rejected_by_supplier",
+            "delivered",        // excluded
+            "ready",            // excluded
+        };
+        for (var i = 0; i < statuses.Length; i++)
+            db.PurchaseOrders.Add(new PurchaseOrderEntity
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
+                PoNumber = $"PO-{i}", OrderDate = DateOnly.FromDateTime(baseTime),
+                Currency = "EUR", Status = statuses[i],
+                CreatedAt = baseTime.AddMinutes(i), UpdatedAt = baseTime,
+            });
+
+        await db.SaveChangesAsync();
+        var svc = BuildService(db);
+
+        var result = await svc.ListPagedAsync(orgId, 1, 25,
+            status: "failed", null, null, null, null, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var (items, total) = result.Value;
+        // All five failure statuses match; the two non-failure rows do not.
+        Assert.Equal(5, total);
+        Assert.Equal(5, items.Count);
+        var returnedStatuses = items.Select(i => i.Status).ToHashSet();
+        Assert.Equal(
+            new HashSet<string>
+            {
+                "failed", "transform_failed", "delivery_failed",
+                "delivery_dead_letter", "rejected_by_supplier",
+            },
+            returnedStatuses);
+    }
+
+    /// <summary>
+    /// A non-failed status filter stays an EXACT match even when failure-bucket rows exist —
+    /// only the literal status is returned (the bucket expansion is failed-only).
+    /// </summary>
+    [Fact]
+    public async Task ListPagedAsync_StatusFilterNonFailed_StaysExactMatch()
+    {
+        var db         = NewDb();
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var baseTime   = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "S", CreatedAt = baseTime });
+
+        var statuses = new[]
+        {
+            "delivered",
+            "delivered",
+            "delivery_failed",   // failure-bucket member — must NOT leak into a delivered filter
+            "transform_failed",  // failure-bucket member — must NOT leak into a delivered filter
+        };
+        for (var i = 0; i < statuses.Length; i++)
+            db.PurchaseOrders.Add(new PurchaseOrderEntity
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
+                PoNumber = $"PO-{i}", OrderDate = DateOnly.FromDateTime(baseTime),
+                Currency = "EUR", Status = statuses[i],
+                CreatedAt = baseTime.AddMinutes(i), UpdatedAt = baseTime,
+            });
+
+        await db.SaveChangesAsync();
+        var svc = BuildService(db);
+
+        var result = await svc.ListPagedAsync(orgId, 1, 25,
+            status: "delivered", null, null, null, null, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var (items, total) = result.Value;
+        Assert.Equal(2, total);
+        Assert.All(items, i => Assert.Equal("delivered", i.Status));
+    }
+
     // ── supplierId filter ──────────────────────────────────────────────────────
 
     [Fact]
