@@ -26,6 +26,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs => Set<SupplierDeliveryConfig>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
     public DbSet<AiUsageMonthly> AiUsageMonthly => Set<AiUsageMonthly>();
+    public DbSet<OverageBillingRecord> OverageBillingRecords => Set<OverageBillingRecord>();
     public DbSet<SftpIngressConfig> SftpIngressConfigs => Set<SftpIngressConfig>();
     public DbSet<ImportedSftpFile> ImportedSftpFiles => Set<ImportedSftpFile>();
     public DbSet<S3IngressConfig> S3IngressConfigs => Set<S3IngressConfig>();
@@ -95,6 +96,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasColumnType("timestamptz");
             b.Property(x => x.PilotExtensionRequestedAt)
              .HasColumnName("pilot_extension_requested_at")
+             .HasColumnType("timestamptz");
+            b.Property(x => x.OrderLimitOverride)
+             .HasColumnName("order_limit_override");
+            b.Property(x => x.SupplierLimitOverride)
+             .HasColumnName("supplier_limit_override");
+            b.Property(x => x.TrialEndsAtOverride)
+             .HasColumnName("trial_ends_at_override")
              .HasColumnType("timestamptz");
             b.Property(x => x.StripeCustomerId)
              .HasColumnName("stripe_customer_id");
@@ -455,6 +463,26 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.UpdatedAt)
              .HasColumnName("updated_at")
              .HasColumnType("timestamptz");
+        });
+
+        // ── overage_billing_records ────────────────────────────────────
+        // Idempotency ledger for per-order overage charges. The unique
+        // (org_id, billing_key) index is what guarantees a replayed Stripe
+        // webhook can never bill the same period twice.
+        modelBuilder.Entity<OverageBillingRecord>(b =>
+        {
+            b.ToTable("overage_billing_records");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.BillingKey).HasColumnName("billing_key").IsRequired();
+            b.Property(x => x.OverageOrders).HasColumnName("overage_orders");
+            b.Property(x => x.AmountCents).HasColumnName("amount_cents");
+            b.Property(x => x.StripeInvoiceItemId).HasColumnName("stripe_invoice_item_id");
+            b.Property(x => x.CreatedAt)
+             .HasColumnName("created_at")
+             .HasColumnType("timestamptz");
+            b.HasIndex(x => new { x.OrgId, x.BillingKey }).IsUnique();
         });
 
         // ── sftp_ingress_configs ───────────────────────────────────────

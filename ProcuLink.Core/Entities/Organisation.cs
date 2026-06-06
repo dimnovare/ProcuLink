@@ -24,6 +24,19 @@ public class Organisation
     /// <summary>Set when user clicks "Request Pilot extension". Sales signal.</summary>
     public DateTime? PilotExtensionRequestedAt    { get; set; }
 
+    // ── Per-org admin limit/trial overrides ─────────────────────────────────
+    // All nullable + additive. The EFFECTIVE limit/trial-end is the override
+    // when set, otherwise the plan/computed default. Set only by the platform
+    // admin surface (POST /api/admin/organisations/{id}/limits) so the founder
+    // can grant a prospect extra headroom or a beefier Pilot without changing
+    // the plan. Null = no override → plan/computed default applies.
+    /// <summary>Admin override for the monthly order limit. Null ⇒ plan default. Non-negative.</summary>
+    public int?      OrderLimitOverride           { get; set; }
+    /// <summary>Admin override for the supplier limit. Null ⇒ plan default. Non-negative.</summary>
+    public int?      SupplierLimitOverride        { get; set; }
+    /// <summary>Admin override for the Pilot trial end. Null ⇒ computed default (trial_started_at + 14d).</summary>
+    public DateTime? TrialEndsAtOverride          { get; set; }
+
     // ── Stripe ────────────────────────────────────────────────────────────
     public string? StripeCustomerId      { get; set; }
     public string? StripeSubscriptionId  { get; set; }

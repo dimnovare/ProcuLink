@@ -227,4 +227,83 @@ public sealed class AdminController : ControllerBase
             return BadRequest(new { error = ex.Message });
         }
     }
+
+    // ── POST /api/admin/organisations/{id}/limits ─────────────────────────
+    /// <summary>
+    /// Sets per-org admin overrides for the order limit, supplier limit, and/or
+    /// Pilot trial end so the founder can grant a prospect extra headroom or a
+    /// beefier/extended Pilot without changing their plan. Cross-tenant by design
+    /// (the org is targeted by route id) and gated by <see cref="AdminOnlyAttribute"/>
+    /// at the controller level — a non-admin gets 403, never reaching this method.
+    /// Limits must be non-negative when set. Returns the updated org plus the
+    /// now-effective limits/trial-end.
+    /// </summary>
+    [HttpPost("organisations/{id:guid}/limits")]
+    [ProducesResponseType(typeof(OrgLimitsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetOrganisationLimits(
+        Guid id,
+        [FromBody] SetOrgLimitsRequest request,
+        CancellationToken ct)
+    {
+        if (request is null)
+            return BadRequest(new { error = "Request body is required." });
+        if (request.OrderLimitOverride is < 0)
+            return BadRequest(new { error = "orderLimitOverride must be non-negative." });
+        if (request.SupplierLimitOverride is < 0)
+            return BadRequest(new { error = "supplierLimitOverride must be non-negative." });
+        if (request.ExtendTrialDays is < 0)
+            return BadRequest(new { error = "extendTrialDays must be non-negative." });
+
+        // Cross-tenant by design — the org is targeted by route id (admin surface).
+        var org = await _db.Organisations.FirstOrDefaultAsync(o => o.Id == id, ct);
+        if (org is null)
+            return NotFound(new { error = $"Organisation {id} not found." });
+
+        // Order limit override: clear-flag wins, then a present value sets it.
+        if (request.ClearOrderLimit)
+            org.OrderLimitOverride = null;
+        else if (request.OrderLimitOverride is { } ol)
+            org.OrderLimitOverride = ol;
+
+        if (request.ClearSupplierLimit)
+            org.SupplierLimitOverride = null;
+        else if (request.SupplierLimitOverride is { } sl)
+            org.SupplierLimitOverride = sl;
+
+        // Trial end: clear-flag wins; then extend-days (relative to now) takes
+        // precedence over an absolute date if both are supplied.
+        if (request.ClearTrialEnds)
+            org.TrialEndsAtOverride = null;
+        else if (request.ExtendTrialDays is { } days)
+            org.TrialEndsAtOverride = DateTime.UtcNow.AddDays(days);
+        else if (request.TrialEndsAtOverride is { } endsAt)
+            org.TrialEndsAtOverride = DateTime.SpecifyKind(endsAt, DateTimeKind.Utc);
+
+        await _db.SaveChangesAsync(ct);
+
+        var plan = PlanConstants.All.Contains(org.Plan) ? org.Plan : PlanConstants.Pilot;
+        var effectiveOrderLimit = PlanConstants.GetEffectiveOrderLimit(plan, org.OrderLimitOverride);
+        var effectiveSupplierLimit = PlanConstants.GetEffectiveSupplierLimit(plan, org.SupplierLimitOverride);
+        var effectiveTrialEnd = org.TrialEndsAtOverride
+            ?? org.TrialEndsAt
+            ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
+
+        _logger.LogInformation(
+            "Admin set limits for org {OrgId}: orderOverride={OrderOverride}, supplierOverride={SupplierOverride}, trialEndOverride={TrialEnd}",
+            org.Id, org.OrderLimitOverride, org.SupplierLimitOverride, org.TrialEndsAtOverride);
+
+        return Ok(new OrgLimitsResponse(
+            Id:                     org.Id,
+            Name:                   org.Name,
+            Plan:                   org.Plan,
+            AccountStatus:          org.AccountStatus,
+            OrderLimitOverride:     org.OrderLimitOverride,
+            SupplierLimitOverride:  org.SupplierLimitOverride,
+            TrialEndsAtOverride:    org.TrialEndsAtOverride,
+            EffectiveOrderLimit:    effectiveOrderLimit,
+            EffectiveSupplierLimit: effectiveSupplierLimit,
+            EffectiveTrialEndsAt:   effectiveTrialEnd));
+    }
 }
