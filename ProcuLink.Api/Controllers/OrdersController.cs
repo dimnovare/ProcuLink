@@ -341,12 +341,21 @@ public sealed class OrdersController : ControllerBase
         [FromBody] ResolveRequest request,
         CancellationToken ct)
     {
-        if (request.LineResolutions is null || request.LineResolutions.Count == 0)
-            return BadRequest(new { error = "At least one line resolution is required." });
+        // A resolve must do something: either resolve at least one line OR correct a
+        // header field (order date / buyer / currency). Header-only edits are valid.
+        var hasHeaderEdit =
+            !string.IsNullOrWhiteSpace(request.OrderDate)
+            || !string.IsNullOrWhiteSpace(request.BuyerName)
+            || !string.IsNullOrWhiteSpace(request.Currency);
 
-        var resolutions = request.LineResolutions
-            .Select(r => new Core.Services.LineResolution(r.LineNumber, r.SupplierItemCode))
-            .ToList();
+        if ((request.LineResolutions is null || request.LineResolutions.Count == 0) && !hasHeaderEdit)
+            return BadRequest(new { error = "At least one line resolution or header correction is required." });
+
+        var resolutions = request.LineResolutions is null
+            ? new List<Core.Services.LineResolution>()
+            : request.LineResolutions
+                .Select(r => new Core.Services.LineResolution(r.LineNumber, r.SupplierItemCode))
+                .ToList();
 
         // Validate + parse optional header corrections (order date / buyer name / currency).
         // PO number + supplier are not accepted here — they stay read-only.
