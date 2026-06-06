@@ -243,6 +243,114 @@ public class AdminControllerTests
         result.Should().BeOfType<BadRequestObjectResult>();
     }
 
+    // ── per-org admin limit/trial overrides ───────────────────────────────
+
+    [Fact]
+    public async Task SetOrganisationLimits_SetsOverrides_AndReturnsEffectiveLimits()
+    {
+        var db = MakeDb();
+        var org = Org("Acme", PlanConstants.Growth, AccountStatusConstants.Active); // defaults 150 / 5
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var request = new SetOrgLimitsRequest(
+            OrderLimitOverride: 1000,
+            SupplierLimitOverride: 30);
+
+        var result = await ctrl.SetOrganisationLimits(org.Id, request, CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<OrgLimitsResponse>().Subject;
+        dto.OrderLimitOverride.Should().Be(1000);
+        dto.SupplierLimitOverride.Should().Be(30);
+        dto.EffectiveOrderLimit.Should().Be(1000, "override replaces the plan default 150");
+        dto.EffectiveSupplierLimit.Should().Be(30);
+
+        var saved = await db.Organisations.FindAsync(org.Id);
+        saved!.OrderLimitOverride.Should().Be(1000);
+        saved.SupplierLimitOverride.Should().Be(30);
+    }
+
+    [Fact]
+    public async Task SetOrganisationLimits_ExtendTrialDays_PushesEffectiveTrialEndIntoFuture()
+    {
+        var db = MakeDb();
+        var org = Org("Beta", PlanConstants.Pilot, AccountStatusConstants.Trialing);
+        org.TrialStartedAt = DateTime.UtcNow.AddDays(-40); // default window long gone
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationLimits(
+            org.Id, new SetOrgLimitsRequest(ExtendTrialDays: 60), CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<OrgLimitsResponse>().Subject;
+        dto.EffectiveTrialEndsAt.Should().BeAfter(DateTime.UtcNow.AddDays(59));
+        dto.TrialEndsAtOverride.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task SetOrganisationLimits_ClearFlag_RemovesOverride()
+    {
+        var db = MakeDb();
+        var org = Org("Gamma", PlanConstants.Operations, AccountStatusConstants.Active);
+        org.OrderLimitOverride = 9999;
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationLimits(
+            org.Id, new SetOrgLimitsRequest(ClearOrderLimit: true), CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<OrgLimitsResponse>().Subject;
+        dto.OrderLimitOverride.Should().BeNull();
+        dto.EffectiveOrderLimit.Should().Be(500, "cleared override ⇒ Operations plan default");
+    }
+
+    [Fact]
+    public async Task SetOrganisationLimits_NegativeLimit_Returns400()
+    {
+        var db = MakeDb();
+        var org = Org("Delta", PlanConstants.Growth, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationLimits(
+            org.Id, new SetOrgLimitsRequest(OrderLimitOverride: -1), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task SetOrganisationLimits_UnknownOrg_Returns404()
+    {
+        var ctrl = Build(MakeDb());
+        var result = await ctrl.SetOrganisationLimits(
+            Guid.NewGuid(), new SetOrgLimitsRequest(OrderLimitOverride: 100), CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Fact]
+    public void SetOrganisationLimits_IsOnTheAdminOnlyGatedController()
+    {
+        // The endpoint lives on AdminController, which is class-decorated with
+        // [AdminOnly] (fail-closed). A non-admin caller is therefore rejected with
+        // 403 by the filter before reaching this action. (The filter's 403 behaviour
+        // is exercised directly in AdminOnlyAttributeTests.)
+        typeof(AdminController)
+            .GetCustomAttributes(typeof(ProcuLink.Api.Auth.AdminOnlyAttribute), inherit: true)
+            .Should().NotBeEmpty();
+
+        typeof(AdminController)
+            .GetMethod(nameof(AdminController.SetOrganisationLimits))
+            .Should().NotBeNull("the admin limits endpoint must exist on the gated controller");
+    }
+
     // ── helper ────────────────────────────────────────────────────────────
 
     private static PurchaseOrderEntity MakeOrder(

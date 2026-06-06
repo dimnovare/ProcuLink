@@ -121,7 +121,11 @@ public class BillingControllerTests
             CanProcessOrders:       true,
             CanAddSupplier:         true,
             StripeCustomerId:       "cus_test",
-            StripeSubscriptionId:   "sub_test");
+            StripeSubscriptionId:   "sub_test",
+            OverageOrders:          0,
+            OverageAmountEur:       0m,
+            NearLimit:              false,
+            AtLimit:                false);
 
         billing
             .Setup(b => b.GetStatusAsync(orgId, It.IsAny<CancellationToken>()))
@@ -153,7 +157,11 @@ public class BillingControllerTests
             CanProcessOrders:       true,
             CanAddSupplier:         false,
             StripeCustomerId:       null,
-            StripeSubscriptionId:   null);
+            StripeSubscriptionId:   null,
+            OverageOrders:          0,
+            OverageAmountEur:       0m,
+            NearLimit:              false,
+            AtLimit:                false);
 
         billing
             .Setup(b => b.GetStatusAsync(orgId, It.IsAny<CancellationToken>()))

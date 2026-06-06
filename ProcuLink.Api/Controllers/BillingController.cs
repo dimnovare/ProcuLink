@@ -218,6 +218,12 @@ public sealed class BillingController : ControllerBase
                 await HandleSubscriptionDeletedAsync(e.Data.Object as Stripe.Subscription, ct);
                 break;
 
+            case "invoice.created":
+                // Period boundary: attach the just-closed period's order overage as
+                // an invoice item BEFORE the invoice finalises. Idempotent per invoice.
+                await HandleInvoiceCreatedAsync(e.Data.Object as Stripe.Invoice, ct);
+                break;
+
             default:
                 _logger.LogDebug("Ignored Stripe event {Type}", e.Type);
                 break;
@@ -347,6 +353,51 @@ public sealed class BillingController : ControllerBase
             previousPlan:       previousPlan,
             hadOrdersThisMonth: hadOrders,
             ct:                 ct) ?? Task.CompletedTask);
+    }
+
+    /// <summary>
+    /// On <c>invoice.created</c> (the period boundary for a subscription), bill the
+    /// just-closed period's per-order overage as a Stripe invoice item, keyed on the
+    /// invoice id so a webhook replay never double-bills. Only subscription invoices
+    /// for an org we recognise are processed; all others are ignored. Never throws on
+    /// the unconfigured/no-customer path and never blocks anything.
+    /// </summary>
+    internal async Task HandleInvoiceCreatedAsync(Stripe.Invoice? invoice, CancellationToken ct)
+    {
+        if (invoice is null) return;
+        if (BillingEvents is null) return; // overage needs the concrete StripeBillingService
+
+        // Only meter subscription invoices (the recurring period close). One-off
+        // (manual founder) invoices carry no subscription and must be skipped.
+        // In Stripe.net 51 the subscription id moved under Parent.SubscriptionDetails.
+        var subscriptionId = invoice.Parent?.SubscriptionDetails?.SubscriptionId;
+        if (string.IsNullOrWhiteSpace(subscriptionId)) return;
+        if (string.IsNullOrWhiteSpace(invoice.Id)) return;
+
+        var org = await _db.Organisations
+            .FirstOrDefaultAsync(o => o.StripeCustomerId == invoice.CustomerId, ct);
+        if (org is null) return;
+
+        // Window of the period that just closed. Fall back to the current calendar
+        // month if Stripe didn't populate the period fields.
+        DateTime periodStart = invoice.PeriodStart == default
+            ? new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc)
+            : DateTime.SpecifyKind(invoice.PeriodStart, DateTimeKind.Utc);
+        DateTime periodEnd = invoice.PeriodEnd == default
+            ? DateTime.UtcNow
+            : DateTime.SpecifyKind(invoice.PeriodEnd, DateTimeKind.Utc);
+
+        var overageOrders = await BillingEvents.ComputePeriodOverageOrdersAsync(
+            org.Id, periodStart, periodEnd, ct);
+        if (overageOrders <= 0) return;
+
+        // Idempotent: keyed on the invoice id. A replay is a no-op.
+        var result = await BillingEvents.BillOverageForInvoiceAsync(
+            org.Id, invoice.Id, overageOrders, ct);
+
+        _logger.LogInformation(
+            "invoice.created overage for org {OrgId}: {Orders} orders, alreadyBilled={Already}, item={Item}",
+            org.Id, result.OverageOrders, result.AlreadyBilled, result.StripeItemId);
     }
 
     private async Task<string?> GetSubscriptionPriceIdAsync(string subscriptionId, CancellationToken ct)

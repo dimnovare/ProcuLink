@@ -26,22 +26,53 @@ public static class PlanConstants
     public const int                PilotSupplierLimit = 1;
 
     // ── Per-plan limits (orders/month for paid; cumulative for Pilot) ──────
+    // NOTE: the order limit is a SOFT cap for active paid plans — going over it
+    // NEVER blocks an order (see #1 never-block rule); it only flags over-limit
+    // usage and accrues the per-order overage fee below. It is a HARD cap only
+    // for Pilot (a trial-ended read-only state, not a volume block).
     public static readonly IReadOnlyDictionary<string, (int Orders, int Suppliers)> Limits =
         new Dictionary<string, (int, int)>
         {
             [Pilot]       = (PilotOrderLimit,  PilotSupplierLimit),
             [Growth]      = (150,              5),
             [Operations]  = (500,              10),
-            [Integration] = (1_000,            20),
+            // Integration raised 1_000 → 1_500 so €/order is monotonic across paid
+            // tiers: Operations €0.80, Integration €0.67, Distributor €0.60.
+            [Integration] = (1_500,            20),
             [Distributor] = (2_500,            30),
             [Enterprise]  = (int.MaxValue,     int.MaxValue),
         };
+
+    /// <summary>
+    /// Per-order overage fee (EUR) charged on every order an active paid
+    /// self-serve plan processes ABOVE its monthly order limit. Billed via a
+    /// Stripe invoice item at the period boundary — going over the cap is always
+    /// allowed, never blocked. Pilot has no overage (it is a hard trial cap) and
+    /// Enterprise is custom-contracted (effectively unlimited).
+    /// </summary>
+    public const decimal OveragePerOrderEur = 0.50m;
 
     public static int GetOrderLimit(string plan) =>
         Limits.TryGetValue(plan, out var limits) ? limits.Orders : PilotOrderLimit;
 
     public static int GetSupplierLimit(string plan) =>
         Limits.TryGetValue(plan, out var limits) ? limits.Suppliers : PilotSupplierLimit;
+
+    /// <summary>
+    /// Effective order limit for an org: the admin per-org override when set
+    /// (and non-negative), otherwise the plan default. Used by the billing limit
+    /// checks so the founder can grant a prospect extra headroom without changing
+    /// their plan. A null or negative override falls back to the plan default.
+    /// </summary>
+    public static int GetEffectiveOrderLimit(string plan, int? orderLimitOverride) =>
+        orderLimitOverride is { } o && o >= 0 ? o : GetOrderLimit(plan);
+
+    /// <summary>
+    /// Effective supplier limit for an org: the admin per-org override when set
+    /// (and non-negative), otherwise the plan default.
+    /// </summary>
+    public static int GetEffectiveSupplierLimit(string plan, int? supplierLimitOverride) =>
+        supplierLimitOverride is { } s && s >= 0 ? s : GetSupplierLimit(plan);
 
     // ── Monthly list price in EUR per plan (the published /pricing ladder) ──
     // Used by the admin overview to compute a DB-side MRR estimate from active
@@ -81,14 +112,19 @@ public static class PlanConstants
             [BillingFeature.Cxml]               = Operations,
             [BillingFeature.DeliveryHistory]    = Operations,
             [BillingFeature.AdvancedAudit]      = Operations,
-            [BillingFeature.WebhookDelivery]    = Integration,
-            [BillingFeature.EmailIngestion]     = Integration,
+            // ── Delivery / ingestion CHANNELS are decoupled from VOLUME ──────
+            // These were gated to Integration, which forced a volume upgrade just
+            // to unlock a channel. They are now available on ALL paid self-serve
+            // plans (Growth+), so picking a channel never forces a volume tier.
+            // Pilot stays restricted (PlanHasFeature returns false below Growth).
+            [BillingFeature.WebhookDelivery]    = Growth,
+            [BillingFeature.EmailIngestion]     = Growth,
+            [BillingFeature.SftpIngestion]      = Growth,
+            [BillingFeature.S3Ingestion]        = Growth,
             [BillingFeature.CustomTemplates]    = Integration,
             [BillingFeature.ErpConnectors]      = Enterprise,
             [BillingFeature.CustomSupplierRules]= Enterprise,
             [BillingFeature.SlaOnboarding]      = Enterprise,
-            [BillingFeature.SftpIngestion]      = Integration,
-            [BillingFeature.S3Ingestion]        = Integration,
         };
 
     private static readonly List<string> PlanOrder =

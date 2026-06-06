@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 using Stripe;
@@ -105,24 +106,48 @@ public sealed class StripeBillingService : IBillingService
 
         var org = await LoadOrgAsync(orgId, asTracking: false, ct);
         var plan = NormalizePlan(org.Plan);
-        var orderLimit = PlanConstants.GetOrderLimit(plan);
-        var supplierLimit = PlanConstants.GetSupplierLimit(plan);
+        // Effective limits respect the per-org admin override (override ?? plan default).
+        var orderLimit = PlanConstants.GetEffectiveOrderLimit(plan, org.OrderLimitOverride);
+        var supplierLimit = PlanConstants.GetEffectiveSupplierLimit(plan, org.SupplierLimitOverride);
         var ordersUsed = await CountOrdersAsync(org, ct);
         var suppliersUsed = await CountSuppliersAsync(orgId, ct);
         var trialEndsAt = GetTrialEndsAt(org);
+        // Pilot hard cap respects the effective order limit (so an admin can grant a beefier Pilot).
+        var pilotOrderCap = PlanConstants.GetEffectiveOrderLimit(PlanConstants.Pilot, org.OrderLimitOverride);
         var isTrialExpired = plan == PlanConstants.Pilot &&
-            (DateTime.UtcNow > trialEndsAt || ordersUsed >= PlanConstants.PilotOrderLimit);
+            (DateTime.UtcNow > trialEndsAt || ordersUsed >= pilotOrderCap);
         var isOrderLimitReached = ordersUsed >= orderLimit;
         var isSupplierLimitReached = suppliersUsed >= supplierLimit;
         var statusAllowsProcessing = ProcessingAllowedStatuses.Contains(org.AccountStatus);
 
+        // ── #1 NEVER BLOCK a real order on an active paid plan due to volume ──
+        // Over the monthly cap is ALLOWED (it accrues overage, surfaced below).
+        // The only volume-style block is Pilot-EXPIRED (a trial-ended/read-only
+        // state, NOT a volume block — that is intentionally kept). Paid plans are
+        // blocked ONLY by a non-processing account status (past_due / read_only /
+        // cancelled), never by hitting the order cap.
         var canProcessOrders = plan == PlanConstants.Enterprise
             ? !IsReadOnlyStatus(org.AccountStatus)
-            : statusAllowsProcessing && !isTrialExpired && !isOrderLimitReached;
+            : plan == PlanConstants.Pilot
+                ? statusAllowsProcessing && !isTrialExpired && !isOrderLimitReached
+                : statusAllowsProcessing; // active paid plan: never blocked by volume
 
+        // Adding a supplier is a SETUP action (not a live order), so the supplier
+        // cap may still gate it — but it must never block PROCESSING orders for
+        // existing suppliers (that is canProcessOrders above, which ignores the
+        // supplier cap). Admin override raises the effective supplier limit.
         var canAddSupplier = plan == PlanConstants.Enterprise
             ? !IsReadOnlyStatus(org.AccountStatus)
             : statusAllowsProcessing && !isTrialExpired && !isSupplierLimitReached;
+
+        // ── Overage (active paid self-serve plans only) ──────────────────────
+        // overage = max(0, used - effectiveLimit); fee = overage × €0.50.
+        // Pilot accrues no overage (hard trial cap); Enterprise is custom.
+        var chargesOverage = PlanConstants.IsPaidPlan(plan) && plan != PlanConstants.Enterprise;
+        var overageOrders = chargesOverage ? Math.Max(0, ordersUsed - orderLimit) : 0;
+        var overageAmountEur = overageOrders * PlanConstants.OveragePerOrderEur;
+        var nearLimit = orderLimit > 0 && ordersUsed >= (int)Math.Ceiling(orderLimit * 0.8);
+        var atLimit = ordersUsed >= orderLimit;
 
         return new BillingStatus(
             Plan: plan,
@@ -139,7 +164,11 @@ public sealed class StripeBillingService : IBillingService
             CanProcessOrders: canProcessOrders,
             CanAddSupplier: canAddSupplier,
             StripeCustomerId: org.StripeCustomerId,
-            StripeSubscriptionId: org.StripeSubscriptionId);
+            StripeSubscriptionId: org.StripeSubscriptionId,
+            OverageOrders: overageOrders,
+            OverageAmountEur: overageAmountEur,
+            NearLimit: nearLimit,
+            AtLimit: atLimit);
     }
 
     public async Task<bool> CanProcessOrdersAsync(Guid orgId, CancellationToken ct = default) =>
@@ -357,6 +386,122 @@ public sealed class StripeBillingService : IBillingService
             Status:           finalised.Status);
     }
 
+    // ── Overage billing at the period boundary ────────────────────────────
+    /// <summary>
+    /// Bills the per-order overage for an organisation as a Stripe INVOICE ITEM
+    /// on the subscription customer. Called from the Stripe webhook flow (e.g.
+    /// <c>invoice.created</c> / <c>invoice.upcoming</c>) so the overage from the
+    /// orders processed over the cap is attached BEFORE the invoice finalises.
+    ///
+    /// <para>IDEMPOTENT: an <see cref="OverageBillingRecord"/> row keyed on
+    /// (orgId, <paramref name="billingKey"/>) is inserted first; the unique index
+    /// means a replayed webhook / Hangfire retry hits a duplicate-key violation
+    /// that is swallowed — never a second invoice item. <paramref name="billingKey"/>
+    /// is normally the Stripe invoice id.</para>
+    ///
+    /// <para>Safe when Stripe is NOT configured: it records the computed overage
+    /// (so the number is auditable) but creates no Stripe item and never throws.
+    /// Always returns the computed overage regardless of Stripe state — the
+    /// caller must never let this block an order.</para>
+    /// </summary>
+    /// <param name="orgId">Organisation to bill.</param>
+    /// <param name="billingKey">Natural idempotency key (Stripe invoice id).</param>
+    /// <param name="overageOrders">Orders above the cap for the period being closed.</param>
+    public async Task<OverageBillingResult> BillOverageForInvoiceAsync(
+        Guid orgId,
+        string billingKey,
+        int overageOrders,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(billingKey))
+            throw new ArgumentException("billingKey is required.", nameof(billingKey));
+
+        var clamped = Math.Max(0, overageOrders);
+        var amountCents = (long)Math.Round(clamped * PlanConstants.OveragePerOrderEur * 100m);
+
+        // Nothing to bill — still idempotent (record a zero so repeats are no-ops),
+        // but skip Stripe entirely.
+        if (clamped == 0 || amountCents == 0)
+            return new OverageBillingResult(orgId, billingKey, 0, 0, AlreadyBilled: false, StripeItemId: null);
+
+        // ── Idempotency guard: claim the (orgId, billingKey) slot FIRST ──────
+        // If a row already exists, a prior call billed this period — no-op.
+        var existing = await _db.OverageBillingRecords
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.OrgId == orgId && r.BillingKey == billingKey, ct);
+        if (existing is not null)
+            return new OverageBillingResult(
+                orgId, billingKey, existing.OverageOrders, existing.AmountCents,
+                AlreadyBilled: true, StripeItemId: existing.StripeInvoiceItemId);
+
+        var record = new OverageBillingRecord
+        {
+            Id            = Guid.NewGuid(),
+            OrgId         = orgId,
+            BillingKey    = billingKey,
+            OverageOrders = clamped,
+            AmountCents   = amountCents,
+            CreatedAt     = DateTimeOffset.UtcNow,
+        };
+        _db.OverageBillingRecords.Add(record);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // Lost the race — another worker already inserted this (orgId, billingKey).
+            // Detach our attempt and treat as already billed (no double charge).
+            _db.Entry(record).State = EntityState.Detached;
+            var winner = await _db.OverageBillingRecords
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r => r.OrgId == orgId && r.BillingKey == billingKey, ct);
+            return new OverageBillingResult(
+                orgId, billingKey, winner?.OverageOrders ?? clamped, winner?.AmountCents ?? amountCents,
+                AlreadyBilled: true, StripeItemId: winner?.StripeInvoiceItemId);
+        }
+
+        // We own the slot. If Stripe is not configured, we still recorded the
+        // number (auditable) but create no item and never throw.
+        if (!IsStripeConfigured())
+            return new OverageBillingResult(orgId, billingKey, clamped, amountCents, AlreadyBilled: false, StripeItemId: null);
+
+        var org = await LoadOrgAsync(orgId, asTracking: true, ct);
+        if (string.IsNullOrWhiteSpace(org.StripeCustomerId))
+            // No Stripe customer to bill — keep the auditable record, skip Stripe.
+            return new OverageBillingResult(orgId, billingKey, clamped, amountCents, AlreadyBilled: false, StripeItemId: null);
+
+        var itemService = new InvoiceItemService();
+        var item = await itemService.CreateAsync(new InvoiceItemCreateOptions
+        {
+            Customer    = org.StripeCustomerId,
+            Currency    = "eur",
+            Amount      = amountCents,
+            Description = $"Order overage: {clamped} orders x EUR{PlanConstants.OveragePerOrderEur:0.00}",
+            Metadata    = new Dictionary<string, string>
+            {
+                ["org_id"]      = orgId.ToString(),
+                ["billing_key"] = billingKey,
+                ["kind"]        = "order_overage",
+            },
+        }, cancellationToken: ct);
+
+        // Persist the Stripe item id back onto the (tracked) ledger row.
+        var saved = await _db.OverageBillingRecords
+            .FirstOrDefaultAsync(r => r.OrgId == orgId && r.BillingKey == billingKey, ct);
+        if (saved is not null)
+        {
+            saved.StripeInvoiceItemId = item.Id;
+            await _db.SaveChangesAsync(ct);
+        }
+
+        _logger.LogInformation(
+            "Billed order overage for org {OrgId}: {Orders} orders, {Cents} cents (invoice item {ItemId}, key {Key})",
+            orgId, clamped, amountCents, item.Id, billingKey);
+
+        return new OverageBillingResult(orgId, billingKey, clamped, amountCents, AlreadyBilled: false, StripeItemId: item.Id);
+    }
+
     private bool IsStripeConfigured() =>
         !string.IsNullOrWhiteSpace(_config["Stripe:SecretKey"]);
 
@@ -399,8 +544,11 @@ public sealed class StripeBillingService : IBillingService
         if (org.AccountStatus is AccountStatusConstants.TrialExpired or AccountStatusConstants.ReadOnly) return;
 
         org.TrialEndsAt ??= org.TrialStartedAt.Add(PlanConstants.PilotDuration);
+        // Effective deadline + cap respect admin overrides (beefier/extended Pilot).
+        var effectiveTrialEnd = GetTrialEndsAt(org);
+        var pilotOrderCap = PlanConstants.GetEffectiveOrderLimit(PlanConstants.Pilot, org.OrderLimitOverride);
         var ordersUsed = await CountOrdersAsync(org, ct);
-        var expired = DateTime.UtcNow > org.TrialEndsAt.Value || ordersUsed >= PlanConstants.PilotOrderLimit;
+        var expired = DateTime.UtcNow > effectiveTrialEnd || ordersUsed >= pilotOrderCap;
         if (!expired) return;
 
         org.AccountStatus = AccountStatusConstants.TrialExpired;
@@ -450,8 +598,34 @@ public sealed class StripeBillingService : IBillingService
     private Task<int> CountSuppliersAsync(Guid orgId, CancellationToken ct) =>
         _db.Suppliers.CountAsync(s => s.OrgId == orgId && s.DeletedAt == null, ct);
 
+    /// <summary>
+    /// Computes how many orders an org processed ABOVE its effective monthly cap
+    /// within the given billing window [periodStart, periodEnd) — i.e. the overage
+    /// order count for that period. Sample orders are excluded (they never count
+    /// against quota). Pilot/Enterprise return 0 (no overage applies). Used by the
+    /// webhook to bill the just-closed period.
+    /// </summary>
+    public async Task<int> ComputePeriodOverageOrdersAsync(
+        Guid orgId,
+        DateTime periodStart,
+        DateTime periodEnd,
+        CancellationToken ct = default)
+    {
+        var org = await LoadOrgAsync(orgId, asTracking: false, ct);
+        var plan = NormalizePlan(org.Plan);
+        if (!PlanConstants.IsPaidPlan(plan) || plan == PlanConstants.Enterprise)
+            return 0;
+
+        var limit = PlanConstants.GetEffectiveOrderLimit(plan, org.OrderLimitOverride);
+        var used = await _db.PurchaseOrders.CountAsync(
+            o => o.OrgId == orgId && !o.IsSample &&
+                 o.CreatedAt >= periodStart && o.CreatedAt < periodEnd, ct);
+        return Math.Max(0, used - limit);
+    }
+
     private static DateTime GetTrialEndsAt(Core.Entities.Organisation org) =>
-        org.TrialEndsAt ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
+        // Admin override wins, then the persisted trial end, then the computed default.
+        org.TrialEndsAtOverride ?? org.TrialEndsAt ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
 
     private static string NormalizePlan(string plan) =>
         PlanConstants.All.Contains(plan) ? plan : PlanConstants.Pilot;
@@ -471,6 +645,20 @@ public sealed class StripeBillingService : IBillingService
 
 /// <summary>One line of a manual admin invoice. Amount is in the smallest currency unit (cents).</summary>
 public sealed record InvoiceLineItemInput(string Description, long AmountCents, int Quantity);
+
+/// <summary>
+/// Outcome of an overage-billing attempt. <see cref="AlreadyBilled"/> is true when
+/// the (orgId, billingKey) slot was already taken (idempotent no-op). When Stripe
+/// is unconfigured or the org has no Stripe customer, <see cref="StripeItemId"/>
+/// is null but the computed amount is still returned for auditing.
+/// </summary>
+public sealed record OverageBillingResult(
+    Guid OrgId,
+    string BillingKey,
+    int OverageOrders,
+    long AmountCents,
+    bool AlreadyBilled,
+    string? StripeItemId);
 
 /// <summary>Identifiers returned after a one-off Stripe invoice is finalised.</summary>
 public sealed record InvoiceCreationResult(string InvoiceId, string? HostedInvoiceUrl, string Status);

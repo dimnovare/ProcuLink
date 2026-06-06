@@ -47,3 +47,35 @@ public sealed record CreateInvoiceResponse(
     string InvoiceId,
     string? HostedInvoiceUrl,
     string Status);
+
+/// <summary>
+/// Request body for POST /api/admin/organisations/{id}/limits. All fields are
+/// optional; a present field SETS the override (use a non-negative value to set,
+/// or a negative value / null per <see cref="ClearOrderLimit"/> etc. to clear).
+/// Limits must be non-negative when set. <see cref="ExtendTrialDays"/> is a
+/// convenience that pushes the effective trial end out from now by N days.
+/// </summary>
+public sealed record SetOrgLimitsRequest(
+    int? OrderLimitOverride = null,
+    int? SupplierLimitOverride = null,
+    DateTime? TrialEndsAtOverride = null,
+    int? ExtendTrialDays = null,
+    bool ClearOrderLimit = false,
+    bool ClearSupplierLimit = false,
+    bool ClearTrialEnds = false);
+
+/// <summary>
+/// Response for POST /api/admin/organisations/{id}/limits — the updated org row
+/// plus the now-effective limits/trial-end (override ?? plan/computed default).
+/// </summary>
+public sealed record OrgLimitsResponse(
+    Guid Id,
+    string Name,
+    string Plan,
+    string AccountStatus,
+    int? OrderLimitOverride,
+    int? SupplierLimitOverride,
+    DateTime? TrialEndsAtOverride,
+    int EffectiveOrderLimit,
+    int EffectiveSupplierLimit,
+    DateTime? EffectiveTrialEndsAt);
