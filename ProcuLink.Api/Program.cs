@@ -144,6 +144,11 @@ authBuilder.AddScheme<ApiKeyAuthOptions, ApiKeyAuthHandler>("ApiKey", _ => { });
 
 builder.Services.AddAuthorization();
 
+// ── Platform-admin allowlist (owner/admin cross-tenant surface) ────────────
+// Reads Admin:UserIds / Admin:Emails (env Admin__UserIds / Admin__Emails).
+// Consumed by [AdminOnly] on AdminController. Fails closed when both are unset.
+builder.Services.AddSingleton<ProcuLink.Api.Auth.AdminAllowlist>();
+
 // ── Rate limiting — 20 uploads/min per authenticated user ──────────────────
 builder.Services.AddRateLimiter(options =>
 {
