@@ -3,6 +3,7 @@ using System.Text;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using ProcuLink.Core.Services.Ocr;
 using ProcuLink.Infrastructure.Services.Ai;
 using ProcuLink.Infrastructure.Services.Ocr;
 using SkiaSharp;
@@ -28,6 +29,33 @@ public class OpenAiPdfOrderExtractorLiveTests
     private static bool Enabled =>
         Environment.GetEnvironmentVariable("PROCULINK_LIVE_AI_TESTS") == "1"
         && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("Ai__OpenAI__ApiKey"));
+
+    // Default real-corpus location; overridable via PROCULINK_LIVE_AI_POS_DIR. Iterated
+    // by ExtractAsync_RealCorpus_* when present; skipped (no-op) when the dir is absent.
+    private const string DefaultPosDir = "C:/Users/Dmitri.REDACTED-PARTY/Downloads/POs";
+
+    private static string PosDir =>
+        Environment.GetEnvironmentVariable("PROCULINK_LIVE_AI_POS_DIR") is { Length: > 0 } d
+            ? d
+            : DefaultPosDir;
+
+    private static OpenAiPdfOrderExtractor BuildExtractor(IPdfRasterizer? rasterizer = null)
+    {
+        var apiKey = Environment.GetEnvironmentVariable("Ai__OpenAI__ApiKey")!;
+        var model = Environment.GetEnvironmentVariable("Ai__OpenAI__ExtractionModel");
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Ai:Provider"] = "openai",
+                ["Ai:OpenAI:ApiKey"] = apiKey,
+                ["Ai:OpenAI:ExtractionModel"] = string.IsNullOrWhiteSpace(model) ? "gpt-4o-mini" : model,
+            })
+            .Build();
+
+        return new OpenAiPdfOrderExtractor(
+            config, NullLogger<OpenAiPdfOrderExtractor>.Instance, scopeFactory: null, rasterizer: rasterizer);
+    }
 
     [Fact]
     public async Task ExtractAsync_RealTextPdf_ProducesStructuredOrder()
@@ -122,6 +150,237 @@ public class OpenAiPdfOrderExtractorLiveTests
         result.Order!.Lines.Should().NotBeEmpty();
         // Vision extraction has no text layer to verify against → every line flagged for review.
         result.ReviewLineNumbers.Should().HaveCount(result.Order.Lines.Count);
+    }
+
+    // ── Party-role assignment (the founder-found buyer/supplier swap bug) ─────
+
+    /// <summary>
+    /// Anonymised, real-shaped POs that reproduce the exact ambiguity the founder hit:
+    /// the system-customer-like name ("Markit") appears as the SUPPLIER/recipient, while
+    /// a DIFFERENT organisation is the BUYER/issuer. The extractor must assign roles from
+    /// the document labels — NOT pick the familiar name as the buyer. Verifies, end to end
+    /// against the real OpenAI call, the fix in <see cref="OpenAiPdfOrderExtractor"/>'s
+    /// system prompt.
+    /// </summary>
+    public static IEnumerable<object[]> PartyRoleFixtures()
+    {
+        // Danfoss-shaped: Danfoss is the buyer/issuer; Markit is the supplier/recipient.
+        yield return new object[]
+        {
+            "Danfoss",  // expected buyer (issuer)
+            "Markit",   // expected supplier (the system-customer-like recipient)
+            CreatePdf(
+                "REDACTED-PARTY",
+                "REDACTED-ADDRESS",
+                "PURCHASE ORDER",
+                "PO Number: 4500123987",
+                "Order Date: 2026-04-14",
+                "Currency: EUR",
+                "Supplier:",
+                "REDACTED-PARTY",
+                "Tallinn, Estonia",
+                "Line  Item Code   Description           Qty  Unit  Unit Price  Amount",
+                "1     DF-VLT-110  Frequency converter   3    PCS   240.00      720.00",
+                "2     DF-SEN-022  Pressure sensor       10   PCS   18.50       185.00")
+        };
+
+        // REDACTED-PARTY-shaped: REDACTED-PARTY is the buyer/issuer; Markit is the supplier.
+        yield return new object[]
+        {
+            "REDACTED-PARTY",
+            "Markit",
+            CreatePdf(
+                "REDACTED-PARTY",
+                "REDACTED-ADDRESS",
+                "Bestellung / PURCHASE ORDER",
+                "PO Number: VA-2026-77120",
+                "Order Date: 2026-03-02",
+                "Currency: EUR",
+                "Vendor / Supplier:",
+                "REDACTED-PARTY",
+                "Tallinn, Estonia",
+                "Line  Item Code   Description           Qty  Unit  Unit Price  Amount",
+                "1     VA-STL-450  Steel coil            5    PCS   1250.00     6250.00",
+                "2     VA-BLT-012  Bolt set              40   PCS   3.20        128.00")
+        };
+
+        // ABB-shaped control case: ABB is the buyer/issuer; Markit is the supplier.
+        yield return new object[]
+        {
+            "ABB",
+            "Markit",
+            CreatePdf(
+                "REDACTED-PARTY",
+                "REDACTED-ADDRESS",
+                "PURCHASE ORDER",
+                "REDACTED-DOCNO",
+                "Order Date: 2026-05-09",
+                "Currency: EUR",
+                "Sold to / Supplier:",
+                "REDACTED-PARTY",
+                "Tallinn, Estonia",
+                "Line  Item Code   Description           Qty  Unit  Unit Price  Amount",
+                "1     EXD-DRV-30  Motor drive REDACTED-ITEM    2    PCS   980.00      1960.00",
+                "2     EXD-CON-08  Contactor REDACTED-ITEM        15   PCS   24.00       360.00")
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(PartyRoleFixtures))]
+    public async Task ExtractAsync_PurchaseOrder_AssignsBuyerFromLabels_NotFromFamiliarName(
+        string expectedBuyer, string expectedSupplier, byte[] pdf)
+    {
+        if (!Enabled) return; // no-op unless explicitly enabled with a key
+
+        var extractor = BuildExtractor();
+        extractor.IsAvailable.Should().BeTrue();
+
+        var sourceText = await ProcuLink.Transform.Parsing.PdfTextExtractor
+            .ExtractTextAsync(pdf, CancellationToken.None);
+
+        await using var stream = new MemoryStream(pdf);
+        var result = await extractor.ExtractAsync(stream, "application/pdf", Guid.NewGuid(), CancellationToken.None);
+
+        result.Success.Should().BeTrue("a clear text PO should extract cleanly");
+        result.Order.Should().NotBeNull();
+
+        // Correct line count.
+        result.Order!.Lines.Should().HaveCount(2);
+
+        // Every emitted number must appear verbatim in the source text.
+        foreach (var line in result.Order.Lines)
+        {
+            if (line.Quantity != 0m)
+                NumberAppearsInSource(line.Quantity, sourceText).Should().BeTrue(
+                    "quantity {0} must be printed in the source", line.Quantity);
+            if (line.UnitPrice is { } up && up != 0m)
+                NumberAppearsInSource(up, sourceText).Should().BeTrue(
+                    "unit price {0} must be printed in the source", up);
+            if (line.LineAmount is { } la && la != 0m)
+                NumberAppearsInSource(la, sourceText).Should().BeTrue(
+                    "line amount {0} must be printed in the source", la);
+        }
+
+        // The two parties must be DIFFERENT.
+        result.Order.BuyerName.Should().NotBeNullOrWhiteSpace();
+        result.Order.SupplierName.Should().NotBeNullOrWhiteSpace();
+        result.Order.BuyerName.Should().NotBe(result.Order.SupplierName);
+
+        // The correct buyer for this fixture — assigned from the labels, NOT the familiar
+        // system-customer name (which is the SUPPLIER here).
+        result.Order.BuyerName!.Should().ContainEquivalentOf(expectedBuyer,
+            "buyer must come from the document's issuer/header, not the familiar recipient name");
+        result.Order.SupplierName!.Should().ContainEquivalentOf(expectedSupplier);
+        // The system-customer-like name must NOT have leaked into the buyer slot.
+        result.Order.BuyerName.Should().NotContainEquivalentOf(expectedSupplier,
+            "the recipient/supplier name must never be assigned as the buyer");
+    }
+
+    /// <summary>
+    /// Iterates a real local PO corpus (default <see cref="DefaultPosDir"/>, overridable via
+    /// PROCULINK_LIVE_AI_POS_DIR). Skips cleanly when the directory is absent. For each PDF it
+    /// asserts the universal invariants the swap bug violated: at least one line, every emitted
+    /// number verbatim in the source, and buyer != supplier. (The correct-buyer-per-document
+    /// assertion lives in the synthetic theory above, which knows the ground truth.)
+    /// </summary>
+    [Fact]
+    public async Task ExtractAsync_RealCorpus_BuyerDiffersFromSupplier_AndNumbersAreVerbatim()
+    {
+        if (!Enabled) return;            // no-op unless explicitly enabled with a key
+        if (!Directory.Exists(PosDir)) return; // no-op when the corpus is absent
+
+        var pdfs = Directory.EnumerateFiles(PosDir, "*.pdf", SearchOption.TopDirectoryOnly).ToList();
+        if (pdfs.Count == 0) return;     // nothing to iterate
+
+        var extractor = BuildExtractor(new SkiaPdfRasterizer(NullLogger<SkiaPdfRasterizer>.Instance));
+
+        foreach (var path in pdfs)
+        {
+            var bytes = await File.ReadAllBytesAsync(path);
+            var sourceText = await ProcuLink.Transform.Parsing.PdfTextExtractor
+                .ExtractTextAsync(bytes, CancellationToken.None);
+
+            await using var stream = new MemoryStream(bytes);
+            var result = await extractor.ExtractAsync(stream, "application/pdf", Guid.NewGuid(), CancellationToken.None);
+
+            if (!result.Success || result.Order is null)
+                continue; // skip docs the extractor declined (low confidence / no lines / scanned-illegible)
+
+            var fileName = Path.GetFileName(path);
+            result.Order.Lines.Should().NotBeEmpty($"{fileName} should yield at least one line");
+
+            result.Order.BuyerName.Should().NotBeNullOrWhiteSpace($"{fileName} buyer must be set");
+            result.Order.SupplierName.Should().NotBeNullOrWhiteSpace($"{fileName} supplier must be set");
+            result.Order.BuyerName.Should().NotBe(result.Order.SupplierName,
+                $"{fileName}: buyer and supplier must be two different parties");
+
+            // Numbers verbatim — only when there is a text layer to verify against (scanned
+            // docs route through vision, which has no source text and flags every line anyway).
+            if (!string.IsNullOrWhiteSpace(sourceText))
+            {
+                foreach (var line in result.Order.Lines)
+                {
+                    if (line.Quantity != 0m)
+                        NumberAppearsInSource(line.Quantity, sourceText).Should().BeTrue(
+                            $"{fileName}: quantity {line.Quantity} must appear in the source");
+                    if (line.UnitPrice is { } up && up != 0m)
+                        NumberAppearsInSource(up, sourceText).Should().BeTrue(
+                            $"{fileName}: unit price {up} must appear in the source");
+                }
+            }
+        }
+    }
+
+    // Lenient "does this number appear in the printed source" check for the live assertions.
+    // Mirrors the extractor's own anti-hallucination intent (EU/Anglo separators, space-grouped
+    // thousands) without reaching into its private matcher.
+    private static bool NumberAppearsInSource(decimal value, string sourceText)
+    {
+        if (string.IsNullOrEmpty(sourceText)) return false;
+        var rounded = Math.Round(value, 4, MidpointRounding.AwayFromZero);
+
+        // Collapse inter-digit spaces/NBSP so "1 250,00" reads as one token too.
+        var collapsed = System.Text.RegularExpressions.Regex.Replace(sourceText, @"(?<=\d)[\x20 ](?=\d)", "");
+
+        foreach (var text in new[] { sourceText, collapsed })
+        foreach (System.Text.RegularExpressions.Match m in
+                 System.Text.RegularExpressions.Regex.Matches(text, @"\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?"))
+        {
+            foreach (var candidate in NumberReadings(m.Value))
+            {
+                if (Math.Round(candidate, 4, MidpointRounding.AwayFromZero) == rounded)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    // All plausible decimal readings of a printed numeric token (EU vs Anglo separators).
+    private static IEnumerable<decimal> NumberReadings(string token)
+    {
+        var t = token.Trim();
+        if (t.Length == 0) yield break;
+
+        var dots = t.Count(c => c == '.');
+        var commas = t.Count(c => c == ',');
+
+        if (dots > 0 && commas > 0)
+        {
+            var decimalSep = t.LastIndexOf('.') > t.LastIndexOf(',') ? '.' : ',';
+            var thousandsSep = decimalSep == '.' ? ',' : '.';
+            var normalized = t.Replace(thousandsSep.ToString(), string.Empty).Replace(decimalSep, '.');
+            if (decimal.TryParse(normalized, NumberStyles.Number, CultureInfo.InvariantCulture, out var v)) yield return v;
+            yield break;
+        }
+
+        // Single separator (or none): yield both the grouped-thousands and the decimal reading.
+        var stripped = t.Replace(".", string.Empty).Replace(",", string.Empty);
+        if (decimal.TryParse(stripped, NumberStyles.Number, CultureInfo.InvariantCulture, out var asGrouped))
+            yield return asGrouped;
+        var asDecimal = t.Replace(',', '.');
+        if (asDecimal.Count(c => c == '.') == 1
+            && decimal.TryParse(asDecimal, NumberStyles.Number, CultureInfo.InvariantCulture, out var v2))
+            yield return v2;
     }
 
     // Embeds a JPEG as the sole content of a 1-page PDF (no text layer) — a synthetic
