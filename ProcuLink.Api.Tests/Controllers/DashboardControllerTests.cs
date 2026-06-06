@@ -101,6 +101,38 @@ public class DashboardControllerTests
     }
 
     [Fact]
+    public async Task GetTopology_SupplierHealth_ExcludesOrdersOlderThan30Days()
+    {
+        var (ctrl, orgId, db) = Build();
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier
+        {
+            Id = supplierId, OrgId = orgId, Name = "Acme Supplies",
+            CreatedAt = DateTime.UtcNow,
+        });
+
+        // In-window: 2 delivered, 0 failed → health should be 100% over the window.
+        var inWindowA = MakeOrderWithBuyer(orgId, supplierId, "delivered", "Buyer Corp");
+        var inWindowB = MakeOrderWithBuyer(orgId, supplierId, "delivered", "Buyer Corp");
+
+        // Out-of-window (40 days old): a failure that must NOT drag the 30-day figure down.
+        var stale = MakeOrderWithBuyer(orgId, supplierId, "delivery_failed", "Buyer Corp");
+        stale.CreatedAt = DateTime.UtcNow.AddDays(-40);
+
+        db.PurchaseOrders.AddRange(inWindowA, inWindowB, stale);
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.GetTopology(CancellationToken.None);
+        var ok     = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto    = ok.Value.Should().BeOfType<DashboardTopologyDto>().Subject;
+
+        dto.Suppliers.Should().HaveCount(1);
+        // If the stale failure were counted, health would be 2/3 → 67. Excluding it
+        // (only the 2 in-window delivered orders count) gives 2/2 → 100.
+        dto.Suppliers[0].Health.Should().Be(100);
+    }
+
+    [Fact]
     public async Task GetTopology_CrossOrg_Excluded()
     {
         var (ctrl, orgId, db) = Build();
