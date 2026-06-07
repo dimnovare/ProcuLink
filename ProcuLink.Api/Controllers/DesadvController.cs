@@ -26,23 +26,18 @@ public sealed class DesadvController : ControllerBase
     // POST /api/asns/upload
     [HttpPost("upload")]
     [RequestSizeLimit(10 * 1024 * 1024)]
-    public async Task<IActionResult> Upload(IFormFile file, [FromQuery] Guid? supplierId, CancellationToken ct)
+    public IActionResult Upload(IFormFile file, [FromQuery] Guid? supplierId)
     {
-        if (file is null || file.Length == 0)
-            return BadRequest(new { error = "No file provided." });
-
-        var orgId = _tenant.OrganisationId;
-        await using var stream = file.OpenReadStream();
-        var asn = await _desadv.CreateStubAsync(orgId, supplierId, stream, file.FileName, file.ContentType, ct);
-
-        // 202 Accepted — file stored, EDIFACT parsing deferred (EdiFabric licence required)
-        return Accepted(new
+        // EDIFACT DESADV parsing is not implemented (it requires a commercial EDI
+        // licence — see EdifactDesadvParser, which throws NotImplementedException).
+        // 501 is the honest contract: we do NOT accept + silently shelve a file we
+        // can never parse (the old 202 implied processing that never happens).
+        // ASN/DESADV intake is also hidden in the UI (NEXT_PUBLIC_INBOUND_ENABLED
+        // off); this guards a direct API caller.
+        _ = file; _ = supplierId;
+        return StatusCode(501, new
         {
-            asn.Id,
-            asn.Status,
-            asn.SourceFileName,
-            asn.CreatedAt,
-            note = "DESADV parsing is not yet active — EdiFabric licence required. File is stored safely.",
+            error = "ASN / EDIFACT DESADV ingestion is not available yet (it requires a commercial EDI licence). Contact support if you need it.",
         });
     }
 
