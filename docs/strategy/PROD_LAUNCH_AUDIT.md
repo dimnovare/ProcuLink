@@ -1955,27 +1955,32 @@ Bridge system is consistently applied (navy/blue/green, top-edge accents, Bricol
 - **Six pricing tiers** — the ICP touches two (Operations, Distributor). Collapse the visible choice.
 - **Self-serve open signup** — for a high-touch €399–€1,499 ICP with per-supplier setup config, you don't need (or want) anonymous self-serve at launch.
 
+> **Reconciliation note (2026-06-07):** the code items below are cross-checked against
+> the per-item tracker at the top of this file (the source of truth for code state). The
+> remaining `[ ]` are genuine **founder / ops / sales** actions, not code — they cannot be
+> landed from the repo.
+
 ### MVP checklist (first paid pilot — design partner)
 - [x] Upload → parse → review → transform → deliver → audit works end-to-end (verified via local QA-bypass e2e + live prod inbox)
 - [x] HTTP delivery proven live; honest `delivery_failed`/dead-letter path proven
 - [x] Org-scoped tenancy + AES-GCM delivery creds + SSRF guard present
-- [ ] **Hide Inbound (Invoice/ASN) nav** (`BridgeSidebar.tsx:60-64`) — kills 3 dead CTAs in one edit
-- [ ] **Fix the 2 capability over-claims** (`/formats` X12/JSON/FTPS/SMTP/ERP "Supported"; landing "X12 / JSON / drop any PO") → mark X12 "via API/.edi", JSON "planned", non-HTTP delivery "configurable / on request"
-- [ ] **Cap Npgsql pool size** + point at Neon pooled endpoint (connection-string only)
-- [ ] **Add idempotency to `IngressController.ReceiveOrder`** (the `idempotency_keys` table already exists) — prevents duplicate orders → double delivery
-- [ ] **One real Markit PO delivered to one real supplier's endpoint** (the only thing the engine has never done)
+- [x] **Hide Inbound (Invoice/ASN) nav** — already gated behind `INBOUND_ENABLED` (off unless `NEXT_PUBLIC_INBOUND_ENABLED=true`); `BridgeSidebar` filters the Inbound group by default
+- [~] **Fix the 2 capability over-claims** — `.x12` import fixed + live-verified (UI/UX #3); landing JSON-via-REST + connectors honesty shipped (`1d47861`); `/library/standards` is the conservative SoT. Residual: re-verify `/formats` wording
+- [~] **Cap Npgsql pool size** + Neon pooled endpoint — pool cap done in code (§1.1.A / B8); **Neon pooled endpoint = founder env** (connection string only)
+- [x] **Add idempotency to `IngressController.ReceiveOrder`** — done (§1.1.C, the priority DB-correctness gap)
+- [ ] **One real Markit PO delivered to one real supplier's endpoint** — *founder/sales action; the single highest-EV item and by design not code*
 
 ### Production checklist (before open/scaled use)
-- [ ] `StuckOrderDetectionJob` requeues (not just fails) transient stuck orders
-- [ ] Worker-down heartbeat alert (API hosts no Hangfire; a dead Worker is silent)
-- [ ] Move EF migrations from auto-on-boot `Task.Run` to a deliberate release step (breaks on 2+ replicas)
-- [ ] Global exception handler (`UseExceptionHandler` + ProblemDetails) — today unhandled errors are raw 500s
-- [ ] Unify tenant resolution so the API-key path and JWT path resolve the same org value-space
-- [ ] SSRF guard: pin the validated IP at connect time (close the DNS-rebinding TOCTOU)
-- [ ] R2 retention/delete path (GDPR erasure + cost) — currently no delete anywhere
-- [ ] Pin: Stripe API version, `next` to `15.x.y`, Node `engines`, `Ai:OpenAI:ExtractionModel`
+- [x] `StuckOrderDetectionJob` requeues (not just fails) transient stuck orders — R2 (`0da39cf`)
+- [x] Worker-down heartbeat alert (API hosts no Hangfire; a dead Worker is silent) — B7
+- [~] Move EF migrations from auto-on-boot `Task.Run` to a deliberate release step — migrate-fail-loud done (`5013fd8`); full move deferred (prod is single-instance, so the 2-replica race doesn't apply yet — §2.7)
+- [x] Global exception handler (`UseExceptionHandler` + ProblemDetails) — P1-2
+- [x] Unify tenant resolution so the API-key path and JWT path resolve the same org value-space — R1 (`3c789b6`)
+- [x] SSRF guard: pin the validated IP at connect time (close the DNS-rebinding TOCTOU) — `OutboundRequestGuard.CreateGuardedHttpHandler()` `ConnectCallback` re-resolves + rejects private/metadata IPs at connect; used by `HttpDeliveryDispatcher`
+- [x] R2 retention/delete path (GDPR erasure + cost) — W3 `IDataErasureService` (per-order R2+DB) + `DataRetentionSweepJob` (time-based, safe-off)
+- [x] Pin: Stripe API version, `next` to `15.x.y`, Node `engines`, `Ai:OpenAI:ExtractionModel` — B1-B4
 
-### Stripe go-live checklist (the June-9 company-registration gate)
+### Stripe go-live checklist (the June-9 company-registration gate) — *founder/ops; code already maps `distributor`→price + boots-requires `DistributorPriceId`*
 - [ ] Create the 4 LIVE products (Growth/Operations/Integration/Distributor) → set live price IDs (+ yearly)
 - [ ] Swap `Stripe:SecretKey` → `sk_live_…`, `Stripe:WebhookSecret` → live `whsec_…` in Railway
 - [ ] Repoint the Stripe webhook endpoint to prod; re-verify `EventUtility.ConstructEvent` succeeds on a live test event
@@ -1983,13 +1988,13 @@ Bridge system is consistently applied (navy/blue/green, top-edge accents, Bricol
 - [ ] Confirm `DistributorPriceId` (now a required key) is set for live, or the API won't boot
 - [ ] Rotate the chat-exposed test secrets
 
-### Support / contact checklist
+### Support / contact checklist — *founder/ops (SMTP env + monitored mailbox); `SupportController` + form wired in code*
 - [ ] Support form backend (SMTP) actually delivers (or route to a real inbox) — `SupportController`
 - [ ] A monitored `support@`/`sales@proculink.eu` (the pricing CTAs point at `sales@`)
 - [ ] Help articles match shipped capability (already mostly reconciled; re-check after hiding Inbound)
 - [ ] A one-line "how to reach a human" in-app (the ICP is high-touch)
 
-### Monitoring checklist
+### Monitoring checklist — *founder/ops (set DSN/keys + wire alert destinations); Sentry + `/health`/`/health/ready` + Hangfire dead-letter all wired in code*
 - [ ] Sentry DSN set on **both** API and Worker (it's wired, key may be unset)
 - [ ] Worker heartbeat + Hangfire dead-letter alert (Slack/email)
 - [ ] `/health` uptime check on `api.proculink.eu` (200 verified) + a synthetic "upload→parsed" canary
