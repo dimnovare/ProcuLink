@@ -37,11 +37,6 @@ public sealed class BillingController : ControllerBase
         _aiUsage = aiUsage;
     }
 
-    // ── Cast helper — lets webhook handlers call EmitBilling* without a Program.cs change ─
-    // In production _billing always resolves to StripeBillingService.
-    // If it doesn't (e.g. in a test using a mock IBillingService) the call is safely skipped.
-    private StripeBillingService? BillingEvents => _billing as StripeBillingService;
-
     // ── Plan rank — used to detect downgrades in HandleSubscriptionUpdatedAsync ───────────
     private static readonly Dictionary<string, int> PlanRank = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -274,12 +269,12 @@ public sealed class BillingController : ControllerBase
         _logger.LogInformation("Org {OrgId} upgraded to {Plan} via Stripe checkout {SessionId}",
             orgId, mappedPlan, session.Id);
 
-        await (BillingEvents?.EmitBillingUpgradedAsync(
+        await _billing.EmitBillingUpgradedAsync(
             orgId:           orgId,
             fromPlan:        fromPlan ?? PlanConstants.Pilot,
             toPlan:          mappedPlan,
             stripeSessionId: session.Id,
-            ct:              ct) ?? Task.CompletedTask);
+            ct:              ct);
     }
 
     internal async Task HandleSubscriptionUpdatedAsync(Stripe.Subscription? sub, CancellationToken ct)
@@ -316,11 +311,11 @@ public sealed class BillingController : ControllerBase
 
         if (!string.IsNullOrEmpty(mappedPlan) && IsPlanDowngrade(fromPlan, mappedPlan))
         {
-            await (BillingEvents?.EmitBillingDowngradedAsync(
+            await _billing.EmitBillingDowngradedAsync(
                 orgId:    org.Id,
                 fromPlan: fromPlan ?? PlanConstants.Pilot,
                 toPlan:   mappedPlan,
-                ct:       ct) ?? Task.CompletedTask);
+                ct:       ct);
         }
     }
 
@@ -348,11 +343,11 @@ public sealed class BillingController : ControllerBase
         var hadOrders = await _db.PurchaseOrders
             .AnyAsync(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= monthStart, ct);
 
-        await (BillingEvents?.EmitBillingCancelledAsync(
+        await _billing.EmitBillingCancelledAsync(
             orgId:              org.Id,
             previousPlan:       previousPlan,
             hadOrdersThisMonth: hadOrders,
-            ct:                 ct) ?? Task.CompletedTask);
+            ct:                 ct);
     }
 
     /// <summary>
@@ -367,7 +362,6 @@ public sealed class BillingController : ControllerBase
     internal async Task HandleInvoiceCreatedAsync(Stripe.Invoice? invoice, CancellationToken ct)
     {
         if (invoice is null) return;
-        if (BillingEvents is null) return; // overage needs the concrete StripeBillingService
 
         // Only meter subscription invoices (the recurring period close). One-off
         // (manual founder) invoices carry no subscription and must be skipped.
@@ -389,7 +383,7 @@ public sealed class BillingController : ControllerBase
             ? DateTime.UtcNow
             : DateTime.SpecifyKind(invoice.PeriodEnd, DateTimeKind.Utc);
 
-        var overageOrders = await BillingEvents.ComputePeriodOverageOrdersAsync(
+        var overageOrders = await _billing.ComputePeriodOverageOrdersAsync(
             org.Id, periodStart, periodEnd, ct);
         if (overageOrders <= 0) return;
 
@@ -398,7 +392,7 @@ public sealed class BillingController : ControllerBase
         // (org_id, billing_key) row blocks a second charge even if Stripe emits a new
         // invoice id for the same/overlapping period (e.g. a voided + re-issued draft).
         var billingKey = BuildPeriodBillingKey(org.Id, periodStart);
-        var result = await BillingEvents.BillOverageForInvoiceAsync(
+        var result = await _billing.BillOverageForInvoiceAsync(
             org.Id, billingKey, overageOrders, ct);
 
         _logger.LogInformation(

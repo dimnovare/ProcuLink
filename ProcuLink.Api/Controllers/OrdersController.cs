@@ -414,11 +414,13 @@ public sealed class OrdersController : ControllerBase
     /// All lines must have NeedsReview = false — returns 422 otherwise.
     /// </summary>
     [HttpPost("{id:guid}/transform")]
+    [EnableRateLimiting("transform")]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> Transform(
         Guid id,
         [FromBody] TransformRequest request,
@@ -517,8 +519,10 @@ public sealed class OrdersController : ControllerBase
     /// Returns { accepted: N } — the count of lines that were accepted.
     /// </summary>
     [HttpPost("{id:guid}/accept-ai-suggestions")]
+    [EnableRateLimiting("ai")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> AcceptAiSuggestions(
         Guid id,
         [FromQuery] double minConfidence = 0.85,
@@ -541,8 +545,10 @@ public sealed class OrdersController : ControllerBase
     /// Returns 404 when the order doesn't exist for the authenticated organisation.
     /// </summary>
     [HttpGet("{id:guid}/mapping-preview")]
+    [EnableRateLimiting("ai")]
     [ProducesResponseType(typeof(MappingPreviewDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> GetMappingPreview(Guid id, CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
@@ -856,8 +862,10 @@ public sealed class OrdersController : ControllerBase
     /// The frontend opens this URL directly — file bytes never flow through the API.
     /// </summary>
     [HttpGet("{id:guid}/artifacts/{artifactId:guid}/download")]
+    [EnableRateLimiting("signed-url")]
     [ProducesResponseType(typeof(DownloadUrl), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> Download(Guid id, Guid artifactId, CancellationToken ct)
     {
         var result = await _orders.GetDownloadUrlAsync(

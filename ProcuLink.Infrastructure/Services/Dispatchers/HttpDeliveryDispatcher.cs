@@ -32,6 +32,31 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
         _logger = logger;
     }
 
+    // Built lazily once from the guard's connect-time-revalidating handler and reused
+    // for the lifetime of this (scoped) dispatcher. SocketsHttpHandler pools connections.
+    private HttpClient? _guardedClient;
+
+    /// <summary>
+    /// Resolves the <see cref="HttpClient"/> used for the outbound delivery (and OAuth token)
+    /// request. The default wraps the named <c>delivery</c> handler config (timeout) but swaps
+    /// in the guard's connect-time-revalidating <see cref="SocketsHttpHandler"/>, so a DNS-rebind
+    /// to a private/metadata IP after the up-front <see cref="OutboundRequestGuard.ValidateAsync"/>
+    /// is still rejected at TCP connect. Tests override this to inject a fake transport.
+    /// </summary>
+    internal virtual HttpClient CreateSendClient()
+    {
+        if (_guardedClient is not null) return _guardedClient;
+
+        // Mirror the "delivery" named-client timeout so behaviour is unchanged for the happy path,
+        // but route the socket through the SSRF connect-time re-validation.
+        var timeout = _httpClientFactory.CreateClient("delivery").Timeout;
+        _guardedClient = new HttpClient(_guard.CreateGuardedHttpHandler(), disposeHandler: true)
+        {
+            Timeout = timeout,
+        };
+        return _guardedClient;
+    }
+
     public async Task<DeliveryResult> DispatchAsync(
         byte[] content,
         string fileName,
@@ -63,7 +88,7 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
                 ? default
                 : JsonSerializer.Deserialize<JsonElement>(decryptedCredentials, JsonOpts);
 
-            var client  = _httpClientFactory.CreateClient("delivery");
+            var client  = CreateSendClient();
             var request = new HttpRequestMessage(
                 new HttpMethod(string.IsNullOrWhiteSpace(httpCfg.Method) ? "POST" : httpCfg.Method),
                 endpoint);

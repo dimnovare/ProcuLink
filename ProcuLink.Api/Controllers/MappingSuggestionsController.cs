@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
@@ -45,10 +46,12 @@ public sealed class MappingSuggestionsController : ControllerBase
     /// <c>columns</c> array returns <c>200 OK</c> with an empty result.
     /// </remarks>
     [HttpPost("{id:guid}/mapping/suggest-fields")]
+    [EnableRateLimiting("ai")]
     [RequestSizeLimit(MaxRequestBytes)]
     [ProducesResponseType(typeof(IReadOnlyList<FieldMappingSuggestion>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> SuggestFields(
         Guid id,
         [FromBody] SuggestFieldsRequest request,

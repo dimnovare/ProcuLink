@@ -20,6 +20,11 @@ public class OutboundRequestGuardTests
     [InlineData("172.31.255.255")]     // private 172.16/12 edge
     [InlineData("192.168.1.1")]        // private 192.168/16
     [InlineData("192.168.0.0")]        // private 192.168/16 start
+    [InlineData("100.64.0.1")]         // CGNAT/shared 100.64.0.0/10 start (RFC 6598)
+    [InlineData("100.100.50.25")]      // CGNAT/shared 100.64.0.0/10 mid
+    [InlineData("100.127.255.255")]    // CGNAT/shared 100.64.0.0/10 edge
+    [InlineData("198.18.0.1")]         // benchmark 198.18.0.0/15 start (RFC 2544)
+    [InlineData("198.19.255.255")]     // benchmark 198.18.0.0/15 edge
     [InlineData("0.0.0.0")]            // unspecified
     public void IsBlockedAddress_ReturnsTrueForBlockedIpv4(string ipStr)
     {
@@ -38,6 +43,10 @@ public class OutboundRequestGuardTests
     [InlineData("192.167.1.1")]        // not 192.168/16
     [InlineData("169.255.0.1")]        // not link-local
     [InlineData("168.254.0.1")]        // not link-local (first octet differs)
+    [InlineData("100.63.255.255")]     // just below CGNAT 100.64.0.0/10
+    [InlineData("100.128.0.0")]        // just above CGNAT 100.64.0.0/10
+    [InlineData("198.17.255.255")]     // just below benchmark 198.18.0.0/15
+    [InlineData("198.20.0.0")]         // just above benchmark 198.18.0.0/15
     public void IsBlockedAddress_ReturnsFalseForPublicIpv4(string ipStr)
     {
         var ip = IPAddress.Parse(ipStr);

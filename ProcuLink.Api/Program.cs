@@ -182,23 +182,63 @@ builder.Services.AddAuthorization();
 // Consumed by [AdminOnly] on AdminController. Fails closed when both are unset.
 builder.Services.AddSingleton<ProcuLink.Api.Auth.AdminAllowlist>();
 
-// ── Rate limiting — 20 uploads/min per authenticated user ──────────────────
+// ── Rate limiting (P2-4) ───────────────────────────────────────────────────
+// Named per-user fixed-window policies for expensive / cost-bearing / abusable
+// endpoints, PLUS a global fallback limiter so every endpoint has a backstop.
+//
+// Partition key for ALL policies: Clerk `sub` claim first (so an authenticated
+// user is limited as themselves regardless of source IP), then the remote IP
+// for unauthenticated-ish callers (webhook receivers, ApiKey ingress), then a
+// shared "anonymous" bucket as the last resort. Helper below keeps this
+// consistent across policies.
+//
+// Controllers opt into a named policy with [EnableRateLimiting("<name>")];
+// the global limiter applies to everything not otherwise rejected.
 builder.Services.AddRateLimiter(options =>
 {
-    // Per-user fixed-window policy for the upload endpoint.
-    // Key: Clerk sub claim; falls back to IP for unauthenticated callers.
-    options.AddPolicy("upload", httpContext =>
+    // sub → IP → "anonymous": authenticated callers are limited per-user; the
+    // unauthenticated ingress/webhook surface is limited per source IP.
+    static string PartitionKey(HttpContext ctx) =>
+        ctx.User.FindFirst("sub")?.Value
+        ?? ctx.Connection.RemoteIpAddress?.ToString()
+        ?? "anonymous";
+
+    static RateLimitPartition<string> Window(HttpContext ctx, string prefix, int permit, int seconds) =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: httpContext.User.FindFirst("sub")?.Value
-                          ?? httpContext.Connection.RemoteIpAddress?.ToString()
-                          ?? "anonymous",
+            partitionKey: $"{prefix}:{PartitionKey(ctx)}",
             factory: _ => new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 20,
-                Window = TimeSpan.FromMinutes(1),
+                PermitLimit = permit,
+                Window = TimeSpan.FromSeconds(seconds),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                 QueueLimit = 0   // reject immediately — no queuing
-            }));
+            });
+
+    // Per-user fixed-window policy for the upload endpoint (unchanged: 20/min).
+    options.AddPolicy("upload", ctx => Window(ctx, "upload", permit: 20, seconds: 60));
+
+    // Transform is CPU/IO-heavy (parse + standards serialization + enqueue
+    // delivery). Cap per-user so a tight client loop can't hammer the worker.
+    options.AddPolicy("transform", ctx => Window(ctx, "transform", permit: 30, seconds: 60));
+
+    // AI mapping / schema-inference / suggestion endpoints call paid LLM APIs.
+    // Tighter cap protects the OpenAI bill and latency budget.
+    options.AddPolicy("ai", ctx => Window(ctx, "ai", permit: 15, seconds: 60));
+
+    // Signed-URL / artifact-download generation. Each call mints a pre-signed R2
+    // URL; cap so the surface can't be used to bulk-mint download links.
+    options.AddPolicy("signed-url", ctx => Window(ctx, "signed-url", permit: 60, seconds: 60));
+
+    // Webhook receivers + ApiKey ingress are unauthenticated-ish and keyed by IP.
+    // Higher ceiling (legitimate integrations are chatty) but still bounded so a
+    // single source can't flood the HMAC-verify / parse path.
+    options.AddPolicy("webhook", ctx => Window(ctx, "webhook", permit: 120, seconds: 60));
+
+    // Global backstop: every request (including ones with no named policy) is
+    // bounded per partition. Generous so it never bites normal usage, but it
+    // closes the "endpoint with no [EnableRateLimiting]" gap.
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
+        Window(ctx, "global", permit: 300, seconds: 60));
 
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
@@ -206,7 +246,7 @@ builder.Services.AddRateLimiter(options =>
     {
         context.HttpContext.Response.ContentType = "application/json";
         await context.HttpContext.Response.WriteAsJsonAsync(
-            new { error = "Upload rate limit exceeded. Maximum 20 uploads per minute." }, ct);
+            new { error = "Rate limit exceeded. Please slow down and retry shortly." }, ct);
     };
 });
 
@@ -228,10 +268,18 @@ builder.Services.AddScoped<Hangfire.Storage.IMonitoringApi>(sp =>
     sp.GetRequiredService<Hangfire.JobStorage>().GetMonitoringApi());
 
 // ── HTTP client for webhook delivery ──────────────────────────────────────
+// SSRF: the "delivery" client sends to tenant-supplied URLs (ErplyConnector /
+// DirectoConnector, and any future CreateClient("delivery") user). Attach the
+// SAME connect-time-revalidating primary handler the HTTP dispatcher + webhook
+// job already build, so a tenant URL pointing at a private/metadata IP (e.g.
+// http://169.254.169.254/…) is rejected at TCP connect. The factory resolves the
+// singleton OutboundRequestGuard lazily, so DI registration order is irrelevant.
 builder.Services.AddHttpClient("delivery", c =>
 {
     c.Timeout = TimeSpan.FromSeconds(30);
-});
+})
+.ConfigurePrimaryHttpMessageHandler(sp =>
+    sp.GetRequiredService<OutboundRequestGuard>().CreateGuardedHttpHandler());
 
 // ── Tenant service ─────────────────────────────────────────────────────────
 builder.Services.AddHttpContextAccessor();
@@ -240,10 +288,50 @@ builder.Services.AddScoped<ICurrentTenantService, CurrentTenantService>();
 // ── MVC / Controllers ──────────────────────────────────────────────────────
 builder.Services.AddControllers();
 
+// ── RFC-7807 ProblemDetails (P1-2) ─────────────────────────────────────────
+// Backs the global exception handler below so unhandled exceptions return a
+// structured application/problem+json body instead of a raw 500 / HTML page.
+// The handler (UseExceptionHandler) never leaks a stack trace in Production —
+// see the pipeline section. Sentry's middleware still captures the exception
+// because it is installed via UseSentry() before the request reaches the
+// exception handler (the handler runs INSIDE Sentry's scope, so Sentry sees
+// the throw before we convert it to a ProblemDetails response).
+builder.Services.AddProblemDetails(options =>
+{
+    options.CustomizeProblemDetails = ctx =>
+    {
+        // Stable correlation id for support / Sentry triage — safe in every env.
+        ctx.ProblemDetails.Extensions["traceId"] = ctx.HttpContext.TraceIdentifier;
+
+        // Developer-only: surface the exception message + stack as extensions so
+        // local debugging is not blind. Gated on Development — NEVER in Production,
+        // so no stack trace is ever leaked to clients in prod.
+        if (ctx.HttpContext.RequestServices
+                .GetRequiredService<IHostEnvironment>().IsDevelopment())
+        {
+            var ex = ctx.HttpContext.Features
+                .Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+            if (ex is not null)
+            {
+                ctx.ProblemDetails.Detail = ex.Message;
+                ctx.ProblemDetails.Extensions["exception"] = ex.GetType().FullName;
+                ctx.ProblemDetails.Extensions["stackTrace"] = ex.StackTrace;
+            }
+        }
+    };
+});
+
 // ── CORS — Next.js frontend ────────────────────────────────────────────────
-// Frontend:Url can be a single URL or a comma-separated list. Supports Vercel
-// preview-deploy wildcard subdomains when configured as e.g.
-//   Frontend:Url=https://proculink.eu,https://*.vercel.app
+// Frontend:Url can be a single URL or a comma-separated EXACT list, e.g.
+//   Frontend:Url=https://proculink.eu,https://www.proculink.eu
+//
+// SECURITY (P1-4): we intentionally DO NOT call
+// SetIsOriginAllowedToAllowWildcardSubdomains(). Combining a wildcard-subdomain
+// match with AllowCredentials() is dangerous — a future `https://*.vercel.app`
+// (or any wildcard) entry in Frontend:Url would let ANY subdomain of that
+// domain make CREDENTIALED cross-origin requests. Prod Frontend:Url is the
+// exact two-origin list above (no wildcard), so requiring an exact origin
+// match does not break prod and removes the credentialed-wildcard footgun.
 builder.Services.AddCors(options =>
 {
     var defaultOrigins = new List<string>
@@ -262,8 +350,7 @@ builder.Services.AddCors(options =>
         .ToArray();
 
     options.AddPolicy("AllowFrontend", policy =>
-        policy.WithOrigins(allOrigins)
-              .SetIsOriginAllowedToAllowWildcardSubdomains()
+        policy.WithOrigins(allOrigins)   // EXACT origins only — no wildcard subdomains
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials());
@@ -490,6 +577,22 @@ var app = builder.Build();
         optionalKeys:     StartupConfigurationValidator.OptionalKeys,
         componentName:    "ProcuLink.Api");
 }
+
+// ── Global exception handler (P1-2) ───────────────────────────────────────
+// Installed EARLY — before routing/CORS/auth — so it wraps the entire request
+// pipeline and converts any unhandled exception into an RFC-7807
+// application/problem+json response (via AddProblemDetails above).
+//
+// Sentry still captures every exception: UseSentry() (configured on the WebHost
+// at the very top) installs Sentry's middleware ahead of this one, so the throw
+// propagates up through Sentry's scope BEFORE this handler turns it into a
+// response — the handler does not swallow it from Sentry's perspective.
+//
+// No stack trace ever leaks in Production: UseExceptionHandler emits only the
+// standard ProblemDetails fields (type/title/status). We attach developer
+// exception details (the message + stack) ONLY in Development, surfaced as
+// ProblemDetails extensions for local debugging.
+app.UseExceptionHandler();
 
 // ── OpenAPI / Scalar UI — dev only ────────────────────────────────────────
 if (app.Environment.IsDevelopment())

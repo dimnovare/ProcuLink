@@ -654,20 +654,6 @@ public sealed class StripeBillingService : IBillingService
 /// <summary>One line of a manual admin invoice. Amount is in the smallest currency unit (cents).</summary>
 public sealed record InvoiceLineItemInput(string Description, long AmountCents, int Quantity);
 
-/// <summary>
-/// Outcome of an overage-billing attempt. <see cref="AlreadyBilled"/> is true when
-/// the (orgId, billingKey) slot was already taken (idempotent no-op). When Stripe
-/// is unconfigured or the org has no Stripe customer, <see cref="StripeItemId"/>
-/// is null but the computed amount is still returned for auditing.
-/// </summary>
-public sealed record OverageBillingResult(
-    Guid OrgId,
-    string BillingKey,
-    int OverageOrders,
-    long AmountCents,
-    bool AlreadyBilled,
-    string? StripeItemId);
-
 /// <summary>Identifiers returned after a one-off Stripe invoice is finalised.</summary>
 public sealed record InvoiceCreationResult(string InvoiceId, string? HostedInvoiceUrl, string Status);
 

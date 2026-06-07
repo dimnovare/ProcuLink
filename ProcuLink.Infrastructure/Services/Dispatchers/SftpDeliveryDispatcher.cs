@@ -59,14 +59,17 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
             var remoteDir = NormaliseRemoteDir(cfg.RemotePath);
             var remotePath = $"{remoteDir.TrimEnd('/')}/{SanitiseFileName(fileName)}";
 
-            // ── SSRF guard ────────────────────────────────────────────────────
-            var guardResult = await _guard.ValidateHostAsync(cfg.Host, port, ct);
-            if (!guardResult.Allowed)
-                return new DeliveryResult(false, $"SFTP delivery blocked: {guardResult.Reason}");
-
             var connectionInfo = BuildConnectionInfo(cfg.Host, port, creds);
             var timeoutSeconds = cfg.TimeoutSeconds is > 0 ? cfg.TimeoutSeconds!.Value : 30;
             connectionInfo.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
+
+            // ── SSRF guard — re-validated IMMEDIATELY before connecting to shrink the
+            // DNS-rebinding TOCTOU window. SSH.NET reconnects by hostname (re-resolving) and
+            // pinning the IP would break host-key/hostname semantics, so the tightest available
+            // mitigation is to re-resolve+validate right before dispatch.
+            var guardResult = await _guard.ValidateHostAsync(cfg.Host, port, ct);
+            if (!guardResult.Allowed)
+                return new DeliveryResult(false, $"SFTP delivery blocked: {guardResult.Reason}");
 
             // SSH.NET is synchronous — wrap in Task.Run so we honour the CancellationToken.
             return await Task.Run(() => UploadSync(content, remotePath, connectionInfo, cfg.MakeDirectories, ct), ct);

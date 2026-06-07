@@ -24,13 +24,19 @@ public class HttpDeliveryDispatcherTests
             EncryptedCredentials = string.Empty,
         };
 
-    private static IHttpClientFactory MakeFactory(HttpStatusCode status, string body = "OK")
+    /// <summary>
+    /// Builds a dispatcher whose send path is routed through the supplied fake transport.
+    /// The real <see cref="HttpDeliveryDispatcher.CreateSendClient"/> builds an SSRF
+    /// connect-time-revalidating socket handler that would attempt a real connection; for unit
+    /// tests we override it with the fake-handler client (the connect-time guard is covered
+    /// separately by <see cref="OutboundRequestGuardConnectCallbackTests"/>).
+    /// </summary>
+    private static HttpDeliveryDispatcher MakeDispatcher(HttpMessageHandler handler, OutboundRequestGuard? guard = null)
     {
-        var handler = new FakeHttpMessageHandler(status, body);
         var client  = new HttpClient(handler);
         var factory = new Moq.Mock<IHttpClientFactory>();
-        factory.Setup(f => f.CreateClient("delivery")).Returns(client);
-        return factory.Object;
+        factory.Setup(f => f.CreateClient("delivery")).Returns(() => new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, "OK")));
+        return new TestableHttpDeliveryDispatcher(factory.Object, guard ?? MakePermissiveGuard(), client);
     }
 
     /// <summary>Returns an OutboundRequestGuard configured to allow all private/local targets.</summary>
@@ -48,7 +54,7 @@ public class HttpDeliveryDispatcherTests
     [Fact]
     public async Task Dispatch_200_ReturnsSuccess()
     {
-        var dispatcher = new HttpDeliveryDispatcher(MakeFactory(HttpStatusCode.OK), MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = MakeDispatcher(new FakeHttpMessageHandler(HttpStatusCode.OK, "OK"));
         var config = MakeConfig("https://example.com/orders");
         var creds = JsonSerializer.Serialize(new { type = "none" });
 
@@ -64,10 +70,7 @@ public class HttpDeliveryDispatcherTests
     [Fact]
     public async Task Dispatch_422_ReturnsFailure()
     {
-        var dispatcher = new HttpDeliveryDispatcher(
-            MakeFactory(HttpStatusCode.UnprocessableEntity, "Invalid format"),
-            MakePermissiveGuard(),
-            NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = MakeDispatcher(new FakeHttpMessageHandler(HttpStatusCode.UnprocessableEntity, "Invalid format"));
         var config = MakeConfig("https://example.com/orders");
         var creds = JsonSerializer.Serialize(new { type = "none" });
 
@@ -90,10 +93,8 @@ public class HttpDeliveryDispatcherTests
             req.Headers.TryGetValues("X-Api-Key", out var vals);
             capturedHeader = vals?.FirstOrDefault();
         });
-        var factory = new Moq.Mock<IHttpClientFactory>();
-        factory.Setup(f => f.CreateClient("delivery")).Returns(new HttpClient(handler));
 
-        var dispatcher = new HttpDeliveryDispatcher(factory.Object, MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = MakeDispatcher(handler);
         var config = MakeConfig("https://example.com");
         var creds = JsonSerializer.Serialize(new { type = "apikey", header = "X-Api-Key", value = "sk-secret" });
 
@@ -105,7 +106,7 @@ public class HttpDeliveryDispatcherTests
     [Fact]
     public async Task Dispatch_InvalidUrl_ReturnsConfigError()
     {
-        var dispatcher = new HttpDeliveryDispatcher(MakeFactory(HttpStatusCode.OK), MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = MakeDispatcher(new FakeHttpMessageHandler(HttpStatusCode.OK, "OK"));
         var config = MakeConfig("not a url");
         var creds = JsonSerializer.Serialize(new { type = "none" });
 
@@ -120,7 +121,7 @@ public class HttpDeliveryDispatcherTests
     [Fact]
     public async Task Dispatch_MalformedCredentials_ReturnsGenericFailure()
     {
-        var dispatcher = new HttpDeliveryDispatcher(MakeFactory(HttpStatusCode.OK), MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = MakeDispatcher(new FakeHttpMessageHandler(HttpStatusCode.OK, "OK"));
         var config = MakeConfig("https://example.com/orders");
 
         var result = await dispatcher.DispatchAsync(
@@ -135,10 +136,8 @@ public class HttpDeliveryDispatcherTests
     public async Task Dispatch_TimeoutSeconds_ReturnsTimeoutFailure()
     {
         var handler = new DelayedHttpMessageHandler(TimeSpan.FromSeconds(2));
-        var factory = new Moq.Mock<IHttpClientFactory>();
-        factory.Setup(f => f.CreateClient("delivery")).Returns(new HttpClient(handler));
 
-        var dispatcher = new HttpDeliveryDispatcher(factory.Object, MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = MakeDispatcher(handler);
         var config = MakeConfig("https://example.com/orders");
         config.ConfigJson = JsonSerializer.Serialize(new { url = "https://example.com/orders", method = "POST", timeoutSeconds = 1 });
         var creds = JsonSerializer.Serialize(new { type = "none" });
@@ -163,10 +162,8 @@ public class HttpDeliveryDispatcherTests
             deliveryAuth = req.Headers.Authorization?.ToString();
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("OK") };
         });
-        var factory = new Moq.Mock<IHttpClientFactory>();
-        factory.Setup(f => f.CreateClient("delivery")).Returns(new HttpClient(handler));
 
-        var dispatcher = new HttpDeliveryDispatcher(factory.Object, MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = MakeDispatcher(handler);
         var config = MakeConfig("https://supplier.example/orders");
         var creds = JsonSerializer.Serialize(new
         {
@@ -193,10 +190,8 @@ public class HttpDeliveryDispatcherTests
             deliveryCalled = true;
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("OK") };
         });
-        var factory = new Moq.Mock<IHttpClientFactory>();
-        factory.Setup(f => f.CreateClient("delivery")).Returns(new HttpClient(handler));
 
-        var dispatcher = new HttpDeliveryDispatcher(factory.Object, MakePermissiveGuard(), NullLogger<HttpDeliveryDispatcher>.Instance);
+        var dispatcher = MakeDispatcher(handler);
         var config = MakeConfig("https://supplier.example/orders");
         var creds = JsonSerializer.Serialize(new
         {
@@ -257,4 +252,23 @@ file sealed class RoutingHttpMessageHandler(Func<HttpRequestMessage, HttpRespons
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
         => Task.FromResult(route(request));
+}
+
+/// <summary>
+/// Test seam: overrides the SSRF-guarded send client (which would open a real socket) with a
+/// client backed by an in-memory fake transport. The connect-time re-validation itself is
+/// covered directly by <c>OutboundRequestGuardConnectCallbackTests</c>.
+/// </summary>
+file sealed class TestableHttpDeliveryDispatcher : HttpDeliveryDispatcher
+{
+    private readonly HttpClient _sendClient;
+
+    public TestableHttpDeliveryDispatcher(
+        IHttpClientFactory factory, OutboundRequestGuard guard, HttpClient sendClient)
+        : base(factory, guard, Microsoft.Extensions.Logging.Abstractions.NullLogger<HttpDeliveryDispatcher>.Instance)
+    {
+        _sendClient = sendClient;
+    }
+
+    internal override HttpClient CreateSendClient() => _sendClient;
 }

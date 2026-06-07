@@ -13,12 +13,12 @@ public class ClerkTokenValidationTests
         };
 
     [Fact]
-    public void NullAzp_IsAccepted() =>
-        Assert.True(ClerkTokenValidation.IsAuthorizedParty(null, Authorized));
+    public void NullAzp_IsRejected() =>
+        Assert.False(ClerkTokenValidation.IsAuthorizedParty(null, Authorized));
 
     [Fact]
-    public void EmptyAzp_IsAccepted() =>
-        Assert.True(ClerkTokenValidation.IsAuthorizedParty(string.Empty, Authorized));
+    public void EmptyAzp_IsRejected() =>
+        Assert.False(ClerkTokenValidation.IsAuthorizedParty(string.Empty, Authorized));
 
     [Fact]
     public void MatchingAzp_IsAccepted() =>

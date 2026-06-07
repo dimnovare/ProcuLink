@@ -462,6 +462,190 @@ public class BillingControllerTests
         updated.Plan.Should().Be(PlanConstants.Growth, "plan must be unchanged when no price mapping is found");
     }
 
+    // ── Webhook calls billing events THROUGH the IBillingService interface ────
+    // Regression guard for the removed runtime downcast (IBillingService ->
+    // StripeBillingService). The controller now resolves a Moq IBillingService
+    // (which is NOT a StripeBillingService); the old `_billing as StripeBillingService`
+    // cast would have been null and silently skipped these calls. Verifying the
+    // mock was invoked proves the calls flow through the interface.
+
+    [Fact]
+    public async Task HandleCheckoutCompleted_EmitsBillingUpgraded_ThroughInterface()
+    {
+        var (ctrl, billing, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id             = orgId,
+            Plan           = PlanConstants.Pilot,
+            AccountStatus  = AccountStatusConstants.Trialing,
+            ClerkOrgId     = "org_emit_up",
+            Name           = "Emit Up Org",
+            Slug           = "emit-up-org",
+            TrialStartedAt = DateTime.UtcNow.AddDays(-3),
+        });
+        await db.SaveChangesAsync();
+
+        var session = new Stripe.Checkout.Session
+        {
+            Metadata = new Dictionary<string, string>
+            {
+                ["org_id"] = orgId.ToString(),
+                ["plan"]   = PlanConstants.Growth,
+            },
+            Id             = "cs_emit_up",
+            SubscriptionId = null,          // keep offline — no live Stripe HTTP call
+            CustomerId     = "cus_emit_up",
+        };
+
+        await ctrl.HandleCheckoutCompletedAsync(session, CancellationToken.None);
+
+        billing.Verify(b => b.EmitBillingUpgradedAsync(
+            orgId,
+            PlanConstants.Pilot,
+            PlanConstants.Growth,
+            "cs_emit_up",
+            It.IsAny<CancellationToken>()), Times.Once,
+            "checkout.session.completed must emit billing_upgraded THROUGH IBillingService, not a downcast");
+    }
+
+    [Fact]
+    public async Task HandleSubscriptionDeleted_EmitsBillingCancelled_ThroughInterface()
+    {
+        var (ctrl, billing, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id                   = orgId,
+            Plan                 = PlanConstants.Growth,
+            AccountStatus        = AccountStatusConstants.Active,
+            StripeCustomerId     = "cus_emit_cancel",
+            StripeSubscriptionId = "sub_emit_cancel",
+            ClerkOrgId           = "org_emit_cancel",
+            Name                 = "Emit Cancel Org",
+            Slug                 = "emit-cancel-org",
+        });
+        await db.SaveChangesAsync();
+
+        var sub = new Stripe.Subscription
+        {
+            Id         = "sub_emit_cancel",
+            CustomerId = "cus_emit_cancel",
+        };
+
+        await ctrl.HandleSubscriptionDeletedAsync(sub, CancellationToken.None);
+
+        billing.Verify(b => b.EmitBillingCancelledAsync(
+            orgId,
+            PlanConstants.Growth,
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Once,
+            "customer.subscription.deleted must emit billing_cancelled THROUGH IBillingService, not a downcast");
+    }
+
+    [Fact]
+    public async Task HandleInvoiceCreated_ComputesAndBillsOverage_ThroughInterface()
+    {
+        var (ctrl, billing, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id               = orgId,
+            Plan             = PlanConstants.Operations,
+            AccountStatus    = AccountStatusConstants.Active,
+            StripeCustomerId = "cus_overage",
+            ClerkOrgId       = "org_overage",
+            Name             = "Overage Org",
+            Slug             = "overage-org",
+        });
+        await db.SaveChangesAsync();
+
+        // Overage path: compute returns > 0 (clears the `<= 0` guard), then bill is
+        // invoked through the interface. The mock must return a real result so the
+        // controller can read result.OverageOrders for its log line.
+        billing
+            .Setup(b => b.ComputePeriodOverageOrdersAsync(
+                orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(7);
+        billing
+            .Setup(b => b.BillOverageForInvoiceAsync(
+                orgId, It.IsAny<string>(), 7, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid o, string key, int orders, CancellationToken _) =>
+                new OverageBillingResult(o, key, orders, orders * 50L, AlreadyBilled: false, StripeItemId: "ii_test"));
+
+        var periodStart = new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc);
+        var periodEnd   = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var invoice = new Stripe.Invoice
+        {
+            Id          = "in_overage",
+            CustomerId  = "cus_overage",
+            PeriodStart = periodStart,
+            PeriodEnd   = periodEnd,
+            Parent      = new Stripe.InvoiceParent
+            {
+                SubscriptionDetails = new Stripe.InvoiceParentSubscriptionDetails
+                {
+                    SubscriptionId = "sub_overage",
+                },
+            },
+        };
+
+        await ctrl.HandleInvoiceCreatedAsync(invoice, CancellationToken.None);
+
+        var expectedKey = BillingController.BuildPeriodBillingKey(orgId, periodStart);
+        billing.Verify(b => b.ComputePeriodOverageOrdersAsync(
+            orgId, periodStart, periodEnd, It.IsAny<CancellationToken>()), Times.Once,
+            "invoice.created must compute overage THROUGH IBillingService");
+        billing.Verify(b => b.BillOverageForInvoiceAsync(
+            orgId, expectedKey, 7, It.IsAny<CancellationToken>()), Times.Once,
+            "invoice.created must bill overage THROUGH IBillingService, not a downcast");
+    }
+
+    [Fact]
+    public async Task HandleInvoiceCreated_WhenNoOverage_DoesNotBill_ThroughInterface()
+    {
+        var (ctrl, billing, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id               = orgId,
+            Plan             = PlanConstants.Operations,
+            AccountStatus    = AccountStatusConstants.Active,
+            StripeCustomerId = "cus_no_overage",
+            ClerkOrgId       = "org_no_overage",
+            Name             = "No Overage Org",
+            Slug             = "no-overage-org",
+        });
+        await db.SaveChangesAsync();
+
+        // Compute returns 0 → the `<= 0` guard must short-circuit before billing.
+        billing
+            .Setup(b => b.ComputePeriodOverageOrdersAsync(
+                orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        var invoice = new Stripe.Invoice
+        {
+            Id         = "in_no_overage",
+            CustomerId = "cus_no_overage",
+            Parent     = new Stripe.InvoiceParent
+            {
+                SubscriptionDetails = new Stripe.InvoiceParentSubscriptionDetails
+                {
+                    SubscriptionId = "sub_no_overage",
+                },
+            },
+        };
+
+        await ctrl.HandleInvoiceCreatedAsync(invoice, CancellationToken.None);
+
+        billing.Verify(b => b.ComputePeriodOverageOrdersAsync(
+            orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
+        billing.Verify(b => b.BillOverageForInvoiceAsync(
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never,
+            "no overage must mean no billing call");
+    }
+
     // ── Minimal in-memory DbContext ──────────────────────────────────────────
 
     private sealed class BillingTestDbContext : ProcuLinkDbContext

@@ -120,11 +120,6 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
         builder.Attachments.Add(attachmentName, content, ContentType.Parse(contentType));
         message.Body = builder.ToMessageBody();
 
-        // ── SSRF guard ────────────────────────────────────────────────────────
-        var guardResult = await _guard.ValidateHostAsync(cfg.Host, port, ct);
-        if (!guardResult.Allowed)
-            return new DeliveryResult(false, $"SMTP delivery blocked: {guardResult.Reason}");
-
         // Dispatch with timeout
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
@@ -132,6 +127,14 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
 
         try
         {
+            // ── SSRF guard — re-validated IMMEDIATELY before ConnectAsync to shrink the
+            // DNS-rebinding TOCTOU window. MailKit reconnects by hostname (re-resolving), so
+            // we cannot pin the IP without breaking TLS certificate/hostname validation; the
+            // tightest available mitigation is to re-resolve+validate right before connect.
+            var guardResult = await _guard.ValidateHostAsync(cfg.Host, port, token);
+            if (!guardResult.Allowed)
+                return new DeliveryResult(false, $"SMTP delivery blocked: {guardResult.Reason}");
+
             using var client = new SmtpClient();
             client.Timeout = (int)TimeSpan.FromSeconds(timeoutSeconds).TotalMilliseconds;
 

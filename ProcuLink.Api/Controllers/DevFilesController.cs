@@ -29,7 +29,19 @@ public class DevFilesController : ControllerBase
         if (!_env.IsDevelopment())
             return NotFound();
 
-        var path = LocalFileStorageService.GetFullPath(key);
+        if (string.IsNullOrWhiteSpace(key))
+            return NotFound();
+
+        string path;
+        try
+        {
+            // GetFullPath rejects path-traversal keys that escape the storage root.
+            path = LocalFileStorageService.GetFullPath(key);
+        }
+        catch (ArgumentException)
+        {
+            return NotFound();
+        }
 
         if (!System.IO.File.Exists(path))
             return NotFound($"File not found: {key}");

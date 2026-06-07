@@ -22,6 +22,7 @@ public sealed class IngressController : ControllerBase
 {
     private readonly ProcuLinkDbContext        _db;
     private readonly IIdempotencyService       _idempotency;
+    private readonly ICurrentTenantService     _tenant;
     private readonly ILogger<IngressController> _logger;
 
     /// <summary>Max accepted length for Idempotency-Key — guards against accidental garbage.</summary>
@@ -30,17 +31,21 @@ public sealed class IngressController : ControllerBase
     public IngressController(
         ProcuLinkDbContext        db,
         IIdempotencyService       idempotency,
+        ICurrentTenantService     tenant,
         ILogger<IngressController> logger)
     {
         _db          = db;
         _idempotency = idempotency;
+        _tenant      = tenant;
         _logger      = logger;
     }
 
     private async Task<bool> SlugMatchesCallerAsync(string slug, CancellationToken ct)
     {
-        var orgIdClaim = User.FindFirst("org_id")?.Value;
-        if (!Guid.TryParse(orgIdClaim, out var orgId)) return false;
+        // Unified resolution: ApiKeyAuthHandler publishes the internal org UUID into
+        // HttpContext.Items (same value-space as the JWT path), which ICurrentTenantService
+        // reads — no per-controller org_id claim parsing.
+        var orgId = _tenant.OrganisationId;
         return await _db.Organisations.AnyAsync(o => o.Id == orgId && o.Slug == slug, ct);
     }
 
@@ -67,7 +72,7 @@ public sealed class IngressController : ControllerBase
         if (req?.Lines is null || req.Lines.Count == 0)
             return BadRequest(new { error = "Order must have at least one line." });
 
-        var orgId = Guid.Parse(User.FindFirst("org_id")!.Value);
+        var orgId = _tenant.OrganisationId;
 
         // ── Idempotency short-circuit ───────────────────────────────────────
         // Zapier/Make.com deliver at-least-once, so the same logical order can

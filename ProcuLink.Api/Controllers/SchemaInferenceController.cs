@@ -50,12 +50,13 @@ public sealed class SchemaInferenceController : ControllerBase
     /// AI provider is not configured, the org is over its monthly token cap,
     /// or the file cannot be parsed.
     ///
-    /// Rate-limited to 20 requests/minute per authenticated user — shared
-    /// policy with <c>/api/orders/upload</c>.
+    /// Rate-limited under the "ai" policy (15 requests/minute per authenticated
+    /// user) — this endpoint calls the paid LLM provider, so it shares the tighter
+    /// AI cap rather than the looser "upload" cap.
     /// </summary>
     [HttpPost("infer")]
     [Consumes("multipart/form-data")]
-    [EnableRateLimiting("upload")]
+    [EnableRateLimiting("ai")]
     [RequestSizeLimit(MaxSampleBytes)]
     [ProducesResponseType(typeof(InferredSchema), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -94,7 +95,7 @@ public sealed class SchemaInferenceController : ControllerBase
     /// </summary>
     [HttpPost("propose-mapping")]
     [Consumes("application/json")]
-    [EnableRateLimiting("upload")]
+    [EnableRateLimiting("ai")]
     [ProducesResponseType(typeof(ProposedMapping), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]

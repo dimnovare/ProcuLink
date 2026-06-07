@@ -82,11 +82,6 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         var timeoutSeconds = cfg.TimeoutSeconds is > 0 ? cfg.TimeoutSeconds!.Value : 30;
         var timeoutMs = timeoutSeconds * 1000;
 
-        // ── SSRF guard ────────────────────────────────────────────────────────
-        var guardResult = await _guard.ValidateHostAsync(host, port, ct);
-        if (!guardResult.Allowed)
-            return new DeliveryResult(false, $"FTPS delivery blocked: {guardResult.Reason}");
-
         // Linked token source so we can enforce our own timeout on top of the caller's token.
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
@@ -116,6 +111,15 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         {
             await using (client.ConfigureAwait(false))
             {
+                // ── SSRF guard — re-validated IMMEDIATELY before Connect to shrink the
+                // DNS-rebinding TOCTOU window. FluentFTP connects by hostname (re-resolving) and
+                // pinning the IP would break TLS certificate/hostname validation, so the tightest
+                // available mitigation is to re-resolve+validate right before connect. Kept inside
+                // the await-using so the client is disposed even on the guard-block return path.
+                var guardResult = await _guard.ValidateHostAsync(host, port, token).ConfigureAwait(false);
+                if (!guardResult.Allowed)
+                    return new DeliveryResult(false, $"FTPS delivery blocked: {guardResult.Reason}");
+
                 await client.Connect(token).ConfigureAwait(false);
 
                 await using var ms = new MemoryStream(content);

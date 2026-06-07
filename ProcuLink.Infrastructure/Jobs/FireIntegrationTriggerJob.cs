@@ -38,6 +38,28 @@ public class FireIntegrationTriggerJob
         _logger = logger;
     }
 
+    // Built lazily once from the guard's connect-time-revalidating handler and reused.
+    private HttpClient? _guardedClient;
+
+    /// <summary>
+    /// Resolves the <see cref="HttpClient"/> used to fire the webhook. The default swaps in the
+    /// guard's connect-time-revalidating <see cref="System.Net.Http.SocketsHttpHandler"/> so a
+    /// DNS-rebind to a private/metadata IP after the up-front
+    /// <see cref="OutboundRequestGuard.ValidateAsync"/> is still rejected at TCP connect.
+    /// Tests override this to inject a fake transport.
+    /// </summary>
+    internal virtual HttpClient CreateSendClient()
+    {
+        if (_guardedClient is not null) return _guardedClient;
+
+        var timeout = _http.CreateClient("delivery").Timeout;
+        _guardedClient = new HttpClient(_guard.CreateGuardedHttpHandler(), disposeHandler: true)
+        {
+            Timeout = timeout,
+        };
+        return _guardedClient;
+    }
+
     [Queue("background")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 30, 120, 600 })]
     public async Task ExecuteAsync(Guid subscriptionId, string payloadJson, CancellationToken ct)
@@ -82,7 +104,7 @@ public class FireIntegrationTriggerJob
 
         try
         {
-            var client = _http.CreateClient("delivery");
+            var client = CreateSendClient();
             using var request = new HttpRequestMessage(HttpMethod.Post, sub.TargetUrl)
             {
                 Content = new StringContent(payloadJson, Encoding.UTF8, "application/json"),

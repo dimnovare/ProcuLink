@@ -2,7 +2,9 @@ using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Security;
 using ProcuLink.Infrastructure;
 
@@ -12,10 +14,23 @@ public sealed class ApiKeyAuthOptions : AuthenticationSchemeOptions { }
 
 /// <summary>
 /// Authenticates machine-to-machine requests carrying X-ProcuLink-Key header.
-/// On success: sets org_id, org_slug, auth_method=api_key, key_id claims.
+/// On success: sets org_id, org_slug, auth_method=api_key, key_id claims AND
+/// stores the resolved internal organisation UUID in HttpContext.Items under the
+/// SAME key TenantResolutionMiddleware uses for the JWT path. This unifies tenant
+/// resolution across both auth schemes onto one value-space (internal Guid in
+/// Items), so API-key controllers resolve the org via ICurrentTenantService just
+/// like JWT controllers, instead of parsing the org_id claim themselves.
 /// </summary>
 public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
 {
+    /// <summary>
+    /// Minimum interval between LastUsedAt writes for a given key. A high-volume
+    /// integration POSTing every few seconds would otherwise issue one UPDATE per
+    /// request on the hot auth path; this throttles those to at most one write per
+    /// window while keeping LastUsedAt fresh enough for "last seen" displays.
+    /// </summary>
+    private static readonly TimeSpan LastUsedThrottle = TimeSpan.FromMinutes(5);
+
     private readonly ProcuLinkDbContext _db;
     private readonly string _hashSecret;
 
@@ -56,9 +71,21 @@ public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
         if (apiKey.ExpiresAt.HasValue && apiKey.ExpiresAt.Value < DateTime.UtcNow)
             return AuthenticateResult.Fail("API key expired.");
 
-        // Fire-and-forget LastUsedAt update (non-critical)
-        apiKey.LastUsedAt = DateTime.UtcNow;
-        _ = _db.SaveChangesAsync(CancellationToken.None);
+        var now = DateTime.UtcNow;
+
+        // Unify tenant resolution across auth schemes: publish the resolved internal
+        // organisation UUID under the SAME HttpContext.Items key that
+        // TenantResolutionMiddleware uses for the JWT path. API-key controllers then
+        // resolve the org via ICurrentTenantService — one resolver, one value-space.
+        Context.Items[CurrentTenantService.Items.OrganisationId] = apiKey.OrganisationId;
+
+        // LastUsedAt: best-effort, throttled, and run on its OWN DI scope so it never
+        // races the request's scoped DbContext (the previous un-awaited
+        // `_ = _db.SaveChangesAsync(...)` shared `_db` with the controller action and
+        // could interleave with the next query on the same context). Throttling keeps
+        // the hot auth path fast for high-volume callers.
+        if (apiKey.LastUsedAt is null || now - apiKey.LastUsedAt.Value >= LastUsedThrottle)
+            TouchLastUsedAsync(apiKey.Id, now);
 
         var claims = new[]
         {
@@ -72,5 +99,32 @@ public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
         var ticket    = new AuthenticationTicket(principal, Scheme.Name);
 
         return AuthenticateResult.Success(ticket);
+    }
+
+    /// <summary>
+    /// Updates LastUsedAt for the given key on a fresh, detached DI scope so it cannot
+    /// race the request-scoped DbContext. Fire-and-forget: failures are logged and
+    /// swallowed — a missed "last used" timestamp must never fail authentication.
+    /// </summary>
+    private void TouchLastUsedAsync(Guid keyId, DateTime usedAt)
+    {
+        var scopeFactory = Context.RequestServices.GetService<IServiceScopeFactory>();
+        if (scopeFactory is null) return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+                await db.TenantApiKeys
+                    .Where(k => k.Id == keyId)
+                    .ExecuteUpdateAsync(s => s.SetProperty(k => k.LastUsedAt, usedAt));
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Non-critical: failed to update LastUsedAt for API key {KeyId}.", keyId);
+            }
+        });
     }
 }

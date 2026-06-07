@@ -118,10 +118,19 @@ builder.Services.AddHangfireServer(opts =>
     opts.Queues = new[] { "critical", "delivery-retry", "polling", "background", "default" };
 });
 
+// SSRF: the "delivery" client sends to tenant-supplied URLs (ErplyConnector /
+// DirectoConnector, and any future CreateClient("delivery") user). Attach the
+// SAME connect-time-revalidating primary handler the HTTP dispatcher + webhook
+// job already build, so a tenant URL pointing at a private/metadata IP (e.g.
+// http://169.254.169.254/…) is rejected at TCP connect. The factory resolves the
+// singleton OutboundRequestGuard lazily, so DI registration order is irrelevant.
 builder.Services.AddHttpClient("delivery", c =>
 {
     c.Timeout = TimeSpan.FromSeconds(30);
-});
+})
+.ConfigurePrimaryHttpMessageHandler(sp =>
+    sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()
+      .CreateGuardedHttpHandler());
 
 if (string.IsNullOrEmpty(builder.Configuration["Storage:R2AccessKeyId"]))
     builder.Services.AddSingleton<IFileStorageService, LocalFileStorageService>();

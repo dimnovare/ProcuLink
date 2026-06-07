@@ -1,6 +1,7 @@
 using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Services;
 
@@ -100,6 +101,7 @@ public sealed class InvoiceController : ControllerBase
 
     // GET /api/invoices/{id}/download?format=csv|xml|json
     [HttpGet("{id:guid}/download")]
+    [EnableRateLimiting("signed-url")]
     public async Task<IActionResult> Download(Guid id, [FromQuery] string format = "csv", CancellationToken ct = default)
     {
         var orgId = _tenant.OrganisationId;

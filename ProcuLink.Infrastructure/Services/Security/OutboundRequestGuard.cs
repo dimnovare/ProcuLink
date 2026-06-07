@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -28,6 +29,14 @@ public sealed class OutboundRequestGuard
         _configuration = configuration;
         _logger = logger;
     }
+
+    /// <summary>
+    /// When <c>true</c> (config <c>Delivery:AllowPrivateNetworkTargets</c>), all
+    /// network-range validation is skipped so local/private test endpoints work.
+    /// The connect-time callback honours this flag too.
+    /// </summary>
+    public bool AllowPrivateNetworkTargets =>
+        _configuration.GetValue<bool>("Delivery:AllowPrivateNetworkTargets", false);
 
     /// <summary>
     /// Validates the given URL for use as an outbound delivery or webhook target.
@@ -153,12 +162,135 @@ public sealed class OutboundRequestGuard
         return GuardResult.Allow();
     }
 
+    // ── Connect-time re-validation (DNS-rebinding TOCTOU defence) ──────────────
+
+    /// <summary>
+    /// Builds a <see cref="SocketsHttpHandler"/> whose <c>ConnectCallback</c> re-resolves
+    /// the target host and RE-VALIDATES the resolved IP AT CONNECT TIME, then opens the TCP
+    /// connection to that exact validated IP. This closes the DNS-rebinding TOCTOU window:
+    /// <see cref="ValidateAsync"/> resolves+validates DNS up front, but a malicious DNS server
+    /// can return a public IP at validation time and a private/metadata IP a moment later when
+    /// the underlying handler re-resolves to connect. By validating the IP we are actually about
+    /// to connect to — and connecting to that pinned IP rather than re-resolving the name a third
+    /// time — a public-at-validation / private-at-connect rebind is blocked.
+    ///
+    /// The original request URI (and therefore the HTTP <c>Host</c> header and the TLS SNI /
+    /// certificate hostname) is preserved: only the socket's destination IP is pinned. TLS still
+    /// negotiates against the hostname, so certificate validation is unaffected.
+    ///
+    /// When <see cref="AllowPrivateNetworkTargets"/> is set the callback connects normally
+    /// (dev/test escape hatch), mirroring <see cref="ValidateAsync"/>.
+    /// </summary>
+    public SocketsHttpHandler CreateGuardedHttpHandler()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            ConnectCallback = GuardedConnectAsync,
+        };
+        return handler;
+    }
+
+    /// <summary>
+    /// <c>ConnectCallback</c> implementation: re-resolve the host, reject if every resolved
+    /// address is in a forbidden range, otherwise connect to the first allowed address.
+    /// Delegates to <see cref="GuardedConnectCoreAsync"/> so the validation logic can be
+    /// unit-tested without constructing the framework-internal connection context.
+    /// </summary>
+    public ValueTask<Stream> GuardedConnectAsync(
+        SocketsHttpConnectionContext context, CancellationToken ct)
+        => GuardedConnectCoreAsync(context.DnsEndPoint.Host, context.DnsEndPoint.Port, ct);
+
+    /// <summary>
+    /// Re-resolves <paramref name="host"/> and validates the resolved IPs at connect time, then
+    /// opens a TCP connection to the first allowed address (pinning the validated IP so the socket
+    /// never re-resolves the name a third time). Throws <see cref="HttpRequestException"/> when the
+    /// host resolves only to forbidden ranges — this is what blocks a DNS-rebind that flipped from
+    /// public (at <see cref="ValidateAsync"/> time) to private/metadata (at connect time).
+    /// <c>internal</c> so it is unit-testable via <c>InternalsVisibleTo</c>.
+    /// </summary>
+    internal async ValueTask<Stream> GuardedConnectCoreAsync(string host, int port, CancellationToken ct)
+    {
+        // Dev/test escape hatch — skip range validation but still connect by hostname.
+        if (AllowPrivateNetworkTargets)
+            return await OpenSocketAsync(host, port, ct);
+
+        IPAddress[] addresses;
+        try
+        {
+            addresses = await Dns.GetHostAddressesAsync(host, ct);
+        }
+        catch (SocketException ex)
+        {
+            _logger.LogWarning(
+                "SSRF guard: connect-time DNS resolution failed for host '{Host}:{Port}': {Message}",
+                host, port, ex.Message);
+            throw new HttpRequestException(
+                $"SSRF guard: DNS resolution failed for host '{host}'.", ex);
+        }
+
+        if (addresses.Length == 0)
+            throw new HttpRequestException($"SSRF guard: host '{host}' resolved to no addresses.");
+
+        // Connect to the FIRST allowed address. Pinning the IP (rather than letting the socket
+        // re-resolve the name) guarantees we connect to an IP we have actually validated.
+        IPAddress? allowed = null;
+        foreach (var ip in addresses)
+        {
+            if (IsBlockedAddress(ip))
+            {
+                _logger.LogWarning(
+                    "SSRF guard blocked connect to '{Host}:{Port}': resolved IP {IP} is in a forbidden range.",
+                    host, port, ip);
+                continue;
+            }
+            allowed = ip;
+            break;
+        }
+
+        if (allowed is null)
+            throw new HttpRequestException(
+                $"SSRF guard: connection to '{host}' blocked — resolved to internal/private addresses only.");
+
+        return await OpenSocketAsync(allowed, port, ct);
+    }
+
+    private static async ValueTask<Stream> OpenSocketAsync(IPAddress ip, int port, CancellationToken ct)
+    {
+        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        try
+        {
+            await socket.ConnectAsync(new IPEndPoint(ip, port), ct);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    private static async ValueTask<Stream> OpenSocketAsync(string host, int port, CancellationToken ct)
+    {
+        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        try
+        {
+            await socket.ConnectAsync(host, port, ct);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
     // ── IP classification ─────────────────────────────────────────────────────
 
     /// <summary>
     /// Returns true when <paramref name="ip"/> should be blocked:
-    /// loopback, private RFC-1918, link-local (169.254/16 — cloud metadata),
-    /// fc00::/7 (IPv6 unique local), fe80::/10 (IPv6 link-local), and
+    /// loopback, private RFC-1918, CGNAT/shared 100.64.0.0/10 (RFC 6598),
+    /// benchmarking 198.18.0.0/15 (RFC 2544), link-local (169.254/16 — cloud
+    /// metadata), fc00::/7 (IPv6 unique local), fe80::/10 (IPv6 link-local), and
     /// unspecified (0.0.0.0 / ::). Unmaps IPv4-mapped IPv6 addresses before
     /// checking so ::ffff:127.0.0.1 is correctly identified as loopback.
     ///
@@ -201,6 +333,14 @@ public sealed class OutboundRequestGuard
 
         // Private: 192.168.0.0/16
         if (a0 == 192 && a1 == 168) return true;
+
+        // CGNAT / shared address space (RFC 6598): 100.64.0.0/10
+        // (100.64.0.0 – 100.127.255.255). Carrier-grade NAT range — reachable
+        // internal infrastructure on some hosts; block like RFC-1918.
+        if (a0 == 100 && a1 >= 64 && a1 <= 127) return true;
+
+        // Benchmarking (RFC 2544): 198.18.0.0/15  (198.18.0.0 – 198.19.255.255)
+        if (a0 == 198 && (a1 == 18 || a1 == 19)) return true;
 
         // Link-local (includes cloud metadata 169.254.169.254): 169.254.0.0/16
         if (a0 == 169 && a1 == 254) return true;

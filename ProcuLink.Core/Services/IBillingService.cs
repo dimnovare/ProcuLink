@@ -46,4 +46,78 @@ public interface IBillingService
 
     /// <summary>Records a pilot extension request and notifies sales. Idempotent.</summary>
     Task RequestPilotExtensionAsync(Guid orgId, CancellationToken ct = default);
+
+    // ── Billing events + period overage (called from the Stripe webhook flow) ──
+    // These are part of the billing contract so the webhook handler calls them
+    // through this interface — never via a runtime downcast to a concrete impl.
+    // A downcast would silently no-op (skipping analytics AND overage billing)
+    // if IBillingService ever resolved to a different implementation.
+
+    /// <summary>
+    /// Emits the <c>billing_upgraded</c> analytics event. Called from the Stripe
+    /// <c>checkout.session.completed</c> webhook when an org moves to a paid plan.
+    /// </summary>
+    Task EmitBillingUpgradedAsync(
+        Guid orgId,
+        string fromPlan,
+        string toPlan,
+        string stripeSessionId,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Emits the <c>billing_downgraded</c> analytics event. Called from the Stripe
+    /// <c>customer.subscription.updated</c> webhook when an org moves to a lower-tier plan.
+    /// </summary>
+    Task EmitBillingDowngradedAsync(
+        Guid orgId,
+        string fromPlan,
+        string toPlan,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Emits the <c>billing_cancelled</c> analytics event. Called from the Stripe
+    /// <c>customer.subscription.deleted</c> webhook. <paramref name="hadOrdersThisMonth"/>
+    /// must reflect whether the org processed any orders in the current Stripe billing cycle.
+    /// </summary>
+    Task EmitBillingCancelledAsync(
+        Guid orgId,
+        string previousPlan,
+        bool hadOrdersThisMonth,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Computes how many orders an org processed ABOVE its effective monthly cap
+    /// within the given billing window [periodStart, periodEnd). Pilot/Enterprise
+    /// and unconfigured plans return 0. Used by the webhook to bill the just-closed period.
+    /// </summary>
+    Task<int> ComputePeriodOverageOrdersAsync(
+        Guid orgId,
+        DateTime periodStart,
+        DateTime periodEnd,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Bills the per-order overage for an organisation as a Stripe invoice item.
+    /// Idempotent on (orgId, billingKey). Safe (never throws, no Stripe item) when
+    /// Stripe is not configured. Called from the <c>invoice.created</c> webhook.
+    /// </summary>
+    Task<OverageBillingResult> BillOverageForInvoiceAsync(
+        Guid orgId,
+        string billingKey,
+        int overageOrders,
+        CancellationToken ct = default);
 }
+
+/// <summary>
+/// Outcome of an overage-billing attempt. <see cref="AlreadyBilled"/> is true when
+/// the (orgId, billingKey) slot was already taken (idempotent no-op). When Stripe
+/// is unconfigured or the org has no Stripe customer, <see cref="StripeItemId"/>
+/// is null but the computed amount is still returned for auditing.
+/// </summary>
+public sealed record OverageBillingResult(
+    Guid OrgId,
+    string BillingKey,
+    int OverageOrders,
+    long AmountCents,
+    bool AlreadyBilled,
+    string? StripeItemId);

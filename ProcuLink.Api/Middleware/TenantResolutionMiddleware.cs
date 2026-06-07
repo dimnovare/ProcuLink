@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
@@ -15,6 +16,13 @@ namespace ProcuLink.Api.Middleware;
 /// auto-provisioned on the spot (pilot trial, 14-day window). This covers the first
 /// login flow where Clerk creates an org before the back-end has ever seen it.
 ///
+/// Auto-provisioning is throttled per client IP / email-domain by a lightweight
+/// in-memory sliding window so a script that mints fresh Clerk identities cannot
+/// create unlimited 14-day trials (trial-farming) or hammer the request-hot-path
+/// write. A normal first login makes a single provisioning call and is never
+/// affected. When the throttle trips, the request continues without a resolved
+/// tenant (downstream [Authorize] / tenant-scoped controllers fail closed).
+///
 /// Unauthenticated requests (e.g. /health) pass through untouched.
 /// </summary>
 public sealed class TenantResolutionMiddleware
@@ -22,10 +30,55 @@ public sealed class TenantResolutionMiddleware
     private readonly RequestDelegate _next;
     private readonly ILogger<TenantResolutionMiddleware> _logger;
 
+    // Auto-provision throttle: at most this many new orgs may be minted from a single
+    // throttle key (IP + email-domain) within the rolling window. A legitimate new
+    // user provisions exactly once, so this leaves normal first-login untouched while
+    // stopping a script from farming trials / amplifying the hot-path write.
+    private const int MaxProvisionsPerWindow = 5;
+    private static readonly TimeSpan ProvisionWindow = TimeSpan.FromMinutes(10);
+
+    // Hard upper bound on the number of distinct throttle keys we keep state for. The
+    // sliding window only protects against repeats from the SAME key; without this cap a
+    // flood of DISTINCT keys (many IPs/email-domains — botnet, NAT churn, spoofed XFF)
+    // would grow the dictionary without limit (memory-growth / unbounded-dictionary DoS).
+    // When the cap is exceeded we evict the least-recently-touched entries. The cap is
+    // far larger than any realistic burst of legitimate concurrent first-logins, so an
+    // honest new user is never evicted before they finish their single provision.
+    private const int MaxTrackedKeys = 10_000;
+
+    // How often (by call count) to run the opportunistic stale-entry sweep. Sweeping on
+    // every call would make the hot path O(n) in the number of tracked keys; gating it
+    // keeps the amortised cost negligible while still reclaiming aged-out entries
+    // promptly relative to the 10-minute window.
+    private const int SweepEveryNCalls = 256;
+
+    // Singleton state (middleware is registered via UseMiddleware<>, so instance
+    // fields persist across requests). Keyed by throttle key → recent provision
+    // timestamps within the window. Bounded two ways so it can never grow without limit:
+    //  (1) a periodic sweep evicts entries whose window has fully aged out, and
+    //  (2) a hard MaxTrackedKeys cap evicts the least-recently-touched entries.
+    private readonly ConcurrentDictionary<string, ProvisionWindowState> _provisionWindows = new();
+
+    // Drives the periodic sweep cadence; incremented on every reservation attempt.
+    private int _reserveCalls;
+
+    // Allows tests to control the clock; defaults to UTC now.
+    private readonly Func<DateTime> _utcNow;
+
     public TenantResolutionMiddleware(RequestDelegate next, ILogger<TenantResolutionMiddleware> logger)
+        : this(next, logger, utcNow: null)
+    {
+    }
+
+    // Test seam: inject a clock to exercise the sliding window deterministically.
+    internal TenantResolutionMiddleware(
+        RequestDelegate next,
+        ILogger<TenantResolutionMiddleware> logger,
+        Func<DateTime>? utcNow)
     {
         _next = next;
         _logger = logger;
+        _utcNow = utcNow ?? (() => DateTime.UtcNow);
     }
 
     public async Task InvokeAsync(HttpContext context, ProcuLinkDbContext db, IAnalyticsService analytics)
@@ -60,8 +113,25 @@ public sealed class TenantResolutionMiddleware
 
                 if (org is null)
                 {
+                    // Throttle auto-provisioning so a script minting fresh Clerk
+                    // identities cannot farm unlimited trials or amplify the hot-path
+                    // write. Legitimate first login provisions once and is unaffected.
+                    var throttleKey = BuildThrottleKey(context, clerkOrgId);
+                    if (!TryReserveProvision(throttleKey))
+                    {
+                        _logger.LogWarning(
+                            "Auto-provision throttled for TenantKey={ClerkOrgId} (ThrottleKey={ThrottleKey}); " +
+                            "more than {Max} new orgs from this key within {Minutes} min.",
+                            clerkOrgId, throttleKey, MaxProvisionsPerWindow, ProvisionWindow.TotalMinutes);
+
+                        // Fail closed: continue without a resolved tenant. Downstream
+                        // [Authorize] / tenant-scoped controllers will reject the call.
+                        await _next(context);
+                        return;
+                    }
+
                     // Auto-provision: first time this tenant key contacts the API.
-                    var now = DateTime.UtcNow;
+                    var now = _utcNow();
                     var orgName = orgSlug ?? clerkOrgId;
                     var newOrg = new Organisation
                     {
@@ -123,5 +193,136 @@ public sealed class TenantResolutionMiddleware
         // 4-char random suffix for uniqueness
         slug += "-" + Guid.NewGuid().ToString("N")[..4];
         return slug;
+    }
+
+    /// <summary>
+    /// Builds the abuse-throttle key. Primary axis is the client IP (a script minting
+    /// Clerk identities still originates from a bounded set of addresses); the email
+    /// domain (from an <c>email</c> claim, when present) is folded in so shared NAT/proxy
+    /// egress doesn't lump unrelated tenants together too aggressively. Falls back to the
+    /// tenant key when no IP is available (e.g. in tests / unusual hosting).
+    /// </summary>
+    private static string BuildThrottleKey(HttpContext context, string clerkOrgId)
+    {
+        var ip = context.Connection.RemoteIpAddress?.ToString();
+
+        var email = context.User.FindFirst("email")?.Value;
+        var domain = string.Empty;
+        if (!string.IsNullOrEmpty(email))
+        {
+            var at = email.LastIndexOf('@');
+            if (at >= 0 && at < email.Length - 1)
+                domain = email[(at + 1)..].ToLowerInvariant();
+        }
+
+        if (!string.IsNullOrEmpty(ip))
+            return string.IsNullOrEmpty(domain) ? $"ip:{ip}" : $"ip:{ip}|dom:{domain}";
+
+        // No IP context: fall back to the tenant key so we still bound a single key,
+        // without lumping every keyless request into one global bucket.
+        return $"tk:{clerkOrgId}";
+    }
+
+    /// <summary>
+    /// Sliding-window reservation. Returns true and records a provision if the key is
+    /// under the limit for the current window; false if it has hit the cap. Thread-safe
+    /// and self-pruning so the dictionary stays bounded: a periodic sweep evicts entries
+    /// whose window has fully aged out, and a hard size cap evicts the least-recently-
+    /// touched entries so distinct-key floods cannot grow the store without limit.
+    /// </summary>
+    private bool TryReserveProvision(string throttleKey)
+    {
+        var now = _utcNow();
+
+        // Bound the dictionary BEFORE touching this key, so eviction work is amortised
+        // across calls rather than left to grow until memory pressure.
+        BoundStore(now);
+
+        var state = _provisionWindows.GetOrAdd(throttleKey, _ => new ProvisionWindowState());
+
+        lock (state.Gate)
+        {
+            state.LastTouched = now;
+
+            // Drop timestamps that have aged out of the window.
+            state.Timestamps.RemoveAll(t => now - t >= ProvisionWindow);
+
+            if (state.Timestamps.Count >= MaxProvisionsPerWindow)
+                return false;
+
+            state.Timestamps.Add(now);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Keeps <see cref="_provisionWindows"/> from growing without limit under a flood of
+    /// distinct throttle keys. Two complementary mechanisms:
+    ///   1. A periodic sweep (every <see cref="SweepEveryNCalls"/> calls) removes entries
+    ///      whose sliding window has fully aged out — these can never throttle again, so
+    ///      retaining them only wastes memory.
+    ///   2. A hard <see cref="MaxTrackedKeys"/> cap: if the store is still over budget
+    ///      after sweeping (many keys active within the window at once), evict the
+    ///      least-recently-touched entries down to the cap.
+    /// Both are safe to interleave with concurrent reservations: a key removed here is
+    /// simply re-created by the next <see cref="ConcurrentDictionary{TKey,TValue}.GetOrAdd"/>,
+    /// at worst resetting that key's window — acceptable for an abuse throttle.
+    /// </summary>
+    private void BoundStore(DateTime now)
+    {
+        var calls = Interlocked.Increment(ref _reserveCalls);
+        var dueForSweep = calls % SweepEveryNCalls == 0;
+        var overCap = _provisionWindows.Count > MaxTrackedKeys;
+
+        if (!dueForSweep && !overCap)
+            return;
+
+        // 1. Evict fully-expired entries (no live timestamps left in the window).
+        foreach (var kvp in _provisionWindows)
+        {
+            var state = kvp.Value;
+            bool expired;
+            lock (state.Gate)
+            {
+                state.Timestamps.RemoveAll(t => now - t >= ProvisionWindow);
+                expired = state.Timestamps.Count == 0;
+            }
+
+            if (expired)
+                _provisionWindows.TryRemove(kvp.Key, out _);
+        }
+
+        // 2. If still over the hard cap (many keys active simultaneously), evict the
+        //    least-recently-touched entries until back within budget.
+        var excess = _provisionWindows.Count - MaxTrackedKeys;
+        if (excess <= 0)
+            return;
+
+        var victims = _provisionWindows
+            .OrderBy(kvp =>
+            {
+                lock (kvp.Value.Gate) { return kvp.Value.LastTouched; }
+            })
+            .Take(excess)
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var key in victims)
+            _provisionWindows.TryRemove(key, out _);
+    }
+
+    /// <summary>
+    /// Test seam: current number of distinct throttle keys retained in the store. Lets
+    /// tests assert the dictionary stays bounded under a flood of distinct keys.
+    /// </summary>
+    internal int TrackedKeyCount => _provisionWindows.Count;
+
+    private sealed class ProvisionWindowState
+    {
+        public object Gate { get; } = new();
+        public List<DateTime> Timestamps { get; } = new();
+
+        // Last time this key was reserved/swept; drives least-recently-touched eviction.
+        public DateTime LastTouched { get; set; }
     }
 }

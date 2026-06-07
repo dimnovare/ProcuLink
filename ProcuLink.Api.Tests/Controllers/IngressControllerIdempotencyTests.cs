@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -35,9 +36,12 @@ public class IngressControllerIdempotencyTests
             .Options);
 
     /// <summary>
-    /// Builds an IngressController with the caller's org_id claim set, plus a
-    /// seeded Organisation (matching <paramref name="slug"/>) and Supplier so the
-    /// slug guard and supplier resolution both pass.
+    /// Builds an IngressController wired through the UNIFIED tenant-resolution path:
+    /// the internal org UUID is published into HttpContext.Items (exactly as
+    /// ApiKeyAuthHandler does after authentication), and the controller reads it via
+    /// ICurrentTenantService — not by parsing an org_id claim. Seeds a matching
+    /// Organisation (by <paramref name="slug"/>) and Supplier so the slug guard and
+    /// supplier resolution both pass.
     /// </summary>
     private static (IngressController Controller, Guid OrgId, Guid SupplierId) BuildController(
         ProcuLinkDbContext db,
@@ -65,18 +69,26 @@ public class IngressControllerIdempotencyTests
 
         var idempotency = new IdempotencyService(db);
 
+        // HttpContext.Items carries the resolved internal org UUID — the same single
+        // value-space ApiKeyAuthHandler/TenantResolutionMiddleware populate. The real
+        // CurrentTenantService reads it through IHttpContextAccessor.
+        var httpContext = new DefaultHttpContext
+        {
+            User  = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim("org_id", orgId.ToString()) }, "ApiKey")),
+        };
+        httpContext.Items[CurrentTenantService.Items.OrganisationId] = orgId;
+
+        var accessor = new HttpContextAccessor { HttpContext = httpContext };
+        var tenant   = new CurrentTenantService(accessor);
+
         var controller = new IngressController(
             db,
             idempotency,
+            tenant,
             NullLogger<IngressController>.Instance);
 
-        var identity  = new ClaimsIdentity(new[] { new Claim("org_id", orgId.ToString()) }, "ApiKey");
-        var principal = new ClaimsPrincipal(identity);
-
-        controller.ControllerContext = new ControllerContext
-        {
-            HttpContext = new DefaultHttpContext { User = principal },
-        };
+        controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
 
         return (controller, orgId, supplierId);
     }

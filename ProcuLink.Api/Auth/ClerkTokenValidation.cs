@@ -13,14 +13,17 @@ namespace ProcuLink.Api.Auth;
 public static class ClerkTokenValidation
 {
     /// <summary>
-    /// Returns <c>true</c> when the token's <paramref name="azp"/> is acceptable.
+    /// Returns <c>true</c> when the token's <paramref name="azp"/> is present and matches one of
+    /// the configured <paramref name="authorizedParties"/>.
     /// </summary>
     /// <remarks>
-    /// A missing/empty <c>azp</c> is accepted: only a token minted for another origin carries a
-    /// non-matching <c>azp</c>, so its absence cannot indicate a cross-application token. A present
-    /// <c>azp</c> must match one of the configured <paramref name="authorizedParties"/>
-    /// (compared with the set's own comparer; configure it case-insensitive).
+    /// A present <c>azp</c> is REQUIRED: production Clerk tokens always carry <c>azp</c> (this app's
+    /// frontend origin), so a missing/empty <c>azp</c> is rejected rather than waved through — that
+    /// allowance would let a token minted for a different app on the same Clerk instance be accepted
+    /// if it omitted the claim. A present <c>azp</c> must match one of the configured
+    /// <paramref name="authorizedParties"/> (compared with the set's own comparer; configure it
+    /// case-insensitive).
     /// </remarks>
     public static bool IsAuthorizedParty(string? azp, IReadOnlySet<string> authorizedParties)
-        => string.IsNullOrEmpty(azp) || authorizedParties.Contains(azp);
+        => !string.IsNullOrEmpty(azp) && authorizedParties.Contains(azp);
 }
