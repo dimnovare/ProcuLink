@@ -66,3 +66,6 @@ tmp*
 
 # Local design reference handoff — not product code
 docs/design_handoff_proculink_redesign/
+
+# Live prod-test scratch fixtures (uncommitted working harness)
+.live-fixtures/
