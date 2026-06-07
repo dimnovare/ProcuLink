@@ -6,6 +6,31 @@ _Date: 2026-06-06 · Method: code-grounded (the **current repo is the source of 
 
 > **Verified corrections to stale docs (checked live this session):** the **Distributor Stripe product exists and is self-serve** (retrieved live from the Stripe API: €1,499/mo + €14,928/yr, both active); **Clerk production is live** on the deployed site (drove it logged-in); **backend tests = 887** (not 211/213); the **cross-tenant `FindAsync`, all-zero AES key, and SSRF guard are genuinely fixed in code**.
 
+## ✅ Audit completion tracker (live — last updated 2026-06-07)
+
+Per-item status against the current code. Legend: `[x]` done+verified · `[~]` partial · `[ ]` in progress · `[—]` deliberately deferred/flagged (reason). Wave commits in `()`. Full plans for in-progress items: `WAVE_D_BACKEND_REMAINING.md`; wave-level view: `LAUNCH_EXECUTION_PLAN.md` tracker.
+
+**Part B (g) — refactor vs can-wait**
+- [x] R1 unify tenant resolution (`3c789b6`) · [x] R2 stuck-order requeue (`0da39cf`) · [x] R3 billing on `IBillingService` (`3c789b6`)
+- [ ] W1 decompose OrderService (behind `IOrderService` facade) — building · [ ] W2 status transition table — building · [ ] W3 R2/DB retention+erase — building
+- [x] W4 Redis-ready nonce (config flag) + API HSTS/nosniff (`0b34ff7`)
+- [—] W5 consolidate retry schedulers (refactors correct code) · [—] W6 split api-client.ts (collides w/ active FE chips; DX-only)
+
+**Part 22 B — drift items** — [x] B1 model pin · [x] B2 Distributor key · [x] B3 Stripe AppInfo/version · [x] B4 next pin+engines · [~] B5 Resend wired/docs honest · [~] B6 single-instance documented (runbook) · [x] B7 Worker-down alert · [x] B8 Npgsql pool ceiling
+
+**Part 24 §1.1 bottlenecks** — [x] A pool ceiling · [x] B ListAsync retired→ListPaged · [x] C ingress idempotency · [x] D AI chunking · [~] E retention sweep (DB done; R2-file delete = W3) · [x] F email-poller indexed flag (`eb24aa6`) · [—] G heavy-parse queue (marginal at pilot)
+**§1.4** — [x] redis nonce (`0b34ff7`) · [—] partition audit/passport (redesign-later) · [—] denormalize line_count/total_value (redesign-later, drift risk)
+
+**Part 24 §2 DB** — [x] §2.3.2 AI-candidates sort index (`eb24aa6`) · [x] §2.3.3 email-flag index · [—] §2.3.4 invoices/ASN composite (frozen tables, no query) · [x] §2.4 canonical_json/ListAsync (retired) · [~] §2.4.2 BuyerName split (read-column-first pattern) · [—] §2.4.4 jsonb converter (deliberate) · [ ] §2.5 Postgres RLS — building · [—] §2.7.1 SchemaFingerprints rename (cosmetic/risky) · [x] §2.7.2 migrate-fail-loud (`5013fd8`); [—] phantom-migration cleanup (dangerous pre-launch)
+
+**Part 26 security** — [x] P1-1 SSRF · [x] P1-2 exception handler · [x] P1-3 azp+Clerk cutover · [x] P1-4 CORS · [x] P1-5 provision throttle · [~/—] P1-6 Postmark (token const-time + Warning logs; signature needs CF Worker) · [x] P2-1 path-traversal · [x] P2-2 LastUsedAt await · [x] P2-3 nonce Redis-ready (`0b34ff7`) · [x] P2-4 rate limits broadened
+
+**Part 28 code-quality** — [x] A1 dead/misleading CTAs (Wave 1 + DESADV→501 `d6c44ac`) · [ ] B1 OrderService split (=W1) · [~] B5 stale docs (latest=correct; historical=labeled) · [—] B3/D5 typed-DTO layer (post-launch)
+
+**UI/UX top-10** — [x] 1 pricing 6→3 · [x] 2 Distributor in-app path · [x] 3 .x12 import · [x] 4 wizard blue→green · [x] 5 wizard a11y · [ ] 6 Admin-nav gating (needs isAdmin signal) · [~] 7 Document-Anatomy confidences · [x] 8 LimitBanner · [~] 9 mobile lineage · [~] 10/C1 landing claims · [—] C2 social proof (needs real data)
+
+---
+
 ## Table of contents
 **Part A — Strategy & business**
 1. Market sizing · 2. Competitive mapping · 3. Customer economics · 4. Failure modes · 5. Value bundle · 6. Year-1 plan · 7. Seed-investor verdict

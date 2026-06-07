@@ -7,6 +7,45 @@
 
 ---
 
+## ✅ Completion tracker (live — last updated 2026-06-07)
+
+Legend: `[x]` done + verified · `[~]` partial · `[ ]` in progress / not done · `[—]` deliberately deferred or flagged (reason).
+
+**Launch-blocker waves**
+- [x] **Wave 0** — reconcile (read-only; ~7 items already-fixed, no redo)
+- [x] **Wave 1** — honesty / dead-CTA / capability over-claims (frontend `432c4ea`)
+- [x] **Wave 2** — correctness: Npgsql pool ceiling · ingress idempotency · AI 50-line chunking · stuck-order requeue + `requeue_count` migration (`0da39cf`)
+- [x] **Wave 3** — security P1 batch: SSRF connect-time revalidation (incl. ERP) · global exception handler/ProblemDetails · `azp` required · CORS wildcard removed · tenant-resolution unified · billing on `IBillingService` · rate-limit policies applied · path-traversal containment (`3c789b6`)
+- [x] **Wave 4** — reliability: Worker Sentry + `WorkerHealthAlertJob` · deep `/health` vs `/health/ready` · DataRetention sweep (dormant) · migrate-fail-loud (`5013fd8`/`961d5af`)
+- [x] **Wave 5** — billing: Stripe `AppInfo` + test-mode QA + `stripe-go-live-runbook.md` (`bbe1dd5`)
+- [x] **Wave 6** — UX: pricing 6→3 + ROI recommender + Distributor upsell · wizard a11y · `next` pinned + engines · explicit `ExtractionModel` (`4af5dd5`)
+- [x] **Wave 7** — full prod test: all 7 upload formats parse live · HTTP/webhook delivery → `delivered` · API-key ingress · SFTP/FTPS/SMTP + SFTP/IMAP/S3 + inbound-email proven
+- [x] **Wave 8** — clean-env regression gate (**990 green**) · SPF+DKIM+**DMARC** complete (verified resolving) · consolidated ops runbook `docs/deployment/launch-operations-runbook.md` (`03b24fa`)
+
+**Frontend (design + launch polish)**
+- [x] Design-primitive migration — 12 in-app pages → `PageShell/PageHeader/Card/MobileListRow/UnifiedStatusBadge` + green-primary (`004c7d0`)
+- [x] Per-page SEO metadata + self-canonical (/how-it-works,/formats,/pricing) · CSP `frame-ancestors 'self'` · og-image 1.99 MB→119 KB · honest hero 9/6/6 (`2d7ab38`)
+
+**Wave D — backend (this push)**
+- [x] **W4 / P2-3** Redis-ready HMAC nonce (config flag) + API **HSTS/nosniff** headers (`0b34ff7`)
+- [x] **§1.1.F / §2.3.2 / §2.3.3** EmailPolling indexed flag (+migration+backfill) + AI-candidates / SFTP / S3 partial indexes (`eb24aa6`)
+- [x] **A1.3 / D3** DESADV upload → 501 (was misleading 202) (`d6c44ac`)
+- [x] **R1 / R2 / R3** (Waves 0-6) · **P1-1..P1-5, P2-1/2/4** · **P1-3** azp + Clerk prod cutover · **B1-B8** drift — verified done
+- [ ] **W2** order-status transition table — building now
+- [ ] **W3** R2/DB GDPR per-order erase — building now
+- [ ] **W1** OrderService decompose behind the `IOrderService` facade — building now
+- [ ] **§2.5** Postgres RLS (defence-in-depth) — building now
+- [—] **W6** split `api-client.ts` — collides with the active frontend chips; DX-only, zero customer value → post-launch
+- [—] **W5** consolidate dual retry schedulers — refactors currently-correct code; pure risk → post-launch
+- [—] **§1.4** denormalize `line_count`/`total_value` + partition audit/passport — audit "redesign-later"; drift risk; marginal at pilot
+- [—] Neon **pooled endpoint** + enable **DataRetention** sweep — founder env/Railway (connection string + `DataRetention:Enabled=true`)
+- [—] **P1-6** Postmark signature (needs the CF inbound Worker to sign) · SchemaFingerprints rename · phantom-migration cleanup — dangerous/cosmetic pre-launch
+- [—] **EDIFACT** INVOIC/DESADV (EdiFabric licence) · cross-org mapping library / i18n / PEPPOL AP — post-launch roadmap
+
+Per-item plans + risk + tests for the four in-progress items: **`docs/strategy/WAVE_D_BACKEND_REMAINING.md`**.
+
+---
+
 ## 0. Already fixed since the audit (DO NOT redo — verify only)
 
 Wave 0 re-verifies each before any agent touches the area, to avoid re-introducing bugs:
