@@ -51,6 +51,15 @@ builder.WebHost.UseSentry(o =>
 
 // ── Stripe SDK ────────────────────────────────────────────────────────────
 StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"] ?? string.Empty;
+// API-version determinism: Stripe.net pins outgoing calls to the API version its
+// release was compiled against (this is Stripe.net 51.1.0 — the package version in
+// ProcuLink.Api.csproj IS the pin), so outgoing requests do NOT drift with the
+// account-default version. We deliberately do NOT set StripeConfiguration.ApiVersion
+// to a hand-typed string: forcing a version newer/older than the SDK's models would
+// risk webhook/response deserialization drift. The one thing to keep in lock-step is
+// the Stripe webhook endpoint's API version in the dashboard — see the Stripe go-live
+// runbook (docs/deployment). AppInfo just tags ProcuLink in Stripe's request logs.
+StripeConfiguration.AppInfo = new AppInfo { Name = "ProcuLink", Url = "https://proculink.eu" };
 
 // ── Database ───────────────────────────────────────────────────────────────
 // Cap the Npgsql pool in code so it applies regardless of the env-injected
