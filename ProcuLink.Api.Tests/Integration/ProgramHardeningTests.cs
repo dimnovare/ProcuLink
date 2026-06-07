@@ -195,6 +195,33 @@ public sealed class ProgramHardeningTests : IClassFixture<HardeningTestFactory>
         Assert.NotNull(svc);
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    // Baseline security response headers (HSTS + nosniff + Referrer-Policy) are
+    // emitted on every response via the OnStarting middleware. Runs before
+    // routing, so even a non-200 carries them.
+    // ────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task SecurityHeaders_ArePresentOnEveryResponse()
+    {
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/health");
+
+        Assert.True(
+            response.Headers.TryGetValues("X-Content-Type-Options", out var nosniff)
+                && nosniff.Contains("nosniff"),
+            "X-Content-Type-Options: nosniff must be present on every response.");
+
+        Assert.True(
+            response.Headers.TryGetValues("Strict-Transport-Security", out var hsts)
+                && hsts.Any(v => v.Contains("max-age=")),
+            "Strict-Transport-Security must be present on every response.");
+
+        Assert.True(
+            response.Headers.Contains("Referrer-Policy"),
+            "Referrer-Policy must be present on every response.");
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>

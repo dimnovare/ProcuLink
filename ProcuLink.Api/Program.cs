@@ -518,9 +518,18 @@ builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.Des
 
 // ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
 // IDistributedCache for HmacWebhookVerifier nonce replay store.
-// MemoryDistributedCache is single-instance; swap for Redis when horizontal scaling is needed:
-//   builder.Services.AddStackExchangeRedisCache(o => o.Configuration = config["Redis:ConnectionString"]);
-builder.Services.AddDistributedMemoryCache();
+// MemoryDistributedCache is single-instance (correct for one API replica). Set
+// Redis:ConnectionString to make HMAC-nonce replay protection cross-instance for
+// horizontal scaling — no other code change needed (closes P2-3 / W4 at the swap point).
+var hmacNonceRedis = builder.Configuration["Redis:ConnectionString"];
+if (!string.IsNullOrWhiteSpace(hmacNonceRedis))
+{
+    builder.Services.AddStackExchangeRedisCache(o => o.Configuration = hmacNonceRedis);
+}
+else
+{
+    builder.Services.AddDistributedMemoryCache();
+}
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
 // Stateless source-column extractor used by the magic-mapping UI (GET /api/suppliers/{id}/mapping/source-columns).
@@ -627,6 +636,24 @@ var app = builder.Build();
 // exception details (the message + stack) ONLY in Development, surfaced as
 // ProblemDetails extensions for local debugging.
 app.UseExceptionHandler();
+
+// ── Baseline security response headers (every API response) ───────────────
+// nosniff stops content-type sniffing; HSTS instructs browsers that hit the API
+// host directly to pin HTTPS (TLS is terminated at Railway, so we send the header
+// rather than redirect). Referrer-Policy limits cross-origin referrer leakage.
+// Set via OnStarting so they apply regardless of which middleware writes the body.
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        var headers = context.Response.Headers;
+        headers["X-Content-Type-Options"] = "nosniff";
+        headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains";
+        headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+        return Task.CompletedTask;
+    });
+    await next();
+});
 
 // ── OpenAPI / Scalar UI — dev only ────────────────────────────────────────
 if (app.Environment.IsDevelopment())
