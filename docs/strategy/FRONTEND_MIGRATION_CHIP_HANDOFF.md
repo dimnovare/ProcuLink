@@ -24,6 +24,13 @@ with your work is `src/app/layout.tsx` (1 line added at the top of the `metadata
 and `next.config.ts` — if you also edited those, resolve trivially (keep both changes).
 Your `(app)` page edits do not overlap the other three files.
 
+## Heads-up: two parallel frontend efforts may exist
+
+`git worktree list` in `project-proculink` showed a second worktree on branch **`ui-parity`**
+(`e6c7905`) alongside the uncommitted WIP in the main checkout. If both are migrating pages to
+the design primitives, **reconcile them before committing** so you don't ship divergent versions
+of the same pages. Confirm which branch is the source of truth with the founder.
+
 ## Your WIP at handoff time
 
 At 2026-06-07 the working tree had ~12 uncommitted `(app)` page files mid-migration:
