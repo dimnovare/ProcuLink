@@ -35,14 +35,14 @@ Full sweep of every launch-critical surface, driven against the live founder ses
 | MX `send.proculink.eu` | `feedback-smtp.eu-west-1.amazonses.com` | ✅ (Resend bounces) |
 | DKIM `resend._domainkey` | RSA key present | ✅ Resend signing |
 | GSC | `google-site-verification=…` | ✅ |
-| **DMARC `_dmarc.proculink.eu`** | **does not exist** | ❌ **GAP** |
+| DMARC `_dmarc.proculink.eu` | `v=DMARC1; p=none; rua=mailto:dim.novare+dmarc@gmail.com; fo=1` | ✅ **ADDED 2026-06-07** |
 
 **Resend outbound is correctly configured** (SPF via `send.` subdomain + root DKIM) — SPF+DKIM
-align. The single email-auth gap is **DMARC**. Recommended (safe, monitoring-only):
-`_dmarc.proculink.eu  TXT  "v=DMARC1; p=none; rua=mailto:dim.novare+dmarc@gmail.com; fo=1"`.
-`p=none` does not enforce, so it cannot harm deliverability — it only enables reporting and
-improves inbox placement at strict receivers (Gmail/Microsoft). Escalate to `p=quarantine`
-later once reports confirm all legit mail passes.
+align. **DMARC was the only gap and is now closed:** added via the Cloudflare API (founder approved
+`p=none`), verified resolving via 1.1.1.1 + 8.8.8.8. `p=none` is monitoring-only (cannot harm
+deliverability); it enables aggregate reports + improves inbox placement at strict receivers
+(Gmail/Microsoft). **Escalate to `p=quarantine` post-launch** once reports confirm all legit mail
+passes. The email-auth trifecta (SPF + DKIM + DMARC) is now complete.
 
 ## Observability
 
@@ -72,6 +72,7 @@ later once reports confirm all legit mail passes.
 
 ## Net
 
-Launch-ready across infra, observability, email (minus DMARC), and billing (test mode).
-**Action required:** add the DMARC record (founder decision on policy + apply). Everything
-else is verified green on the current deployed build.
+Launch-ready across infra, observability, email (SPF+DKIM+DMARC all green), and billing
+(test mode). **No open infra actions** — the DMARC gap is closed. The only remaining
+launch gate is the founder-only Stripe live-mode swap (target June 9). Everything else is
+verified green on the current deployed build.
