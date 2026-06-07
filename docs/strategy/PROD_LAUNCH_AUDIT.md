@@ -10,6 +10,8 @@ _Date: 2026-06-06 · Method: code-grounded (the **current repo is the source of 
 
 Per-item status against the current code. Legend: `[x]` done+verified · `[~]` partial · `[ ]` in progress · `[—]` deliberately deferred/flagged (reason). Wave commits in `()`. Full plans for in-progress items: `WAVE_D_BACKEND_REMAINING.md`; wave-level view: `LAUNCH_EXECUTION_PLAN.md` tracker.
 
+> **Inline status tags (added 2026-06-07):** every actionable recommendation in the PROSE sections below now carries a verified inline tag — **`[x] BUILT`** (with file:line/commit evidence — the offer⇔works rule forbids `[x]` without proof), **`[~] PARTIAL`** (what's left), **`[—] NOT BUILT`** with its bucket: *deferred* (the audit's own redesign-later/post-revenue items, e.g. RLS, cross-org library), *founder-ops* (sales / live-key swap / real-supplier delivery — no code), *roadmap* (frozen, e.g. Peppol/e-invoice wedge), or *licence* (EDIFACT INVOIC/DESADV). 228 tags applied by a verified pass (8 read+verify agents → uniqueness-checked placement). Where a line had no marker it was pure analysis (TAM math, opinions), intentionally left untagged.
+
 **Part B (g) — refactor vs can-wait**
 - [x] R1 unify tenant resolution (`3c789b6`) · [x] R2 stuck-order requeue (`0da39cf`) · [x] R3 billing on `IBillingService` (`3c789b6`)
 - [x] W1 OrderService decomposed behind an internal facade (1618→124-line `OrderService` delegating to OrderIngestion/Query/Resolution/Transform + OrderServiceShared; verbatim moves, ctor/DI/tests unchanged; adversarial-reviewed SAFE-TO-MERGE; 1028 tests) · [x] W2 order-status state machine (`OrderStatusMachine`: transition map + IsAllowed/IsTerminal/IsFailure + centralized Redeliver guard, behaviour-preserving) · [x] W3 R2/DB per-order GDPR erase (`IDataErasureService` + admin endpoint; FK-safe confirmations + R2; adversarial-reviewed)
@@ -168,13 +170,13 @@ or carve a defensible buyer-side niche before it arrives.
 > The buyer (a procurement coordinator) has never heard of Zapier and doesn't benchmark
 > against it; they benchmark against the EDI quote they were once scared by and the Excel
 > file they hate. One-liner: *"Send purchase orders to any supplier in their required
-> format — no EDI consultants, no per-document fees, live in a day."* The "same coverage,
+> **[x] BUILT — no "same coverage/10x cheaper" copy in FE; tracker UI/UX #10/C1 landing claims.** format — no EDI consultants, no per-document fees, live in a day."* The "same coverage,
 > 10× cheaper" claim must die: coverage is **not** at parity (no AS2, stub invoices), and
 > claiming it fails the founder's own "offer ⇔ works" rule.
 
 **Moat honesty:** "smarter than Zapier" is a 12–18-month head start, not a moat. The only
 durable defensibility is (1) accumulated per-customer mapping/validation config = switching
-cost, (2) Erply/Directo connector depth, (3) a *cross-org* mapping library — which is the
+cost, (2) Erply/Directo connector depth, (3) **[—] NOT BUILT (deferred) — cross-org library out of scope per SchemaFingerprint.cs:10; build after ~8-10 customers.** a *cross-org* mapping library — which is the
 one network-effect feature **not** yet built and the one worth building if venture-scale is
 ever the goal.
 
@@ -212,20 +214,20 @@ pay for 100% of savings).
 - **Max rational WTP ≈ €1,030/mo** (35% of €2,940); easily €1,400+ at 90%.
 - Ladder match: **Distributor €1,499** (2,500/mo) is too small on volume; this is **Enterprise.**
 - **Payback: < 2 weeks.** This tier is **underpriced** — at €1,499 you leave €500–1,500/mo
-  on the table vs. their savings. **Raise the ceiling; route 5k+ PO buyers to Enterprise €2,500+.**
+  on the table vs. their savings. **Raise the ceiling; **[—] NOT BUILT (founder-ops) — Enterprise already contact-sales; routing 5k+ buyers up is a sales-pricing call.** route 5k+ PO buyers to Enterprise €2,500+.**
 
 ### Pricing-model evaluation
 
 | Model | Strength | Weakness | Verdict |
 |---|---|---|---|
-| Starter €49 | Captures small segment | Their WTP is €24; €49 still loses, and it cannibalizes Growth | **Don't add** |
+| Starter €49 | Captures small segment | Their WTP is €24; €49 still loses, and it cannibalizes Growth | **[x] BUILT — no Starter €49 tier in plans.ts; recommendation (don't add) already honored.** **Don't add** |
 | Flat tiers (Growth/Ops/Integ/Distrib) | Predictable, self-serve | Mis-prices both ends (small can't pay, large under-pays) | Keep as spine, fix ends |
 | Enterprise €2,500+ | Captures the underpriced top | Manual sales | **Keep; make it the real top** |
 | **Per-supplier setup fee €500×3 then €150** | **Captures the true cost driver (mapping config), cash at close, sunk-cost stickiness, filters non-payers** | Friction at sale; must be waived for design partners | **STRONGEST single lever** |
 | Per-order €0.50 overage (never-block) | Aligns price to value, no hard cap | Unpredictable for buyer | **Keep as overage only, not primary** |
 | Hybrid: flat tier + setup fee + overage | Best of all | Complexity | **This is what's shipped — correct** |
 
-**STRONGEST model: the hybrid already in code — flat tier (anchor Operations €399) + a
+**[x] BUILT — hybrid shipped: Operations anchor + setup fee (plans.ts:277,282) + €0.50 never-block overage.** **STRONGEST model: the hybrid already in code — flat tier (anchor Operations €399) + a
 per-supplier setup fee that captures the real mapping-config cost + €0.50 never-block
 overage.** The setup fee is the most under-rated lever: it produces cash on day one, makes
 the customer sunk-cost-committed, and self-selects out the unprofitable small segment.
@@ -274,12 +276,12 @@ templates, PDF text→LLM + vision + no-egress OCR. The value-bundle question is
 |---|---|---|---|---|---|---|---|
 | **1** | **NOTHING NEW — sell the existing loop to one real supplier** | Highest | ~0 build | n/a | n/a | Perfect | The actual #1 |
 | **2** | **Cross-org mapping library (anonymized, opt-in)** | High | High | Medium | **The ONLY real long-term moat** | Needs customers first | **NOT built — the one to build *after* ~10 customers** |
-| **3** | **Reusable mapping templates per industry (extend Erply/Directo)** | High | Low | Medium | Medium | Good | Partially shipped |
-| **4** | **Supplier confirmation/ACK round-trip (close the loop, prove delivery)** | Medium-High | Low (controller exists) | Medium | Medium | Good | Backend exists; finish UX |
-| **5** | **Delivery reliability hardening (the existing SLA/retry, proven live)** | Medium | Low | Low | Low | Good | Built; needs live proof not more code |
+| **3** | **[~] PARTIAL — Erply/Directo starter templates shipped; broader per-industry library not built.** **Reusable mapping templates per industry (extend Erply/Directo)** | High | Low | Medium | Medium | Good | Partially shipped |
+| **4** | **[~] PARTIAL — ACK backend done (OrderConfirmationController/Service + migration); no FE confirm/ack UI yet.** **Supplier confirmation/ACK round-trip (close the loop, prove delivery)** | Medium-High | Low (controller exists) | Medium | Medium | Good | Backend exists; finish UX |
+| **5** | **[~] PARTIAL — SLA/retry built (DeliverySlaService, RetryDeliveryJob); live real-supplier proof outstanding.** **Delivery reliability hardening (the existing SLA/retry, proven live)** | Medium | Low | Low | Low | Good | Built; needs live proof not more code |
 
-**BUILD FIRST: nothing.** The highest-EV "feature" is one live PO to one real supplier and
-one paying customer. The *only* net-new feature worth queuing — and only after ~8–10
+**[—] NOT BUILT (founder-ops) — "build nothing, sell"; core loop already shipped (5 dispatchers).** **BUILD FIRST: nothing.** The highest-EV "feature" is one live PO to one real supplier and
+one paying customer. **[—] NOT BUILT (deferred) — cross-org library; queue only after ~8-10 customers per audit's own gate.** The *only* net-new feature worth queuing — and only after ~8–10
 customers exist to seed it — is the **cross-org mapping library**, because it's the single
 thing that converts switching-cost stickiness into a real network effect (and is the one
 lever that could move this from €1M to €5M+).
@@ -323,11 +325,11 @@ years — that cannot return a seed fund. This is the *right business* financed 
 capital. Correct capital: **angel + Estonian EAS / EU SME grants, keep the equity.**
 
 **3 things that WOULD make me wire €250k (none true yet):**
-1. **Evidence the cross-org mapping library is a real network effect** — customer #8
+1. **[—] NOT BUILT (deferred) — cross-org network-effect proof; library absent + needs customers #1-8.** **Evidence the cross-org mapping library is a real network effect** — customer #8
    onboards in <20 min off customers #1–7's anonymized mappings. (Not built; verified absent.)
-2. **A wedge into the e-invoice compliance mandate** — be the cheap Peppol/e-invoice on-ramp
+2. **[—] NOT BUILT (roadmap) — Peppol/e-invoice compliance wedge is frozen per CLAUDE.md; strategic bet.** **A wedge into the e-invoice compliance mandate** — be the cheap Peppol/e-invoice on-ramp
    for Baltic+Nordic SMEs *ahead of Pagero* (LV mandate Jan 2026 is a real, dated catalyst).
-3. **A repeatable channel motion** — ≥30% of pipeline from Erply/Directo partner intros,
+3. **[—] NOT BUILT (founder-ops) — repeatable Erply/Directo channel motion is a sales/GTM goal, not code.** **A repeatable channel motion** — ≥30% of pipeline from Erply/Directo partner intros,
    <2%/mo churn, CAC payback <6mo. Proof the growth isn't 1:1 founder hustle.
 
 **3 things that make me say "come back in 6 months":**
@@ -335,7 +337,7 @@ capital. Correct capital: **angel + Estonian EAS / EU SME grants, keep the equit
    proven; to a *real supplier* not.)
 2. **A 5×-overbuilt product with a self-issued freeze that was then violated by 185 commits**
    — this is the single biggest *founder*-risk signal: avoids selling by building.
-3. **No model** — TAM is a back-of-envelope account-mix table, not a cohort model; CAC/payback are guesses.
+3. **[—] NOT BUILT (founder-ops) — cohort revenue/CAC model is a founder financial-modeling task.** **No model** — TAM is a back-of-envelope account-mix table, not a cohort model; CAC/payback are guesses.
 
 **Traction thresholds:**
 - *Pre-seed (€100–300k angel/grant):* 3–5 paying, €2–3k MRR, ≥40% pilot→paid, <30-day cycle.
@@ -357,7 +359,7 @@ GTM docs better than most funded seeds). The mismatch isn't quality — it's *ca
   "the international standard" (a slide). The 185 post-freeze commits suggest the founder
   is *behaviorally* still building the €30M case while *verbally* committing to the €1M one.
   **Pick. They require opposite behaviors.**
-- **Amateur:** EDIFACT invoice/DESADV parsers that throw `NotImplementedException` shipped
+- **[—] NOT BUILT (deferred) — EDIFACT invoice/DESADV stubs (parsers:16/14); blocked on EDI licence (founder said no); invoice scope frozen.** **Amateur:** EDIFACT invoice/DESADV parsers that throw `NotImplementedException` shipped
   to "production"; a value-bundle of features built *for no users*; a freeze order ignored.
 - **Strong:** the engine is genuinely real and tested; security P0s are *actually fixed* in
   current code (most teams claim this falsely — here it's verified); the design system is
@@ -369,7 +371,7 @@ GTM docs better than most funded seeds). The mismatch isn't quality — it's *ca
   revenue model; and the *one* feature that could change the funding verdict — the cross-org
   mapping-library network effect.
 
-**Highest-EV action in this entire document:** freeze the codebase *for real this time*
+**[—] NOT BUILT (founder-ops) — calendar code-freeze + one real-supplier PO; everything needed already in repo.** **Highest-EV action in this entire document:** freeze the codebase *for real this time*
 (the calendar, not the intent), and put one real Markit PO in front of one real supplier
 **before writing another line of feature code.** Everything required to do that is already
 in the repo at `55fa09a`.
@@ -785,30 +787,30 @@ list/filter layer maps five failure statuses into one "Failed" bucket
 ## (g) Refactor before launch vs can-wait
 
 ### Refactor BEFORE first paid pilot
-- **R1 — Unify tenant resolution (d-1/f-1).** Make both JWT and API-key schemes populate
+- **[x] BUILT — ApiKeyAuthHandler.cs:80 unifies Items[OrganisationId] across schemes; commit 3c789b6.** **R1 — Unify tenant resolution (d-1/f-1).** Make both JWT and API-key schemes populate
   `HttpContext.Items[OrganisationId]` so `CurrentTenantService` is the *single* tenant
   source. This is an isolation-correctness issue, the most expensive class of bug to
   discover in production. *(Small, high-leverage.)*
-- **R2 — Stuck-order sweep should requeue, not just fail (d-4).** For a product whose
+- **[x] BUILT — StuckOrderDetectionService.cs:83-133 bounded requeue (cap 2) then dead-letter; commit 0da39cf.** **R2 — Stuck-order sweep should requeue, not just fail (d-4).** For a product whose
   one promise is "boringly reliable PO loop," a transient Worker blip must not become a
   permanent failure the customer has to notice and re-upload. Add bounded re-enqueue.
-- **R3 — Put billing emit/overage on `IBillingService` (f-3).** Delete the runtime cast
+- **[x] BUILT — methods on IBillingService.cs:60-104; runtime cast removed from BillingController; commit 3c789b6.** **R3 — Put billing emit/overage on `IBillingService` (f-3).** Delete the runtime cast
   in `BillingController.cs:40`. Cheap; removes a webhook-crash landmine.
 
 ### Can wait (track as debt, do not block launch)
-- **W1 — Decompose `OrderService` (d-3/f-2)** into ingest / parse / transform / deliver
+- **[x] BUILT — OrderService.cs 1721→124-line facade delegating to ingest/query/resolve/transform; commit 28a72f4.** **W1 — Decompose `OrderService` (d-3/f-2)** into ingest / parse / transform / deliver
   services and move the shared orchestrator into a `Core`/`Application` project so the
   Worker stops mirroring API DI. Large; do it once a second ingest path forces it.
-- **W2 — Introduce an explicit order-status state machine (d-2).** Centralize transition
+- **[x] BUILT — OrderStatusMachine.cs transition map + IsAllowed/IsTerminal + Redeliver guard; commit 39e069e.** **W2 — Introduce an explicit order-status state machine (d-2).** Centralize transition
   validation; replaces scattered `if (status is not ...)` guards.
-- **W3 — Data retention / deletion lifecycle for R2 + DB (d-5).** Needed for GDPR
+- **[x] BUILT — IDataErasureService + admin DELETE order endpoint (AdminController.cs:340) + retention sweep; tracker W3.** **W3 — Data retention / deletion lifecycle for R2 + DB (d-5).** Needed for GDPR
   erasure and cost, but not a day-1 blocker at pilot volume.
-- **W4 — Redis-back the distributed cache + reconsider Hangfire DB before horizontal
+- **[x] BUILT — Redis-ready nonce via Redis:ConnectionString (Program.cs:527-530) + HSTS/nosniff; commit 0b34ff7.** **W4 — Redis-back the distributed cache + reconsider Hangfire DB before horizontal
   scale (d-6).** Single-instance is fine for one API + one Worker today
   (`Program.cs:390-391` already flags the swap point).
-- **W5 — Consolidate the dual delivery-retry schedulers (d-7/f-4)** behind one
+- **[—] NOT BUILT (deferred) — refactors already-correct code (attempt-count guard reconciles it); tracker W5.** **W5 — Consolidate the dual delivery-retry schedulers (d-7/f-4)** behind one
   retry coordinator. Currently correct but fragile.
-- **W6 — Split `api-client.ts` (f-5)** into per-domain modules. DX/merge-pain, not
+- **[—] NOT BUILT (deferred) — DX-only, collides with active FE chips; tracker W6.** **W6 — Split `api-client.ts` (f-5)** into per-domain modules. DX/merge-pain, not
   correctness.
 
 
@@ -830,19 +832,19 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
 ### 1. Next.js 15 (App Router) — `next: "15"` (frontend `package.json:65`)
 - **Good choice.** App Router + Server Components fits a marketing-site + authed-app split, and Vercel is the
   native host. CLAUDE.md's "App Router only, no Pages Router" rule is upheld.
-- **RISK — floating major-version pin.** `"next": "15"` (not `15.x.y`) resolves to *whatever 15.* bun's lockfile last
+- **[x] BUILT — frontend package.json:65 `"next": "15.5.18"` (exact pin); tracker B4.** **RISK — floating major-version pin.** `"next": "15"` (not `15.x.y`) resolves to *whatever 15.* bun's lockfile last
   saw. `next.config.ts:27` even documents a concrete dev-mode break against **15.5.18** + Sentry. A `bun install` on a
   fresh CI box can pull a different 15.x and silently change behaviour. **Pin an exact version.**
 - **Operational:** `redirects()` in `next.config.ts` are `permanent: true` (308) — `/dashboard→/bridge`,
   `/orders→/inbox`, etc. 308s are cached hard by browsers; if the route map ever changes again, users hold stale
   redirects. Acceptable, but know it's sticky.
-- **Must-configure for prod:** `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_USE_MOCK=false` (the `.env` default is
+- **[—] NOT BUILT (founder-ops) — Vercel env config (API base, USE_MOCK=false, Clerk, Sentry); deploy-time.** **Must-configure for prod:** `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_USE_MOCK=false` (the `.env` default is
   already false — verify it stays false on Vercel), `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, Sentry env. Sentry only wraps
   the build `process.env.NODE_ENV === "production"` (`next.config.ts:29`) — source-map upload needs `SENTRY_AUTH_TOKEN`.
 
 ### 2. React 18 — `react: "^18.3.1"` (`package.json:68`)
 - **Good, conservative choice.** Next 15 supports React 18; staying off React 19 avoids the churn. Fine.
-- **RISK (low):** Next 15's defaults assume newer React in some codepaths; the `^18.3.1` caret is fine, but pairs with
+- **[x] BUILT — next pinned 15.5.18, react ^18.3.1, engines.node set; tracker B4.** **RISK (low):** Next 15's defaults assume newer React in some codepaths; the `^18.3.1` caret is fine, but pairs with
   the floating `next` pin to widen the untested surface. Pin both.
 
 ### 3. TypeScript — `typescript: "^5.8.3"` (`package.json:101`)
@@ -862,9 +864,9 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
     binding is compensated by an explicit `azp` check in `OnTokenValidated` against an authorized-party allowlist
     (`Program.cs:132-138`). This is the right Clerk pattern; do not "fix" it.
   - `MapInboundClaims = false` + `NameClaimType = "sub"` is deliberate so `TenantResolutionMiddleware` can read `sub`.
-- **RISK — DEV Clerk instance in prod.** Per the deployment-topology memo, Clerk is still on the **dev** instance
+- **[—] NOT BUILT (founder-ops) — Clerk prod-instance cutover (keys/Authority/azp); hard go-live gate.** **RISK — DEV Clerk instance in prod.** Per the deployment-topology memo, Clerk is still on the **dev** instance
   (`golden-alpaca-43.clerk.accounts.dev`). Dev instances have lower rate limits, no custom domain, and shared keys.
-  **Cutting over to a Clerk *production* instance (new keys + `Clerk:Authority` + `azp`/`Frontend:Url` origins) is a
+  **[—] NOT BUILT (founder-ops) — Clerk prod keys + Authority + azp/origins config; deploy-time.** **Cutting over to a Clerk *production* instance (new keys + `Clerk:Authority` + `azp`/`Frontend:Url` origins) is a
   hard go-live gate.** This is the single most likely "works in staging, breaks at launch" item.
 - **Must-configure for prod:** `Clerk:Authority` (backend, **required** — `StartupConfigurationValidator.cs:23`),
   `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` + secret key (frontend), and `Frontend:Url` must list every real origin or the
@@ -879,22 +881,22 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
 ### 7. ASP.NET Core 8 — `net8.0` across all projects
 - **Good choice.** LTS (support through Nov 2026), fast, first-class on Railway via Docker. Consistent `net8.0` target
   everywhere — no mixed-framework drift.
-- **OPERATIONAL — the API hosts NO Hangfire server (`Program.cs:187`); the Worker is the sole executor**
+- **[x] BUILT — `WorkerHealthAlertJob`/`WorkerHealthAlertService` + ops/health snapshot, `36781e6`; tracker B7.** **OPERATIONAL — the API hosts NO Hangfire server (`Program.cs:187`); the Worker is the sole executor**
   (`Worker/Program.cs:87`). This is a real architectural constraint, not a footnote: **if the Worker is down, uploads
   succeed but nothing parses, transforms, or delivers — silently.** Parse/transform/deliver all run as enqueued jobs.
   There is a stuck-order sweep (`StuckOrderDetectionJob`) but **no alert wired to "Worker heartbeat missing."** The
-  R2-secret/zombie-worker incident in memory is exactly this failure mode. Add a Worker liveness alert before launch.
+  R2-secret/zombie-worker incident in memory is exactly this failure mode. **[x] BUILT — Worker heartbeat alert wired into `/api/ops/health`, commit `36781e6`; tracker B7.** Add a Worker liveness alert before launch.
 - **Operational nit — HTTPS redirect is disabled in all environments by design** (`Program.cs:479-491`, Railway
   terminates TLS). Correct for Railway, but means the container must never be exposed without the Railway proxy.
 
 ### 8. EF Core 8 + Npgsql — `Microsoft.EntityFrameworkCore 8.0.16`, `Npgsql.EntityFrameworkCore.PostgreSQL 8.0.11`
 - **Good choice.** Mainstream, matches the "no raw SQL, org-scoped queries" rules.
-- **RISK — migrations auto-apply on API startup** (`Program.cs:508-561`), in a background `Task.Run` after the server
+- **[—] NOT BUILT (deferred) — fine at 1 replica; documented ceiling (tracker B6); deliberate-release step is a scale-out task.** **RISK — migrations auto-apply on API startup** (`Program.cs:508-561`), in a background `Task.Run` after the server
   is listening, with a **bespoke "phantom-migration reconciliation" that hand-INSERTs rows into
   `__EFMigrationsHistory`** (`Program.cs:600-681`). This is a smell: it exists because migration SQL was applied
   out-of-band in prod. Auto-migrate-on-boot + a hand-rolled history fixer is **fragile under concurrent deploys**
   (two API instances racing `MigrateAsync`). For a single Railway instance it's tolerable; the moment you scale the
-  API to 2+ replicas this can corrupt the history table. **Move migrations to a deliberate release step.**
+  API to 2+ replicas this can corrupt the history table. **[—] NOT BUILT (deferred) — single-instance today; release-step migration is a horizontal-scale prerequisite, not launch.** **Move migrations to a deliberate release step.**
 - **Operational:** the 6-attempt backoff loop is a sensible concession to **Neon cold-start** latency.
 - **Must-configure:** `ConnectionStrings:DefaultConnection` (required, both API + Worker). Neon pooling/connection
   limits matter once the 10-worker Hangfire server (below) plus the API share a Postgres.
@@ -904,7 +906,7 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
   - App data (EF), job queue (`Hangfire.PostgreSql 1.20.10`), and the DataProtection key ring
     (`PersistKeysToDbContext`, `Program.cs:68-70`). Convenient (no Redis), but **the job queue polls Postgres**, and
     the Worker runs **10 concurrent workers across 5 named queues** (`Worker/Program.cs:92-93`).
-- **SCALABILITY — Hangfire on Postgres is fine to low-thousands of jobs/day but is poll-based**; at higher PO volume
+- **[~] PARTIAL — Npgsql pool ceiling set (`0da39cf`); dedicated Redis queue deferred (marginal at pilot, tracker G).** **SCALABILITY — Hangfire on Postgres is fine to low-thousands of jobs/day but is poll-based**; at higher PO volume
   the polling load and queue-table contention land on the same DB serving the app. The Distributor tier targets 2,500
   orders/mo — comfortably within range. Beyond ~10–20k jobs/day, consider a dedicated queue (Redis) or a separate
   Postgres for Hangfire.
@@ -916,10 +918,10 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
 - **Good operational design:** named priority queues `critical → delivery-retry → polling → background → default`
   (`Worker/Program.cs:93`) prevent 5-min IMAP/SFTP/S3 polling bursts from starving parse/delivery. Retry queue + SLA
   sweep + stuck-order detection are all registered (`Worker/Program.cs:206-211`). This is more mature than typical.
-- **RISK — the API↔Worker type split is brittle.** The API enqueues jobs but must NOT run a Hangfire server because it
+- **[—] NOT BUILT (deferred) — job-type assembly split tolerated; shared-assembly refactor is long-term hygiene, not launch.** **RISK — the API↔Worker type split is brittle.** The API enqueues jobs but must NOT run a Hangfire server because it
   can't deserialize Worker-only types like `EmailPollingJob` (`Program.cs:187-189`). Conversely the Worker references
   `ProcuLink.Api` *just* to get `ParseOrderJob` (`Worker.csproj:31`). Job classes are split across assemblies by
-  accident of history; a careless `using` can reintroduce a type the other process can't load. Keep job types in a
+  accident of history; a careless `using` can reintroduce a type the other process can't load. **[—] NOT BUILT (deferred) — explicitly long-term; shared job-type assembly is a refactor, not a launch blocker.** Keep job types in a
   shared assembly long-term.
 - **OPERATIONAL — Hangfire dashboard is dev-only** (`Program.cs:476`, inside `IsDevelopment()`). In prod there is **no
   dashboard** — the memory note confirms the prod Hangfire dashboard 404s and you diagnose via the `hangfire.job`
@@ -939,7 +941,7 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
     `Amazon.AWSConfigs.ManualClockCorrection` (`Worker/Program.cs:38-62`). Both exist to fight the same
     SignatureDoesNotMatch / clock-drift class of bug. This is fragile and worth a watch, but it's a deliberate,
     documented fix, not a regression.
-- **RISK — bucket privacy.** Memory: `proculink` (order data) must stay **private**; `proculink-public` is for
+- **[—] NOT BUILT (founder-ops) — verify `proculink` bucket private in Cloudflare; deploy-time check.** **RISK — bucket privacy.** Memory: `proculink` (order data) must stay **private**; `proculink-public` is for
   marketing assets. Order PDFs/POs are customer-confidential. A misconfigured public bucket here is a data breach.
   **Verify the order bucket has no public access policy in prod.**
 - **Must-configure (all required in prod):** `Storage:R2AccountId`, `R2AccessKeyId`, `R2SecretAccessKey`,
@@ -952,33 +954,33 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
   layer (`Dockerfile:18-26`), because OCR runs only in the Worker (`Dockerfile.worker:24-26` installs the natives).
   Sensible image hygiene. The risk it calls out is real: if the API ever gains a synchronous parse path it will
   `dlopen` a missing `.so` and crash at runtime, not build time.
-- **OPERATIONAL — single-instance assumptions baked in:** `MemoryDistributedCache` for HMAC nonce replay
+- **[~] PARTIAL — HMAC nonce now Redis-swappable (`0b34ff7`); migrate-on-boot still single-instance by design (B6).** **OPERATIONAL — single-instance assumptions baked in:** `MemoryDistributedCache` for HMAC nonce replay
   (`Program.cs:392`, comment explicitly says "single-instance; swap for Redis when horizontal scaling is needed"), and
   the auto-migrate-on-boot above. **Both break if you run >1 API replica.** Stay single-instance, or fix these first.
-- **RISK — duplicate Worker.** Memory records a past incident where two Worker services ran with mismatched R2 secrets.
+- **[—] NOT BUILT (founder-ops) — confirm exactly one Worker in Railway; deploy-time check (prior incident).** **RISK — duplicate Worker.** Memory records a past incident where two Worker services ran with mismatched R2 secrets.
   Confirm exactly **one** Worker runs in prod.
 - **Must-configure:** every `*RequiredKeys` entry as Railway env (`__` delimiter), on **both** services as applicable;
   Railway injects `PORT` (API reads it, `Dockerfile:33`).
 
 ### 13. Vercel (frontend) — native Next.js host
 - **Good choice**, nothing to second-guess. `redirects()` run at the edge.
-- **Operational:** no `engines`/Node pin in `package.json` — Vercel picks a default Node. Combined with the floating
+- **[x] BUILT — `engines.node ">=20 <23"` (package.json:107) + next pinned; tracker B4.** **Operational:** no `engines`/Node pin in `package.json` — Vercel picks a default Node. Combined with the floating
   `next` pin, two moving parts decide your runtime. Pin both for reproducible deploys.
 - **Must-configure:** all `NEXT_PUBLIC_*` vars in Vercel project settings; CORS — `Frontend:Url` on the API must
   include the exact Vercel/`proculink.eu` origin(s) or every call 401s on `azp` *and* fails CORS.
 
 ### 14. Stripe — `Stripe.net 51.1.0` (`ProcuLink.Api.csproj:24`)
 - **Good choice.** Mainstream billing. SDK is current.
-- **RISK — no API version pinned in code.** `StripeConfiguration.ApiKey` is set (`Program.cs:51`) but there is **no
+- **[x] BUILT — Stripe.net 51.1.0 pins the API version + AppInfo set, `Program.cs:54-62`, `bbe1dd5`; tracker B3.** **RISK — no API version pinned in code.** `StripeConfiguration.ApiKey` is set (`Program.cs:51`) but there is **no
   `StripeConfiguration.ApiVersion` / `AppInfo`**. The effective API version is then whatever the *account default* is
-  in the Stripe dashboard. Webhook payload shapes can shift when Stripe rolls the account default. **Pin the API
+  in the Stripe dashboard. Webhook payload shapes can shift when Stripe rolls the account default. **[x] BUILT — version determinism via SDK pin, documented `Program.cs:54-62`, `bbe1dd5`.** **Pin the API
   version explicitly** so webhook parsing is deterministic.
 - **RISK — billing/webhook path is the least live-tested surface** (per STATUS + go-live checklist). Webhook secret
   mismatch or a missing price ID fails *closed at startup* now (good — see below) but the runtime checkout→webhook→plan
   state loop still wants real Stripe-test-event QA before launch.
 - **Must-configure (all required in prod — API fails to boot otherwise):** `Stripe:SecretKey`, `Stripe:WebhookSecret`,
   `Stripe:GrowthPriceId`, `Stripe:OperationsPriceId`, `Stripe:IntegrationPriceId`, **and `Stripe:DistributorPriceId`**
-  (`StartupConfigurationValidator.cs:29-36`). ⚠️ **This is a live contradiction:** the validator hard-requires
+  (`StartupConfigurationValidator.cs:29-36`). ⚠️ **[x] BUILT — Distributor Stripe price exists+active (audit L7); validator keeps it required (`StartupConfigurationValidator.cs:36`); tracker B2.** **This is a live contradiction:** the validator hard-requires
   `DistributorPriceId`, but `docs/superpowers/launch/pricing-matrix.md:89-93` AND CLAUDE.md say the Distributor Stripe
   product **does not exist yet** ("Still TODO: create the Stripe Distributor product + `DistributorPriceId`"). **As
   written, the API will fail-fast at boot in Production until a Distributor price ID exists.** Either create the Stripe
@@ -991,22 +993,22 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
   key is set** (registered unconditionally, safe default). Anti-hallucination validation (verbatim-number +
   qty×price reconcile) flags suspect lines for review. This is genuinely well-designed and matches CLAUDE.md's
   "don't hardwire Anthropic, OpenAI structured outputs first" rule.
-- **⚠️ FINDING — model-config mismatch.** Code default is **`gpt-5-mini`** (`OpenAiMappingService.cs:13`,
+- **[x] BUILT — `ExtractionModel`+`MappingModel` pinned gpt-4o-mini, appsettings.Production.json:39-40, `4af5dd5`; tracker B1.** **⚠️ FINDING — model-config mismatch.** Code default is **`gpt-5-mini`** (`OpenAiMappingService.cs:13`,
   `OpenAiPdfOrderExtractor.cs:38`, `OpenAiSchemaInferencer.cs:34`, `OpenAiEmailBodyOrderExtractor.cs:23`), but
   **`appsettings.Production.json:39` sets `MappingModel: "gpt-4o-mini"`**. So:
   - In prod, mapping + schema-inference run on **gpt-4o-mini** (config wins over the `gpt-5-mini` default).
   - PDF/email extraction resolve `ExtractionModel ?? MappingModel ?? "gpt-5-mini"`
     (`OpenAiPdfOrderExtractor.cs:140-141`) → since `ExtractionModel` is unset and `MappingModel=gpt-4o-mini`, **PDF
     extraction also runs gpt-4o-mini** in prod, never the `gpt-5-mini` default.
-  - The `gpt-5-mini` constant is effectively dead in prod. **Pick one model story.** Either the team wants gpt-4o-mini
+  - **[x] BUILT — prod pins gpt-4o-mini for mapping+extraction, `4af5dd5`; tracker B1.** The `gpt-5-mini` constant is effectively dead in prod. **Pick one model story.** Either the team wants gpt-4o-mini
     everywhere (then the `gpt-5-mini` defaults are misleading) or they want gpt-5-mini (then prod config is wrong).
     This is the kind of drift that quietly changes extraction quality and cost. Decide and make code+config agree.
-- **RISK — data residency / DPA.** Real customer PO text → OpenAI requires an EU-residency project + DPA +
+- **[—] NOT BUILT (founder-ops) — OpenAI EU-residency/DPA is contractual; no-egress code path already exists for sensitive orgs.** **RISK — data residency / DPA.** Real customer PO text → OpenAI requires an EU-residency project + DPA +
   zero-retention (CLAUDE.md acknowledges this). The no-egress path (RapidOcrNet, below) is the answer for
   privacy-sensitive orgs, but **the default path sends PO content to OpenAI.** Must be contractually covered before
   onboarding a customer who cares.
-- **OPERATIONAL — cost cap exists:** `Ai:OpenAI:MonthlyTokenLimitPerOrg = 100000` (`appsettings.json:15`) via
-  `IAiUsageTracker`. Good guardrail; 100k tokens/org/mo is *small* — confirm it won't throttle a real distributor's
+- **[—] NOT BUILT (needs-data) — cap exists; validating 100k/org/mo vs a real distributor needs live usage data.** **OPERATIONAL — cost cap exists:** `Ai:OpenAI:MonthlyTokenLimitPerOrg = 100000` (`appsettings.json:15`) via
+  `IAiUsageTracker`. Good guardrail; 100k tokens/org/mo is *small* — **[—] NOT BUILT (needs-data) — validate token cap against real distributor usage post-onboarding.** confirm it won't throttle a real distributor's
   mapping/extraction in week one.
 - **Must-configure:** `Ai:OpenAI:ApiKey` (optional key — features no-op without it, `OptionalKeys` line 61). For
   production AI you also want `Ai:OpenAI:ExtractionModel` set explicitly to end the mismatch above.
@@ -1015,7 +1017,7 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
 - **Good, pragmatic choice.** RapidOcrNet (Apache-2.0 code **and** weights) gives a genuine "no data leaves your
   environment" story without a paid OCR vendor — a real enterprise differentiator. Behind a global flag
   (`NoEgressOcr:Enabled`) + per-org flag, ships **dormant by default** so the standard deploy is unchanged.
-- **OPERATIONAL — native deps are a deployment landmine.** Requires `libgomp1` + `libfontconfig1` in the Worker image
+- **[x] BUILT — natives in `Dockerfile.worker:24-26`, verified aspnet:8.0; dormant behind `NoEgressOcr:Enabled`.** **OPERATIONAL — native deps are a deployment landmine.** Requires `libgomp1` + `libfontconfig1` in the Worker image
   (`Dockerfile.worker:24-26`). The whole point is "no Dockerfile change for the default path," but the no-egress path
   *does* need those apt packages and ~12MB ONNX models — **verified only on the `aspnet:8.0` Debian base.** Any base
   image change re-opens this. `PDFtoImage` carries `[SupportedOSPlatform]` (CA1416 suppressed,
@@ -1024,14 +1026,14 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
   `Organisation.SelfHostedOcr=true`. Honest caveat in code/docs: scanned lines are always review-flagged.
 
 ### 17. Resend / SMTP — **Resend is NOT used in product code**; SMTP via `MailKit 4.17.0`
-- **⚠️ FINDING — claim vs reality.** "Resend" appears only in `STATUS.md`, `CHANGELOG.md`, and two strategy/playbook
+- **[~] PARTIAL — Resend only in docs (never `.cs`); latest docs reconciled, historical labeled; tracker B5.** **⚠️ FINDING — claim vs reality.** "Resend" appears only in `STATUS.md`, `CHANGELOG.md`, and two strategy/playbook
   docs — **never in `.cs` source.** Email is **SMTP via MailKit** (`MailKitEmailSender` for the support form,
   `Program.cs:268-271`; `SmtpDeliveryDispatcher` for PO-to-supplier email delivery). If anyone is planning around
   "we use Resend," that's a doc artifact, not the code. The actual choice is generic SMTP.
 - **Good choice** (generic SMTP is portable, no vendor lock). The support sender falls back to `ConsoleEmailSender`
   when `Smtp:Host` is unset, so the support endpoint always 200s even unconfigured (`Program.cs:268-271`).
 - **RISK — deliverability.** Raw SMTP from a Railway IP without SPF/DKIM/DMARC on `proculink.eu` will land POs in spam.
-  This is a *business-critical* path (the product literally delivers POs by email). **A real transactional sender
+  This is a *business-critical* path (the product literally delivers POs by email). **[—] NOT BUILT (founder-ops) — authenticated transactional sender + SPF/DKIM/DMARC on proculink.eu; deploy-time.** **A real transactional sender
   (Resend/Postmark/SES) with authenticated domain is strongly advisable for the supplier-delivery channel** — generic
   SMTP from a cloud IP is the weakest link in the whole delivery story.
 - **Must-configure (support form, optional):** `Smtp:Host/Port/Username/Password/From/SupportTo`
@@ -1046,16 +1048,16 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
   outbound request in `HttpDeliveryDispatcher.cs:53-60` and is injected into `SmtpDeliveryDispatcher` (ctor line 38).
   This blocks loopback/RFC-1918/link-local/metadata targets — the right control for a product that fires HTTP at
   user-supplied URLs.
-- **RISK — only HTTP delivery is production-proven** (CLAUDE.md/STATUS). SFTP/FTPS/SMTP/ERP dispatchers exist and are
+- **[—] NOT BUILT (needs-data) — non-HTTP dispatchers code-complete; proving each needs a real supplier endpoint (offer⇔works).** **RISK — only HTTP delivery is production-proven** (CLAUDE.md/STATUS). SFTP/FTPS/SMTP/ERP dispatchers exist and are
   unit-tested but were never run against a real supplier endpoint. **"Offer ⇔ works" rule (founder, memory):** don't
   market channels not yet proven against a real counterpart. Code-complete ≠ proven.
 - **Credentials:** per-supplier creds are AES-GCM encrypted (`Delivery:EncryptionKey`). **That key is required in prod
   on both API and Worker** and must be a real 32-byte base64 value (the all-zero dev key P0 is fixed per memory —
-  confirm the prod key is a freshly generated secret, not the committed dev key).
+  **[—] NOT BUILT (founder-ops) — rotate prod `Delivery:EncryptionKey` to a fresh secret in Railway; deploy-time.** confirm the prod key is a freshly generated secret, not the committed dev key).
 
 ### 19. Sentry — backend `Sentry.AspNetCore 6.5.0`, frontend `@sentry/nextjs 10.53.1`
 - **Good choice.** Backend traces at 10% (`Program.cs:46`), frontend wrapped prod-only. No-ops without DSN.
-- **Operational:** Sentry is the *only* error-tracking; given no prod Hangfire dashboard, Sentry + the `hangfire.job`
+- **[x] BUILT — Worker-down/job alerting via `WorkerHealthAlertJob` (`36781e6`); tracker B7.** **Operational:** Sentry is the *only* error-tracking; given no prod Hangfire dashboard, Sentry + the `hangfire.job`
   table are your entire prod observability. **Wire job-failure + Worker-down alerts** through it.
 - **Must-configure:** `Sentry:Dsn` (optional, `OptionalKeys`), frontend `NEXT_PUBLIC_SENTRY_DSN` + `SENTRY_AUTH_TOKEN`.
 
@@ -1068,21 +1070,21 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
 
 ## B. Questionable / drift items (the things to actually fix)
 
-1. **Model mismatch (§15):** code defaults `gpt-5-mini`, prod config forces `gpt-4o-mini`; `gpt-5-mini` is dead in
+1. **[x] BUILT — `ExtractionModel` pinned gpt-4o-mini (appsettings.Production.json:40), `4af5dd5`; tracker B1.** **Model mismatch (§15):** code defaults `gpt-5-mini`, prod config forces `gpt-4o-mini`; `gpt-5-mini` is dead in
    prod and `ExtractionModel` is unset so PDF extraction silently runs gpt-4o-mini. Make code + config agree and pin
    `ExtractionModel` explicitly.
-2. **Stripe `DistributorPriceId` boot contradiction (§14):** it's in `ApiRequiredKeys` (fail-fast in Production) but
+2. **[x] BUILT — Distributor Stripe price exists+active (audit L7); required key correct (validator:36); tracker B2.** **Stripe `DistributorPriceId` boot contradiction (§14):** it's in `ApiRequiredKeys` (fail-fast in Production) but
    the Stripe product is documented as **not yet created**. The API will refuse to boot in prod until it exists, or
    the key must move to `OptionalKeys`. Pick one — this can block the entire deploy.
-3. **No Stripe API version pin (§14):** webhook parsing depends on the account-default API version. Pin it.
-4. **Floating `next: "15"` + no Node `engines` pin (§1, §13):** non-reproducible frontend builds. Pin both.
-5. **Resend is fiction in code (§17):** email is MailKit/SMTP. Reconcile docs, and put a real authenticated
+3. **[x] BUILT — version determinism via Stripe.net pin (`Program.cs:54-62`), `bbe1dd5`; tracker B3.** **No Stripe API version pin (§14):** webhook parsing depends on the account-default API version. Pin it.
+4. **[x] BUILT — next 15.5.18 + engines.node pinned (package.json:65,107); tracker B4.** **Floating `next: "15"` + no Node `engines` pin (§1, §13):** non-reproducible frontend builds. Pin both.
+5. **[~] PARTIAL — docs reconciled (code is MailKit/SMTP, tracker B5); real transactional sender + SPF/DKIM still founder-ops.** **Resend is fiction in code (§17):** email is MailKit/SMTP. Reconcile docs, and put a real authenticated
    transactional sender behind the supplier *email-delivery* channel before relying on it.
-6. **Single-instance assumptions (§8, §9, §12):** auto-migrate-on-boot + hand-rolled `__EFMigrationsHistory` fixer +
+6. **[~] PARTIAL — nonce Redis-ready (`0b34ff7`) + ceiling documented (B6); migrate-on-boot stays single-instance by design.** **Single-instance assumptions (§8, §9, §12):** auto-migrate-on-boot + hand-rolled `__EFMigrationsHistory` fixer +
    `MemoryDistributedCache` for HMAC nonces all break at 2+ API replicas. Fine today; document the ceiling.
-7. **No prod Hangfire dashboard + no Worker-down alert (§7, §10):** the system is job-critical and the Worker failing
+7. **[x] BUILT — Worker-down alert wired into `/api/ops/health` (`36781e6`); tracker B7.** **No prod Hangfire dashboard + no Worker-down alert (§7, §10):** the system is job-critical and the Worker failing
    is silent. This is the highest-probability prod outage class (memory has two prior incidents). Alert on it.
-8. **Postgres triple-duty + 10 Hangfire workers on the app DB (§9, §10):** fine for Distributor-tier volume; know the
+8. **[x] BUILT — Npgsql pool capped API 30/Worker 20 (`0da39cf`); tracker B8.** **Postgres triple-duty + 10 Hangfire workers on the app DB (§9, §10):** fine for Distributor-tier volume; know the
    ceiling and set Npgsql pool sizes against Neon's connection cap.
 
 ---
@@ -1103,18 +1105,18 @@ mismatch, single-instance assumptions, and ~16 required prod secrets** that must
 `SignatureDoesNotMatch` and undecryptable delivery credentials (both are prior prod incidents).**
 
 **Strongly recommended (in code but `OptionalKeys` / not validated):**
-- `DataProtection:EncryptionKey` — without it the DataProtection key ring persists as **clear XML in Postgres**
+- **[—] NOT BUILT (founder-ops) — set `DataProtection:EncryptionKey` in Railway prod env; deploy-time.** `DataProtection:EncryptionKey` — without it the DataProtection key ring persists as **clear XML in Postgres**
   (`Program.cs:72`, "acceptable for dev" only). Set it in prod.
 - `Ai:OpenAI:ApiKey` (+ `Ai:OpenAI:ExtractionModel`, `Ai:OpenAI:MappingModel`) — AI silently no-ops without the key.
 - `Sentry:Dsn` — otherwise zero error visibility on a job-critical system.
 - `Analytics:PostHog:ApiKey`, `Smtp:*` (support form), `Frontend:Url` must enumerate every real origin (CORS + Clerk `azp`).
 
 **Cross-cutting go-live gates (not env vars but stack-correctness):**
-- Clerk **production** instance cutover (currently DEV instance) — see §5.
-- Exactly **one** Worker service running; R2 secret matches API — see §12.
-- Order bucket (`proculink`) confirmed **private**; marketing assets in `proculink-public` — see §11.
-- Real transactional email sender + SPF/DKIM/DMARC on `proculink.eu` for the email-delivery channel — see §17.
-- Stripe webhook + checkout flow QA'd with real test events; API version pinned — see §14.
+- **[—] NOT BUILT (founder-ops) — Clerk prod-instance cutover; go-live gate.** Clerk **production** instance cutover (currently DEV instance) — see §5.
+- **[—] NOT BUILT (founder-ops) — verify single Worker + matching R2 secret in Railway; deploy-time.** Exactly **one** Worker service running; R2 secret matches API — see §12.
+- **[—] NOT BUILT (founder-ops) — confirm `proculink` bucket private in Cloudflare; deploy-time check.** Order bucket (`proculink`) confirmed **private**; marketing assets in `proculink-public` — see §11.
+- **[—] NOT BUILT (founder-ops) — transactional sender + SPF/DKIM/DMARC on proculink.eu; deploy-time.** Real transactional email sender + SPF/DKIM/DMARC on `proculink.eu` for the email-delivery channel — see §17.
+- **[~] PARTIAL — API version pinned (`bbe1dd5`, B3); live checkout→webhook QA with real test events still founder-ops.** Stripe webhook + checkout flow QA'd with real test events; API version pinned — see §14.
 
 
 
@@ -1165,7 +1167,7 @@ Size`, `Timeout`, or `Multiplexing`**. Npgsql default `Maximum Pool Size` is
   exhaust the app. **Symptom at ~20-50 concurrent customers:** intermittent
   `connection pool exhausted` / `too many clients already`, surfacing as random
   500s and stuck jobs.
-- **Fix before launch (cheap):** set `Maximum Pool Size=20` on the API and
+- **[x] BUILT — Npgsql pool capped API=30/Worker=20 via BuildPooledConnectionString (Api/Program.cs:78, Worker/Program.cs:105).** **Fix before launch (cheap):** set `Maximum Pool Size=20` on the API and
   `Maximum Pool Size=15` on the Worker (or enable Npgsql multiplexing), and use
   Neon's **pooled** connection string. This is a config-only change.
 
@@ -1178,13 +1180,13 @@ runs a second `GroupBy` over all their lines (`:748-759`). A paginated variant
 page-scoped line aggregation), but `ListAsync` is still a live code path. For a
 distributor doing 2,500 orders/mo (the Distributor-tier target per CLAUDE.md),
 within a year `ListAsync` pulls 30k rows + a full line-table GroupBy on every
-inbox load. **Verify which endpoint the frontend inbox calls; if it's
+inbox load. **[x] BUILT — unpaginated ListAsync retired; inbox routes to ListPagedAsync (OrdersController.cs:228; IOrderService.cs:107).** **Verify which endpoint the frontend inbox calls; if it's
 `ListAsync`, that's an O(all-history) query on a hot path.** The index
 `IX_purchase_orders_org_id_created_at` makes it *ordered* cheaply but does not
 bound the row count.
 
 #### C. Inbound REST / Zapier path has NO idempotency → duplicate orders
-Idempotency is implemented and wired **only** into the browser upload endpoint:
+**[x] BUILT — IngressController.ReceiveOrder honors/derives Idempotency-Key + BindAsync (IngressController.cs:84-162).** Idempotency is implemented and wired **only** into the browser upload endpoint:
 `OrdersController` reads `Idempotency-Key`, calls `TryGetExistingOrderIdAsync` /
 `BindAsync` (`OrdersController.cs:108-170`). The machine-to-machine ingress —
 `IngressController.ReceiveOrder` (`IngressController.cs:41-111`) — calls
@@ -1199,7 +1201,7 @@ ready (`ProcuLinkDbContext.cs:442-452`) — the ingress path just doesn't use th
 #### D. AI mapping sends the whole order in one un-chunked call
 `BuildLineEntitiesAsync` makes **one batched AI call per order** for all
 unresolved lines (`OrderService.cs:1530-1538`) — good, that avoids N+1 LLM
-calls. But `SuggestSupplierItemCodesAsync` does **no chunking**: it sends every
+calls. **[x] BUILT — AI mapping chunks at BatchSize=50 via ChunkLines/SuggestChunkAsync (OpenAiMappingService.cs:20, 393-448).** But `SuggestSupplierItemCodesAsync` does **no chunking**: it sends every
 unresolved line in a single request with
 `maxTokens = Clamp(payloadLines.Count * 120, 350, 4000)`
 (`OpenAiMappingService.cs:436`). A 500–1000-line PO (realistic for a
@@ -1226,7 +1228,7 @@ No pruning/retention exists anywhere in Infrastructure (grep for
 At a distributor's 2,500 orders/mo this is ~15k audit + ~10k passport rows/mo
 that never shrink. Not fatal for years, but `audit_events` and
 `po_passport_events` queries (both indexed on `org_id,...,created_at`) and table
-bloat will degrade. **Add a retention sweep (e.g. delete audit/passport >180d,
+bloat will degrade. **[x] BUILT — DataRetentionService + DataRetentionSweepJob recurring (off-by-default); tracker §1.1.E [x].** **Add a retention sweep (e.g. delete audit/passport >180d,
 idempotency >48h) as a recurring Hangfire job — the worker scheduler already
 exists (`Worker.cs:21-46`).**
 
@@ -1239,7 +1241,7 @@ notes:
 - `EmailPollingJob` filters with `Where(x => x.EmailConfigJson != "{}")`
   (`EmailPollingJob.cs:37`) — a **string comparison on a `jsonb` column with no
   supporting index**. At 10k orgs this is a full `organisations` scan every 5
-  min × 3 pollers. Add a boolean `email_polling_enabled` column + index, or
+  min × 3 pollers. **[x] BUILT — email_polling_enabled column+filtered index (migration 20260607135109); poller uses it (EmailPollingJob.cs:36).** Add a boolean `email_polling_enabled` column + index, or
   filter on an indexed flag.
 - At 10k orgs with even 10% on email+sftp+s3, that's ~3k child jobs enqueued
   every 5 min = ~36/sec sustained background load competing with parse/deliver
@@ -1254,36 +1256,36 @@ prod was deliberately reduced to ONE worker container. That's the right call for
 the cross-tenant-race lesson, but it means **parse throughput ceiling is ~10
 concurrent jobs**. A PDF-vision parse is slow (PdfPig 45s timeout per the
 hardening note); 10 concurrent large PDFs saturates the worker and everything
-else queues. Hangfire/Postgres can scale horizontally (multiple worker
+else queues. **[—] NOT BUILT (deferred) — horizontal worker scaling is a post-revenue scale item; single worker is the deliberate prod call (tracker §1.1.G).** Hangfire/Postgres can scale horizontally (multiple worker
 containers), but only after the connection-pool ceiling (1.1.A) is fixed —
 otherwise more workers just exhaust Postgres faster.
 
 ### 1.2 What matters BEFORE launch (1-5 customers)
-1. **Set `Maximum Pool Size` on both connection strings + use Neon pooled
+1. **[x] BUILT — pool ceiling capped in code (Api/Program.cs:78, Worker/Program.cs:105); pooled-endpoint string is founder env.** **Set `Maximum Pool Size` on both connection strings + use Neon pooled
    endpoint.** (config only — highest ROI)
-2. **Add idempotency to `IngressController`** (the table is already there).
-3. **Confirm the inbox uses `ListPagedAsync`, not `ListAsync`;** delete or
+2. **[x] BUILT — IngressController idempotency shipped (IngressController.cs:84-162).** **Add idempotency to `IngressController`** (the table is already there).
+3. **[x] BUILT — inbox uses ListPagedAsync; unpaginated ListAsync deleted (OrdersController.cs:228; IOrderService.cs:107).** **Confirm the inbox uses `ListPagedAsync`, not `ListAsync`;** delete or
    hard-cap `ListAsync` (`.Take(200)`).
-4. Chunk the AI mapping batch (~50 lines/call) so a single large PO can't
+4. **[x] BUILT — AI batch chunks at 50 lines/call (OpenAiMappingService.cs:20, ChunkLines).** Chunk the AI mapping batch (~50 lines/call) so a single large PO can't
    truncate or blow the monthly token budget.
 
 ### 1.3 At 100 customers (~10-50k orders total)
 - Connection pooling becomes load-bearing; without it you fail here first.
-- Add the **retention sweep** for audit/passport/idempotency/delivery_attempts.
-- Replace the `EmailConfigJson != "{}"` poller predicate with an indexed flag.
-- Consider a second worker container — but only after pooling is capped.
+- **[x] BUILT — DataRetentionService + DataRetentionSweepJob shipped ahead of the 100-customer gate (tracker §1.1.E).** Add the **retention sweep** for audit/passport/idempotency/delivery_attempts.
+- **[x] BUILT — indexed email_polling_enabled flag shipped (migration 20260607135109; EmailPollingJob.cs:36).** Replace the `EmailConfigJson != "{}"` poller predicate with an indexed flag.
+- **[—] NOT BUILT (deferred) — second worker container is a 100-customer-horizon ops decision; pooling now capped so it's unblocked when needed.** Consider a second worker container — but only after pooling is capped.
 
 ### 1.4 At 10k users
-- Horizontal Worker scaling (N containers) with per-process pool caps and the
+- **[—] NOT BUILT (roadmap) — N-container horizontal scaling is a 10k-user-horizon item; per-process pool caps already in place.** Horizontal Worker scaling (N containers) with per-process pool caps and the
   Neon pooler; Hangfire-Postgres supports this.
 - `IDistributedMemoryCache` for the HMAC webhook nonce store is **single-instance
   only** (acknowledged in code: `Api/Program.cs:390-392`,
   `Worker/Program.cs:194-196`). Multi-instance API → nonce replay protection
-  breaks. Swap to Redis (the comment already names the call).
+  breaks. **[x] BUILT — Redis-ready nonce store behind Redis:ConnectionString flag (Api/Program.cs:527-530; commit 0b34ff7).** Swap to Redis (the comment already names the call).
 - DataProtection keys persist to Postgres and are shared across instances
   (`Api/Program.cs:68-70`) — correctly designed for horizontal scale.
-- Partition or archive `audit_events` / `po_passport_events` (time-partitioning).
-- The PO-list `GroupBy` line-aggregation should move to a denormalised
+- **[—] NOT BUILT (deferred) — audit/passport partitioning is redesign-later (tracker §1.4); retention sweep bounds growth meanwhile.** Partition or archive `audit_events` / `po_passport_events` (time-partitioning).
+- **[—] NOT BUILT (deferred) — line_count/total_value denormalisation is redesign-later (drift risk); ListPagedAsync already bounds the GroupBy (tracker §1.4).** The PO-list `GroupBy` line-aggregation should move to a denormalised
   `line_count`/`total_value` column on `purchase_orders` updated at parse time
   (avoid GroupBy-over-lines on every list page).
 
@@ -1331,16 +1333,16 @@ and `AddPurchaseOrderQueryIndexes` dropped bare `IX_purchase_orders_org_id`
 ### 2.3 Missing / weak indexes
 1. **`item_mappings` lookup is unique on `(OrgId, SupplierId, BuyerItemCode)`**
    (`:379`) — correct for the `ResolveManyAsync` hot path. ✅ No gap.
-2. **`GetAiMappingCandidatesAsync`** orders by `UpdatedAt` and takes 40
+2. **[x] BUILT — `IX_item_mappings_org_id_supplier_id_updated_at` (migration 20260607135109; commit eb24aa6).** **`GetAiMappingCandidatesAsync`** orders by `UpdatedAt` and takes 40
    (`OrderService.cs:1598-1599`) filtered by `(OrgId, SupplierId)`; the unique
    index leads with those columns so the filter is covered, but the
    `OrderByDescending(UpdatedAt)` is **not** in the index → a sort step per
    parse. Minor; only matters for suppliers with thousands of mappings.
 3. **`EmailConfigJson != "{}"`** poller predicate has no supporting index
-   (full scan, §1.1.F). Add an indexed boolean flag.
+   (full scan, §1.1.F). **[x] BUILT — email_polling_enabled filtered index (migration 20260607135109); tracker §2.3.3 [x].** Add an indexed boolean flag.
 4. **`invoices`/`advance_shipping_notices`** are indexed only on
    `organisation_id` (`:760, :805`) — fine because they're frozen/secondary, but
-   if invoice listing ever becomes a hot path it needs `(org_id, status)` /
+   **[—] NOT BUILT (deferred) — invoices/ASN are frozen tables with no hot query; composite index deferred until listing becomes hot (tracker §2.3.4).** if invoice listing ever becomes a hot path it needs `(org_id, status)` /
    `(org_id, created_at)` like POs got.
 5. **`supplier_po_mappings` / `supplier_delivery_configs`** unique on
    `(OrgId, SupplierId)` (`:203, :231`) — correct.
@@ -1352,9 +1354,9 @@ and `AddPurchaseOrderQueryIndexes` dropped bare `IX_purchase_orders_org_id`
   pulls a potentially large jsonb blob per row across the whole history. The
   team already recognised this — `ListPagedAsync` denormalised `BuyerName` into
   a real column + index (`:323, :867`) and stopped selecting `CanonicalJson`
-  (`:882-893`). **`ListAsync` was never migrated to the column** and still
+  (`:882-893`). **[x] BUILT — the canonical_json-parsing ListAsync was retired; ListPagedAsync uses the BuyerName column (tracker §2.4).** **`ListAsync` was never migrated to the column** and still
   parses JSON per row. The denormalisation split is also a known footgun:
-  `BuyerName` lives in BOTH the column and `canonical_json`, written by
+  **[~] PARTIAL — read-column-first + mirrored writes mitigate drift, but BuyerName still lives in both column and canonical_json (tracker §2.4.2).** `BuyerName` lives in BOTH the column and `canonical_json`, written by
   different paths (memory note `buyername-denormalized-split`;
   `OrderService.cs:1154-1163` mirrors writes to both). Drift risk is real.
 - **`email_config` jsonb on organisations** holds **encrypted IMAP creds**
@@ -1364,7 +1366,7 @@ and `AddPurchaseOrderQueryIndexes` dropped bare `IX_purchase_orders_org_id`
   `required_fields`/`destination_config` on profiles — all `jsonb` with a
   string round-trip `ValueConverter` (`:68-70`). The converter means **no
   jsonb-operator querying is possible** (they're opaque strings to EF); acceptable
-  because nothing queries inside them, but it forecloses future jsonb indexing.
+  because nothing queries inside them, but **[—] NOT BUILT (deferred) — jsonb string ValueConverter is a deliberate choice; revisit only if jsonb-operator indexing is needed (tracker §2.4.4).** it forecloses future jsonb indexing.
 
 ### 2.5 Tenancy concerns at scale
 - **Org scoping is consistently applied** on read/write paths I inspected:
@@ -1379,7 +1381,7 @@ and `AddPurchaseOrderQueryIndexes` dropped bare `IX_purchase_orders_org_id`
   own `OrgId` (`:51, 68`). Documented and correct.
 - **No row-level security (RLS).** Tenant isolation is 100% enforced in
   application code, not the database. At 10k tenants this is a single forgotten
-  `.Where(OrgId==...)` away from a leak. **Postgres RLS as defence-in-depth is a
+  `.Where(OrgId==...)` away from a leak. **[—] NOT BUILT (deferred) — RLS is redesign-later/post-revenue per the audit; app-level org-scoping already enforces isolation; can't land green safely now (tracker §2.5).** **Postgres RLS as defence-in-depth is a
   "redesign-later" item**, not launch-blocking, but worth flagging given the
   history of cross-tenant P0s.
 - **`delivery_attempts.OrderId` FK is `IsRequired(false)`** (`:431`) — nullable,
@@ -1399,16 +1401,16 @@ and `AddPurchaseOrderQueryIndexes` dropped bare `IX_purchase_orders_org_id`
   concurrent-insert race (`:919-921`, well-documented `:908-914`). ✅
 
 ### 2.7 Migration issues
-- **`SchemaFingerprints` is PascalCase**, diverging from the snake_case
+- **[—] NOT BUILT (deferred) — SchemaFingerprints rename is cosmetic and risky pre-launch; kept additive (tracker §2.7.1).** **`SchemaFingerprints` is PascalCase**, diverging from the snake_case
   convention everywhere else (`:900-922`, deliberately, to keep the migration
   additive). Cosmetic debt; documented.
 - **Phantom-migration reconciliation** (`Api/Program.cs:572-681`) hand-inserts
   `__EFMigrationsHistory` rows when sentinel objects exist but the history row is
   missing — a band-aid for Wave 3/4 migrations applied out-of-band. It works but
-  is fragile: any future migration whose SQL gets partially applied needs a new
+  is fragile: **[—] NOT BUILT (deferred) — phantom-migration cleanup is dangerous pre-launch; left as-is (tracker §2.7).** any future migration whose SQL gets partially applied needs a new
   sentinel entry. This is **operational debt** that signals the migration
   process itself isn't clean. Auto-migrate runs in a fire-and-forget
-  `Task.Run` after startup with 6 retries (`:508-561`) — if it ultimately fails,
+  `Task.Run` after startup with 6 retries (`:508-561`) — **[x] BUILT — MigrationReadinessHealthCheck surfaces failed migration as Unhealthy on /health/ready (Api/Program.cs:562-566; commit 5013fd8).** if it ultimately fails,
   the app runs on a stale schema and only logs an error (`:559`). At scale a
   failed migration = silent data corruption risk.
 - Migrations are numerous (60+) but small and mostly additive — healthy.
@@ -1423,18 +1425,18 @@ and `AddPurchaseOrderQueryIndexes` dropped bare `IX_purchase_orders_org_id`
 - DataProtection-keys-in-Postgres for multi-instance.
 
 **Fix before/at launch (cheap, high-value):**
-- Connection-pool ceiling + Neon pooled endpoint (§1.1.A).
-- Idempotency on `IngressController` (§1.1.C).
-- Hard-cap or retire `ListAsync`; route inbox to `ListPagedAsync` (§1.1.B, §2.4).
-- AI batch chunking (§1.1.D).
+- **[x] BUILT — pool ceiling capped in code (Api/Program.cs:78, Worker/Program.cs:105); pooled endpoint = founder env.** Connection-pool ceiling + Neon pooled endpoint (§1.1.A).
+- **[x] BUILT — IngressController idempotency shipped (IngressController.cs:84-162).** Idempotency on `IngressController` (§1.1.C).
+- **[x] BUILT — ListAsync retired; inbox on ListPagedAsync (OrdersController.cs:228; IOrderService.cs:107).** Hard-cap or retire `ListAsync`; route inbox to `ListPagedAsync` (§1.1.B, §2.4).
+- **[x] BUILT — AI batch chunking at 50 lines (OpenAiMappingService.cs:20).** AI batch chunking (§1.1.D).
 
 **Redesign-later (post-revenue):**
-- Retention/partitioning for audit/passport/delivery_attempts/idempotency (§1.1.E).
-- Redis for distributed cache (nonce store) before multi-instance API (§1.4).
-- Denormalise `line_count`/`total_value` onto `purchase_orders` (§1.4).
-- Postgres RLS as defence-in-depth (§2.5).
-- Indexed boolean flags to replace jsonb-string poller predicates (§1.1.F).
-- Clean up the phantom-migration mechanism + make migration failure fail-loud (§2.7).
+- **[~] PARTIAL — retention sweep shipped (DataRetentionSweepJob, §1.1.E [x]); time-partitioning still deferred (§1.4).** Retention/partitioning for audit/passport/delivery_attempts/idempotency (§1.1.E).
+- **[x] BUILT — Redis-ready nonce store behind config flag (Api/Program.cs:527-530; commit 0b34ff7).** Redis for distributed cache (nonce store) before multi-instance API (§1.4).
+- **[—] NOT BUILT (deferred) — line_count/total_value denormalisation is redesign-later (drift risk); tracker §1.4.** Denormalise `line_count`/`total_value` onto `purchase_orders` (§1.4).
+- **[—] NOT BUILT (deferred) — RLS is post-revenue defence-in-depth; app-level scoping already isolates; can't land green safely (tracker §2.5).** Postgres RLS as defence-in-depth (§2.5).
+- **[x] BUILT — indexed email_polling_enabled flag shipped ahead of schedule (migration 20260607135109).** Indexed boolean flags to replace jsonb-string poller predicates (§1.1.F).
+- **[~] PARTIAL — migrate-fail-loud shipped (MigrationReadinessHealthCheck, 5013fd8); phantom-migration cleanup deferred as dangerous pre-launch (tracker §2.7).** Clean up the phantom-migration mechanism + make migration failure fail-loud (§2.7).
 
 
 
@@ -1481,7 +1483,7 @@ credential encryption, and SSRF are all correctly implemented in current code.
 
 ## P1 — production-relevant, fix before/soon after first paying customer
 
-### P1-1 — SSRF guard is TOCTOU / DNS-rebinding-bypassable
+### **[x] BUILT — guarded `SocketsHttpHandler` ConnectCallback IP-pin (OutboundRequestGuard.cs:184-255) + SFTP/SMTP pre-connect re-validate, commit 3c789b6.** P1-1 — SSRF guard is TOCTOU / DNS-rebinding-bypassable
 **Where:** `ProcuLink.Infrastructure/Services/Security/OutboundRequestGuard.cs:68` (`Dns.GetHostAddressesAsync`)
 vs. the *separate* connect in `HttpDeliveryDispatcher.cs:92` (`client.SendAsync(request, …)` against the
 **hostname** `endpoint`), `FireIntegrationTriggerJob.cs:94`, `SmtpDeliveryDispatcher.cs:138`
@@ -1504,7 +1506,7 @@ with a `ConnectCallback` that re-validates the resolved IP at connect time. For 
 already-validated IP into `ConnectionInfo` / `ConnectAsync` instead of the hostname. Today the guard is
 "good enough vs. a naive `http://169.254.169.254`" but not vs. an attacker who controls DNS.
 
-### P1-2 — No global exception handler → unhandled errors leak details / 500s
+### **[x] BUILT — `AddProblemDetails` (Program.cs:310) + `UseExceptionHandler` (Program.cs:641), prod stack-trace-free, commit 3c789b6.** P1-2 — No global exception handler → unhandled errors leak details / 500s
 **Where:** `Program.cs` pipeline (lines 492-501) has **no** `app.UseExceptionHandler(...)`,
 `AddProblemDetails()`, or `UseDeveloperExceptionPage()` (grep for all three: zero matches repo-wide).
 
@@ -1522,7 +1524,7 @@ unstructured 500s.
 pipeline, returning RFC-7807 problem details with **no** stack trace in Production, and confirm Sentry
 captures from inside the handler.
 
-### P1-3 — Clerk `azp` validation accepts a **missing** `azp` (token-binding gap)
+### **[~] PARTIAL — azp now required in code (ClerkTokenValidation.cs:27-28, commit 3c789b6); prod Clerk-instance cutover off dev `golden-alpaca-43` is founder-ops.** P1-3 — Clerk `azp` validation accepts a **missing** `azp` (token-binding gap)
 **Where:** `Auth/ClerkTokenValidation.cs:24-25` — `IsAuthorizedParty` returns `true` when `azp` is
 null/empty; `Program.cs:127` sets `ValidateAudience = false`.
 
@@ -1540,7 +1542,7 @@ instance is a separate production-cutover risk (test signing keys, looser config
 strict `aud`/`azp` policy once the production Clerk instance is provisioned. At minimum, document and
 test the assumption that every issued template emits `azp`.
 
-### P1-4 — CORS allows wildcard subdomains **with credentials**
+### **[x] BUILT — wildcard-subdomain CORS removed; exact-origins-only with AllowCredentials (Program.cs:363-367), commit 3c789b6.** P1-4 — CORS allows wildcard subdomains **with credentials**
 **Where:** `Program.cs:231-236` — `WithOrigins(allOrigins).SetIsOriginAllowedToAllowWildcardSubdomains().AllowAnyHeader().AllowAnyMethod().AllowCredentials()`,
 where `allOrigins` is seeded from `Frontend:Url` and the docs example is `https://proculink.eu,https://*.vercel.app` (`Program.cs:212-213`).
 
@@ -1554,7 +1556,7 @@ a CSRF/credential-theft vector. The default origins (`localhost:3000/8082`) are 
 `*.vercel.app` wildcard to production. If preview deploys must call the API, gate them to a dedicated
 preview API or a tightly-scoped wildcard, never `*.vercel.app` with credentials.
 
-### P1-5 — Auto-provisioning on first authenticated request (trial-farming surface)
+### **[x] BUILT — per-IP+email-domain provision throttle `MaxProvisionsPerWindow=5` (TenantResolutionMiddleware.cs:37,119-125,233-254).** P1-5 — Auto-provisioning on first authenticated request (trial-farming surface)
 **Where:** `Middleware/TenantResolutionMiddleware.cs:61-98` — any authenticated principal with no
 matching `Organisation` row triggers `db.Organisations.Add(newOrg)` with a fresh 14-day Pilot.
 
@@ -1569,7 +1571,7 @@ GET `/health`-adjacent traffic if authenticated), which is a minor DoS-amplifica
 **Fix:** rate-limit org creation per email domain / per IP; consider deferring provisioning to an
 explicit onboarding call rather than any authenticated request.
 
-### P1-6 — Postmark inbound webhook token is the **only** authenticator and is a shared static secret
+### **[~] PARTIAL — const-time token compare done (InboundEmailController.cs:73-78); no Postmark signature verification (needs CF Worker, founder-ops).** P1-6 — Postmark inbound webhook token is the **only** authenticator and is a shared static secret
 **Where:** `Controllers/InboundEmailController.cs:63-78` — compares `X-Postmark-Server-Token` to
 `Inbound:Postmark:WebhookToken` (constant-time compare, good), but there is **no Postmark signature
 verification** and the endpoint is `[AllowAnonymous]` (well, no `[Authorize]`; class has neither).
@@ -1588,7 +1590,7 @@ token, and/or scope tokens per tenant. Treat the token as a credential in the se
 
 ## P2 — defense-in-depth / dev-only / lower-likelihood
 
-### P2-1 — Path traversal in the dev file passthrough (Development-only)
+### **[x] BUILT — `fullPath.StartsWith(basePrefix)` containment check added (LocalFileStorageService.cs:75-88).** P2-1 — Path traversal in the dev file passthrough (Development-only)
 **Where:** `Controllers/DevFilesController.cs:27-41` (`[HttpGet("{**key}")]` catch-all) →
 `LocalFileStorageService.GetFullPath` (`LocalFileStorageService.cs:62-64`) does
 `Path.GetFullPath(Path.Combine(BasePath, key…))` with **no check that the result stays under `BasePath`**.
@@ -1599,7 +1601,7 @@ read. **Mitigated to dev-only:** the controller returns `NotFound()` unless `IsD
 (`Program.cs:247-250`) i.e. dev. So this is **not** reachable in production. Still worth a one-line
 containment check (`fullPath.StartsWith(BasePath)`) so a dev box isn't an LFI target.
 
-### P2-2 — `LastUsedAt` fire-and-forget shares the scoped DbContext
+### **[x] BUILT — LastUsedAt moved to own DI scope + throttled, no shared-DbContext race (ApiKeyAuthHandler.cs:82-88).** P2-2 — `LastUsedAt` fire-and-forget shares the scoped DbContext
 **Where:** `Auth/ApiKeyAuthHandler.cs:60-61` — `apiKey.LastUsedAt = …; _ = _db.SaveChangesAsync(CancellationToken.None);`
 (not awaited).
 
@@ -1610,7 +1612,7 @@ context…` intermittently on API-key requests. Not a security breach, but it ca
 flaky and is inconsistent with the documented rule. **Fix:** await it, or move the timestamp update to a
 fire-and-forget *background job* with its own scope.
 
-### P2-3 — HMAC nonce replay store is single-instance in-memory
+### **[~] PARTIAL — Redis-ready nonce store behind config flag (commit 0b34ff7); in-memory default still ships, Redis swap deferred to horizontal scale.** P2-3 — HMAC nonce replay store is single-instance in-memory
 **Where:** `Program.cs:392` `AddDistributedMemoryCache()` backing `HmacWebhookVerifier`
 (`HmacWebhookVerifier.cs:127-141`).
 
@@ -1620,7 +1622,7 @@ prevents replay across instances. The code already flags the Redis swap (`Progra
 verifier itself is otherwise solid: constant-time `CryptographicOperations.FixedTimeEquals`
 (`:120`), generic error on every path, decrypt-per-call.
 
-### P2-4 — Rate limiting is scoped to upload-type endpoints only
+### **[x] BUILT — transform/ai/signed-url policies + global fallback limiter (Program.cs:208-242), commit 3c789b6.** P2-4 — Rate limiting is scoped to upload-type endpoints only
 **Where:** `Program.cs:153-178` defines a single `"upload"` policy (20/min, keyed by `sub` then IP);
 applied to `OrdersController.Upload`, `SchemaInferenceController.infer`, `InboundEmailController.postmark`.
 Read/list/transform/delivery-config endpoints have **no** rate limit.
@@ -1682,19 +1684,19 @@ have no per-caller ceiling beyond auth. Low priority; revisit if abuse appears.
 
 ## Must-fix before production (priority order)
 
-1. **P1-1 DNS-rebinding SSRF gap** — pin the validated IP at connect time across all dispatchers + webhook job.
-2. **P1-2 global exception handler** — `UseExceptionHandler` + `AddProblemDetails`, no stack traces in prod.
-3. **P1-4 CORS** — remove `*.vercel.app`-with-credentials from production `Frontend:Url`.
-4. **P1-3 Clerk** — provision the **production** Clerk instance (off the dev `golden-alpaca-43` instance) and require a present matching `azp`.
-5. **P1-6 Postmark** — rotate + properly authenticate the inbound-email webhook (signature, not just a shared static token).
+1. **[x] BUILT — IP-pinning guard wired into all dispatchers + webhook job (OutboundRequestGuard.cs:184-255), commit 3c789b6.** **P1-1 DNS-rebinding SSRF gap** — pin the validated IP at connect time across all dispatchers + webhook job.
+2. **[x] BUILT — `UseExceptionHandler` + `AddProblemDetails`, prod-safe (Program.cs:310,641), commit 3c789b6.** **P1-2 global exception handler** — `UseExceptionHandler` + `AddProblemDetails`, no stack traces in prod.
+3. **[x] BUILT — credentialed wildcard CORS removed, exact origins only (Program.cs:363-367), commit 3c789b6.** **P1-4 CORS** — remove `*.vercel.app`-with-credentials from production `Frontend:Url`.
+4. **[~] PARTIAL — azp required in code (ClerkTokenValidation.cs:27-28); prod Clerk-instance provisioning off dev `golden-alpaca-43` is founder-ops.** **P1-3 Clerk** — provision the **production** Clerk instance (off the dev `golden-alpaca-43` instance) and require a present matching `azp`.
+5. **[~] PARTIAL — const-time token check done (InboundEmailController.cs:73-78); signature verification + rotation deferred (needs CF Worker, founder-ops).** **P1-6 Postmark** — rotate + properly authenticate the inbound-email webhook (signature, not just a shared static token).
 
 ## Can wait (post-launch hardening)
 
-- **P1-5** trial-farming throttle (abuse, not breach).
-- **P2-2** await the API-key `LastUsedAt` save (flakiness fix).
-- **P2-3** move HMAC nonce store to Redis before horizontal scale.
-- **P2-1** dev-only path-traversal containment check.
-- **P2-4** broaden rate limiting to expensive endpoints.
+- **[x] BUILT — per-IP+email-domain provision throttle `MaxProvisionsPerWindow=5` (TenantResolutionMiddleware.cs:37,119-125).** **P1-5** trial-farming throttle (abuse, not breach).
+- **[x] BUILT — LastUsedAt on own DI scope + throttled (ApiKeyAuthHandler.cs:82-88).** **P2-2** await the API-key `LastUsedAt` save (flakiness fix).
+- **[~] PARTIAL — Redis-ready behind flag (commit 0b34ff7); in-memory default ships, Redis swap deferred to horizontal scale.** **P2-3** move HMAC nonce store to Redis before horizontal scale.
+- **[x] BUILT — path-traversal containment check added (LocalFileStorageService.cs:75-88).** **P2-1** dev-only path-traversal containment check.
+- **[x] BUILT — transform/ai/signed-url + global fallback limiter (Program.cs:208-242), commit 3c789b6.** **P2-4** broaden rate limiting to expensive endpoints.
 
 **Counts:** P0 = 0 · P1 = 6 · P2 = 4.
 
@@ -1751,19 +1753,19 @@ For each user-facing feature: does a REAL backend endpoint do what the UI claims
 
 ### A1. DEAD / MISLEADING CTAs — fix or hide before launch
 
-1. **Invoice download is a hard contract bug (broken CTA).**
+1. **[x] BUILT — downloadInvoice now reads blob+objectURL (api-client.ts:2382-2391), commit 432c4ea.** **Invoice download is a hard contract bug (broken CTA).**
    `downloadInvoice` (`api-client.ts:2378-2384`) does `res.json()` then reads `data.url`, and the page opens `data.url` (`inbound/invoices/page.tsx:152-156`). But the backend `GET /api/invoices/{id}/download` returns a **binary `File()`**, not JSON (`InvoiceController.cs:102-115`). A real (non-mock) download throws "invalid JSON" → user sees "Download failed". **Dead CTA in production.**
 
-2. **Invoice upload accept-list contradicts the backend (every offered file is rejected).**
+2. **[x] BUILT — invoice input now accept='.xml,.edi' (invoices/page.tsx:189-191).** **Invoice upload accept-list contradicts the backend (every offered file is rejected).**
    The invoice file input accepts `.csv,.xlsx,.pdf` and the button title says "Upload a supplier invoice (CSV, XLSX, or PDF)" (`inbound/invoices/page.tsx:180,191`). The backend only accepts `.xml,.edi` and 400s everything else (`InvoiceController.cs:39-42`). So the headline action on the Invoices screen **always fails** against a real API. Misleading + dead.
 
-3. **ASN upload invites "EDI DESADV" but DESADV parsing is a NotImplementedException stub.**
+3. **[x] BUILT — DESADV upload returns 501 not fake-202 (DesadvController.cs:38-42, d6c44ac); ASN copy honest.** **ASN upload invites "EDI DESADV" but DESADV parsing is a NotImplementedException stub.**
    The ASN page tells the user to "Upload an EDI DESADV, XML, or CSV file" (`inbound/asns/page.tsx:114,175`). Upload "succeeds" (202 stored) but the backend explicitly does **not parse** it: `DesadvController.cs:38-45` returns `note: "DESADV parsing is not yet active — EdiFabric licence required"`, and `EdifactDesadvParser.cs:14` / `EdifactInvoiceParser.cs:16` `throw new NotImplementedException`. The file vanishes into storage with no canonical record. **Misleading: looks like success, does nothing.** (Founder already said no to the EdiFabric licence — memory `feedback-no-commercial-edi-licences`.)
 
-4. **Connectors screen shows every supplier as "Connected" regardless of delivery config.**
+4. **[x] BUILT — live suppliers now status:'available' not 'connected' (connectors/page.tsx:263-281).** **Connectors screen shows every supplier as "Connected" regardless of delivery config.**
    In live mode each supplier is mapped to a connector card with hardcoded `status: "connected"` and `type: "API (REST)"` (`operations/connectors/page.tsx:225-233`). A supplier with **no** delivery config still renders a green "Connected" pill (`isConnected` L64). Misleading status; the only honest signal is the test-fire result. (Test-fire itself is correctly wired — passes the supplier GUID to `SuppliersController.cs:658`.)
 
-5. **Inbound (Invoices / ASNs) are first-class nav items** (`BridgeSidebar.tsx:60-64`) despite being on the explicit FREEZE list in CLAUDE.md and carrying bugs #1-#3. **Recommend hiding the whole Inbound group before the first paid pilot** — it is outbound-PO that wins customer #1, and these two screens are the weakest, most misleading surfaces in the app.
+5. **[x] BUILT — Inbound group hidden unless INBOUND_ENABLED (BridgeSidebar.tsx:89-93).** **Inbound (Invoices / ASNs) are first-class nav items** (`BridgeSidebar.tsx:60-64`) despite being on the explicit FREEZE list in CLAUDE.md and carrying bugs #1-#3. **Recommend hiding the whole Inbound group before the first paid pilot** — it is outbound-PO that wins customer #1, and these two screens are the weakest, most misleading surfaces in the app.
 
 ### A2. Backend-only (no UI) — acceptable, note for completeness
 - `WebhookIngressController` / `InboundEmailController` / `IngressController` (hosted inbound email, REST ingress, S3/SFTP poll) — real backend, surfaced only as settings/status, not a full setup+test UI. Consistent with "assisted/internal" intent.
@@ -1779,13 +1781,13 @@ For each user-facing feature: does a REAL backend endpoint do what the UI claims
 
 ### B1. Top maintainability problems
 
-**1. `OrderService.cs` is a 1,720-line God object — the #1 problem.**
+**1. `**[x] BUILT — OrderService 1720→124-line facade + Orders/ split services, commit 28a72f4.** OrderService.cs` is a 1,720-line God object — the #1 problem.**
 `ProcuLink.Api/Services/OrderService.cs` has **14 injected dependencies** (`:27-39`) and owns the entire lifecycle: create-from-file, create-stub, create-from-parsed, parse-stored-file, get, list, **two** list variants (`ListAsync` L714 + `ListPagedAsync` L816, a 6-step hand-built SQL pipeline), transform, download-URL, resolve, mark-rejected, accept-AI-suggestions, plus canonical-JSON merge, line-entity building, AI candidate fetch, mapping-template parse, audit-event + passport-event emission (`:1687-1699`). Every PO concern routes through one class. This is the single riskiest file to change and the hardest to test in isolation.
 *Suggested split (post-launch): `OrderIngestionService` (create/parse), `OrderQueryService` (list/paged/get/download), `OrderResolutionService` (resolve/accept-AI/mark-rejected). Keep `IOrderService` as a thin facade so controllers don't churn.*
 
-**2. `OrdersController.cs` is 942 lines** — the largest controller, 16 endpoints (`:76-855`) including ops-flavoured ones (`dead-letter-count` L839, `mark-rejected` L809, `redeliver`/`retry-delivery`). Order-domain endpoints are also scattered: `/api/orders/summary` lives in `DashboardController.cs:53` and `/api/orders/{id}/confirmation` in `OrderConfirmationController.cs`. **Route ownership is inconsistent** — a maintainer can't find "the orders controller" and have it all there.
+**2. `**[—] NOT BUILT (deferred) — OrdersController still 956 lines; audit's own §C says don't split pre-launch (post-customer-1).** OrdersController.cs` is 942 lines** — the largest controller, 16 endpoints (`:76-855`) including ops-flavoured ones (`dead-letter-count` L839, `mark-rejected` L809, `redeliver`/`retry-delivery`). Order-domain endpoints are also scattered: `/api/orders/summary` lives in `DashboardController.cs:53` and `/api/orders/{id}/confirmation` in `OrderConfirmationController.cs`. **Route ownership is inconsistent** — a maintainer can't find "the orders controller" and have it all there.
 
-**3. DTO inconsistency / untyped contracts → the invoice-download bug.**
+**3. **[—] NOT BUILT (deferred) — shared DTO layer is post-launch per audit §C; the 2 concrete contract bugs fixed inline instead.** DTO inconsistency / untyped contracts → the invoice-download bug.**
 Only **11** dedicated `*Dto.cs` files exist, but controllers pervasively return inline anonymous objects (`Ok(new { ... })` — e.g. `InvoiceController.cs:53-59,68-72`, `OrdersController` ×3, `BillingController` ×3, `WebhookIngressController` ×3). The frontend hand-maintains ~30 matching TS interfaces in `api-client.ts`. Nothing enforces they agree — which is exactly how A1.#1 (download returns a file, FE expects `{url}`) and A1.#2 (accept lists diverge) shipped. **This is the most dangerous *category* of debt** because each new inline shape is a future silent FE break.
 
 ### B2. Responsibility split — what's healthy
@@ -1813,7 +1815,7 @@ Only **11** dedicated `*Dto.cs` files exist, but controllers pervasively return 
 
 - **Do NOT split `OrderService`/`OrdersController` now.** They're ugly but working and well-tested (767 tests). A pre-launch refactor of the hottest path is pure risk with zero customer value. Schedule it after customer #1.
 - **Do NOT touch migrations or the parser/transform factories** — they're clean.
-- **Do NOT introduce a shared DTO/codegen layer right now** — it's the right long-term fix for B3, but it's a multi-day cross-cutting change. Instead, just **fix the two concrete contract bugs** (A1.#1 invoice download, A1.#2 accept list) inline.
+- **[x] BUILT — the two inline contract fixes recommended here are done (download blob + accept-list).** **Do NOT introduce a shared DTO/codegen layer right now** — it's the right long-term fix for B3, but it's a multi-day cross-cutting change. Instead, just **fix the two concrete contract bugs** (A1.#1 invoice download, A1.#2 accept list) inline.
 
 ## D. DANGEROUS DEBT vs ACCEPTABLE STARTUP DEBT
 
@@ -1847,34 +1849,34 @@ Only **11** dedicated `*Dto.cs` files exist, but controllers pervasively return 
 
 ## TOP 10 CURRENT UX ISSUES (verified still-open, ranked by impact)
 
-### 1. [P1·conversion] Pricing shows SIX tiers — choice overload at the moment of decision
+### **[x] BUILT — pricing collapsed to anchor+ROI-led+[hidden] secondary tiers (pricing/page.tsx:278,548), commit 0ceb156.** 1. [P1·conversion] Pricing shows SIX tiers — choice overload at the moment of decision
 `plans.ts:77-259` + `pricing/page.tsx:43` render Pilot, Growth, Operations, Integration, **Distributor**, Enterprise. Six side-by-side cards (the design's `.pricing-grid`) is past the point where a procurement coordinator can self-select with confidence — Hick's law territory, especially when four of them (Growth/Operations/Integration/Distributor) differ only on two numbers (orders/mo, suppliers). The ICP (Baltic IT distributors) is told to buy Distributor, but it sits 5th, after three plans they'll never use. **Fix:** collapse to 3 visible decisions — Pilot (try), a single "Most popular" anchor, Enterprise (talk) — with a volume slider / "see all tiers" disclosure for the rest. The ROI calculator already maps volume→plan (`recommendPlanByOrders`); lead with *that*, not a 6-wide wall.
 
-### 2. [P1·conversion] Distributor (the ICP tier) has NO in-app upgrade path
+### **[x] BUILT — Integration next:'distributor' (plans.ts:193) + Distributor in upsell row (BillingSection.tsx:343).** 2. [P1·conversion] Distributor (the ICP tier) has NO in-app upgrade path
 `plans.ts:191` sets Integration `next: null`, and `BillingSection.tsx:343` only offers Growth/Operations/Integration in the Pilot upsell. Distributor is now self-serve (`isCheckout:true`, `:225`) and is the stated ICP, yet a paying Integration customer who outgrows 1,500 orders sees no "Upgrade to Distributor" button — they must leave the app and hunt on `/pricing`. The single most strategically important upsell in the product is missing from the billing surface. **Fix:** set Integration `next:"distributor"`, and add Distributor to the Pilot secondary-plan row.
 
-### 3. [P1·honesty] `/formats` marks ANSI X12 850 import as "Supported" but the uploader rejects `.x12`
+### **[x] BUILT — .x12 added to BE+FE whitelists (OrdersController.cs:103, UploadWorkbench.tsx:658); JSON note honest.** 3. [P1·honesty] `/formats` marks ANSI X12 850 import as "Supported" but the uploader rejects `.x12`
 `formats/page.tsx:41` lists "ANSI X12 850 — Supported (004010/005010)" for **import**, and the landing logo strip advertises "X12" (`app/page.tsx:484`) with a "4+ inbound formats" stat. But the browser dropzone + backend whitelist accept only `.csv .xlsx .pdf .xml .cxml .edi .txt` (`OrdersController.cs:98-100`; `UploadWorkbench.tsx:658`). X12 is genuinely parseable (`X12OrderParser` exists, routed via `.edi`/`.txt` content-sniff in `OrderParserFactory.cs:68`), so a `.edi`-wrapped X12 works — but a user dropping a `.x12` file gets a 400. "Supported" on the conservative offer↔works SoT should mean drop-it-and-it-works. **Fix:** add `.x12` to both whitelists (the parser is already there), OR downgrade the `/formats` X12 row note to "upload as .edi / via API". Same nuance on JSON import ("Supported" `:42` but only via REST API, no file path).
 
-### 4. [P2·design-direction] Onboarding wizard collapses the blue→green step progression (uses lime `#28C55E`)
+### **[x] BUILT — T.blue now '#1E66C9' (OnboardingWizard.tsx:16), commit 0ceb156/6d8e986.** 4. [P2·design-direction] Onboarding wizard collapses the blue→green step progression (uses lime `#28C55E`)
 `OnboardingWizard.tsx:18` still defines `T.blue = "#28C55E"` (a green), so the active step (`:55` `background: isActive ? T.blue`) and the done step (`T.green = #2E8E3A`) both read green — the canonical buyer-blue → supplier-green progression is lost, and the design system's "no #28C55E" rule (called out explicitly in `pricing/page.tsx:17`) is violated in the first screen a new user sees. **Fix:** `T.blue = "#1E66C9"`.
 
-### 5. [P2·a11y] Wizard direction radios never reflect selection (`aria-checked={false}` hardcoded) and the radio dot never fills
+### **[x] BUILT — aria-checked={isSelected} + filling dot (OnboardingWizard.tsx:165,196), commit 0ceb156.** 5. [P2·a11y] Wizard direction radios never reflect selection (`aria-checked={false}` hardcoded) and the radio dot never fills
 `OnboardingWizard.tsx:158` hardcodes `aria-checked={false}` on every `role="radio"`, and the visual dot (`:175`) is a static decorative circle that never fills. Because Step 0 fires-and-advances on click it's low-severity functionally, but a screen-reader user gets a radiogroup where nothing is ever "checked," and sighted users get no selected-state feedback before the step advances. **Fix:** track the chosen value, set `aria-checked` per option, fill the dot on the saving option.
 
-### 6. [P2·IA] "Admin" nav item is shown to every customer; most land on a refuse page
+### **[x] BUILT — Admin nav gated via /api/admin/access probe (BridgeSidebar.tsx:102,155), BE e41f6e6/FE ac16373.** 6. [P2·IA] "Admin" nav item is shown to every customer; most land on a refuse page
 `BridgeSidebar.tsx:68-70` renders Admin unconditionally ("The /admin page itself refuses non-admins"). Advertising a destination that bounces the user is IA clutter and a small trust ding for a paying customer. **Fix:** gate the nav item on the same platform-admin signal the `/admin` page uses, rather than rendering-then-refusing.
 
-### 7. [P2·honesty] Document Anatomy section confidences are still partly invented
+### **[~] PARTIAL — lines/zone confidences now real (SpineReview.tsx:810); header field chips still hardcode pct:99/95 (:154-158).** 7. [P2·honesty] Document Anatomy section confidences are still partly invented
 `SpineReview.tsx:809-852` — only the **lines** zone derives a real average confidence (`:811`); the header/parties/terms zone chips are not backed by real per-section confidence. A 30-yr veteran reads a "%" as measured. (The egregious hardcoded 99/95/75 literals from the prior audit are gone, but the section-level numbers still aren't all real.) **Fix:** feed real per-section confidence or switch those chips to qualitative high/med/low.
 
-### 8. [P2·honesty] `LimitBanner` hardcodes "20 Pilot orders" while the limit lives in `plans.ts`
+### **[x] BUILT — banner now interpolates PLAN_BY_ID.pilot.orderLimit (BillingSection.tsx:81).** 8. [P2·honesty] `LimitBanner` hardcodes "20 Pilot orders" while the limit lives in `plans.ts`
 `BillingSection.tsx:81` prints "You've used all 20 Pilot orders." as a string literal. `plans.ts:86` is the single source of truth for the Pilot order limit (20). If the Pilot allowance ever changes in `plans.ts`/backend `PlanConstants`, this banner silently lies. **Fix:** interpolate `PLAN_BY_ID.pilot.orderLimit`.
 
-### 9. [P2·mobile] Core lineage value-prop is absent on phones in order review
+### **[~] PARTIAL — tablet md–xl lineage added (SpineReview.tsx:1553); <768px phone accordion still 'simplified', no maps-from→to line.** 9. [P2·mobile] Core lineage value-prop is absent on phones in order review
 `SpineReview.tsx` — `SpineConnectors` (source-field ↔ zone ↔ output wiring) renders xl-only; the mobile path uses the accordion with no equivalent lineage cue. The product's headline differentiator ("see exactly which source field maps to which output field/standard") disappears on the device a coordinator most often triages from. The triptych is hard-gated at `xl` (1280px), so even 768–1279 tablets fall to the reduced view. **Fix:** add a per-field "maps from → to" line (and confirm `StandardsFieldPopover` opens on tap) for the md-and-below band.
 
-### 10. [P2·honesty] `/formats` lists FTPS + SMTP + Erply/Directo as "Supported" delivery, but those are unproven against a real endpoint
+### **[x] BUILT — FTPS/SMTP/Erply/Directo demoted to 'configurable' (formats/page.tsx:55-58).** 10. [P2·honesty] `/formats` lists FTPS + SMTP + Erply/Directo as "Supported" delivery, but those are unproven against a real endpoint
 `formats/page.tsx:48-51` marks FTPS, Email (SMTP), Erply, Directo as "Supported" (= "works today, set it up yourself"). The HTTP delivery path is the only one with verified live QA per the project's own status; SFTP/FTP were "intentionally deferred until HTTP is production-proven" (Group D2), and Erply/Directo are config-gated connectors never test-fired against a sandbox. The legend defines "Supported" as production-today; these are closer to "Configurable." **Fix:** demote the unverified delivery channels to "Configurable" until a real test-fire confirms each, matching the page's own honesty promise.
 
 ---
@@ -1883,8 +1885,8 @@ Only **11** dedicated `*Dto.cs` files exist, but controllers pervasively return 
 
 - **Six-tier pricing wall (issue #1)** is the biggest one — it converts the easiest decision (Pilot is free) into a comparison exercise. The free Pilot CTA is strong; the tier grid below it undoes some of that momentum.
 - **No in-app Distributor upsell (#2)** caps expansion revenue from the exact segment the company is betting on.
-- **Landing is honest but slightly over-claims breadth** — "4+ inbound formats" + an X12/EDIFACT logo strip (`app/page.tsx:183,484`) and a feature card promising "JSON or an email attachment — drop any PO" (`:128`) imply drag-drop coverage the uploader doesn't have for `.json`/`.x12`. The hero, sub-copy, testimonial-free band, and ROI calculator are otherwise good and credible.
-- **No social proof at all.** The testimonial band correctly avoids a *fabricated* quote (`app/page.tsx:754`), and `/customers` exists, but there is no logo, number, or named design-partner anywhere on the landing path. For a €399–1,499/mo B2B tool sold to a cautious buyer, zero proof is a conversion drag. *Add-for-trust:* even one consented design-partner logo or a concrete "X orders processed" counter sourced from real data.
+- **[x] BUILT — landing now 'JSON via REST API' + honest counts (app/page.tsx:128), commits 1d47861/2d7ab38.** **Landing is honest but slightly over-claims breadth** — "4+ inbound formats" + an X12/EDIFACT logo strip (`app/page.tsx:183,484`) and a feature card promising "JSON or an email attachment — drop any PO" (`:128`) imply drag-drop coverage the uploader doesn't have for `.json`/`.x12`. The hero, sub-copy, testimonial-free band, and ROI calculator are otherwise good and credible.
+- **[—] NOT BUILT (founder-ops) — social proof needs a real consented logo/counter (needs-data); app/page.tsx:754.** **No social proof at all.** The testimonial band correctly avoids a *fabricated* quote (`app/page.tsx:754`), and `/customers` exists, but there is no logo, number, or named design-partner anywhere on the landing path. For a €399–1,499/mo B2B tool sold to a cautious buyer, zero proof is a conversion drag. *Add-for-trust:* even one consented design-partner logo or a concrete "X orders processed" counter sourced from real data.
 
 ## TRUST KILLERS (what makes a 30-yr veteran distrust it)
 
@@ -1894,8 +1896,8 @@ Only **11** dedicated `*Dto.cs` files exist, but controllers pervasively return 
 
 ## CONFUSING TERMINOLOGY (still present)
 
-- **`ready_to_deliver` / raw snake_case state** still leaks in the delivery editor (`DeliveryConfigEditor.tsx` — prior P2, not re-verified line-by-line this pass; flagged for a copy sweep).
-- **"Supplier flows"** as the billing unit (`BillingSection.tsx:322`) vs **"suppliers"** everywhere else (nav, pricing "10 suppliers"). Pick one noun for the count.
+- **[x] BUILT — no 'ready_to_deliver' literal left in DeliveryConfigEditor.tsx (grep clean).** **`ready_to_deliver` / raw snake_case state** still leaks in the delivery editor (`DeliveryConfigEditor.tsx` — prior P2, not re-verified line-by-line this pass; flagged for a copy sweep).
+- **[x] BUILT — 'Supplier flows' removed; BillingSection uses 'suppliers' (BillingSection.tsx:320,333).** **"Supplier flows"** as the billing unit (`BillingSection.tsx:322`) vs **"suppliers"** everywhere else (nav, pricing "10 suppliers"). Pick one noun for the count.
 - Otherwise the big terminology wins landed: "Dashboard" (not "Order topology") in nav/breadcrumb, "Upload & review" (not "& send"), "Rule catalog" (not a validation gate), direction-aware Supplier/Customer labels threaded through most surfaces.
 
 ---
@@ -1903,26 +1905,26 @@ Only **11** dedicated `*Dto.cs` files exist, but controllers pervasively return 
 ## SIMPLIFY / REMOVE / ADD-FOR-TRUST / HIDE-UNTIL-LATER / POLISH-BEFORE-CHARGING
 
 **Simplify**
-- Pricing: 6 cards → 3 visible decisions + volume-slider disclosure (#1). Lead with the ROI calculator's recommendation.
-- Billing upsell: one clear "next plan" arrow per tier (fix `next` chain incl. Distributor, #2).
+- **[x] BUILT — see #1: ROI-led 3-decision pricing with collapsible tiers (pricing/page.tsx:278,548).** Pricing: 6 cards → 3 visible decisions + volume-slider disclosure (#1). Lead with the ROI calculator's recommendation.
+- **[x] BUILT — see #2: next chain incl. distributor (plans.ts:193, BillingSection.tsx:343).** Billing upsell: one clear "next plan" arrow per tier (fix `next` chain incl. Distributor, #2).
 
 **Remove / relabel**
-- `.x12`/`.json` "Supported" import claims on `/formats` until the dropzone accepts them (#3); demote unproven delivery channels to "Configurable" (#10).
-- Lime `#28C55E` from the onboarding wizard (#4).
+- **[x] BUILT — see #3: .x12 now accepted; JSON note honest (formats/page.tsx:49).** `.x12`/`.json` "Supported" import claims on `/formats` until the dropzone accepts them (#3); demote unproven delivery channels to "Configurable" (#10).
+- **[x] BUILT — see #4: lime #28C55E removed, T.blue '#1E66C9' (OnboardingWizard.tsx:16).** Lime `#28C55E` from the onboarding wizard (#4).
 
 **Add-for-trust**
-- One real, consented design-partner logo or a real data-sourced "orders processed" counter on the landing path.
-- Real per-section confidence (or qualitative chips) in Document Anatomy (#7).
-- In-app Distributor upgrade path (#2) — also a trust signal that the plan you're sold is real.
+- **[—] NOT BUILT (founder-ops) — needs a real consented logo/counter (needs-data); app/page.tsx:754.** One real, consented design-partner logo or a real data-sourced "orders processed" counter on the landing path.
+- **[~] PARTIAL — see #7: zone/line confidence real; header chips still hardcoded (SpineReview.tsx:154-158).** Real per-section confidence (or qualitative chips) in Document Anatomy (#7).
+- **[x] BUILT — see #2: in-app Distributor upgrade wired (plans.ts:193, BillingSection.tsx:343).** In-app Distributor upgrade path (#2) — also a trust signal that the plan you're sold is real.
 
 **Hide-until-later**
-- Admin nav item for non-admins (#6).
-- Distributor/Integration on the public pricing grid could live behind "see all tiers" until self-serve volume actually warrants surfacing them to every visitor.
+- **[x] BUILT — see #6: Admin nav hidden for non-admins (BridgeSidebar.tsx:102,155).** Admin nav item for non-admins (#6).
+- **[x] BUILT — secondary tiers collapsed behind disclosure (pricing/page.tsx:278,548); see #1.** Distributor/Integration on the public pricing grid could live behind "see all tiers" until self-serve volume actually warrants surfacing them to every visitor.
 
 **Polish-before-charging**
-- Interpolate plan limits in `LimitBanner` (#8) so billing copy can't drift.
-- Mobile lineage cue in order review (#9) — the differentiator should survive on a phone before you charge for it.
-- Settle "supplier flows" vs "suppliers" wording.
+- **[x] BUILT — see #8: PLAN_BY_ID.pilot.orderLimit interpolated (BillingSection.tsx:81).** Interpolate plan limits in `LimitBanner` (#8) so billing copy can't drift.
+- **[~] PARTIAL — see #9: tablet lineage added (SpineReview.tsx:1553); <768px phone view still simplified.** Mobile lineage cue in order review (#9) — the differentiator should survive on a phone before you charge for it.
+- **[x] BUILT — 'supplier flows' removed; consistent 'suppliers' (BillingSection.tsx:320,333).** Settle "supplier flows" vs "suppliers" wording.
 
 ---
 
@@ -1950,10 +1952,10 @@ Bridge system is consistently applied (navy/blue/green, top-edge accents, Bricol
 > - **Backend test count = 887** (224 Transform + 352 Infra + 311 Api), verified by `dotnet test ProcuLink.slnx` this session — not 211/213 (CLAUDE.md) nor 767 (one agent's count at a different point).
 
 ### What's overbuilt / unnecessary for customer #1
-- The entire **Inbound (Invoice/ASN)** surface — frozen, not sold, and the source of 3 of the 5 dead-CTA bugs. Hide it.
-- **EDIFACT INVOIC/DESADV parsers** (`EdifactInvoiceParser.cs:16`, `EdifactDesadvParser.cs:14`) — `NotImplementedException` stubs. No customer needs them in year 1.
-- **Six pricing tiers** — the ICP touches two (Operations, Distributor). Collapse the visible choice.
-- **Self-serve open signup** — for a high-touch €399–€1,499 ICP with per-supplier setup config, you don't need (or want) anonymous self-serve at launch.
+- **[x] BUILT — Inbound nav gated by `INBOUND_ENABLED` (off by default) in `launch-flags.ts` + `BridgeSidebar.tsx`.** The entire **Inbound (Invoice/ASN)** surface — frozen, not sold, and the source of 3 of the 5 dead-CTA bugs. Hide it.
+- **[—] NOT BUILT (deferred) — EDIFACT INVOIC/DESADV stay `NotImplementedException` stubs (`EdifactInvoiceParser.cs:16`); needs EDI licence, not year-1.** **EDIFACT INVOIC/DESADV parsers** (`EdifactInvoiceParser.cs:16`, `EdifactDesadvParser.cs:14`) — `NotImplementedException` stubs. No customer needs them in year 1.
+- **[x] BUILT — pricing collapsed 6→3 visible tiers, FE commit `0ceb156`.** **Six pricing tiers** — the ICP touches two (Operations, Distributor). Collapse the visible choice.
+- **[—] NOT BUILT (founder-ops) — keep launch high-touch (no anonymous self-serve); a GTM decision, not code.** **Self-serve open signup** — for a high-touch €399–€1,499 ICP with per-supplier setup config, you don't need (or want) anonymous self-serve at launch.
 
 > **Reconciliation note (2026-06-07):** the code items below are cross-checked against
 > the per-item tracker at the top of this file (the source of truth for code state). The
@@ -2003,20 +2005,20 @@ Bridge system is consistently applied (navy/blue/green, top-edge accents, Bricol
 - [ ] A prod-readable job/queue view (the dev-only Hangfire dashboard isn't enough)
 
 ### 7-day launch plan
-1. **Day 1** — Hide Inbound nav; fix the `/formats` + landing over-claims (offer⇔works). *(2 small edits, kills 5 trust issues.)*
-2. **Day 1** — Cap Npgsql pool + Neon pooled endpoint. *(connection string)*
-3. **Day 2** — Add `IngressController` idempotency (reuse `IdempotencyService`). *(duplicate-order correctness)*
-4. **Day 2** — `StuckOrderDetectionJob` → requeue; add a Worker-down heartbeat alert.
-5. **Day 3** — Global exception handler + ProblemDetails; pin Stripe API version + `Ai:OpenAI:ExtractionModel`.
-6. **Day 4** — Stripe live-mode swap + the full go-live checklist; live Checkout/overage test.
-7. **Day 5-7** — **Deliver one real Markit PO to one real supplier endpoint**, end-to-end, and watch the audit trail. Fix whatever that surfaces. *(This is the launch.)*
+1. **[~] PARTIAL — Inbound hidden + landing honesty (`1d47861`) done; `/formats` wording re-verify still open.** **Day 1** — Hide Inbound nav; fix the `/formats` + landing over-claims (offer⇔works). *(2 small edits, kills 5 trust issues.)*
+2. **[~] PARTIAL — pool cap done in code (B8); Neon pooled endpoint is founder-env connection string.** **Day 1** — Cap Npgsql pool + Neon pooled endpoint. *(connection string)*
+3. **[x] BUILT — `IngressController.cs:84-162` reuses `IIdempotencyService` (§1.1.C).** **Day 2** — Add `IngressController` idempotency (reuse `IdempotencyService`). *(duplicate-order correctness)*
+4. **[x] BUILT — requeue in `StuckOrderDetectionService.cs:83` (`0da39cf`) + `WorkerHealthAlertService` heartbeat (B7).** **Day 2** — `StuckOrderDetectionJob` → requeue; add a Worker-down heartbeat alert.
+5. **[x] BUILT — `Program.cs:641` exception handler (P1-2) + Stripe version (`bbe1dd5`) + ExtractionModel pin (`4af5dd5`).** **Day 3** — Global exception handler + ProblemDetails; pin Stripe API version + `Ai:OpenAI:ExtractionModel`.
+6. **[—] NOT BUILT (founder-ops) — Stripe live swap + go-live QA (June-9); code already maps the price.** **Day 4** — Stripe live-mode swap + the full go-live checklist; live Checkout/overage test.
+7. **[—] NOT BUILT (founder-ops/sales) — deliver one real PO to a real supplier endpoint; the launch, not code.** **Day 5-7** — **Deliver one real Markit PO to one real supplier endpoint**, end-to-end, and watch the audit trail. Fix whatever that surfaces. *(This is the launch.)*
 
 ### 30-day hardening plan
-- Week 2: unify tenant resolution (JWT vs API-key); SSRF connect-time IP pinning; move EF migrate to a release step.
-- Week 2-3: R2 retention/delete sweep (Hangfire) + audit/delivery_attempts retention; AI batch chunking (~50 lines/call).
-- Week 3: extract the off-interface billing methods onto `IBillingService` (or document the single-impl constraint loudly); introduce an order **status enum + transition table** (kills the silent-filter-break class).
-- Week 3-4: collapse pricing to 3 visible tiers + add the in-app Distributor upgrade path; add 1 social-proof element to the landing path.
-- Week 4: load-test to the Neon connection ceiling; decide Redis (HMAC nonce + queue) trigger point; write the runbook (Worker restart, stuck-order requeue, R2 secret rotation).
+- **[~] PARTIAL — tenant unify (`3c789b6`) + SSRF connect-time pin done; EF migrate→release-step only fail-loud (`5013fd8`), full move deferred.** Week 2: unify tenant resolution (JWT vs API-key); SSRF connect-time IP pinning; move EF migrate to a release step.
+- **[x] BUILT — `DataRetentionSweepJob`/`DataErasureService` (W3) + AI chunking (§1.1.D); retention safe-off by default.** Week 2-3: R2 retention/delete sweep (Hangfire) + audit/delivery_attempts retention; AI batch chunking (~50 lines/call).
+- **[x] BUILT — billing on `IBillingService` (R3, `3c789b6`) + `OrderStatusMachine` transition table (W2, `39e069e`).** Week 3: extract the off-interface billing methods onto `IBillingService` (or document the single-impl constraint loudly); introduce an order **status enum + transition table** (kills the silent-filter-break class).
+- **[~] PARTIAL — pricing 6→3 + Distributor in-app path done (`0ceb156`); social-proof deferred — needs real customer data.** Week 3-4: collapse pricing to 3 visible tiers + add the in-app Distributor upgrade path; add 1 social-proof element to the landing path.
+- **[~] PARTIAL — Redis-ready nonce (`0b34ff7`) + runbook written; load-test + Redis trigger decision are founder-ops.** Week 4: load-test to the Neon connection ceiling; decide Redis (HMAC nonce + queue) trigger point; write the runbook (Worker restart, stuck-order requeue, R2 secret rotation).
 
 
 ---
@@ -2031,16 +2033,16 @@ Bridge system is consistently applied (navy/blue/green, top-edge accents, Bricol
 - **The business has a structural ceiling, not a quality problem.** A €1–3M ARR Baltic-bootstrap on 4–8× EU B2B-integration multiples. The product is *better* than the business. You are doing €5M+ engineering on a €1M opportunity.
 - **The labor-savings ROI is thin at the small end.** A 200-PO customer's *entire* monthly manual-PO cost is ~€96; Growth is €149. You cannot sell that tier on ROI math — only on "don't hire" / fear / reliability. Either drop a genuine €49 Starter or stop pretending Growth has a 200-PO buyer.
 - **You have never delivered a real PO to a real supplier.** Everything is proven against your own controlled endpoints and a QA-bypass e2e. The single most important fact about a delivery product is unverified.
-- **The one thing that would make it defensible — the cross-org mapping library / network effect — is the one thing not built.** Everything built is a feature; nothing built is a moat.
+- **[—] NOT BUILT (deferred) — cross-org library is Horizon-3 (SchemaFingerprint.cs:10); audit gates it post ~10 customers.** **The one thing that would make it defensible — the cross-org mapping library / network effect — is the one thing not built.** Everything built is a feature; nothing built is a moat.
 
 ### What is unclear
 - **The identity fork is still unresolved — and you're answering it with your hands, not your mouth.** You *say* "Baltic bootstrap, freeze features," and you *build* the international-standard breadth (185 commits since the freeze order; OrderService 1,166→1,720 lines; Inbound/Invoice/ASN/EDIFACT). Pick one and let the codebase reflect it.
 - **Who signs the cheque, concretely.** "Procurement coordinator approves €399" is a hypothesis with zero evidence. One signed pilot resolves it; nothing in the repo can.
 
 ### What feels amateur
-- **Dead CTAs behind first-class nav** (Invoice download returns binary but the client parses JSON; ASN page invites an EDIFACT upload that throws `NotImplementedException`). Shipping a button that 500s is the fastest way to look unfinished.
-- **Over-claiming on the page titled "what works."** `/formats` marks X12/JSON/FTPS/SMTP/ERP "Supported" when the dropzone rejects `.x12`/`.json` and only HTTP delivery is proven. You wrote an honesty rule and then broke it on the honesty page.
-- **Stale self-reported numbers.** CLAUDE.md says 211 tests; reality is 887. STATUS.md referenced security P0s as open that are actually fixed. A buyer who diffs docs-vs-code stops trusting the docs — which is a shame, because here the *code* is better than the docs claim.
+- **[x] BUILT — Inbound nav gated by `INBOUND_ENABLED` (BridgeSidebar.tsx:93); DESADV→501 (`d6c44ac`).** **Dead CTAs behind first-class nav** (Invoice download returns binary but the client parses JSON; ASN page invites an EDIFACT upload that throws `NotImplementedException`). Shipping a button that 500s is the fastest way to look unfinished.
+- **[x] BUILT — `/formats` honest status tags (formats/page.tsx:22-25); `.x12` accepted (UploadWorkbench.tsx:658).** **Over-claiming on the page titled "what works."** `/formats` marks X12/JSON/FTPS/SMTP/ERP "Supported" when the dropzone rejects `.x12`/`.json` and only HTTP delivery is proven. You wrote an honesty rule and then broke it on the honesty page.
+- **[x] BUILT — counts reconciled (`4a405f1`); tracker B5 latest=correct; 1029 green (`70cacca`).** **Stale self-reported numbers.** CLAUDE.md says 211 tests; reality is 887. STATUS.md referenced security P0s as open that are actually fixed. A buyer who diffs docs-vs-code stops trusting the docs — which is a shame, because here the *code* is better than the docs claim.
 
 ### What feels strong (genuinely, not flattery)
 - **Multi-tenancy and idempotency are real, not theater.** Every query is org-scoped, the cross-tenant `FindAsync` is actually fixed, composite indexes lead with `OrgId`, upload + overage + schema-fingerprint all have real idempotency. Most teams at this stage fake this; you didn't.
@@ -2055,21 +2057,21 @@ Bridge system is consistently applied (navy/blue/green, top-edge accents, Bricol
 
 ### What you are missing completely
 - **A signed customer.** Not a lead, not a demo — a paid pilot with a real supplier endpoint. It is the only datapoint that changes anything (resolves ICP, WTP, the channel/delivery reliability, the identity fork, and fundability simultaneously).
-- **A connection-pool ceiling.** Two unbounded 100-connection pools against a ~100-connection Neon cap will produce random 500s at ~20–50 concurrent customers — and you'll debug it as "flaky" instead of "I never set Max Pool Size."
-- **Idempotency on the inbound API.** Zapier/Make retry at-least-once; you'll deliver the same PO to a supplier twice and find out from an angry customer.
-- **Proof.** Zero social proof on the landing path for a €399–€1,499/mo tool. One logo or one number changes conversion more than any feature.
+- **[x] BUILT — pool caps API=30/Worker=20 (Program.cs:79, Worker/Program.cs:105).** **A connection-pool ceiling.** Two unbounded 100-connection pools against a ~100-connection Neon cap will produce random 500s at ~20–50 concurrent customers — and you'll debug it as "flaky" instead of "I never set Max Pool Size."
+- **[x] BUILT — ingress Idempotency-Key short-circuit (IngressController.cs:84-93,162).** **Idempotency on the inbound API.** Zapier/Make retry at-least-once; you'll deliver the same PO to a supplier twice and find out from an angry customer.
+- **[—] NOT BUILT (deferred) — page.tsx:754 deliberately no fabricated attribution; needs a real consented customer.** **Proof.** Zero social proof on the landing path for a €399–€1,499/mo tool. One logo or one number changes conversion more than any feature.
 
 ### What would make a buyer lose trust
-A button that errors. A "Supported" badge for a format that 400s. A "Demo data" inbox where a real customer expected their orders. A delivery that silently dead-letters with no alert. An invoice screen that throws. **Every one of these exists today and is removable in a day.**
+**[x] BUILT — error CTAs/badges removed: Inbound gated, `/formats` honest, worker alert, DESADV→501.** A button that errors. A "Supported" badge for a format that 400s. A "Demo data" inbox where a real customer expected their orders. A delivery that silently dead-letters with no alert. An invoice screen that throws. **Every one of these exists today and is removable in a day.**
 
 ### What would make the product feel premium
-- A delivery that *just works* and a clean, timestamped audit trail proving it (PO Passport) — your strongest "premium" asset, already built; surface it harder.
-- One real customer logo + "N POs delivered, 0 reformatted by hand."
-- A 60-second "upload → it reached your supplier" demo, no scrolling, real data.
-- Removing the half-finished surfaces so 100% of what's visible works.
+- **[~] PARTIAL — audit trail/PO Passport built + surfaced; 'surface harder' is UX emphasis, not a discrete fix.** A delivery that *just works* and a clean, timestamped audit trail proving it (PO Passport) — your strongest "premium" asset, already built; surface it harder.
+- **[—] NOT BUILT (deferred) — needs a real customer (none signed); page.tsx:754 avoids fabricated stats.** One real customer logo + "N POs delivered, 0 reformatted by hand."
+- **[—] NOT BUILT (founder-ops) — demo video iterating (scripts/demo-video); needs a real supplier delivery for real data.** A 60-second "upload → it reached your supplier" demo, no scrolling, real data.
+- **[x] BUILT — half-finished surfaces gated/removed (Inbound flag, honest `/formats`, DESADV→501).** Removing the half-finished surfaces so 100% of what's visible works.
 
 ### What would justify the price
-- The mid-market math does, cleanly: a 1,000-PO customer saves ~€642/mo at 70% automation and pays €399. That's a 1.6× ROI in month one with the setup fee paid back in weeks. **That customer — not the 200-PO one — is your proof case.** Land three of them and the price justifies itself.
+- **[—] NOT BUILT (founder-ops) — sales action: land 3 mid-market (1,000-PO) customers; no code to write.** The mid-market math does, cleanly: a 1,000-PO customer saves ~€642/mo at 70% automation and pays €399. That's a 1.6× ROI in month one with the setup fee paid back in weeks. **That customer — not the 200-PO one — is your proof case.** Land three of them and the price justifies itself.
 
 
 ---
@@ -2082,7 +2084,7 @@ A button that errors. A "Supported" badge for a format that 400s. A "Demo data" 
 
 > Ordered by launch priority. Each is self-contained. Backend = `ProcuLink` (.NET 8), frontend = `project-proculink` (bun). Conventions: every service method takes `Guid organisationId`; EF queries `.Where(x => x.OrganisationId == organisationId)`; Hangfire jobs idempotent; no raw SQL. End commits with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 
-### Prompt 1 — Hide/remove unfinished UI flows (do FIRST; kills 5 trust issues in ~1 day)
+### **[x] BUILT — Inbound gated (BridgeSidebar.tsx:93) + honest `/formats`/landing (`1d47861`, `d6c44ac`).** Prompt 1 — Hide/remove unfinished UI flows (do FIRST; kills 5 trust issues in ~1 day)
 - **Goal:** No control ships unless it works (offer⇔works). Remove the frozen Inbound surface and the capability over-claims.
 - **Inspect:** `src/components/bridge/BridgeSidebar.tsx:60-64`; `src/app/(app)/inbound/invoices/page.tsx`; `src/app/(app)/inbound/asns/page.tsx`; `src/app/(marketing)/formats/page.tsx:41`; `src/app/page.tsx:128,484`; `src/lib/launch-flags.ts`; backend `InvoiceController.cs`, `DesadvController.cs`, `EdifactInvoiceParser.cs:16`.
 - **Frontend:** Remove the Inbound (Invoices/ASNs) nav group + their `LAUNCH_CORE_HREFS` entries (or gate behind a `NEXT_PUBLIC_INBOUND_ENABLED` flag, default off). On `/formats`: X12 850 → "Import via API or `.edi` wrapper", JSON → "Planned", FTPS/SMTP/Erply/Directo delivery → "Configurable / on request" (only HTTP is "Supported, verified"). On landing: drop "X12" and "JSON or email attachment, drop any PO" claims to match the real whitelist (`.csv,.xlsx,.pdf,.xml,.cxml,.edi,.txt`).
@@ -2091,7 +2093,7 @@ A button that errors. A "Supported" badge for a format that 400s. A "Demo data" 
 - **Acceptance:** No nav item leads to a screen whose headline action 400s/throws; `/formats` and landing claim only verified capabilities; `bun run build` clean.
 - **Commands:** `bun run build`; `bun run test:e2e`.
 
-### Prompt 2 — Postgres connection-pool ceiling + inbound idempotency (correctness/stability P0s)
+### **[x] BUILT — pool caps (Program.cs:79, Worker:105) + ingress Idempotency-Key (IngressController.cs:84).** Prompt 2 — Postgres connection-pool ceiling + inbound idempotency (correctness/stability P0s)
 - **Goal:** Stop Neon connection exhaustion and duplicate orders from at-least-once inbound retries.
 - **Inspect:** `ProcuLink.Api/Program.cs:54` + `ProcuLink.Worker/Program.cs:79-92` (DbContext + Hangfire WorkerCount=10); the connection string config; `ProcuLink.Api/Controllers/IngressController.cs:41-111`; `IdempotencyService.cs`; `OrdersController.cs:112-170` (the working upload idempotency pattern to copy).
 - **Backend:** Add `Maximum Pool Size` to the Npgsql connection string (e.g. API 30, Worker 20 against a ~100 Neon cap) and use the Neon **pooled** endpoint. In `IngressController.ReceiveOrder`, require/honor an `Idempotency-Key` (or hash of body+slug) via the existing `idempotency_keys` table before `CreateStubFromParsedOrderAsync` — return the existing order on replay.
@@ -2099,7 +2101,7 @@ A button that errors. A "Supported" badge for a format that 400s. A "Demo data" 
 - **Acceptance:** pool sizes capped + pooled endpoint; ingress replay creates exactly one PO; `dotnet test ProcuLink.slnx` green.
 - **Commands:** `dotnet test ProcuLink.slnx`.
 
-### Prompt 3 — Stuck parsing/delivery detection: requeue, not just fail
+### **[x] BUILT — `StuckOrderDetectionService` requeue→cap→dead-letter (MaxRequeues=2, :83-168); tracker R2.** Prompt 3 — Stuck parsing/delivery detection: requeue, not just fail
 - **Goal:** A transient Worker outage must self-heal, not become a permanent user-visible failure.
 - **Inspect:** `ProcuLink.Infrastructure/Jobs/StuckOrderDetectionJob.cs:16,33`; `ParseOrderJob`, `TransformOrderJob`, `DeliverOrderJob` enqueue paths; `RetryDeliveryJob.cs`.
 - **Backend:** For orders parked >N min in `parsing`/`transforming`, **re-enqueue** the corresponding job up to a bounded retry count (track attempts) before failing to dead-letter. Keep it idempotent (don't double-process an order that recovered). Distinguish "stuck (transient)" from "genuinely failed".
@@ -2107,7 +2109,7 @@ A button that errors. A "Supported" badge for a format that 400s. A "Demo data" 
 - **Acceptance:** simulated stuck order recovers on requeue; cap respected; `dotnet test` green.
 - **Commands:** `dotnet test ProcuLink.slnx`.
 
-### Prompt 4 — Production Worker / Hangfire reliability audit + heartbeat alert
+### **[x] BUILT — `WorkerHealthAlertJob` + heartbeat fields (OpsController.cs:74-75); tracker B7.** Prompt 4 — Production Worker / Hangfire reliability audit + heartbeat alert
 - **Goal:** A dead Worker can never be silent (API hosts no Hangfire server; the Worker is the sole executor — 2 prior prod incidents).
 - **Inspect:** `ProcuLink.Worker/Program.cs:87-94` (5 queues, WorkerCount=10), `ProcuLink.Api/Program.cs:187-189,476` (no server, dev-only dashboard), the recurring schedulers in `ProcuLink.Worker/Worker.cs`.
 - **Backend:** Add a Worker heartbeat (e.g. a recurring job writing `last_seen` + a lightweight `/worker-health` the API can read, or a Hangfire `IBackgroundProcess` heartbeat) and an alert (Sentry/Slack/email) when no heartbeat in M minutes or when dead-letter count crosses a threshold. Expose a prod-safe read-only queue/health view.
@@ -2115,7 +2117,7 @@ A button that errors. A "Supported" badge for a format that 400s. A "Demo data" 
 - **Acceptance:** killing the Worker locally fires the alert within M minutes; dead-letter spike alerts.
 - **Commands:** `dotnet test ProcuLink.slnx`; manual: stop Worker, observe alert.
 
-### Prompt 5 — Stripe live readiness + pricing consistency
+### **[~] PARTIAL — code done (AppInfo Program.cs:62, Distributor price wired); live-mode swap + live test event = June-9 founder-ops.** Prompt 5 — Stripe live readiness + pricing consistency
 - **Goal:** Live-mode billing works and the plan ladder is internally consistent.
 - **Inspect:** `ProcuLink.Api/Program.cs:51` (no API version), `ProcuLink.Api/Services/StripeBillingService.cs` (CreateCheckoutSession, overage `BillOverageForInvoiceAsync`, the off-interface emit methods), `BillingController.cs` (webhook), `ProcuLink.Infrastructure/Services/StartupConfigurationValidator.cs:31-36`, `src/lib/plans.ts`, `docs/deployment/stripe-go-live-checklist.md`.
 - **Backend:** Pin `StripeConfiguration.ApiVersion` + AppInfo. Verify `DistributorPriceId`/`DistributorYearlyPriceId` are set for live (they exist in test — confirmed via Stripe API this session). Confirm `EventUtility.ConstructEvent` + the period-keyed overage idempotency on a live test event.
@@ -2124,7 +2126,7 @@ A button that errors. A "Supported" badge for a format that 400s. A "Demo data" 
 - **Acceptance:** live Checkout + Portal + an `invoice.created` overage line all succeed against a live test event; `plans.ts` ≡ `PlanConstants`.
 - **Commands:** `dotnet test ProcuLink.slnx`; `bun run build`; manual Stripe live test event.
 
-### Prompt 6 — Security + tenant-isolation hardening (P1 batch)
+### **[x] BUILT — SSRF connect re-validate, ExceptionHandler (Program.cs:641), azp required, CORS exact, provision throttle; tracker P1 batch.** Prompt 6 — Security + tenant-isolation hardening (P1 batch)
 - **Goal:** Close the verified P1s (no new P0s exist).
 - **Inspect:** `OutboundRequestGuard.cs:68` + the dispatchers that reconnect by hostname (`HttpDeliveryDispatcher.cs:92`, `SmtpDeliveryDispatcher.cs:138`, `SftpDeliveryDispatcher.cs:67`, `FireIntegrationTriggerJob.cs:94`); `Program.cs` (no `UseExceptionHandler`; CORS `:231-236`); `ClerkTokenValidation.cs:24-25` (missing-azp accepted); `TenantResolutionMiddleware.cs:61-98` (auto-provision); `InboundEmailController.cs:63-78`; the **tenant-resolution duality** (`CurrentTenantService.cs:21-25` JWT path vs `IngressController.cs:26-28,54` + `ApiKeyAuthHandler.cs:65` API-key path, both `org_id`, different value spaces).
 - **Backend:** (1) SSRF: resolve once, **connect to the validated IP** (or re-validate at connect) to close DNS-rebinding TOCTOU. (2) Add `UseExceptionHandler` + ProblemDetails. (3) Reject a missing `azp` when `ValidateAudience=false`. (4) Tighten CORS: explicit origin allowlist, no `*.vercel.app` in prod with `AllowCredentials`. (5) Throttle auto-provisioning (per IP/email). (6) Unify tenant resolution so API-key requests flow through one resolver returning the internal org UUID.
@@ -2132,14 +2134,14 @@ A button that errors. A "Supported" badge for a format that 400s. A "Demo data" 
 - **Acceptance:** all P1s closed with tests; `dotnet test` green.
 - **Commands:** `dotnet test ProcuLink.slnx`.
 
-### Prompt 7 — Upload → parse → review → transform → deliver E2E (the golden-path gate)
+### **[~] PARTIAL — live-po-loop/failure-states specs exist + run; prompt's poll/gate hardening not fully re-verified.** Prompt 7 — Upload → parse → review → transform → deliver E2E (the golden-path gate)
 - **Goal:** A committed, runnable e2e that proves the whole loop against a real local stack (and is CI-able in mock).
 - **Inspect:** `project-proculink/playwright.config.ts`, `tests/e2e/live-po-loop.spec.ts`, `tests/e2e/live-po-failure-states.spec.ts`; backend QA-bypass (`PROCULINK_QA_BYPASS_AUTH`); `MagicMappingPreview.tsx` (the parse poll).
 - **Frontend/Tests:** Harden `live-po-loop` to: upload CSV → wait for parse (poll, not a fixed 30s) → resolve a line → transform → assert `delivery_failed` (no config) OR `delivered` (test endpoint) → assert the audit trail. Make it robust to next-dev hydration (retry-click pattern already used in `sample-order-happy-path`). Keep the live path behind `PLAYWRIGHT_LIVE=1` and the mock path green in CI.
 - **Backend:** none. **Acceptance:** `PLAYWRIGHT_LIVE=1 PLAYWRIGHT_API_URL=http://localhost:5223 bun run test:e2e:live -- tests/e2e/live-po-loop.spec.ts` passes against a booted API+Worker; mock suite green in CI.
 - **Commands (full local stack):** API `ASPNETCORE_ENVIRONMENT=Development PROCULINK_QA_BYPASS_AUTH=true dotnet run --project ProcuLink.Api`; Worker `DOTNET_ENVIRONMENT=Development dotnet run --project ProcuLink.Worker`; then the e2e above. *(Note: the Worker reads `DOTNET_ENVIRONMENT`, not `ASPNETCORE_ENVIRONMENT`.)*
 
-### Prompt 8 — Delivery failure & retry UX + correction workflow polish
+### **[x] BUILT — exceptions/health pages + requeue-from-dead-letter (OpsController RequeueDelivery); last error on order DTO.** Prompt 8 — Delivery failure & retry UX + correction workflow polish
 - **Goal:** The operator can always see why delivery failed and act; corrections are obvious.
 - **Inspect:** `SpineReview.tsx` (delivery state, retry feedback), `src/app/(app)/operations/exceptions/page.tsx`, `src/app/(app)/operations/health/page.tsx` (dead-letter/requeue), `DeliveryService.cs`, `RetryDeliveryJob.cs`, `MagicMappingPreview.tsx`/`MappingEditor.tsx`.
 - **Frontend:** Surface the latest `delivery_attempts` error + a one-click "retry"/"requeue from dead-letter" with feedback; ensure the exceptions list "Open order" loop is intuitive; confirm mapping corrections persist + refetch (verified) and the "Parsing…" state shows during async parse (verified).
@@ -2148,7 +2150,7 @@ A button that errors. A "Supported" badge for a format that 400s. A "Demo data" 
 - **Acceptance:** no silent delivery failure; every failed order shows a reason + a recovery action.
 - **Commands:** `dotnet test ProcuLink.slnx`; `bun run test:e2e`.
 
-### Prompt 9 — Onboarding simplification + pricing choice reduction
+### **[x] BUILT — wizard blue/a11y (OnboardingWizard.tsx:16,165), Distributor upsell (plans.ts:193), LimitBanner from plans; tracker UI/UX 1-7.** Prompt 9 — Onboarding simplification + pricing choice reduction
 - **Goal:** One clear path in; reduce the 6-tier decision.
 - **Inspect:** `OnboardingWizard.tsx:18,158` (lime `#28C55E`; `aria-checked` hardcoded), `src/lib/plans.ts:77-259`, `src/app/(marketing)/pricing/page.tsx:43`, `BillingSection.tsx:81,343` (hardcoded "20 Pilot orders"; no Distributor upsell), `ROICalculator`.
 - **Frontend:** Collapse the pricing page to 3 visible decisions (Pilot/Operations-anchor/Contact-sales), lead with the ROI calculator's recommendation, keep all tiers reachable. Add the **in-app Distributor upgrade path** (`BillingSection`). Fix the wizard active-step color (`T.blue=#1E66C9`) + real `aria-checked` + dot fill. Drive the LimitBanner copy from `plans.ts` not a hardcoded string.
@@ -2156,7 +2158,7 @@ A button that errors. A "Supported" badge for a format that 400s. A "Demo data" 
 - **Acceptance:** pricing reads as 3 decisions; Distributor upgradable in-app; wizard a11y correct; `bun run build` clean.
 - **Commands:** `bun run build`; `bun run test:e2e`.
 
-### Prompt 10 — Monitoring & production health checks
+### **[~] PARTIAL — /health/ready (Program.cs:707) + worker alert + Sentry done; synthetic upload canary + full alert drill unverified.** Prompt 10 — Monitoring & production health checks
 - **Goal:** Production is observable; failures page someone.
 - **Inspect:** Sentry wiring (API + Worker `Program.cs`), `/health`, `StartupConfigurationValidator.cs`, Neon/Hangfire metrics, `Ai:OpenAI:MonthlyTokenLimitPerOrg`.
 - **Backend:** Confirm Sentry DSN on both services; add a deeper `/health` (DB + R2 + Hangfire reachable) and a synthetic "upload→parsed" canary; alerts for Worker-down (Prompt 4), Neon connection-count, dead-letter spike, OpenAI spend/cap.
@@ -2186,39 +2188,39 @@ A button that errors. A "Supported" badge for a format that 400s. A "Demo data" 
 > **Security note:** 0 production P0s. The three commonly-faked fixes (cross-tenant `FindAsync`, all-zero AES key, SSRF guard) are **genuinely present in code** — verified.
 
 ### Top 10 UX issues (CURRENT — post the big fix pass; most of the old audit is fixed)
-1. **6-tier pricing choice-overload**; the ICP (Distributor) sits 5th. Collapse to 3 visible decisions. (`plans.ts:77-259`)
-2. **No in-app upgrade path to Distributor** (the ICP tier) — `Integration.next:null`, `BillingSection` upsells only Growth/Ops/Integration. (`BillingSection.tsx:343`)
-3. **`/formats` + landing over-claim** capabilities (see P0 #6) — biggest trust drag on the honesty page.
-4. **Zero social proof** on the landing path for a €399–€1,499/mo tool.
-5. **Onboarding wizard uses banned lime `#28C55E`** (collapses the blue→green progression on the first screen). (`OnboardingWizard.tsx:18`)
-6. **Wizard radios hardcode `aria-checked={false}`** + dot never fills. (`OnboardingWizard.tsx:158`)
-7. **`LimitBanner` hardcodes "20 Pilot orders"** instead of `plans.ts`. (`BillingSection.tsx:81`)
-8. **Document-Anatomy section confidences partly invented** (only the lines zone is real). (`SpineReview.tsx:809`)
-9. **"Admin" nav shown to every customer**, then refuses non-admins. (`BridgeSidebar.tsx:68`)
-10. **Mobile order-review loses the field→output lineage** value-prop (`SpineConnectors` xl-only) + minor "supplier flows" vs "suppliers" wording drift.
+1. **[x] BUILT — pricing collapsed 6→3, tracker UI/UX #1 (`1b9f896`).** **6-tier pricing choice-overload**; the ICP (Distributor) sits 5th. Collapse to 3 visible decisions. (`plans.ts:77-259`)
+2. **[x] BUILT — Distributor in-app upsell chain (plans.ts:193); tracker UI/UX #2.** **No in-app upgrade path to Distributor** (the ICP tier) — `Integration.next:null`, `BillingSection` upsells only Growth/Ops/Integration. (`BillingSection.tsx:343`)
+3. **[x] BUILT — honest `/formats` + landing (formats/page.tsx:22; `1d47861`); tracker UI/UX #3.** **`/formats` + landing over-claim** capabilities (see P0 #6) — biggest trust drag on the honesty page.
+4. **[—] NOT BUILT (deferred) — page.tsx:754 no fabricated proof; needs a real customer (tracker C2).** **Zero social proof** on the landing path for a €399–€1,499/mo tool.
+5. **[x] BUILT — wizard active step T.blue=#1E66C9 (OnboardingWizard.tsx:16,55); tracker UI/UX #4.** **Onboarding wizard uses banned lime `#28C55E`** (collapses the blue→green progression on the first screen). (`OnboardingWizard.tsx:18`)
+6. **[x] BUILT — aria-checked={isSelected} + filled dot (OnboardingWizard.tsx:165,196); tracker UI/UX #5.** **Wizard radios hardcode `aria-checked={false}`** + dot never fills. (`OnboardingWizard.tsx:158`)
+7. **[x] BUILT — LimitBanner derived from plans.ts (BillingSection.tsx:13,68); tracker UI/UX #8.** **`LimitBanner` hardcodes "20 Pilot orders"** instead of `plans.ts`. (`BillingSection.tsx:81`)
+8. **[~] PARTIAL — only lines-zone confidence real; section confidences still partial (tracker UI/UX #7).** **Document-Anatomy section confidences partly invented** (only the lines zone is real). (`SpineReview.tsx:809`)
+9. **[x] BUILT — Admin nav hidden via /api/admin/access probe (BridgeSidebar.tsx:97; `e41f6e6`/`ac16373`).** **"Admin" nav shown to every customer**, then refuses non-admins. (`BridgeSidebar.tsx:68`)
+10. **[~] PARTIAL — mobile lineage still xl-only (tracker UI/UX #9).** **Mobile order-review loses the field→output lineage** value-prop (`SpineConnectors` xl-only) + minor "supplier flows" vs "suppliers" wording drift.
 
 ### Top 10 product improvements (most candidates already shipped — these are the real gaps)
-1. **Cross-org mapping library / network effect** — the ONE un-built feature that is a real moat. Build after ~10 customers. (Everything else below is polish/closing.)
-2. **Per-supplier setup-fee productization** — the strongest pricing lever; make it a first-class, trackable line (it's the true cost driver + stickiness).
-3. **Pricing re-cut** — collapse to 3 tiers; route 5,000-PO customers to Enterprise (€1,499 Distributor leaves €500–1,500/mo on the table); stop selling Growth €149 on labor ROI to 200-PO buyers.
-4. **Supplier confirmation/ACK round-trip** completion (started in `OrderConfirmationController`) — closes the loop the ICP cares about.
-5. **R2 + audit/delivery-attempts retention/GDPR-delete** — currently no delete path anywhere.
-6. **Order status enum + transition table** — kills the silent-filter-break class (the 5-status "Failed" bucket showed the fragility).
-7. **AI batch chunking (~50 lines/call)** — a 500–1,000-line distributor PO truncates output / blows the 100k/mo token cap.
-8. **A typed contract layer (codegen or shared DTOs)** — the inline-anonymous-object + hand-mirrored-TS pattern is what produced the invoice contract bugs.
-9. **One social-proof artifact + a 60-second "it reached your supplier" demo** — bigger conversion lift than any feature.
-10. **The real test: deliver one Markit PO to one real supplier endpoint** — the only "feature" that resolves ICP, WTP, reliability, and the identity fork at once.
+1. **[—] NOT BUILT (deferred) — Horizon-3 (SchemaFingerprint.cs:10); audit gates it post ~10 customers.** **Cross-org mapping library / network effect** — the ONE un-built feature that is a real moat. Build after ~10 customers. (Everything else below is polish/closing.)
+2. **[—] NOT BUILT (deferred) — no setup-fee line in code (grep empty); post-launch pricing lever.** **Per-supplier setup-fee productization** — the strongest pricing lever; make it a first-class, trackable line (it's the true cost driver + stickiness).
+3. **[~] PARTIAL — 3 visible tiers + honest ROI shipped (`1b9f896`); >5k-PO routing & Growth-pitch change = pricing decision.** **Pricing re-cut** — collapse to 3 tiers; route 5,000-PO customers to Enterprise (€1,499 Distributor leaves €500–1,500/mo on the table); stop selling Growth €149 on labor ROI to 200-PO buyers.
+4. **[~] PARTIAL — `OrderConfirmationService` (223 lines) records/evaluates ACKs; full round-trip completion not all verified.** **Supplier confirmation/ACK round-trip** completion (started in `OrderConfirmationController`) — closes the loop the ICP cares about.
+5. **[x] BUILT — `IDataErasureService` per-order R2+DB erase (AdminController.cs:343) + DataRetentionService; W3/§1.1.E.** **R2 + audit/delivery-attempts retention/GDPR-delete** — currently no delete path anywhere.
+6. **[x] BUILT — `OrderStatusMachine` transition map (OrderStatusMachine.cs:22); tracker W2 (`39e069e`).** **Order status enum + transition table** — kills the silent-filter-break class (the 5-status "Failed" bucket showed the fragility).
+7. **[x] BUILT — AI batch chunking (OpenAiMappingService.cs:15,393); tracker §1.1.D.** **AI batch chunking (~50 lines/call)** — a 500–1,000-line distributor PO truncates output / blows the 100k/mo token cap.
+8. **[—] NOT BUILT (deferred) — typed-DTO layer explicitly post-launch (tracker B3/D5).** **A typed contract layer (codegen or shared DTOs)** — the inline-anonymous-object + hand-mirrored-TS pattern is what produced the invoice contract bugs.
+9. **[—] NOT BUILT (founder-ops) — needs a real customer + a real supplier delivery; demo video still iterating.** **One social-proof artifact + a 60-second "it reached your supplier" demo** — bigger conversion lift than any feature.
+10. **[—] NOT BUILT (founder-ops) — only controlled-endpoint delivery proven; needs a real supplier endpoint.** **The real test: deliver one Markit PO to one real supplier endpoint** — the only "feature" that resolves ICP, WTP, reliability, and the identity fork at once.
 
 ### What must be done before production
-- Prompts **1–6** (hide Inbound + fix over-claims; pool ceiling + ingress idempotency; stuck-requeue; Worker heartbeat; Stripe live + pricing consistency; security P1 batch).
-- The **Stripe live-mode swap** (June-9 gate) + secret rotation.
-- **One real PO → one real supplier**, end-to-end, watched.
+- **[x] BUILT — Prompts 1-4 & 6 shipped; Prompt 5 code done (live swap = June-9). See per-prompt rows.** Prompts **1–6** (hide Inbound + fix over-claims; pool ceiling + ingress idempotency; stuck-requeue; Worker heartbeat; Stripe live + pricing consistency; security P1 batch).
+- **[—] NOT BUILT (founder-ops) — Stripe live-key swap + rotation, June-9 gate; code already maps prices.** The **Stripe live-mode swap** (June-9 gate) + secret rotation.
+- **[—] NOT BUILT (founder-ops) — needs a real supplier endpoint; only controlled delivery proven.** **One real PO → one real supplier**, end-to-end, watched.
 
 ### What can wait until after launch
-- OrderService/OrdersController God-object split; the off-interface billing refactor (document the single-impl constraint loudly instead); typed-DTO codegen.
-- Redis (HMAC nonce + queue) — only at >1 API replica / >10–20k jobs/day; stay single-instance until then.
-- Postgres RLS as defence-in-depth; SchemaFingerprints PascalCase cosmetic; Vite/SWC devDep cleanup.
-- The cross-org mapping library (post ~10 customers); EDIFACT INVOIC/DESADV (don't build — keep hidden); i18n/PEPPOL/broad standards breadth.
+- **[~] PARTIAL — OrderService split (W1 `28a72f4`) + billing-on-IBillingService (R3) done; typed-DTO codegen still deferred.** OrderService/OrdersController God-object split; the off-interface billing refactor (document the single-impl constraint loudly instead); typed-DTO codegen.
+- **[~] PARTIAL — Redis-ready nonce shipped behind flag (`0b34ff7`, W4); Redis queue deferred to >1 replica.** Redis (HMAC nonce + queue) — only at >1 API replica / >10–20k jobs/day; stay single-instance until then.
+- **[—] NOT BUILT (deferred) — RLS redesign-later/post-revenue (tracker §2.5); rename cosmetic; app-level org scoping already isolates.** Postgres RLS as defence-in-depth; SchemaFingerprints PascalCase cosmetic; Vite/SWC devDep cleanup.
+- **[—] NOT BUILT (deferred) — cross-org Horizon-3; EDIFACT INVOIC/DESADV intentionally kept hidden (DESADV→501 `d6c44ac`); licence-declined.** The cross-org mapping library (post ~10 customers); EDIFACT INVOIC/DESADV (don't build — keep hidden); i18n/PEPPOL/broad standards breadth.
 
 ### One-line bottom line
 The **code is better than the docs claim and better than the business needs** — a genuinely clean, secure, idempotent outbound PO engine sitting on a €1–3M Baltic-bootstrap opportunity. The launch blockers are ~6 removals/hardening fixes (≈1 week), not features. The single highest-EV action is not in this document: **stop building, deliver one real PO to one real supplier, and sell.**
