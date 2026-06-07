@@ -69,6 +69,25 @@ From `docs/audit/2026-06-07-launch-site-audit.md` (backend repo) — confirmed, 
 consolidated runbook) + Wave D refactors + the **API security headers** (HSTS + nosniff in
 `ProcuLink.Api/Program.cs`). DMARC is already added (`p=none`, verified). Don't duplicate those.
 
-## Isolated build verdict of your WIP snapshot
+## Isolated build verdict of your WIP snapshot — VERIFIED 2026-06-07
 
-_(appended below once the isolated `bun run build` completes — see task `bh9jjjm3o`)_
+A snapshot of your 12-file migration was applied to a throwaway worktree (off your tree)
+and built. **It builds CLEAN after fixing exactly two lines** — your migration is otherwise
+sound. The blocker was a naive curly→straight quote fix that produced **nested unescaped
+double-quotes** inside JS strings, both in `src/app/(app)/operations/health/page.tsx`:
+
+- **line 156** — was:
+  `: "No worker has reported in — uploads will stall at "parsing" until a worker starts."}`
+  → fix (wrap the JS string in single quotes so the inner `"parsing"` is literal):
+  `: 'No worker has reported in — uploads will stall at "parsing" until a worker starts.'}`
+- **line 216** — was:
+  `{includeFailed ? "" : "Tick "Include delivery-failed" to widen the view."}`
+  → fix:
+  `{includeFailed ? "" : 'Tick "Include delivery-failed" to widen the view.'}`
+
+After those two edits, `bun run build` compiles all routes (incl. `/operations/health`,
+`/settings`, all 12 migrated pages) with no errors — only the usual Sentry/Browserslist
+warnings. **Apply those two fixes (or `\"`-escape the inner quotes), then build-gate and
+commit your `(app)` files by explicit path.** Lesson: a blind `“”`→`"` replace breaks any
+string that used curly quotes as quotation marks around a word — grep for nested `"…"…"…"`
+after such a sweep. No other build errors were found across the 12 files.
