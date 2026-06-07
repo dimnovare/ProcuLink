@@ -12,7 +12,7 @@ Per-item status against the current code. Legend: `[x]` done+verified · `[~]` p
 
 **Part B (g) — refactor vs can-wait**
 - [x] R1 unify tenant resolution (`3c789b6`) · [x] R2 stuck-order requeue (`0da39cf`) · [x] R3 billing on `IBillingService` (`3c789b6`)
-- [ ] W1 decompose OrderService (behind `IOrderService` facade) — building · [x] W2 order-status state machine (`OrderStatusMachine`: transition map + IsAllowed/IsTerminal/IsFailure + centralized Redeliver guard, behaviour-preserving) · [x] W3 R2/DB per-order GDPR erase (`IDataErasureService` + admin endpoint; FK-safe confirmations + R2; adversarial-reviewed)
+- [—] W1 decompose OrderService (behind `IOrderService` facade) — DEFERRED to a dedicated session (1618 LOC, shared private helpers; audit's own "pure risk, zero value pre-launch"; ready plan in WAVE_D_BACKEND_REMAINING.md) · [x] W2 order-status state machine (`OrderStatusMachine`: transition map + IsAllowed/IsTerminal/IsFailure + centralized Redeliver guard, behaviour-preserving) · [x] W3 R2/DB per-order GDPR erase (`IDataErasureService` + admin endpoint; FK-safe confirmations + R2; adversarial-reviewed)
 - [x] W4 Redis-ready nonce (config flag) + API HSTS/nosniff (`0b34ff7`)
 - [—] W5 consolidate retry schedulers (refactors correct code) · [—] W6 split api-client.ts (collides w/ active FE chips; DX-only)
 
@@ -21,7 +21,7 @@ Per-item status against the current code. Legend: `[x]` done+verified · `[~]` p
 **Part 24 §1.1 bottlenecks** — [x] A pool ceiling · [x] B ListAsync retired→ListPaged · [x] C ingress idempotency · [x] D AI chunking · [~] E retention sweep (DB done; R2-file delete = W3) · [x] F email-poller indexed flag (`eb24aa6`) · [—] G heavy-parse queue (marginal at pilot)
 **§1.4** — [x] redis nonce (`0b34ff7`) · [—] partition audit/passport (redesign-later) · [—] denormalize line_count/total_value (redesign-later, drift risk)
 
-**Part 24 §2 DB** — [x] §2.3.2 AI-candidates sort index (`eb24aa6`) · [x] §2.3.3 email-flag index · [—] §2.3.4 invoices/ASN composite (frozen tables, no query) · [x] §2.4 canonical_json/ListAsync (retired) · [~] §2.4.2 BuyerName split (read-column-first pattern) · [—] §2.4.4 jsonb converter (deliberate) · [ ] §2.5 Postgres RLS — building · [—] §2.7.1 SchemaFingerprints rename (cosmetic/risky) · [x] §2.7.2 migrate-fail-loud (`5013fd8`); [—] phantom-migration cleanup (dangerous pre-launch)
+**Part 24 §2 DB** — [x] §2.3.2 AI-candidates sort index (`eb24aa6`) · [x] §2.3.3 email-flag index · [—] §2.3.4 invoices/ASN composite (frozen tables, no query) · [x] §2.4 canonical_json/ListAsync (retired) · [~] §2.4.2 BuyerName split (read-column-first pattern) · [—] §2.4.4 jsonb converter (deliberate) · [—] §2.5 Postgres RLS — DEFERRED to a dedicated session (needs session-var connection interceptor + role exemptions + a real-Postgres two-org test harness; high risk of silently zeroing queries; app-level scoping already enforces isolation) · [—] §2.7.1 SchemaFingerprints rename (cosmetic/risky) · [x] §2.7.2 migrate-fail-loud (`5013fd8`); [—] phantom-migration cleanup (dangerous pre-launch)
 
 **Part 26 security** — [x] P1-1 SSRF · [x] P1-2 exception handler · [x] P1-3 azp+Clerk cutover · [x] P1-4 CORS · [x] P1-5 provision throttle · [~/—] P1-6 Postmark (token const-time + Warning logs; signature needs CF Worker) · [x] P2-1 path-traversal · [x] P2-2 LastUsedAt await · [x] P2-3 nonce Redis-ready (`0b34ff7`) · [x] P2-4 rate limits broadened
 
