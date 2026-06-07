@@ -55,6 +55,18 @@ public sealed class AdminController : ControllerBase
     // IBillingService interface — same pattern as BillingController.BillingEvents.
     private StripeBillingService? Stripe => _billing as StripeBillingService;
 
+    // ── GET /api/admin/access ─────────────────────────────────────────────
+    // Lightweight probe so the frontend can hide the Admin nav link for
+    // non-admins. The class-level [AdminOnly] gate already returns 403 for
+    // anyone not on the server-side allowlist, so reaching this action means
+    // "you are an admin" → 204. There is NO body: the allowlist is never
+    // serialized to the browser, so the link being shown/hidden leaks nothing,
+    // and defense-in-depth is unchanged (every other admin endpoint re-gates).
+    [HttpGet("access")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public IActionResult GetAccess() => NoContent();
+
     // ── GET /api/admin/overview ───────────────────────────────────────────
     [HttpGet("overview")]
     [ProducesResponseType(typeof(AdminOverviewDto), StatusCodes.Status200OK)]

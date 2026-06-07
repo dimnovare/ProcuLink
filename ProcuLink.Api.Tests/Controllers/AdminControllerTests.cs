@@ -89,6 +89,18 @@ public class AdminControllerTests
         dto.CountsByAccountStatus[AccountStatusConstants.Trialing].Should().Be(2);
     }
 
+    // ── access probe ──────────────────────────────────────────────────────
+    // The endpoint itself only returns 204; the real protection is the
+    // class-level [AdminOnly] gate (covered by AdminOnlyAttributeTests). This
+    // locks the contract the frontend nav-hide relies on: reaching the action
+    // ⇒ 204 No Content, no body.
+    [Fact]
+    public void GetAccess_ReturnsNoContent()
+    {
+        var ctrl = Build(MakeDb());
+        ctrl.GetAccess().Should().BeOfType<NoContentResult>();
+    }
+
     [Fact]
     public async Task GetOverview_WhenStripeUnconfigured_StripeMrrNull_AndNotReconciled()
     {
