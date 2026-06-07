@@ -86,11 +86,6 @@ public interface IOrderService
         Guid orderId,
         CancellationToken ct);
 
-    /// <summary>List all orders for the org, newest first, as lightweight summaries.</summary>
-    Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(
-        Guid organisationId,
-        CancellationToken ct);
-
     /// <summary>
     /// Paginated, filtered list of orders for the org.
     /// Filters are applied before pagination; totalCount reflects the filtered count.

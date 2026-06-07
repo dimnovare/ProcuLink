@@ -42,6 +42,15 @@ public class PurchaseOrderEntity
     public bool IsSample { get; set; }
 
     /// <summary>
+    /// How many times the stuck-order sweep has re-enqueued this order after it stalled
+    /// in a transient pipeline status ('parsing' / 'transforming'). A transient Worker
+    /// restart mid-job leaves an order parked; the sweep requeues it up to a bounded cap
+    /// (see <c>StuckOrderDetectionService</c>) before dead-lettering it as genuinely failed.
+    /// Default 0; additive column <c>requeue_count</c> (migration <c>AddOrderRequeueCount</c>).
+    /// </summary>
+    public int RequeueCount { get; set; }
+
+    /// <summary>
     /// Column-layout hash recorded once this order's source file has been fingerprinted
     /// (see <c>ISchemaFingerprintService</c>). Non-null means the fingerprint upsert already
     /// counted this order — the guard that makes parse-time fingerprinting idempotent across

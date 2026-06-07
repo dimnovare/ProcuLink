@@ -296,6 +296,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // SLA timers (Group O reliability).
             b.Property(x => x.DeliveryDueAt).HasColumnName("delivery_due_at").HasColumnType("timestamptz");
             b.Property(x => x.SlaBreached).HasColumnName("sla_breached").HasDefaultValue(false);
+            // Bounded requeue counter for the stuck-order self-heal sweep (additive).
+            b.Property(x => x.RequeueCount).HasColumnName("requeue_count").HasDefaultValue(0);
             // Phase 4 enrichment + doc-type classification (nullable).
             b.Property(x => x.SupplierName).HasColumnName("supplier_name");
             b.Property(x => x.SubTotal).HasColumnName("sub_total").HasColumnType("numeric(18,4)");

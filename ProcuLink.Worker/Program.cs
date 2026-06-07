@@ -76,6 +76,31 @@ if (!string.Equals(builder.Environment.EnvironmentName, "Production", StringComp
 // the validator will then throw the real combined error after Build().
 connectionString ??= string.Empty;
 
+// Cap the Npgsql pool in code so it applies regardless of the env-injected
+// connection string (prod string comes from Railway env). Without an explicit
+// ceiling each process would use Npgsql's default Maximum Pool Size of 100, so
+// API + Worker = two ~100-conn pools, well past Neon's ~100-connection cap.
+// The Worker (Hangfire WorkerCount=10) gets 20 — a head per worker plus margin
+// for recurring/polling jobs; the API gets 30. Both the EF DbContext and the
+// Hangfire Postgres storage share this single capped string below.
+// ConnectionIdleLifetime returns idle pooled connections to Neon so the pool
+// doesn't pin its ceiling. Existing settings in the string are preserved.
+connectionString = BuildPooledConnectionString(connectionString, maxPoolSize: 20);
+
+static string? BuildPooledConnectionString(string? raw, int maxPoolSize)
+{
+    if (string.IsNullOrWhiteSpace(raw))
+        return raw;
+
+    var b = new Npgsql.NpgsqlConnectionStringBuilder(raw)
+    {
+        MaxPoolSize = maxPoolSize,
+        ConnectionIdleLifetime = 60,   // seconds an idle pooled conn lives before close
+        ConnectionPruningInterval = 10 // seconds between idle-pruning sweeps
+    };
+    return b.ConnectionString;
+}
+
 builder.Services.AddDbContext<ProcuLinkDbContext>(options =>
     options.UseNpgsql(connectionString));
 
@@ -206,6 +231,12 @@ builder.Services.AddScoped<S3PollOrgJob>();
 // P0 reliability: stuck-order detection sweep + operator retry job.
 builder.Services.AddScoped<IStuckOrderDetectionService, StuckOrderDetectionService>();
 builder.Services.AddScoped<StuckOrderDetectionJob>();
+// StuckOrderDetectionService re-enqueues stuck 'parsing' orders through IParseJobEnqueuer.
+// That dependency is optional, so without this registration the Worker would reset stuck
+// orders to 'pending_parse' but never enqueue a fresh parse job — nothing would drive them.
+// The concrete adapter lives in ProcuLink.Api (alongside Hangfire + ParseOrderJob) and needs
+// only IBackgroundJobClient, which this Worker already provides.
+builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.HangfireParseJobEnqueuer>();
 // Group O reliability: automatic delivery retry queue (scheduled here) + SLA breach sweep.
 builder.Services.AddScoped<RetryDeliveryJob>();
 builder.Services.AddScoped<DeliverySlaSweepJob>();

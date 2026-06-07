@@ -3,46 +3,132 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services.Email;
 using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
 
 /// <summary>
-/// P0 reliability — stuck-order detection. Orders left in a transient pipeline
-/// status ('parsing' / 'transforming') past the timeout are failed with a
-/// 'StuckTimeout' audit event. Uses the full ProcuLinkDbContext on InMemory.
+/// P0 reliability — stuck-order detection + requeue. Orders left in a transient
+/// pipeline status ('parsing' / 'transforming') past the timeout are RE-ENQUEUED
+/// (a transient Worker restart mid-job is recoverable), up to a bounded cap, after
+/// which they are dead-lettered as genuinely failed. Each action writes an audit
+/// event. Uses the full ProcuLinkDbContext on InMemory.
 /// </summary>
 public class StuckOrderDetectionServiceTests
 {
     private static readonly TimeSpan Threshold = TimeSpan.FromMinutes(30);
 
+    // Mirrors StuckOrderDetectionService.MaxRequeues.
+    private const int MaxRequeues = 2;
+
     [Fact]
-    public async Task RunAsync_ParsingOrderOlderThanThreshold_MarksFailedWithAuditEvent()
+    public async Task RunAsync_StuckParsingOrder_FirstTime_IsRequeuedNotFailed()
     {
         await using var db = CreateDb();
         var orderId = await SeedOrderAsync(db, OrderStatusConstants.Parsing, updatedMinutesAgo: 45);
+        var enqueuer = new RecordingParseEnqueuer();
 
-        var marked = await CreateService(db).RunAsync(Threshold, default);
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
 
-        marked.Should().Be(1);
-        (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).Status
-            .Should().Be(OrderStatusConstants.Failed);
+        acted.Should().Be(1);
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        // Reset to its pre-parse state — NOT failed.
+        order.Status.Should().Be(OrderStatusConstants.PendingParse);
+        order.RequeueCount.Should().Be(1);
+
+        // The parse job was actually re-enqueued through the seam.
+        enqueuer.Calls.Should().ContainSingle()
+            .Which.Should().Be((orderId, order.OrgId));
+
+        // A StuckRequeued audit event was written (not StuckTimeout).
         var audit = await db.AuditEvents.SingleAsync(e => e.EntityId == orderId);
-        audit.Action.Should().Be("StuckTimeout");
+        audit.Action.Should().Be("StuckRequeued");
         audit.EntityType.Should().Be("Order");
     }
 
     [Fact]
-    public async Task RunAsync_TransformingOrderOlderThanThreshold_MarksFailed()
+    public async Task RunAsync_StuckTransformingOrder_FirstTime_IsResetToReadyNotFailed()
     {
         await using var db = CreateDb();
         var orderId = await SeedOrderAsync(db, OrderStatusConstants.Transforming, updatedMinutesAgo: 60);
+        var enqueuer = new RecordingParseEnqueuer();
 
-        var marked = await CreateService(db).RunAsync(Threshold, default);
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
 
-        marked.Should().Be(1);
-        (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).Status
+        acted.Should().Be(1);
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        // Reset to the resolved pre-transform 'ready' state — NOT failed.
+        order.Status.Should().Be(OrderStatusConstants.Ready);
+        order.RequeueCount.Should().Be(1);
+
+        // Transform recovery does NOT use the parse seam.
+        enqueuer.Calls.Should().BeEmpty();
+
+        (await db.AuditEvents.SingleAsync(e => e.EntityId == orderId)).Action
+            .Should().Be("StuckRequeued");
+    }
+
+    [Fact]
+    public async Task RunAsync_StuckOrderPastRequeueCap_IsDeadLetteredAsFailed()
+    {
+        await using var db = CreateDb();
+        // Already requeued up to the cap and stalled again.
+        var orderId = await SeedOrderAsync(
+            db, OrderStatusConstants.Parsing, updatedMinutesAgo: 45, requeueCount: MaxRequeues);
+        var enqueuer = new RecordingParseEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        acted.Should().Be(1);
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        order.Status.Should().Be(OrderStatusConstants.Failed);
+
+        // No further requeue once the cap is hit.
+        enqueuer.Calls.Should().BeEmpty();
+
+        // Dead-letter audit with a clear reason.
+        var audit = await db.AuditEvents.SingleAsync(e => e.EntityId == orderId);
+        audit.Action.Should().Be("StuckTimeout");
+        var root = audit.Payload!.RootElement;
+        root.GetProperty("reason").GetString().Should().Be("StuckTimeout");
+        root.GetProperty("deadLettered").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunAsync_RepeatedStalls_RequeueUntilCapThenDeadLetter()
+    {
+        await using var db = CreateDb();
+        var orderId = await SeedOrderAsync(db, OrderStatusConstants.Parsing, updatedMinutesAgo: 45);
+        var enqueuer = new RecordingParseEnqueuer();
+        var service = CreateService(db, enqueuer);
+
+        // Each iteration simulates: sweep requeues -> job stalls again past threshold.
+        for (var attempt = 1; attempt <= MaxRequeues; attempt++)
+        {
+            (await service.RunAsync(Threshold, default)).Should().Be(1);
+
+            var o = await db.PurchaseOrders.SingleAsync(x => x.Id == orderId);
+            o.Status.Should().Be(OrderStatusConstants.PendingParse, "requeue {0} should not fail the order", attempt);
+            o.RequeueCount.Should().Be(attempt);
+
+            // Re-stall: put it back in 'parsing', aged past the threshold.
+            o.Status = OrderStatusConstants.Parsing;
+            o.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
+            await db.SaveChangesAsync();
+        }
+
+        // Cap now exhausted -> next sweep dead-letters.
+        (await service.RunAsync(Threshold, default)).Should().Be(1);
+        (await db.PurchaseOrders.SingleAsync(x => x.Id == orderId)).Status
             .Should().Be(OrderStatusConstants.Failed);
+
+        enqueuer.Calls.Should().HaveCount(MaxRequeues);
+        (await db.AuditEvents.CountAsync(e => e.Action == "StuckRequeued")).Should().Be(MaxRequeues);
+        (await db.AuditEvents.CountAsync(e => e.Action == "StuckTimeout")).Should().Be(1);
     }
 
     [Fact]
@@ -50,12 +136,14 @@ public class StuckOrderDetectionServiceTests
     {
         await using var db = CreateDb();
         var orderId = await SeedOrderAsync(db, OrderStatusConstants.Parsing, updatedMinutesAgo: 5);
+        var enqueuer = new RecordingParseEnqueuer();
 
-        var marked = await CreateService(db).RunAsync(Threshold, default);
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
 
-        marked.Should().Be(0);
+        acted.Should().Be(0);
         (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).Status
             .Should().Be(OrderStatusConstants.Parsing);
+        enqueuer.Calls.Should().BeEmpty();
         (await db.AuditEvents.CountAsync(e => e.EntityId == orderId)).Should().Be(0);
     }
 
@@ -67,25 +155,48 @@ public class StuckOrderDetectionServiceTests
         // parsing/transforming count as "stuck".
         var orderId = await SeedOrderAsync(db, OrderStatusConstants.Delivered, updatedMinutesAgo: 120);
 
-        var marked = await CreateService(db).RunAsync(Threshold, default);
+        var acted = await CreateService(db).RunAsync(Threshold, default);
 
-        marked.Should().Be(0);
+        acted.Should().Be(0);
         (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).Status
             .Should().Be(OrderStatusConstants.Delivered);
     }
 
     [Fact]
-    public async Task RunAsync_IsIdempotent_SecondRunMarksNothing()
+    public async Task RunAsync_IsIdempotent_SecondRunOnRequeuedOrderDoesNothing()
     {
         await using var db = CreateDb();
-        await SeedOrderAsync(db, OrderStatusConstants.Parsing, updatedMinutesAgo: 45);
-        var service = CreateService(db);
+        var orderId = await SeedOrderAsync(db, OrderStatusConstants.Parsing, updatedMinutesAgo: 45);
+        var service = CreateService(db, new RecordingParseEnqueuer());
 
+        // First run requeues (status leaves the transient set).
         (await service.RunAsync(Threshold, default)).Should().Be(1);
+        // Second run: the order is now 'pending_parse', not in a transient status,
+        // so it is not acted on again — no double-processing.
         (await service.RunAsync(Threshold, default)).Should().Be(0);
 
-        // Exactly one StuckTimeout event — not duplicated across runs.
-        (await db.AuditEvents.CountAsync(e => e.Action == "StuckTimeout")).Should().Be(1);
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).RequeueCount.Should().Be(1);
+        (await db.AuditEvents.CountAsync(e => e.EntityId == orderId)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RunAsync_NoEnqueuerRegistered_ParsingOrderStillResetAndCountedNotPermanentlyFailed()
+    {
+        // The Worker that runs the sweep may not have IParseJobEnqueuer registered.
+        // A transient stall must still NOT become a permanent failure on the first blip.
+        await using var db = CreateDb();
+        var orderId = await SeedOrderAsync(db, OrderStatusConstants.Parsing, updatedMinutesAgo: 45);
+
+        var acted = await new StuckOrderDetectionService(
+            db, NullLogger<StuckOrderDetectionService>.Instance, parseEnqueuer: null)
+            .RunAsync(Threshold, default);
+
+        acted.Should().Be(1);
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        order.Status.Should().Be(OrderStatusConstants.PendingParse);
+        order.RequeueCount.Should().Be(1);
+        (await db.AuditEvents.SingleAsync(e => e.EntityId == orderId)).Action
+            .Should().Be("StuckRequeued");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -95,10 +206,12 @@ public class StuckOrderDetectionServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private static StuckOrderDetectionService CreateService(ProcuLinkDbContext db) =>
-        new(db, NullLogger<StuckOrderDetectionService>.Instance);
+    private static StuckOrderDetectionService CreateService(
+        ProcuLinkDbContext db, IParseJobEnqueuer? enqueuer = null) =>
+        new(db, NullLogger<StuckOrderDetectionService>.Instance, enqueuer);
 
-    private static async Task<Guid> SeedOrderAsync(ProcuLinkDbContext db, string status, int updatedMinutesAgo)
+    private static async Task<Guid> SeedOrderAsync(
+        ProcuLinkDbContext db, string status, int updatedMinutesAgo, int requeueCount = 0)
     {
         var orderId = Guid.NewGuid();
         var updated = DateTime.UtcNow.AddMinutes(-updatedMinutesAgo);
@@ -111,10 +224,22 @@ public class StuckOrderDetectionServiceTests
             OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
             Currency = "EUR",
             Status = status,
+            RequeueCount = requeueCount,
             CreatedAt = updated,
             UpdatedAt = updated,
         });
         await db.SaveChangesAsync();
         return orderId;
+    }
+
+    private sealed class RecordingParseEnqueuer : IParseJobEnqueuer
+    {
+        public List<(Guid OrderId, Guid OrgId)> Calls { get; } = new();
+
+        public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
+        {
+            Calls.Add((orderId, orgId));
+            return Task.CompletedTask;
+        }
     }
 }

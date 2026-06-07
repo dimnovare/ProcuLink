@@ -51,8 +51,41 @@ builder.WebHost.UseSentry(o =>
 StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"] ?? string.Empty;
 
 // ── Database ───────────────────────────────────────────────────────────────
+// Cap the Npgsql pool in code so it applies regardless of the env-injected
+// connection string (prod string comes from Railway env). Without an explicit
+// ceiling each process would use Npgsql's default Maximum Pool Size of 100, so
+// API + Worker = two ~100-conn pools, well past Neon's ~100-connection cap.
+// API gets 30 (it serves HTTP + enqueues Hangfire jobs); the Worker (WorkerCount=10)
+// gets 20. ConnectionIdleLifetime returns idle pooled connections to Neon so the
+// pool doesn't pin its ceiling. Existing settings in the string are preserved.
 builder.Services.AddDbContext<ProcuLinkDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    // Read the connection string LAZILY here (per DbContext creation, after the host is
+    // built) so WebApplicationFactory integration tests that override
+    // ConnectionStrings:DefaultConnection are honoured. An eager read at builder-config
+    // time would capture the pre-override (empty) value. The pool ceiling is applied via
+    // BuildPooledConnectionString.
+    options.UseNpgsql(BuildPooledConnectionString(
+        builder.Configuration.GetConnectionString("DefaultConnection"), maxPoolSize: 30)));
+
+static string? BuildPooledConnectionString(string? raw, int maxPoolSize)
+{
+    if (string.IsNullOrWhiteSpace(raw))
+        return raw;
+
+    var b = new Npgsql.NpgsqlConnectionStringBuilder(raw);
+    // Only impose a pool ceiling when pooling is actually enabled. If a caller
+    // explicitly disabled pooling (e.g. integration tests that run a background
+    // MigrateAsync and must avoid connection multiplexing), leave the string as-is —
+    // setting Max Pool Size with Pooling=false is meaningless and Npgsql treats the
+    // builder as non-pooling, so we must not override the caller's intent.
+    if (!b.Pooling)
+        return raw;
+
+    b.MaxPoolSize = maxPoolSize;
+    b.ConnectionIdleLifetime = 60;   // seconds an idle pooled conn lives before close
+    b.ConnectionPruningInterval = 10; // seconds between idle-pruning sweeps
+    return b.ConnectionString;
+}
 
 // ── DataProtection ─────────────────────────────────────────────────────────
 // Persist the key ring to Postgres so keys survive container restarts and are

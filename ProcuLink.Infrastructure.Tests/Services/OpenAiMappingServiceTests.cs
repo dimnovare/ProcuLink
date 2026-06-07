@@ -181,6 +181,58 @@ public class OpenAiMappingServiceTests
         result.Should().BeEmpty("no-egress orgs never send line data to OpenAI");
     }
 
+    // ── Batch chunking ──────────────────────────────────────────────────────────
+    // A large PO must be split into fixed-size, in-order batches so a single request
+    // never truncates against the token ceiling and the per-org cap can be re-checked
+    // between chunks. A small order (≤ BatchSize) must stay a single chunk so behaviour
+    // is unchanged. ChunkLines is the pure partitioning seam exercised here.
+
+    [Theory]
+    [InlineData(0, 0)]    // no lines → no chunks
+    [InlineData(1, 1)]    // single line → one chunk
+    [InlineData(50, 1)]   // exactly BatchSize → still ONE chunk (small-order path unchanged)
+    [InlineData(51, 2)]   // one over → two chunks
+    [InlineData(100, 2)]  // exact multiple
+    [InlineData(500, 10)] // large PO
+    [InlineData(1000, 20)]
+    public void ChunkLines_PartitionsIntoFixedBatchesOf50(int lineCount, int expectedChunks)
+    {
+        var lines = Enumerable.Range(1, lineCount)
+            .Select(n => new AiMappingLineContext(n, $"BUY-{n}", $"Item {n}", 1, "PCS"))
+            .ToList();
+
+        var chunks = OpenAiMappingService.ChunkLines(lines, 50).ToList();
+
+        chunks.Should().HaveCount(expectedChunks);
+
+        // Chunks must cover every line exactly once, in order, with none larger than 50.
+        chunks.SelectMany(c => c.Chunk.Select(l => l.LineNumber))
+            .Should().Equal(lines.Select(l => l.LineNumber));
+        // OnlyContain throws on an empty collection, so guard the zero-line case.
+        if (chunks.Count > 0)
+            chunks.Should().OnlyContain(c => c.Chunk.Count <= 50 && c.Chunk.Count >= 1);
+
+        // Offsets are the running start index of each chunk.
+        chunks.Select(c => c.Offset)
+            .Should().Equal(Enumerable.Range(0, expectedChunks).Select(i => i * 50));
+    }
+
+    [Fact]
+    public void ChunkLines_LastChunkHoldsTheRemainder()
+    {
+        var lines = Enumerable.Range(1, 120)
+            .Select(n => new AiMappingLineContext(n, $"BUY-{n}", $"Item {n}", 1, "PCS"))
+            .ToList();
+
+        var chunks = OpenAiMappingService.ChunkLines(lines, 50).ToList();
+
+        chunks.Should().HaveCount(3);
+        chunks[0].Chunk.Should().HaveCount(50);
+        chunks[1].Chunk.Should().HaveCount(50);
+        chunks[2].Chunk.Should().HaveCount(20);
+        chunks[2].Offset.Should().Be(100);
+    }
+
     private static OpenAiMappingService CreateService(Dictionary<string, string?> values)
     {
         var configuration = new ConfigurationBuilder()
