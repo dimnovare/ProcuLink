@@ -334,7 +334,8 @@ affordances will be surfaced via the existing Command Palette (Cmd+K),
 per-screen column selectors, and contextual disclosure, not a global
 mode flag. The Bridge Layer direction is still locked.
 
-Backend test count: **213** (102 Transform + 11 Api.Tests + 100 Infrastructure).
+Backend test count: **988** (grew from 213 across the May/June waves; verified green
+2026-06-07 at `main` `4af5dd5`). The "213"/"211" figures below are historical snapshots.
 Waiting on founder configuration only for Group L Wave 3 to function in
 production: PostHog keys, Clerk post-signup redirect,
 `NEXT_PUBLIC_STATUS_URL`, `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`,
@@ -444,10 +445,11 @@ Read this before starting new work:
   - New `ProcuLink.Api.Tests` project added to `ProcuLink.slnx`; 11 new tests (2 middleware + 2 suppliers + 2 parse job + 2 transform job + 3 billing).
   - `FakeAnalyticsService` in both `ProcuLink.Infrastructure.Tests/TestDoubles/` and `ProcuLink.Api.Tests/TestDoubles/`.
   - 2 new delivery emit tests in `ProcuLink.Infrastructure.Tests/Services/DeliveryServiceEmitsFirstDeliverySucceededTests.cs`.
-- **Last verified commands:**
+- **Last verified commands (historical snapshot — current count is 988; see top of file):**
   - `dotnet build ProcuLink.Api/ProcuLink.Api.csproj --no-restore` passed (API process locking DLLs; build Infrastructure + tests fine).
   - `dotnet test ProcuLink.slnx --no-restore` passed, **211 tests** (102 Transform + 11 Api.Tests + 98 Infrastructure), 0 failures.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
+  - **2026-06-07 launch push:** `dotnet test ProcuLink.slnx` = **988 green** at `main` `4af5dd5`; `bun run build` clean at frontend `main` `0ceb156`.
 
 No remaining Phase 4 C-H group is open. Wave 3 and Wave 4 (Invoice/ASN + Zapier/Make.com) are complete. Group K is complete. **Group L is fully shipped on `main` both repos** — Waves 1 + 2 + 3 all merged, all feature branches deleted local + remote, all chip stashes cleared. The only remaining work is founder configuration (PostHog keys, Clerk post-signup redirect, `NEXT_PUBLIC_STATUS_URL`, `NEXT_PUBLIC_WALKTHROUGH_LOOM_URL`, `NEXT_PUBLIC_BOOK_DEMO_URL`, optional SMTP) — see `STATUS.md` "Group L — waiting on founder configuration / external setup" table. Group I (UI polish) is effectively complete through pass 15.
 
