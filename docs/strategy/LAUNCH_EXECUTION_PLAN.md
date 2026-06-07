@@ -32,7 +32,7 @@ Legend: `[x]` done + verified · `[~]` partial · `[ ]` in progress / not done �
 - [x] **A1.3 / D3** DESADV upload → 501 (was misleading 202) (`d6c44ac`)
 - [x] **R1 / R2 / R3** (Waves 0-6) · **P1-1..P1-5, P2-1/2/4** · **P1-3** azp + Clerk prod cutover · **B1-B8** drift — verified done
 - [ ] **W2** order-status transition table — building now
-- [ ] **W3** R2/DB GDPR per-order erase — building now
+- [x] **W3** R2/DB GDPR per-order erase — `IDataErasureService` + admin `DELETE /organisations/{org}/orders/{id}`; FK-safe confirmation erase + R2 blobs; adversarially reviewed (caught+fixed a RESTRICT-FK abort + a confirmation data-leak). 993 tests green.
 - [ ] **W1** OrderService decompose behind the `IOrderService` facade — building now
 - [ ] **§2.5** Postgres RLS (defence-in-depth) — building now
 - [—] **W6** split `api-client.ts` — collides with the active frontend chips; DX-only, zero customer value → post-launch

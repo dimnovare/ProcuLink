@@ -37,7 +37,13 @@ public class AdminControllerTests
         var billing = new StripeBillingService(
             db, config, NullLogger<StripeBillingService>.Instance, new FakeAnalyticsService());
 
-        return new AdminController(db, billing, config, NullLogger<AdminController>.Instance);
+        return new AdminController(db, billing, config, NullLogger<AdminController>.Instance, new NoopErasureService());
+    }
+
+    private sealed class NoopErasureService : ProcuLink.Core.Services.IDataErasureService
+    {
+        public Task<ProcuLink.Core.Services.OrderErasureResult> EraseOrderAsync(Guid org, Guid orderId, CancellationToken ct)
+            => Task.FromResult(new ProcuLink.Core.Services.OrderErasureResult(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
     }
 
     private static Organisation Org(string name, string plan, string status, DateTime? createdAt = null) =>

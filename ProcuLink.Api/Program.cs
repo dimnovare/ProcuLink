@@ -516,6 +516,9 @@ builder.Services.AddSingleton<IInvoiceTransformService, JsonInvoiceTransformServ
 builder.Services.AddScoped<IInvoiceService, ProcuLink.Infrastructure.Services.InvoiceService>();
 builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.DesadvService>();
 
+// GDPR per-order erasure (admin-triggered): deletes the R2 blobs + every order-tied DB row.
+builder.Services.AddScoped<IDataErasureService, ProcuLink.Infrastructure.Services.DataErasureService>();
+
 // ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
 // IDistributedCache for HmacWebhookVerifier nonce replay store.
 // MemoryDistributedCache is single-instance (correct for one API replica). Set

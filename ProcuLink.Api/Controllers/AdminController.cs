@@ -34,17 +34,20 @@ public sealed class AdminController : ControllerBase
     private readonly IBillingService          _billing;
     private readonly IConfiguration           _config;
     private readonly ILogger<AdminController>  _logger;
+    private readonly IDataErasureService      _erasure;
 
     public AdminController(
         ProcuLinkDbContext       db,
         IBillingService          billing,
         IConfiguration           config,
-        ILogger<AdminController>  logger)
+        ILogger<AdminController>  logger,
+        IDataErasureService      erasure)
     {
         _db      = db;
         _billing = billing;
         _config  = config;
         _logger  = logger;
+        _erasure = erasure;
     }
 
     // In production _billing always resolves to StripeBillingService. The cast
@@ -317,5 +320,23 @@ public sealed class AdminController : ControllerBase
             EffectiveOrderLimit:    effectiveOrderLimit,
             EffectiveSupplierLimit: effectiveSupplierLimit,
             EffectiveTrialEndsAt:   effectiveTrialEnd));
+    }
+
+    // ── DELETE /api/admin/organisations/{orgId}/orders/{orderId} ──────────
+    // GDPR right-to-erasure: hard-deletes an order's R2 blobs + every order-tied
+    // DB row, strictly org-scoped (closes audit d-5). Admin-only (class [AdminOnly]).
+    [HttpDelete("organisations/{orgId:guid}/orders/{orderId:guid}")]
+    [ProducesResponseType(typeof(OrderErasureResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> EraseOrder(Guid orgId, Guid orderId, CancellationToken ct)
+    {
+        var result = await _erasure.EraseOrderAsync(orgId, orderId, ct);
+        if (!result.Found)
+            return NotFound(new { error = "Order not found for that organisation (or already erased)." });
+
+        _logger.LogWarning(
+            "ADMIN ERASE: order {OrderId} (org {OrgId}) hard-deleted by admin — {@Result}.",
+            orderId, orgId, result);
+        return Ok(result);
     }
 }
