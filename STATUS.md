@@ -4,6 +4,15 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-07 (cont.2) — Wave D backend: full audit reconcile + safe items SHIPPED; structural four handed off**
+
+> Founder: "do everything risky/deferred, no new bugs." Did a 7-section read-only **reconcile** of `PROD_LAUNCH_AUDIT.md` vs current code (confirmed R1-R3 + all P1/P2 + Part-22 drift already done in Waves 0-6; P1-3 azp + Clerk cutover verified done). Then shipped every **confidently-safe** open item from an isolated worktree (`wave-d`, landed on `main` via rebase+ff-push, never touching the concurrent chips' checkout):
+> - **`0b34ff7`** — API security headers (HSTS/nosniff/Referrer-Policy) + **Redis-ready HMAC nonce** behind `Redis:ConnectionString` flag → closes **W4 / P2-3 / 1.4.redis / 2.8.redesign2** + the audit's API-headers gap. Verified live: `/health` carries `Strict-Transport-Security` + `X-Content-Type-Options: nosniff`.
+> - **`eb24aa6`** — **EmailPolling indexed flag** (`Organisation.EmailPollingEnabled`, partial index, migration `AddEmailPollingFlagAndPollingIndexes` + backfill, behaviour-preserving) + **AI-candidates** `(org,supplier,updated_at)` index + **SFTP/S3** `is_enabled` partial indexes → closes **§1.1.F / §2.3.2 / §2.3.3 / §2.4.3 / 2.8.redesign5**. Migration applied on Neon (`/health/ready` Healthy).
+> - **`d6c44ac`** — DESADV upload **→ 501** (was a misleading 202) → closes **A1.3 / D3** honesty.
+> - 990 backend tests green (one pre-existing load-flaky HTTP-timeout test passes in isolation).
+> - **Structural four NOT auto-merged (need dedicated focus + founder review): W2** status transition table · **W1** OrderService decompose behind the `IOrderService` facade · **W3** R2/DB GDPR per-order erase · **Postgres RLS**. Precise plans + risk + the "flagged counterproductive-now" list (W6 api-client split [collides with active FE chips], W5 retry-consolidate [refactors correct code], denormalize/partition, Neon-pooler+DataRetention-enable [env], Postmark-signature [needs CF Worker], SchemaFingerprints-rename + phantom-migration [dangerous pre-launch], social proof [needs real data], EDIFACT [licence], cross-org/i18n/PEPPOL [roadmap]) → **`docs/strategy/WAVE_D_BACKEND_REMAINING.md`** (`c4b3079`). Continue in a fresh isolated worktree off `main`.
+
 ## Where we are: **2026-06-07 (latest) — LAUNCH PUSH toward June 9: PROD_LAUNCH_AUDIT Waves 0-6 shipped + verified live; Wave 7 format leg DONE (all 7 formats parse on prod)**
 
 > Multi-agent launch push (one Workflow per wave; agents on disjoint files; central build-gate; deploy-verify each wave). Backend `main` `4af5dd5` (**988 tests green**, was 887); frontend `main` `0ceb156` (`bun run build` clean). Both pushed + deployed (Railway + Vercel healthy: `/health` 200, `/health/ready` Healthy, Worker heartbeat ~29s).
