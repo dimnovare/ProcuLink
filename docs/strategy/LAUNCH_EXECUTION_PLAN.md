@@ -31,7 +31,7 @@ Legend: `[x]` done + verified · `[~]` partial · `[ ]` in progress / not done �
 - [x] **§1.1.F / §2.3.2 / §2.3.3** EmailPolling indexed flag (+migration+backfill) + AI-candidates / SFTP / S3 partial indexes (`eb24aa6`)
 - [x] **A1.3 / D3** DESADV upload → 501 (was misleading 202) (`d6c44ac`)
 - [x] **R1 / R2 / R3** (Waves 0-6) · **P1-1..P1-5, P2-1/2/4** · **P1-3** azp + Clerk prod cutover · **B1-B8** drift — verified done
-- [ ] **W2** order-status transition table — building now
+- [x] **W2** order-status state machine — `OrderStatusMachine` (documented transition map + `IsAllowed`/`IsTerminal`/`IsFailure`) + the scattered Redeliver guard centralized into `RedeliverableFrom`; behaviour-preserving (the live flow is intentionally permissive, so the map is a superset that only rejects impossible moves). 1028 tests green.
 - [x] **W3** R2/DB GDPR per-order erase — `IDataErasureService` + admin `DELETE /organisations/{org}/orders/{id}`; FK-safe confirmation erase + R2 blobs; adversarially reviewed (caught+fixed a RESTRICT-FK abort + a confirmation data-leak). 993 tests green.
 - [ ] **W1** OrderService decompose behind the `IOrderService` facade — building now
 - [ ] **§2.5** Postgres RLS (defence-in-depth) — building now

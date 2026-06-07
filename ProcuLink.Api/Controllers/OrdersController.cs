@@ -725,7 +725,10 @@ public sealed class OrdersController : ControllerBase
 
         var order = getResult.Value!;
 
-        if (order.Status is not ("delivery_failed" or "ready_to_deliver"))
+        // Centralised in the order-status state machine (W2): a manual redeliver is
+        // valid only from a stalled-but-recoverable delivery state. Behaviour is
+        // identical to the prior literal {delivery_failed, ready_to_deliver}.
+        if (!ProcuLink.Core.Constants.OrderStatusMachine.RedeliverableFrom.Contains(order.Status))
             return BadRequest(new
             {
                 error = $"Order must be in 'delivery_failed' or 'ready_to_deliver' status to redeliver (current: '{order.Status}')."

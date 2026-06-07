@@ -12,7 +12,7 @@ Per-item status against the current code. Legend: `[x]` done+verified · `[~]` p
 
 **Part B (g) — refactor vs can-wait**
 - [x] R1 unify tenant resolution (`3c789b6`) · [x] R2 stuck-order requeue (`0da39cf`) · [x] R3 billing on `IBillingService` (`3c789b6`)
-- [ ] W1 decompose OrderService (behind `IOrderService` facade) — building · [ ] W2 status transition table — building · [x] W3 R2/DB per-order GDPR erase (`IDataErasureService` + admin endpoint; FK-safe confirmations + R2; adversarial-reviewed)
+- [ ] W1 decompose OrderService (behind `IOrderService` facade) — building · [x] W2 order-status state machine (`OrderStatusMachine`: transition map + IsAllowed/IsTerminal/IsFailure + centralized Redeliver guard, behaviour-preserving) · [x] W3 R2/DB per-order GDPR erase (`IDataErasureService` + admin endpoint; FK-safe confirmations + R2; adversarial-reviewed)
 - [x] W4 Redis-ready nonce (config flag) + API HSTS/nosniff (`0b34ff7`)
 - [—] W5 consolidate retry schedulers (refactors correct code) · [—] W6 split api-client.ts (collides w/ active FE chips; DX-only)
 
