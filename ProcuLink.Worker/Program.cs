@@ -24,8 +24,25 @@ using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
 using ProcuLink.Worker;
 using ProcuLink.Worker.Jobs;
+using Sentry;
+using Sentry.Extensions.Logging;
 
 var builder = Host.CreateApplicationBuilder(args);
+
+// ── Sentry error tracking — no-op when DSN is absent ─────────────────────────
+// The API wires Sentry on its WebHost (Api/Program.cs:42-48). The Worker is a
+// generic host with no WebHost, so background-job exceptions were previously
+// invisible. Wire Sentry through the logging pipeline instead: AddSentry routes
+// log events >= Error to Sentry, and AddSentry also initialises the global
+// SentrySdk hub, so jobs can call SentrySdk.CaptureException/CaptureMessage
+// directly (e.g. the alert job) without any extra wiring.
+// When Sentry:Dsn is empty the SDK initialises disabled — a safe no-op.
+builder.Logging.AddSentry(o =>
+{
+    o.Dsn = builder.Configuration["Sentry:Dsn"] ?? string.Empty;
+    o.MinimumBreadcrumbLevel = LogLevel.Information;
+    o.MinimumEventLevel = LogLevel.Error;
+});
 
 // ── R2 clock-skew correction ────────────────────────────────────────────────
 // R2 returns SignatureDoesNotMatch (not RequestTimeTooSkewed) when a request's
@@ -166,6 +183,31 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
+
+// ── Wave 4 reliability/observability: worker-health alert sweep + retention ──
+// The recurring jobs are scheduled in Worker.cs; these are their DI deps.
+// Alert sink is Sentry-backed and a safe no-op when Sentry DSN is unset.
+builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
+builder.Services.AddSingleton<IWorkerAlertSink, SentryWorkerAlertSink>();
+builder.Services.AddSingleton<WorkerHealthAlertState>(); // singleton: cross-run rate-limit state (no scoped DbContext captured)
+builder.Services.AddScoped<IWorkerHealthAlertService, WorkerHealthAlertService>();
+builder.Services.AddScoped<WorkerHealthAlertJob>();
+builder.Services.AddSingleton(_ =>
+{
+    var opts = new WorkerHealthAlertOptions();
+    builder.Configuration.GetSection(WorkerHealthAlertOptions.SectionName).Bind(opts);
+    return opts;
+});
+// Data-retention sweep: DISABLED by default; tune via the "DataRetention" section.
+builder.Services.AddSingleton(_ =>
+{
+    var opts = new DataRetentionOptions();
+    builder.Configuration.GetSection(DataRetentionOptions.SectionName).Bind(opts);
+    return opts;
+});
+builder.Services.AddScoped<IDataRetentionService, DataRetentionService>();
+builder.Services.AddScoped<DataRetentionSweepJob>();
+
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
@@ -267,6 +309,8 @@ host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping
 {
     var svc = host.Services.GetRequiredService<IAnalyticsService>();
     try { svc.FlushAsync(default).GetAwaiter().GetResult(); } catch { /* swallow */ }
+    // Drain any pending Sentry events before the process exits (no-op when Sentry is disabled).
+    try { SentrySdk.FlushAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult(); } catch { /* swallow */ }
 });
 
 // ── Startup configuration validation ─────────────────────────────────────

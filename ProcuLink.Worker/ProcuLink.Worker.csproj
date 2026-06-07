@@ -18,6 +18,10 @@
     <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.8" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <!-- Sentry for the generic (non-WebApplication) host. The API uses Sentry.AspNetCore 6.5.0;
+         a Worker has no WebHost, so it wires Sentry via ILoggingBuilder.AddSentry from the
+         lower-level Sentry.Extensions.Logging package (same 6.5.0 line). No-op when DSN is empty. -->
+    <PackageReference Include="Sentry.Extensions.Logging" Version="6.5.0" />
     <!-- Direct ref so RapidOcrNet's PP-OCRv5 models are copied into the Worker's
          publish output (transitive PackageCopyToOutput from Infrastructure doesn't
          flow). The Worker runs ParseOrderJob, where self-hosted OCR executes. -->

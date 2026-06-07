@@ -7,7 +7,9 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
+using Sentry;
 using ProcuLink.Api.Auth;
 using ProcuLink.Api.Middleware;
 using ProcuLink.Api.Services;
@@ -516,8 +518,31 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintS
 builder.Services.AddSingleton<ProcuLink.Core.Services.Detection.ISourceColumnExtractor, ProcuLink.Transform.Detection.SourceColumnExtractor>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier, ProcuLink.Infrastructure.Services.Webhooks.HmacWebhookVerifier>();
 
-// ── Health check (G5) ─────────────────────────────────────────────────────
-builder.Services.AddHealthChecks();
+// ── Health checks (G5) — liveness vs readiness ────────────────────────────
+// Liveness (/health) is a fast, dependency-free 200 served by HealthController
+// so Railway's container probe never gets killed by a transient DB/R2 blip.
+// Readiness (/health/ready, mapped below) runs the dependency checks tagged
+// "ready": DB reachability, storage reachability, and the background-migration
+// readiness flag. Railway/monitoring can probe readiness to see degraded state
+// (e.g. migrations failed) without the process going down (liveness stays up).
+builder.Services.AddHealthChecks()
+    // DB reachable — opens a connection (CanConnectAsync). Implemented with plain
+    // EF Core (already referenced) rather than AddDbContextCheck, which would pull
+    // in the extra HealthChecks.EntityFrameworkCore package.
+    .AddCheck<ProcuLink.Api.Controllers.DatabaseHealthCheck>(
+        name: "database",
+        failureStatus: HealthStatus.Unhealthy,
+        tags: new[] { "ready" })
+    // R2 / local storage reachable (degrades gracefully when R2 isn't configured).
+    .AddCheck<ProcuLink.Api.Controllers.StorageHealthCheck>(
+        name: "storage",
+        failureStatus: HealthStatus.Degraded,
+        tags: new[] { "ready" })
+    // Background auto-migration readiness — Unhealthy once all retries are exhausted.
+    .AddCheck<ProcuLink.Api.Controllers.MigrationReadinessHealthCheck>(
+        name: "migrations",
+        failureStatus: HealthStatus.Unhealthy,
+        tags: new[] { "ready" });
 
 // ── OpenAPI — Swashbuckle for spec, Scalar for UI ──────────────────────────
 builder.Services.AddEndpointsApiExplorer();
@@ -634,7 +659,16 @@ app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapControllers();
-app.MapHealthChecks("/health");
+
+// Liveness (/health) is served by HealthController (fast, dependency-free 200) so
+// Railway's container probe is never blocked by a slow dependency. Readiness
+// (/health/ready) runs ONLY the "ready"-tagged dependency checks (DB + storage +
+// migration flag) and reports the aggregate status so monitoring can see degraded
+// state without taking the process down.
+app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+});
 
 // ── Auto-migrate after server starts ─────────────────────────────────────
 // Runs AFTER the HTTP server is listening so the Railway health check
@@ -674,16 +708,24 @@ app.Lifetime.ApplicationStarted.Register(() =>
                 ex.Message);
         }
 
+        Exception? lastError = null;
         for (var attempt = 1; attempt <= 6; attempt++)
         {
             try
             {
                 await db.Database.MigrateAsync();
                 migLogger.LogInformation("Database migrations applied (attempt {Attempt}).", attempt);
+                // Clear any prior failure state so the readiness endpoint reports
+                // healthy again (idempotent across retries / re-runs).
+                ProcuLink.Api.Controllers.MigrationReadiness.MarkSucceeded();
                 return;
             }
-            catch (Exception ex) when (attempt < 6)
+            catch (Exception ex)
             {
+                lastError = ex;
+                if (attempt >= 6)
+                    break; // Final attempt failed — fall through to fail-loud handling.
+
                 var delay = TimeSpan.FromSeconds(attempt * 3); // 3 s, 6 s, 9 s, 12 s, 15 s
                 migLogger.LogWarning(
                     "Migration attempt {Attempt}/6 failed ({Message}). Retrying in {Delay}s…",
@@ -692,7 +734,28 @@ app.Lifetime.ApplicationStarted.Register(() =>
             }
         }
 
-        migLogger.LogError("All 6 migration attempts failed — app is running but DB schema may be outdated.");
+        // ── Fail-loud on final failure ────────────────────────────────────────
+        // All retries exhausted. We deliberately do NOT crash the process: the
+        // HTTP server (and liveness probe) stays up so partial functionality and
+        // diagnostics remain available. But the failure must be VISIBLE:
+        //   1. LogError (structured) — shows in Railway logs.
+        //   2. SentrySdk.CaptureException — Sentry is wired on the API WebHost, so
+        //      this raises an alert with the actual migration exception.
+        //   3. MigrationReadiness.MarkFailed() — flips /health/ready to Unhealthy
+        //      so Railway/monitoring can detect the stale-schema state.
+        migLogger.LogError(
+            lastError,
+            "All 6 migration attempts failed — app is running but DB schema may be outdated. " +
+            "Marking readiness UNHEALTHY (/health/ready) and reporting to Sentry.");
+
+        if (lastError is not null)
+            SentrySdk.CaptureException(lastError);
+        else
+            SentrySdk.CaptureMessage(
+                "Database migrations failed after all retry attempts (no exception captured).",
+                SentryLevel.Error);
+
+        ProcuLink.Api.Controllers.MigrationReadiness.MarkFailed();
     });
 });
 

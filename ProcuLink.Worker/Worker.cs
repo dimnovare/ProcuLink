@@ -45,7 +45,21 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/15 * * * *");
 
-        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling (every 5 min), stuck-order-detection + delivery-sla-sweep (every 15 min).");
+        // Reliability/observability: alert (Sentry) when no worker is beating or the dead-letter /
+        // failed-delivery backlog spikes (every 5 min). No-op without a Sentry DSN; rate-limited.
+        _recurringJobs.AddOrUpdate<WorkerHealthAlertJob>(
+            "worker-health-alert",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/5 * * * *");
+
+        // Maintenance: prune append-only / ephemeral tables past their retention window so they do
+        // not grow unbounded (daily at 03:30 UTC). Disabled by default — config-gated, bounded batches.
+        _recurringJobs.AddOrUpdate<DataRetentionSweepJob>(
+            "data-retention-sweep",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "30 3 * * *");
+
+        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep (every 15 min), data-retention-sweep (daily 03:30 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

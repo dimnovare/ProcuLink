@@ -123,6 +123,26 @@ public sealed class OpsHealthService : IOpsHealthService
         }
     }
 
+    public async Task<WorkerHealthSnapshot> GetWorkerHealthSnapshotAsync(CancellationToken ct)
+    {
+        // Reuse the same Hangfire heartbeat probe the org-scoped summary uses.
+        var (activeWorkers, _, secondsSince, workerHealthy) = GetWorkerHealth();
+
+        // Cross-tenant counts: a system health probe is intentionally NOT org-scoped.
+        var deadLetter = await _db.PurchaseOrders
+            .CountAsync(o => o.Status == OrderStatusConstants.DeliveryDeadLetter, ct);
+
+        var failedDelivery = await _db.PurchaseOrders
+            .CountAsync(o => o.Status == OrderStatusConstants.DeliveryFailed, ct);
+
+        return new WorkerHealthSnapshot(
+            WorkerHealthy:                workerHealthy,
+            ActiveWorkers:               activeWorkers,
+            SecondsSinceWorkerHeartbeat: secondsSince,
+            DeadLetterOrders:            deadLetter,
+            FailedDeliveryOrders:        failedDelivery);
+    }
+
     public async Task<IReadOnlyList<DeadLetterOrder>> ListDeadLetterAsync(
         Guid organisationId, bool includeFailed, CancellationToken ct)
     {
