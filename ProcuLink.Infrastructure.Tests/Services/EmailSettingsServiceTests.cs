@@ -126,6 +126,30 @@ public class EmailSettingsServiceTests
         stored.PasswordCiphertext.Should().BeNull();
     }
 
+    [Fact]
+    public async Task UpdateAsync_SetsEmailPollingEnabledFlag_MirroringConfigPresence()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db);
+        var supplierId = await SeedSupplierAsync(db, orgId);
+        var service = new EmailSettingsService(db, CreateEncryption());
+
+        // Before any config the org is NOT a poller candidate.
+        (await db.Organisations.SingleAsync(x => x.Id == orgId)).EmailPollingEnabled.Should().BeFalse();
+
+        await service.UpdateAsync(orgId, new UpdateEmailSettingsRequest(
+            Enabled: true, Host: "imap.example.com", Port: 993, UseSsl: true,
+            Username: "orders@example.com", Password: "secret", Folder: "INBOX",
+            DefaultSupplierId: supplierId), default);
+
+        // The indexed poller-candidate flag now mirrors the non-empty email config —
+        // the same set the legacy "email_config <> '{}'" predicate enqueued, so the
+        // EmailPollingJob behaviour is preserved while filtering on an index.
+        var org = await db.Organisations.SingleAsync(x => x.Id == orgId);
+        org.EmailPollingEnabled.Should().BeTrue();
+        org.EmailConfigJson.Should().NotBe("{}");
+    }
+
     private static async Task<Guid> SeedOrgAsync(ProcuLinkDbContext db)
     {
         var orgId = Guid.NewGuid();

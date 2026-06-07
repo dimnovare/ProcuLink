@@ -60,6 +60,9 @@ public sealed class EmailSettingsService : IEmailSettingsService
             UpdatedAt: DateTime.UtcNow);
 
         org.EmailConfigJson = updated.ToJson();
+        // Keep the indexed poller-candidate flag in lock-step with the jsonb config
+        // (same set as the legacy "email_config <> '{}'" predicate).
+        org.EmailPollingEnabled = org.EmailConfigJson != "{}";
         await _db.SaveChangesAsync(ct);
 
         return ToResponse(updated);
@@ -79,6 +82,7 @@ public sealed class EmailSettingsService : IEmailSettingsService
             LastPolledAt = polledAt,
             UpdatedAt = current.UpdatedAt ?? polledAt
         }).ToJson();
+        org.EmailPollingEnabled = org.EmailConfigJson != "{}";
         await _db.SaveChangesAsync(ct);
     }
 

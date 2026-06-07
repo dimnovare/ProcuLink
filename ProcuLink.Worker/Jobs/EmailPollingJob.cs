@@ -33,7 +33,7 @@ public sealed class EmailPollingJob
 
         var orgIds = await _db.Organisations
             .AsNoTracking()
-            .Where(x => x.EmailConfigJson != "{}")
+            .Where(x => x.EmailPollingEnabled)
             .Select(x => x.Id)
             .ToListAsync(ct);
 

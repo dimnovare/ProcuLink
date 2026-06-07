@@ -46,6 +46,14 @@ public class Organisation
     public DateTime? BillingUpdatedAt    { get; set; }
     public string EmailConfigJson        { get; set; } = "{}";
 
+    /// <summary>
+    /// Indexed flag mirroring "has a non-empty email_config" — the email-poller
+    /// dispatcher candidate predicate. Kept in lock-step with EmailConfigJson
+    /// wherever it is written (EmailSettingsService) so the poller filters on an
+    /// indexed boolean instead of a jsonb-string scan (audit §1.1.F / §2.3.3).
+    /// </summary>
+    public bool EmailPollingEnabled      { get; set; }
+
     // ── Webhook receive ingress (Group N Phase 4) ────────────────────────
     /// <summary>
     /// AES-GCM-encrypted HMAC shared secret used to verify inbound webhook calls

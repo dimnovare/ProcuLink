@@ -122,6 +122,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasColumnType("jsonb")
              .HasDefaultValue("{}")
              .IsRequired();
+            // Indexed poller-candidate flag — replaces the email_config <> '{}' jsonb scan
+            // (audit §1.1.F / §2.3.3). Partial index = only the rows the poller wants.
+            b.Property(x => x.EmailPollingEnabled)
+             .HasColumnName("email_polling_enabled")
+             .HasDefaultValue(false);
+            b.HasIndex(x => x.EmailPollingEnabled)
+             .HasFilter("email_polling_enabled = true");
             b.Property(x => x.Slug)
              .HasColumnName("slug")
              .HasDefaultValue("")
@@ -379,6 +386,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             b.HasIndex(x => new { x.OrgId, x.SupplierId, x.BuyerItemCode }).IsUnique();
+            // Covers GetAiMappingCandidatesAsync: filter (OrgId, SupplierId) + ORDER BY updated_at DESC (audit §2.3.2).
+            b.HasIndex(x => new { x.OrgId, x.SupplierId, x.UpdatedAt });
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.ItemMappings)
              .HasForeignKey(x => x.OrgId);
@@ -510,6 +519,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .WithMany()
              .HasForeignKey(x => x.DefaultSupplierId)
              .OnDelete(DeleteBehavior.SetNull);
+            // Poller scans WHERE is_enabled = true across all orgs every 5 min (audit §1.1.F).
+            b.HasIndex(x => x.IsEnabled).HasFilter("is_enabled = true");
         });
 
         // ── imported_sftp_files ────────────────────────────────────────
@@ -549,6 +560,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .WithMany()
              .HasForeignKey(x => x.DefaultSupplierId)
              .OnDelete(DeleteBehavior.SetNull);
+            // Poller scans WHERE is_enabled = true across all orgs every 5 min (audit §1.1.F).
+            b.HasIndex(x => x.IsEnabled).HasFilter("is_enabled = true");
         });
 
         // ── imported_s3_objects ────────────────────────────────────────

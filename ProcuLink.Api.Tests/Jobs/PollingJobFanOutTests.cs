@@ -47,9 +47,11 @@ public class PollingJobFanOutTests
     {
         await using var db = NewDb();
         db.Organisations.AddRange(
-            new Organisation { Id = Guid.NewGuid(), ClerkOrgId = "a", Name = "OrgA", Slug = "org-a", EmailConfigJson = """{"enabled":true}""" },
-            new Organisation { Id = Guid.NewGuid(), ClerkOrgId = "b", Name = "OrgB", Slug = "org-b", EmailConfigJson = """{"enabled":true}""" },
-            // This org has no email config — should be excluded from the query
+            // EmailPollingEnabled is the indexed poller-candidate flag, set alongside a
+            // non-empty email config by EmailSettingsService / the migration backfill.
+            new Organisation { Id = Guid.NewGuid(), ClerkOrgId = "a", Name = "OrgA", Slug = "org-a", EmailConfigJson = """{"enabled":true}""", EmailPollingEnabled = true },
+            new Organisation { Id = Guid.NewGuid(), ClerkOrgId = "b", Name = "OrgB", Slug = "org-b", EmailConfigJson = """{"enabled":true}""", EmailPollingEnabled = true },
+            // This org has no email config — flag stays false, excluded from the query
             new Organisation { Id = Guid.NewGuid(), ClerkOrgId = "c", Name = "OrgC", Slug = "org-c", EmailConfigJson = "{}" });
         await db.SaveChangesAsync();
 
