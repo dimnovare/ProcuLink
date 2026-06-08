@@ -323,7 +323,7 @@ public sealed class OrdersController : ControllerBase
     /// Used by the frontend to poll while an order is in "parsing" or "transforming" state.
     /// </summary>
     [HttpGet("{id:guid}/status")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(OrderStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetStatus(Guid id, CancellationToken ct)
     {
@@ -332,7 +332,7 @@ public sealed class OrdersController : ControllerBase
         if (!result.IsSuccess)
             return NotFound();
 
-        return Ok(new { status = result.Value!.Status });
+        return Ok(new OrderStatusResponse(result.Value!.Status));
     }
 
     // ── POST /api/orders/{id}/resolve ─────────────────────────────────────────
@@ -682,7 +682,7 @@ public sealed class OrdersController : ControllerBase
     /// </summary>
     [HttpPost("{id:guid}/accept-ai-suggestions")]
     [EnableRateLimiting("ai")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(AcceptAiSuggestionsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> AcceptAiSuggestions(
@@ -696,7 +696,7 @@ public sealed class OrdersController : ControllerBase
         if (!result.IsSuccess)
             return NotFound();
 
-        return Ok(new { accepted = result.Value });
+        return Ok(new AcceptAiSuggestionsResponse(result.Value));
     }
 
     // ── GET /api/orders/{id}/mapping-preview ─────────────────────────────────
@@ -1011,13 +1011,13 @@ public sealed class OrdersController : ControllerBase
     /// Ops metric: count of orders in <c>delivery_dead_letter</c> state for this org.
     /// </summary>
     [HttpGet("dead-letter-count")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(DeadLetterCountResponse), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetDeadLetterCount(CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
         var count = await _db.PurchaseOrders
             .CountAsync(o => o.OrgId == orgId && o.Status == OrderStatusConstants.DeliveryDeadLetter, ct);
-        return Ok(new { count });
+        return Ok(new DeadLetterCountResponse(count));
     }
 
     // ── GET /api/orders/{id}/artifacts/{artifactId}/download ─────────────────
