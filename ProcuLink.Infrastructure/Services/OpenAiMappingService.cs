@@ -276,6 +276,12 @@ public sealed class OpenAiMappingService : IAiMappingService
 
         try
         {
+            // Catalog allow-list: when this supplier has a product catalog, the candidates
+            // carry the real codes and the model MUST select one of them — any code outside
+            // the catalog is rejected after the call so a hallucinated code can never surface.
+            // With no catalog the allow-list is empty → behaviour is unchanged (free suggestion).
+            var catalog = BuildCatalogAllowList(candidates);
+
             var promptPayload = new
             {
                 supplierName,
@@ -285,13 +291,7 @@ public sealed class OpenAiMappingService : IAiMappingService
 
             var messages = new List<ChatMessage>
             {
-                new SystemChatMessage("""
-                    You suggest supplier item codes for unresolved B2B purchase-order lines.
-                    Use existing candidate mappings when they support the suggestion.
-                    If the evidence is weak, return an empty supplierItemCode and confidence 0.
-                    Never claim a mapping is confirmed. Suggestions are human review hints only.
-                    Keep reason and provenance concise.
-                    """),
+                new SystemChatMessage(catalog.HasCatalog ? CatalogSystemPrompt : FreeSystemPrompt),
                 new UserChatMessage(JsonSerializer.Serialize(promptPayload, JsonOptions))
             };
 
@@ -331,15 +331,22 @@ public sealed class OpenAiMappingService : IAiMappingService
                 return null;
 
             var dto = JsonSerializer.Deserialize<OpenAiSuggestionDto>(json, JsonOptions);
-            if (dto is null || string.IsNullOrWhiteSpace(dto.SupplierItemCode))
-                return null;
+            if (dto is null) return null;
 
-            var confidence = Math.Clamp(dto.Confidence, 0f, 1f);
-            return new AiMappingSuggestion(
-                dto.SupplierItemCode.Trim(),
-                confidence,
-                dto.Reason?.Trim() ?? string.Empty,
-                dto.Provenance?.Trim() ?? "OpenAI structured output");
+            // Allow-list guard + concrete provenance (shared with the batch path). Returns
+            // null when the code is empty OR (when a catalog is present) not a real catalog
+            // code — so a hallucinated code can never surface. offer ⇔ works.
+            var suggestion = ResolveSuggestion(
+                catalog, dto.SupplierItemCode, dto.Confidence, dto.Reason, dto.Provenance);
+
+            if (suggestion is null && catalog.HasCatalog && !string.IsNullOrWhiteSpace(dto.SupplierItemCode))
+            {
+                _logger.LogInformation(
+                    "Rejected non-catalog AI suggestion {Code} for org {OrgId}, supplier {SupplierId}, line {LineNumber}",
+                    dto.SupplierItemCode.Trim(), organisationId, supplierId, line.LineNumber);
+            }
+
+            return suggestion;
         }
         catch (Exception ex)
         {
@@ -398,6 +405,11 @@ public sealed class OpenAiMappingService : IAiMappingService
         var merged = new Dictionary<int, AiMappingSuggestion>();
         var candidatePayload = candidates.Take(40).ToArray();
 
+        // Catalog allow-list computed once for the whole order. When the supplier has a
+        // product catalog the candidates carry the real codes; the model must select one
+        // of them and any code outside it is rejected per chunk. No catalog → unchanged.
+        var catalog = BuildCatalogAllowList(candidatePayload);
+
         foreach (var (offset, chunk) in ChunkLines(payloadLines, BatchSize))
         {
             ct.ThrowIfCancellationRequested();
@@ -432,7 +444,7 @@ public sealed class OpenAiMappingService : IAiMappingService
             try
             {
                 await SuggestChunkAsync(
-                    organisationId, supplierId, supplierName, chunk, candidatePayload, tracker, merged, ct);
+                    organisationId, supplierId, supplierName, chunk, candidatePayload, catalog, tracker, merged, ct);
             }
             catch (Exception ex)
             {
@@ -465,6 +477,7 @@ public sealed class OpenAiMappingService : IAiMappingService
         string supplierName,
         IReadOnlyList<AiMappingLineContext> chunk,
         IReadOnlyList<AiMappingCandidate> candidatePayload,
+        CatalogAllowList catalog,
         IAiUsageTracker? tracker,
         Dictionary<int, AiMappingSuggestion> merged,
         CancellationToken ct)
@@ -478,15 +491,7 @@ public sealed class OpenAiMappingService : IAiMappingService
 
         var messages = new List<ChatMessage>
         {
-            new SystemChatMessage("""
-                You suggest supplier item codes for unresolved B2B purchase-order lines.
-                The input contains multiple lines; return one suggestion object per line,
-                echoing each line's lineNumber so the caller can match them.
-                Use existing candidate mappings when they support a suggestion.
-                If the evidence for a line is weak, return an empty supplierItemCode and
-                confidence 0 for that line. Never claim a mapping is confirmed. Suggestions
-                are human review hints only. Keep reason and provenance concise.
-                """),
+            new SystemChatMessage(catalog.HasCatalog ? CatalogBatchSystemPrompt : FreeBatchSystemPrompt),
             new UserChatMessage(JsonSerializer.Serialize(promptPayload, JsonOptions))
         };
 
@@ -540,13 +545,23 @@ public sealed class OpenAiMappingService : IAiMappingService
         foreach (var s in dto.Suggestions)
         {
             if (!requestedLineNumbers.Contains(s.LineNumber)) continue;
-            if (string.IsNullOrWhiteSpace(s.SupplierItemCode)) continue;
 
-            merged[s.LineNumber] = new AiMappingSuggestion(
-                s.SupplierItemCode.Trim(),
-                Math.Clamp(s.Confidence, 0f, 1f),
-                s.Reason?.Trim() ?? string.Empty,
-                s.Provenance?.Trim() ?? "OpenAI structured output");
+            // Allow-list guard + concrete provenance (shared with the single-line path):
+            // null when the code is empty OR (with a catalog) not a real catalog code.
+            var suggestion = ResolveSuggestion(
+                catalog, s.SupplierItemCode, s.Confidence, s.Reason, s.Provenance);
+
+            if (suggestion is null)
+            {
+                if (catalog.HasCatalog && !string.IsNullOrWhiteSpace(s.SupplierItemCode))
+                    _logger.LogInformation(
+                        "Rejected non-catalog AI suggestion {Code} for org {OrgId}, supplier {SupplierId}, line {LineNumber}",
+                        s.SupplierItemCode.Trim(), organisationId, supplierId, s.LineNumber);
+                continue;
+            }
+
+            // Last write wins if the model echoes a duplicate lineNumber.
+            merged[s.LineNumber] = suggestion;
         }
     }
 
@@ -704,6 +719,155 @@ public sealed class OpenAiMappingService : IAiMappingService
                 chunk.Add(lines[offset + i]);
             yield return (offset, chunk);
         }
+    }
+
+    // ── Catalog grounding ────────────────────────────────────────────────────────
+    // System prompts come in two flavours. Without a catalog the model free-forms a code
+    // (today's behaviour). WITH a catalog the candidates are the supplier's REAL product
+    // rows and the model MUST select one of them (the post-response allow-list guard then
+    // rejects anything that slips through), so a hallucinated code can never reach delivery.
+
+    private const string FreeSystemPrompt = """
+        You suggest supplier item codes for unresolved B2B purchase-order lines.
+        Use existing candidate mappings when they support the suggestion.
+        If the evidence is weak, return an empty supplierItemCode and confidence 0.
+        Never claim a mapping is confirmed. Suggestions are human review hints only.
+        Keep reason and provenance concise.
+        """;
+
+    private const string CatalogSystemPrompt = """
+        You match an unresolved B2B purchase-order line to the supplier's REAL product catalog.
+        The candidates list contains the supplier's actual products (code + name + barcode + unit).
+        You MUST set supplierItemCode to one of the supplierItemCode values present in candidates,
+        choosing the closest real product to the buyer's line. You may NOT invent or modify a code.
+        If no candidate is a reasonable match, return an empty supplierItemCode and confidence 0.
+        Never claim a mapping is confirmed. Suggestions are human review hints only.
+        Keep reason and provenance concise.
+        """;
+
+    private const string FreeBatchSystemPrompt = """
+        You suggest supplier item codes for unresolved B2B purchase-order lines.
+        The input contains multiple lines; return one suggestion object per line,
+        echoing each line's lineNumber so the caller can match them.
+        Use existing candidate mappings when they support a suggestion.
+        If the evidence for a line is weak, return an empty supplierItemCode and
+        confidence 0 for that line. Never claim a mapping is confirmed. Suggestions
+        are human review hints only. Keep reason and provenance concise.
+        """;
+
+    private const string CatalogBatchSystemPrompt = """
+        You match unresolved B2B purchase-order lines to the supplier's REAL product catalog.
+        The candidates list contains the supplier's actual products (code + name + barcode + unit).
+        The input contains multiple lines; return one suggestion object per line, echoing each
+        line's lineNumber so the caller can match them.
+        For each line you MUST set supplierItemCode to one of the supplierItemCode values present
+        in candidates, choosing the closest real product. You may NOT invent or modify a code.
+        If no candidate is a reasonable match for a line, return an empty supplierItemCode and
+        confidence 0 for that line. Never claim a mapping is confirmed. Suggestions are human
+        review hints only. Keep reason and provenance concise.
+        """;
+
+    /// <summary>
+    /// The supplier's real catalog codes available for this request, derived from the
+    /// catalog-flavoured candidates. <see cref="HasCatalog"/> is true only when at least one
+    /// catalog candidate was supplied; that is the switch that activates the allow-list guard
+    /// and the constrained prompt. Membership is case-insensitive + trimmed to match the way
+    /// codes round-trip through the model. Carries the catalog rows so provenance can name the
+    /// matched product (code + name).
+    /// </summary>
+    private sealed class CatalogAllowList
+    {
+        public static readonly CatalogAllowList None = new(
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, AiMappingCandidate>(StringComparer.OrdinalIgnoreCase));
+
+        private readonly HashSet<string> _codes;
+        private readonly Dictionary<string, AiMappingCandidate> _byCode;
+
+        private CatalogAllowList(HashSet<string> codes, Dictionary<string, AiMappingCandidate> byCode)
+        {
+            _codes = codes;
+            _byCode = byCode;
+        }
+
+        public bool HasCatalog => _codes.Count > 0;
+
+        public bool Contains(string? code) =>
+            !string.IsNullOrWhiteSpace(code) && _codes.Contains(code.Trim());
+
+        public AiMappingCandidate? Match(string? code) =>
+            !string.IsNullOrWhiteSpace(code) && _byCode.TryGetValue(code.Trim(), out var row) ? row : null;
+
+        public static CatalogAllowList From(IEnumerable<AiMappingCandidate> candidates)
+        {
+            var codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var byCode = new Dictionary<string, AiMappingCandidate>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in candidates)
+            {
+                if (!c.IsCatalogProduct || string.IsNullOrWhiteSpace(c.SupplierItemCode)) continue;
+                var code = c.SupplierItemCode.Trim();
+                if (codes.Add(code)) byCode[code] = c;
+            }
+            return codes.Count == 0 ? None : new CatalogAllowList(codes, byCode);
+        }
+    }
+
+    private static CatalogAllowList BuildCatalogAllowList(IEnumerable<AiMappingCandidate> candidates) =>
+        CatalogAllowList.From(candidates);
+
+    /// <summary>
+    /// Turns one model-returned suggestion into a validated <see cref="AiMappingSuggestion"/>,
+    /// or null when it must be dropped. The single decision point shared by the single-line and
+    /// batch paths: (1) empty code → null; (2) when a catalog is present and the code is not a
+    /// real catalog code → null (allow-list guard, blocks hallucinations); otherwise build the
+    /// suggestion with clamped confidence and concrete catalog provenance. Pure + side-effect
+    /// free so it is directly unit-testable without a network call.
+    /// </summary>
+    private static AiMappingSuggestion? ResolveSuggestion(
+        CatalogAllowList catalog, string? suggestedCode, float confidence, string? reason, string? provenance)
+    {
+        if (string.IsNullOrWhiteSpace(suggestedCode)) return null;
+        if (catalog.HasCatalog && !catalog.Contains(suggestedCode)) return null;
+
+        return new AiMappingSuggestion(
+            suggestedCode.Trim(),
+            Math.Clamp(confidence, 0f, 1f),
+            reason?.Trim() ?? string.Empty,
+            BuildProvenance(catalog, suggestedCode, provenance));
+    }
+
+    /// <summary>
+    /// Test seam: exercises the catalog allow-list guard + provenance exactly as the live
+    /// paths do, building the allow-list from the same public <see cref="AiMappingCandidate"/>
+    /// set the ingestion service passes in. Returns null when the suggestion would be dropped.
+    /// </summary>
+    internal static AiMappingSuggestion? ApplyCatalogGuardForTest(
+        IEnumerable<AiMappingCandidate> candidates,
+        string? suggestedCode,
+        float confidence,
+        string? reason,
+        string? provenance) =>
+        ResolveSuggestion(BuildCatalogAllowList(candidates), suggestedCode, confidence, reason, provenance);
+
+    /// <summary>
+    /// Builds a concrete, veteran-grade provenance string. When the suggested code matches a
+    /// catalog row, names that row (code + name) instead of the vague model-supplied text —
+    /// "Matched catalog product ES-RES-220R 'Resistor 220Ω 0.25W'". Falls back to the model's
+    /// own provenance (then a default) when there is no catalog match.
+    /// </summary>
+    private static string BuildProvenance(CatalogAllowList catalog, string suggestedCode, string? modelProvenance)
+    {
+        var match = catalog.Match(suggestedCode);
+        if (match is not null)
+        {
+            var code = match.SupplierItemCode.Trim();
+            return string.IsNullOrWhiteSpace(match.Name)
+                ? $"Matched catalog product {code}"
+                : $"Matched catalog product {code} — \"{match.Name!.Trim()}\"";
+        }
+
+        var fromModel = modelProvenance?.Trim();
+        return string.IsNullOrWhiteSpace(fromModel) ? "OpenAI structured output" : fromModel;
     }
 
     private sealed record OpenAiSuggestionDto(
