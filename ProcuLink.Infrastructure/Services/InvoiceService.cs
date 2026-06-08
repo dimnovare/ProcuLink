@@ -133,10 +133,12 @@ public sealed class InvoiceService : IInvoiceService
 
         var (contentType, ext) = outputFormat.ToLowerInvariant() switch
         {
-            "csv"  => ("text/csv", ".csv"),
-            "xml"  => ("application/xml", ".xml"),
-            "json" => ("application/json", ".json"),
-            _      => ("application/octet-stream", ".bin"),
+            "csv"    => ("text/csv", ".csv"),
+            "xml"    => ("application/xml", ".xml"),
+            "json"   => ("application/json", ".json"),
+            // Peppol BIS Billing 3.0 — a UBL 2.1 XML document.
+            "peppol" => ("application/xml", ".xml"),
+            _        => ("application/octet-stream", ".bin"),
         };
 
         // Advance status to forwarded

@@ -518,6 +518,15 @@ builder.Services.AddSingleton<IInvoiceTransformService, CsvInvoiceTransformServi
 builder.Services.AddSingleton<IInvoiceTransformService, XmlInvoiceTransformService>();
 builder.Services.AddSingleton<IInvoiceTransformService, JsonInvoiceTransformService>();
 
+// ── Peppol wedge (Track A): BIS Billing 3.0 UBL invoice generation + validation.
+// Format token "peppol" is routed by InvoiceService.ForwardAsync just like the
+// other invoice transformers. Party details (endpoint IDs / VAT) come from
+// PeppolPartyOptions; the default-constructed singleton produces a structurally
+// valid but party-incomplete document, which PeppolBisValidator flags honestly.
+// AS4 / Access-Point transport is NOT included (that is Track B partner-wrap).
+builder.Services.AddSingleton<IInvoiceTransformService, PeppolBisInvoiceTransformService>();
+builder.Services.AddSingleton<PeppolBisValidator>();
+
 // ── Wave 3: Invoice + ASN services ────────────────────────────────────────
 builder.Services.AddScoped<IInvoiceService, ProcuLink.Infrastructure.Services.InvoiceService>();
 builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.DesadvService>();
