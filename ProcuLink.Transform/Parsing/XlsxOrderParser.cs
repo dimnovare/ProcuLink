@@ -67,12 +67,16 @@ public sealed class XlsxOrderParser : IPurchaseOrderParser
 
             var buyerCode    = GetColumnValue(row, headerMap, "BuyerItemCode", "ItemCode") ?? string.Empty;
             var description  = GetColumnValue(row, headerMap, "Description");
-            var quantityStr  = GetColumnValue(row, headerMap, "Quantity");
             var unit         = GetColumnValue(row, headerMap, "Unit");
-            var unitPriceStr = GetColumnValue(row, headerMap, "UnitPrice", "Price");
 
-            var quantity  = decimal.TryParse(quantityStr,  NumberStyles.Any, CultureInfo.InvariantCulture, out var qty)   ? qty   : 0m;
-            var unitPrice = decimal.TryParse(unitPriceStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var price) ? price : (decimal?)null;
+            // Numeric cells are read via the cell's underlying numeric value, NOT a
+            // string round-trip: ClosedXML's GetString() formats numbers with the
+            // CURRENT culture (e.g. "12,5" on an EU/comma-decimal server), which then
+            // mis-parses under InvariantCulture ("12,5" → 125, a silent 10× error).
+            // GetNumericColumnValue takes the raw double when the cell is numeric and
+            // only falls back to invariant string parsing for text-typed cells.
+            var quantity  = GetNumericColumnValue(row, headerMap, "Quantity") ?? 0m;
+            var unitPrice = GetNumericColumnValue(row, headerMap, "UnitPrice", "Price");
 
             lines.Add(new ParsedOrderLine(
                 LineNumber:    lineNumber,
@@ -109,6 +113,47 @@ public sealed class XlsxOrderParser : IPurchaseOrderParser
             var value = row.Cell(relCol).GetString().Trim();
             if (!string.IsNullOrEmpty(value))
                 return value;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reads a numeric column culture-invariantly. When the underlying cell is a
+    /// number (or a formula yielding one), its raw <see cref="double"/> value is taken
+    /// directly — no locale-dependent string round-trip. Falls back to invariant
+    /// string parsing for text-typed cells (numbers stored as text, e.g. "4.50"),
+    /// and returns null when the column is absent or the value cannot be parsed.
+    /// </summary>
+    private static decimal? GetNumericColumnValue(IXLRangeRow row, Dictionary<string, int> headerMap, params string[] aliases)
+    {
+        var originCol = row.FirstCell().Address.ColumnNumber;
+
+        foreach (var alias in aliases)
+        {
+            if (!headerMap.TryGetValue(alias, out var absCol)) continue;
+
+            var relCol = absCol - originCol + 1;
+            if (relCol < 1) continue;
+
+            var cell = row.Cell(relCol);
+            if (cell.IsEmpty()) continue;
+
+            // Prefer the typed numeric value — this is the culture-safe path.
+            if (cell.DataType == XLDataType.Number && cell.TryGetValue<double>(out var d))
+                return (decimal)d;
+
+            // Text-typed cell: parse the trimmed string under InvariantCulture so
+            // "4.50" is read as four-point-five regardless of server locale.
+            var s = cell.GetString().Trim();
+            if (!string.IsNullOrEmpty(s)
+                && decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
+                return parsed;
+
+            // A non-empty, non-numeric cell (e.g. "five") — degrade to null here so
+            // the caller's default (0 for qty) applies; never throw.
+            if (!string.IsNullOrEmpty(s))
+                return null;
         }
 
         return null;

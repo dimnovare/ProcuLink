@@ -71,6 +71,8 @@ function contentTypeFor(name) {
   if (name.endsWith(".xml") || name.endsWith(".cxml")) return "application/xml";
   if (name.endsWith(".pdf")) return "application/pdf";
   if (name.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (name.endsWith(".edi")) return "application/edifact";
+  if (name.endsWith(".x12")) return "application/edi-x12";
   return "application/octet-stream";
 }
 

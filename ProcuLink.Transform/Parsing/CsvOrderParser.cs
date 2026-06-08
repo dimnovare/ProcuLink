@@ -49,8 +49,21 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
 
         csv.Context.RegisterClassMap<RawRowMap>();
         var rows = new List<RawRow>();
-        await foreach (var row in csv.GetRecordsAsync<RawRow>(ct))
-            rows.Add(row);
+        try
+        {
+            await foreach (var row in csv.GetRecordsAsync<RawRow>(ct))
+                rows.Add(row);
+        }
+        catch (CsvHelper.ReaderException)
+        {
+            // No header column matched any known alias, so CsvHelper has no members to
+            // map and raises "No members are mapped for type 'RawRow'". This is a
+            // malformed / unrecognised CSV, not an engine fault: degrade to an empty
+            // order rather than leaking a third-party exception with an internal type
+            // name. The upstream ingestion layer surfaces an empty/no-line order as a
+            // reviewable failure ("we couldn't read this file").
+            return new ParsedOrder(null, null, null, null, Array.Empty<ParsedOrderLine>());
+        }
 
         return BuildParsedOrder(rows);
     }
