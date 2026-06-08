@@ -1,8 +1,8 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Services;
@@ -127,7 +127,7 @@ internal sealed class OrderResolutionService
             }
 
             if (canonicalUpdates.Count > 0)
-                entity.CanonicalJson = MergeCanonicalJson(entity.CanonicalJson, canonicalUpdates);
+                entity.CanonicalJson = CanonicalJsonMerge.MergeStrings(entity.CanonicalJson, canonicalUpdates);
         }
 
         // Recompute order status
@@ -158,47 +158,6 @@ internal sealed class OrderResolutionService
             orderId, resolutions.Count, saveMappings, entity.Status);
 
         return Result<PurchaseOrderEntity>.Ok(entity);
-    }
-
-    /// <summary>
-    /// Returns a new <see cref="JsonDocument"/> equal to <paramref name="existing"/> with the
-    /// supplied keys added or overwritten. Existing properties are preserved verbatim; the
-    /// updated keys are written as strings (header corrections are always string-valued).
-    /// A null/missing source document yields a document containing only the updates.
-    /// Used by ResolveAsync to keep canonical_json consistent with the denormalised header
-    /// columns after a user edits header fields on the review screen.
-    /// </summary>
-    private static JsonDocument MergeCanonicalJson(
-        JsonDocument? existing,
-        IReadOnlyDictionary<string, object?> updates)
-    {
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-
-            // Copy through every existing property except the ones we're overwriting.
-            if (existing is not null && existing.RootElement.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var prop in existing.RootElement.EnumerateObject())
-                {
-                    if (updates.ContainsKey(prop.Name)) continue; // overwritten below
-                    prop.WriteTo(writer);
-                }
-            }
-
-            // Write (add or overwrite) the corrected header keys.
-            foreach (var kvp in updates)
-            {
-                writer.WritePropertyName(kvp.Key);
-                if (kvp.Value is null) writer.WriteNullValue();
-                else writer.WriteStringValue(kvp.Value.ToString());
-            }
-
-            writer.WriteEndObject();
-        }
-
-        return JsonDocument.Parse(buffer.ToArray());
     }
 
     // ── MarkRejectedAsync ─────────────────────────────────────────────────────

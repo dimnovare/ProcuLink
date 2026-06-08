@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Output;
 
@@ -56,9 +57,20 @@ internal sealed class OrderTransformService
             return Result<TransformResponse>.Fail(
                 $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolved)}.");
 
-        // Locate the correct transformer (Xml or Csv)
+        // heart-piece-flex Phase 2: route to the override-aware builder ONLY when this order carries a
+        // usable per-order output mapping AND the format is one the override builder supports (CSV/JSON).
+        // Otherwise fall through to the EXISTING fixed transformer, unchanged — so the default (no
+        // override) path is byte-for-byte identical to today. An override with only custom fields, an
+        // empty output config, or an unsupported format never diverts the transform.
+        var mappingOverride = OrderMappingOverrideReader.Read(entity.CanonicalJson);
+        var useOverride =
+            OrderMappingOverrideReader.HasUsableOutput(mappingOverride)
+            && MappedTransformService.SupportsOverride(format);
+
+        // Locate the correct fixed transformer (Xml/Csv/Json/...). Always required for the non-override
+        // path; we still resolve it up-front so a missing transformer fails before status mutation.
         var transformer = _transformers.FirstOrDefault(t => t.CanTransform(format));
-        if (transformer is null)
+        if (!useOverride && transformer is null)
             return Result<TransformResponse>.Fail($"No transform service registered for format '{format}'.");
 
         // Mark as transforming so the UI can show a spinner
@@ -70,7 +82,9 @@ internal sealed class OrderTransformService
         TransformResult transformResult;
         try
         {
-            transformResult = await transformer.TransformAsync(entity, format, ct);
+            transformResult = useOverride
+                ? new MappedTransformService().Build(entity, mappingOverride!, format)
+                : await transformer!.TransformAsync(entity, format, ct);
         }
         catch (TransformValidationException ex)
         {

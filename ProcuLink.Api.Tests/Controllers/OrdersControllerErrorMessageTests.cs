@@ -73,7 +73,8 @@ public class OrdersControllerErrorMessageTests
             new Mock<IBillingService>().Object,
             new Mock<IIdempotencyService>().Object,
             new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object);
+            new Mock<ISupplierAcceptanceService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 
@@ -137,7 +138,8 @@ public class OrdersControllerErrorMessageTests
             new Mock<IBillingService>().Object,
             new Mock<IIdempotencyService>().Object,
             new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object);
+            new Mock<ISupplierAcceptanceService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 
@@ -186,7 +188,8 @@ public class OrdersControllerErrorMessageTests
             new Mock<IBillingService>().Object,
             new Mock<IIdempotencyService>().Object,
             new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object);
+            new Mock<ISupplierAcceptanceService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 

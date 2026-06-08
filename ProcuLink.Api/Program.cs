@@ -384,6 +384,9 @@ else
 // ItemMappingService is Scoped (DbContext is Scoped).
 // OrderService is Scoped for the same reason.
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
+// heart-piece-flex Phase 1: per-order mapping/override stored in canonical_json (no new table).
+builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService,
+                           ProcuLink.Infrastructure.Services.OrderMappingOverrideService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();

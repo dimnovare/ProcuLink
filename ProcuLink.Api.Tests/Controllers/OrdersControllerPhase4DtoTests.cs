@@ -38,7 +38,8 @@ public class OrdersControllerPhase4DtoTests
             new Mock<IBillingService>().Object,
             new Mock<IIdempotencyService>().Object,
             new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object);
+            new Mock<ISupplierAcceptanceService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object);
     }
 
     [Fact]

@@ -46,7 +46,8 @@ public class OrdersControllerResolveValidationTests
             billing.Object,
             idempotency.Object,
             exceptions.Object,
-            acceptance.Object);
+            acceptance.Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object);
 
         return (ctrl, orders, orgId);
     }

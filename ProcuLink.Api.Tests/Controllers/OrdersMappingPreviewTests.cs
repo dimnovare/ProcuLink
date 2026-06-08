@@ -54,7 +54,8 @@ public class OrdersMappingPreviewTests
             billing.Object,
             idempotency.Object,
             new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object);
+            new Mock<ISupplierAcceptanceService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object);
 
         return (controller, orgId, db);
     }

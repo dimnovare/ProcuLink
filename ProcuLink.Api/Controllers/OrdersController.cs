@@ -9,8 +9,10 @@ using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
+using ProcuLink.Transform.Mapping;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -33,6 +35,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IIdempotencyService       _idempotency;
     private readonly IOrderExceptionService    _exceptionService;
     private readonly ISupplierAcceptanceService _acceptance;
+    private readonly IOrderMappingOverrideService _mappingOverrides;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -52,7 +55,8 @@ public sealed class OrdersController : ControllerBase
         IBillingService           billing,
         IIdempotencyService       idempotency,
         IOrderExceptionService    exceptionService,
-        ISupplierAcceptanceService acceptance)
+        ISupplierAcceptanceService acceptance,
+        IOrderMappingOverrideService mappingOverrides)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -63,6 +67,7 @@ public sealed class OrdersController : ControllerBase
         _idempotency      = idempotency;
         _exceptionService = exceptionService;
         _acceptance       = acceptance;
+        _mappingOverrides = mappingOverrides;
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -403,6 +408,101 @@ public sealed class OrdersController : ControllerBase
         }
 
         return Ok(MapToDto(result.Value!));
+    }
+
+    // ── GET /api/orders/{id}/mapping-override ─────────────────────────────────
+
+    /// <summary>
+    /// Returns the per-order mapping/override (heart-piece-flex Phase 1) stored in this order's
+    /// canonical_json, or <c>null</c> when the order has no override. The override never changes the
+    /// default transform unless an output mapping is present and the format is supported.
+    /// Org-scoped: a cross-tenant order id returns 404.
+    /// </summary>
+    [HttpGet("{id:guid}/mapping-override")]
+    [ProducesResponseType(typeof(OrderMappingOverride), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetMappingOverride(Guid id, CancellationToken ct)
+    {
+        // Confirm the order exists for this org first so an absent override on a real order (200 null)
+        // is distinguishable from a non-existent / cross-tenant order (404).
+        var exists = await _db.PurchaseOrders
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id && x.OrgId == _tenant.OrganisationId, ct);
+
+        if (!exists)
+            return NotFound();
+
+        var @override = await _mappingOverrides.GetAsync(_tenant.OrganisationId, id, ct);
+        return Ok(@override); // 200 with null body when no override is set
+    }
+
+    // ── PUT /api/orders/{id}/mapping-override ─────────────────────────────────
+
+    /// <summary>
+    /// Upserts the per-order mapping/override into this order's canonical_json (no new table).
+    /// Every <see cref="OutputFieldRule.FieldManipulators"/> entry is validated against
+    /// <c>ManipulatorRegistry</c> (resolve + a dry apply) BEFORE the write, so a bad/unknown
+    /// manipulator returns 400 here and can NEVER reach the transform path. Org-scoped: a
+    /// cross-tenant order id returns 404.
+    /// </summary>
+    [HttpPut("{id:guid}/mapping-override")]
+    [ProducesResponseType(typeof(OrderMappingOverride), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> PutMappingOverride(
+        Guid id,
+        [FromBody] OrderMappingOverride request,
+        CancellationToken ct)
+    {
+        if (request is null)
+            return BadRequest(new { error = "A mapping override body is required." });
+
+        // Validate every manipulator on every output rule (header + line) by attempting to
+        // resolve it and apply it against an empty row. Fail at edit time, never at deliver time.
+        var validationError = ValidateOverrideManipulators(request);
+        if (validationError is not null)
+            return BadRequest(new { error = validationError });
+
+        var saved = await _mappingOverrides.UpsertAsync(_tenant.OrganisationId, id, request, ct);
+        if (!saved)
+            return NotFound();
+
+        // Echo back the persisted override so the frontend can confirm the exact stored shape.
+        var stored = await _mappingOverrides.GetAsync(_tenant.OrganisationId, id, ct);
+        return Ok(stored);
+    }
+
+    /// <summary>
+    /// Validates every manipulator in the override's output rules against <c>ManipulatorRegistry</c>.
+    /// Returns null when all rules are valid, or a human-readable error string for the first bad rule.
+    /// A bad manipulator type or bad ctor params throw here (resolve) or on the dry apply — both caught.
+    /// </summary>
+    private static string? ValidateOverrideManipulators(OrderMappingOverride @override)
+    {
+        if (@override.Output is null) return null;
+
+        var emptyRow = new Dictionary<string, string>();
+
+        foreach (var (outputKey, rule) in @override.Output.Header.Concat(@override.Output.Lines))
+        {
+            foreach (var entry in rule.FieldManipulators ?? new List<ManipulatorEntry>())
+            {
+                try
+                {
+                    var manipulator = ManipulatorRegistry.Resolve(entry.Type, entry.Params);
+                    // Dry apply with an empty value + empty row — surfaces ctor/param errors that
+                    // only throw on apply (e.g. an index or format param the manipulator validates).
+                    _ = manipulator.Apply(null, emptyRow);
+                }
+                catch (Exception ex)
+                {
+                    return $"Invalid manipulator '{entry.Type}' on output field '{rule.OutputPath}' " +
+                           $"(rule key '{outputKey}'): {ex.Message}";
+                }
+            }
+        }
+
+        return null;
     }
 
     // ── POST /api/orders/{id}/transform ──────────────────────────────────────
