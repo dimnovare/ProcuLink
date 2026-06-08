@@ -38,6 +38,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IOrderExceptionService       _exceptionService;
     private readonly ISupplierAcceptanceService   _acceptance;
     private readonly IOrderMappingOverrideService _mappingOverrides;
+    private readonly IPromoteMappingService        _promoteMapping;
     private readonly IFileStorageService          _fileStorage;
     private readonly ISourceTokenizer             _tokenizer;
 
@@ -61,6 +62,7 @@ public sealed class OrdersController : ControllerBase
         IOrderExceptionService       exceptionService,
         ISupplierAcceptanceService   acceptance,
         IOrderMappingOverrideService mappingOverrides,
+        IPromoteMappingService       promoteMapping,
         IFileStorageService          fileStorage,
         ISourceTokenizer             tokenizer)
     {
@@ -74,6 +76,7 @@ public sealed class OrdersController : ControllerBase
         _exceptionService = exceptionService;
         _acceptance       = acceptance;
         _mappingOverrides = mappingOverrides;
+        _promoteMapping   = promoteMapping;
         _fileStorage      = fileStorage;
         _tokenizer        = tokenizer;
     }
@@ -596,6 +599,68 @@ public sealed class OrdersController : ControllerBase
             // Return it as a preview warning, never a 500 — the editor shows it inline.
             return Ok(new { format = fmt.Value.ToString(), warning = ex.Message, content = (string?)null });
         }
+    }
+
+    // ── POST /api/orders/{id}/mapping-override/promote ───────────────────────
+
+    /// <summary>
+    /// Promotes the per-order <see cref="OrderMappingOverride.SourceMap"/> into the supplier's
+    /// reusable inbound PO mapping (<see cref="PoMappingConfig"/>), so the SAME source layout
+    /// auto-applies to future orders from this supplier without further user review.
+    ///
+    /// <para>Semantics:</para>
+    /// <list type="bullet">
+    ///   <item>Reads the <c>SourceMap</c> stored in this order's <c>canonical_json</c>.</item>
+    ///   <item>Translates each entry to a <see cref="FieldMappingEntry"/> (SourceToken→ExternalField,
+    ///        FixedValue→FixedValue, Manipulators→FieldManipulators).</item>
+    ///   <item>Merges the translated entries into the supplier's existing <see cref="PoMappingConfig"/>
+    ///        (additive — fields NOT in the SourceMap are preserved).</item>
+    ///   <item>Idempotent — re-promoting the same override overwrites with identical data.</item>
+    ///   <item>Returns a summary: supplierId, headerFieldsPromoted, lineFieldsPromoted, schemaFingerprintHash.</item>
+    /// </list>
+    ///
+    /// <para>NOTE — Output side not promoted:</para>
+    /// The <see cref="OrderMappingOverride.Output"/> (canonical→output-field re-mapping) is not
+    /// persisted by this endpoint. <see cref="PoMappingConfig"/> only models the inbound
+    /// (source→canonical) direction. Output-side persistence requires a separate supplier-level
+    /// output-mapping entity that does not yet exist. See the <c>TODO(output-promote)</c> comment
+    /// in <c>PromoteMappingService</c>.
+    ///
+    /// <para>Schema fingerprint note:</para>
+    /// The mapping is stored at the supplier level, not per-fingerprint. The returned
+    /// <c>schemaFingerprintHash</c> is informational — it identifies the layout this order was
+    /// parsed with, but the promoted rules apply to ALL future orders from this supplier.
+    ///
+    /// Org-scoped: a cross-tenant or unknown order id returns 404.
+    /// Returns 200 with a promotion summary on success (including when the SourceMap is absent
+    /// — zero fields promoted is a valid idempotent result).
+    /// </summary>
+    [HttpPost("{id:guid}/mapping-override/promote")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> PromoteMappingOverride(Guid id, CancellationToken ct)
+    {
+        var result = await _promoteMapping.PromoteAsync(_tenant.OrganisationId, id, ct);
+
+        if (result is null)
+            return NotFound();
+
+        _logger.LogInformation(
+            "Mapping override promoted for order {OrderId} (org {OrgId}): " +
+            "supplier {SupplierId}, {Header} header + {Lines} line fields, fingerprint {Hash}",
+            id, _tenant.OrganisationId,
+            result.SupplierId,
+            result.HeaderFieldsPromoted,
+            result.LineFieldsPromoted,
+            result.SchemaFingerprintHash ?? "(none)");
+
+        return Ok(new
+        {
+            supplierId            = result.SupplierId,
+            headerFieldsPromoted  = result.HeaderFieldsPromoted,
+            lineFieldsPromoted    = result.LineFieldsPromoted,
+            schemaFingerprintHash = result.SchemaFingerprintHash,
+        });
     }
 
     // ── GET /api/orders/{id}/source-tokens ────────────────────────────────────

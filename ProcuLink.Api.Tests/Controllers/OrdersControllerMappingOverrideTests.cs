@@ -43,6 +43,7 @@ public class OrdersControllerMappingOverrideTests
             new Mock<IOrderExceptionService>().Object,
             new Mock<ISupplierAcceptanceService>().Object,
             new OrderMappingOverrideService(db), // real service over the in-memory db
+            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
             new Mock<IFileStorageService>().Object,
             new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object);
     }
