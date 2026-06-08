@@ -13,6 +13,7 @@ using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Transform.Mapping;
+using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -503,6 +504,67 @@ public sealed class OrdersController : ControllerBase
         }
 
         return null;
+    }
+
+    // ── POST /api/orders/{id}/mapping-override/preview ────────────────────────
+
+    /// <summary>
+    /// Dry-run (heart-piece-flex Phase 3): applies the supplied override to this order IN MEMORY and
+    /// returns the would-be output document. NEVER writes, NEVER changes status, NEVER delivers.
+    /// Override preview supports CSV + JSON (the formats <c>MappedTransformService</c> handles in v1);
+    /// other formats return 400. A bad manipulator returns 400; an order whose lines still need review
+    /// returns 200 with a <c>warning</c> (the same guard a real transform would hit) and no content.
+    /// Org-scoped: a cross-tenant order id returns 404.
+    /// </summary>
+    [HttpPost("{id:guid}/mapping-override/preview")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> PreviewMappingOverride(
+        Guid id,
+        [FromBody] OrderMappingOverride request,
+        [FromQuery] string format = "csv",
+        CancellationToken ct = default)
+    {
+        if (request is null)
+            return BadRequest(new { error = "A mapping override body is required." });
+
+        // v1 preview supports CSV + JSON only (matches MappedTransformService.SupportsOverride).
+        var fmt = (format?.Trim().ToLowerInvariant()) switch
+        {
+            "csv"  => OutputFormat.Csv,
+            "json" => OutputFormat.Json,
+            _      => (OutputFormat?)null,
+        };
+        if (fmt is null || !MappedTransformService.SupportsOverride(fmt.Value))
+            return BadRequest(new { error = "Override preview supports CSV and JSON only." });
+
+        // Same manipulator guard as PUT — surface a bad rule at edit time, never at transform time.
+        var validationError = ValidateOverrideManipulators(request);
+        if (validationError is not null)
+            return BadRequest(new { error = validationError });
+
+        // Load the order WITH lines, org-scoped, read-only.
+        var order = await _db.PurchaseOrders
+            .Include(o => o.Lines)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == _tenant.OrganisationId, ct);
+        if (order is null)
+            return NotFound();
+
+        try
+        {
+            var result  = new MappedTransformService().Build(order, request, fmt.Value);
+            using var sr = new StreamReader(result.Content);
+            var content  = await sr.ReadToEndAsync(ct);
+            return Ok(new { format = fmt.Value.ToString(), contentType = result.ContentType, content });
+        }
+        catch (TransformValidationException ex)
+        {
+            // The dry-run hit the same validation a real transform would (e.g. an unresolved line).
+            // Return it as a preview warning, never a 500 — the editor shows it inline.
+            return Ok(new { format = fmt.Value.ToString(), warning = ex.Message, content = (string?)null });
+        }
     }
 
     // ── POST /api/orders/{id}/transform ──────────────────────────────────────

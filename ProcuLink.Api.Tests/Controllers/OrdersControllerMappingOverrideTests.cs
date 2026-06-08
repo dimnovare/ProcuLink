@@ -204,4 +204,54 @@ public class OrdersControllerMappingOverrideTests
         Assert.Single(getBody.Output.Lines["code"].FieldManipulators);
         Assert.Equal("Trim", getBody.Output.Lines["code"].FieldManipulators[0].Type);
     }
+
+    // ── preview (Phase 3, dry-run) ────────────────────────────────────────────
+
+    [Fact]
+    public async Task Preview_UnsupportedFormat_Returns400()
+    {
+        await using var db = NewDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = await SeedOrderAsync(db, orgId);
+        var ctrl    = Build(db, orgId);
+
+        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "xml", CancellationToken.None);
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task Preview_CrossTenantOrder_Returns404()
+    {
+        await using var db = NewDb();
+        var orderId = await SeedOrderAsync(db, Guid.NewGuid());
+        var ctrl    = Build(db, Guid.NewGuid()); // different org
+
+        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "csv", CancellationToken.None);
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task Preview_WithResolvedLine_ReturnsOk_NeverThrows()
+    {
+        await using var db = NewDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = await SeedOrderAsync(db, orgId);
+        db.PurchaseOrderLines.Add(new PurchaseOrderLineEntity
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
+            BuyerItemCode = "B1", SupplierItemCode = "S1", Description = "Widget",
+            Quantity = 2, UnitPrice = 5m, NeedsReview = false,
+        });
+        await db.SaveChangesAsync();
+        var ctrl = Build(db, orgId);
+
+        // Dry-run: returns 200 with content (or a warning) — never writes, never 500s.
+        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "csv", CancellationToken.None);
+        var ok = Assert.IsType<OkObjectResult>(result);
+        Assert.NotNull(ok.Value);
+
+        // The dry-run must NOT have persisted an override or changed status.
+        var stored = await new OrderMappingOverrideService(db).GetAsync(orgId, orderId, CancellationToken.None);
+        Assert.Null(stored);
+    }
 }

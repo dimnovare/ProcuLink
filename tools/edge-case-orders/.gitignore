@@ -1,0 +1,5 @@
+# Generated adversarial order files — do not commit. Regenerate with: node generate.mjs
+out/
+# Live-run results (may contain org/order data)
+results/
+*.results.json
