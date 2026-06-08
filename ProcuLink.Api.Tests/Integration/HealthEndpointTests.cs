@@ -186,4 +186,87 @@ public sealed class HealthEndpointTests : IClassFixture<HealthTestFactory>
         var recovered = await client.GetAsync("/health/ready");
         Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
     }
+
+    // ── Tri-state: Pending → not ready ──────────────────────────────────────
+
+    [Fact]
+    public async Task Readiness_WhenPending_Returns503()
+    {
+        var client = _factory.CreateClient();
+
+        // Simulate the "migration not yet complete" window that starts the moment
+        // the app boots (before MigrateAsync finishes).
+        MigrationReadiness.MarkPending();
+        try
+        {
+            var response = await client.GetAsync("/health/ready");
+
+            // Pending means the schema has NOT been proven applied yet — NOT ready.
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        }
+        finally
+        {
+            MigrationReadiness.MarkSucceeded();
+        }
+    }
+
+    [Fact]
+    public async Task Readiness_WhenPending_LivenessStillReturns200()
+    {
+        var client = _factory.CreateClient();
+
+        // Pending readiness must NEVER affect the liveness probe.
+        MigrationReadiness.MarkPending();
+        try
+        {
+            var response = await client.GetAsync("/health");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+        finally
+        {
+            MigrationReadiness.MarkSucceeded();
+        }
+    }
+
+    [Fact]
+    public async Task Readiness_WhenFailed_Returns503()
+    {
+        var client = _factory.CreateClient();
+
+        MigrationReadiness.MarkFailed();
+        try
+        {
+            var response = await client.GetAsync("/health/ready");
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        }
+        finally
+        {
+            MigrationReadiness.MarkSucceeded();
+        }
+    }
+
+    [Fact]
+    public async Task Readiness_WhenSucceeded_Returns200()
+    {
+        var client = _factory.CreateClient();
+
+        MigrationReadiness.MarkSucceeded();
+        var response = await client.GetAsync("/health/ready");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Readiness_PendingThenSucceeded_TransitionsToReady()
+    {
+        var client = _factory.CreateClient();
+
+        // Simulate full startup lifecycle: Pending → Succeeded.
+        MigrationReadiness.MarkPending();
+        var pendingResponse = await client.GetAsync("/health/ready");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, pendingResponse.StatusCode);
+
+        MigrationReadiness.MarkSucceeded();
+        var succeededResponse = await client.GetAsync("/health/ready");
+        Assert.Equal(HttpStatusCode.OK, succeededResponse.StatusCode);
+    }
 }

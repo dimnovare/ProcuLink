@@ -27,31 +27,66 @@ public class HealthController : ControllerBase
 }
 
 /// <summary>
-/// Process-wide readiness flag for the background auto-migration.
+/// Process-wide tri-state readiness indicator for the background auto-migration.
 ///
 /// The fire-and-forget migration in Program.cs (ApplicationStarted) keeps the
-/// HTTP server up so the liveness probe passes during Neon cold-start. But if it
-/// exhausts all retries the schema may be stale and the process should report
-/// NOT ready. This flag is the bridge: the migration loop flips it on final
-/// failure, and <see cref="MigrationReadinessHealthCheck"/> surfaces it on the
-/// readiness endpoint so Railway / external monitoring can see the degraded state
-/// (the process stays alive — only readiness flips).
+/// HTTP server up so the liveness probe passes during Neon cold-start. The
+/// tri-state lets the readiness endpoint be honest during the migrate window:
+/// <list type="bullet">
+///   <item><term>Pending</term><description>Default — migration not yet completed.
+///     Reports NOT-ready so early traffic does not hit a stale schema.</description></item>
+///   <item><term>Succeeded</term><description>MigrateAsync completed OK.
+///     Reports Healthy.</description></item>
+///   <item><term>Failed</term><description>All retries exhausted.
+///     Reports NOT-ready (schema may be stale).</description></item>
+/// </list>
 /// </summary>
+public enum MigrationReadinessState
+{
+    Pending = 0,
+    Succeeded = 1,
+    Failed = 2,
+}
+
 public static class MigrationReadiness
 {
-    private static volatile bool _failed;
+    // _state is written from a single background thread after startup and read
+    // from the health-check path. Volatile int (backing the enum) gives the
+    // visibility guarantee without a lock.
+    private static volatile int _state = (int)MigrationReadinessState.Pending;
+
+    /// <summary>Current tri-state readiness.</summary>
+    public static MigrationReadinessState State =>
+        (MigrationReadinessState)_state;
 
     /// <summary>True once the background migration has exhausted all retries.</summary>
-    public static bool HasFailed => _failed;
+    public static bool HasFailed =>
+        (MigrationReadinessState)_state == MigrationReadinessState.Failed;
 
     /// <summary>Called by the migration loop after the final failed attempt.</summary>
-    public static void MarkFailed() => _failed = true;
+    public static void MarkFailed() =>
+        _state = (int)MigrationReadinessState.Failed;
 
     /// <summary>
-    /// Called when migrations apply successfully. Clears any prior failure so a
-    /// later successful re-run (or test reuse of the static) reports healthy again.
+    /// Called when migrations apply successfully. Clears any prior failure or
+    /// pending state so the readiness endpoint reports healthy.
     /// </summary>
-    public static void MarkSucceeded() => _failed = false;
+    public static void MarkSucceeded() =>
+        _state = (int)MigrationReadinessState.Succeeded;
+
+    /// <summary>
+    /// Resets to Pending — used in tests to simulate a freshly starting process,
+    /// and called at the start of the migration task in Program.cs so the state
+    /// is honest from the very beginning of the startup window.
+    /// </summary>
+    public static void MarkPending() =>
+        _state = (int)MigrationReadinessState.Pending;
+
+    /// <summary>
+    /// Alias for <see cref="MarkPending"/> kept for test symmetry.
+    /// </summary>
+    public static void Reset() =>
+        _state = (int)MigrationReadinessState.Pending;
 }
 
 /// <summary>
@@ -85,19 +120,34 @@ public sealed class DatabaseHealthCheck : IHealthCheck
 }
 
 /// <summary>
-/// Readiness check that reports unhealthy when the background auto-migration has
-/// exhausted all retry attempts (schema potentially stale). Tagged "ready" so it
-/// only affects the readiness endpoint, never liveness.
+/// Readiness check that reflects the tri-state migration readiness.
+/// <list type="bullet">
+///   <item><term>Pending</term><description>Migration has not yet completed —
+///     reports Unhealthy so early health-check traffic does not see a false-ready
+///     while the schema might be stale.</description></item>
+///   <item><term>Failed</term><description>All retries exhausted — reports
+///     Unhealthy; schema is likely stale.</description></item>
+///   <item><term>Succeeded</term><description>Reports Healthy.</description></item>
+/// </list>
+/// Tagged "ready" so it only affects the readiness endpoint, never liveness.
 /// </summary>
 public sealed class MigrationReadinessHealthCheck : IHealthCheck
 {
     public Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(MigrationReadiness.HasFailed
-            ? HealthCheckResult.Unhealthy(
-                "Database migrations failed after all retry attempts — schema may be stale.")
-            : HealthCheckResult.Healthy("Migrations applied (or in progress)."));
+        var result = MigrationReadiness.State switch
+        {
+            MigrationReadinessState.Succeeded =>
+                HealthCheckResult.Healthy("Migrations applied successfully."),
+            MigrationReadinessState.Failed =>
+                HealthCheckResult.Unhealthy(
+                    "Database migrations failed after all retry attempts — schema may be stale."),
+            _ /* Pending */ =>
+                HealthCheckResult.Unhealthy(
+                    "Database migrations have not yet completed — service is still starting up."),
+        };
+        return Task.FromResult(result);
     }
 }
 

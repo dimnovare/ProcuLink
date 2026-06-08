@@ -738,6 +738,12 @@ app.Lifetime.ApplicationStarted.Register(() =>
         var loggerFactory = scope.ServiceProvider.GetRequiredService<ILoggerFactory>();
         var migLogger = loggerFactory.CreateLogger("ProcuLink.Migrations");
 
+        // P2: State starts as Pending (the default) so /health/ready is
+        // honest during Neon cold-start; it stays NOT-ready until
+        // MigrateAsync() completes successfully. No explicit MarkPending()
+        // call is needed here — the field initialises to Pending at process
+        // start, which is the desired semantics.
+
         // ── Phantom-migration reconciliation ─────────────────────────────
         // Some Wave 3/4 migrations had their SQL applied to the prod DB
         // out-of-band (or via a previous deploy that crashed mid-migration),
@@ -748,18 +754,31 @@ app.Lifetime.ApplicationStarted.Register(() =>
         // migration we check a sentinel DB object — if the object exists
         // AND the migration row is missing, we insert the history row so
         // MigrateAsync() skips re-applying the SQL.
-        try
+        //
+        // P1 kill-switch: set Migrations:ReconcilePhantom=false to bypass
+        // once prod __EFMigrationsHistory is confirmed to contain all 5 IDs.
+        // Default is true (current behaviour unchanged).
+        var reconcilePhantom = app.Configuration.GetValue("Migrations:ReconcilePhantom", defaultValue: true);
+        if (reconcilePhantom)
         {
-            await ReconcilePhantomMigrationsAsync(db, migLogger);
+            try
+            {
+                await ReconcilePhantomMigrationsAsync(db, migLogger);
+            }
+            catch (Exception ex)
+            {
+                // Sentinel queries can transiently fail on Neon cold-start.
+                // The retry loop below will get another shot; do not abort boot.
+                migLogger.LogWarning(
+                    "Phantom-migration reconciliation skipped due to error ({Message}). " +
+                    "Proceeding to MigrateAsync — retry loop will handle transient failures.",
+                    ex.Message);
+            }
         }
-        catch (Exception ex)
+        else
         {
-            // Sentinel queries can transiently fail on Neon cold-start.
-            // The retry loop below will get another shot; do not abort boot.
-            migLogger.LogWarning(
-                "Phantom-migration reconciliation skipped due to error ({Message}). " +
-                "Proceeding to MigrateAsync — retry loop will handle transient failures.",
-                ex.Message);
+            migLogger.LogInformation(
+                "Phantom-migration reconciliation disabled via Migrations:ReconcilePhantom=false.");
         }
 
         Exception? lastError = null;
@@ -769,8 +788,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
             {
                 await db.Database.MigrateAsync();
                 migLogger.LogInformation("Database migrations applied (attempt {Attempt}).", attempt);
-                // Clear any prior failure state so the readiness endpoint reports
-                // healthy again (idempotent across retries / re-runs).
+                // P2: transition to Succeeded — /health/ready becomes Healthy.
                 ProcuLink.Api.Controllers.MigrationReadiness.MarkSucceeded();
                 return;
             }
@@ -852,83 +870,98 @@ static (string Id, string SentinelDescription, string SentinelSql)[] PhantomMigr
 
 static async Task ReconcilePhantomMigrationsAsync(ProcuLinkDbContext db, ILogger logger)
 {
+    // P1 — own the connection lifetime: open it explicitly here and close it
+    // in a finally so it is returned to the pool before MigrateAsync runs.
+    // Previously the connection was opened but never explicitly closed/disposed,
+    // relying on EF scope disposal; that is a resource leak.
     var conn = db.Database.GetDbConnection();
-    if (conn.State != System.Data.ConnectionState.Open)
+    var openedByUs = conn.State != System.Data.ConnectionState.Open;
+    if (openedByUs)
         await conn.OpenAsync();
 
-    // Step 1: Does __EFMigrationsHistory exist? If not, MigrateAsync will
-    // create it on first run and there is nothing phantom to reconcile.
-    bool historyTableExists;
-    await using (var cmd = conn.CreateCommand())
+    try
     {
-        cmd.CommandText =
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables " +
-            "WHERE table_schema = 'public' AND table_name = '__EFMigrationsHistory')";
-        var result = await cmd.ExecuteScalarAsync();
-        historyTableExists = result is bool b && b;
-    }
-
-    if (!historyTableExists)
-    {
-        logger.LogInformation(
-            "__EFMigrationsHistory does not exist — fresh database. Skipping phantom-migration check.");
-        return;
-    }
-
-    // Step 2: Read an existing ProductVersion to stay consistent, fallback to 8.0.0.
-    var productVersion = "8.0.0";
-    await using (var cmd = conn.CreateCommand())
-    {
-        cmd.CommandText = "SELECT \"ProductVersion\" FROM \"__EFMigrationsHistory\" LIMIT 1";
-        var result = await cmd.ExecuteScalarAsync();
-        if (result is string s && !string.IsNullOrWhiteSpace(s))
-            productVersion = s;
-    }
-
-    // Step 3: Load applied migration IDs.
-    var appliedIds = new HashSet<string>(StringComparer.Ordinal);
-    await using (var cmd = conn.CreateCommand())
-    {
-        cmd.CommandText = "SELECT \"MigrationId\" FROM \"__EFMigrationsHistory\"";
-        await using var reader = await cmd.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-            appliedIds.Add(reader.GetString(0));
-    }
-
-    // Step 4: For each phantom-prone migration, check sentinel and insert
-    // history row if needed.
-    foreach (var (id, sentinelDescription, sentinelSql) in PhantomMigrations())
-    {
-        if (appliedIds.Contains(id))
-            continue; // Already recorded — nothing to do.
-
-        bool sentinelExists;
+        // Step 1: Does __EFMigrationsHistory exist? If not, MigrateAsync will
+        // create it on first run and there is nothing phantom to reconcile.
+        bool historyTableExists;
         await using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = sentinelSql;
+            cmd.CommandText =
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables " +
+                "WHERE table_schema = 'public' AND table_name = '__EFMigrationsHistory')";
             var result = await cmd.ExecuteScalarAsync();
-            sentinelExists = result is bool b && b;
+            historyTableExists = result is bool b && b;
         }
 
-        if (!sentinelExists)
-            continue; // Genuinely new migration — let MigrateAsync apply it.
+        if (!historyTableExists)
+        {
+            logger.LogInformation(
+                "__EFMigrationsHistory does not exist — fresh database. Skipping phantom-migration check.");
+            return;
+        }
 
-        logger.LogWarning(
-            "Phantom migration {Id} detected (sentinel: {Sentinel}). Inserting history row.",
-            id, sentinelDescription);
+        // Step 2: Read an existing ProductVersion to stay consistent, fallback to 8.0.0.
+        var productVersion = "8.0.0";
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT \"ProductVersion\" FROM \"__EFMigrationsHistory\" LIMIT 1";
+            var result = await cmd.ExecuteScalarAsync();
+            if (result is string s && !string.IsNullOrWhiteSpace(s))
+                productVersion = s;
+        }
 
-        await using var insert = conn.CreateCommand();
-        insert.CommandText =
-            "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") " +
-            "VALUES (@migId, @productVersion)";
-        var migIdParam = insert.CreateParameter();
-        migIdParam.ParameterName = "@migId";
-        migIdParam.Value = id;
-        insert.Parameters.Add(migIdParam);
-        var pvParam = insert.CreateParameter();
-        pvParam.ParameterName = "@productVersion";
-        pvParam.Value = productVersion;
-        insert.Parameters.Add(pvParam);
-        await insert.ExecuteNonQueryAsync();
+        // Step 3: Load applied migration IDs.
+        var appliedIds = new HashSet<string>(StringComparer.Ordinal);
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT \"MigrationId\" FROM \"__EFMigrationsHistory\"";
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                appliedIds.Add(reader.GetString(0));
+        }
+
+        // Step 4: For each phantom-prone migration, check sentinel and insert
+        // history row if needed.
+        foreach (var (id, sentinelDescription, sentinelSql) in PhantomMigrations())
+        {
+            if (appliedIds.Contains(id))
+                continue; // Already recorded — nothing to do.
+
+            bool sentinelExists;
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = sentinelSql;
+                var result = await cmd.ExecuteScalarAsync();
+                sentinelExists = result is bool b && b;
+            }
+
+            if (!sentinelExists)
+                continue; // Genuinely new migration — let MigrateAsync apply it.
+
+            logger.LogWarning(
+                "Phantom migration {Id} detected (sentinel: {Sentinel}). Inserting history row.",
+                id, sentinelDescription);
+
+            await using var insert = conn.CreateCommand();
+            insert.CommandText =
+                "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") " +
+                "VALUES (@migId, @productVersion)";
+            var migIdParam = insert.CreateParameter();
+            migIdParam.ParameterName = "@migId";
+            migIdParam.Value = id;
+            insert.Parameters.Add(migIdParam);
+            var pvParam = insert.CreateParameter();
+            pvParam.ParameterName = "@productVersion";
+            pvParam.Value = productVersion;
+            insert.Parameters.Add(pvParam);
+            await insert.ExecuteNonQueryAsync();
+        }
+    }
+    finally
+    {
+        // Close only if we were the ones who opened it; do not close a
+        // connection that MigrateAsync (or EF itself) had already opened.
+        if (openedByUs && conn.State == System.Data.ConnectionState.Open)
+            await conn.CloseAsync();
     }
 }
