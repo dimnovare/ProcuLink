@@ -54,7 +54,8 @@ public class SuppliersControllerApplyTemplateTests
             new TestDoubles.FakeAnalyticsService(),
             new Mock<IFileStorageService>().Object,
             new SourceColumnExtractor(),
-            new StarterTemplateService());          // real — loads embedded fixtures
+            new StarterTemplateService(),           // real — loads embedded fixtures
+            new Mock<ISupplierCatalogService>().Object);
 
         return (controller, orgId, db);
     }

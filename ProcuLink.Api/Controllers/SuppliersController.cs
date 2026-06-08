@@ -33,6 +33,7 @@ public class SuppliersController : ControllerBase
     private readonly IFileStorageService        _fileStorage;
     private readonly ISourceColumnExtractor     _sourceColumns;
     private readonly IStarterTemplateService    _starterTemplates;
+    private readonly ISupplierCatalogService     _catalog;
 
     public SuppliersController(
         ISupplierProfileRepository supplierProfileRepository,
@@ -46,7 +47,8 @@ public class SuppliersController : ControllerBase
         IAnalyticsService          analytics,
         IFileStorageService        fileStorage,
         ISourceColumnExtractor     sourceColumns,
-        IStarterTemplateService    starterTemplates)
+        IStarterTemplateService    starterTemplates,
+        ISupplierCatalogService    catalog)
     {
         _supplierProfileRepository = supplierProfileRepository;
         _mappingService            = mappingService;
@@ -60,6 +62,7 @@ public class SuppliersController : ControllerBase
         _fileStorage               = fileStorage;
         _sourceColumns             = sourceColumns;
         _starterTemplates          = starterTemplates;
+        _catalog                   = catalog;
     }
 
     // ── GET /api/suppliers ────────────────────────────────────────────────────
@@ -668,6 +671,247 @@ public class SuppliersController : ControllerBase
 
         var result = await _deliveryService.TestFireAsync(orgId, id, ct);
         return Ok(result);
+    }
+
+    // ── GET /api/suppliers/{id}/catalog ───────────────────────────────────────
+
+    /// <summary>
+    /// Lists the supplier's product catalog (active rows) — the authoritative set of real codes.
+    /// Optional <c>?q=</c> filters by code/name/barcode (case-insensitive contains); <c>?take=</c>
+    /// caps the page size. Returns 200 with <c>{ total, items: [{ id, code, name, unit, price,
+    /// currency, barcode, externalId }] }</c>. 404 for an unknown/foreign supplier.
+    /// </summary>
+    [HttpGet("{id:guid}/catalog")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetCatalog(
+        Guid id,
+        [FromQuery] string? q,
+        [FromQuery] int? take,
+        CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        var total = await _catalog.CountAsync(orgId, id, ct);
+        var items = await _catalog.ListAsync(orgId, id, q, take, ct);
+
+        return Ok(new
+        {
+            total,
+            items = items.Select(p => new
+            {
+                id         = p.Id,
+                code       = p.Code,
+                name       = p.Name,
+                unit       = p.Unit,
+                price      = p.Price,
+                currency   = p.Currency,
+                barcode    = p.Barcode,
+                externalId = p.ExternalId,
+            }),
+        });
+    }
+
+    // ── POST /api/suppliers/{id}/catalog/import ───────────────────────────────
+
+    /// <summary>
+    /// Bulk-imports catalog products from a CSV or XLSX file. Columns are auto-detected
+    /// case-insensitively against common aliases: code (required), name, unit, price,
+    /// currency, barcode, external_id. Rows are idempotently upserted by (org, supplier, code).
+    /// Returns <c>{ created, updated, skipped, total }</c>. 404 for an unknown/foreign supplier.
+    /// </summary>
+    [HttpPost("{id:guid}/catalog/import")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ImportCatalog(
+        Guid id,
+        IFormFile file,
+        CancellationToken ct)
+    {
+        if (file is null || file.Length == 0) return BadRequest("No file provided.");
+
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        var ext = System.IO.Path.GetExtension(file.FileName)?.ToLowerInvariant();
+
+        List<SupplierProduct> drafts;
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            drafts = ext switch
+            {
+                ".xlsx" or ".xls" => ParseCatalogXlsx(stream),
+                ".csv"            => await ParseCatalogCsvAsync(stream, ct),
+                // No/unknown extension: fall back to CSV parsing (handles text/csv uploads with no name).
+                _                 => await ParseCatalogCsvAsync(stream, ct),
+            };
+        }
+        catch (Exception)
+        {
+            return BadRequest("Could not read the catalog file. Provide a CSV or XLSX with a 'code' column.");
+        }
+
+        var parsed   = drafts.Count;
+        var withCode = drafts.Count(d => !string.IsNullOrWhiteSpace(d.Code));
+        if (withCode == 0)
+            return BadRequest("No rows with a product code were found. Ensure the file has a 'code' column.");
+
+        var (created, updated) = await _catalog.UpsertManyAsync(orgId, id, drafts, ct);
+
+        return Ok(new
+        {
+            created,
+            updated,
+            skipped = parsed - withCode,
+            total   = created + updated,
+        });
+    }
+
+    // ── DELETE /api/suppliers/{id}/catalog ────────────────────────────────────
+
+    /// <summary>Clears the supplier's entire product catalog. Returns <c>{ deleted }</c>.
+    /// 404 for an unknown/foreign supplier.</summary>
+    [HttpDelete("{id:guid}/catalog")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ClearCatalog(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        var deleted = await _catalog.DeleteAsync(orgId, id, ct);
+        return Ok(new { deleted });
+    }
+
+    // ── Catalog file parsing (deterministic, alias-based column detection) ─────
+
+    /// <summary>Case-insensitive aliases → canonical catalog field.</summary>
+    private static readonly Dictionary<string, string> CatalogColumnAliases =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["code"] = "code", ["product_code"] = "code", ["productcode"] = "code",
+            ["sku"] = "code", ["item_code"] = "code", ["itemcode"] = "code",
+            ["supplier_code"] = "code", ["suppliercode"] = "code", ["supplier_item_code"] = "code",
+            ["name"] = "name", ["product_name"] = "name", ["productname"] = "name",
+            ["description"] = "name", ["product"] = "name", ["title"] = "name",
+            ["unit"] = "unit", ["uom"] = "unit", ["unit_of_measure"] = "unit", ["unitname"] = "unit",
+            ["price"] = "price", ["unit_price"] = "price", ["unitprice"] = "price", ["list_price"] = "price",
+            ["currency"] = "currency", ["ccy"] = "currency",
+            ["barcode"] = "barcode", ["gtin"] = "barcode", ["ean"] = "barcode", ["upc"] = "barcode", ["code2"] = "barcode",
+            ["external_id"] = "external_id", ["externalid"] = "external_id", ["product_id"] = "external_id",
+            ["productid"] = "external_id", ["erp_id"] = "external_id",
+        };
+
+    private static SupplierProduct? RowToDraft(IReadOnlyDictionary<string, string?> fields)
+    {
+        var code = Pick(fields, "code");
+        if (string.IsNullOrWhiteSpace(code)) return null;
+
+        decimal? price = null;
+        var priceStr = Pick(fields, "price");
+        if (!string.IsNullOrWhiteSpace(priceStr)
+            && decimal.TryParse(priceStr, System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out var p))
+            price = p;
+
+        return new SupplierProduct
+        {
+            Code       = code!.Trim(),
+            Name       = Pick(fields, "name"),
+            Unit       = Pick(fields, "unit"),
+            Price      = price,
+            Currency   = Pick(fields, "currency"),
+            Barcode    = Pick(fields, "barcode"),
+            ExternalId = Pick(fields, "external_id"),
+        };
+
+        static string? Pick(IReadOnlyDictionary<string, string?> f, string key) =>
+            f.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v) ? v.Trim() : null;
+    }
+
+    /// <summary>Builds header-index → canonical-field map from a header row's cell names.</summary>
+    private static Dictionary<int, string> MapHeaderColumns(IReadOnlyList<string> header)
+    {
+        var map = new Dictionary<int, string>();
+        for (var i = 0; i < header.Count; i++)
+        {
+            var name = header[i]?.Trim().Trim('"') ?? string.Empty;
+            if (name.Length == 0) continue;
+            if (CatalogColumnAliases.TryGetValue(name, out var canonical) && !map.ContainsValue(canonical))
+                map[i] = canonical;
+        }
+        return map;
+    }
+
+    private static async Task<List<SupplierProduct>> ParseCatalogCsvAsync(Stream stream, CancellationToken ct)
+    {
+        var drafts = new List<SupplierProduct>();
+        using var reader = new System.IO.StreamReader(stream);
+
+        var headerLine = await reader.ReadLineAsync(ct);
+        if (headerLine is null) return drafts;
+
+        var delimiter = headerLine.Contains(';') && !headerLine.Contains(',') ? ';'
+                      : headerLine.Contains('\t') && !headerLine.Contains(',') ? '\t'
+                      : ',';
+
+        var header = headerLine.Split(delimiter).Select(h => h.Trim().Trim('"')).ToList();
+        var colMap = MapHeaderColumns(header);
+        if (!colMap.ContainsValue("code")) return drafts; // no code column → nothing usable
+
+        while (!reader.EndOfStream)
+        {
+            var line = await reader.ReadLineAsync(ct);
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            var parts = line.Split(delimiter);
+            var fields = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (idx, canonical) in colMap)
+                fields[canonical] = idx < parts.Length ? parts[idx].Trim().Trim('"') : null;
+
+            var draft = RowToDraft(fields);
+            if (draft is not null) drafts.Add(draft);
+        }
+
+        return drafts;
+    }
+
+    private static List<SupplierProduct> ParseCatalogXlsx(Stream stream)
+    {
+        var drafts = new List<SupplierProduct>();
+        using var workbook = new ClosedXML.Excel.XLWorkbook(stream);
+        var worksheet = workbook.Worksheets.FirstOrDefault();
+        var rows = worksheet?.RangeUsed()?.RowsUsed().ToList();
+        if (rows is null || rows.Count < 2) return drafts;
+
+        var headerCells = rows[0].Cells().ToList();
+        // ColumnNumber (1-based) → canonical field.
+        var header = new List<string>();
+        var maxCol = headerCells.Count == 0 ? 0 : headerCells.Max(c => c.Address.ColumnNumber);
+        for (var c = 1; c <= maxCol; c++) header.Add(string.Empty);
+        foreach (var cell in headerCells)
+            header[cell.Address.ColumnNumber - 1] = cell.GetString().Trim();
+
+        var colMap = MapHeaderColumns(header); // 0-based index → canonical
+        if (!colMap.ContainsValue("code")) return drafts;
+
+        for (var i = 1; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            if (row.IsEmpty()) continue;
+
+            var fields = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (idx, canonical) in colMap)
+                fields[canonical] = row.Cell(idx + 1).GetString().Trim();
+
+            var draft = RowToDraft(fields);
+            if (draft is not null) drafts.Add(draft);
+        }
+
+        return drafts;
     }
 
     private Task<bool> SupplierExistsAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>

@@ -60,7 +60,8 @@ public class SuppliersControllerEmitsFirstSupplierAddedTests
             analytics,
             fileStorage.Object,
             sourceCols.Object,
-            new ProcuLink.Api.Services.StarterTemplates.StarterTemplateService());
+            new ProcuLink.Api.Services.StarterTemplates.StarterTemplateService(),
+            new Mock<ISupplierCatalogService>().Object);
 
         return (controller, analytics, orgId, db);
     }

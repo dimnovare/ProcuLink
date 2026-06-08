@@ -19,6 +19,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<PurchaseOrderEntity> PurchaseOrders => Set<PurchaseOrderEntity>();
     public DbSet<PurchaseOrderLineEntity> PurchaseOrderLines => Set<PurchaseOrderLineEntity>();
     public DbSet<ItemMapping> ItemMappings => Set<ItemMapping>();
+    public DbSet<SupplierProduct> SupplierProducts => Set<SupplierProduct>();
     public DbSet<OutboundArtifact> OutboundArtifacts => Set<OutboundArtifact>();
     public DbSet<DeliveryAttempt> DeliveryAttempts => Set<DeliveryAttempt>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
@@ -395,6 +396,39 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .WithMany(x => x.ItemMappings)
              .HasForeignKey(x => x.SupplierId);
             b.HasMany<MappingCorrection>().WithOne(x => x.Mapping).HasForeignKey(x => x.MappingId);
+        });
+
+        // ── supplier_products ──────────────────────────────────────────
+        // The supplier's authoritative product catalog (ground truth). Tenancy and
+        // EF-config conventions mirror item_mappings: org+supplier scoped, snake_case,
+        // explicit HasColumnName on every property (the migration relies on these).
+        modelBuilder.Entity<SupplierProduct>(b =>
+        {
+            b.ToTable("supplier_products");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            b.Property(x => x.Code).HasColumnName("code").IsRequired();
+            b.Property(x => x.Name).HasColumnName("name");
+            b.Property(x => x.Unit).HasColumnName("unit");
+            b.Property(x => x.Price).HasColumnName("price").HasColumnType("numeric(18,4)");
+            b.Property(x => x.Currency).HasColumnName("currency");
+            b.Property(x => x.Barcode).HasColumnName("barcode");
+            b.Property(x => x.ExternalId).HasColumnName("external_id");
+            b.Property(x => x.IsActive).HasColumnName("is_active").HasDefaultValue(true);
+            b.Property(x => x.CreatedAt).HasColumnName("created_at");
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            // One row per real code per (org, supplier) — the upsert key.
+            b.HasIndex(x => new { x.OrgId, x.SupplierId, x.Code }).IsUnique();
+            // Active-catalog listing / typeahead read path.
+            b.HasIndex(x => new { x.OrgId, x.SupplierId, x.IsActive });
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
+            b.HasOne(x => x.Supplier)
+             .WithMany(x => x.Products)
+             .HasForeignKey(x => x.SupplierId);
         });
 
         // ── outbound_artifacts ─────────────────────────────────────────

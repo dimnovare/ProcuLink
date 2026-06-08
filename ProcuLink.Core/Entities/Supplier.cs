@@ -23,4 +23,7 @@ public class Supplier
     public List<ItemMapping> ItemMappings { get; set; } = new();
     public List<SupplierPoMapping> PoMappings { get; set; } = new();
     public List<SupplierDeliveryConfig> DeliveryConfigs { get; set; } = new();
+
+    /// <summary>The supplier's product catalog — the authoritative set of real codes (optional).</summary>
+    public List<SupplierProduct> Products { get; set; } = new();
 }

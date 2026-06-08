@@ -59,7 +59,8 @@ public class SuppliersControllerSourceColumnsTests
             new TestDoubles.FakeAnalyticsService(),
             fileStorage.Object,
             new SourceColumnExtractor(),  // real extractor
-            new ProcuLink.Api.Services.StarterTemplates.StarterTemplateService());
+            new ProcuLink.Api.Services.StarterTemplates.StarterTemplateService(),
+            new Mock<ISupplierCatalogService>().Object);
 
         return (controller, orgId, db);
     }
