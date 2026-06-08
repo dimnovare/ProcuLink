@@ -30,10 +30,11 @@ public sealed record DataRetentionResult(
     int AuditEvents,
     int PassportEvents,
     int IdempotencyKeys,
-    int DeliveryAttempts)
+    int DeliveryAttempts,
+    int OrderExceptions = 0)
 {
     public static readonly DataRetentionResult Empty = new(0, 0, 0, 0);
 
     /// <summary>Total rows deleted across every pruned table.</summary>
-    public int Total => AuditEvents + PassportEvents + IdempotencyKeys + DeliveryAttempts;
+    public int Total => AuditEvents + PassportEvents + IdempotencyKeys + DeliveryAttempts + OrderExceptions;
 }
