@@ -296,10 +296,6 @@ public class WebhookIngressControllerTests
                 v => v == null ? null : v.RootElement.GetRawText(),
                 v => JsonDocHelpers.ParseNullable(v));
 
-            var jsonDocNonNullConverter = new ValueConverter<JsonDocument, string>(
-                v => v.RootElement.GetRawText(),
-                v => JsonDocHelpers.ParseNonNull(v));
-
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {
                 b.HasKey(x => x.Id);
@@ -315,7 +311,7 @@ public class WebhookIngressControllerTests
             {
                 b.HasKey(x => x.Id);
                 b.Ignore(x => x.Organisation);
-                b.Property(x => x.Payload).HasConversion(jsonDocNonNullConverter);
+                b.Property(x => x.Payload).HasConversion(jsonDocNullableConverter);
             });
         }
     }
@@ -330,6 +326,4 @@ internal static class JsonDocHelpers
 {
     public static JsonDocument? ParseNullable(string? s) =>
         s is null ? null : JsonDocument.Parse(s);
-
-    public static JsonDocument ParseNonNull(string s) => JsonDocument.Parse(s);
 }
