@@ -845,6 +845,12 @@ internal sealed class OrderIngestionService
             var supplierCode = ResolveFromMap(resolvedMap, line.BuyerItemCode);
             bool resolved = !string.IsNullOrWhiteSpace(supplierCode);
 
+            // The parser flags a line whose quantity / unit price was ambiguous or
+            // unparseable (e.g. scientific notation) so a silently-wrong number never
+            // reaches a supplier. Force review even when the supplier code resolved, and
+            // cap confidence so it surfaces — mirrors ApplyExtractionReviewFlags for PDFs.
+            bool parserFlagged = line.NeedsReview;
+
             AiMappingSuggestion? suggestion = null;
             if (!resolved)
                 suggestions.TryGetValue(line.LineNumber, out suggestion);
@@ -859,8 +865,8 @@ internal sealed class OrderIngestionService
                 Quantity         = line.Quantity,
                 Unit             = line.Unit,
                 UnitPrice        = line.UnitPrice ?? 0m,
-                Confidence       = resolved ? 1.0f : 0.0f,
-                NeedsReview      = !resolved,
+                Confidence       = resolved ? (parserFlagged ? 0.5f : 1.0f) : 0.0f,
+                NeedsReview      = !resolved || parserFlagged,
                 AiSuggestedSupplierItemCode = suggestion?.SupplierItemCode,
                 AiSuggestionConfidence = suggestion?.Confidence,
                 AiSuggestionReason = suggestion?.Reason,
