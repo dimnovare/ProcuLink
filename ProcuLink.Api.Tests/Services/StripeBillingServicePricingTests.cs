@@ -174,6 +174,32 @@ public class StripeBillingServicePricingTests
     }
 
     [Fact]
+    public async Task PilotTrialExpired_WithAdminExtension_IsReactivated_AndCanProcess()
+    {
+        // Regression: a Pilot org stored as trial_expired must be REACTIVATED (→ trialing)
+        // once an admin override extends the trial + raises the cap — not left read-only.
+        var db = MakeDb();
+        var org = Org(
+            PlanConstants.Pilot,
+            AccountStatusConstants.TrialExpired,
+            orderLimitOverride: 2000,
+            trialEndsAtOverride: DateTime.UtcNow.AddDays(365));
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+        await SeedOrdersThisMonthAsync(db, org.Id, 25); // > base pilot 20, but well under the 2000 override
+
+        var status = await MakeService(db).GetStatusAsync(org.Id);
+
+        status.IsTrialExpired.Should().BeFalse("the admin-extended trial is active again");
+        status.CanProcessOrders.Should().BeTrue("a reactivated Pilot must accept orders");
+        status.AccountStatus.Should().Be(AccountStatusConstants.Trialing);
+
+        // Reactivation is PERSISTED, not just computed for this response.
+        var reloaded = await db.Organisations.AsNoTracking().FirstAsync(o => o.Id == org.Id);
+        reloaded.AccountStatus.Should().Be(AccountStatusConstants.Trialing);
+    }
+
+    [Fact]
     public async Task ReadOnlyPaidAccount_CannotProcess_EvenUnderCap()
     {
         var db = MakeDb();

@@ -557,7 +557,8 @@ public sealed class StripeBillingService : IBillingService
     {
         var org = await LoadOrgAsync(orgId, asTracking: true, ct);
         if (org.Plan != PlanConstants.Pilot) return;
-        if (org.AccountStatus is AccountStatusConstants.TrialExpired or AccountStatusConstants.ReadOnly) return;
+        // ReadOnly is a paid-plan terminal state (e.g. cancelled) — not ours to flip here.
+        if (org.AccountStatus is AccountStatusConstants.ReadOnly) return;
 
         org.TrialEndsAt ??= org.TrialStartedAt.Add(PlanConstants.PilotDuration);
         // Effective deadline + cap respect admin overrides (beefier/extended Pilot).
@@ -565,10 +566,22 @@ public sealed class StripeBillingService : IBillingService
         var pilotOrderCap = PlanConstants.GetEffectiveOrderLimit(PlanConstants.Pilot, org.OrderLimitOverride);
         var ordersUsed = await CountOrdersAsync(org, ct);
         var expired = DateTime.UtcNow > effectiveTrialEnd || ordersUsed >= pilotOrderCap;
-        if (!expired) return;
 
-        org.AccountStatus = AccountStatusConstants.TrialExpired;
-        await _db.SaveChangesAsync(ct);
+        // Bidirectional: expire when past the effective deadline/cap, AND REACTIVATE a
+        // previously-expired Pilot when an admin override (extended trial / raised cap)
+        // has put it back inside its window. Without the reactivation branch, an admin
+        // could extend a Pilot but the org would stay read-only forever (the early-return
+        // bug this replaces). Only TrialExpired⇄Trialing are touched.
+        if (expired && org.AccountStatus != AccountStatusConstants.TrialExpired)
+        {
+            org.AccountStatus = AccountStatusConstants.TrialExpired;
+            await _db.SaveChangesAsync(ct);
+        }
+        else if (!expired && org.AccountStatus == AccountStatusConstants.TrialExpired)
+        {
+            org.AccountStatus = AccountStatusConstants.Trialing;
+            await _db.SaveChangesAsync(ct);
+        }
     }
 
     public async Task RequestPilotExtensionAsync(Guid orgId, CancellationToken ct = default)
