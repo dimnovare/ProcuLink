@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sanitized real-world SAP IDoc ORDERS05.
+     Notable: E1EDK01 CURCY=704 is a numeric SAP-internal currency code.
+     E1EDS01 SUNIT=EUR is the alphabetic ISO code that should win.
+     PII removed; company names changed. Structure preserved exactly. -->
+<ORDERS05>
+  <IDOC BEGIN="1">
+    <EDI_DC40 SEGMENT="1">
+      <TABNAM>EDI_DC40</TABNAM>
+      <MANDT>020</MANDT>
+      <DOCNUM>0000000069830589</DOCNUM>
+      <IDOCTYP>ORDERS05</IDOCTYP>
+      <MESTYP>ORDERS</MESTYP>
+      <CREDAT>20260603</CREDAT>
+    </EDI_DC40>
+    <E1EDK01 SEGMENT="1">
+      <ACTION>AG</ACTION>
+      <CURCY>704</CURCY>
+    </E1EDK01>
+    <E1EDK03 SEGMENT="1">
+      <IDDAT>012</IDDAT>
+      <DATUM>20260603</DATUM>
+    </E1EDK03>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>AG</PARVW>
+      <PARTN>7704</PARTN>
+      <BNAME>Test Buyer Madrid</BNAME>
+      <PAORG>7704</PAORG>
+      <ORGTX>O.C. Madrid</ORGTX>
+    </E1EDKA1>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>LF</PARVW>
+      <PARTN>0000494423</PARTN>
+      <SPRAS_ISO>ES</SPRAS_ISO>
+    </E1EDKA1>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>WE</PARVW>
+      <LIFNR>7704</LIFNR>
+      <NAME1>TEST SHIP-TO MADRID</NAME1>
+      <STRAS>Avda. Test s/n</STRAS>
+      <ORT01>Madrid</ORT01>
+      <PSTLZ>28022</PSTLZ>
+      <LAND1>ES</LAND1>
+    </E1EDKA1>
+    <E1EDK02 SEGMENT="1">
+      <QUALF>001</QUALF>
+      <BELNR>0005472513</BELNR>
+      <DATUM>20260603</DATUM>
+    </E1EDK02>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00010</POSEX>
+      <ACTION>001</ACTION>
+      <MENGE>1.000</MENGE>
+      <MENEE>PCE</MENEE>
+      <VPREI>149.49</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>149.49</NETWR>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <IDTNR>000000000030001746</IDTNR>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+      </E1EDP19>
+    </E1EDP01>
+    <E1EDS01 SEGMENT="1">
+      <SUMID>002</SUMID>
+      <SUMME>149.49</SUMME>
+      <SUNIT>EUR</SUNIT>
+    </E1EDS01>
+  </IDOC>
+</ORDERS05>
