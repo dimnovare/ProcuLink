@@ -155,15 +155,13 @@ public class SourceTokenizerTests
     // ── Unsupported formats → empty list ─────────────────────────────────────
 
     [Theory]
-    [InlineData(".xlsx")]
-    [InlineData(".pdf")]
-    [InlineData(".x12")]
-    [InlineData(".edifact")]
+    [InlineData(".pdf")]   // PDF has no stable addressable cells
+    [InlineData(".edifact")] // Unknown extension — not the canonical .edi
     [InlineData(".txt")]
     [InlineData("")]
     public async Task UnsupportedFormat_ReturnsEmptyList(string ext)
     {
-        // Tokenisation not yet implemented for formats other than CSV/XML.
+        // Tokenisation not implemented for these formats/extensions.
         // Must return empty, not throw.
         var bytes = Encoding.UTF8.GetBytes("some content");
 
