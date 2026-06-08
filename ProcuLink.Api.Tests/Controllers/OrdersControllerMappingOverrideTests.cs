@@ -42,7 +42,9 @@ public class OrdersControllerMappingOverrideTests
             new Mock<IIdempotencyService>().Object,
             new Mock<IOrderExceptionService>().Object,
             new Mock<ISupplierAcceptanceService>().Object,
-            new OrderMappingOverrideService(db)); // real service over the in-memory db
+            new OrderMappingOverrideService(db), // real service over the in-memory db
+            new Mock<IFileStorageService>().Object,
+            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object);
     }
 
     private static async Task<Guid> SeedOrderAsync(ProcuLinkDbContext db, Guid orgId)

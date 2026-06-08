@@ -5,6 +5,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Mapping;
+using ProcuLink.Transform.Tokenizing;
 
 namespace ProcuLink.Transform.Output;
 
@@ -40,18 +41,31 @@ public sealed class MappedTransformService
     /// Build the override-driven output document. Throws <see cref="TransformValidationException"/>
     /// if any line is unresolved (same guard as the fixed transforms), and
     /// <see cref="ArgumentException"/> if asked for an unsupported format (the caller guards this).
+    ///
+    /// When <paramref name="sourceTokens"/> is non-null and the override carries a
+    /// <see cref="OrderMappingOverride.SourceMap"/>, the SourceMap re-derive step runs BEFORE
+    /// the output rules: effective canonical values are computed from the token list first, then
+    /// the output rules read those effective values. Passing <c>null</c> or an empty list is
+    /// equivalent to no SourceMap — the default (no remap) path is unchanged.
     /// </summary>
-    public TransformResult Build(PurchaseOrderEntity order, OrderMappingOverride @override, OutputFormat format)
+    public TransformResult Build(
+        PurchaseOrderEntity        order,
+        OrderMappingOverride       @override,
+        OutputFormat               format,
+        IReadOnlyList<SourceToken>? sourceTokens = null)
     {
         ValidateOrder(order);
 
         var output = @override.Output
             ?? throw new ArgumentException("Override has no output mapping config.", nameof(@override));
 
+        // Materialise a non-null token list once (empty if none supplied).
+        IReadOnlyList<SourceToken> tokens = sourceTokens ?? Array.Empty<SourceToken>();
+
         return format switch
         {
-            OutputFormat.Csv  => BuildCsv(order, @override, output),
-            OutputFormat.Json => BuildJson(order, @override, output),
+            OutputFormat.Csv  => BuildCsv(order, @override, output, tokens),
+            OutputFormat.Json => BuildJson(order, @override, output, tokens),
             _ => throw new ArgumentException(
                      $"MappedTransformService does not support format '{format}' (v1: CSV + JSON only).",
                      nameof(format)),
@@ -61,7 +75,10 @@ public sealed class MappedTransformService
     // ── CSV ────────────────────────────────────────────────────────────────────
 
     private static TransformResult BuildCsv(
-        PurchaseOrderEntity order, OrderMappingOverride @override, OutputMappingConfig output)
+        PurchaseOrderEntity        order,
+        OrderMappingOverride       @override,
+        OutputMappingConfig        output,
+        IReadOnlyList<SourceToken> tokens)
     {
         // Stable column order: header rules first (emitted once as a leading section is awkward for a
         // flat CSV, so header values are repeated on every line as leading columns), then line columns.
@@ -77,14 +94,16 @@ public sealed class MappedTransformService
         sb.AppendLine(string.Join(",", headerNames.Select(Escape)));
 
         // Resolve header values once (header scope).
-        var headerRow    = BuildHeaderRow(order, @override);
+        // SourceMap re-derive runs first (no-op when SourceMap is absent/empty).
+        var headerRow    = SourceMapReDerive.ApplyToHeaderRow(BuildHeaderRow(order, @override), @override, tokens);
         var headerValues = headerCols
             .Select(c => ResolveRule(c.Value, headerRow) ?? string.Empty)
             .ToList();
 
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
-            var lineRow = BuildLineRow(order, @override, line);
+            // SourceMap re-derive for each line row.
+            var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line), @override, tokens);
 
             var lineValues = lineCols
                 .Select(c => ResolveRule(c.Value, lineRow) ?? string.Empty)
@@ -100,9 +119,13 @@ public sealed class MappedTransformService
     // ── JSON ───────────────────────────────────────────────────────────────────
 
     private static TransformResult BuildJson(
-        PurchaseOrderEntity order, OrderMappingOverride @override, OutputMappingConfig output)
+        PurchaseOrderEntity        order,
+        OrderMappingOverride       @override,
+        OutputMappingConfig        output,
+        IReadOnlyList<SourceToken> tokens)
     {
-        var headerRow = BuildHeaderRow(order, @override);
+        // SourceMap re-derive for header row.
+        var headerRow = SourceMapReDerive.ApplyToHeaderRow(BuildHeaderRow(order, @override), @override, tokens);
 
         var header = new Dictionary<string, string?>();
         foreach (var (_, rule) in output.Header)
@@ -111,7 +134,8 @@ public sealed class MappedTransformService
         var lines = new List<Dictionary<string, string?>>();
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
-            var lineRow = BuildLineRow(order, @override, line);
+            // SourceMap re-derive for each line row.
+            var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line), @override, tokens);
             var obj = new Dictionary<string, string?>();
             foreach (var (_, rule) in output.Lines)
                 obj[rule.OutputPath] = ResolveRule(rule, lineRow) ?? string.Empty;
