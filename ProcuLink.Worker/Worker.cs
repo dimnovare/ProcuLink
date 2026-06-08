@@ -45,6 +45,14 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/15 * * * *");
 
+        // Delivery-path hardening: recover orders stranded in 'delivering' past the threshold
+        // (every 15 min). Re-drives via RetryDeliveryJob up to a cap, then dead-letters —
+        // guarantees a delivering→terminal transition. Companion to stuck-order-detection.
+        _recurringJobs.AddOrUpdate<StuckDeliveryDetectionJob>(
+            "stuck-delivery-detection",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/15 * * * *");
+
         // Reliability/observability: alert (Sentry) when no worker is beating or the dead-letter /
         // failed-delivery backlog spikes (every 5 min). No-op without a Sentry DSN; rate-limited.
         _recurringJobs.AddOrUpdate<WorkerHealthAlertJob>(
@@ -59,7 +67,7 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "30 3 * * *");
 
-        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep (every 15 min), data-retention-sweep (daily 03:30 UTC).");
+        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection (every 15 min), data-retention-sweep (daily 03:30 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

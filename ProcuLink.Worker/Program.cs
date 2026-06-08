@@ -292,6 +292,14 @@ builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.Hangfire
 // Group O reliability: automatic delivery retry queue (scheduled here) + SLA breach sweep.
 builder.Services.AddScoped<RetryDeliveryJob>();
 builder.Services.AddScoped<DeliverySlaSweepJob>();
+// Delivery-path hardening: recover orders stranded in 'delivering' (e.g. a Worker restart /
+// download throw / dispatcher hang between the status write and the terminal attempt persist).
+// The sweep re-drives them through RetryDeliveryJob via IRetryDeliveryEnqueuer up to a bounded
+// cap, then dead-letters — guaranteeing a delivering→terminal transition. The Hangfire adapter
+// needs only IBackgroundJobClient, which this Worker already provides.
+builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
+builder.Services.AddScoped<IStuckDeliveryDetectionService, StuckDeliveryDetectionService>();
+builder.Services.AddScoped<StuckDeliveryDetectionJob>();
 // ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
 // ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
