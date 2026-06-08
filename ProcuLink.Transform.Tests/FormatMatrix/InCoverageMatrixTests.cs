@@ -122,12 +122,12 @@ public class InCoverageMatrixTests
     }
 
     [Fact]
-    public async Task Csv_EuThousandsSeparator_1Dot234Comma56_IsMisparsed_GAP()
+    public async Task Csv_EuropeanNumbers_SemicolonDelimited_ParsedCorrectly()
     {
-        // European number "1.234,56" under InvariantCulture + NumberStyles.Any:
-        // '.' is read as a thousands group separator and ',' is NOT a valid decimal
-        // point, so the whole token fails to parse cleanly.
-        // Semicolon-delimited so the comma decimal does not split columns.
+        // A ';'-delimited file signals a European locale, so ParseDecimalFlexible reads
+        // the comma as the decimal separator and a lone dot + 3 trailing digits as a
+        // thousands group. (Previously GAP #3: under InvariantCulture these were silently
+        // mis-read — "73,22"→7322 (100×), "1.234,56"→null (dropped), "1.000"→1 — now fixed.)
         var sb = new StringBuilder();
         sb.Append(CsvHeader.Replace(',', ';')).Append(NL);
         sb.Append("PO-EU;2026-06-08;EUR;Käufer GmbH;1;BUY-1;EU price;1;EA;1.234,56").Append(NL);
@@ -135,21 +135,9 @@ public class InCoverageMatrixTests
 
         var order = await new CsvOrderParser().ParseAsync(ToStream(sb.ToString()), CancellationToken.None);
 
-        // GAP #3 (EU-locale CSV numbers — silent corruption). Under InvariantCulture +
-        // NumberStyles.Any the EU number conventions are systematically mis-read:
-        //   "1.234,56" → '.' decimal point then ',' invalid → whole token FAILS → null
-        //                (a €1,234.56 price silently DROPPED to no-price).
-        //   "73,22"    → ',' read as a GROUP separator → 7322 (a 100× mis-read of a
-        //                €73.22 price — the worst kind: silent, plausible, wrong).
-        //   "1.000" qty → '.' read as the DECIMAL point → 1.000 == 1 (so an EU file that
-        //                meant "one thousand" via a dot-group becomes 1; and "1.234"
-        //                meaning 1234 becomes 1.234). Both directions are wrong for EU.
-        // Captured so the loss is VISIBLE and tracked. The fix is a locale-aware CSV
-        // mode (infer comma-decimal from the ';' delimiter); out of scope for this
-        // suite because it risks regressing the InvariantCulture happy path.
-        order.Lines[0].UnitPrice.Should().BeNull("GAP: EU decimal 1.234,56 fails InvariantCulture parse → null");
-        order.Lines[1].UnitPrice.Should().Be(7322m, "GAP: '73,22' is silently mis-read as 7322 (comma taken as group sep)");
-        order.Lines[1].Quantity.Should().Be(1m, "GAP: '1.000' is read as 1.000 (dot = decimal point), not one thousand");
+        order.Lines[0].UnitPrice.Should().Be(1234.56m, "EU '1.234,56' → 1234.56 (dot=group, comma=decimal)");
+        order.Lines[1].UnitPrice.Should().Be(73.22m, "EU '73,22' → 73.22 (comma is the decimal)");
+        order.Lines[1].Quantity.Should().Be(1000m, "EU '1.000' → 1000 (lone dot + 3 digits = thousands group)");
     }
 
     [Fact]

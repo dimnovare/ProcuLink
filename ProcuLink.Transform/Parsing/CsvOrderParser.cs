@@ -65,7 +65,9 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
             return new ParsedOrder(null, null, null, null, Array.Empty<ParsedOrderLine>());
         }
 
-        return BuildParsedOrder(rows);
+        // A ';'-delimited file is the reliable signal of a European locale (comma is
+        // the decimal separator there), so numbers are parsed accordingly.
+        return BuildParsedOrder(rows, european: delimiter == ";");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -88,7 +90,7 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
             .ToArray());
     }
 
-    private static ParsedOrder BuildParsedOrder(List<RawRow> rows)
+    private static ParsedOrder BuildParsedOrder(List<RawRow> rows, bool european)
     {
         // Header-level fields come from the first non-null value across all rows
         var poNumber   = rows.Select(r => r.PoNumber  ).FirstOrDefault(v => !string.IsNullOrEmpty(v));
@@ -102,8 +104,8 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
         foreach (var raw in rows)
         {
             var lineNumber  = int.TryParse(raw.LineNumber, out var ln) ? ln : autoLineNum;
-            var quantity    = decimal.TryParse(raw.Quantity,  NumberStyles.Any, CultureInfo.InvariantCulture, out var qty)   ? qty   : 0m;
-            var unitPrice   = decimal.TryParse(raw.UnitPrice, NumberStyles.Any, CultureInfo.InvariantCulture, out var price) ? price : (decimal?)null;
+            var quantity    = ParseDecimalFlexible(raw.Quantity,  european) ?? 0m;
+            var unitPrice   = ParseDecimalFlexible(raw.UnitPrice, european);
             var buyerCode   = NullIfEmpty(raw.BuyerItemCode ?? raw.ItemCode) ?? string.Empty;
 
             lines.Add(new ParsedOrderLine(
@@ -119,6 +121,54 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
         }
 
         return new ParsedOrder(poNumber, orderDate, buyerName, currency, lines);
+    }
+
+    /// <summary>
+    /// Parse a decimal that may be US ("1,234.56", "73.22") or European
+    /// ("1.234,56", "73,22", "1.000") notation. Rules:
+    ///  • both separators present → the LAST one is the decimal separator;
+    ///  • only ',' → decimal, UNLESS it's a single comma with exactly 3 trailing
+    ///    digits and the file is NOT European (then it's a US thousands group);
+    ///  • only '.' → decimal, UNLESS the file IS European AND it's a single dot
+    ///    with exactly 3 trailing digits (then it's a European thousands group).
+    /// `european` is inferred from a ';' delimiter. This prevents the silent
+    /// 10×/100× corruption where "73,22" was read as 7322 under InvariantCulture.
+    /// </summary>
+    private static decimal? ParseDecimalFlexible(string? raw, bool european)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var s = new string(raw.Where(c => char.IsDigit(c) || c is '.' or ',' or '-').ToArray());
+        if (s.Length == 0 || s == "-") return null;
+
+        int lastDot = s.LastIndexOf('.'), lastComma = s.LastIndexOf(',');
+        char? decimalSep;
+        if (lastDot >= 0 && lastComma >= 0)
+        {
+            decimalSep = lastComma > lastDot ? ',' : '.';                 // both → last wins
+        }
+        else if (lastComma >= 0)
+        {
+            bool single = s.IndexOf(',') == lastComma;
+            int trailing = s.Length - lastComma - 1;
+            decimalSep = (european || !(single && trailing == 3)) ? ',' : null;
+        }
+        else if (lastDot >= 0)
+        {
+            bool single = s.IndexOf('.') == lastDot;
+            int trailing = s.Length - lastDot - 1;
+            decimalSep = (european && single && trailing == 3) ? null : '.';
+        }
+        else
+        {
+            decimalSep = null;                                            // pure integer
+        }
+
+        string normalized = decimalSep is char ds
+            ? s.Replace(ds == '.' ? "," : ".", "").Replace(ds, '.')      // strip groups, decimal → '.'
+            : s.Replace(",", "").Replace(".", "");                       // integer / thousands-only
+
+        return decimal.TryParse(normalized, NumberStyles.Number, CultureInfo.InvariantCulture, out var d)
+            ? d : (decimal?)null;
     }
 
     private static DateTime? ParseDate(string? value)
