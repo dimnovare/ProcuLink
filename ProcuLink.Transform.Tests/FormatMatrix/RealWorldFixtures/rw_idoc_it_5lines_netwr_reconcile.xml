@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sanitized real-world SAP IDoc ORDERS05 (5 lines, EUR currency, Italian locale).
+     PII removed; company names changed. Structure preserved exactly.
+     Grand total: 186.01 EUR. Line amounts should reconcile. -->
+<ORDERS05>
+  <IDOC BEGIN="1">
+    <EDI_DC40 SEGMENT="1">
+      <TABNAM>EDI_DC40</TABNAM>
+      <MANDT>710</MANDT>
+      <DOCNUM>0000000920893943</DOCNUM>
+      <IDOCTYP>ORDERS05</IDOCTYP>
+      <MESTYP>ORDERS</MESTYP>
+      <CREDAT>20260526</CREDAT>
+    </EDI_DC40>
+    <E1EDK01 SEGMENT="1">
+      <CURCY>EUR</CURCY>
+      <BELNR>4501450099</BELNR>
+    </E1EDK01>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>AG</PARVW>
+      <PARTN>1016</PARTN>
+      <BNAME>Test Buyer IT</BNAME>
+      <PAORG>1016</PAORG>
+      <ORGTX>Test Buyer Srl IT</ORGTX>
+    </E1EDKA1>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>LF</PARVW>
+      <PARTN>0000142533</PARTN>
+      <SPRAS_ISO>IT</SPRAS_ISO>
+    </E1EDKA1>
+    <E1EDK02 SEGMENT="1">
+      <QUALF>001</QUALF>
+      <BELNR>4501450099</BELNR>
+      <DATUM>20260525</DATUM>
+    </E1EDK02>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00010</POSEX>
+      <MENGE>50.000</MENGE>
+      <MENEE>EA</MENEE>
+      <VPREI>1.05</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>52.5</NETWR>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>002</QUALF>
+        <IDTNR>15728463</IDTNR>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+      </E1EDP19>
+      <E1EDPT1 SEGMENT="1">
+        <TDID>F01</TDID>
+        <E1EDPT2 SEGMENT="1">
+          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+        </E1EDPT2>
+      </E1EDPT1>
+    </E1EDP01>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00020</POSEX>
+      <MENGE>2.000</MENGE>
+      <MENEE>EA</MENEE>
+      <VPREI>11.72</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>23.44</NETWR>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>002</QUALF>
+        <IDTNR>11097719</IDTNR>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+      </E1EDP19>
+      <E1EDPT1 SEGMENT="1">
+        <TDID>F01</TDID>
+        <E1EDPT2 SEGMENT="1">
+          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+        </E1EDPT2>
+      </E1EDPT1>
+    </E1EDP01>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00030</POSEX>
+      <MENGE>3.000</MENGE>
+      <MENEE>EA</MENEE>
+      <VPREI>16.34</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>49.01</NETWR>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>002</QUALF>
+        <IDTNR>30045872</IDTNR>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+      </E1EDP19>
+      <E1EDPT1 SEGMENT="1">
+        <TDID>F01</TDID>
+        <E1EDPT2 SEGMENT="1">
+          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+        </E1EDPT2>
+      </E1EDPT1>
+    </E1EDP01>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00040</POSEX>
+      <MENGE>4.000</MENGE>
+      <MENEE>EA</MENEE>
+      <VPREI>2.99</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>11.96</NETWR>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>002</QUALF>
+        <IDTNR>20612144</IDTNR>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+      </E1EDP19>
+    </E1EDP01>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00050</POSEX>
+      <MENGE>10.000</MENGE>
+      <MENEE>EA</MENEE>
+      <VPREI>4.91</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>49.1</NETWR>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>002</QUALF>
+        <IDTNR>43362014</IDTNR>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+      </E1EDP19>
+    </E1EDP01>
+    <E1EDS01 SEGMENT="1">
+      <SUMID>002</SUMID>
+      <SUMME>186.01</SUMME>
+      <SUNIT>EUR</SUNIT>
+    </E1EDS01>
+  </IDOC>
+</ORDERS05>

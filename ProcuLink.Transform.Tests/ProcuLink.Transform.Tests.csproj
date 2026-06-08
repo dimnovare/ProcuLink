@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="FormatMatrix\RealWorldFixtures\*.xml" />
   </ItemGroup>
 
 </Project>

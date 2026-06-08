@@ -1,0 +1,86 @@
+<cXML xml:lang="en-US" payloadID="REDACTED" timestamp="2026-05-25T05:52:36-04:00">
+  <Header>
+    <From>
+      <Credential domain="NetworkId">
+        <Identity>BUYER_ES-T</Identity>
+      </Credential>
+    </From>
+    <To>
+      <Credential domain="NetworkId">
+        <Identity>SUPPLIER_ES-T</Identity>
+      </Credential>
+    </To>
+    <Sender>
+      <Credential domain="NetworkId">
+        <Identity>BUYER_ES-T</Identity>
+        <SharedSecret>sanitized</SharedSecret>
+      </Credential>
+      <UserAgent>Coupa Procurement 1.0</UserAgent>
+    </Sender>
+  </Header>
+  <!-- NOTE: the real file had no deploymentMode attribute, which our parser
+       rejects as required. We add it here so the fixture tests the canonical
+       parse path; a separate real-world gap test covers the missing-deploymentMode case. -->
+  <Request deploymentMode="production">
+    <OrderRequest>
+      <OrderRequestHeader orderID="140181" orderDate="2026-05-25T05:52:36-04:00" type="new">
+        <Total>
+          <Money currency="EUR">88.3</Money>
+        </Total>
+        <ShipTo>
+          <Address isoCountryCode="ES" addressID="AAB">
+            <Name xml:lang="en">Test Buyer Spain S.L.</Name>
+            <PostalAddress name="default">
+              <DeliverTo>Test User</DeliverTo>
+              <Street>Test Address</Street>
+              <City>Madrid</City>
+              <State>Madrid Autonomous Community</State>
+              <PostalCode>12345</PostalCode>
+              <Country isoCountryCode="ES">Spain</Country>
+            </PostalAddress>
+            <Email name="default">test@example.com</Email>
+          </Address>
+        </ShipTo>
+        <BillTo>
+          <Address isoCountryCode="US" addressID="30707">
+            <Name xml:lang="en">Test Buyer Spain S.L.</Name>
+            <PostalAddress name="default">
+              <DeliverTo>Test User</DeliverTo>
+              <Street>30707 Test street</Street>
+              <City>San Mateo</City>
+              <State />
+              <PostalCode>11111</PostalCode>
+              <Country isoCountryCode="US">United States</Country>
+            </PostalAddress>
+            <Email name="default">test@example.com</Email>
+          </Address>
+        </BillTo>
+        <Shipping>
+          <Money currency="EUR">0.0</Money>
+          <Description xml:lang="en-US" />
+        </Shipping>
+        <PaymentTerm payInNumberOfDays="30" />
+        <Contact role="endUser">
+          <Name xml:lang="en">Test User</Name>
+          <Email name="default">test@example.com</Email>
+        </Contact>
+      </OrderRequestHeader>
+      <ItemOut quantity="1" lineNumber="1">
+        <ItemID>
+          <SupplierPartID>13267375</SupplierPartID>
+          <SupplierPartAuxiliaryID>153531947</SupplierPartAuxiliaryID>
+        </ItemID>
+        <ItemDetail>
+          <UnitPrice>
+            <Money currency="EUR">88.3</Money>
+          </UnitPrice>
+          <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
+          <UnitOfMeasure>EA</UnitOfMeasure>
+          <Classification domain="UNSPSC">unknown</Classification>
+          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
+          <ManufacturerName xml:lang="en">REDACTED-NAME</ManufacturerName>
+        </ItemDetail>
+      </ItemOut>
+    </OrderRequest>
+  </Request>
+</cXML>

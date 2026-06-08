@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sanitized real-world SAP IDoc ORDERS05 (2 lines, EUR, French locale).
+     PII removed; company names changed. Structure preserved. -->
+<ORDERS05>
+  <IDOC BEGIN="1">
+    <E1EDK01 SEGMENT="1">
+      <CURCY>EUR</CURCY>
+      <BELNR>4501453089</BELNR>
+    </E1EDK01>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>AG</PARVW>
+      <PARTN>1081</PARTN>
+      <BNAME>Test Buyer FR</BNAME>
+      <PAORG>1081</PAORG>
+      <ORGTX>Test Buyer SAS</ORGTX>
+    </E1EDKA1>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>LF</PARVW>
+      <PARTN>0000140344</PARTN>
+      <SPRAS_ISO>FR</SPRAS_ISO>
+    </E1EDKA1>
+    <E1EDK02 SEGMENT="1">
+      <QUALF>001</QUALF>
+      <BELNR>4501453089</BELNR>
+      <DATUM>20260603</DATUM>
+    </E1EDK02>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00010</POSEX>
+      <MENGE>1.000</MENGE>
+      <MENEE>EA</MENEE>
+      <VPREI>19.33</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>19.33</NETWR>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>002</QUALF>
+        <IDTNR>11097719</IDTNR>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+      </E1EDP19>
+    </E1EDP01>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00020</POSEX>
+      <MENGE>1.000</MENGE>
+      <MENEE>EA</MENEE>
+      <VPREI>9</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>9</NETWR>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>002</QUALF>
+        <IDTNR>20612100</IDTNR>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <KTEXT>USB Cable Type-C 1m</KTEXT>
+      </E1EDP19>
+    </E1EDP01>
+    <E1EDS01 SEGMENT="1">
+      <SUMID>002</SUMID>
+      <SUMME>28.33</SUMME>
+      <SUNIT>EUR</SUNIT>
+    </E1EDS01>
+  </IDOC>
+</ORDERS05>

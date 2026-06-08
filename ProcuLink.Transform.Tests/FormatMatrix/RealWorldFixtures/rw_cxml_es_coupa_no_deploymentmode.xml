@@ -1,0 +1,44 @@
+<cXML xml:lang="en-US" payloadID="REDACTED" timestamp="2026-05-25T05:52:36-04:00">
+  <Header>
+    <From>
+      <Credential domain="NetworkId">
+        <Identity>BUYER_ES-T</Identity>
+      </Credential>
+    </From>
+    <To>
+      <Credential domain="NetworkId">
+        <Identity>SUPPLIER_ES-T</Identity>
+      </Credential>
+    </To>
+    <Sender>
+      <Credential domain="NetworkId">
+        <Identity>BUYER_ES-T</Identity>
+        <SharedSecret>sanitized</SharedSecret>
+      </Credential>
+      <UserAgent>Coupa Procurement 1.0</UserAgent>
+    </Sender>
+  </Header>
+  <!-- NOTE: real file has no deploymentMode attribute on <Request> — our parser rejects this. -->
+  <Request>
+    <OrderRequest>
+      <OrderRequestHeader orderID="140181" orderDate="2026-05-25T05:52:36-04:00" type="new">
+        <Total>
+          <Money currency="EUR">88.3</Money>
+        </Total>
+        <PaymentTerm payInNumberOfDays="30" />
+      </OrderRequestHeader>
+      <ItemOut quantity="1" lineNumber="1">
+        <ItemID>
+          <SupplierPartID>13267375</SupplierPartID>
+        </ItemID>
+        <ItemDetail>
+          <UnitPrice>
+            <Money currency="EUR">88.3</Money>
+          </UnitPrice>
+          <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
+          <UnitOfMeasure>EA</UnitOfMeasure>
+        </ItemDetail>
+      </ItemOut>
+    </OrderRequest>
+  </Request>
+</cXML>

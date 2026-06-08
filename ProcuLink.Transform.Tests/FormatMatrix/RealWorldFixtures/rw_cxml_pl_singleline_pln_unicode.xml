@@ -1,0 +1,70 @@
+<cXML payloadID="4577738226_0100769732_2026-06-02T12:51:50+00:00" timestamp="2026-06-02T12:51:50+00:00" lang="pl" version="1.2.044">
+  <Header>
+    <From>
+      <Credential domain="NetworkId">
+        <Identity>BUYER_PL</Identity>
+      </Credential>
+    </From>
+    <To>
+      <Credential domain="NetworkId">
+        <Identity>SUPPLIER_PL</Identity>
+      </Credential>
+    </To>
+    <Sender>
+      <Credential domain="NetworkId">
+        <SharedSecret>sanitized</SharedSecret>
+      </Credential>
+    </Sender>
+  </Header>
+  <Request deploymentMode="Production">
+    <OrderRequest>
+      <OrderRequestHeader orderDate="2026-06-02T00:00:00+00:00" orderID="4577738226" orderType="regular" orderVersion="1" type="new">
+        <Total>
+          <Money currency="PLN">295.02</Money>
+        </Total>
+        <ShipTo>
+          <Address addressID="0335" isoCountryCode="PL">
+            <Name lang="pl">Test Buyer ; Buyer Polska</Name>
+            <PostalAddress name="default">
+              <Street>ul. Testowa 153</Street>
+              <City>Kalisz</City>
+              <PostalCode>62-800</PostalCode>
+              <Country isoCountryCode="PL">Polska</Country>
+            </PostalAddress>
+          </Address>
+        </ShipTo>
+        <Contact role="purchasingAgent">
+          <Name lang="pl">Test Buyer</Name>
+          <Email>test@example.com</Email>
+        </Contact>
+        <BillTo>
+          <Address addressID="PL10" isoCountryCode="PL">
+            <Name lang="pl">Buyer Polska S.A.</Name>
+            <PostalAddress name="default">
+              <Street>ul. Testowa 32</Street>
+              <City>Warszawa</City>
+              <PostalCode>02-672</PostalCode>
+              <Country isoCountryCode="PL">Polska</Country>
+            </PostalAddress>
+          </Address>
+        </BillTo>
+        <PaymentTerm payInNumberOfDays="60"></PaymentTerm>
+        <Comments>Test comment</Comments>
+      </OrderRequestHeader>
+      <ItemOut quantity="1.0" lineNumber="10">
+        <ItemID>
+          <SupplierPartID>29048107</SupplierPartID>
+          <SupplierPartAuxiliaryID>188780123</SupplierPartAuxiliaryID>
+        </ItemID>
+        <ItemDetail>
+          <UnitPrice>
+            <Money currency="PLN">295.02</Money>
+          </UnitPrice>
+          <Description Lang="pl">REDACTED-ORDER-DATA</Description>
+          <UnitOfMeasure>EA</UnitOfMeasure>
+          <Classification domain="not available">36 Workforce Devices</Classification>
+        </ItemDetail>
+      </ItemOut>
+    </OrderRequest>
+  </Request>
+</cXML>
