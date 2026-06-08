@@ -65,7 +65,11 @@ public sealed class UblOrderTransformService : ITransformService
         OutputFormat format,
         CancellationToken ct)
     {
-        ValidateOrder(order);
+        // Existing review guard + format-required-field checks. UBL carries the line
+        // code in an OPTIONAL identification element, so a missing code is not a hard
+        // structural failure (the supplier-item-code / review guard still covers it);
+        // a missing / zero unit price is flagged so a €0 document never delivers blind.
+        OutputFieldValidator.ValidateEntity(order, format);
 
         var currency = string.IsNullOrWhiteSpace(order.Currency) ? "EUR" : order.Currency;
 
@@ -149,17 +153,5 @@ public sealed class UblOrderTransformService : ITransformService
                     new XElement(Cbc + "Name", line.Description ?? string.Empty),
                     new XElement(Cac + "SellersItemIdentification",
                         new XElement(Cbc + "ID", line.SupplierItemCode ?? string.Empty)))));
-    }
-
-    private static void ValidateOrder(PurchaseOrderEntity order)
-    {
-        var unresolved = order.Lines
-            .Where(l => l.NeedsReview || string.IsNullOrWhiteSpace(l.SupplierItemCode))
-            .Select(l => l.LineNumber)
-            .OrderBy(n => n)
-            .ToList();
-
-        if (unresolved.Count > 0)
-            throw new TransformValidationException(unresolved);
     }
 }

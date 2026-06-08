@@ -150,4 +150,100 @@ public class EdifactParsedOrderTransformTests
         parsed.Lines.Should().HaveCount(1);
         parsed.Lines[0].Description.Should().Be(tricky);
     }
+
+    // ── Required-field validation (output-format hardening) ────────────────────
+
+    [Fact]
+    public void Transform_EmptyBuyerItemCode_IsRejectedAsStructurallyInvalid()
+    {
+        // The LIN segment's item-number component (C212/7140) is mandatory; an empty
+        // value emits "LIN+1++:IN'", a structurally-invalid ORDERS message. The line
+        // is rejected so it surfaces in /operations/exceptions instead.
+        var svc   = new EdifactParsedOrderTransform();
+        var order = SampleOrder(new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "", Description: "Widget", Quantity: 1m, Unit: "EA", UnitPrice: 9.99m),
+        });
+
+        var act = () => svc.Transform(order, OutputFormat.EdifactOrders);
+
+        act.Should().Throw<TransformValidationException>()
+           .Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.MissingItemCode);
+    }
+
+    [Fact]
+    public void Transform_WhitespaceBuyerItemCode_IsRejected()
+    {
+        var svc   = new EdifactParsedOrderTransform();
+        var order = SampleOrder(new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "   ", Description: "Widget", Quantity: 1m, Unit: "EA", UnitPrice: 9.99m),
+        });
+
+        var act = () => svc.Transform(order, OutputFormat.EdifactOrders);
+        act.Should().Throw<TransformValidationException>();
+    }
+
+    [Fact]
+    public void Transform_MissingUnitPrice_IsFlaggedForReview()
+    {
+        // A null unit price omits PRI / emits a zero-value line — flagged for review.
+        var svc   = new EdifactParsedOrderTransform();
+        var order = SampleOrder(new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "BUYER-001", Description: "Widget", Quantity: 1m, Unit: "EA", UnitPrice: null),
+        });
+
+        var act = () => svc.Transform(order, OutputFormat.EdifactOrders);
+
+        act.Should().Throw<TransformValidationException>()
+           .Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.MissingOrZeroPrice);
+    }
+
+    [Fact]
+    public void Transform_ZeroUnitPrice_IsFlaggedForReview()
+    {
+        var svc   = new EdifactParsedOrderTransform();
+        var order = SampleOrder(new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "BUYER-001", Description: "Widget", Quantity: 1m, Unit: "EA", UnitPrice: 0m),
+        });
+
+        var act = () => svc.Transform(order, OutputFormat.EdifactOrders);
+        act.Should().Throw<TransformValidationException>();
+    }
+
+    [Fact]
+    public void Transform_MultipleBadLines_ReportsAllAffectedLineNumbers()
+    {
+        var svc   = new EdifactParsedOrderTransform();
+        var order = SampleOrder(new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "",          Description: "A", Quantity: 1m, Unit: "EA", UnitPrice: 1m),
+            new(LineNumber: 2, BuyerItemCode: "BUYER-002", Description: "B", Quantity: 1m, Unit: "EA", UnitPrice: 5m),
+            new(LineNumber: 3, BuyerItemCode: "BUYER-003", Description: "C", Quantity: 1m, Unit: "EA", UnitPrice: null),
+        });
+
+        var act = () => svc.Transform(order, OutputFormat.EdifactOrders);
+
+        act.Should().Throw<TransformValidationException>()
+           .Which.UnresolvedLineNumbers.Should().BeEquivalentTo(new[] { 1, 3 });
+    }
+
+    [Fact]
+    public void Transform_ValidOrder_IsByteIdenticalAcrossRuns()
+    {
+        // The validation guard must NOT alter the happy-path bytes. EDIFACT's only
+        // clock-derived fields are in the UNB interchange header; the message body
+        // (UNH … UNZ) is deterministic, so compare it directly.
+        var svc = new EdifactParsedOrderTransform();
+        var a = svc.Transform(SampleOrder(), OutputFormat.EdifactOrders).AsText();
+        var b = svc.Transform(SampleOrder(), OutputFormat.EdifactOrders).AsText();
+
+        static string Body(string edi) =>
+            string.Join("'", SplitSegments(edi).Where(s => !s.StartsWith("UNB")));
+
+        Body(a).Should().Be(Body(b));
+        Body(a).Should().Contain("LIN+1++BUYER-001:IN").And.Contain("PRI+AAA:125.00");
+    }
 }

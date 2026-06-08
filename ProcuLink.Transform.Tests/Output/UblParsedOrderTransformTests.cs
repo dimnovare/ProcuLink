@@ -118,6 +118,9 @@ public class UblParsedOrderTransformTests
     [Fact]
     public void Transform_ToleratesNullHeaderFields()
     {
+        // Null HEADER fields (PoNumber / OrderDate / BuyerName / Currency) must still
+        // default cleanly. The line carries a valid price so the (separate) required-
+        // field price guard is not what is under test here.
         var svc   = new UblParsedOrderTransform();
         var order = new ParsedOrder(
             PoNumber:  null,
@@ -126,7 +129,7 @@ public class UblParsedOrderTransformTests
             Currency:  null,
             Lines: new List<ParsedOrderLine>
             {
-                new(LineNumber: 1, BuyerItemCode: "X-1", Description: null, Quantity: 1m, Unit: null, UnitPrice: null),
+                new(LineNumber: 1, BuyerItemCode: "X-1", Description: null, Quantity: 1m, Unit: null, UnitPrice: 9.99m),
             });
 
         var act = () => XDocument.Parse(svc.Transform(order, OutputFormat.UblOrder).AsText());
@@ -137,5 +140,53 @@ public class UblParsedOrderTransformTests
         // Defaults applied: currency EUR, unitCode EA.
         parsed.Descendants(Cbc + "DocumentCurrencyCode").Single().Value.Should().Be("EUR");
         parsed.Descendants(Cbc + "Quantity").Single().Attribute("unitCode")!.Value.Should().Be("EA");
+    }
+
+    // ── Required-field validation (output-format hardening) ────────────────────
+
+    [Fact]
+    public void Transform_MissingUnitPrice_IsFlaggedForReview()
+    {
+        // A null unit price would emit a 0.00 LineExtensionAmount / PriceAmount — a
+        // financially-wrong document. UBL holds it for review rather than delivering
+        // blind. (Empty buyer code is NOT a hard UBL failure; it rides the optional
+        // BuyersItemIdentification element, so only the price guard fires here.)
+        var svc   = new UblParsedOrderTransform();
+        var order = SampleOrder(new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "BUYER-001", Description: "Widget", Quantity: 1m, Unit: "EA", UnitPrice: null),
+        });
+
+        var act = () => svc.Transform(order, OutputFormat.UblOrder);
+
+        act.Should().Throw<TransformValidationException>()
+           .Which.UnresolvedLineNumbers.Should().ContainSingle().Which.Should().Be(1);
+    }
+
+    [Fact]
+    public void Transform_ZeroUnitPrice_IsFlaggedForReview()
+    {
+        var svc   = new UblParsedOrderTransform();
+        var order = SampleOrder(new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "BUYER-001", Description: "Widget", Quantity: 1m, Unit: "EA", UnitPrice: 0m),
+        });
+
+        var act = () => svc.Transform(order, OutputFormat.UblOrder);
+        act.Should().Throw<TransformValidationException>();
+    }
+
+    [Fact]
+    public void Transform_ValidOrder_IsByteIdenticalToPreValidationOutput()
+    {
+        // The validation guard must NOT change the happy-path bytes: a fully-valid
+        // order serializes exactly as before the guard existed.
+        var svc = new UblParsedOrderTransform();
+
+        var bytesA = svc.Transform(SampleOrder(), OutputFormat.UblOrder).Content;
+        var bytesB = svc.Transform(SampleOrder(), OutputFormat.UblOrder).Content;
+
+        bytesA.Should().Equal(bytesB);
+        XDocument.Parse(System.Text.Encoding.UTF8.GetString(bytesA)); // still well-formed
     }
 }

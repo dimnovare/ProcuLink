@@ -56,7 +56,14 @@ public sealed class X12TransformService : ITransformService
         OutputFormat format,
         CancellationToken ct)
     {
-        ValidateOrder(order);
+        // Existing review guard + format-required-field checks (empty BP buyer code,
+        // missing / zero unit price). Throws TransformValidationException so the lines
+        // surface in /operations/exceptions instead of an invalid / $0 850.
+        OutputFieldValidator.ValidateEntity(order, format);
+
+        // Delimiter contamination in a code field has no X12 escape — flag it for
+        // review rather than silently space-substituting a structured vendor part code.
+        X12Sanitizer.GuardCodeFields(order);
 
         var now      = DateTime.UtcNow;
         var currency = string.IsNullOrWhiteSpace(order.Currency) ? "USD" : order.Currency.ToUpperInvariant();
@@ -174,29 +181,11 @@ public sealed class X12TransformService : ITransformService
         value.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// Strips X12 delimiter characters from a free-text value so it cannot corrupt
-    /// the segment structure. X12 has no release/escape mechanism, so the only
-    /// safe option is substitution.
+    /// Strips X12 delimiter characters from a value so it cannot corrupt the segment
+    /// structure. X12 has no release/escape mechanism, so substitution is the only
+    /// safe option. Identifier fields are guarded up-front by
+    /// <see cref="X12Sanitizer.GuardCodeFields(PurchaseOrderEntity)"/>, so this only
+    /// ever runs the substitution on free text in practice.
     /// </summary>
-    private static string Sanitize(string value)
-    {
-        if (string.IsNullOrEmpty(value)) return value ?? string.Empty;
-        return value
-            .Replace(ElementSep, ' ')
-            .Replace(ComponentSep, ' ')
-            .Replace(SegmentSep, ' ')
-            .Trim();
-    }
-
-    private static void ValidateOrder(PurchaseOrderEntity order)
-    {
-        var unresolved = order.Lines
-            .Where(l => l.NeedsReview || string.IsNullOrWhiteSpace(l.SupplierItemCode))
-            .Select(l => l.LineNumber)
-            .OrderBy(n => n)
-            .ToList();
-
-        if (unresolved.Count > 0)
-            throw new TransformValidationException(unresolved);
-    }
+    private static string Sanitize(string value) => X12Sanitizer.SanitizeFreeText(value);
 }

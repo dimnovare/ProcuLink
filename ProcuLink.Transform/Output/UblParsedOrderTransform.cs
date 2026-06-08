@@ -60,6 +60,12 @@ public sealed class UblParsedOrderTransform : IParsedOrderTransform
     {
         ArgumentNullException.ThrowIfNull(order);
 
+        // UBL carries the line code in an OPTIONAL identification element, so an empty
+        // code is not a hard structural failure here — but a missing / zero unit price
+        // still produces a financially-wrong document, so the price guard flags it for
+        // review. No-op for a well-formed order — emitted bytes are unchanged.
+        OutputFieldValidator.ValidateParsedOrder(order, format);
+
         var currency  = string.IsNullOrWhiteSpace(order.Currency) ? "EUR" : order.Currency.Trim();
         var poNumber  = string.IsNullOrWhiteSpace(order.PoNumber) ? "UNKNOWN" : order.PoNumber.Trim();
         var issueDate = (order.OrderDate ?? DateTime.UtcNow).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);

@@ -256,6 +256,35 @@ public class CxmlTransformServiceTests
         await act.Should().ThrowAsync<TransformValidationException>();
     }
 
+    [Fact]
+    public async Task TransformAsync_ZeroUnitPrice_IsFlaggedForReview()
+    {
+        // A €0 line delivers a financially-wrong cXML document. Held for review.
+        var lines = new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                LineNumber       = 1,
+                BuyerItemCode    = "B-001",
+                SupplierItemCode = "SUP-1",
+                Description      = "Widget",
+                Quantity         = 1m,
+                Unit             = "EA",
+                UnitPrice        = 0m,
+                NeedsReview      = false,
+                Confidence       = 1.0f,
+            }
+        };
+
+        var svc   = new CxmlTransformService();
+        var order = BuildOrder(lines: lines);
+
+        var act = async () => await svc.TransformAsync(order, OutputFormat.CXml, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<TransformValidationException>();
+        ex.Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.MissingOrZeroPrice);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static async Task<string> ReadContentAsString(TransformResult result)
