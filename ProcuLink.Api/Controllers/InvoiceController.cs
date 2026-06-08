@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Services;
+using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -12,21 +13,30 @@ namespace ProcuLink.Api.Controllers;
 [Route("api/invoices")]
 public sealed class InvoiceController : ControllerBase
 {
-    private readonly IInvoiceService             _invoices;
-    private readonly ICurrentTenantService       _tenant;
-    private readonly IBackgroundJobClient        _jobs;
-    private readonly ILogger<InvoiceController>  _logger;
+    private readonly IInvoiceService                  _invoices;
+    private readonly ICurrentTenantService            _tenant;
+    private readonly IBackgroundJobClient             _jobs;
+    private readonly PeppolBisInvoiceTransformService _peppolGenerator;
+    private readonly PeppolBisValidator               _peppolValidator;
+    private readonly ILogger<InvoiceController>       _logger;
 
     public InvoiceController(
-        IInvoiceService            invoices,
-        ICurrentTenantService      tenant,
-        IBackgroundJobClient       jobs,
-        ILogger<InvoiceController> logger)
+        IInvoiceService                  invoices,
+        ICurrentTenantService            tenant,
+        IBackgroundJobClient             jobs,
+        PeppolBisValidator               peppolValidator,
+        IEnumerable<IInvoiceTransformService> transformers,
+        ILogger<InvoiceController>       logger)
     {
-        _invoices = invoices;
-        _tenant   = tenant;
-        _jobs     = jobs;
-        _logger   = logger;
+        _invoices        = invoices;
+        _tenant          = tenant;
+        _jobs            = jobs;
+        _peppolValidator = peppolValidator;
+        // Resolve the Peppol generator from the transformer set so its
+        // (optionally configured) party options are honoured rather than
+        // newing an empty instance here.
+        _peppolGenerator = transformers.OfType<PeppolBisInvoiceTransformService>().Single();
+        _logger          = logger;
     }
 
     // POST /api/invoices/upload
@@ -114,5 +124,43 @@ public sealed class InvoiceController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    // GET /api/invoices/{id}/validate-peppol
+    //
+    // Peppol wedge — Track A. Generates the BIS Billing 3.0 UBL for this invoice
+    // IN MEMORY (no status mutation, nothing delivered) and runs the lightweight
+    // mandatory-field validator over it. Returns whether the document clears the
+    // high-value BIS mandatory rules plus the full issue list.
+    //
+    // HONEST SCOPE: this is NOT full Schematron / EN 16931 conformance — see
+    // PeppolBisValidator. AS4 / Access-Point TRANSPORT is out of scope (Track B).
+    [HttpGet("{id:guid}/validate-peppol")]
+    public async Task<IActionResult> ValidatePeppol(Guid id, CancellationToken ct)
+    {
+        var orgId   = _tenant.OrganisationId;
+        var invoice = await _invoices.GetAsync(orgId, id, ct);
+        if (invoice is null) return NotFound();
+
+        var doc    = _peppolGenerator.BuildDocument(invoice, invoice.Lines);
+        var result = _peppolValidator.Validate(doc);
+
+        return Ok(new
+        {
+            invoiceId = invoice.Id,
+            customizationId = PeppolBisInvoiceTransformService.CustomizationId,
+            profileId       = PeppolBisInvoiceTransformService.ProfileId,
+            isValid = result.IsValid,
+            errorCount   = result.Errors.Count(),
+            warningCount = result.Warnings.Count(),
+            issues = result.Issues.Select(i => new
+            {
+                i.RuleId,
+                i.BusinessTerm,
+                i.Severity,
+                i.Message,
+            }),
+            note = "Lightweight BIS Billing 3.0 mandatory-field check — not full Schematron/EN 16931 conformance, and excludes AS4/Access-Point transport.",
+        });
     }
 }
