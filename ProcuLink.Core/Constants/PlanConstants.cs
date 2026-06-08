@@ -125,6 +125,8 @@ public static class PlanConstants
             [BillingFeature.ErpConnectors]      = Enterprise,
             [BillingFeature.CustomSupplierRules]= Enterprise,
             [BillingFeature.SlaOnboarding]      = Enterprise,
+            // Enterprise SSO (SAML/OIDC) via Clerk Enterprise Connections.
+            [BillingFeature.Sso]                = Enterprise,
         };
 
     private static readonly List<string> PlanOrder =

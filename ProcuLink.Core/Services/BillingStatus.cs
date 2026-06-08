@@ -33,4 +33,13 @@ public sealed record BillingStatus(
     int OverageOrders,
     decimal OverageAmountEur,
     bool NearLimit,
-    bool AtLimit);
+    bool AtLimit,
+    // ── Capability flag: whether the plan includes Enterprise SSO (SAML/OIDC) ──
+    // Computed from PlanConstants.PlanHasFeature(plan, BillingFeature.Sso); pure
+    // presentation/policy metadata so the Settings "Single sign-on" tab can show
+    // the gated upsell (false) vs the available/contact-us state (true) WITHOUT a
+    // Clerk Backend API round-trip. true does NOT mean a SAML connection is already
+    // configured for the org — that is provisioned per-org in the Clerk Dashboard
+    // (see docs/strategy/2026-06-08-sso-saml-implementation.md). Defaults to false
+    // so existing positional construction sites stay correct.
+    bool SsoAvailable = false);

@@ -149,6 +149,13 @@ public sealed class StripeBillingService : IBillingService
         var nearLimit = orderLimit > 0 && ordersUsed >= (int)Math.Ceiling(orderLimit * 0.8);
         var atLimit = ordersUsed >= orderLimit;
 
+        // Enterprise SSO (SAML/OIDC) availability is pure plan metadata — true only
+        // on Enterprise. It signals the Settings "Single sign-on" tab to show the
+        // available/contact-us state instead of the upsell; it does NOT assert a
+        // SAML connection is already configured (that is per-org in the Clerk
+        // Dashboard). See docs/strategy/2026-06-08-sso-saml-implementation.md.
+        var ssoAvailable = PlanConstants.PlanHasFeature(plan, BillingFeature.Sso);
+
         return new BillingStatus(
             Plan: plan,
             AccountStatus: org.AccountStatus,
@@ -168,7 +175,8 @@ public sealed class StripeBillingService : IBillingService
             OverageOrders: overageOrders,
             OverageAmountEur: overageAmountEur,
             NearLimit: nearLimit,
-            AtLimit: atLimit);
+            AtLimit: atLimit,
+            SsoAvailable: ssoAvailable);
     }
 
     public async Task<bool> CanProcessOrdersAsync(Guid orgId, CancellationToken ct = default) =>

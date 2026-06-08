@@ -91,4 +91,41 @@ public class PlanFeatureGateTests
         PlanConstants.GetEffectiveSupplierLimit(PlanConstants.Growth, null).Should().Be(5);
         PlanConstants.GetEffectiveSupplierLimit(PlanConstants.Growth, 25).Should().Be(25);
     }
+
+    // ── SSO (SAML/OIDC) — Enterprise-only capability gate ─────────────────────
+    // SSO is plan-gated to Enterprise exactly like ErpConnectors / CustomSupplierRules
+    // / SlaOnboarding. The capability is delivered by Clerk Enterprise Connections;
+    // this flag is the presentation/policy gate the Settings "Single sign-on" tab and
+    // BillingStatus.SsoAvailable read. See docs/strategy/2026-06-08-sso-saml-implementation.md.
+
+    [Fact]
+    public void Sso_IsAvailableOnEnterprise()
+    {
+        PlanConstants.PlanHasFeature(PlanConstants.Enterprise, BillingFeature.Sso)
+            .Should().BeTrue("Enterprise must include SSO (SAML/OIDC)");
+    }
+
+    [Theory]
+    [InlineData(PlanConstants.Pilot)]
+    [InlineData(PlanConstants.Growth)]
+    [InlineData(PlanConstants.Operations)]
+    [InlineData(PlanConstants.Integration)]
+    [InlineData(PlanConstants.Distributor)]
+    public void Sso_IsRestrictedBelowEnterprise(string plan)
+    {
+        // Distributor sits above Integration in rank but is still NOT Enterprise,
+        // so SSO must remain gated — this guards the ordinal-rank comparison from
+        // accidentally unlocking SSO on the high-volume self-serve tier.
+        PlanConstants.PlanHasFeature(plan, BillingFeature.Sso)
+            .Should().BeFalse($"SSO must be gated to Enterprise, not available on {plan}");
+    }
+
+    [Fact]
+    public void Sso_IsIncludedInEnterpriseFeatureSet_AndAbsentFromDistributor()
+    {
+        PlanConstants.FeaturesForPlan(PlanConstants.Enterprise)
+            .Should().Contain(BillingFeature.Sso);
+        PlanConstants.FeaturesForPlan(PlanConstants.Distributor)
+            .Should().NotContain(BillingFeature.Sso);
+    }
 }
