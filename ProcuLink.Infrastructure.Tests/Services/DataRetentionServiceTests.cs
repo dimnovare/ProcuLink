@@ -112,6 +112,45 @@ public class DataRetentionServiceTests
         (await db.DeliveryAttempts.AnyAsync(a => a.Id == recentTerminal)).Should().BeTrue("inside the window");
     }
 
+    // ── order_exceptions ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_PrunesOldResolvedAndIgnoredExceptions_KeepsOpenAndRecent()
+    {
+        await using var db = CreateDb();
+
+        // Old resolved → pruned
+        var oldResolvedId  = await SeedOrderExceptionAsync(db, state: "resolved", ageDays: 200);
+        // Old ignored → pruned
+        var oldIgnoredId   = await SeedOrderExceptionAsync(db, state: "ignored",  ageDays: 200);
+        // Old OPEN → NEVER pruned (operator still needs to action it)
+        var oldOpenId      = await SeedOrderExceptionAsync(db, state: "open",     ageDays: 200);
+        // Recent resolved → kept (inside the window)
+        var recentId       = await SeedOrderExceptionAsync(db, state: "resolved", ageDays: 10);
+
+        var result = await CreateService(db, EnabledOptions()).RunAsync(default);
+
+        result.OrderExceptions.Should().Be(2);
+        (await db.OrderExceptions.AnyAsync(e => e.Id == oldResolvedId)).Should().BeFalse("old resolved is past the window");
+        (await db.OrderExceptions.AnyAsync(e => e.Id == oldIgnoredId)).Should().BeFalse("old ignored is past the window");
+        (await db.OrderExceptions.AnyAsync(e => e.Id == oldOpenId)).Should().BeTrue("open exceptions are NEVER pruned");
+        (await db.OrderExceptions.AnyAsync(e => e.Id == recentId)).Should().BeTrue("recent resolved is inside the window");
+    }
+
+    [Fact]
+    public async Task RunAsync_OpenExceptions_AreNeverPruned_RegardlessOfAge()
+    {
+        await using var db = CreateDb();
+
+        // Very old open exception — must survive no matter how old it is.
+        var veryOldOpenId = await SeedOrderExceptionAsync(db, state: "open", ageDays: 999);
+
+        var result = await CreateService(db, EnabledOptions()).RunAsync(default);
+
+        result.OrderExceptions.Should().Be(0);
+        (await db.OrderExceptions.AnyAsync(e => e.Id == veryOldOpenId)).Should().BeTrue("open exceptions must never be deleted");
+    }
+
     // ── disabled / idempotent ───────────────────────────────────────────────────
 
     [Fact]
@@ -271,6 +310,26 @@ public class DataRetentionServiceTests
             Status = "delivered",
             AttemptedAt = DateTime.UtcNow.AddDays(-ageDays),
             AttemptNumber = 1,
+        });
+        await db.SaveChangesAsync();
+        return id;
+    }
+
+    private static async Task<Guid> SeedOrderExceptionAsync(
+        ProcuLinkDbContext db, string state, int ageDays)
+    {
+        var id = Guid.NewGuid();
+        db.OrderExceptions.Add(new OrderException
+        {
+            Id        = id,
+            OrgId     = Guid.NewGuid(),
+            OrderId   = Guid.NewGuid(),
+            Stage     = "Deliver",
+            Code      = "delivery_failed",
+            Severity  = "error",
+            State     = state,
+            Message   = "test",
+            CreatedAt = DateTime.UtcNow.AddDays(-ageDays),
         });
         await db.SaveChangesAsync();
         return id;

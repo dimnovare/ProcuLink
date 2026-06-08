@@ -63,10 +63,11 @@ public class DataRetentionService : IDataRetentionService
 
         // Each cutoff is "now minus the window". We delete rows strictly OLDER than the cutoff
         // (timestamp < cutoff), so recent rows are never touched.
-        var auditCutoff      = now - _options.AuditEventWindow;
-        var passportCutoff   = now - _options.PassportEventWindow;
+        var auditCutoff       = now - _options.AuditEventWindow;
+        var passportCutoff    = now - _options.PassportEventWindow;
         var idempotencyCutoff = new DateTimeOffset(now - _options.IdempotencyKeyWindow, TimeSpan.Zero);
-        var deliveryCutoff   = now - _options.DeliveryAttemptWindow;
+        var deliveryCutoff    = now - _options.DeliveryAttemptWindow;
+        var exceptionCutoff   = now - _options.OrderExceptionWindow;
 
         var auditDeleted = await DeleteOldestBatchAsync(
             _db.AuditEvents.Where(e => e.CreatedAt < auditCutoff),
@@ -93,18 +94,40 @@ public class DataRetentionService : IDataRetentionService
                 && (a.OrderId == null || terminalOrderIds.Contains(a.OrderId.Value))),
             batch, ct);
 
+        // order_exceptions: prune only resolved/ignored rows past the window.
+        // NEVER prune 'open' exceptions — an operator may still need to action them.
+        var exceptionsDeleted = await DeleteOldestBatchAsync(
+            _db.OrderExceptions.Where(e =>
+                e.CreatedAt < exceptionCutoff
+                && (e.State == "resolved" || e.State == "ignored")),
+            batch, ct);
+
         var result = new DataRetentionResult(
-            AuditEvents:       auditDeleted,
-            PassportEvents:    passportDeleted,
-            IdempotencyKeys:   idempotencyDeleted,
-            DeliveryAttempts:  deliveryDeleted);
+            AuditEvents:      auditDeleted,
+            PassportEvents:   passportDeleted,
+            IdempotencyKeys:  idempotencyDeleted,
+            DeliveryAttempts: deliveryDeleted,
+            OrderExceptions:  exceptionsDeleted);
 
         if (result.Total > 0)
             _logger.LogInformation(
-                "DataRetention: pruned {Total} row(s) — audit_events={Audit}, po_passport_events={Passport}, idempotency_keys={Idempotency}, delivery_attempts={Delivery}.",
-                result.Total, result.AuditEvents, result.PassportEvents, result.IdempotencyKeys, result.DeliveryAttempts);
+                "DataRetention: pruned {Total} row(s) — audit_events={Audit}, po_passport_events={Passport}, idempotency_keys={Idempotency}, delivery_attempts={Delivery}, order_exceptions={Exceptions}.",
+                result.Total, result.AuditEvents, result.PassportEvents, result.IdempotencyKeys, result.DeliveryAttempts, result.OrderExceptions);
         else
             _logger.LogInformation("DataRetention: run complete — nothing past any retention window.");
+
+        // A2 — observability: warn when a single run deletes an unexpectedly large volume.
+        // This lets operators spot table-growth surprises before they require partitioning.
+        // Uses structured Warning (no Sentry dependency in this assembly) so it flows to
+        // whatever log sink is wired (Railway logs, Datadog, etc.).
+        var threshold = _options.EffectiveHighVolumeAlertThreshold;
+        if (result.Total > threshold)
+            _logger.LogWarning(
+                "DataRetention: high-volume prune detected — {Total} row(s) deleted in one run (threshold={Threshold}). " +
+                "audit_events={Audit}, po_passport_events={Passport}, idempotency_keys={Idempotency}, delivery_attempts={Delivery}, order_exceptions={Exceptions}. " +
+                "Consider whether retention windows or batch size need tuning.",
+                result.Total, threshold,
+                result.AuditEvents, result.PassportEvents, result.IdempotencyKeys, result.DeliveryAttempts, result.OrderExceptions);
 
         return result;
     }

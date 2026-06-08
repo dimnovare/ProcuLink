@@ -31,8 +31,8 @@ public sealed class DataRetentionSweepJob
         var result = await _service.RunAsync(ct);
         if (result.Total > 0)
             _logger.LogInformation(
-                "DataRetentionSweepJob pruned {Total} row(s) — audit={Audit}, passport={Passport}, idempotency={Idempotency}, deliveryAttempts={Delivery}.",
-                result.Total, result.AuditEvents, result.PassportEvents, result.IdempotencyKeys, result.DeliveryAttempts);
+                "DataRetentionSweepJob pruned {Total} row(s) — audit={Audit}, passport={Passport}, idempotency={Idempotency}, deliveryAttempts={Delivery}, orderExceptions={Exceptions}.",
+                result.Total, result.AuditEvents, result.PassportEvents, result.IdempotencyKeys, result.DeliveryAttempts, result.OrderExceptions);
         else
             _logger.LogInformation("DataRetentionSweepJob run complete — nothing past any retention window.");
     }

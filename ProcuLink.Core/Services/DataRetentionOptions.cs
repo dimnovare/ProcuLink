@@ -30,10 +30,22 @@ public sealed class DataRetentionOptions
     public int DeliveryAttemptDays { get; set; } = 180;
 
     /// <summary>
+    /// Retention window for <c>order_exceptions</c> in state <c>resolved</c> or <c>ignored</c>.
+    /// Exceptions in state <c>open</c> are NEVER pruned. Default 180 days.
+    /// </summary>
+    public int OrderExceptionDays { get; set; } = 180;
+
+    /// <summary>
     /// Max rows deleted per table per sweep run. Keeps each delete bounded so a large backlog
     /// is drained over several runs rather than in one unbounded statement. Default 5,000.
     /// </summary>
     public int BatchSize { get; set; } = 5_000;
+
+    /// <summary>
+    /// When a single sweep run deletes more than this many total rows, a structured warning is
+    /// emitted so operators are alerted to unexpected growth. Default 1,000.
+    /// </summary>
+    public int HighVolumeAlertThreshold { get; set; } = 1_000;
 
     private static int PositiveOr(int value, int fallback) => value > 0 ? value : fallback;
 
@@ -49,6 +61,12 @@ public sealed class DataRetentionOptions
     /// <summary>Effective delivery-attempt window (never non-positive).</summary>
     public TimeSpan DeliveryAttemptWindow => TimeSpan.FromDays(PositiveOr(DeliveryAttemptDays, 180));
 
+    /// <summary>Effective order-exception window (never non-positive).</summary>
+    public TimeSpan OrderExceptionWindow => TimeSpan.FromDays(PositiveOr(OrderExceptionDays, 180));
+
     /// <summary>Effective per-table batch cap (never non-positive).</summary>
     public int EffectiveBatchSize => PositiveOr(BatchSize, 5_000);
+
+    /// <summary>Effective high-volume alert threshold (never non-positive).</summary>
+    public int EffectiveHighVolumeAlertThreshold => PositiveOr(HighVolumeAlertThreshold, 1_000);
 }
