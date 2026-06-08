@@ -69,8 +69,19 @@ public sealed class LocalFileStorageService : IFileStorageService
         if (string.IsNullOrWhiteSpace(key))
             throw new ArgumentException("Storage key must not be empty.", nameof(key));
 
+        // Reject path traversal OS-INDEPENDENTLY. The containment check below relies on
+        // Path.GetFullPath, whose separator handling is platform-specific: on Linux '\'
+        // is a literal filename char, so a key like "..\..\..\windows\win.ini" would NOT
+        // be collapsed and would slip past the prefix test (it does on Windows). Normalise
+        // BOTH separators to '/', then reject any "." or ".." segment up front — this is
+        // identical on every platform and is the primary traversal guard.
+        var normalizedKey = key.Replace('\\', '/');
+        if (normalizedKey.Split('/').Any(seg => seg == ".."))
+            throw new ArgumentException(
+                $"Storage key must not contain path traversal: {key}", nameof(key));
+
         var fullPath = Path.GetFullPath(
-            Path.Combine(BasePath, key.Replace('/', Path.DirectorySeparatorChar)));
+            Path.Combine(BasePath, normalizedKey.Replace('/', Path.DirectorySeparatorChar)));
 
         // Containment check: the resolved path must stay under BasePath.
         // Compare against BasePath with a trailing separator so that a sibling
