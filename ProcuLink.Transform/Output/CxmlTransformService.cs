@@ -49,7 +49,11 @@ public sealed class CxmlTransformService : ITransformService
         OutputFormat format,
         CancellationToken ct)
     {
-        ValidateOrder(order);
+        // Existing review guard + format-required-field checks. cXML carries the line
+        // code in an OPTIONAL SupplierPartID element, so a missing code is not a hard
+        // structural failure (the supplier-item-code / review guard still covers it);
+        // a missing / zero unit price is flagged so a €0 document never delivers blind.
+        OutputFieldValidator.ValidateEntity(order, format);
 
         var payloadId = $"{Guid.NewGuid():N}@proculink";
         var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
@@ -141,17 +145,5 @@ public sealed class CxmlTransformService : ITransformService
                     line.Description ?? string.Empty),
                 new XElement("UnitOfMeasure",
                     line.Unit ?? string.Empty)));
-    }
-
-    private static void ValidateOrder(PurchaseOrderEntity order)
-    {
-        var unresolved = order.Lines
-            .Where(l => l.NeedsReview || string.IsNullOrWhiteSpace(l.SupplierItemCode))
-            .Select(l => l.LineNumber)
-            .OrderBy(n => n)
-            .ToList();
-
-        if (unresolved.Count > 0)
-            throw new TransformValidationException(unresolved);
     }
 }

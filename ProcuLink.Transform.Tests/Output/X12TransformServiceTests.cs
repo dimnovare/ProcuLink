@@ -217,4 +217,81 @@ public class X12TransformServiceTests
         second.Quantity.Should().Be(250m);
         second.UnitPrice.Should().Be(0.45m);
     }
+
+    // ── Required-field + delimiter-in-code hardening ────────────────────────────
+
+    [Fact]
+    public async Task TransformAsync_DelimiterInSupplierItemCode_IsFlaggedNotSilentlyCorrupted()
+    {
+        // "ABC*123>REVB" is a structured part code; space-substituting the delimiters
+        // would corrupt the vendor part hierarchy. X12 has no escape, so the line is
+        // held for review rather than delivered mangled.
+        var lines = new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                LineNumber = 1, BuyerItemCode = "B-001", SupplierItemCode = "ABC*123>REVB",
+                Description = "Widget", Quantity = 1m, Unit = "EA", UnitPrice = 5m,
+                NeedsReview = false, Confidence = 1.0f,
+            }
+        };
+
+        var svc = new X12TransformService();
+        var act = async () => await svc.TransformAsync(BuildOrder(lines: lines), OutputFormat.X12, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<TransformValidationException>();
+        ex.Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.Sanitized);
+    }
+
+    [Fact]
+    public async Task TransformAsync_EmptyBuyerItemCode_IsRejected()
+    {
+        var lines = new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                LineNumber = 1, BuyerItemCode = "", SupplierItemCode = "SUP-1",
+                Description = "Widget", Quantity = 1m, Unit = "EA", UnitPrice = 5m,
+                NeedsReview = false, Confidence = 1.0f,
+            }
+        };
+
+        var svc = new X12TransformService();
+        var act = async () => await svc.TransformAsync(BuildOrder(lines: lines), OutputFormat.X12, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<TransformValidationException>();
+        ex.Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.MissingItemCode);
+    }
+
+    [Fact]
+    public async Task TransformAsync_ZeroUnitPrice_IsFlaggedForReview()
+    {
+        var lines = new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                LineNumber = 1, BuyerItemCode = "B-001", SupplierItemCode = "SUP-1",
+                Description = "Widget", Quantity = 1m, Unit = "EA", UnitPrice = 0m,
+                NeedsReview = false, Confidence = 1.0f,
+            }
+        };
+
+        var svc = new X12TransformService();
+        var act = async () => await svc.TransformAsync(BuildOrder(lines: lines), OutputFormat.X12, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<TransformValidationException>();
+        ex.Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.MissingOrZeroPrice);
+    }
+
+    [Fact]
+    public async Task TransformAsync_CleanSupplierCode_StillSerializesUnchanged()
+    {
+        // A clean supplier code with no delimiters must serialize exactly as before —
+        // the guard is a no-op for valid data.
+        var svc = new X12TransformService();
+        var result = await svc.TransformAsync(BuildOrder(), OutputFormat.X12, CancellationToken.None);
+        var segs = SplitSegments(await ReadContentAsString(result));
+
+        segs.Should().Contain(s => s.StartsWith("PO1*1*10*EA*125.00*PE*BP*BUYER-001*VP*SUP-ABC-001"));
+    }
 }

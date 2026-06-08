@@ -119,11 +119,14 @@ public class X12ParsedOrderTransformTests
     }
 
     [Fact]
-    public void Transform_SanitizesDelimiterCharactersInFreeText()
+    public void Transform_SanitizesDelimiterCharactersInFreeTextDescription()
     {
+        // A description (FREE TEXT) carrying X12 delimiters is space-substituted — X12
+        // has no escape, and substitution is acceptable for free text. The buyer code
+        // is clean here so the code-field guard does not fire.
         var lines = new List<ParsedOrderLine>
         {
-            new(LineNumber: 1, BuyerItemCode: "B*1>x", Description: "Has*star>and~tilde", Quantity: 1m, Unit: "EA", UnitPrice: 1m),
+            new(LineNumber: 1, BuyerItemCode: "BUYER-001", Description: "Has*star>and~tilde", Quantity: 1m, Unit: "EA", UnitPrice: 1m),
         };
 
         var svc = new X12ParsedOrderTransform();
@@ -134,5 +137,76 @@ public class X12ParsedOrderTransformTests
         SplitSegments(edi).Count(s => s.StartsWith("SE*")).Should().Be(1);
         // The raw '~' from the description must not appear unescaped inside a PID value.
         edi.Should().Contain("PID*F****Has star and tilde");
+    }
+
+    // ── Required-field + delimiter-in-code hardening ────────────────────────────
+
+    [Fact]
+    public void Transform_DelimiterInBuyerItemCode_IsFlaggedNotSilentlyCorrupted()
+    {
+        // A delimiter inside a structured vendor part code (e.g. "ABC*123>REVB") would
+        // be silently space-substituted into "ABC 123 REVB", corrupting the part
+        // hierarchy. X12 has no escape, so the line is HELD FOR REVIEW instead.
+        var lines = new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "ABC*123>REVB", Description: "Widget", Quantity: 1m, Unit: "EA", UnitPrice: 5m),
+        };
+
+        var svc = new X12ParsedOrderTransform();
+        var act = () => svc.Transform(SampleOrder(lines), OutputFormat.X12_850);
+
+        act.Should().Throw<TransformValidationException>()
+           .Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.Sanitized);
+    }
+
+    [Fact]
+    public void Transform_EmptyBuyerItemCode_IsRejectedAsStructurallyInvalid()
+    {
+        // An empty buyer item code leaves the PO1 BP qualifier with no value — invalid 850.
+        var lines = new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "", Description: "Widget", Quantity: 1m, Unit: "EA", UnitPrice: 5m),
+        };
+
+        var svc = new X12ParsedOrderTransform();
+        var act = () => svc.Transform(SampleOrder(lines), OutputFormat.X12_850);
+
+        act.Should().Throw<TransformValidationException>()
+           .Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.MissingItemCode);
+    }
+
+    [Fact]
+    public void Transform_MissingUnitPrice_IsFlaggedForReview()
+    {
+        var lines = new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "BUYER-001", Description: "Widget", Quantity: 1m, Unit: "EA", UnitPrice: null),
+        };
+
+        var svc = new X12ParsedOrderTransform();
+        var act = () => svc.Transform(SampleOrder(lines), OutputFormat.X12_850);
+
+        act.Should().Throw<TransformValidationException>()
+           .Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.MissingOrZeroPrice);
+    }
+
+    [Fact]
+    public void Transform_ValidOrder_TransactionSetIsByteIdenticalAcrossRuns()
+    {
+        // The guards must NOT change the happy-path bytes: the transaction set
+        // (ST … SE, the clock-free portion) is deterministic across runs.
+        var svc = new X12ParsedOrderTransform();
+        var a = svc.Transform(SampleOrder(), OutputFormat.X12_850).AsText();
+        var b = svc.Transform(SampleOrder(), OutputFormat.X12_850).AsText();
+
+        static string TxSet(string edi) => string.Concat(
+            edi.Split('~', StringSplitOptions.RemoveEmptyEntries)
+               .Select(s => s.Trim('\r', '\n', ' ', '\t'))
+               .Where(s => s.StartsWith("ST")  || s.StartsWith("BEG") || s.StartsWith("CUR")
+                        || s.StartsWith("N1")   || s.StartsWith("PO1") || s.StartsWith("PID")
+                        || s.StartsWith("CTT")  || s.StartsWith("SE")));
+
+        TxSet(a).Should().Be(TxSet(b));
+        TxSet(a).Should().Contain("PO1*1*10*EA*125.00*PE*BP*BUYER-001");
     }
 }

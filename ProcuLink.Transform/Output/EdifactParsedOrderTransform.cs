@@ -56,6 +56,13 @@ public sealed class EdifactParsedOrderTransform : IParsedOrderTransform
     {
         ArgumentNullException.ThrowIfNull(order);
 
+        // Required-by-format guard: an empty buyer item code makes the LIN segment's
+        // mandatory item-number component empty (structurally invalid ORDERS), and a
+        // missing / zero unit price emits a financially-wrong PRI. Both are surfaced
+        // as a TransformValidationException so the lines hit /operations/exceptions
+        // instead of delivering a broken document. No-op for a well-formed order.
+        OutputFieldValidator.ValidateParsedOrder(order, format);
+
         var now       = DateTime.UtcNow;
         var currency  = string.IsNullOrWhiteSpace(order.Currency) ? "EUR" : order.Currency.Trim().ToUpperInvariant();
         var poNumber  = string.IsNullOrWhiteSpace(order.PoNumber) ? "UNKNOWN" : order.PoNumber.Trim();

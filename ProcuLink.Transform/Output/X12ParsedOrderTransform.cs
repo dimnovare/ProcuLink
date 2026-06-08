@@ -53,6 +53,18 @@ public sealed class X12ParsedOrderTransform : IParsedOrderTransform
     {
         ArgumentNullException.ThrowIfNull(order);
 
+        // Required-by-format guard: an empty buyer item code leaves the PO1 BP
+        // qualifier with no value (invalid 850), and a missing / zero unit price
+        // emits a $0 line. Surfaced as a TransformValidationException so the lines
+        // hit /operations/exceptions instead of delivering a broken document. No-op
+        // for a well-formed order — emitted bytes are unchanged.
+        OutputFieldValidator.ValidateParsedOrder(order, format);
+
+        // Delimiter contamination in a code field (buyer code / unit) has no X12
+        // escape; surface it as a review flag rather than silently space-substituting
+        // a structured vendor part number.
+        X12Sanitizer.GuardCodeFields(order);
+
         var now       = DateTime.UtcNow;
         var currency  = string.IsNullOrWhiteSpace(order.Currency) ? "USD" : order.Currency.Trim().ToUpperInvariant();
         var poNumber  = string.IsNullOrWhiteSpace(order.PoNumber) ? "UNKNOWN" : order.PoNumber.Trim();
@@ -168,17 +180,11 @@ public sealed class X12ParsedOrderTransform : IParsedOrderTransform
     private static string Num(decimal value) => value.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// Strips X12 delimiter characters from a free-text value so it cannot corrupt
-    /// the segment structure. X12 has no release/escape mechanism, so substitution
-    /// is the only safe option.
+    /// Strips X12 delimiter characters from a value so it cannot corrupt the segment
+    /// structure. X12 has no release/escape mechanism, so substitution is the only
+    /// safe option. Identifier fields (buyer code, unit) are guarded up-front by
+    /// <see cref="X12Sanitizer.GuardCodeFields(ParsedOrder)"/> so this only ever runs
+    /// the substitution on free text in practice.
     /// </summary>
-    private static string Sanitize(string? value)
-    {
-        if (string.IsNullOrEmpty(value)) return string.Empty;
-        return value
-            .Replace(ElementSep, ' ')
-            .Replace(ComponentSep, ' ')
-            .Replace(SegmentSep, ' ')
-            .Trim();
-    }
+    private static string Sanitize(string? value) => X12Sanitizer.SanitizeFreeText(value);
 }

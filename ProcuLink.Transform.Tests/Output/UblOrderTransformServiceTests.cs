@@ -185,6 +185,29 @@ public class UblOrderTransformServiceTests
         firstParsedLine.Description.Should().Be("Round-trip widget");
     }
 
+    // ── Required-field validation (output-format hardening) ────────────────────
+
+    [Fact]
+    public async Task TransformAsync_ZeroUnitPrice_IsFlaggedForReview()
+    {
+        // A €0 line delivers a financially-wrong document. UBL holds it for review.
+        var lines = new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                LineNumber = 1, BuyerItemCode = "B-001", SupplierItemCode = "SUP-1",
+                Description = "Widget", Quantity = 1m, Unit = "EA", UnitPrice = 0m,
+                NeedsReview = false, Confidence = 1.0f,
+            }
+        };
+
+        var svc = new UblOrderTransformService();
+        var act = async () => await svc.TransformAsync(BuildOrder(lines: lines), OutputFormat.Ubl, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<TransformValidationException>();
+        ex.Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.MissingOrZeroPrice);
+    }
+
     // ── Bonus: confirm CanTransform routes correctly ─────────────────────────
 
     [Fact]
