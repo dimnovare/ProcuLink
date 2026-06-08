@@ -14,6 +14,7 @@ using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Transform.Mapping;
 using ProcuLink.Transform.Output;
+using ProcuLink.Transform.Tokenizing;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -27,16 +28,18 @@ namespace ProcuLink.Api.Controllers;
 [Route("api/orders")]
 public sealed class OrdersController : ControllerBase
 {
-    private readonly IOrderService             _orders;
-    private readonly ICurrentTenantService     _tenant;
-    private readonly IBackgroundJobClient      _jobs;
-    private readonly ProcuLinkDbContext        _db;
-    private readonly ILogger<OrdersController> _logger;
-    private readonly IBillingService           _billing;
-    private readonly IIdempotencyService       _idempotency;
-    private readonly IOrderExceptionService    _exceptionService;
-    private readonly ISupplierAcceptanceService _acceptance;
+    private readonly IOrderService                _orders;
+    private readonly ICurrentTenantService        _tenant;
+    private readonly IBackgroundJobClient         _jobs;
+    private readonly ProcuLinkDbContext           _db;
+    private readonly ILogger<OrdersController>    _logger;
+    private readonly IBillingService              _billing;
+    private readonly IIdempotencyService          _idempotency;
+    private readonly IOrderExceptionService       _exceptionService;
+    private readonly ISupplierAcceptanceService   _acceptance;
     private readonly IOrderMappingOverrideService _mappingOverrides;
+    private readonly IFileStorageService          _fileStorage;
+    private readonly ISourceTokenizer             _tokenizer;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -48,16 +51,18 @@ public sealed class OrdersController : ControllerBase
         new(StringComparer.OrdinalIgnoreCase) { "xml", "csv", "cxml", "json", "ubl", "x12" };
 
     public OrdersController(
-        IOrderService             orders,
-        ICurrentTenantService     tenant,
-        IBackgroundJobClient      jobs,
-        ProcuLinkDbContext        db,
-        ILogger<OrdersController> logger,
-        IBillingService           billing,
-        IIdempotencyService       idempotency,
-        IOrderExceptionService    exceptionService,
-        ISupplierAcceptanceService acceptance,
-        IOrderMappingOverrideService mappingOverrides)
+        IOrderService                orders,
+        ICurrentTenantService        tenant,
+        IBackgroundJobClient         jobs,
+        ProcuLinkDbContext           db,
+        ILogger<OrdersController>    logger,
+        IBillingService              billing,
+        IIdempotencyService          idempotency,
+        IOrderExceptionService       exceptionService,
+        ISupplierAcceptanceService   acceptance,
+        IOrderMappingOverrideService mappingOverrides,
+        IFileStorageService          fileStorage,
+        ISourceTokenizer             tokenizer)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -69,6 +74,8 @@ public sealed class OrdersController : ControllerBase
         _exceptionService = exceptionService;
         _acceptance       = acceptance;
         _mappingOverrides = mappingOverrides;
+        _fileStorage      = fileStorage;
+        _tokenizer        = tokenizer;
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -474,31 +481,55 @@ public sealed class OrdersController : ControllerBase
     }
 
     /// <summary>
-    /// Validates every manipulator in the override's output rules against <c>ManipulatorRegistry</c>.
-    /// Returns null when all rules are valid, or a human-readable error string for the first bad rule.
-    /// A bad manipulator type or bad ctor params throw here (resolve) or on the dry apply — both caught.
+    /// Validates every manipulator in the override's output rules AND SourceMap rules against
+    /// <c>ManipulatorRegistry</c>. Returns null when all rules are valid, or a human-readable
+    /// error string for the first bad rule. A bad manipulator type or bad ctor params throw here
+    /// (resolve) or on the dry apply — both caught. Fail at edit time, never at deliver time.
     /// </summary>
     private static string? ValidateOverrideManipulators(OrderMappingOverride @override)
     {
-        if (@override.Output is null) return null;
-
         var emptyRow = new Dictionary<string, string>();
 
-        foreach (var (outputKey, rule) in @override.Output.Header.Concat(@override.Output.Lines))
+        // Validate output-side manipulators.
+        if (@override.Output is not null)
         {
-            foreach (var entry in rule.FieldManipulators ?? new List<ManipulatorEntry>())
+            foreach (var (outputKey, rule) in @override.Output.Header.Concat(@override.Output.Lines))
             {
-                try
+                foreach (var entry in rule.FieldManipulators ?? new List<ManipulatorEntry>())
                 {
-                    var manipulator = ManipulatorRegistry.Resolve(entry.Type, entry.Params);
-                    // Dry apply with an empty value + empty row — surfaces ctor/param errors that
-                    // only throw on apply (e.g. an index or format param the manipulator validates).
-                    _ = manipulator.Apply(null, emptyRow);
+                    try
+                    {
+                        var manipulator = ManipulatorRegistry.Resolve(entry.Type, entry.Params);
+                        // Dry apply with an empty value + empty row — surfaces ctor/param errors that
+                        // only throw on apply (e.g. an index or format param the manipulator validates).
+                        _ = manipulator.Apply(null, emptyRow);
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"Invalid manipulator '{entry.Type}' on output field '{rule.OutputPath}' " +
+                               $"(rule key '{outputKey}'): {ex.Message}";
+                    }
                 }
-                catch (Exception ex)
+            }
+        }
+
+        // Validate SourceMap-side manipulators (SourceFieldRule.Manipulators).
+        if (@override.SourceMap is not null)
+        {
+            foreach (var (fieldName, sourceRule) in @override.SourceMap)
+            {
+                foreach (var entry in sourceRule.Manipulators ?? new List<ManipulatorEntry>())
                 {
-                    return $"Invalid manipulator '{entry.Type}' on output field '{rule.OutputPath}' " +
-                           $"(rule key '{outputKey}'): {ex.Message}";
+                    try
+                    {
+                        var manipulator = ManipulatorRegistry.Resolve(entry.Type, entry.Params);
+                        _ = manipulator.Apply(null, emptyRow);
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"Invalid manipulator '{entry.Type}' in SourceMap rule for field " +
+                               $"'{fieldName}': {ex.Message}";
+                    }
                 }
             }
         }
@@ -565,6 +596,64 @@ public sealed class OrdersController : ControllerBase
             // Return it as a preview warning, never a 500 — the editor shows it inline.
             return Ok(new { format = fmt.Value.ToString(), warning = ex.Message, content = (string?)null });
         }
+    }
+
+    // ── GET /api/orders/{id}/source-tokens ────────────────────────────────────
+
+    /// <summary>
+    /// Returns the tokenizer output (every addressable value) for the order's stored source file.
+    /// Used by the SourceMap editor to let users pick which source cell / XML element maps to each
+    /// canonical field.
+    ///
+    /// <list type="bullet">
+    ///   <item>Org-scoped: a cross-tenant or unknown order id returns 404.</item>
+    ///   <item>Returns an empty array when the order has no stored source file, or when the file
+    ///         format is not yet supported for tokenisation (e.g. XLSX, PDF, EDI).</item>
+    ///   <item>Never throws for an unsupported format — the tokenizer returns an empty list.</item>
+    /// </list>
+    /// </summary>
+    [HttpGet("{id:guid}/source-tokens")]
+    [ProducesResponseType(typeof(IReadOnlyList<SourceToken>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetSourceTokens(Guid id, CancellationToken ct)
+    {
+        // Org-scoped existence + source file key retrieval.
+        var order = await _db.PurchaseOrders
+            .AsNoTracking()
+            .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId)
+            .Select(o => new { o.SourceFileKey })
+            .FirstOrDefaultAsync(ct);
+
+        if (order is null)
+            return NotFound();
+
+        // No stored source file → empty list (valid, not an error).
+        if (string.IsNullOrEmpty(order.SourceFileKey))
+            return Ok(Array.Empty<SourceToken>());
+
+        // Derive file extension from the stored R2 key.
+        var ext = System.IO.Path.GetExtension(order.SourceFileKey);
+        if (string.IsNullOrEmpty(ext))
+            return Ok(Array.Empty<SourceToken>());
+
+        // Download the source file from R2 / local storage.
+        byte[] bytes;
+        try
+        {
+            await using var stream = await _fileStorage.DownloadAsync(order.SourceFileKey, ct);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms, ct);
+            bytes = ms.ToArray();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not download source file {Key} for tokenisation", order.SourceFileKey);
+            return Ok(Array.Empty<SourceToken>());
+        }
+
+        // Tokenise. Unsupported formats return an empty list (no exception).
+        var tokens = await _tokenizer.TokenizeAsync(bytes, ext, ct);
+        return Ok(tokens);
     }
 
     // ── POST /api/orders/{id}/transform ──────────────────────────────────────

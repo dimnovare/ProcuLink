@@ -38,6 +38,50 @@ public record OrderMappingOverride
     /// the fixed columns. Null = use the existing fixed transformer unchanged.
     /// </summary>
     public OutputMappingConfig? Output { get; init; }
+
+    /// <summary>
+    /// Optional source→canonical remapping (SourceMap engine). When present, the effective
+    /// canonical value for each named field is derived from a source token, a fixed value, or
+    /// the existing parsed value — then run through the manipulator chain. Null = no remapping,
+    /// the existing parsed canonical values are used unchanged (default, byte-for-byte identical).
+    ///
+    /// Recognised field keys (header): PoNumber, OrderDate, BuyerName, Currency, SupplierName.
+    /// Recognised field keys (line): LineNumber, BuyerItemCode, SupplierItemCode, Description,
+    /// Quantity, Unit, UnitPrice, LineTotal.
+    /// </summary>
+    public Dictionary<string, SourceFieldRule>? SourceMap { get; init; }
+}
+
+/// <summary>
+/// One field's re-derive rule in the SourceMap engine: where the effective canonical value
+/// comes from (a source token by id, a fixed literal, or — when both are null — the original
+/// parsed value), optionally followed by a manipulator chain run with identical semantics to
+/// <c>ManipulatorRegistry</c> / <c>PoMappingEngine.ResolveField</c>.
+/// </summary>
+public record SourceFieldRule
+{
+    /// <summary>
+    /// Stable source-token id to use as the raw value input (e.g. "cell:r1c3" for CSV, or an XPath
+    /// string for XML). When non-null and the token is found in the tokenizer output, its
+    /// <c>Value</c> is used as the starting value before manipulators are applied. When null (or the
+    /// token is not found in the current file), falls through to <see cref="FixedValue"/> and then
+    /// to the original parsed value.
+    /// </summary>
+    public string? SourceToken { get; init; }
+
+    /// <summary>
+    /// Constant value used when <see cref="SourceToken"/> is null or yields no match. When both
+    /// <see cref="SourceToken"/> and <see cref="FixedValue"/> are null, the existing parsed canonical
+    /// value is kept (pass-through), so omitting a field from the SourceMap is always safe.
+    /// </summary>
+    public string? FixedValue { get; init; }
+
+    /// <summary>
+    /// Ordered manipulator chain applied to the resolved value. Uses the EXISTING
+    /// <see cref="ManipulatorEntry"/> type; each entry is resolved through
+    /// <c>ManipulatorRegistry</c> at re-derive time, identical semantics to the output mapping.
+    /// </summary>
+    public List<ManipulatorEntry> Manipulators { get; init; } = new();
 }
 
 /// <summary>
