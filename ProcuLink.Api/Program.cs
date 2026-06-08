@@ -389,6 +389,9 @@ builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
 // heart-piece-flex Phase 1: per-order mapping/override stored in canonical_json (no new table).
 builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService,
                            ProcuLink.Infrastructure.Services.OrderMappingOverrideService>();
+// heart-piece-flex promote: persists a per-order SourceMap into the supplier's reusable inbound mapping.
+builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IPromoteMappingService,
+                           ProcuLink.Infrastructure.Services.PromoteMappingService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
