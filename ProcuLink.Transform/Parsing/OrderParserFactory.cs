@@ -50,9 +50,16 @@ public sealed class OrderParserFactory
     {
         var ext = (fileExtension ?? string.Empty).ToLowerInvariant();
 
-        // ── .xml — UBL vs cXML disambiguation ─────────────────────────────────
+        // ── .xml — IDoc ORDERS05 vs UBL vs cXML disambiguation ────────────────
         if (ext == ".xml" && peek.CanSeek)
         {
+            // SAP IDoc ORDERS05 (root <ORDERS05>) — checked first; it is structurally
+            // unambiguous and would otherwise fall through to cXML and be rejected.
+            if (IDocOrders05Parser.IsIdocOrders05Document(peek))
+            {
+                var idoc = _parsers.OfType<IDocOrders05Parser>().FirstOrDefault();
+                if (idoc is not null) return idoc;
+            }
             if (UblOrderParser.IsUblOrderDocument(peek))
             {
                 var ubl = _parsers.OfType<UblOrderParser>().FirstOrDefault();

@@ -1,0 +1,246 @@
+<ORDERS05>
+  <IDOC BEGIN="1">
+    <EDI_DC40 SEGMENT="1">
+      <TABNAM>EDI_DC40</TABNAM>
+      <MANDT>710</MANDT>
+      <DOCNUM>0000000925167777</DOCNUM>
+      <DOCREL>750</DOCREL>
+      <STATUS>30</STATUS>
+      <DIRECT>1</DIRECT>
+      <OUTMOD>4</OUTMOD>
+      <IDOCTYP>ORDERS05</IDOCTYP>
+      <MESTYP>ORDERS</MESTYP>
+      <SNDPOR>REDACTED-SYSTEM</SNDPOR>
+      <SNDPRT>LS</SNDPRT>
+      <SNDPRN>REDACTED-SYSTEM</SNDPRN>
+      <RCVPOR>SAPPO</RCVPOR>
+      <RCVPRT>LI</RCVPRT>
+      <RCVPFC>LF</RCVPFC>
+      <RCVPRN>0000142533</RCVPRN>
+      <CREDAT>20260605</CREDAT>
+      <CRETIM>175405</CRETIM>
+      <SERIAL>20260605175404</SERIAL>
+    </EDI_DC40>
+    <E1EDK01 SEGMENT="1">
+      <CURCY>EUR</CURCY>
+      <HWAER>EUR</HWAER>
+      <WKURS>1.00000</WKURS>
+      <ZTERM>0030</ZTERM>
+      <BSART>NB</BSART>
+      <BELNR>4501453008</BELNR>
+      <RECIPNT_NO>0000142533</RECIPNT_NO>
+    </E1EDK01>
+    <E1EDK14 SEGMENT="1">
+      <QUALF>014</QUALF>
+      <ORGID>1016</ORGID>
+    </E1EDK14>
+    <E1EDK14 SEGMENT="1">
+      <QUALF>009</QUALF>
+      <ORGID>I53</ORGID>
+    </E1EDK14>
+    <E1EDK14 SEGMENT="1">
+      <QUALF>013</QUALF>
+      <ORGID>NB</ORGID>
+    </E1EDK14>
+    <E1EDK14 SEGMENT="1">
+      <QUALF>011</QUALF>
+      <ORGID>1016</ORGID>
+    </E1EDK14>
+    <E1EDK03 SEGMENT="1">
+      <IDDAT>012</IDDAT>
+      <DATUM>20260603</DATUM>
+    </E1EDK03>
+    <E1EDK03 SEGMENT="1">
+      <IDDAT>011</IDDAT>
+      <DATUM>20260605</DATUM>
+    </E1EDK03>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>AG</PARVW>
+      <PARTN>1016</PARTN>
+      <BNAME>Contact Person</BNAME>
+      <PAORG>1016</PAORG>
+      <ORGTX>Buyer Org IT</ORGTX>
+      <PAGRU>I53</PAGRU>
+      <ILNNR>contact@example.com</ILNNR>
+    </E1EDKA1>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>LF</PARVW>
+      <PARTN>0000142533</PARTN>
+      <SPRAS>I</SPRAS>
+      <SPRAS_ISO>IT</SPRAS_ISO>
+    </E1EDKA1>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>WE</PARVW>
+      <LIFNR>1016</LIFNR>
+      <NAME1>Ship-To Site IT</NAME1>
+      <NAME4>Contact</NAME4>
+      <STRAS>1 Example Street</STRAS>
+      <ORT01>Example City</ORT01>
+      <PSTLZ>00000</PSTLZ>
+      <LAND1>IT</LAND1>
+      <TELF1>0000000000</TELF1>
+      <TELFX>0000000000</TELFX>
+      <SPRAS>I</SPRAS>
+      <ANRED>Ditta</ANRED>
+      <REGIO>VC</REGIO>
+      <SPRAS_ISO>IT</SPRAS_ISO>
+    </E1EDKA1>
+    <E1EDK02 SEGMENT="1">
+      <QUALF>001</QUALF>
+      <BELNR>4501453008</BELNR>
+      <DATUM>20260603</DATUM>
+      <UZEIT>175404</UZEIT>
+    </E1EDK02>
+    <E1EDK18 SEGMENT="1">
+      <QUALF>001</QUALF>
+      <TAGE>30</TAGE>
+    </E1EDK18>
+    <E1EDKT1 SEGMENT="1">
+      <TDID>F01</TDID>
+      <TSSPRAS>I</TSSPRAS>
+      <TSSPRAS_ISO>IT</TSSPRAS_ISO>
+      <E1EDKT2 SEGMENT="1">
+        <TDLINE>x Contact</TDLINE>
+        <TDFORMAT>*</TDFORMAT>
+      </E1EDKT2>
+    </E1EDKT1>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00010</POSEX>
+      <ACTION>001</ACTION>
+      <PSTYP>0</PSTYP>
+      <MENGE>50.000</MENGE>
+      <MENEE>EA</MENEE>
+      <BMNG2>50.000</BMNG2>
+      <PMENE>EA</PMENE>
+      <VPREI>0.95</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>47.5</NETWR>
+      <MATKL>05500</MATKL>
+      <BPUMN>1</BPUMN>
+      <BPUMZ>1</BPUMZ>
+      <WERKS>1016</WERKS>
+      <E1EDP20 SEGMENT="1">
+        <WMENG>50.000</WMENG>
+        <AMENG>0.000</AMENG>
+        <EDATU>20260603</EDATU>
+      </E1EDP20>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>002</QUALF>
+        <IDTNR>35617715</IDTNR>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>004</QUALF>
+        <MFRPN>125873915</MFRPN>
+      </E1EDP19>
+      <E1EDPT1 SEGMENT="1">
+        <TDID>F01</TDID>
+        <TSSPRAS>I</TSSPRAS>
+        <TSSPRAS_ISO>IT</TSSPRAS_ISO>
+        <E1EDPT2 SEGMENT="1">
+          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+        </E1EDPT2>
+        <E1EDPT2 SEGMENT="1">
+          <TDLINE>schermato, antiaggrovigliamento - blu</TDLINE>
+        </E1EDPT2>
+      </E1EDPT1>
+    </E1EDP01>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00020</POSEX>
+      <ACTION>001</ACTION>
+      <PSTYP>0</PSTYP>
+      <MENGE>150.000</MENGE>
+      <MENEE>EA</MENEE>
+      <BMNG2>150.000</BMNG2>
+      <PMENE>EA</PMENE>
+      <VPREI>0.95</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>142.5</NETWR>
+      <MATKL>05500</MATKL>
+      <BPUMN>1</BPUMN>
+      <BPUMZ>1</BPUMZ>
+      <WERKS>1016</WERKS>
+      <E1EDP20 SEGMENT="1">
+        <WMENG>150.000</WMENG>
+        <AMENG>0.000</AMENG>
+        <EDATU>20260603</EDATU>
+      </E1EDP20>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>002</QUALF>
+        <IDTNR>35617713</IDTNR>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>004</QUALF>
+        <MFRPN>125876519</MFRPN>
+      </E1EDP19>
+      <E1EDPT1 SEGMENT="1">
+        <TDID>F01</TDID>
+        <TSSPRAS>I</TSSPRAS>
+        <TSSPRAS_ISO>IT</TSSPRAS_ISO>
+        <E1EDPT2 SEGMENT="1">
+          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+        </E1EDPT2>
+        <E1EDPT2 SEGMENT="1">
+          <TDLINE>stampato, antiaggrovigliamento - grigio</TDLINE>
+        </E1EDPT2>
+      </E1EDPT1>
+    </E1EDP01>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00030</POSEX>
+      <ACTION>001</ACTION>
+      <PSTYP>0</PSTYP>
+      <MENGE>100.000</MENGE>
+      <MENEE>EA</MENEE>
+      <BMNG2>100.000</BMNG2>
+      <PMENE>EA</PMENE>
+      <VPREI>3.09</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>309</NETWR>
+      <MATKL>05500</MATKL>
+      <BPUMN>1</BPUMN>
+      <BPUMZ>1</BPUMZ>
+      <WERKS>1016</WERKS>
+      <E1EDP20 SEGMENT="1">
+        <WMENG>100.000</WMENG>
+        <AMENG>0.000</AMENG>
+        <EDATU>20260605</EDATU>
+      </E1EDP20>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>002</QUALF>
+        <IDTNR>32281494</IDTNR>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+      </E1EDP19>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>004</QUALF>
+        <MFRPN>163902878</MFRPN>
+      </E1EDP19>
+      <E1EDPT1 SEGMENT="1">
+        <TDID>F01</TDID>
+        <TSSPRAS>I</TSSPRAS>
+        <TSSPRAS_ISO>IT</TSSPRAS_ISO>
+        <E1EDPT2 SEGMENT="1">
+          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+        </E1EDPT2>
+        <E1EDPT2 SEGMENT="1">
+          <TDLINE>6a - senza alogeni, stampato - arancione</TDLINE>
+        </E1EDPT2>
+      </E1EDPT1>
+    </E1EDP01>
+    <E1EDS01 SEGMENT="1">
+      <SUMID>002</SUMID>
+      <SUMME>499</SUMME>
+      <SUNIT>EUR</SUNIT>
+    </E1EDS01>
+  </IDOC>
+  <EDICustomerID>00000000-0000-0000-0000-000000000000</EDICustomerID>
+</ORDERS05>

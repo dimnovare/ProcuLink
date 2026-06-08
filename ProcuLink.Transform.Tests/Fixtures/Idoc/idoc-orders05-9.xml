@@ -1,0 +1,172 @@
+<ORDERS05>
+  <IDOC BEGIN="1">
+    <EDI_DC40 SEGMENT="1">
+      <TABNAM>EDI_DC40</TABNAM>
+      <MANDT>020</MANDT>
+      <DOCNUM>0000000069830589</DOCNUM>
+      <DOCREL>740</DOCREL>
+      <STATUS>30</STATUS>
+      <DIRECT>1</DIRECT>
+      <OUTMOD>2</OUTMOD>
+      <IDOCTYP>ORDERS05</IDOCTYP>
+      <MESTYP>ORDERS</MESTYP>
+      <SNDPOR>SAPPRO</SNDPOR>
+      <SNDPRT>LS</SNDPRT>
+      <SNDPRN>REDACTED-SYSTEM</SNDPRN>
+      <RCVPOR>REDACTED-SYSTEM</RCVPOR>
+      <RCVPRT>LI</RCVPRT>
+      <RCVPFC>LF</RCVPFC>
+      <RCVPRN>0000494423</RCVPRN>
+      <CREDAT>20260603</CREDAT>
+      <CRETIM>163008</CRETIM>
+      <SERIAL>20260603163008</SERIAL>
+    </EDI_DC40>
+    <E1EDK01 SEGMENT="1">
+      <ACTION>AG</ACTION>
+      <KZABS>7</KZABS>
+      <CURCY>704</CURCY>
+    </E1EDK01>
+    <E1EDK14 SEGMENT="1">
+      <QUALF>014</QUALF>
+      <ORGID>7704</ORGID>
+    </E1EDK14>
+    <E1EDK14 SEGMENT="1">
+      <QUALF>009</QUALF>
+      <ORGID>197</ORGID>
+    </E1EDK14>
+    <E1EDK14 SEGMENT="1">
+      <QUALF>013</QUALF>
+      <ORGID>NB</ORGID>
+    </E1EDK14>
+    <E1EDK14 SEGMENT="1">
+      <QUALF>011</QUALF>
+      <ORGID>1100</ORGID>
+    </E1EDK14>
+    <E1EDK03 SEGMENT="1">
+      <IDDAT>012</IDDAT>
+      <DATUM>20260603</DATUM>
+    </E1EDK03>
+    <E1EDK03 SEGMENT="1">
+      <IDDAT>011</IDDAT>
+      <DATUM>20260603</DATUM>
+    </E1EDK03>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>AG</PARVW>
+      <PARTN>7704</PARTN>
+      <BNAME>Contact Person</BNAME>
+      <PAORG>7704</PAORG>
+      <ORGTX>Buyer Org ES</ORGTX>
+      <PAGRU>197</PAGRU>
+    </E1EDKA1>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>LF</PARVW>
+      <PARTN>0000494423</PARTN>
+      <SPRAS>S</SPRAS>
+      <SPRAS_ISO>ES</SPRAS_ISO>
+    </E1EDKA1>
+    <E1EDKA1 SEGMENT="1">
+      <PARVW>WE</PARVW>
+      <LIFNR>7704</LIFNR>
+      <NAME1>Ship-To Site ES</NAME1>
+      <STRAS>1 Example Street</STRAS>
+      <ORT01>Example City</ORT01>
+      <PSTLZ>00000</PSTLZ>
+      <LAND1>ES</LAND1>
+      <TELF1>0000000000</TELF1>
+      <TELFX>0000000000</TELFX>
+      <SPRAS>S</SPRAS>
+      <ANRED>Empresa</ANRED>
+      <REGIO>28</REGIO>
+      <SPRAS_ISO>ES</SPRAS_ISO>
+    </E1EDKA1>
+    <E1EDK02 SEGMENT="1">
+      <QUALF>001</QUALF>
+      <BELNR>0005472513</BELNR>
+      <DATUM>20260603</DATUM>
+      <UZEIT>163008</UZEIT>
+    </E1EDK02>
+    <E1EDKT1 SEGMENT="1">
+      <TDID>F01</TDID>
+      <TSSPRAS>S</TSSPRAS>
+      <TSSPRAS_ISO>ES</TSSPRAS_ISO>
+      <E1EDKT2 SEGMENT="1">
+        <TDLINE>REDACTED-TICKET)</TDLINE>
+        <TDFORMAT>*</TDFORMAT>
+      </E1EDKT2>
+    </E1EDKT1>
+    <E1EDKT1 SEGMENT="1">
+      <TDID>ZCGC</TDID>
+      <TSSPRAS>S</TSSPRAS>
+      <TSSPRAS_ISO>ES</TSSPRAS_ISO>
+      <E1EDKT2 SEGMENT="1">
+        <TDLINE>&lt;H&gt;El presente pedido se regirá, exceptuando lo dispuesto en relación</TDLINE>
+        <TDFORMAT>C</TDFORMAT>
+      </E1EDKT2>
+      <E1EDKT2 SEGMENT="1">
+        <TDLINE>contractual específica, por las Condiciones Generales de Compra de</TDLINE>
+      </E1EDKT2>
+      <E1EDKT2 SEGMENT="1">
+        <TDLINE>the Buyer, a su disposición en el siguiente enlace:&lt;/&gt;</TDLINE>
+      </E1EDKT2>
+      <E1EDKT2 SEGMENT="1">
+        <TDLINE>&lt;NN:&gt;https://assetstools.example.com/api/v1/bynder/doc/111A9314-D0CF</TDLINE>
+        <TDFORMAT>C</TDFORMAT>
+      </E1EDKT2>
+      <E1EDKT2 SEGMENT="1">
+        <TDLINE>-4</TDLINE>
+        <TDFORMAT>=</TDFORMAT>
+      </E1EDKT2>
+      <E1EDKT2 SEGMENT="1">
+        <TDLINE>AC6-A2EE07D45C4FD4D0/file.pdf&lt;/&gt;</TDLINE>
+        <TDFORMAT>=</TDFORMAT>
+      </E1EDKT2>
+    </E1EDKT1>
+    <E1EDP01 SEGMENT="1">
+      <POSEX>00010</POSEX>
+      <ACTION>001</ACTION>
+      <PSTYP>0</PSTYP>
+      <MENGE>1.000</MENGE>
+      <MENEE>PCE</MENEE>
+      <BMNG2>1.000</BMNG2>
+      <PMENE>PCE</PMENE>
+      <VPREI>149.49</VPREI>
+      <PEINH>1</PEINH>
+      <NETWR>149.49</NETWR>
+      <NTGEW>1</NTGEW>
+      <GEWEI>KGM</GEWEI>
+      <MATKL>3006</MATKL>
+      <BPUMN>1</BPUMN>
+      <BPUMZ>1</BPUMZ>
+      <BRGEW>1</BRGEW>
+      <WERKS>7704</WERKS>
+      <LGORT>0001</LGORT>
+      <E1EDP20 SEGMENT="1">
+        <WMENG>1.000</WMENG>
+        <AMENG>0.000</AMENG>
+        <EDATU>20260610</EDATU>
+      </E1EDP20>
+      <E1EDPA1 SEGMENT="1">
+        <PARVW>WE</PARVW>
+        <NAME1>Contact</NAME1>
+        <NAME2>Person</NAME2>
+        <E1EDPA3 SEGMENT="1">
+          <QUALP>Z06</QUALP>
+          <STDPN>contact@example.com</STDPN>
+        </E1EDPA3>
+      </E1EDPA1>
+      <E1EDP19 SEGMENT="1">
+        <QUALF>001</QUALF>
+        <IDTNR>000000000030001746</IDTNR>
+        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <IDTNR_EXTERNAL>0000000000000000000000000000000030001746</IDTNR_EXTERNAL>
+        <IDTNR_GUID>005056A0251E1EDB89818FC808215F1E</IDTNR_GUID>
+      </E1EDP19>
+    </E1EDP01>
+    <E1EDS01 SEGMENT="1">
+      <SUMID>002</SUMID>
+      <SUMME>149.49</SUMME>
+      <SUNIT>EUR</SUNIT>
+    </E1EDS01>
+  </IDOC>
+  <EDICustomerID>00000000-0000-0000-0000-000000000000</EDICustomerID>
+</ORDERS05>

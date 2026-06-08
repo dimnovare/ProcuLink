@@ -222,6 +222,7 @@ builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, CxmlOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, UblOrderParser>();
+builder.Services.AddSingleton<IPurchaseOrderParser, IDocOrders05Parser>(); // SAP IDoc ORDERS05 (.xml, root <ORDERS05>)
 builder.Services.AddSingleton<IPurchaseOrderParser, EdifactOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, X12OrderParser>(); // Group M — ANSI X12 850
 builder.Services.AddSingleton<OrderParserFactory>();
