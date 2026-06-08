@@ -14,6 +14,10 @@
     <PackageReference Include="ClosedXML" Version="0.104.2" />
     <PackageReference Include="CsvHelper" Version="33.0.0" />
     <PackageReference Include="PdfPig" Version="0.1.14" />
+    <!-- Sandboxed per-field expression templating for the flexible per-order mapping override
+         (ScribanFieldEvaluator). Scriban is MIT-licensed (no commercial-licence concern) and is a
+         pure string-template engine with no file/network/process surface. -->
+    <PackageReference Include="Scriban" Version="7.2.4" />
   </ItemGroup>
 
 </Project>

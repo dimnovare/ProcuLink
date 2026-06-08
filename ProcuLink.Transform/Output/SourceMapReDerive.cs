@@ -13,11 +13,14 @@ namespace ProcuLink.Transform.Output;
 ///
 /// <para><b>Resolution order for each field:</b></para>
 /// <list type="number">
-///   <item>If a <see cref="SourceFieldRule"/> is present for the field AND its
-///         <see cref="SourceFieldRule.SourceToken"/> is non-null AND that token id exists in
-///         <paramref name="tokens"/>, use the token's <c>Value</c> as the raw input.</item>
+///   <item>If the rule has a non-blank <see cref="SourceFieldRule.Expression"/> (Scriban), the
+///         rendered expression is the raw input — evaluated with <c>order</c> (and, for line fields,
+///         <c>line</c>) in scope. A compile/eval error is non-fatal and falls through to the steps
+///         below.</item>
+///   <item>Else if its <see cref="SourceFieldRule.SourceToken"/> is non-null AND that token id
+///         exists in <paramref name="tokens"/>, use the token's <c>Value</c> as the raw input.</item>
 ///   <item>Else if the rule has a non-null <see cref="SourceFieldRule.FixedValue"/>, use it.</item>
-///   <item>Else (no rule, or both SourceToken and FixedValue are null), keep the existing parsed
+///   <item>Else (no rule, or expression/token/fixed all absent), keep the existing parsed
 ///         value from <paramref name="headerRow"/> / <paramref name="lineRow"/> unchanged.</item>
 /// </list>
 /// <para>After the value is selected, the rule's <see cref="SourceFieldRule.Manipulators"/> chain
@@ -59,7 +62,7 @@ public static class SourceMapReDerive
         var headerFields = new[] { "PoNumber", "OrderDate", "BuyerName", "Currency", "SupplierName" };
 
         foreach (var fieldName in headerFields)
-            ApplyRule(result, fieldName, sourceMap, tokens);
+            ApplyRule(result, fieldName, sourceMap, tokens, lineScope: false);
 
         return result;
     }
@@ -89,7 +92,7 @@ public static class SourceMapReDerive
         };
 
         foreach (var fieldName in lineFields)
-            ApplyRule(result, fieldName, sourceMap, tokens);
+            ApplyRule(result, fieldName, sourceMap, tokens, lineScope: true);
 
         // Unresolved-line guard: SupplierItemCode must never become empty/whitespace via remap.
         // The fixed transform validators check for null/whitespace — preserve the sentinel.
@@ -105,15 +108,28 @@ public static class SourceMapReDerive
         Dictionary<string, string>             row,
         string                                 fieldName,
         Dictionary<string, SourceFieldRule>    sourceMap,
-        IReadOnlyList<SourceToken>             tokens)
+        IReadOnlyList<SourceToken>             tokens,
+        bool                                   lineScope)
     {
         if (!sourceMap.TryGetValue(fieldName, out var rule))
             return; // no rule for this field → keep existing value, unchanged
 
-        // 1. Pick raw value: SourceToken lookup → FixedValue → existing parsed value
+        // 1. Pick raw value. Precedence: Expression (Scriban) → SourceToken → FixedValue →
+        //    existing parsed value. The expression layer is additive: with no Expression set, the
+        //    original token/fixed/pass-through behaviour is byte-for-byte identical to before.
         string? value = null;
 
-        if (rule.SourceToken is not null)
+        if (!string.IsNullOrWhiteSpace(rule.Expression))
+        {
+            var result = lineScope
+                ? ScribanFieldEvaluator.EvaluateLine(rule.Expression, row)
+                : ScribanFieldEvaluator.EvaluateHeader(rule.Expression, row);
+            if (result.Ok)
+                value = result.Value;
+            // Expression failed — fall through to token/fixed/pass-through so the transform survives.
+        }
+
+        if (value is null && rule.SourceToken is not null)
         {
             // Search the token list for a matching id. Comparison is case-sensitive to keep ids stable.
             var token = FindToken(tokens, rule.SourceToken);
