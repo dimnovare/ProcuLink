@@ -97,7 +97,7 @@ public sealed class MappedTransformService
         // SourceMap re-derive runs first (no-op when SourceMap is absent/empty).
         var headerRow    = SourceMapReDerive.ApplyToHeaderRow(BuildHeaderRow(order, @override), @override, tokens);
         var headerValues = headerCols
-            .Select(c => ResolveRule(c.Value, headerRow) ?? string.Empty)
+            .Select(c => ResolveRule(c.Value, headerRow, lineScope: false) ?? string.Empty)
             .ToList();
 
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
@@ -106,7 +106,7 @@ public sealed class MappedTransformService
             var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line), @override, tokens);
 
             var lineValues = lineCols
-                .Select(c => ResolveRule(c.Value, lineRow) ?? string.Empty)
+                .Select(c => ResolveRule(c.Value, lineRow, lineScope: true) ?? string.Empty)
                 .ToList();
 
             sb.AppendLine(string.Join(",", headerValues.Concat(lineValues).Select(Escape)));
@@ -129,7 +129,7 @@ public sealed class MappedTransformService
 
         var header = new Dictionary<string, string?>();
         foreach (var (_, rule) in output.Header)
-            header[rule.OutputPath] = ResolveRule(rule, headerRow) ?? string.Empty;
+            header[rule.OutputPath] = ResolveRule(rule, headerRow, lineScope: false) ?? string.Empty;
 
         var lines = new List<Dictionary<string, string?>>();
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
@@ -138,7 +138,7 @@ public sealed class MappedTransformService
             var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line), @override, tokens);
             var obj = new Dictionary<string, string?>();
             foreach (var (_, rule) in output.Lines)
-                obj[rule.OutputPath] = ResolveRule(rule, lineRow) ?? string.Empty;
+                obj[rule.OutputPath] = ResolveRule(rule, lineRow, lineScope: true) ?? string.Empty;
             lines.Add(obj);
         }
 
@@ -157,14 +157,27 @@ public sealed class MappedTransformService
     // ── Value resolution (mirrors PoMappingEngine.ResolveField semantics) ────────
 
     /// <summary>
-    /// Resolves one rule: pick the source value (fixed value, else the named canonical/custom field
-    /// from <paramref name="row"/>), then run the manipulator chain. Identical order of precedence
-    /// and manipulator application as <c>PoMappingEngine.ResolveField</c>.
+    /// Resolves one rule. Precedence for the source value:
+    /// <list type="number">
+    ///   <item><b>Expression</b> (Scriban) when non-blank — evaluated with <c>order</c> (and, when
+    ///         <paramref name="lineScope"/> is true, <c>line</c>) in scope. A compile/eval error is
+    ///         non-fatal: it falls back to the canonical/fixed value so the transform never crashes.</item>
+    ///   <item><b>FixedValue</b>.</item>
+    ///   <item><b>CanonicalField</b> looked up in <paramref name="row"/>.</item>
+    /// </list>
+    /// The chosen value is then run through the manipulator chain — identical order and semantics to
+    /// <c>PoMappingEngine.ResolveField</c>. The expression layer is purely additive: with no
+    /// <c>Expression</c> set, behaviour is byte-for-byte identical to before.
     /// </summary>
-    private static string? ResolveRule(OutputFieldRule rule, IReadOnlyDictionary<string, string> row)
+    private static string? ResolveRule(
+        OutputFieldRule rule, IReadOnlyDictionary<string, string> row, bool lineScope)
     {
-        string? value = rule.FixedValue
-            ?? (rule.CanonicalField is not null && row.TryGetValue(rule.CanonicalField, out var v) ? v : null);
+        string? value = ResolveExpressionOrField(
+            rule.Expression,
+            fallbackFixedValue: rule.FixedValue,
+            fallbackCanonicalField: rule.CanonicalField,
+            row: row,
+            lineScope: lineScope);
 
         foreach (var m in rule.FieldManipulators ?? new List<ManipulatorEntry>())
         {
@@ -173,6 +186,34 @@ public sealed class MappedTransformService
         }
 
         return value;
+    }
+
+    /// <summary>
+    /// Shared value-selection helper used by both the output-rule path here and the SourceMap
+    /// re-derive path (<see cref="SourceMapReDerive"/>). Expression wins when present and non-blank;
+    /// otherwise the supplied fixed value, then the named field in <paramref name="row"/>. On an
+    /// expression compile/eval failure, falls back to the fixed/field value (never throws).
+    /// </summary>
+    internal static string? ResolveExpressionOrField(
+        string? expression,
+        string? fallbackFixedValue,
+        string? fallbackCanonicalField,
+        IReadOnlyDictionary<string, string> row,
+        bool lineScope)
+    {
+        if (!string.IsNullOrWhiteSpace(expression))
+        {
+            var result = lineScope
+                ? ScribanFieldEvaluator.EvaluateLine(expression, row)
+                : ScribanFieldEvaluator.EvaluateHeader(expression, row);
+
+            if (result.Ok)
+                return result.Value;
+            // Expression failed — fall through to the field/fixed value so the transform survives.
+        }
+
+        return fallbackFixedValue
+            ?? (fallbackCanonicalField is not null && row.TryGetValue(fallbackCanonicalField, out var v) ? v : null);
     }
 
     /// <summary>

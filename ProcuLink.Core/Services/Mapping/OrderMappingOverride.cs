@@ -61,11 +61,24 @@ public record OrderMappingOverride
 public record SourceFieldRule
 {
     /// <summary>
+    /// Optional free-form Scriban expression (heart-piece-flex flexible mapping). When non-null and
+    /// non-blank it takes PRECEDENCE over <see cref="SourceToken"/> and <see cref="FixedValue"/>:
+    /// the value is the rendered expression, evaluated with the canonical order (and, for line-scope
+    /// fields, the current line) in scope — e.g. <c>{{ order.PoNumber }}</c>,
+    /// <c>{{ line.Quantity * line.UnitPrice }}</c>, <c>{{ order.Currency }}-{{ line.SupplierItemCode }}</c>.
+    /// The result is then run through <see cref="Manipulators"/> exactly as a token/fixed value would
+    /// be. Null (the default) → no expression, byte-for-byte identical to existing SourceMap rules.
+    /// A compile/eval error never crashes the transform (the resolved value falls back per the
+    /// evaluator contract and the line stays subject to the usual review guard).
+    /// </summary>
+    public string? Expression { get; init; }
+
+    /// <summary>
     /// Stable source-token id to use as the raw value input (e.g. "cell:r1c3" for CSV, or an XPath
     /// string for XML). When non-null and the token is found in the tokenizer output, its
     /// <c>Value</c> is used as the starting value before manipulators are applied. When null (or the
     /// token is not found in the current file), falls through to <see cref="FixedValue"/> and then
-    /// to the original parsed value.
+    /// to the original parsed value. Ignored when <see cref="Expression"/> is set.
     /// </summary>
     public string? SourceToken { get; init; }
 
@@ -73,6 +86,7 @@ public record SourceFieldRule
     /// Constant value used when <see cref="SourceToken"/> is null or yields no match. When both
     /// <see cref="SourceToken"/> and <see cref="FixedValue"/> are null, the existing parsed canonical
     /// value is kept (pass-through), so omitting a field from the SourceMap is always safe.
+    /// Ignored when <see cref="Expression"/> is set.
     /// </summary>
     public string? FixedValue { get; init; }
 
@@ -133,6 +147,18 @@ public record OutputFieldRule
     public string OutputPath { get; init; } = string.Empty;
 
     /// <summary>
+    /// Optional free-form Scriban expression (heart-piece-flex flexible mapping). When non-null and
+    /// non-blank it takes PRECEDENCE over <see cref="CanonicalField"/> and <see cref="FixedValue"/>:
+    /// the value is the rendered expression, evaluated with the canonical order in scope for a header
+    /// rule, or the order + current line in scope for a line rule — e.g. <c>{{ order.PoNumber }}</c>,
+    /// <c>{{ line.Quantity * line.UnitPrice }}</c>, <c>{{ order.Currency }}-{{ line.SupplierItemCode }}</c>.
+    /// The rendered result is then run through <see cref="FieldManipulators"/> exactly as a
+    /// canonical/fixed value would be. Null (the default) → no expression, byte-for-byte identical to
+    /// existing output rules. A compile/eval error never crashes the transform.
+    /// </summary>
+    public string? Expression { get; init; }
+
+    /// <summary>
     /// Name of the canonical (or custom) field to source the value from. Null when using
     /// <see cref="FixedValue"/> only. Recognised canonical names mirror the fixed transformers
     /// (header: PoNumber/OrderDate/BuyerName/Currency/SupplierName; line:
@@ -141,7 +167,7 @@ public record OutputFieldRule
     /// </summary>
     public string? CanonicalField { get; init; }
 
-    /// <summary>Constant value used when no canonical/custom field applies. Null if using a field.</summary>
+    /// <summary>Constant value used when no canonical/custom field applies. Null if using a field. Ignored when <see cref="Expression"/> is set.</summary>
     public string? FixedValue { get; init; }
 
     /// <summary>
