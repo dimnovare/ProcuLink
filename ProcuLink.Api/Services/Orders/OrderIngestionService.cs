@@ -820,12 +820,21 @@ internal sealed class OrderIngestionService
 
         if (unresolvedContexts.Count > 0 && !noEgress)
         {
+            // Catalog grounding (Supplier Catalog P2): when the supplier has a product
+            // catalog, retrieve the closest REAL products for the unresolved lines and pass
+            // them as catalog candidates. The AI service then constrains the model to those
+            // real codes and rejects any code outside them — a hallucinated code can never
+            // surface. With no catalog this returns the original mapping candidates unchanged
+            // (offer ⇔ works — today's free suggestion).
+            var groundedCandidates = await BuildCatalogGroundedCandidatesAsync(
+                organisationId, supplierId, unresolvedContexts, aiCandidates, ct);
+
             suggestions = await _aiMappings.SuggestSupplierItemCodesAsync(
                 organisationId,
                 supplierId,
                 supplierName,
                 unresolvedContexts,
-                aiCandidates,
+                groundedCandidates,
                 ct);
         }
 
@@ -883,16 +892,165 @@ internal sealed class OrderIngestionService
         Guid supplierId,
         CancellationToken ct)
     {
-        return await _db.ItemMappings
+        // Project to an intermediate first: AiMappingCandidate now has optional ctor params,
+        // and an expression tree (EF Select) may not omit optional arguments (CS0854).
+        var rows = await _db.ItemMappings
             .AsNoTracking()
             .Where(m => m.OrgId == organisationId && m.SupplierId == supplierId)
             .OrderByDescending(m => m.UpdatedAt)
             .Take(40)
+            .Select(m => new { m.BuyerItemCode, m.SupplierItemCode })
+            .ToListAsync(ct);
+
+        return rows
             .Select(m => new AiMappingCandidate(
                 m.BuyerItemCode,
                 m.SupplierItemCode,
                 $"existing mapping {m.BuyerItemCode} -> {m.SupplierItemCode}"))
+            .ToList();
+    }
+
+    // ── Catalog grounding (Supplier Catalog P2) ───────────────────────────────────
+    // The supplier's product catalog (supplier_products) is the authoritative set of REAL
+    // codes the AI may suggest. We retrieve, per unresolved line, the most lexically-similar
+    // catalog rows (dependency-free: ToLower().Contains + token overlap over Code/Name/Barcode
+    // — NO pg_trgm, no new extension, no migration) and fold them into the AI candidate set as
+    // catalog candidates. The AI service then constrains the model to those real codes and
+    // rejects any code outside them. When the supplier has NO catalog, the original mapping
+    // candidates are returned unchanged — behaviour is byte-for-byte today's (offer ⇔ works).
+
+    /// <summary>Hard cap on catalog rows loaded for in-memory retrieval, to keep the read bounded.</summary>
+    private const int CatalogRetrievalPoolCap = 2000;
+
+    /// <summary>Top-K most-similar catalog rows considered per unresolved line.</summary>
+    private const int CatalogCandidatesPerLine = 20;
+
+    /// <summary>Overall cap on the candidate set sent to the model (mirrors the AI service's own Take(40)).</summary>
+    private const int MaxCandidates = 40;
+
+    private async Task<IReadOnlyList<AiMappingCandidate>> BuildCatalogGroundedCandidatesAsync(
+        Guid organisationId,
+        Guid supplierId,
+        IReadOnlyList<AiMappingLineContext> unresolvedContexts,
+        IReadOnlyList<AiMappingCandidate> mappingCandidates,
+        CancellationToken ct)
+    {
+        // One org+supplier-scoped read of the active catalog. Never cross-tenant.
+        var catalog = await _db.SupplierProducts
+            .AsNoTracking()
+            .Where(p => p.OrgId == organisationId && p.SupplierId == supplierId && p.IsActive)
+            .OrderBy(p => p.Code)
+            .Take(CatalogRetrievalPoolCap)
+            .Select(p => new SupplierProduct
+            {
+                Code = p.Code, Name = p.Name, Unit = p.Unit, Price = p.Price, Barcode = p.Barcode,
+            })
             .ToListAsync(ct);
+
+        // No catalog → unchanged behaviour: the original mapping candidates, free suggestion.
+        if (catalog.Count == 0)
+            return mappingCandidates;
+
+        // Per-line lexical retrieval → deduped union of the closest real products (catalog-first).
+        var union = new Dictionary<string, AiMappingCandidate>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in unresolvedContexts)
+        {
+            foreach (var product in RetrieveCatalogMatches(line, catalog, CatalogCandidatesPerLine))
+            {
+                var code = product.Code.Trim();
+                if (string.IsNullOrEmpty(code) || union.ContainsKey(code)) continue;
+
+                union[code] = new AiMappingCandidate(
+                    BuyerItemCode: string.Empty,
+                    SupplierItemCode: code,
+                    Provenance: string.IsNullOrWhiteSpace(product.Name)
+                        ? $"catalog product {code}"
+                        : $"catalog product {code} — {product.Name!.Trim()}",
+                    IsCatalogProduct: true,
+                    Name: product.Name,
+                    Unit: product.Unit,
+                    Price: product.Price,
+                    Barcode: product.Barcode);
+            }
+        }
+
+        // Catalog candidates first (ground truth), then past mappings as supporting evidence,
+        // capped to MaxCandidates so the AI service's own Take(40) never truncates the catalog.
+        var grounded = new List<AiMappingCandidate>(MaxCandidates);
+        grounded.AddRange(union.Values.Take(MaxCandidates));
+        foreach (var m in mappingCandidates)
+        {
+            if (grounded.Count >= MaxCandidates) break;
+            grounded.Add(m);
+        }
+        return grounded;
+    }
+
+    /// <summary>
+    /// Scores catalog rows against one unresolved line by simple, dependency-free lexical
+    /// signals over the line's buyer code + description vs each product's Code + Name + Barcode:
+    /// exact code/barcode equality scores highest, then substring containment, then shared
+    /// token overlap. Returns the top <paramref name="take"/> positively-scored rows. Pure +
+    /// in-memory (no DB, no pg_trgm) so it is deterministic and unit-testable.
+    /// </summary>
+    private static IEnumerable<SupplierProduct> RetrieveCatalogMatches(
+        AiMappingLineContext line, IReadOnlyList<SupplierProduct> catalog, int take)
+    {
+        var buyerCode = (line.BuyerItemCode ?? string.Empty).Trim();
+        var buyerCodeLower = buyerCode.ToLowerInvariant();
+        var queryText = $"{buyerCode} {line.Description}".Trim();
+        var queryTokens = Tokenize(queryText);
+
+        var scored = new List<(SupplierProduct Product, int Score)>(catalog.Count);
+        foreach (var p in catalog)
+        {
+            var code = (p.Code ?? string.Empty).Trim();
+            var codeLower = code.ToLowerInvariant();
+            var barcode = (p.Barcode ?? string.Empty).Trim();
+            var name = p.Name ?? string.Empty;
+
+            var score = 0;
+
+            // Strongest signals: exact code or exact barcode match against the buyer code.
+            if (buyerCodeLower.Length > 0 && codeLower == buyerCodeLower) score += 100;
+            if (buyerCodeLower.Length > 0 && barcode.Length > 0
+                && string.Equals(barcode, buyerCode, StringComparison.OrdinalIgnoreCase)) score += 100;
+
+            // Substring containment in either direction (code embedded in the line, or vice versa).
+            if (buyerCodeLower.Length >= 3 && codeLower.Length >= 3
+                && (codeLower.Contains(buyerCodeLower) || buyerCodeLower.Contains(codeLower))) score += 25;
+
+            // Token overlap between the line text and the product code+name.
+            var productTokens = Tokenize($"{code} {name}");
+            if (queryTokens.Count > 0 && productTokens.Count > 0)
+            {
+                var overlap = queryTokens.Count(t => productTokens.Contains(t));
+                score += overlap * 5;
+            }
+
+            if (score > 0) scored.Add((p, score));
+        }
+
+        return scored
+            .OrderByDescending(s => s.Score)
+            .ThenBy(s => s.Product.Code, StringComparer.OrdinalIgnoreCase)
+            .Take(take)
+            .Select(s => s.Product);
+    }
+
+    private static readonly char[] TokenSeparators =
+        { ' ', '\t', '\r', '\n', ',', ';', '.', '/', '\\', '-', '_', '(', ')', '[', ']', '{', '}', ':', '"', '\'', '#', '*', '+', '&' };
+
+    /// <summary>Lowercase, punctuation-split token set; drops tokens shorter than 2 chars as noise.</summary>
+    private static HashSet<string> Tokenize(string? text)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(text)) return set;
+        foreach (var raw in text.ToLowerInvariant().Split(TokenSeparators, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (raw.Length >= 2) set.Add(raw);
+        }
+        return set;
     }
 
     private static Task<ParsedOrder> ParseWithMappingTemplateAsync(

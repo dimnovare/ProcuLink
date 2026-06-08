@@ -63,10 +63,26 @@ public sealed record AiMappingLineContext(
     decimal Quantity,
     string? Unit);
 
+/// <summary>
+/// A candidate supplier item code the model may suggest, plus the evidence behind it.
+/// Two flavours share this record:
+///   • a learned past resolution from <c>item_mappings</c> (<see cref="IsCatalogProduct"/> = false), and
+///   • a real product from the supplier's <c>supplier_products</c> catalog
+///     (<see cref="IsCatalogProduct"/> = true) — the authoritative "ground truth" set.
+/// When ANY catalog candidate is present in a request, the implementation MUST constrain
+/// the model to those real codes and REJECT any suggested code absent from the catalog set
+/// (the allow-list guard). When no catalog candidate is present, behaviour is unchanged
+/// (free suggestion grounded only by past mappings + the buyer line) — offer ⇔ works.
+/// </summary>
 public sealed record AiMappingCandidate(
     string BuyerItemCode,
     string SupplierItemCode,
-    string Provenance);
+    string Provenance,
+    bool IsCatalogProduct = false,
+    string? Name = null,
+    string? Unit = null,
+    decimal? Price = null,
+    string? Barcode = null);
 
 public sealed record AiMappingSuggestion(
     string SupplierItemCode,

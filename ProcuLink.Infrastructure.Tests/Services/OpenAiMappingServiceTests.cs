@@ -233,6 +233,100 @@ public class OpenAiMappingServiceTests
         chunks[2].Offset.Should().Be(100);
     }
 
+    // ── Catalog allow-list guard (Supplier Catalog P2) ──────────────────────────
+    // When the supplier has a product catalog, the candidate set carries the REAL codes
+    // (IsCatalogProduct = true) and the model MUST select one of them. The post-response
+    // guard rejects any code not in the catalog so a hallucinated code can never surface.
+    // With NO catalog the guard is inert — today's free suggestion is returned (offer ⇔ works).
+    // ApplyCatalogGuardForTest exercises the exact same decision point the live single-line
+    // and batch paths use, without a network call.
+
+    private static readonly AiMappingCandidate[] CatalogCandidates =
+    {
+        new("", "ES-RES-220R", "catalog product ES-RES-220R — Resistor 220Ω 0.25W",
+            IsCatalogProduct: true, Name: "Resistor 220Ω 0.25W", Unit: "PCS", Price: 0.04m, Barcode: "4711000220R"),
+        new("", "ES-CAP-100N", "catalog product ES-CAP-100N — Capacitor 100nF",
+            IsCatalogProduct: true, Name: "Capacitor 100nF", Unit: "PCS"),
+    };
+
+    [Fact]
+    public void CatalogGuard_AcceptsRealCatalogCode_WithConcreteProvenance()
+    {
+        var result = OpenAiMappingService.ApplyCatalogGuardForTest(
+            CatalogCandidates,
+            suggestedCode: "ES-RES-220R",
+            confidence: 0.82f,
+            reason: "closest match",
+            provenance: "buyer description evidence");
+
+        result.Should().NotBeNull();
+        result!.SupplierItemCode.Should().Be("ES-RES-220R");
+        result.Confidence.Should().BeApproximately(0.82f, 0.0001f);
+        // Provenance names the matched catalog row, not the vague model text.
+        result.Provenance.Should().Contain("ES-RES-220R");
+        result.Provenance.Should().Contain("Resistor 220Ω 0.25W");
+        result.Provenance.Should().NotContain("buyer description evidence");
+    }
+
+    [Fact]
+    public void CatalogGuard_RejectsCodeNotInCatalog()
+    {
+        // The model hallucinated a plausible-looking code that does not exist in the catalog.
+        var result = OpenAiMappingService.ApplyCatalogGuardForTest(
+            CatalogCandidates,
+            suggestedCode: "ES-RES-999X",
+            confidence: 0.95f,
+            reason: "looks right",
+            provenance: "model");
+
+        result.Should().BeNull("a code absent from the supplier catalog must never surface");
+    }
+
+    [Fact]
+    public void CatalogGuard_MatchIsCaseInsensitiveAndTrimmed()
+    {
+        var result = OpenAiMappingService.ApplyCatalogGuardForTest(
+            CatalogCandidates,
+            suggestedCode: "  es-res-220r  ",
+            confidence: 0.7f,
+            reason: "",
+            provenance: null);
+
+        result.Should().NotBeNull();
+        result!.SupplierItemCode.Should().Be("es-res-220r"); // trimmed; matched case-insensitively
+        result.Provenance.Should().Contain("ES-RES-220R");   // names the canonical catalog row
+    }
+
+    [Fact]
+    public void CatalogGuard_NoCatalog_KeepsFreeSuggestion_Unchanged()
+    {
+        // Only past-mapping candidates (IsCatalogProduct = false) → no allow-list, free suggestion.
+        var mappingsOnly = new[]
+        {
+            new AiMappingCandidate("HEI-PLT-08", "ACM-PLT-080", "existing mapping"),
+        };
+
+        var result = OpenAiMappingService.ApplyCatalogGuardForTest(
+            mappingsOnly,
+            suggestedCode: "ANYTHING-THE-MODEL-WANTS",
+            confidence: 0.6f,
+            reason: "weak",
+            provenance: "buyer code/description signals");
+
+        result.Should().NotBeNull("with no catalog the guard is inert (offer ⇔ works)");
+        result!.SupplierItemCode.Should().Be("ANYTHING-THE-MODEL-WANTS");
+        result.Provenance.Should().Be("buyer code/description signals"); // model provenance preserved
+    }
+
+    [Fact]
+    public void CatalogGuard_EmptyCode_ReturnsNull_RegardlessOfCatalog()
+    {
+        OpenAiMappingService.ApplyCatalogGuardForTest(CatalogCandidates, "", 0.9f, "r", "p")
+            .Should().BeNull();
+        OpenAiMappingService.ApplyCatalogGuardForTest(CatalogCandidates, "   ", 0.9f, "r", "p")
+            .Should().BeNull();
+    }
+
     private static OpenAiMappingService CreateService(Dictionary<string, string?> values)
     {
         var configuration = new ConfigurationBuilder()
