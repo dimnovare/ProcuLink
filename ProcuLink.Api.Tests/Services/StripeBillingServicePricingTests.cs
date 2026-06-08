@@ -350,6 +350,42 @@ public class StripeBillingServicePricingTests
         db.OverageBillingRecords.Should().ContainSingle(r => r.OrgId == org.Id && r.BillingKey == "in_unconfig");
     }
 
+    // ── SSO availability is surfaced on the billing-status DTO ────────────
+    // BillingStatus.SsoAvailable is computed from PlanHasFeature(plan, Sso) so the
+    // frontend Settings "Single sign-on" tab can show available vs upsell without a
+    // Clerk Backend API round-trip. It must be true ONLY on Enterprise.
+
+    [Fact]
+    public async Task GetStatus_Enterprise_ReportsSsoAvailableTrue()
+    {
+        var db = MakeDb();
+        var org = Org(PlanConstants.Enterprise, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var status = await MakeService(db).GetStatusAsync(org.Id);
+
+        status.SsoAvailable.Should().BeTrue("Enterprise includes SSO (SAML/OIDC)");
+    }
+
+    [Theory]
+    [InlineData(PlanConstants.Pilot)]
+    [InlineData(PlanConstants.Growth)]
+    [InlineData(PlanConstants.Operations)]
+    [InlineData(PlanConstants.Integration)]
+    [InlineData(PlanConstants.Distributor)]
+    public async Task GetStatus_BelowEnterprise_ReportsSsoAvailableFalse(string plan)
+    {
+        var db = MakeDb();
+        var org = Org(plan, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var status = await MakeService(db).GetStatusAsync(org.Id);
+
+        status.SsoAvailable.Should().BeFalse($"SSO is Enterprise-only, not available on {plan}");
+    }
+
     // ── period overage compute helper ─────────────────────────────────────
 
     [Fact]
