@@ -4,6 +4,16 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-09 — Search indexing host mismatch fixed**
+
+> Frontend `fa4937f` makes `https://proculink.eu` the single production origin:
+> `www.proculink.eu/:path*` now returns a permanent 308 to the matching apex URL.
+> Regression coverage verifies that sitemap URLs use the apex host and the host
+> redirect remains configured. Production verification: apex `/sitemap.xml`
+> returns `200 application/xml`; the `www` sitemap URL redirects to it. In Google
+> Search Console, use the Domain property `proculink.eu` (or apex URL-prefix
+> property) and submit `https://proculink.eu/sitemap.xml`, not the `www` URL.
+
 ## Where we are: **2026-06-07 (cont.4) — Wave D CLOSE-OUT: W1 shipped+deploy-verified; UI/UX #6 admin-nav gating; Part C checklist reconciled; RLS final-deferred. PROD_LAUNCH_AUDIT code surface = CLOSED.**
 
 > Continuation of (cont.3). Founder: "do everything risky/deferred, all suggestions/improvements/fixes that can be done — no new bugs (tiebreaker: drop any that can't land green safely)." Worked from the isolated `wave-d` worktree, landed on `main` via rebase+ff-push (concurrent chips' checkout untouched).
