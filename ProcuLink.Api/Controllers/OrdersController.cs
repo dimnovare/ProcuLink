@@ -47,6 +47,13 @@ public sealed class OrdersController : ControllerBase
     /// <summary>Max accepted length for Idempotency-Key — guards against accidental garbage. </summary>
     private const int MaxIdempotencyKeyLength = 200;
 
+    /// <summary>
+    /// Max accepted length for free-text header corrections (PO number, supplier display name)
+    /// submitted via resolve. These are short business identifiers / names — bounding the length
+    /// guards against an accidental large paste bloating the row.
+    /// </summary>
+    private const int MaxHeaderTextLength = 256;
+
     /// <summary>Output formats reachable via transform — each maps to a registered ITransformService.</summary>
     private static readonly HashSet<string> AllowedTransformFormats =
         new(StringComparer.OrdinalIgnoreCase) { "xml", "csv", "cxml", "json", "ubl", "x12" };
@@ -361,11 +368,14 @@ public sealed class OrdersController : ControllerBase
         CancellationToken ct)
     {
         // A resolve must do something: either resolve at least one line OR correct a
-        // header field (order date / buyer / currency). Header-only edits are valid.
+        // header field (order date / buyer / currency / PO number / supplier name).
+        // Header-only edits are valid.
         var hasHeaderEdit =
             !string.IsNullOrWhiteSpace(request.OrderDate)
             || !string.IsNullOrWhiteSpace(request.BuyerName)
-            || !string.IsNullOrWhiteSpace(request.Currency);
+            || !string.IsNullOrWhiteSpace(request.Currency)
+            || !string.IsNullOrWhiteSpace(request.PoNumber)
+            || !string.IsNullOrWhiteSpace(request.SupplierName);
 
         if ((request.LineResolutions is null || request.LineResolutions.Count == 0) && !hasHeaderEdit)
             return BadRequest(new { error = "At least one line resolution or header correction is required." });
@@ -376,8 +386,9 @@ public sealed class OrdersController : ControllerBase
                 .Select(r => new Core.Services.LineResolution(r.LineNumber, r.SupplierItemCode))
                 .ToList();
 
-        // Validate + parse optional header corrections (order date / buyer name / currency).
-        // PO number + supplier are not accepted here — they stay read-only.
+        // Validate + parse optional header corrections. PO number + the document/display
+        // supplier name ARE accepted here now; the order's ROUTING supplier (SupplierId)
+        // stays read-only and is never changed by this endpoint.
         DateOnly? orderDate = null;
         if (request.OrderDate is not null && !string.IsNullOrWhiteSpace(request.OrderDate))
         {
@@ -402,7 +413,28 @@ public sealed class OrdersController : ControllerBase
         // Buyer name: trim; whitespace-only is treated as no-change (null).
         var buyerName = string.IsNullOrWhiteSpace(request.BuyerName) ? null : request.BuyerName.Trim();
 
-        var header = new Core.Services.ResolveHeaderFields(orderDate, buyerName, currency);
+        // PO number: trim; whitespace-only is no-change. Bound the length so a garbage
+        // paste can't bloat the row (po_number is a short business identifier).
+        string? poNumber = null;
+        if (!string.IsNullOrWhiteSpace(request.PoNumber))
+        {
+            poNumber = request.PoNumber.Trim();
+            if (poNumber.Length > MaxHeaderTextLength)
+                return BadRequest(new { error = $"PoNumber must be {MaxHeaderTextLength} characters or fewer." });
+        }
+
+        // Supplier display name: trim; whitespace-only is no-change. Bounded for the same
+        // reason. This is the as-printed value only — it never changes order routing.
+        string? supplierName = null;
+        if (!string.IsNullOrWhiteSpace(request.SupplierName))
+        {
+            supplierName = request.SupplierName.Trim();
+            if (supplierName.Length > MaxHeaderTextLength)
+                return BadRequest(new { error = $"SupplierName must be {MaxHeaderTextLength} characters or fewer." });
+        }
+
+        var header = new Core.Services.ResolveHeaderFields(
+            orderDate, buyerName, currency, poNumber, supplierName);
 
         var result = await _orders.ResolveAsync(
             _tenant.OrganisationId, id,
@@ -604,27 +636,34 @@ public sealed class OrdersController : ControllerBase
     // ── POST /api/orders/{id}/mapping-override/promote ───────────────────────
 
     /// <summary>
-    /// Promotes the per-order <see cref="OrderMappingOverride.SourceMap"/> into the supplier's
-    /// reusable inbound PO mapping (<see cref="PoMappingConfig"/>), so the SAME source layout
-    /// auto-applies to future orders from this supplier without further user review.
+    /// Promotes the per-order <see cref="OrderMappingOverride"/> into the supplier's reusable PO
+    /// mapping (<see cref="PoMappingConfig"/>), so the SAME layout auto-applies to future orders
+    /// from this supplier without further user review. This backs the review-screen
+    /// "Save mappings for &lt;supplier&gt;" button.
     ///
     /// <para>Semantics:</para>
     /// <list type="bullet">
-    ///   <item>Reads the <c>SourceMap</c> stored in this order's <c>canonical_json</c>.</item>
-    ///   <item>Translates each entry to a <see cref="FieldMappingEntry"/> (SourceToken→ExternalField,
-    ///        FixedValue→FixedValue, Manipulators→FieldManipulators).</item>
-    ///   <item>Merges the translated entries into the supplier's existing <see cref="PoMappingConfig"/>
-    ///        (additive — fields NOT in the SourceMap are preserved).</item>
+    ///   <item>Reads the <c>SourceMap</c> AND <c>Output</c> mapping stored in this order's <c>canonical_json</c>.</item>
+    ///   <item>Translates each SourceMap entry to a <see cref="FieldMappingEntry"/> (SourceToken→ExternalField,
+    ///        FixedValue→FixedValue, Manipulators→FieldManipulators) and copies the output mapping verbatim.</item>
+    ///   <item>Merges both into the supplier's existing <see cref="PoMappingConfig"/>
+    ///        (additive — fields NOT in the override are preserved).</item>
     ///   <item>Idempotent — re-promoting the same override overwrites with identical data.</item>
-    ///   <item>Returns a summary: supplierId, headerFieldsPromoted, lineFieldsPromoted, schemaFingerprintHash.</item>
+    ///   <item>NEVER a silent no-op — when the order has neither a SourceMap nor an output mapping,
+    ///        the supplier mapping is left unchanged and the response carries
+    ///        <c>nothingToPromote: true</c> with a clear <c>message</c>.</item>
     /// </list>
     ///
-    /// <para>NOTE — Output side not promoted:</para>
-    /// The <see cref="OrderMappingOverride.Output"/> (canonical→output-field re-mapping) is not
-    /// persisted by this endpoint. <see cref="PoMappingConfig"/> only models the inbound
-    /// (source→canonical) direction. Output-side persistence requires a separate supplier-level
-    /// output-mapping entity that does not yet exist. See the <c>TODO(output-promote)</c> comment
-    /// in <c>PromoteMappingService</c>.
+    /// <para>Response shape:</para>
+    /// <c>{ supplierId, headerFieldsPromoted, lineFieldsPromoted, outputHeaderFieldsPromoted,
+    /// outputLineFieldsPromoted, totalFieldsPromoted, nothingToPromote, schemaFingerprintHash,
+    /// message }</c>. The original four keys are preserved for backward compatibility; the rest are
+    /// additive.
+    ///
+    /// <para>Output-side caveat:</para>
+    /// The supplier-level <c>Output</c> mapping is PERSISTED + REPORTED here but not yet CONSUMED on
+    /// re-upload (the per-order override remains the only output-divert seam at transform time). This
+    /// removes the founder-reported silent no-op; wiring re-upload consumption is a separate follow-up.
     ///
     /// <para>Schema fingerprint note:</para>
     /// The mapping is stored at the supplier level, not per-fingerprint. The returned
@@ -632,8 +671,6 @@ public sealed class OrdersController : ControllerBase
     /// parsed with, but the promoted rules apply to ALL future orders from this supplier.
     ///
     /// Org-scoped: a cross-tenant or unknown order id returns 404.
-    /// Returns 200 with a promotion summary on success (including when the SourceMap is absent
-    /// — zero fields promoted is a valid idempotent result).
     /// </summary>
     [HttpPost("{id:guid}/mapping-override/promote")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -646,20 +683,29 @@ public sealed class OrdersController : ControllerBase
             return NotFound();
 
         _logger.LogInformation(
-            "Mapping override promoted for order {OrderId} (org {OrgId}): " +
-            "supplier {SupplierId}, {Header} header + {Lines} line fields, fingerprint {Hash}",
+            "Mapping override promote for order {OrderId} (org {OrgId}): " +
+            "supplier {SupplierId}, {Header} header + {Lines} line + {OutHeader} out-header + " +
+            "{OutLines} out-line fields, nothingToPromote={Nothing}, fingerprint {Hash}",
             id, _tenant.OrganisationId,
             result.SupplierId,
             result.HeaderFieldsPromoted,
             result.LineFieldsPromoted,
+            result.OutputHeaderFieldsPromoted,
+            result.OutputLineFieldsPromoted,
+            result.NothingToPromote,
             result.SchemaFingerprintHash ?? "(none)");
 
         return Ok(new
         {
-            supplierId            = result.SupplierId,
-            headerFieldsPromoted  = result.HeaderFieldsPromoted,
-            lineFieldsPromoted    = result.LineFieldsPromoted,
-            schemaFingerprintHash = result.SchemaFingerprintHash,
+            supplierId                 = result.SupplierId,
+            headerFieldsPromoted       = result.HeaderFieldsPromoted,
+            lineFieldsPromoted         = result.LineFieldsPromoted,
+            outputHeaderFieldsPromoted = result.OutputHeaderFieldsPromoted,
+            outputLineFieldsPromoted   = result.OutputLineFieldsPromoted,
+            totalFieldsPromoted        = result.TotalFieldsPromoted,
+            nothingToPromote           = result.NothingToPromote,
+            schemaFingerprintHash      = result.SchemaFingerprintHash,
+            message                    = result.Message,
         });
     }
 

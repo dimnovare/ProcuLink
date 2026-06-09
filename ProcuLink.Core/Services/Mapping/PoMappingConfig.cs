@@ -8,6 +8,23 @@ public record PoMappingConfig
     public Dictionary<string, FieldMappingEntry> Header { get; init; } = new();
     /// <summary>Maps canonical line field names to column mapping entry.</summary>
     public Dictionary<string, FieldMappingEntry> Lines { get; init; } = new();
+
+    /// <summary>
+    /// Optional reusable OUTPUT mapping (canonical → output-field path) promoted from a per-order
+    /// <see cref="OrderMappingOverride.Output"/> so the supplier's preferred output layout persists
+    /// across re-uploads. Null (the default) means no supplier-level output override — the existing
+    /// fixed transformers stay in control, byte-for-byte identical to today.
+    ///
+    /// <para>
+    /// Additive + safe: this property serialises into the SAME <c>SupplierPoMapping.ConfigJson</c>
+    /// JSONB column (no new table, no EF migration). Older configs that predate it simply deserialise
+    /// it as null. It is NOT consumed by the transform path yet (the per-order override remains the
+    /// only output-divert seam in <c>OrderTransformService</c>); persisting it here makes the founder's
+    /// "Save mappings" button actually save the output side and report it, removing the silent no-op.
+    /// Wiring re-upload consumption is a separate follow-up.
+    /// </para>
+    /// </summary>
+    public OutputMappingConfig? Output { get; init; }
 }
 
 public record FieldMappingEntry
