@@ -50,6 +50,36 @@ public record OrderMappingOverride
     /// Quantity, Unit, UnitPrice, LineTotal.
     /// </summary>
     public Dictionary<string, SourceFieldRule>? SourceMap { get; init; }
+
+    /// <summary>
+    /// Optional WHOLE-DOCUMENT Scriban template (heart-piece-flex flexible mapping — template mode).
+    /// When present and non-blank, the transform renders this single template string against the
+    /// canonical order to produce the ENTIRE output document, instead of building it field-by-field
+    /// from <see cref="Output"/>. This lets a supplier's exact required structure (e.g. an Ingram
+    /// Micro-style nested JSON with a <c>lines</c> array) be expressed directly:
+    /// <code>
+    /// {"customerOrderNumber":"{{ OrderNr }}","shipToInfo":{"city":"{{ ShippingAddress.City }}"},
+    ///  "lines":[{{ for Line in Lines }}{"quantity":{{ Line.Qty }}}{{ if !for.last }},{{ end }}{{ end }}]}
+    /// </code>
+    /// The template sees the stable model namespace documented in
+    /// <c>docs/qa/2026-06-09-scriban-template-namespace.md</c> (top-level globals OrderNr, OrderDate,
+    /// Currency, BuyerName, SupplierName, ShippingAddress, CustomFields, Lines, plus intuitive aliases
+    /// such as <c>Line.DistributorPid</c> / <c>Line.OrderedPrice</c> / <c>Line.Qty</c>).
+    ///
+    /// <para><b>Opt-in &amp; safe.</b> Null/blank (the default) → template mode is OFF and behaviour is
+    /// byte-for-byte identical to today (fixed transformer, or the field-by-field <see cref="Output"/>
+    /// override when present). A compile/render error never crashes the transform — it surfaces as a
+    /// clear validation failure and the order stays un-transformed.</para>
+    /// </summary>
+    public string? OutputTemplate { get; init; }
+
+    /// <summary>
+    /// MIME content type to stamp on a template-mode artifact. Optional; defaults to
+    /// <c>application/json</c> when <see cref="OutputTemplate"/> is set without an explicit type.
+    /// Set e.g. <c>text/csv</c>, <c>application/xml</c>, or <c>text/plain</c> when the template
+    /// produces that shape. Ignored when <see cref="OutputTemplate"/> is null/blank.
+    /// </summary>
+    public string? OutputTemplateContentType { get; init; }
 }
 
 /// <summary>

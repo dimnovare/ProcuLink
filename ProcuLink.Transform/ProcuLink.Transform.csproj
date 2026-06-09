@@ -11,6 +11,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Expose internal helpers (ScribanOrderModel, the shared sandbox builder) to the unit tests
+         without widening the public API surface. -->
+    <InternalsVisibleTo Include="ProcuLink.Transform.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="ClosedXML" Version="0.104.2" />
     <PackageReference Include="CsvHelper" Version="33.0.0" />
     <PackageReference Include="PdfPig" Version="0.1.14" />

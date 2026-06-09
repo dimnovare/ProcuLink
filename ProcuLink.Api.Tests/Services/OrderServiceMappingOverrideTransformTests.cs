@@ -238,6 +238,61 @@ public class OrderServiceMappingOverrideTransformTests
     }
 
     [Fact]
+    public async Task TransformAsync_WholeDocumentTemplate_RoutesToTemplateService_EvenForUnregisteredFormat()
+    {
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedResolvedOrderAsync(db);
+
+        // A whole-document template + an XML content type. Template mode must render the document
+        // itself — it does NOT need a registered XML transformer (only CSV + JSON are wired here).
+        var overrideSvc = new OrderMappingOverrideService(db);
+        await overrideSvc.UpsertAsync(orgId, orderId, new OrderMappingOverride
+        {
+            OutputTemplate =
+                "<order ref=\"{{OrderNr}}\">" +
+                "{{ for L in Lines }}<line code=\"{{L.DistributorPid}}\" qty=\"{{L.Qty}}\"/>{{ end }}" +
+                "</order>",
+            OutputTemplateContentType = "application/xml",
+        }, CancellationToken.None);
+
+        var (svc, captured) = Build(db); // only CSV + JSON transformers registered
+        var result = await svc.TransformAsync(orgId, orderId, OutputFormat.Xml, CancellationToken.None);
+
+        Assert.True(result.IsSuccess, result.Error);
+        var actual = captured();
+        Assert.NotNull(actual);
+
+        var xml = Encoding.UTF8.GetString(actual!);
+        Assert.Equal(
+            "<order ref=\"PO-REG-1\"><line code=\"SUP-1\" qty=\"3\"/><line code=\"SUP-2\" qty=\"2\"/></order>",
+            xml);
+        Assert.Equal("xml", result.Value!.Format); // artifact format follows the requested OutputFormat
+    }
+
+    [Fact]
+    public async Task TransformAsync_BrokenTemplate_FailsClearly_AndRevertsStatusToReady()
+    {
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedResolvedOrderAsync(db);
+
+        var overrideSvc = new OrderMappingOverrideService(db);
+        await overrideSvc.UpsertAsync(orgId, orderId, new OrderMappingOverride
+        {
+            OutputTemplate = "{{ for x in Lines }}oops", // unbalanced for/end → compile error
+        }, CancellationToken.None);
+
+        var (svc, _) = Build(db);
+        var result = await svc.TransformAsync(orgId, orderId, OutputFormat.Json, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("compile", result.Error);
+
+        // The order must NOT be left stuck in "transforming" — a broken template reverts to ready.
+        var reloaded = await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId);
+        Assert.Equal("ready", reloaded.Status);
+    }
+
+    [Fact]
     public async Task TransformAsync_OverrideForUnsupportedFormat_FallsThroughToFixedTransformer()
     {
         await using var db = NewDb();
