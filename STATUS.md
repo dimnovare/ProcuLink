@@ -6,10 +6,12 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ## Where we are: **2026-06-09 — Search indexing host mismatch fixed**
 
-> Frontend `fa4937f` makes `https://proculink.eu` the single production origin:
+> Frontend `fa4937f` + `b29cb6e` make `https://proculink.eu` the single production origin:
 > `www.proculink.eu/:path*` now returns a permanent 308 to the matching apex URL.
 > Regression coverage verifies that sitemap URLs use the apex host and the host
-> redirect remains configured. Production verification: apex `/sitemap.xml`
+> redirect remains configured. Deployment-time fake `lastModified` timestamps
+> were removed; dates should only return when backed by real content dates.
+> Production verification: apex `/sitemap.xml`
 > returns `200 application/xml`; the `www` sitemap URL redirects to it. In Google
 > Search Console, use the Domain property `proculink.eu` (or apex URL-prefix
 > property) and submit `https://proculink.eu/sitemap.xml`, not the `www` URL.
