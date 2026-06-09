@@ -31,7 +31,12 @@ public class OrderServiceMappingOverrideTransformTests
             .Options);
 
     /// <summary>Builds OrderService wired with the REAL CSV + JSON transformers and a byte-capturing storage mock.</summary>
-    private static (OrderService Svc, Func<byte[]?> CapturedBytes) Build(ProcuLinkDbContext db)
+    private static (OrderService Svc, Func<byte[]?> CapturedBytes) Build(ProcuLinkDbContext db) =>
+        Build(db, new ITransformService[] { new CsvTransformService(), new JsonTransformService() });
+
+    /// <summary>Same, but with a caller-supplied transformer set (e.g. to register the structured formats).</summary>
+    private static (OrderService Svc, Func<byte[]?> CapturedBytes) Build(
+        ProcuLinkDbContext db, ITransformService[] transformers)
     {
         byte[]? captured = null;
 
@@ -46,12 +51,6 @@ public class OrderServiceMappingOverrideTransformTests
                 captured = ms.ToArray();
             })
             .ReturnsAsync("artifact-key");
-
-        var transformers = new ITransformService[]
-        {
-            new CsvTransformService(),
-            new JsonTransformService(),
-        };
 
         var svc = new OrderService(
             db,
@@ -238,23 +237,51 @@ public class OrderServiceMappingOverrideTransformTests
     }
 
     [Fact]
-    public async Task TransformAsync_OverrideForUnsupportedFormat_FallsThroughToFixedTransformer()
+    public async Task TransformAsync_StructuredFormatOverride_AppliesEffectiveEntityToFixedTransform()
     {
         await using var db = NewDb();
         var (orgId, orderId) = await SeedResolvedOrderAsync(db);
 
-        // A usable CSV/JSON-style override exists, but we transform to XML — override must NOT apply,
-        // and since no XML transformer is registered here, the service reports the fixed-path failure.
+        // A header override that targets the recognised canonical PoNumber with a fixed value.
         var overrideSvc = new OrderMappingOverrideService(db);
         await overrideSvc.UpsertAsync(orgId, orderId, new OrderMappingOverride
         {
             Output = new OutputMappingConfig
             {
-                Header = { ["po"] = new OutputFieldRule { OutputPath = "OrderRef", CanonicalField = "PoNumber" } },
+                Header = { ["po"] = new OutputFieldRule { OutputPath = "PoNumber", FixedValue = "XML-OVERRIDDEN-PO" } },
             },
         }, CancellationToken.None);
 
-        var (svc, _) = Build(db); // only CSV + JSON transformers registered
+        // Register the XML transformer so the structured-override path can render.
+        var (svc, captured) = Build(db, new ITransformService[]
+        {
+            new CsvTransformService(), new JsonTransformService(), new XmlTransformService(),
+        });
+
+        var result = await svc.TransformAsync(orgId, orderId, OutputFormat.Xml, CancellationToken.None);
+
+        Assert.True(result.IsSuccess, result.Error);
+        var xml = Encoding.UTF8.GetString(captured()!);
+        Assert.Contains("<PoNumber>XML-OVERRIDDEN-PO</PoNumber>", xml);
+        Assert.DoesNotContain("PO-REG-1", xml);
+    }
+
+    [Fact]
+    public async Task TransformAsync_StructuredFormatOverride_NoRegisteredTransformer_ReportsFixedPathFailure()
+    {
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedResolvedOrderAsync(db);
+
+        var overrideSvc = new OrderMappingOverrideService(db);
+        await overrideSvc.UpsertAsync(orgId, orderId, new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = { ["po"] = new OutputFieldRule { OutputPath = "PoNumber", FixedValue = "X" } },
+            },
+        }, CancellationToken.None);
+
+        var (svc, _) = Build(db); // only CSV + JSON transformers registered → no XML transformer
         var result = await svc.TransformAsync(orgId, orderId, OutputFormat.Xml, CancellationToken.None);
 
         Assert.False(result.IsSuccess);

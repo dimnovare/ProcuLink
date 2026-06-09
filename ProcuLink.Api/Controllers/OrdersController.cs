@@ -41,6 +41,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IPromoteMappingService        _promoteMapping;
     private readonly IFileStorageService          _fileStorage;
     private readonly ISourceTokenizer             _tokenizer;
+    private readonly IEnumerable<ITransformService> _transformers;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -64,7 +65,8 @@ public sealed class OrdersController : ControllerBase
         IOrderMappingOverrideService mappingOverrides,
         IPromoteMappingService       promoteMapping,
         IFileStorageService          fileStorage,
-        ISourceTokenizer             tokenizer)
+        ISourceTokenizer             tokenizer,
+        IEnumerable<ITransformService> transformers)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -79,6 +81,7 @@ public sealed class OrdersController : ControllerBase
         _promoteMapping   = promoteMapping;
         _fileStorage      = fileStorage;
         _tokenizer        = tokenizer;
+        _transformers     = transformers;
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -545,10 +548,16 @@ public sealed class OrdersController : ControllerBase
     /// <summary>
     /// Dry-run (heart-piece-flex Phase 3): applies the supplied override to this order IN MEMORY and
     /// returns the would-be output document. NEVER writes, NEVER changes status, NEVER delivers.
-    /// Override preview supports CSV + JSON (the formats <c>MappedTransformService</c> handles in v1);
-    /// other formats return 400. A bad manipulator returns 400; an order whose lines still need review
-    /// returns 200 with a <c>warning</c> (the same guard a real transform would hit) and no content.
-    /// Org-scoped: a cross-tenant order id returns 404.
+    /// Override preview supports EVERY entity-based output format —
+    /// <c>csv | json | xml | cxml | ubl | x12</c>:
+    /// <list type="bullet">
+    ///   <item>CSV/JSON are emitted natively by <c>MappedTransformService</c> (arbitrary output paths).</item>
+    ///   <item>XML/cXML/UBL/X12 resolve an effective entity (override canonical-field changes applied)
+    ///         and run the EXISTING fixed transform.</item>
+    /// </list>
+    /// An unknown format returns 400. A bad manipulator returns 400; an order whose lines still need
+    /// review (or fails a format's required-field guard) returns 200 with a <c>warning</c> (the same
+    /// guard a real transform would hit) and no content. Org-scoped: a cross-tenant order id returns 404.
     /// </summary>
     [HttpPost("{id:guid}/mapping-override/preview")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -563,15 +572,19 @@ public sealed class OrdersController : ControllerBase
         if (request is null)
             return BadRequest(new { error = "A mapping override body is required." });
 
-        // v1 preview supports CSV + JSON only (matches MappedTransformService.SupportsOverride).
+        // Preview supports every entity-based output format an override can influence.
         var fmt = (format?.Trim().ToLowerInvariant()) switch
         {
             "csv"  => OutputFormat.Csv,
             "json" => OutputFormat.Json,
+            "xml"  => OutputFormat.Xml,
+            "cxml" => OutputFormat.CXml,
+            "ubl"  => OutputFormat.Ubl,
+            "x12"  => OutputFormat.X12,
             _      => (OutputFormat?)null,
         };
-        if (fmt is null || !MappedTransformService.SupportsOverride(fmt.Value))
-            return BadRequest(new { error = "Override preview supports CSV and JSON only." });
+        if (fmt is null || !MappedTransformService.SupportsOverrideFormat(fmt.Value))
+            return BadRequest(new { error = "Override preview supports csv, json, xml, cxml, ubl, and x12." });
 
         // Same manipulator guard as PUT — surface a bad rule at edit time, never at transform time.
         var validationError = ValidateOverrideManipulators(request);
@@ -586,9 +599,37 @@ public sealed class OrdersController : ControllerBase
         if (order is null)
             return NotFound();
 
+        // Supplier name feeds the structured transforms (XML/UBL read Supplier?.Name). Load it
+        // separately + defensively so a missing supplier can never filter the order out (an
+        // Include of the required Supplier nav drops the row under the in-memory provider).
+        if (order.Supplier is null && order.SupplierId != Guid.Empty)
+        {
+            var supplier = await _db.Suppliers
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.Id == order.SupplierId && s.OrgId == _tenant.OrganisationId, ct);
+            if (supplier is not null)
+                order.Supplier = supplier;
+        }
+
         try
         {
-            var result  = new MappedTransformService().Build(order, request, fmt.Value);
+            TransformResult result;
+            if (MappedTransformService.SupportsOverride(fmt.Value))
+            {
+                // CSV/JSON — the override builder emits the document natively.
+                result = new MappedTransformService().Build(order, request, fmt.Value);
+            }
+            else
+            {
+                // XML/cXML/UBL/X12 — resolve an effective entity, then run the EXISTING fixed transform.
+                var transformer = _transformers.FirstOrDefault(t => t.CanTransform(fmt.Value));
+                if (transformer is null)
+                    return BadRequest(new { error = $"No transform service registered for format '{fmt.Value}'." });
+
+                var effective = EffectiveEntityResolver.Resolve(order, request);
+                result = await transformer.TransformAsync(effective, fmt.Value, ct);
+            }
+
             using var sr = new StreamReader(result.Content);
             var content  = await sr.ReadToEndAsync(ct);
             return Ok(new { format = fmt.Value.ToString(), contentType = result.ContentType, content });

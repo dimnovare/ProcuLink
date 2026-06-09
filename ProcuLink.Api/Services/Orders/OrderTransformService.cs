@@ -57,20 +57,29 @@ internal sealed class OrderTransformService
             return Result<TransformResponse>.Fail(
                 $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolved)}.");
 
-        // heart-piece-flex Phase 2: route to the override-aware builder ONLY when this order carries a
-        // usable per-order output mapping AND the format is one the override builder supports (CSV/JSON).
+        // heart-piece-flex Phase 2/3: apply the per-order override whenever this order carries a usable
+        // per-order output mapping AND the format is one an override can influence.
+        //  • CSV/JSON  → the override builder emits the document natively from the output-field rules.
+        //  • XML/cXML/UBL/X12 → the override's canonical-field changes are resolved into an EFFECTIVE
+        //    entity, then handed to the EXISTING fixed transform (no per-format re-implementation).
         // Otherwise fall through to the EXISTING fixed transformer, unchanged — so the default (no
-        // override) path is byte-for-byte identical to today. An override with only custom fields, an
-        // empty output config, or an unsupported format never diverts the transform.
+        // override) path is byte-for-byte identical to today. An override with only custom fields or an
+        // empty output config never diverts the transform.
         var mappingOverride = OrderMappingOverrideReader.Read(entity.CanonicalJson);
-        var useOverride =
+        var hasUsableOverride =
             OrderMappingOverrideReader.HasUsableOutput(mappingOverride)
-            && MappedTransformService.SupportsOverride(format);
+            && MappedTransformService.SupportsOverrideFormat(format);
 
-        // Locate the correct fixed transformer (Xml/Csv/Json/...). Always required for the non-override
-        // path; we still resolve it up-front so a missing transformer fails before status mutation.
+        // CSV/JSON are emitted natively by the override builder; the structured formats reuse the fixed
+        // transform fed an effective entity.
+        var useNativeOverride =
+            hasUsableOverride && MappedTransformService.SupportsOverride(format);
+
+        // Locate the correct fixed transformer (Xml/Csv/Json/...). Always required EXCEPT for the native
+        // CSV/JSON override path; we still resolve it up-front so a missing transformer fails before
+        // status mutation.
         var transformer = _transformers.FirstOrDefault(t => t.CanTransform(format));
-        if (!useOverride && transformer is null)
+        if (!useNativeOverride && transformer is null)
             return Result<TransformResponse>.Fail($"No transform service registered for format '{format}'.");
 
         // Mark as transforming so the UI can show a spinner
@@ -78,13 +87,27 @@ internal sealed class OrderTransformService
         entity.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
-        // Generate the document
+        // Generate the document.
+        //  • Native CSV/JSON override → the override builder emits the document.
+        //  • Structured-format override → resolve an effective entity (canonical-field overrides
+        //    applied to the typed columns) and feed it to the EXISTING fixed transform.
+        //  • No override → the fixed transform on the original entity, byte-for-byte unchanged.
         TransformResult transformResult;
         try
         {
-            transformResult = useOverride
-                ? new MappedTransformService().Build(entity, mappingOverride!, format)
-                : await transformer!.TransformAsync(entity, format, ct);
+            if (useNativeOverride)
+            {
+                transformResult = new MappedTransformService().Build(entity, mappingOverride!, format);
+            }
+            else if (hasUsableOverride)
+            {
+                var effective = EffectiveEntityResolver.Resolve(entity, mappingOverride!);
+                transformResult = await transformer!.TransformAsync(effective, format, ct);
+            }
+            else
+            {
+                transformResult = await transformer!.TransformAsync(entity, format, ct);
+            }
         }
         catch (TransformValidationException ex)
         {

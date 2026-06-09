@@ -27,6 +27,17 @@ public class OrdersControllerMappingOverrideTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
+    /// <summary>The real entity-based transformers, so structured-format previews can render.</summary>
+    private static ITransformService[] RealTransformers() => new ITransformService[]
+    {
+        new ProcuLink.Transform.Output.XmlTransformService(),
+        new ProcuLink.Transform.Output.CsvTransformService(),
+        new ProcuLink.Transform.Output.JsonTransformService(),
+        new ProcuLink.Transform.Output.CxmlTransformService(),
+        new ProcuLink.Transform.Output.UblOrderTransformService(),
+        new ProcuLink.Transform.Output.X12TransformService(),
+    };
+
     private static OrdersController Build(ProcuLinkDbContext db, Guid orgId)
     {
         var tenant = new Mock<ICurrentTenantService>();
@@ -45,7 +56,8 @@ public class OrdersControllerMappingOverrideTests
             new OrderMappingOverrideService(db), // real service over the in-memory db
             new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
             new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object);
+            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
+            RealTransformers());
     }
 
     private static async Task<Guid> SeedOrderAsync(ProcuLinkDbContext db, Guid orgId)
@@ -218,8 +230,84 @@ public class OrdersControllerMappingOverrideTests
         var orderId = await SeedOrderAsync(db, orgId);
         var ctrl    = Build(db, orgId);
 
-        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "xml", CancellationToken.None);
+        // "edifact" is a real format but NOT an entity-based override format — must 400.
+        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "edifact", CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    // ── preview now spans every entity-based output format ─────────────────────
+
+    /// <summary>Seeds one resolved line + a supplier so the structured transforms can render.</summary>
+    private static async Task SeedResolvedLineAndSupplierAsync(
+        ProcuLinkDbContext db, Guid orgId, Guid orderId)
+    {
+        var order = await db.PurchaseOrders.FirstAsync(o => o.Id == orderId);
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "Seeded Supplier OÜ" });
+        order.SupplierId = supplierId;
+
+        db.PurchaseOrderLines.Add(new PurchaseOrderLineEntity
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
+            BuyerItemCode = "B1", SupplierItemCode = "S1", Description = "Widget",
+            Quantity = 2, UnitPrice = 5m, NeedsReview = false,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>An override that overrides the PoNumber with a fixed value (works for every format).</summary>
+    private static OrderMappingOverride PoNumberFixedValueOverride() => new()
+    {
+        Output = new OutputMappingConfig
+        {
+            Header = { ["po"] = new OutputFieldRule { OutputPath = "PoNumber", FixedValue = "OVERRIDDEN-PO" } },
+        },
+    };
+
+    [Theory]
+    [InlineData("xml")]
+    [InlineData("cxml")]
+    [InlineData("ubl")]
+    [InlineData("x12")]
+    public async Task Preview_StructuredFormat_AppliesHeaderOverride(string format)
+    {
+        await using var db = NewDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = await SeedOrderAsync(db, orgId);
+        await SeedResolvedLineAndSupplierAsync(db, orgId, orderId);
+        var ctrl = Build(db, orgId);
+
+        var result = await ctrl.PreviewMappingOverride(orderId, PoNumberFixedValueOverride(), format, CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        // The preview content carries the overridden PO number and never the original.
+        var content = ok.Value!.GetType().GetProperty("content")!.GetValue(ok.Value) as string;
+        Assert.NotNull(content);
+        Assert.Contains("OVERRIDDEN-PO", content);
+        Assert.DoesNotContain("PO-1", content);
+
+        // Non-mutating: no override persisted.
+        var stored = await new OrderMappingOverrideService(db).GetAsync(orgId, orderId, CancellationToken.None);
+        Assert.Null(stored);
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("xml")]
+    [InlineData("cxml")]
+    [InlineData("ubl")]
+    [InlineData("x12")]
+    public async Task Preview_AllFormatsAccepted_ReturnOk(string format)
+    {
+        await using var db = NewDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = await SeedOrderAsync(db, orgId);
+        await SeedResolvedLineAndSupplierAsync(db, orgId, orderId);
+        var ctrl = Build(db, orgId);
+
+        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), format, CancellationToken.None);
+        var ok = Assert.IsType<OkObjectResult>(result);
+        Assert.NotNull(ok.Value);
     }
 
     [Fact]

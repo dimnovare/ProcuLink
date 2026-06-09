@@ -68,7 +68,8 @@ public class OrdersControllerPromoteMappingTests
             new Mock<IOrderMappingOverrideService>().Object,
             promoteService,
             new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object);
+            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
+            Array.Empty<ProcuLink.Core.Services.ITransformService>());
 
         return (ctrl, poMappingService);
     }
