@@ -4,6 +4,16 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Where we are: **2026-06-09 — legal entity identity reconciled**
+
+> ProcuLink remains the product and customer-facing brand. The operating legal
+> entity is **Diip Solutions OÜ**, registry code **17527757**, registered at
+> **Uus-Sadama tn 15-2, 10120 Tallinn, Estonia**. The frontend source of truth is
+> `project-proculink/src/lib/legal-entity.ts`; legal pages, public footers, the
+> one-pager, and Organization JSON-LD consume it. Never restore the fabricated
+> `ProcuLink OÜ` / `17477775` / `Katusepapi` identity. Do not publish the
+> founder's personal registry email or invent a VAT number.
+
 ## Where we are: **2026-06-09 — Search indexing host mismatch fixed**
 
 > Frontend `fa4937f` + `b29cb6e` make `https://proculink.eu` the single production origin:

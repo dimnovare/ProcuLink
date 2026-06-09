@@ -393,7 +393,9 @@ Once all 8 actions are done, run this 20-minute test to confirm everything is co
 
 10. Open `/watch` in a new tab → Loom video embeds and plays.
 11. Open `/customers` → placeholder cards visible.
-12. Open `/dpa`, `/subprocessors`, `/aup` → all four legal pages render with `ProcuLink OÜ` entity.
+12. Open `/privacy`, `/terms`, `/dpa`, `/subprocessors`, and `/aup` → the
+    pages retain the `ProcuLink` service name and identify `Diip Solutions OÜ`
+    (registry code `17527757`) wherever the legal entity is required.
 13. Open `/support` → fill the contact form → email arrives at `support@proculink.eu` within 30s.
 14. Click "Status" in the marketing footer → Instatus page loads.
 

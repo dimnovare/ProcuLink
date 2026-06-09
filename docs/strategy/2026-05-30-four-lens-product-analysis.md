@@ -223,7 +223,7 @@ pre-launch company publicly admitting zero customers.
 action (one click to an "aha"). **Remove:** customers page (until a real quote exists), the ghost
 "Distributor" tier, the "4+" hedging. **Add for trust:** one real/anonymised pilot quote, 2-3
 product screenshots, a "test-fire to your own endpoint in 60 seconds" guarantee, and the
-ProcuLink OÜ + EU-residency badge **above the fold** (currently buried in `/security` — it's the
+Diip Solutions OÜ as the operator of ProcuLink + EU-residency badge **above the fold** (currently buried in `/security` — it's the
 single best trust asset for EU procurement).
 
 **Mobile:** App shell is genuinely responsive (mobile-card/desktop-table patterns). But
@@ -284,7 +284,7 @@ Everything needed to do that already exists in the code.
 ## Lens 4 — Launch readiness (brutal)
 
 **Genuinely strong:** the core engine is real and tested (not vaporware); the design identity is
-distinctive; the trust/legal stack (ProcuLink OÜ, GDPR doc, DPA, subprocessors, EU residency) is
+distinctive; the trust/legal stack (Diip Solutions OÜ as ProcuLink's operator, GDPR doc, DPA, subprocessors, EU residency) is
 ahead of most pre-launch peers; the GTM docs (scripted demo, outreach templates, pilot checklist,
 tripwires) are excellent; and the founder's own docs are refreshingly honest about gaps.
 
