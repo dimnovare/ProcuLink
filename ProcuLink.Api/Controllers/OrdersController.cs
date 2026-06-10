@@ -43,6 +43,7 @@ public sealed class OrdersController : ControllerBase
     private readonly ISourceTokenizer             _tokenizer;
     private readonly IEnumerable<ITransformService> _transformers;
     private readonly IAiSuggestionDecisionService _aiDecisions;
+    private readonly ProcuLink.Transform.Conformance.IConformanceService _conformance;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -75,7 +76,8 @@ public sealed class OrdersController : ControllerBase
         IFileStorageService          fileStorage,
         ISourceTokenizer             tokenizer,
         IEnumerable<ITransformService> transformers,
-        IAiSuggestionDecisionService? aiDecisions = null)
+        IAiSuggestionDecisionService? aiDecisions = null,
+        ProcuLink.Transform.Conformance.IConformanceService? conformance = null)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -95,6 +97,10 @@ public sealed class OrdersController : ControllerBase
         // not supply one we build the concrete recorder against the injected DbContext.
         _aiDecisions      = aiDecisions
             ?? new ProcuLink.Infrastructure.Services.AiSuggestionDecisionService(db);
+        // Optional in the ctor so existing positional test constructions stay valid; the
+        // conformance checker is pure/stateless, so a default instance is safe to construct.
+        _conformance      = conformance
+            ?? new ProcuLink.Transform.Conformance.ConformanceService();
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -1382,6 +1388,150 @@ public sealed class OrdersController : ControllerBase
             return NotFound();
 
         return Ok(result.Value);
+    }
+
+    // ── GET /api/orders/{id}/conformance ──────────────────────────────────────
+
+    /// <summary>
+    /// Group V8 — standards conformance report for an order's would-be OUTBOUND
+    /// document. Transforms the order to the named standards <c>format</c>
+    /// (cxml / ubl / x12 — the entity formats that map to a named profile) and
+    /// validates the produced bytes against that profile (cXML 1.2 OrderRequest /
+    /// UBL 2.1 Order / X12 850), returning the overall pass plus a named,
+    /// profile-referenced per-check row for each mandatory element / segment /
+    /// cardinality.
+    ///
+    /// <para>
+    /// Read-only and NON-MUTATING: it never writes, never changes status, never
+    /// delivers, never persists an artifact — it produces the document in memory
+    /// purely to check it. "Supported" therefore means <em>validated against a
+    /// named profile</em>.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>format</c> resolution mirrors transform: an explicit <c>?format=</c> wins;
+    /// otherwise the supplier's configured delivery format is used; a format with no
+    /// named standards profile (csv / json / xml) returns 400. Pass
+    /// <c>?download=md</c> for a <c>text/markdown</c> downloadable report instead of
+    /// JSON. Org-scoped: a cross-tenant or unknown order id returns 404.
+    /// </para>
+    /// </summary>
+    [HttpGet("{id:guid}/conformance")]
+    [ProducesResponseType(typeof(ConformanceReportDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> GetConformance(
+        Guid id,
+        [FromQuery] string? format = null,
+        [FromQuery] string? download = null,
+        CancellationToken ct = default)
+    {
+        var orgId = _tenant.OrganisationId;
+
+        // Load the order WITH lines, org-scoped, read-only. A missing supplier nav must
+        // never filter the row out, so the supplier is loaded separately + defensively
+        // (mirrors the preview endpoint).
+        var order = await _db.PurchaseOrders
+            .Include(o => o.Lines)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == orgId, ct);
+        if (order is null)
+            return NotFound();
+
+        if (order.Supplier is null && order.SupplierId != Guid.Empty)
+        {
+            var supplier = await _db.Suppliers
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.Id == order.SupplierId && s.OrgId == orgId, ct);
+            if (supplier is not null)
+                order.Supplier = supplier;
+        }
+
+        // Resolve the format: explicit query wins; else the supplier's configured delivery format.
+        var formatStr = format?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(formatStr))
+        {
+            var supplierFormat = await (
+                from o in _db.PurchaseOrders.AsNoTracking()
+                join c in _db.SupplierDeliveryConfigs.AsNoTracking()
+                    on new { o.OrgId, o.SupplierId } equals new { c.OrgId, c.SupplierId }
+                where o.Id == id && o.OrgId == orgId
+                select c.OutputFormat
+            ).FirstOrDefaultAsync(ct);
+            formatStr = supplierFormat?.Trim().ToLowerInvariant();
+        }
+        if (string.IsNullOrEmpty(formatStr))
+            return BadRequest(new
+            {
+                error = "No format to validate. Pass ?format=cxml|ubl|x12 or configure the supplier's delivery format.",
+            });
+
+        // Only the entity-transformable formats that have a NAMED standards profile.
+        var outputFormat = formatStr switch
+        {
+            "cxml" => (OutputFormat?)OutputFormat.CXml,
+            "ubl"  => OutputFormat.Ubl,
+            "x12"  => OutputFormat.X12,
+            _      => null,
+        };
+        if (outputFormat is null || !_conformance.SupportsFormat(outputFormat.Value))
+            return BadRequest(new
+            {
+                error = "Conformance reports are available for the named standards formats: cxml, ubl, x12. " +
+                        "Generic csv/json/xml templates have no named profile.",
+            });
+
+        // Transform the order to the standards document IN MEMORY. The transform applies the
+        // existing review / required-field guard, so an order with unresolved lines surfaces a
+        // 422 (resolve first) rather than a misleading conformance failure on a half-formed doc.
+        var transformer = _transformers.FirstOrDefault(t => t.CanTransform(outputFormat.Value));
+        if (transformer is null)
+            return BadRequest(new { error = $"No transform service registered for format '{formatStr}'." });
+
+        string documentText;
+        try
+        {
+            var result = await transformer.TransformAsync(order, outputFormat.Value, ct);
+            using var sr = new StreamReader(result.Content);
+            documentText = await sr.ReadToEndAsync(ct);
+        }
+        catch (TransformValidationException ex)
+        {
+            return UnprocessableEntity(new
+            {
+                error = "The order cannot be transformed to a complete document yet, so it cannot be " +
+                        "checked for conformance. Resolve the flagged lines first.",
+                detail = ex.Message,
+                unresolvedLines = ex.UnresolvedLineNumbers,
+            });
+        }
+
+        var report = _conformance.Check(documentText, outputFormat.Value);
+
+        // Markdown download variant.
+        if (string.Equals(download?.Trim(), "md", StringComparison.OrdinalIgnoreCase))
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(report.ToMarkdown());
+            var fileName = $"conformance-{order.PoNumber ?? id.ToString()}-{report.Profile}.md";
+            return File(bytes, "text/markdown", fileName);
+        }
+
+        var dto = new ConformanceReportDto(
+            OrderId:        id,
+            Format:         formatStr,
+            Profile:        report.Profile.ToString(),
+            ProfileName:    report.ProfileName,
+            ProfileVersion: report.ProfileVersion,
+            OverallPass:    report.OverallPass,
+            ErrorCount:     report.ErrorCount,
+            WarningCount:   report.WarningCount,
+            Checks: report.Checks
+                .Select(c => new ConformanceCheckDto(
+                    c.Code, c.Severity.ToString(), c.Passed, c.Message, c.ProfileRef))
+                .ToList());
+
+        return Ok(dto);
     }
 
     // ── Mapping helper ────────────────────────────────────────────────────────
