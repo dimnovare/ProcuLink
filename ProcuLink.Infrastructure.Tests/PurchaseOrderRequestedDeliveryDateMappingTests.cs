@@ -46,7 +46,9 @@ public class PurchaseOrderRequestedDeliveryDateMappingTests
         var property = entityType!.FindProperty(nameof(PurchaseOrderEntity.RequestedDeliveryDate));
         property.Should().NotBeNull(
             "RequestedDeliveryDate must be a mapped property — if it were b.Ignore()'d, FindProperty would return null");
-        entityType.GetIgnoredMembers().Should().NotContain(nameof(PurchaseOrderEntity.RequestedDeliveryDate));
+        // Definitive proof it's the real column: an EF-Ignored member has no property at all,
+        // so the non-null FindProperty above already rules out b.Ignore(...). Pin the column name too.
+        property!.GetColumnName().Should().Be("requested_delivery_date");
     }
 
     [Fact]
