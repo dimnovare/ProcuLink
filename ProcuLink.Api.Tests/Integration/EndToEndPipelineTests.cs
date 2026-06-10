@@ -1019,4 +1019,106 @@ public sealed class EndToEndPipelineTests : IAsyncLifetime
             Assert.Equal("ubl", parsed.Value!.DetectedFormat);
         }
     }
+
+    /// <summary>
+    /// V5 regression guard (the round-trip the unit tests lacked). The header field
+    /// <see cref="PurchaseOrderEntity.RequestedDeliveryDate"/> was originally EF-Ignored and "rode
+    /// canonical_json", so in production it was ALWAYS null at transform time: the async ingest
+    /// persisted typed columns only via <c>ExecuteUpdateAsync</c> (no canonical rewrite) and the
+    /// transform reloaded the entity fresh.
+    ///
+    /// This drives the REAL ingest path — <c>CreateStubAsync</c> → <c>ParseStoredFileAsync</c>
+    /// (which uses <c>ExecuteUpdateAsync</c>, untranslatable by the InMemory provider, hence real
+    /// Postgres here) — on a SAP IDoc ORDERS05 carrying <c>E1EDK03 IDDAT=012 DATUM=20260525</c>, then
+    /// RELOADS the order from a fresh DbContext scope and asserts the header requested delivery date
+    /// came back as the non-null parsed value. Pre-fix this read back null.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task ParseStoredFileAsync_Idoc_PersistsHeaderRequestedDeliveryDate()
+    {
+        var factory = _factory!;
+        var ct = CancellationToken.None;
+        var orgGuid = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        using (var scope = factory.NewScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var now = DateTime.UtcNow;
+
+            db.Organisations.Add(new Organisation
+            {
+                Id = orgGuid,
+                ClerkOrgId = "org_IDOC_RDD",
+                Name = "IDoc RDD Test Org",
+                Slug = "idoc-rdd-test-org",
+                Plan = "operations",
+                AccountStatus = "active",
+                CreatedAt = now,
+            });
+
+            db.Suppliers.Add(new Supplier
+            {
+                Id = supplierId,
+                OrgId = orgGuid,
+                Name = "Initech Supplier",
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        // Minimal SAP IDoc ORDERS05 carrying a header requested delivery date
+        // (E1EDK03 IDDAT=012 DATUM=20260525) and one orderable line.
+        const string idocXml = """
+            <ORDERS05>
+              <IDOC BEGIN="1">
+                <E1EDK01><CURCY>EUR</CURCY><BELNR>4501450099</BELNR></E1EDK01>
+                <E1EDK02><QUALF>001</QUALF><BELNR>PO-IDOC-RDD-1</BELNR><DATUM>20260601</DATUM></E1EDK02>
+                <E1EDK03><IDDAT>012</IDDAT><DATUM>20260525</DATUM></E1EDK03>
+                <E1EDP01>
+                  <POSEX>00010</POSEX><MENGE>50.000</MENGE><MENEE>EA</MENEE><VPREI>1.05</VPREI><NETWR>52.5</NETWR>
+                  <E1EDP19><QUALF>002</QUALF><IDTNR>BUY-IDOC-1</IDTNR></E1EDP19>
+                  <E1EDP19><QUALF>001</QUALF><KTEXT>Network bracket</KTEXT></E1EDP19>
+                </E1EDP01>
+                <E1EDS01><SUMME>52.5</SUMME><SUNIT>EUR</SUNIT></E1EDS01>
+              </IDOC>
+            </ORDERS05>
+            """;
+
+        Guid orderId;
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(idocXml));
+            var stub = await orders.CreateStubAsync(
+                orgGuid, supplierId, stream, "idoc-order.xml", "application/xml", ct);
+
+            Assert.True(stub.IsSuccess, $"CreateStubAsync failed: {stub.Error}");
+            orderId = stub.Value!.Id;
+        }
+
+        // Drive the previously-broken async path (uses ExecuteUpdateAsync).
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            var parsed = await orders.ParseStoredFileAsync(orgGuid, orderId, ct);
+
+            Assert.True(parsed.IsSuccess, $"ParseStoredFileAsync failed: {parsed.Error}");
+            Assert.Equal("PO-IDOC-RDD-1", parsed.Value!.Entity.PoNumber);
+            // The in-memory entity reflects the parsed value...
+            Assert.Equal(new DateOnly(2026, 5, 25), parsed.Value!.Entity.RequestedDeliveryDate);
+        }
+
+        // ...and — the actual regression — a FRESH reload from the DB has it too,
+        // proving ExecuteUpdateAsync persisted the column (pre-fix this was null).
+        using (var scope = factory.NewScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var reloaded = await db.PurchaseOrders.AsNoTracking()
+                .SingleAsync(o => o.Id == orderId && o.OrgId == orgGuid, ct);
+
+            Assert.Equal(new DateOnly(2026, 5, 25), reloaded.RequestedDeliveryDate);
+        }
+    }
 }

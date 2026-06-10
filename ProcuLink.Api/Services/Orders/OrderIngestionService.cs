@@ -405,7 +405,7 @@ internal sealed class OrderIngestionService
             GrandTotal    = order.GrandTotal,
             PaymentTerms  = paymentTerms,
             DocumentType  = documentType,
-            // V5: header-level requested delivery date (in-memory only; rides canonical_json).
+            // V5: header-level requested delivery date — real persisted column (requested_delivery_date).
             RequestedDeliveryDate = order.RequestedDeliveryDate,
         };
 
@@ -625,7 +625,7 @@ internal sealed class OrderIngestionService
             var newSubTotal   = parsedOrder.SubTotal;
             var newTaxTotal   = parsedOrder.TaxTotal;
             var newGrandTotal = parsedOrder.GrandTotal;
-            // V5: requested delivery date rides canonical_json (not a DB column; set on in-memory entity only).
+            // V5: header-level requested delivery date — real persisted column (requested_delivery_date).
             var newRequestedDeliveryDate = parsedOrder.RequestedDeliveryDate;
 
             var updated = await _db.PurchaseOrders
@@ -642,6 +642,7 @@ internal sealed class OrderIngestionService
                     .SetProperty(o => o.GrandTotal,   newGrandTotal)
                     .SetProperty(o => o.PaymentTerms, newPaymentTerms)
                     .SetProperty(o => o.DocumentType, newDocumentType)
+                    .SetProperty(o => o.RequestedDeliveryDate, newRequestedDeliveryDate)
                     .SetProperty(o => o.UpdatedAt,    now), ct);
 
             if (updated == 0)
@@ -690,7 +691,7 @@ internal sealed class OrderIngestionService
             entity.GrandTotal            = newGrandTotal;
             entity.PaymentTerms          = newPaymentTerms;
             entity.DocumentType          = newDocumentType;
-            // V5: rides canonical_json — in-memory only, not persisted as a DB column.
+            // V5: header-level requested delivery date — persisted via ExecuteUpdateAsync above.
             entity.RequestedDeliveryDate = newRequestedDeliveryDate;
             entity.UpdatedAt = now;
             entity.Lines = lineEntities;

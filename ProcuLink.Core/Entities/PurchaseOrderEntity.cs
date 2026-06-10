@@ -86,11 +86,13 @@ public class PurchaseOrderEntity
     /// </summary>
     public string? DocumentType { get; set; }
 
-    // ── V5 deepen-canonical (nullable; rides canonical_json — no migration) ─────
+    // ── V5 deepen-canonical (nullable; real persisted column) ───────────────────
     /// <summary>
     /// Requested delivery date at the header level (Peppol BIS 3.0 mandatory).
     /// UBL cbc:RequestedDeliveryDate; EDIFACT DTM+2; X12 DTM*002; IDoc E1EDK03 IDDAT=012.
-    /// Stored on the entity so transform/Scriban surfaces it; rides canonical_json (no DB column).
+    /// Real persisted column <c>requested_delivery_date</c> (migration <c>AddRequestedDeliveryDate</c>),
+    /// mirroring the per-line <c>delivery_date</c> column — survives the async ingest save/reload so
+    /// transform/override/Scriban paths read the parsed value back. Set at ingest from the parsed order.
     /// Null for formats that do not carry a header-level delivery date.
     /// </summary>
     public DateOnly? RequestedDeliveryDate { get; set; }

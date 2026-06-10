@@ -323,8 +323,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.DocumentType).HasColumnName("document_type");
             // Group V1: the connection revision this order was pinned to at ingest (nullable; legacy = null).
             b.Property(x => x.ConnectionRevisionId).HasColumnName("connection_revision_id");
-            // V5 deepen-canonical: RequestedDeliveryDate rides canonical_json — no DB column, no migration.
-            b.Ignore(x => x.RequestedDeliveryDate);
+            // V5 deepen-canonical: real persisted nullable date column (mirrors per-line delivery_date).
+            // Migration AddRequestedDeliveryDate. Null for formats with no header-level delivery date.
+            b.Property(x => x.RequestedDeliveryDate).HasColumnName("requested_delivery_date");
             // Composite indexes for cross-tenant maintenance sweeps and inbox/list queries.
             // (OrgId, Status): inbox list — filter by tenant then status bucket.
             b.HasIndex(x => new { x.OrgId, x.Status })
