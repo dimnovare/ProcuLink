@@ -32,10 +32,10 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
 2. **Source-token labels** → branch `auto/be-source-token-labels`. "row 9" → meaningful
    labels (column header + row/value) so a user can identify + map the exact source
    field. No migration.
-3. **FE cleanups** → branch `auto/fe-cleanups` (project-proculink). Editable PO# node
-   (resolve already accepts poNumber/supplierName) + full hide-wires-when-editor-open
-   (lift `mapOpen` to SpineReview, pass `hidden` to the wire layers — the prop already
-   exists).
+3. **FE cleanups** → ✅ SHIPPED (FE `main` = `274320b` → Vercel). Editable PO#/supplier
+   node (sends poNumber/supplierName via resolve) + full hide-wires-when-editor-open
+   (OutputPreview relays mapOpen up; SpineReview feeds the wire layers' `hidden` prop +
+   skips SpineConnectors while the editor is open). Verified green + live-mock-QA'd.
 
    MERGE RECIPE (proven this session): worktree agents commit to `auto/*`; `git checkout
    main` → `git merge --no-ff` each (disjoint files → clean; resolve OrderTransformService
