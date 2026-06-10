@@ -52,6 +52,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<SupplierAcceptanceProfile>   SupplierAcceptanceProfiles   { get; set; } = null!;
     public DbSet<SupplierAcceptanceRule>      SupplierAcceptanceRules      { get; set; } = null!;
     public DbSet<OrderValidationResult>       OrderValidationResults       { get; set; } = null!;
+    // ── Group V4: unified validation — reusable rule definitions (templates) ─
+    public DbSet<RuleDefinition>              RuleDefinitions              { get; set; } = null!;
     // ── Group V1: versioned Supplier Connection ─────────────────────────────
     public DbSet<SupplierConnection>             SupplierConnections           { get; set; } = null!;
     public DbSet<SupplierConnectionRevision>     SupplierConnectionRevisions   { get; set; } = null!;
@@ -749,7 +751,41 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.ExpectedValue).HasColumnName("expected_value");
             b.Property(x => x.Severity).HasColumnName("severity").IsRequired();
             b.Property(x => x.BlockOnFail).HasColumnName("block_on_fail");
+            // Group V4 — optional binding to a reusable RuleDefinition (executor never reads these).
+            b.Property(x => x.RuleDefinitionId).HasColumnName("rule_definition_id");
+            b.Property(x => x.RuleCode).HasColumnName("rule_code");
             b.HasIndex(x => x.ProfileId).HasDatabaseName("IX_supplier_acceptance_rules_profile_id");
+            b.HasIndex(x => x.RuleDefinitionId).HasDatabaseName("IX_supplier_acceptance_rules_rule_definition_id");
+        });
+
+        // ── rule_definitions (Group V4 — reusable rule templates / org catalog) ──
+        modelBuilder.Entity<RuleDefinition>(b =>
+        {
+            b.ToTable("rule_definitions");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.Code).HasColumnName("code").IsRequired();
+            b.Property(x => x.Title).HasColumnName("title").IsRequired();
+            b.Property(x => x.Description).HasColumnName("description");
+            b.Property(x => x.Scope).HasColumnName("scope").IsRequired();
+            b.Property(x => x.FieldPath).HasColumnName("field_path").IsRequired();
+            b.Property(x => x.Operator).HasColumnName("operator").IsRequired();
+            b.Property(x => x.DefaultSeverity).HasColumnName("default_severity").IsRequired();
+            b.Property(x => x.DefaultExpectedValue).HasColumnName("default_expected_value");
+            b.Property(x => x.ParamHint).HasColumnName("param_hint");
+            b.Property(x => x.UblRef).HasColumnName("ubl_ref");
+            b.Property(x => x.EdifactRef).HasColumnName("edifact_ref");
+            b.Property(x => x.X12Ref).HasColumnName("x12_ref");
+            b.Property(x => x.CxmlRef).HasColumnName("cxml_ref");
+            b.Property(x => x.IsSystem).HasColumnName("is_system");
+            b.Property(x => x.CreatedBy).HasColumnName("created_by");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
+            // Org-scoped catalog: a code is unique within an org.
+            b.HasIndex(x => new { x.OrgId, x.Code })
+             .IsUnique()
+             .HasDatabaseName("IX_rule_definitions_org_code");
         });
 
         // ── order_validation_results ────────────────────────────────────

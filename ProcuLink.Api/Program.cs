@@ -400,6 +400,9 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IPromoteMappingServic
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
+// Group V4 — unified validation: reusable rule definitions + binding-aware read API + boot backfill.
+builder.Services.AddScoped<IRuleDefinitionService, RuleDefinitionService>();
+builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfillService>();
 // Group V1 — versioned Supplier Connection (lifecycle service, ingest-time resolver, backfill).
 builder.Services.AddScoped<ISupplierConnectionService, SupplierConnectionService>();
 builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
@@ -826,6 +829,27 @@ app.Lifetime.ApplicationStarted.Register(() =>
                     migLogger.LogError(backfillEx,
                         "Group V1 connection backfill failed (app stays up; orders fall back to live config).");
                     SentrySdk.CaptureException(backfillEx);
+                }
+
+                // ── Group V4: idempotent rule-definition seed + link ─────────
+                // Seed the global rule catalog as org-scoped RuleDefinitions and link existing
+                // free-floating acceptance rules to a matching definition. ZERO evaluation change
+                // (rule scalar columns are never touched). Idempotent — UNIQUE(org_id, code) +
+                // the "RuleDefinitionId is null" link guard make re-runs a no-op. Best-effort:
+                // a failure must NOT keep the app from serving (migrations already succeeded).
+                try
+                {
+                    var ruleBackfill = scope.ServiceProvider.GetRequiredService<IRuleDefinitionBackfillService>();
+                    var (defs, links) = await ruleBackfill.BackfillAllAsync(CancellationToken.None);
+                    migLogger.LogInformation(
+                        "Group V4 rule-definition backfill complete: {Defs} definition(s) seeded, {Links} rule(s) linked.",
+                        defs, links);
+                }
+                catch (Exception ruleBackfillEx)
+                {
+                    migLogger.LogError(ruleBackfillEx,
+                        "Group V4 rule-definition backfill failed (app stays up; acceptance evaluation unaffected).");
+                    SentrySdk.CaptureException(ruleBackfillEx);
                 }
                 return;
             }
