@@ -96,31 +96,50 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   read-only manifest requirements section (`resolveManifestKey` maps connector type → the 6 keys; silent
   for unknown), reusing the Required/Secret/type pills.
 
-## ⚠️ LIVE-MATRIX FINDING (2026-06-10) — V5 introduced a csv/json preview 500 (HOTFIX IN FLIGHT)
-Driving the live in×out matrix (the runner) surfaced a REAL prod regression that the deterministic
-56/56 + V5 byte-identical tests + adversarial review ALL missed:
-- **`POST /api/orders/{id}/mapping-override/preview?format=csv|json` → HTTP 500** (unhandled exception)
-  for RESOLVED orders, on EVERY order (incl. pre-existing `ef6138c2`). `?format=xml|cxml|ubl|x12` → 200.
-- ROOT CAUSE (hypothesis, agent confirming): **V5 added derived totals (SubTotal/TaxTotal/GrandTotal)
-  + PaymentTerms + per-line TaxRate/LineAmount into `MappedTransformService.BuildHeaderRow/BuildLineRow`
-  — the row-bag used by the NATIVE csv/json override+preview path.** The byte-identical tests only
-  covered the FIXED transforms (typed-column readers), NOT this path → the new derived-total code
-  throws on csv/json preview. The csv/json all-format preview WORKED before V5.
-- HOTFIX: background agent `a3fd2c1a68652cfca` → branch `auto/be-fix-csvjson-preview-500` (reproduce
-  red test → null-safe derived totals → regression test covering the csv/json preview/override path →
-  full suite → I deploy + re-verify csv/json preview = 200 live). **MERGE GATE: do not call V5 "done"
-  until this lands + csv/json preview is 200 live.**
-- LESSON: the deterministic matrix proves transforms on RESOLVED, RICH fixtures; live minimal-CSV
-  orders behave differently. Also: CSV-inbound → cxml/ubl/x12 preview returns 200 with a `warning` +
-  EMPTY content (insufficient structured data — honest, not a crash); xml-out works from CSV. Cover the
-  override/preview/row-bag path in tests, not just fixed transforms.
+## ✅ LIVE-MATRIX FINDING (2026-06-10) — csv/json preview 500 FOUND + FIXED + LIVE-VERIFIED (`e7b5965`)
+Driving the live in×out matrix surfaced a REAL prod 500 the deterministic 56/56 + byte-identical tests
++ adversarial review ALL missed:
+- **`POST /api/orders/{id}/mapping-override/preview?format=csv|json` → HTTP 500** for RESOLVED orders,
+  on EVERY order. `?format=xml|cxml|ubl|x12` → 200.
+- **TRUE ROOT CAUSE (my V5 hypothesis was WRONG; the hotfix agent reproduced + corrected it):** a LATENT
+  bug since Phase 1/2 — `MappedTransformService.cs:75` throws `ArgumentException` on a null `Output`, and
+  the csv/json preview branch gated the native builder on `SupportsOverride(fmt)` ALONE (not also
+  `HasUsableOutput`), so an empty `{}` preview body → unhandled throw → 500 (the endpoint only caught
+  `TransformValidationException`). xml/cxml use `EffectiveEntityResolver` (tolerates null Output) → 200.
+  NOT a V5 arithmetic bug (V5 totals were a red herring; both paths call BuildHeaderRow). The agent
+  didn't just accept my hypothesis — it reproduced the throw + found the real cause.
+- **FIX (`e7b5965`, merged + deployed):** gate the native builder on `SupportsOverride && HasUsableOutput`
+  (matching the real transform path) → empty override falls back to the fixed transform; + defensive
+  overflow guards on the V5 totals (defense-in-depth). +3 regression tests covering the csv/json
+  preview/override path (the coverage gap). 1970 tests green; fixed transforms untouched (verified).
+- **LIVE-VERIFIED:** pre-existing order `ef6138c2` now returns 200 + content for ALL 6 formats
+  (csv/json/xml/cxml/ubl/x12). 500 gone.
+- LESSON: cover the override/preview/row-bag path in tests, not just fixed transforms. The deterministic
+  matrix proves transforms on RESOLVED RICH fixtures; live minimal-CSV orders → cxml/ubl/x12 return 200
+  with a `warning` + EMPTY content (insufficient structured data — honest, not a crash); xml-out works.
+
+## ✅ ENG-HYGIENE SHIPPED (FE `main` = `9633633` → Vercel) + Fable-5 diverse-review experiment
+Workflow `wsfy7y3p0` (build → Fable-5 + Sonnet parallel review). Behavior-preserving, both reviewers SAFE:
+- `@next/mdx` aligned ^16.2.6 → 15.5.18 (matches Next 15; MDX IS used — 8 help .mdx pages).
+- `scripts/check-pageshell.mjs` report-only CI guard (baseline allowlist of 15 legacy pages; `--strict`
+  fails only on NEW non-conforming pages; not wired as a build-blocker). `bun run check:pageshell`.
+- `api-client.ts` decomposed (690 impl lines → re-exports) into `src/lib/api/{billing,operations,settings}.ts`;
+  public surface preserved (129 exports both sides, verified). Build green 50/50.
+- **FABLE-5 vs SONNET (answer to "does Fable 5 help"): YES as a DIVERSE REVIEWER.** Sonnet: issues=[].
+  Fable-5 caught 4 non-blocking issues Sonnet missed — notably a **class-identity footgun**: the
+  decomposition copied `ApiHttpError` as a PRIVATE class into 2 modules → cross-module `instanceof`
+  silently false (it proved via consumer-grep that no current call site breaks). Its note: "a textual
+  diff alone would have called this a pure move." Use Fable-5 as a diverse adversarial lens; keep Sonnet
+  for implementation.
+- FOLLOW-UP IN FLIGHT (`a7c980f81ab909b95` → branch `auto/fe-api-core`): extract `src/lib/api/core.ts`
+  (single `ApiHttpError` + shared helpers) to close Fable's #1+#2. MERGE when it lands → build → Vercel.
 - RUNNER BUGS found (fix `scripts/live-matrix/runner.js`): (1) it reads the order id at `up.json.id`
   but the upload API returns `{order:{id}}` → it never tracked orders; (2) it treats `/transform` as
   returning output inline, but `/transform` is ASYNC (enqueues a Worker job) — the INLINE path for all
   formats is `/mapping-override/preview?format=`; (3) it never RESOLVES lines, so structured-format
   legs correctly 422 "resolve first". The 25s parse poll is also too short under Worker load.
 
-## BATCH 4 — V5 deepen canonical ✅ SHIPPED (backend `main` = `5dc2edb` → Railway) — ⚠️ csv/json-preview regression hotfix in flight (above)
+## BATCH 4 — V5 deepen canonical ✅ SHIPPED + LIVE-VERIFIED (backend `main` = `5dc2edb`; csv/json-preview 500 was a pre-existing latent bug, now fixed `e7b5965`)
 LIVE-VERIFIED on Neon (after the GitHub/Railway incident cleared): new build Online; authenticated
 `GET /api/orders` list + detail both 200 → `requested_delivery_date` migration applied cleanly on live
 Postgres (a missing column would 500 the SELECT under the new EF model). Migration applied + round-trip
