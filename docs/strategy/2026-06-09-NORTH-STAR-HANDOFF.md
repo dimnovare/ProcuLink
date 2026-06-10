@@ -143,10 +143,23 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   ConnectionDetail: revision picker + recent-window, per-order rows sorted most-dangerous-
   first, "would start failing" flagged red, expandable output diff / field-change table /
   validation-flip rows, non-destructive. Uses the live replay endpoint.
-- **FE follow-up still OPEN for batch 3:** no V4 or V8 frontend yet. Candidates: a rule-definitions
-  catalog / per-supplier bindings view (reads the new read API; standards refs already exposed), and
-  a "Conformance" tab/button on the order/connection detail that calls the conformance endpoint and
-  renders/downloads the report. Both are read-only over endpoints that are already live.
+- **Batch-3 FE + V6 — ✅ SHIPPED + LIVE-VERIFIED (FE `main` = `a5d1854` → Vercel).** Branch
+  `auto/fe-v6-exception-first` merged (1243 +/35 −, `bun run build` green, 20/20 unit tests).
+  THREE features, all read-only over now-live endpoints, all verified rendering real prod data:
+  (1) **Conformance viewer** — `ConformancePanel` as a "Conformance" tab on the order-review screen
+  (SpineReview) with `?tab=conformance` deep-link; cXML/UBL/X12 selector + checks table + real
+  authenticated Markdown download (`GET /api/orders/{id}/conformance?format=…&download=md`). LIVE:
+  tab renders, format selector + checks + download present, no error. (2) **Rule-definitions
+  catalog** — new `/library/rule-definitions` route (+ sidebar nav under the Library group, gated by
+  `NEXT_PUBLIC_LAUNCH_FULL_NAV` like its siblings) reading `GET /api/rule-definitions`; grouped by
+  scope; standards refs (UBL/EDIFACT/X12/cXML) behind a `StandardsRefList` disclosure. LIVE: shows
+  "12 definitions", all codes, Order/Line groups. Plus an "Active rule bindings" panel on
+  `SupplierDockProfile` reading `GET /api/suppliers/{id}/rule-bindings` (clean empty state at count
+  0). (3) **Exception-first elevation** — `/operations/exceptions` rows/cards expand
+  (`ExceptionDetail`) to what's-wrong / why / how-to-fix / honest delivery status (delivered≠accepted),
+  linking to the conformance tab + supplier bindings. Verified the agent's `ConformanceReport` TS
+  interface matches the raw prod JSON exactly (`profile`/`profileName`/`profileVersion`/`overallPass`
+  at report level; `profileRef` per-check) — no casing bug.
 
 ## Resume instructions (BATCH 1+2+3 all shipped + live — backend `10bb6f1`, FE `040d972`)
 Backend North-Star groups V1, V2, V3, V4, V8, V9, V10 are all SHIPPED + LIVE-VERIFIED. Remaining:
