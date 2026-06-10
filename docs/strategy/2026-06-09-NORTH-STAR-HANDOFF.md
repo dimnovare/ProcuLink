@@ -91,14 +91,21 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   verify rAF features by reasoning + the founder's focused screen.
 - `dotnet`/long bash need `dangerouslyDisableSandbox:true`. bun never npm.
 
-## BATCH 2 IN FLIGHT (launched 2026-06-09 after V1 shipped) — MERGE when they land
-- `auto/be-v2-replay` — Group V2 replay/impact testing (run historical orders through a
-  DRAFT revision, non-mutating, never delivers; returns canonical/validation/output diff).
-  NO migration. Backend worktree.
-- `auto/be-v10-catalog` — Group V10 indexed Postgres catalog retrieval (pg_trgm + GIN
-  index; exact-match → trigram ranking; small catalogs unchanged). **OWNS the only
-  migration this batch.** ⚠️ trigram needs LIVE-POSTGRES verification (InMemory can't test
-  pg_trgm — see project-inmemory-masks-postgres-fk); verify the indexed path live after deploy.
+## BATCH 2 — ✅ ALL SHIPPED + LIVE (backend `main` = `e52ca2d` → Railway, API 200/200, 1824 tests green)
+- **V2 replay/impact testing** — SHIPPED + VERIFIED LIVE. `POST /api/connections/{cid}/revisions/{revId}/replay`
+  (body `{orderIds?|recentLimit?}`, cap 50) returns per-order output/effective-value/validation
+  diffs, non-mutating, never delivers. Reuses the transform engine + a pure extracted
+  `SupplierAcceptanceService.EvaluateProfile`. Live smoke: replayed rev-1 over 5 real orders
+  → 200, outputChanged/validationChanged=false (correct, same revision), output re-rendered.
+  Full contract (ReplayResponse/ReplayOrderDiffDto) in the workflow result — feeds the V2 UI
+  that replaces the "Coming soon" placeholder on the connection detail page.
+- **V10 indexed catalog retrieval** — SHIPPED. Migration `20260610120109_AddCatalogTrigramIndexes`
+  (pg_trgm + GIN trigram indexes on supplier_products.code/name + barcode btree; idempotent
+  raw SQL) **applied clean on prod (API healthy)**. `CatalogRetrievalService` exact→trigram;
+  threshold-gated so catalogs ≤2000 use the unchanged in-memory path (byte-identical). ⚠️
+  the trigram RANKING path itself only triggers for >2000-SKU catalogs and can't be proven by
+  InMemory tests — exercise it with a real large catalog when one exists (extension + indexes
+  are confirmed live).
 - `auto/fe-v1-connections-ui` — ✅ SHIPPED (FE `main` = `78fb893` → Vercel). Connections
   list + detail (active-revision bundle summary + revision history) + full lifecycle
   (create-draft/clone, mark-test, publish-with-confirm, archive, rollback), sidebar nav,
