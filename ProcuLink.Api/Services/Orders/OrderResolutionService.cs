@@ -15,21 +15,24 @@ namespace ProcuLink.Api.Services;
 /// </summary>
 internal sealed class OrderResolutionService
 {
-    private readonly ProcuLinkDbContext    _db;
-    private readonly IItemMappingService   _mappings;
-    private readonly ILogger<OrderService> _logger;
-    private readonly OrderServiceShared    _shared;
+    private readonly ProcuLinkDbContext            _db;
+    private readonly IItemMappingService           _mappings;
+    private readonly ILogger<OrderService>         _logger;
+    private readonly OrderServiceShared            _shared;
+    private readonly IAiSuggestionDecisionService  _aiDecisions;
 
     public OrderResolutionService(
-        ProcuLinkDbContext    db,
-        IItemMappingService   mappings,
-        ILogger<OrderService> logger,
-        OrderServiceShared    shared)
+        ProcuLinkDbContext            db,
+        IItemMappingService           mappings,
+        ILogger<OrderService>         logger,
+        OrderServiceShared            shared,
+        IAiSuggestionDecisionService  aiDecisions)
     {
-        _db       = db;
-        _mappings = mappings;
-        _logger   = logger;
-        _shared   = shared;
+        _db          = db;
+        _mappings    = mappings;
+        _logger      = logger;
+        _shared      = shared;
+        _aiDecisions = aiDecisions;
     }
 
     // ── ResolveAsync ──────────────────────────────────────────────────────────
@@ -71,11 +74,20 @@ internal sealed class OrderResolutionService
             ? await _db.Database.BeginTransactionAsync(ct)
             : null;
 
+        // Capture AI-suggestion decisions BEFORE the transient Ai* fields are cleared below,
+        // so the durable history survives resolution (the fields are about to be nulled out).
+        var decisionRecords = new List<AiSuggestionDecisionRecord>();
+
         // Apply resolutions
         foreach (var res in resolutions)
         {
             var line             = entity.Lines.First(l => l.LineNumber == res.LineNumber);
-            line.SupplierItemCode = res.SupplierItemCode.Trim();
+            var chosen           = res.SupplierItemCode.Trim();
+
+            // Record what happened to any AI suggestion that was attached to this line.
+            decisionRecords.Add(BuildDecisionFromLine(line, chosen, decidedBy: "user"));
+
+            line.SupplierItemCode = chosen;
             line.NeedsReview     = false;
             line.Confidence      = 1.0f;
             line.AiSuggestedSupplierItemCode = null;
@@ -166,6 +178,11 @@ internal sealed class OrderResolutionService
 
         await _db.SaveChangesAsync(ct);
 
+        // Persist the durable AI-suggestion decision history inside the same transaction so it
+        // commits atomically with the resolution. Idempotent across retries via the unique index.
+        if (decisionRecords.Count > 0)
+            await _aiDecisions.RecordManyAsync(organisationId, orderId, decisionRecords, ct);
+
         await _shared.EmitPassportEventAsync(organisationId, orderId, "Map", "Corrected",
             actorType: "user",
             payload: new { linesResolved = resolutions.Count, savedMappings = saveMappings }, ct: ct);
@@ -251,13 +268,22 @@ internal sealed class OrderResolutionService
 
         var acceptedCount = 0;
 
+        // Capture decisions BEFORE clearing the transient Ai* fields below.
+        var decisionRecords = new List<AiSuggestionDecisionRecord>();
+
         foreach (var line in entity.Lines)
         {
             if (!line.NeedsReview) continue;
             if (string.IsNullOrWhiteSpace(line.AiSuggestedSupplierItemCode)) continue;
             if ((line.AiSuggestionConfidence ?? 0.0) < minConfidence) continue;
 
-            line.SupplierItemCode           = line.AiSuggestedSupplierItemCode;
+            var chosen = line.AiSuggestedSupplierItemCode;
+
+            // The bulk-accept path always keeps the AI's suggested code verbatim → "accepted",
+            // decided by the AI/system (no human review). Recorded before the fields are cleared.
+            decisionRecords.Add(BuildDecisionFromLine(line, chosen, decidedBy: "ai"));
+
+            line.SupplierItemCode           = chosen;
             line.Confidence                 = (float)(line.AiSuggestionConfidence ?? line.Confidence);
             line.NeedsReview                = false;
             line.AiSuggestedSupplierItemCode = null;
@@ -283,6 +309,10 @@ internal sealed class OrderResolutionService
 
         await _db.SaveChangesAsync(ct);
 
+        // Persist the durable accept history. Idempotent across retries via the unique index.
+        if (decisionRecords.Count > 0)
+            await _aiDecisions.RecordManyAsync(organisationId, orderId, decisionRecords, ct);
+
         await _shared.EmitPassportEventAsync(organisationId, orderId, "Map", "AiAccepted",
             actorType: "ai",
             payload: new { accepted = acceptedCount }, ct: ct);
@@ -294,5 +324,57 @@ internal sealed class OrderResolutionService
             orderId, acceptedCount, minConfidence, entity.Status);
 
         return Result<int>.Ok(acceptedCount);
+    }
+
+    // ── Decision-history helper ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds an <see cref="AiSuggestionDecisionRecord"/> from a line's transient AI metadata
+    /// and the code that was actually chosen. Classifies the outcome:
+    /// <list type="bullet">
+    ///   <item>no AI suggestion present → <c>manual</c></item>
+    ///   <item>chosen code equals the suggested code → <c>accepted</c></item>
+    ///   <item>a different code was chosen → <c>rejected</c></item>
+    /// </list>
+    /// The candidate-set evidence (reason + provenance) is captured as a small JSON blob so the
+    /// suggestion context survives the clearing of the line's Ai* fields.
+    /// </summary>
+    private static AiSuggestionDecisionRecord BuildDecisionFromLine(
+        PurchaseOrderLineEntity line, string chosenCode, string decidedBy)
+    {
+        var suggested = line.AiSuggestedSupplierItemCode;
+        var hasSuggestion = !string.IsNullOrWhiteSpace(suggested);
+
+        string decision;
+        if (!hasSuggestion)
+            decision = AiSuggestionDecisionKind.Manual;
+        else if (string.Equals(suggested!.Trim(), chosenCode.Trim(), StringComparison.OrdinalIgnoreCase))
+            decision = AiSuggestionDecisionKind.Accepted;
+        else
+            decision = AiSuggestionDecisionKind.Rejected;
+
+        // Capture reason + provenance as the candidate-set evidence (minimal, queryable JSON).
+        string? candidateSetJson = null;
+        if (hasSuggestion && (!string.IsNullOrWhiteSpace(line.AiSuggestionReason)
+                              || !string.IsNullOrWhiteSpace(line.AiSuggestionProvenance)))
+        {
+            candidateSetJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                reason     = line.AiSuggestionReason,
+                provenance = line.AiSuggestionProvenance,
+            });
+        }
+
+        return new AiSuggestionDecisionRecord(
+            LineNumber:                line.LineNumber,
+            SuggestedSupplierItemCode: hasSuggestion ? suggested!.Trim() : string.Empty,
+            ChosenSupplierItemCode:    string.IsNullOrWhiteSpace(chosenCode) ? null : chosenCode.Trim(),
+            CandidateSetJson:          candidateSetJson,
+            Confidence:                line.AiSuggestionConfidence.HasValue
+                                           ? (double?)line.AiSuggestionConfidence.Value
+                                           : null,
+            ModelVersion:              null, // per-line model version is not persisted on the line today
+            Decision:                  decision,
+            DecidedBy:                 decidedBy);
     }
 }
