@@ -97,6 +97,14 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
         // ── Order date: E1EDK02 DATUM (yyyyMMdd) ───────────────────────────────
         var orderDate = ParseIdocDate(ChildValue(poEdk02, "DATUM"));
 
+        // ── Requested delivery date: E1EDK03 IDDAT=012 DATUM (yyyyMMdd) ────────
+        // Peppol BIS 3.0 mandatory; UBL cbc:RequestedDeliveryDate; EDIFACT DTM+2.
+        // Read the first E1EDK03 segment with IDDAT=012 (delivery schedule date).
+        var edk03List = Children(idoc, "E1EDK03").ToList();
+        var deliveryDateSeg = edk03List
+            .FirstOrDefault(e => ChildValue(e, "IDDAT") == "012");
+        var requestedDeliveryDate = ParseIdocDateOnly(ChildValue(deliveryDateSeg, "DATUM"));
+
         // ── Currency: E1EDS01 SUNIT, else E1EDK01 CURCY when alphabetic ────────
         var currency = NullIfEmpty(ChildValue(eds01, "SUNIT"));
         if (currency is null)
@@ -134,6 +142,11 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
             var unitPrice = ParseDecimal(ChildValue(lineEl, "VPREI"));
             var lineAmount = ParseDecimal(ChildValue(lineEl, "NETWR"));
 
+            // V5: per-line delivery date from E1EDP20 EDATU (yyyyMMdd).
+            // Present on every line in the real fixture corpus (idoc-orders05-11/-710).
+            var edp20 = Children(lineEl, "E1EDP20").FirstOrDefault();
+            var lineDeliveryDate = ParseIdocDateOnly(ChildValue(edp20, "EDATU"));
+
             var idp19s = Children(lineEl, "E1EDP19").ToList();
 
             // Buyer item code: prefer QUALF=002 (buyer material no.), then QUALF=001,
@@ -161,7 +174,9 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
                 Quantity: quantity,
                 Unit: unit,
                 UnitPrice: unitPrice,
-                LineAmount: lineAmount));
+                LineAmount: lineAmount,
+                // V5: populate per-line delivery date from E1EDP20 EDATU.
+                DeliveryDate: lineDeliveryDate));
 
             autoLine++;
         }
@@ -174,7 +189,9 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
             Lines: lines,
             SupplierName: supplierName,
             GrandTotal: grandTotal,
-            DocumentType: "order");
+            DocumentType: "order",
+            // V5: header-level requested delivery date from E1EDK03 IDDAT=012.
+            RequestedDeliveryDate: requestedDeliveryDate);
     }
 
     // ── Public static helper (factory-friendly content detection) ───────────────
@@ -286,6 +303,19 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
         return DateTime.TryParseExact(value.Trim(), "yyyyMMdd", CultureInfo.InvariantCulture,
                    DateTimeStyles.None, out var dt)
             ? dt
+            : null;
+    }
+
+    /// <summary>
+    /// Parses an IDoc date string (<c>yyyyMMdd</c>) into a <see cref="DateOnly"/>.
+    /// V5: used for requested delivery dates (header E1EDK03 DATUM and line E1EDP20 EDATU).
+    /// </summary>
+    private static DateOnly? ParseIdocDateOnly(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        return DateOnly.TryParseExact(value.Trim(), "yyyyMMdd", CultureInfo.InvariantCulture,
+                   DateTimeStyles.None, out var d)
+            ? d
             : null;
     }
 

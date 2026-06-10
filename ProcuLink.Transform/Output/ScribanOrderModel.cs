@@ -74,6 +74,11 @@ internal static class ScribanOrderModel
         root["GrandTotal"]   = NumberOrEmpty(order.GrandTotal);
         root["PaymentTerms"] = order.PaymentTerms ?? string.Empty;
 
+        // V5 deepen-canonical: requested delivery date (ISO string, "" when absent).
+        root["RequestedDeliveryDate"] = order.RequestedDeliveryDate.HasValue
+            ? order.RequestedDeliveryDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : string.Empty;
+
         // ── ShippingAddress object ──
         root["ShippingAddress"] = BuildShippingAddress(order, @override);
 
@@ -126,6 +131,11 @@ internal static class ScribanOrderModel
         obj["LineTotal"]        = total;
         // LineAmount: the printed extended total when stated, else the computed line total.
         obj["LineAmount"]       = line.LineAmount ?? total;
+        // V5 deepen-canonical: per-line enrichment (empty string / "" when absent).
+        obj["TaxRate"]          = line.TaxRate.HasValue ? (object)line.TaxRate.Value : string.Empty;
+        obj["DeliveryDate"]     = line.DeliveryDate.HasValue
+            ? line.DeliveryDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : string.Empty;
 
         // Line-scoped custom fields for THIS line number.
         var lineCustom = new ScriptObject();
