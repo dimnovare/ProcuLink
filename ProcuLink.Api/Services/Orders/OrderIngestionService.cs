@@ -357,16 +357,18 @@ internal sealed class OrderIngestionService
         var canonicalPayload = new
         {
             source,
-            buyerName    = order.BuyerName,
-            poNumber     = order.PoNumber,
-            orderDate    = order.OrderDate,
-            currency     = order.Currency,
+            buyerName              = order.BuyerName,
+            poNumber               = order.PoNumber,
+            orderDate              = order.OrderDate,
+            currency               = order.Currency,
             supplierName,
             paymentTerms,
             documentType,
-            subTotal     = order.SubTotal,
-            taxTotal     = order.TaxTotal,
-            grandTotal   = order.GrandTotal,
+            subTotal               = order.SubTotal,
+            taxTotal               = order.TaxTotal,
+            grandTotal             = order.GrandTotal,
+            // V5: requested delivery date (null when absent — omitted from JSON by serialiser's default).
+            requestedDeliveryDate  = order.RequestedDeliveryDate,
         };
         var canonicalJson = JsonDocument.Parse(JsonSerializer.Serialize(canonicalPayload));
 
@@ -403,6 +405,8 @@ internal sealed class OrderIngestionService
             GrandTotal    = order.GrandTotal,
             PaymentTerms  = paymentTerms,
             DocumentType  = documentType,
+            // V5: header-level requested delivery date (in-memory only; rides canonical_json).
+            RequestedDeliveryDate = order.RequestedDeliveryDate,
         };
 
         _db.PurchaseOrders.Add(entity);
@@ -621,6 +625,8 @@ internal sealed class OrderIngestionService
             var newSubTotal   = parsedOrder.SubTotal;
             var newTaxTotal   = parsedOrder.TaxTotal;
             var newGrandTotal = parsedOrder.GrandTotal;
+            // V5: requested delivery date rides canonical_json (not a DB column; set on in-memory entity only).
+            var newRequestedDeliveryDate = parsedOrder.RequestedDeliveryDate;
 
             var updated = await _db.PurchaseOrders
                 .Where(o => o.Id == orderId && o.OrgId == organisationId)
@@ -678,12 +684,14 @@ internal sealed class OrderIngestionService
             entity.Currency  = newCurrency;
             entity.Status    = newStatus;
             entity.BuyerName = newBuyerName;
-            entity.SupplierName = newSupplierName;
-            entity.SubTotal     = newSubTotal;
-            entity.TaxTotal     = newTaxTotal;
-            entity.GrandTotal   = newGrandTotal;
-            entity.PaymentTerms = newPaymentTerms;
-            entity.DocumentType = newDocumentType;
+            entity.SupplierName          = newSupplierName;
+            entity.SubTotal              = newSubTotal;
+            entity.TaxTotal              = newTaxTotal;
+            entity.GrandTotal            = newGrandTotal;
+            entity.PaymentTerms          = newPaymentTerms;
+            entity.DocumentType          = newDocumentType;
+            // V5: rides canonical_json — in-memory only, not persisted as a DB column.
+            entity.RequestedDeliveryDate = newRequestedDeliveryDate;
             entity.UpdatedAt = now;
             entity.Lines = lineEntities;
 
@@ -800,7 +808,9 @@ internal sealed class OrderIngestionService
             TaxTotal: o.TaxTotal,
             GrandTotal: o.GrandTotal,
             PaymentTerms: o.PaymentTerms,
-            DocumentType: o.DocumentType);
+            DocumentType: o.DocumentType,
+            // V5: propagate header-level requested delivery date.
+            RequestedDeliveryDate: o.RequestedDeliveryDate);
 
     private async Task<List<PurchaseOrderLineEntity>> BuildLineEntitiesAsync(
         Guid organisationId,

@@ -40,8 +40,9 @@ namespace ProcuLink.Transform.Output;
 public static class EffectiveEntityResolver
 {
     // Recognised header canonical fields that map onto typed columns.
+    // V5: added "RequestedDeliveryDate" (DateOnly?; nullable — a parse failure leaves it null rather than the original).
     private static readonly HashSet<string> HeaderFields =
-        new(StringComparer.OrdinalIgnoreCase) { "PoNumber", "OrderDate", "Currency", "SupplierName", "BuyerName" };
+        new(StringComparer.OrdinalIgnoreCase) { "PoNumber", "OrderDate", "Currency", "SupplierName", "BuyerName", "RequestedDeliveryDate" };
 
     // Recognised line canonical fields that map onto typed columns.
     private static readonly HashSet<string> LineFields = new(StringComparer.OrdinalIgnoreCase)
@@ -176,6 +177,13 @@ public static class EffectiveEntityResolver
                 if (TryParseDate(value, out var d))
                     clone.OrderDate = d;
                 break;
+            case "requesteddeliverydate":
+                // V5: nullable — a blank value clears the field; a parse failure leaves original.
+                if (string.IsNullOrWhiteSpace(value))
+                    clone.RequestedDeliveryDate = null;
+                else if (TryParseDate(value, out var rd))
+                    clone.RequestedDeliveryDate = rd;
+                break;
         }
     }
 
@@ -252,12 +260,14 @@ public static class EffectiveEntityResolver
             CreatedAt     = src.CreatedAt,
             UpdatedAt     = src.UpdatedAt,
             IsSample      = src.IsSample,
-            SupplierName  = src.SupplierName,
-            SubTotal      = src.SubTotal,
-            TaxTotal      = src.TaxTotal,
-            GrandTotal    = src.GrandTotal,
-            PaymentTerms  = src.PaymentTerms,
-            DocumentType  = src.DocumentType,
+            SupplierName          = src.SupplierName,
+            SubTotal              = src.SubTotal,
+            TaxTotal              = src.TaxTotal,
+            GrandTotal            = src.GrandTotal,
+            PaymentTerms          = src.PaymentTerms,
+            DocumentType          = src.DocumentType,
+            // V5: requested delivery date (in-memory only; not a DB column).
+            RequestedDeliveryDate = src.RequestedDeliveryDate,
         };
 
         if (src.Supplier is not null)

@@ -236,17 +236,41 @@ public sealed class MappedTransformService
     /// Header-scope field bag: the recognised canonical header fields plus any header-scoped custom
     /// fields. Keys match the canonical names accepted in <see cref="OutputFieldRule.CanonicalField"/>.
     /// Manipulators that read sibling columns (Concat/Fallback) see this same bag as their row.
+    ///
+    /// V5 additions (additive — all keys default to empty when the field is null):
+    /// <c>SubTotal</c>, <c>TaxTotal</c>, <c>GrandTotal</c>, <c>PaymentTerms</c>,
+    /// <c>RequestedDeliveryDate</c>. These keys are always present; existing templates and
+    /// overrides that do not reference them are unaffected (the fixed transforms never read
+    /// this bag). Adding a key to the row bag cannot change fixed-transform output.
     /// </summary>
     internal static Dictionary<string, string> BuildHeaderRow(
         PurchaseOrderEntity order, OrderMappingOverride @override)
     {
+        // V5: SubTotal/TaxTotal/GrandTotal prefer the parser-stated value; fall back to derivation.
+        // Derivation mirrors ScribanOrderModel: sum of (Qty * UnitPrice) for all lines.
+        // When the entity already carries a stated value, use it; compute only when null.
+        static decimal DeriveSubTotal(PurchaseOrderEntity o) =>
+            o.SubTotal ?? o.Lines.Sum(l => l.Quantity * l.UnitPrice);
+        static decimal DeriveTaxTotal(PurchaseOrderEntity o) =>
+            o.TaxTotal ?? 0m;
+        static decimal DeriveGrandTotal(PurchaseOrderEntity o) =>
+            o.GrandTotal ?? o.Lines.Sum(l => l.Quantity * l.UnitPrice);
+
         var row = new Dictionary<string, string>
         {
-            ["PoNumber"]     = order.PoNumber ?? string.Empty,
-            ["OrderDate"]    = order.OrderDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            ["BuyerName"]    = ExtractBuyerName(order),
-            ["Currency"]     = order.Currency ?? string.Empty,
-            ["SupplierName"] = order.Supplier?.Name ?? order.SupplierName ?? string.Empty,
+            ["PoNumber"]               = order.PoNumber ?? string.Empty,
+            ["OrderDate"]              = order.OrderDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            ["BuyerName"]              = ExtractBuyerName(order),
+            ["Currency"]               = order.Currency ?? string.Empty,
+            ["SupplierName"]           = order.Supplier?.Name ?? order.SupplierName ?? string.Empty,
+            // V5: totals (derived when not stated) and remaining header enrichment.
+            ["SubTotal"]               = DeriveSubTotal(order).ToString(CultureInfo.InvariantCulture),
+            ["TaxTotal"]               = DeriveTaxTotal(order).ToString(CultureInfo.InvariantCulture),
+            ["GrandTotal"]             = DeriveGrandTotal(order).ToString(CultureInfo.InvariantCulture),
+            ["PaymentTerms"]           = order.PaymentTerms ?? string.Empty,
+            ["RequestedDeliveryDate"]  = order.RequestedDeliveryDate.HasValue
+                                             ? order.RequestedDeliveryDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                                             : string.Empty,
         };
 
         foreach (var cf in @override.CustomFields)
@@ -278,6 +302,16 @@ public sealed class MappedTransformService
         row["Unit"]             = line.Unit ?? string.Empty;
         row["UnitPrice"]        = line.UnitPrice.ToString(CultureInfo.InvariantCulture);
         row["LineTotal"]        = (line.Quantity * line.UnitPrice).ToString(CultureInfo.InvariantCulture);
+        // V5 additive line fields: stated extended amount (falls back to computed),
+        // per-line tax rate, and per-line delivery date.
+        row["LineAmount"]       = (line.LineAmount ?? line.Quantity * line.UnitPrice)
+                                      .ToString(CultureInfo.InvariantCulture);
+        row["TaxRate"]          = line.TaxRate.HasValue
+                                      ? line.TaxRate.Value.ToString(CultureInfo.InvariantCulture)
+                                      : string.Empty;
+        row["DeliveryDate"]     = line.DeliveryDate.HasValue
+                                      ? line.DeliveryDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                                      : string.Empty;
 
         foreach (var cf in @override.CustomFields)
         {

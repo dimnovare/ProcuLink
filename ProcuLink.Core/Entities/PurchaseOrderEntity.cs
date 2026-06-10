@@ -86,6 +86,15 @@ public class PurchaseOrderEntity
     /// </summary>
     public string? DocumentType { get; set; }
 
+    // ── V5 deepen-canonical (nullable; rides canonical_json — no migration) ─────
+    /// <summary>
+    /// Requested delivery date at the header level (Peppol BIS 3.0 mandatory).
+    /// UBL cbc:RequestedDeliveryDate; EDIFACT DTM+2; X12 DTM*002; IDoc E1EDK03 IDDAT=012.
+    /// Stored on the entity so transform/Scriban surfaces it; rides canonical_json (no DB column).
+    /// Null for formats that do not carry a header-level delivery date.
+    /// </summary>
+    public DateOnly? RequestedDeliveryDate { get; set; }
+
     /// <summary>
     /// Group V1: the exact <see cref="SupplierConnectionRevision"/> this order was processed with,
     /// pinned ONCE at ingest (never re-pinned). This is the reproducibility invariant — the order

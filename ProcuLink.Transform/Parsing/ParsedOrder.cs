@@ -16,5 +16,9 @@ public record ParsedOrder(
     decimal? TaxTotal = null,
     decimal? GrandTotal = null,
     string? PaymentTerms = null,
-    string? DocumentType = null
+    string? DocumentType = null,
+    // V5 deepen-canonical: requested delivery date (header-level).
+    // Peppol BIS 3.0 mandatory; UBL cbc:RequestedDeliveryDate; EDIFACT DTM+2;
+    // X12 DTM*002; IDoc E1EDK03 IDDAT=012. Null when the format does not carry it.
+    DateOnly? RequestedDeliveryDate = null
 );

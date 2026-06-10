@@ -35,7 +35,10 @@ public sealed record ExtractedOrder(
     decimal? TaxTotal = null,
     decimal? GrandTotal = null,
     string? PaymentTerms = null,
-    string? DocumentType = null
+    string? DocumentType = null,
+    // V5 deepen-canonical: requested delivery date (header-level).
+    // Mirrors ParsedOrder.RequestedDeliveryDate — null when absent.
+    DateOnly? RequestedDeliveryDate = null
 );
 
 /// <summary>
