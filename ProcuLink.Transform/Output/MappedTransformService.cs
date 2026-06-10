@@ -249,12 +249,22 @@ public sealed class MappedTransformService
         // V5: SubTotal/TaxTotal/GrandTotal prefer the parser-stated value; fall back to derivation.
         // Derivation mirrors ScribanOrderModel: sum of (Qty * UnitPrice) for all lines.
         // When the entity already carries a stated value, use it; compute only when null.
-        static decimal DeriveSubTotal(PurchaseOrderEntity o) =>
-            o.SubTotal ?? o.Lines.Sum(l => l.Quantity * l.UnitPrice);
-        static decimal DeriveTaxTotal(PurchaseOrderEntity o) =>
-            o.TaxTotal ?? 0m;
-        static decimal DeriveGrandTotal(PurchaseOrderEntity o) =>
-            o.GrandTotal ?? o.Lines.Sum(l => l.Quantity * l.UnitPrice);
+        // Defence-in-depth: the sum is overflow-guarded so a pathological qty/price can never throw
+        // an OverflowException up the CSV/JSON build path (the row bag falls back to 0 instead).
+        static decimal SafeLineSum(PurchaseOrderEntity o)
+        {
+            try
+            {
+                return o.Lines.Sum(l => l.Quantity * l.UnitPrice);
+            }
+            catch (OverflowException)
+            {
+                return 0m;
+            }
+        }
+        static decimal DeriveSubTotal(PurchaseOrderEntity o)   => o.SubTotal   ?? SafeLineSum(o);
+        static decimal DeriveTaxTotal(PurchaseOrderEntity o)   => o.TaxTotal   ?? 0m;
+        static decimal DeriveGrandTotal(PurchaseOrderEntity o) => o.GrandTotal ?? SafeLineSum(o);
 
         var row = new Dictionary<string, string>
         {
@@ -301,10 +311,11 @@ public sealed class MappedTransformService
         row["Quantity"]         = line.Quantity.ToString(CultureInfo.InvariantCulture);
         row["Unit"]             = line.Unit ?? string.Empty;
         row["UnitPrice"]        = line.UnitPrice.ToString(CultureInfo.InvariantCulture);
-        row["LineTotal"]        = (line.Quantity * line.UnitPrice).ToString(CultureInfo.InvariantCulture);
+        row["LineTotal"]        = SafeMultiply(line.Quantity, line.UnitPrice).ToString(CultureInfo.InvariantCulture);
         // V5 additive line fields: stated extended amount (falls back to computed),
-        // per-line tax rate, and per-line delivery date.
-        row["LineAmount"]       = (line.LineAmount ?? line.Quantity * line.UnitPrice)
+        // per-line tax rate, and per-line delivery date. The computed fallback is overflow-guarded so
+        // a pathological qty/price can never throw an OverflowException up the CSV/JSON build path.
+        row["LineAmount"]       = (line.LineAmount ?? SafeMultiply(line.Quantity, line.UnitPrice))
                                       .ToString(CultureInfo.InvariantCulture);
         row["TaxRate"]          = line.TaxRate.HasValue
                                       ? line.TaxRate.Value.ToString(CultureInfo.InvariantCulture)
@@ -357,6 +368,17 @@ public sealed class MappedTransformService
         }
         catch { /* malformed JSON — ignore */ }
         return string.Empty;
+    }
+
+    /// <summary>
+    /// Overflow-safe decimal multiply for the derived line/extended amounts. A pathological
+    /// quantity × unit-price can overflow <see cref="decimal"/>; the row bag must never throw on the
+    /// CSV/JSON build path, so an overflow degrades to 0 rather than crashing the preview/transform.
+    /// </summary>
+    private static decimal SafeMultiply(decimal a, decimal b)
+    {
+        try { return a * b; }
+        catch (OverflowException) { return 0m; }
     }
 
     /// <summary>RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline.</summary>

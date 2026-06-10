@@ -708,17 +708,31 @@ public sealed class OrdersController : ControllerBase
         if (validationError is not null)
             return BadRequest(new { error = validationError });
 
+        // Decide native-override vs fixed-transform EXACTLY like the real transform path
+        // (OrderTransformService.TransformAsync): the native CSV/JSON builder only runs when the
+        // override carries a USABLE output config. An override with a null/empty Output (e.g. the
+        // live preview harness POSTs '{}', or a custom-fields-only override) must NOT reach
+        // MappedTransformService.Build — it throws ArgumentException("Override has no output
+        // mapping config.") on a null Output, which the preview did not catch → HTTP 500. Falling
+        // back to the fixed transformer yields the byte-identical preview the order would deliver.
+        var useNativeOverride =
+            MappedTransformService.SupportsOverride(fmt.Value)
+            && OrderMappingOverrideReader.HasUsableOutput(fieldOverride);
+
         try
         {
             TransformResult result;
-            if (MappedTransformService.SupportsOverride(fmt.Value))
+            if (useNativeOverride)
             {
-                // CSV/JSON — the override builder emits the document natively.
+                // CSV/JSON WITH a usable output mapping — the override builder emits the document natively.
                 result = new MappedTransformService().Build(order, fieldOverride, fmt.Value);
             }
             else
             {
-                // XML/cXML/UBL/X12 — resolve an effective entity, then run the EXISTING fixed transform.
+                // Either a structured format (XML/cXML/UBL/X12), OR a CSV/JSON request with no usable
+                // output config. In both cases resolve an effective entity (canonical-field overrides
+                // applied; an identity clone when there are none) and run the EXISTING fixed transform —
+                // byte-for-byte the no-override output for that format.
                 var transformer = _transformers.FirstOrDefault(t => t.CanTransform(fmt.Value));
                 if (transformer is null)
                     return BadRequest(new { error = $"No transform service registered for format '{fmt.Value}'." });
