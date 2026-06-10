@@ -42,22 +42,100 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
             .MaxAsync(ct);
         var nextVersion = (maxVersion ?? 0) + 1;
 
+        // Group V4: bind new rules to reusable RuleDefinitions so they are no longer free-floating.
+        // Definitions referenced by the rules must exist FIRST (a rule's RuleDefinitionId is a
+        // nullable FK to a definition) — resolve/create + save them before the profile that points
+        // at them. This NEVER affects evaluation: the executor reads the rule scalar columns below,
+        // which come verbatim from the input. RuleDefinitionId/RuleCode are pure provenance metadata.
+        var definitionIdByCode = await ResolveDefinitionsAsync(orgId, rules, createdBy, ct);
+
         var profile = new SupplierAcceptanceProfile
         {
             Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
             VersionNo = nextVersion, Status = "draft",
             Protocol = protocol, OutputFormat = outputFormat,
             CreatedBy = createdBy, CreatedAt = DateTime.UtcNow,
-            Rules = rules.Select(r => new SupplierAcceptanceRule
+            Rules = rules.Select(r =>
             {
-                Id = Guid.NewGuid(), Scope = r.Scope, FieldPath = r.FieldPath,
-                Operator = r.Operator, ExpectedValue = r.ExpectedValue,
-                Severity = r.Severity, BlockOnFail = r.BlockOnFail,
+                var code = RuleCatalog.CodeFor(r.FieldPath, r.Operator);
+                return new SupplierAcceptanceRule
+                {
+                    Id = Guid.NewGuid(), Scope = r.Scope, FieldPath = r.FieldPath,
+                    Operator = r.Operator, ExpectedValue = r.ExpectedValue,
+                    Severity = r.Severity, BlockOnFail = r.BlockOnFail,
+                    RuleDefinitionId = definitionIdByCode.TryGetValue(code, out var did) ? did : (Guid?)null,
+                    RuleCode = definitionIdByCode.ContainsKey(code) ? code : null,
+                };
             }).ToList(),
         };
         _db.SupplierAcceptanceProfiles.Add(profile);
         await _db.SaveChangesAsync(ct);
         return profile;
+    }
+
+    /// <summary>
+    /// Group V4: ensures an org-scoped <see cref="RuleDefinition"/> exists for every distinct
+    /// (fieldPath, operator) the given rules use, creating + saving any missing ones (derived from a
+    /// seeded catalog template when one matches, else from the rule's own shape). Returns a
+    /// code → definitionId map so callers can bind each rule. Definitions are saved here, BEFORE the
+    /// rules that reference them, so there is never an ambiguous circular insert.
+    /// </summary>
+    private async Task<Dictionary<string, Guid>> ResolveDefinitionsAsync(
+        Guid orgId, IReadOnlyList<AcceptanceRuleInput> rules, string? createdBy, CancellationToken ct)
+    {
+        var wantedCodes = rules
+            .Select(r => RuleCatalog.CodeFor(r.FieldPath, r.Operator))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var existing = await _db.RuleDefinitions
+            .Where(d => d.OrgId == orgId && wantedCodes.Contains(d.Code))
+            .ToListAsync(ct);
+        var idByCode = existing.ToDictionary(d => d.Code, d => d.Id, StringComparer.Ordinal);
+
+        var seedByCode = RuleCatalog.Entries.ToDictionary(e => e.Code, StringComparer.Ordinal);
+        var now = DateTime.UtcNow;
+        var toAdd = new List<RuleDefinition>();
+        foreach (var r in rules)
+        {
+            var code = RuleCatalog.CodeFor(r.FieldPath, r.Operator);
+            if (idByCode.ContainsKey(code) || toAdd.Any(d => d.Code == code)) continue;
+
+            RuleDefinition def;
+            if (seedByCode.TryGetValue(code, out var seed))
+            {
+                def = new RuleDefinition
+                {
+                    Id = Guid.NewGuid(), OrgId = orgId, Code = seed.Code, Title = seed.Title,
+                    Description = seed.Description, Scope = seed.Scope, FieldPath = seed.FieldPath,
+                    Operator = seed.Operator, DefaultSeverity = seed.DefaultSeverity,
+                    DefaultExpectedValue = seed.DefaultExpectedValue, ParamHint = seed.ParamHint,
+                    UblRef = seed.UblRef, EdifactRef = seed.EdifactRef, X12Ref = seed.X12Ref,
+                    CxmlRef = seed.CxmlRef, IsSystem = true, CreatedBy = "system:seed", CreatedAt = now,
+                };
+            }
+            else
+            {
+                def = new RuleDefinition
+                {
+                    Id = Guid.NewGuid(), OrgId = orgId, Code = code,
+                    Title = $"{r.FieldPath} {r.Operator}",
+                    Description = "Created from a supplier acceptance rule (Group V4).",
+                    Scope = r.Scope, FieldPath = r.FieldPath, Operator = r.Operator,
+                    DefaultSeverity = r.Severity, DefaultExpectedValue = r.ExpectedValue,
+                    IsSystem = false, CreatedBy = createdBy ?? "system", CreatedAt = now,
+                };
+            }
+            toAdd.Add(def);
+        }
+
+        if (toAdd.Count > 0)
+        {
+            _db.RuleDefinitions.AddRange(toAdd);
+            await _db.SaveChangesAsync(ct);
+            foreach (var d in toAdd) idByCode[d.Code] = d.Id;
+        }
+        return idByCode;
     }
 
     public async Task<bool> ActivateVersionAsync(Guid orgId, Guid supplierId, int versionNo, CancellationToken ct)
