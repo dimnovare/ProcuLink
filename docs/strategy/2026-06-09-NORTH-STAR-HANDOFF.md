@@ -99,9 +99,13 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   index; exact-match → trigram ranking; small catalogs unchanged). **OWNS the only
   migration this batch.** ⚠️ trigram needs LIVE-POSTGRES verification (InMemory can't test
   pg_trgm — see project-inmemory-masks-postgres-fk); verify the indexed path live after deploy.
-- `auto/fe-v1-connections-ui` (project-proculink) — the Connections list + detail +
-  draft→test→publish→archive/rollback lifecycle UI against the live /api/connections API.
-  Replay UI is a placeholder until V2 lands.
+- `auto/fe-v1-connections-ui` — ✅ SHIPPED (FE `main` = `78fb893` → Vercel). Connections
+  list + detail (active-revision bundle summary + revision history) + full lifecycle
+  (create-draft/clone, mark-test, publish-with-confirm, archive, rollback), sidebar nav,
+  409→inline-error. Replay = "Coming soon" placeholder (V2). Draft component editing links
+  to the existing per-supplier editors. EXACT routes (verbatim from ConnectionsController):
+  GET /api/connections; GET /api/connections/{id}; POST /api/connections/ensure/{supplierId};
+  GET|POST /api/connections/{id}/revisions[/{revId}]; PUT .../{revId}; POST .../{revId}/{test|publish|archive}.
   MERGE: backend two (V10 owns the migration, V2 disjoint) → one `dotnet test` → push →
   Railway (verify the pg_trgm migration applied + catalog path live). FE → bun build → push.
 
