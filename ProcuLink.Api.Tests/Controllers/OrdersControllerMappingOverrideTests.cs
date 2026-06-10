@@ -345,4 +345,125 @@ public class OrdersControllerMappingOverrideTests
         var stored = await new OrderMappingOverrideService(db).GetAsync(orgId, orderId, CancellationToken.None);
         Assert.Null(stored);
     }
+
+    // ── Regression: no-usable-output override must NOT 500 (csv/json) ──────────
+    //
+    // The live preview harness POSTs an EMPTY body ('{}') for csv|json. That deserializes to an
+    // OrderMappingOverride with a NULL Output. The native CSV/JSON builder (MappedTransformService.Build)
+    // throws ArgumentException("Override has no output mapping config.") on a null Output, and the
+    // preview endpoint only caught TransformValidationException → unhandled → HTTP 500. The xml/cxml/
+    // ubl/x12 path was unaffected because EffectiveEntityResolver tolerates a null Output (identity
+    // clone) and the harness routes those through the real transform endpoint.
+    //
+    // Expected behaviour: with no USABLE output config, the preview must fall back to the FIXED
+    // transformer for that format (the same byte-identical output the order would actually deliver),
+    // returning 200 with content — exactly like OrderTransformService gates on HasUsableOutput.
+
+    /// <summary>Seeds a resolved line carrying realistic V5 data (qty, unit price, amount, tax rate).</summary>
+    private static async Task SeedResolvedV5LineAsync(ProcuLinkDbContext db, Guid orgId, Guid orderId)
+    {
+        var order = await db.PurchaseOrders.FirstAsync(o => o.Id == orderId);
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "V5 Supplier OÜ" });
+        order.SupplierId = supplierId;
+        // V5 header enrichment present (totals) so the derived-total row-bag code runs with real data.
+        order.SubTotal   = 250m;
+        order.TaxTotal   = 50m;
+        order.GrandTotal = 300m;
+        order.PaymentTerms = "NET30";
+
+        db.PurchaseOrderLines.Add(new PurchaseOrderLineEntity
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
+            BuyerItemCode = "B1", SupplierItemCode = "S1", Description = "Widget",
+            Quantity = 5m, Unit = "EA", UnitPrice = 50m,
+            LineAmount = 250m, TaxRate = 0.20m, DeliveryDate = new DateOnly(2026, 7, 1),
+            NeedsReview = false,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    [Theory]
+    [InlineData("csv")]
+    [InlineData("json")]
+    public async Task Preview_EmptyOverride_NoUsableOutput_ReturnsOk_NotThrow(string format)
+    {
+        await using var db = NewDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = await SeedOrderAsync(db, orgId);
+        await SeedResolvedV5LineAsync(db, orgId, orderId);
+        var ctrl = Build(db, orgId);
+
+        // Mirrors the live harness body '{}' — an override with a null Output config.
+        var emptyOverride = new OrderMappingOverride();
+
+        var result = await ctrl.PreviewMappingOverride(orderId, emptyOverride, format, CancellationToken.None);
+
+        // Must be a 200 with non-null content (the fixed-transform fallback), never an unhandled throw.
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var content = ok.Value!.GetType().GetProperty("content")!.GetValue(ok.Value) as string;
+        Assert.False(string.IsNullOrEmpty(content),
+            $"{format} preview with an empty override must fall back to the fixed transform output.");
+
+        // Non-mutating.
+        var stored = await new OrderMappingOverrideService(db).GetAsync(orgId, orderId, CancellationToken.None);
+        Assert.Null(stored);
+    }
+
+    [Theory]
+    [InlineData("csv")]
+    [InlineData("json")]
+    public async Task Preview_CustomFieldsOnly_NoUsableOutput_ReturnsOk(string format)
+    {
+        await using var db = NewDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = await SeedOrderAsync(db, orgId);
+        await SeedResolvedV5LineAsync(db, orgId, orderId);
+        var ctrl = Build(db, orgId);
+
+        // Custom fields present but NO output mapping rules → still no usable output → fixed fallback.
+        var customOnly = new OrderMappingOverride
+        {
+            CustomFields = { new CustomField { Key = "note", Label = "Note", Scope = "header", Value = "hello" } },
+            Output = new OutputMappingConfig(), // present but EMPTY (Header.Count == 0 && Lines.Count == 0)
+        };
+
+        var result = await ctrl.PreviewMappingOverride(orderId, customOnly, format, CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var content = ok.Value!.GetType().GetProperty("content")!.GetValue(ok.Value) as string;
+        Assert.False(string.IsNullOrEmpty(content),
+            $"{format} preview with custom-fields-only override must fall back to the fixed transform output.");
+    }
+
+    /// <summary>
+    /// Regression: an override WITH a usable output config still drives the native CSV/JSON builder
+    /// (the heart-piece path) — the no-output fallback must not swallow real overrides.
+    /// </summary>
+    [Theory]
+    [InlineData("csv")]
+    [InlineData("json")]
+    public async Task Preview_UsableOutput_StillUsesNativeOverrideBuilder(string format)
+    {
+        await using var db = NewDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = await SeedOrderAsync(db, orgId);
+        await SeedResolvedV5LineAsync(db, orgId, orderId);
+        var ctrl = Build(db, orgId);
+
+        // A usable output that emits a single distinctively-named column not present in the fixed shape.
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = { ["po"] = new OutputFieldRule { OutputPath = "DistinctRefColumn", CanonicalField = "PoNumber" } },
+            },
+        };
+
+        var result = await ctrl.PreviewMappingOverride(orderId, ov, format, CancellationToken.None);
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var content = ok.Value!.GetType().GetProperty("content")!.GetValue(ok.Value) as string;
+        Assert.NotNull(content);
+        Assert.Contains("DistinctRefColumn", content!); // proves the native override builder ran
+    }
 }
