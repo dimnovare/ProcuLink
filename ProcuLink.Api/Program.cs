@@ -386,6 +386,9 @@ else
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 // Supplier product catalog (ground truth for AI code suggestions) — Scoped (DbContext is Scoped).
 builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
+// V10 — indexed catalog retrieval at scale (exact + pg_trgm trigram). Scoped; OrderIngestionService
+// self-constructs one from its DbContext, but register it so other consumers can resolve it.
+builder.Services.AddScoped<ICatalogRetrievalService, CatalogRetrievalService>();
 // Durable AI-suggestion accept/reject decision history (confidence calibration) — Scoped.
 builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
 // heart-piece-flex Phase 1: per-order mapping/override stored in canonical_json (no new table).
