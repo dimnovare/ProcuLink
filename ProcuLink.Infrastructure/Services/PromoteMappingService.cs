@@ -29,13 +29,16 @@ namespace ProcuLink.Infrastructure.Services;
 ///   <item>Unknown field names are silently skipped — future canonical-field additions won't break promotion.</item>
 /// </list>
 ///
-/// TODO(output-promote): The <see cref="OrderMappingOverride.Output"/> side (canonical→output-field
-/// re-mapping) is not promoted here. <see cref="PoMappingConfig"/> models only the inbound
-/// (source→canonical) direction. Persisting the output mapping requires a separate per-supplier
-/// output config concept (a <c>SupplierOutputMapping</c> entity analogous to <c>SupplierPoMapping</c>)
-/// that does not yet exist. Until that entity ships, re-promote the order override each time or
-/// keep the per-order override. The SourceMap promotion alone eliminates the bulk of manual
-/// re-entry on repeat layouts.
+/// Output side (canonical→output-field re-mapping): the <see cref="OrderMappingOverride.Output"/> is
+/// now ALSO promoted — it is copied verbatim onto <see cref="PoMappingConfig.Output"/>, an additive
+/// JSONB field that round-trips through the SAME <c>SupplierPoMapping.ConfigJson</c> column (no new
+/// table, no EF migration). This makes the founder's "Save mappings for &lt;supplier&gt;" button
+/// actually save the output side and report what it saved — fixing the silent no-op.
+///
+/// Caveat: the supplier-level output mapping is PERSISTED + REPORTED here but not yet CONSUMED on
+/// re-upload (the per-order override remains the only output-divert seam in <c>OrderTransformService</c>).
+/// Consuming the promoted supplier output mapping at transform time is a separate, intentionally
+/// out-of-scope follow-up.
 /// </summary>
 public sealed class PromoteMappingService : IPromoteMappingService
 {
@@ -88,9 +91,10 @@ public sealed class PromoteMappingService : IPromoteMappingService
         if (orderRow is null)
             return null;
 
-        // Read the stored SourceMap from canonical_json (null = no override set yet).
+        // Read the stored override from canonical_json (null = no override set yet).
         var @override = OrderMappingOverrideReader.Read(orderRow.CanonicalJson);
         var sourceMap = @override?.SourceMap;
+        var output    = @override?.Output;
 
         // Load the existing supplier mapping (or start from an empty config) so we can merge.
         var existing = await _poMappingService.GetAsync(orgId, orderRow.SupplierId, ct)
@@ -126,15 +130,51 @@ public sealed class PromoteMappingService : IPromoteMappingService
             }
         }
 
+        // Promote the OUTPUT side too. We copy the per-order output mapping verbatim onto the
+        // supplier config's additive Output field so it persists across re-uploads. Only a NON-EMPTY
+        // output mapping (at least one header or line rule) counts and is stored — an empty output
+        // config never overwrites an existing supplier output mapping with nothing.
+        int outputHeaderCount = output?.Header.Count ?? 0;
+        int outputLineCount   = output?.Lines.Count  ?? 0;
+        var hasUsableOutput   = outputHeaderCount > 0 || outputLineCount > 0;
+
+        // Decide whether anything is actually promotable. If the order has no SourceMap entries that
+        // map to a known canonical field AND no usable output mapping, leave the supplier mapping
+        // untouched and report a clear "nothing to promote" — never a silent success-with-no-effect.
+        var inboundPromoted = headerCount + lineCount;
+        if (inboundPromoted == 0 && !hasUsableOutput)
+        {
+            return new PromoteMappingResult(
+                SupplierId:                 orderRow.SupplierId,
+                HeaderFieldsPromoted:       0,
+                LineFieldsPromoted:         0,
+                OutputHeaderFieldsPromoted: 0,
+                OutputLineFieldsPromoted:   0,
+                SchemaFingerprintHash:      orderRow.SchemaFingerprintHash,
+                Message:                    BuildNothingToPromoteMessage(@override));
+        }
+
+        // Build the merged config. Inbound rules merge into Header/Lines (additive). The output mapping
+        // is set only when this order carries a usable one — otherwise the existing supplier output
+        // mapping (if any) is preserved unchanged.
+        var merged = existing with
+        {
+            Header = header,
+            Lines  = lines,
+            Output = hasUsableOutput ? output : existing.Output,
+        };
+
         // Upsert is idempotent (overwrites the existing mapping row — no duplication).
-        var merged = existing with { Header = header, Lines = lines };
         await _poMappingService.UpsertAsync(orgId, orderRow.SupplierId, merged, ct);
 
         return new PromoteMappingResult(
-            SupplierId:           orderRow.SupplierId,
-            HeaderFieldsPromoted: headerCount,
-            LineFieldsPromoted:   lineCount,
-            SchemaFingerprintHash: orderRow.SchemaFingerprintHash);
+            SupplierId:                 orderRow.SupplierId,
+            HeaderFieldsPromoted:       headerCount,
+            LineFieldsPromoted:         lineCount,
+            OutputHeaderFieldsPromoted: hasUsableOutput ? outputHeaderCount : 0,
+            OutputLineFieldsPromoted:   hasUsableOutput ? outputLineCount   : 0,
+            SchemaFingerprintHash:      orderRow.SchemaFingerprintHash,
+            Message:                    BuildPromotedMessage(headerCount, lineCount, hasUsableOutput ? outputHeaderCount : 0, hasUsableOutput ? outputLineCount : 0));
     }
 
     // ── Translation helpers ──────────────────────────────────────────────────
@@ -165,4 +205,40 @@ public sealed class PromoteMappingService : IPromoteMappingService
     /// </summary>
     private static string NormaliseKey(string input, HashSet<string> authoritative) =>
         authoritative.TryGetValue(input, out var canonical) ? canonical : input;
+
+    // ── Message builders ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Human-readable confirmation of a successful promotion, e.g.
+    /// "Saved 3 source field(s) and 5 output field(s) to this supplier's reusable mapping."
+    /// Only the non-zero halves are mentioned.
+    /// </summary>
+    private static string BuildPromotedMessage(
+        int headerCount, int lineCount, int outputHeaderCount, int outputLineCount)
+    {
+        var inbound = headerCount + lineCount;
+        var output  = outputHeaderCount + outputLineCount;
+
+        var parts = new List<string>();
+        if (inbound > 0) parts.Add($"{inbound} source field{(inbound == 1 ? "" : "s")}");
+        if (output  > 0) parts.Add($"{output} output field{(output == 1 ? "" : "s")}");
+
+        return $"Saved {string.Join(" and ", parts)} to this supplier's reusable mapping. " +
+               "Future uploads from this supplier reuse it.";
+    }
+
+    /// <summary>
+    /// Clear reason when there is nothing to promote, so the UI never shows an empty success.
+    /// Distinguishes "no per-order mapping at all" from "a mapping exists but none of its fields
+    /// map to a known canonical field / output rule".
+    /// </summary>
+    private static string BuildNothingToPromoteMessage(OrderMappingOverride? @override)
+    {
+        if (@override is null)
+            return "Nothing to save — this order has no custom field mapping yet. " +
+                   "Wire some fields (or edit the output mapping) first, then save.";
+
+        return "Nothing to save — the current field mapping has no source or output rules that map " +
+               "to a known field. Wire at least one field, then save.";
+    }
 }

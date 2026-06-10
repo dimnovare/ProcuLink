@@ -326,4 +326,135 @@ public class OrderServiceResolveHeaderFieldsTests
         var reloaded = await ReloadAsync(db, orderId);
         Assert.Equal("Old Buyer Ltd", reloaded.BuyerName);
     }
+
+    // ── PO number IS now editable: column + canonical_json both updated ─────────────
+
+    [Fact]
+    public async Task ResolveAsync_EditsPoNumber_ToColumnAndCanonicalJson()
+    {
+        var db = NewDb();
+        var (orgId, orderId) = await SeedOrderAsync(db);
+        var svc = Build(db);
+
+        var result = await svc.ResolveAsync(
+            orgId, orderId,
+            new[] { new LineResolution(1, "SUP-1") },
+            saveMappings: false,
+            CancellationToken.None,
+            new ResolveHeaderFields(PoNumber: "PO-9999"));
+
+        Assert.True(result.IsSuccess);
+
+        var reloaded = await ReloadAsync(db, orderId);
+
+        // Column updated (the read path's PoNumber source).
+        Assert.Equal("PO-9999", reloaded.PoNumber);
+
+        // canonical_json mirror stays consistent (transform/Scriban read this).
+        Assert.True(reloaded.CanonicalJson!.RootElement.TryGetProperty("poNumber", out var po));
+        Assert.Equal("PO-9999", po.GetString());
+
+        // Other header fields untouched.
+        Assert.Equal("Old Buyer Ltd", reloaded.BuyerName);
+        Assert.Equal("EUR", reloaded.Currency);
+    }
+
+    // ── Supplier DISPLAY name editable; routing (SupplierId) untouched ─────────────
+
+    [Fact]
+    public async Task ResolveAsync_EditsSupplierName_ChangesDisplayNotRouting()
+    {
+        var db = NewDb();
+        var (orgId, orderId) = await SeedOrderAsync(db);
+        var svc = Build(db);
+
+        var before = await ReloadAsync(db, orderId);
+        var routingSupplierId = before.SupplierId; // must NOT change
+
+        var result = await svc.ResolveAsync(
+            orgId, orderId,
+            new[] { new LineResolution(1, "SUP-1") },
+            saveMappings: false,
+            CancellationToken.None,
+            new ResolveHeaderFields(SupplierName: "  Northwind Trading OU  ")); // trimmed
+
+        Assert.True(result.IsSuccess);
+
+        var reloaded = await ReloadAsync(db, orderId);
+
+        // Display/document supplier name column updated + trimmed.
+        Assert.Equal("Northwind Trading OU", reloaded.SupplierName);
+
+        // canonical_json mirror.
+        Assert.True(reloaded.CanonicalJson!.RootElement.TryGetProperty("supplierName", out var sn));
+        Assert.Equal("Northwind Trading OU", sn.GetString());
+
+        // CRITICAL: routing supplier id is unchanged — the edit is display-only.
+        Assert.Equal(routingSupplierId, reloaded.SupplierId);
+    }
+
+    // ── PO number + supplier name coexist with date/currency/buyer in one request ──
+
+    [Fact]
+    public async Task ResolveAsync_AllFiveHeaderFields_PersistTogether()
+    {
+        var db = NewDb();
+        var (orgId, orderId) = await SeedOrderAsync(db);
+        var svc = Build(db);
+
+        var header = new ResolveHeaderFields(
+            OrderDate:    new DateOnly(2026, 5, 1),
+            BuyerName:    "Buyer Five",
+            Currency:     "usd",
+            PoNumber:     "PO-FIVE",
+            SupplierName: "Supplier Five");
+
+        var result = await svc.ResolveAsync(
+            orgId, orderId,
+            new[] { new LineResolution(1, "SUP-1") },
+            saveMappings: false,
+            CancellationToken.None,
+            header);
+
+        Assert.True(result.IsSuccess);
+
+        var reloaded = await ReloadAsync(db, orderId);
+        Assert.Equal(new DateOnly(2026, 5, 1), reloaded.OrderDate);
+        Assert.Equal("Buyer Five", reloaded.BuyerName);
+        Assert.Equal("USD", reloaded.Currency);
+        Assert.Equal("PO-FIVE", reloaded.PoNumber);
+        Assert.Equal("Supplier Five", reloaded.SupplierName);
+
+        // All five mirrored into canonical_json.
+        var root = reloaded.CanonicalJson!.RootElement;
+        Assert.Equal("2026-05-01",    root.GetProperty("orderDate").GetString());
+        Assert.Equal("Buyer Five",    root.GetProperty("buyerName").GetString());
+        Assert.Equal("USD",           root.GetProperty("currency").GetString());
+        Assert.Equal("PO-FIVE",       root.GetProperty("poNumber").GetString());
+        Assert.Equal("Supplier Five", root.GetProperty("supplierName").GetString());
+    }
+
+    // ── Whitespace-only PO number / supplier name are no-change ─────────────────────
+
+    [Fact]
+    public async Task ResolveAsync_WhitespacePoNumberAndSupplierName_AreNoChange()
+    {
+        var db = NewDb();
+        var (orgId, orderId) = await SeedOrderAsync(db);
+        var svc = Build(db);
+
+        var result = await svc.ResolveAsync(
+            orgId, orderId,
+            new[] { new LineResolution(1, "SUP-1") },
+            saveMappings: false,
+            CancellationToken.None,
+            new ResolveHeaderFields(PoNumber: "   ", SupplierName: "  "));
+
+        Assert.True(result.IsSuccess);
+
+        var reloaded = await ReloadAsync(db, orderId);
+        // PO number column unchanged from the seed; supplier name still null (never set).
+        Assert.Equal("PO-1001", reloaded.PoNumber);
+        Assert.Null(reloaded.SupplierName);
+    }
 }

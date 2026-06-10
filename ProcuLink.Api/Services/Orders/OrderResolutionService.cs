@@ -94,11 +94,17 @@ internal sealed class OrderResolutionService
         }
 
         // Apply optional header-field corrections. Null/blank = no change per field.
-        // The read path (GET /api/orders/{id} → MapToDto) sources OrderDate and Currency
-        // from the columns, and BuyerName column-first with a canonical_json fallback.
-        // We therefore write the columns AND mirror into canonical_json so the two stay
-        // consistent (the buyer-name denormalisation split is the reason header edits were
-        // dropped before — see CLAUDE.md). PO number + supplier are not accepted here.
+        // The read path (GET /api/orders/{id} → MapToDto) sources OrderDate, Currency and
+        // PoNumber from the columns, BuyerName column-first with a canonical_json fallback,
+        // and the document/display supplier name (DocumentSupplierName) from the SupplierName
+        // column. We therefore write the columns AND mirror into canonical_json so the two
+        // stay consistent (the buyer-name denormalisation split is the reason header edits
+        // were dropped before — see CLAUDE.md).
+        //
+        // PO number and the document/display supplier name ARE editable now. What is NOT
+        // editable here is order ROUTING: SupplierId is never touched, so the order keeps
+        // delivering to the supplier chosen via the picker — only the printed/display values
+        // change.
         var changedHeaderFields = new List<string>();
         if (header is not null && header.HasAnyChange)
         {
@@ -124,6 +130,22 @@ internal sealed class OrderResolutionService
                 entity.BuyerName = trimmed;                 // denormalised column
                 canonicalUpdates["buyerName"] = trimmed;    // canonical_json mirror
                 changedHeaderFields.Add("buyerName");
+            }
+
+            if (!string.IsNullOrWhiteSpace(header.PoNumber))
+            {
+                var trimmed = header.PoNumber.Trim();
+                entity.PoNumber = trimmed;                  // po_number column (read path source)
+                canonicalUpdates["poNumber"] = trimmed;     // canonical_json mirror (transform/Scriban)
+                changedHeaderFields.Add("poNumber");
+            }
+
+            if (!string.IsNullOrWhiteSpace(header.SupplierName))
+            {
+                var trimmed = header.SupplierName.Trim();
+                entity.SupplierName = trimmed;              // supplier_name column (display only; NOT routing)
+                canonicalUpdates["supplierName"] = trimmed; // canonical_json mirror
+                changedHeaderFields.Add("supplierName");
             }
 
             if (canonicalUpdates.Count > 0)

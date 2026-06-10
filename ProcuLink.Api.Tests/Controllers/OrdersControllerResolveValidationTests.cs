@@ -172,4 +172,100 @@ public class OrdersControllerResolveValidationTests
         Assert.NotNull(captured);
         Assert.False(captured!.HasAnyChange);
     }
+
+    // ── PO number + supplier name are forwarded (trimmed) to the service ────────────
+
+    [Fact]
+    public async Task Resolve_PoNumberAndSupplierName_ForwardedTrimmed()
+    {
+        var (ctrl, orders, orgId) = Build();
+        var id = Guid.NewGuid();
+
+        ResolveHeaderFields? captured = null;
+        orders
+            .Setup(o => o.ResolveAsync(
+                orgId, id, It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
+                It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()))
+            .Callback<Guid, Guid, IReadOnlyList<Core.Services.LineResolution>, bool, CancellationToken, ResolveHeaderFields?>(
+                (_, _, _, _, _, h) => captured = h)
+            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
+            {
+                Id = id, OrgId = orgId, PoNumber = "PO-NEW", Currency = "EUR",
+                OrderDate = new DateOnly(2026, 1, 1), Status = "ready",
+            }));
+
+        var result = await ctrl.Resolve(
+            id,
+            WithLine(r =>
+            {
+                r.PoNumber     = "  PO-NEW  ";
+                r.SupplierName = "  Acme Display  ";
+            }),
+            CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.NotNull(captured);
+        Assert.Equal("PO-NEW", captured!.PoNumber);
+        Assert.Equal("Acme Display", captured.SupplierName);
+        Assert.True(captured.HasAnyChange);
+    }
+
+    // ── A header-only PO-number edit (no line resolutions) is accepted ─────────────
+
+    [Fact]
+    public async Task Resolve_PoNumberOnly_NoLines_IsAccepted()
+    {
+        var (ctrl, orders, orgId) = Build();
+        var id = Guid.NewGuid();
+
+        orders
+            .Setup(o => o.ResolveAsync(
+                orgId, id, It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
+                It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()))
+            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
+            {
+                Id = id, OrgId = orgId, PoNumber = "PO-EDIT", Currency = "EUR",
+                OrderDate = new DateOnly(2026, 1, 1), Status = "ready",
+            }));
+
+        var req = new ResolveRequest { PoNumber = "PO-EDIT" }; // no line resolutions
+
+        var result = await ctrl.Resolve(id, req, CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        orders.Verify(o => o.ResolveAsync(
+            orgId, id, It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
+            It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Once);
+    }
+
+    // ── Over-long PO number / supplier name → 400 before the service is touched ─────
+
+    [Fact]
+    public async Task Resolve_OverlongPoNumber_Returns400_AndNeverCallsService()
+    {
+        var (ctrl, orders, _) = Build();
+
+        var result = await ctrl.Resolve(
+            Guid.NewGuid(),
+            WithLine(r => r.PoNumber = new string('X', 257)), // > 256
+            CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        orders.Verify(o => o.ResolveAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
+            It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Resolve_OverlongSupplierName_Returns400()
+    {
+        var (ctrl, _, _) = Build();
+
+        var result = await ctrl.Resolve(
+            Guid.NewGuid(),
+            WithLine(r => r.SupplierName = new string('Y', 300)),
+            CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
 }

@@ -1,11 +1,17 @@
 namespace ProcuLink.Core.Services.Mapping;
 
 /// <summary>
-/// Result returned by <see cref="IPromoteMappingService.PromoteAsync"/>.
+/// Result returned by <see cref="IPromoteMappingService.PromoteAsync"/>. Reports EXACTLY what was
+/// written so the caller (and the operator) can never be left guessing whether the "Save mappings
+/// for &lt;supplier&gt;" button did anything — the founder's "seems not to save or give any errors"
+/// complaint. When nothing was promotable, <see cref="NothingToPromote"/> is true and
+/// <see cref="Message"/> explains why, instead of a silent success-with-no-effect.
 /// </summary>
-/// <param name="SupplierId">The supplier whose inbound mapping was updated.</param>
-/// <param name="HeaderFieldsPromoted">Number of header canonical-field rules written into the supplier mapping.</param>
-/// <param name="LineFieldsPromoted">Number of line canonical-field rules written into the supplier mapping.</param>
+/// <param name="SupplierId">The supplier whose reusable mapping was updated.</param>
+/// <param name="HeaderFieldsPromoted">Number of INBOUND header canonical-field rules (SourceMap) written into the supplier mapping.</param>
+/// <param name="LineFieldsPromoted">Number of INBOUND line canonical-field rules (SourceMap) written into the supplier mapping.</param>
+/// <param name="OutputHeaderFieldsPromoted">Number of OUTPUT header rules promoted into the supplier mapping's reusable output config.</param>
+/// <param name="OutputLineFieldsPromoted">Number of OUTPUT line rules promoted into the supplier mapping's reusable output config.</param>
 /// <param name="SchemaFingerprintHash">
 /// The order's schema-fingerprint hash at the time of promotion, or <c>null</c> when the order has
 /// no fingerprint recorded (header-less format, or parsed before fingerprinting was wired).
@@ -17,43 +23,77 @@ namespace ProcuLink.Core.Services.Mapping;
 /// supplier regardless of layout variation. A per-fingerprint override store (routing different
 /// layouts to different <see cref="PoMappingConfig"/>s) is a Horizon 3 / Group Q capability.
 /// </param>
+/// <param name="Message">
+/// Human-readable summary of what happened — a confirmation when something was promoted, or a
+/// clear reason when there was nothing to promote (so the UI never shows an empty success).
+/// </param>
 public sealed record PromoteMappingResult(
     Guid SupplierId,
     int HeaderFieldsPromoted,
     int LineFieldsPromoted,
-    string? SchemaFingerprintHash);
+    int OutputHeaderFieldsPromoted,
+    int OutputLineFieldsPromoted,
+    string? SchemaFingerprintHash,
+    string Message)
+{
+    /// <summary>Total inbound (SourceMap) field rules promoted.</summary>
+    public int InboundFieldsPromoted => HeaderFieldsPromoted + LineFieldsPromoted;
+
+    /// <summary>Total output field rules promoted.</summary>
+    public int OutputFieldsPromoted => OutputHeaderFieldsPromoted + OutputLineFieldsPromoted;
+
+    /// <summary>Total of every kind of rule promoted (inbound + output).</summary>
+    public int TotalFieldsPromoted => InboundFieldsPromoted + OutputFieldsPromoted;
+
+    /// <summary>
+    /// True when the order carried no promotable mapping at all (no SourceMap and no output mapping),
+    /// so the supplier mapping was left unchanged. The caller surfaces <see cref="Message"/> as a
+    /// clear "nothing to save" notice rather than a misleading success.
+    /// </summary>
+    public bool NothingToPromote => TotalFieldsPromoted == 0;
+}
 
 /// <summary>
-/// Promotes the SourceMap stored inside a per-order <see cref="OrderMappingOverride"/> to the
-/// supplier's reusable inbound <see cref="PoMappingConfig"/> so future orders from the same
-/// supplier with the same source layout are auto-mapped without user intervention.
+/// Promotes a per-order <see cref="OrderMappingOverride"/> (the source→canonical SourceMap AND the
+/// canonical→output mapping) to the supplier's reusable <see cref="PoMappingConfig"/> so future
+/// orders from the same supplier with the same layout reuse the work without further user review.
 ///
 /// <para>Contract:</para>
 /// <list type="bullet">
 ///   <item>Org-scoped — a cross-tenant or unknown order id returns <c>null</c> (caller maps to 404).</item>
 ///   <item>Idempotent — re-promoting the same override overwrites (never duplicates) the rules.</item>
-///   <item>Additive — canonical fields NOT in the SourceMap are preserved in the existing mapping
+///   <item>Additive — canonical fields NOT in the override are preserved in the existing mapping
 ///        (the upsert merges the promoted entries into whatever PoMappingConfig already exists).
 ///   </item>
-///   <item>SourceMap only — the <see cref="OrderMappingOverride.Output"/> side (canonical→output
-///        re-mapping) is not promoted because <see cref="PoMappingConfig"/> models the
-///        <em>inbound</em> (source→canonical) direction only. Output-side persistence is a
-///        separate future capability — see <c>TODO(output-promote)</c> comment in the
-///        implementation.
+///   <item>Both sides — the inbound <see cref="OrderMappingOverride.SourceMap"/> is translated into
+///        <see cref="PoMappingConfig.Header"/> / <see cref="PoMappingConfig.Lines"/>, and the
+///        <see cref="OrderMappingOverride.Output"/> mapping is stored on
+///        <see cref="PoMappingConfig.Output"/> (an additive JSONB field, no migration). Both are
+///        counted in the returned <see cref="PromoteMappingResult"/>.
+///   </item>
+///   <item>Never a silent no-op — when the order carries no SourceMap AND no output mapping, the
+///        supplier mapping is left untouched and the result reports
+///        <see cref="PromoteMappingResult.NothingToPromote"/> = true with an explanatory
+///        <see cref="PromoteMappingResult.Message"/>.
 ///   </item>
 /// </list>
+///
+/// <para>Caveat:</para> the supplier-level <see cref="PoMappingConfig.Output"/> is PERSISTED here but
+/// not yet CONSUMED by the transform path (the per-order override is still the only output-divert
+/// seam in <c>OrderTransformService</c>). Persisting + reporting it removes the founder-reported
+/// silent no-op; wiring re-upload consumption of the supplier output mapping is a separate follow-up.
 /// </summary>
 public interface IPromoteMappingService
 {
     /// <summary>
-    /// Reads the order's stored <see cref="OrderMappingOverride.SourceMap"/>, translates each
-    /// entry into an equivalent <see cref="FieldMappingEntry"/>, merges them into the supplier's
-    /// existing <see cref="PoMappingConfig"/> (or creates one), and persists via
+    /// Reads the order's stored <see cref="OrderMappingOverride"/>, translates the inbound SourceMap
+    /// into <see cref="FieldMappingEntry"/> rules and copies the output mapping verbatim, merges both
+    /// into the supplier's existing <see cref="PoMappingConfig"/> (or creates one), and persists via
     /// <see cref="IPoMappingService.UpsertAsync"/>.
     ///
-    /// Returns <c>null</c> when the order does not exist for <paramref name="orgId"/> (caller
-    /// maps to 404). Returns a result with zero promoted fields when the override has no SourceMap
-    /// (idempotent no-op — the mapping is unchanged).
+    /// Returns <c>null</c> when the order does not exist for <paramref name="orgId"/> (caller maps to
+    /// 404). Returns a result with <see cref="PromoteMappingResult.NothingToPromote"/> = true (and the
+    /// supplier mapping unchanged) when the override has neither a SourceMap nor an output mapping.
     /// </summary>
     Task<PromoteMappingResult?> PromoteAsync(
         Guid orgId, Guid orderId, CancellationToken ct);

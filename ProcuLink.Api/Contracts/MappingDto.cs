@@ -11,9 +11,17 @@ public class CreateMappingRequest
 
 /// <summary>
 /// Request to resolve missing supplier item codes on a purchase order.
-/// Optionally carries corrected header fields (order date / buyer name / currency)
-/// so the review screen can persist those edits through the same endpoint.
-/// PO number and supplier stay read-only and are intentionally NOT accepted here.
+/// Optionally carries corrected header fields (order date / buyer name / currency /
+/// PO number / supplier name) so the review screen can persist those edits through the
+/// same endpoint.
+///
+/// <para>
+/// PO number and the document/display supplier name ARE editable (the founder
+/// "PO number cannot be edited" bug). What stays read-only is which supplier the order
+/// ROUTES to — that is controlled by the supplier picker, never by this body. Editing
+/// <c>SupplierName</c> changes only the as-printed display value (the
+/// <c>supplier_name</c> column), not <c>SupplierId</c>.
+/// </para>
 /// </summary>
 public class ResolveRequest
 {
@@ -46,6 +54,20 @@ public class ResolveRequest
     /// stored upper-cased.
     /// </summary>
     public string? Currency { get; set; }
+
+    /// <summary>
+    /// Optional corrected purchase-order number. Null or whitespace-only = no change.
+    /// Trimmed before persisting. Written to BOTH the <c>po_number</c> column AND
+    /// canonical_json (the <c>poNumber</c> key) so the read and transform paths agree.
+    /// </summary>
+    public string? PoNumber { get; set; }
+
+    /// <summary>
+    /// Optional corrected document/display supplier name. Null or whitespace-only = no
+    /// change. Trimmed before persisting. Written to the <c>supplier_name</c> column AND
+    /// canonical_json. Does NOT change order routing — <c>SupplierId</c> is untouched.
+    /// </summary>
+    public string? SupplierName { get; set; }
 }
 
 /// <summary>

@@ -423,4 +423,207 @@ public class OrdersControllerPromoteMappingTests
         Assert.Equal(1, doc.RootElement.GetProperty("headerFieldsPromoted").GetInt32());
         Assert.Equal(0, doc.RootElement.GetProperty("lineFieldsPromoted").GetInt32());
     }
+
+    // ── Test 9: the OUTPUT side is promoted, persisted, and counted ────────────────
+
+    [Fact]
+    public async Task Promote_OutputMapping_PersistsAndCounts()
+    {
+        await using var db = NewDb();
+        var orgId          = Guid.NewGuid();
+        var (ctrl, poSvc)  = Build(db, orgId);
+
+        var @override = new OrderMappingOverride
+        {
+            SourceMap = new Dictionary<string, SourceFieldRule>
+            {
+                ["PoNumber"] = new SourceFieldRule { SourceToken = "po" },
+            },
+            Output = new OutputMappingConfig
+            {
+                Header = new Dictionary<string, OutputFieldRule>
+                {
+                    ["po"] = new OutputFieldRule { OutputPath = "PurchaseOrder", CanonicalField = "PoNumber" },
+                },
+                Lines = new Dictionary<string, OutputFieldRule>
+                {
+                    ["sku"] = new OutputFieldRule { OutputPath = "SKU",      CanonicalField = "SupplierItemCode" },
+                    ["qty"] = new OutputFieldRule { OutputPath = "Quantity", CanonicalField = "Quantity" },
+                },
+            },
+        };
+
+        var (orderId, supplierId) = await SeedOrderWithSourceMapAsync(db, orgId, @override);
+
+        var result = await ctrl.PromoteMappingOverride(orderId, CancellationToken.None);
+        var ok     = Assert.IsType<OkObjectResult>(result);
+
+        // The supplier config now carries the promoted output mapping (round-trips through JSONB).
+        var saved = await poSvc.GetAsync(orgId, supplierId);
+        Assert.NotNull(saved);
+        Assert.NotNull(saved!.Output);
+        Assert.Single(saved.Output!.Header);
+        Assert.Equal(2, saved.Output.Lines.Count);
+        Assert.Equal("PurchaseOrder", saved.Output.Header["po"].OutputPath);
+        Assert.Equal("SKU",           saved.Output.Lines["sku"].OutputPath);
+
+        // The response reports the output counts + a non-empty message + not nothingToPromote.
+        var json = JsonSerializer.Serialize(ok.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(1, doc.RootElement.GetProperty("headerFieldsPromoted").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("outputHeaderFieldsPromoted").GetInt32());
+        Assert.Equal(2, doc.RootElement.GetProperty("outputLineFieldsPromoted").GetInt32());
+        // total = 1 inbound header + 1 output header + 2 output lines = 4
+        Assert.Equal(4, doc.RootElement.GetProperty("totalFieldsPromoted").GetInt32());
+        Assert.False(doc.RootElement.GetProperty("nothingToPromote").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(doc.RootElement.GetProperty("message").GetString()));
+    }
+
+    // ── Test 10: output-only override (no SourceMap) still promotes + counts ────────
+
+    [Fact]
+    public async Task Promote_OutputOnly_NoSourceMap_StillPersists()
+    {
+        await using var db = NewDb();
+        var orgId          = Guid.NewGuid();
+        var (ctrl, poSvc)  = Build(db, orgId);
+
+        var @override = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = new Dictionary<string, OutputFieldRule>
+                {
+                    ["po"] = new OutputFieldRule { OutputPath = "OrderNo", CanonicalField = "PoNumber" },
+                },
+            },
+        };
+
+        var (orderId, supplierId) = await SeedOrderWithSourceMapAsync(db, orgId, @override);
+
+        var result = await ctrl.PromoteMappingOverride(orderId, CancellationToken.None);
+        var ok     = Assert.IsType<OkObjectResult>(result);
+
+        var saved = await poSvc.GetAsync(orgId, supplierId);
+        Assert.NotNull(saved);
+        Assert.NotNull(saved!.Output);
+        Assert.Single(saved.Output!.Header);
+
+        var json = JsonSerializer.Serialize(ok.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(0, doc.RootElement.GetProperty("headerFieldsPromoted").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("outputHeaderFieldsPromoted").GetInt32());
+        Assert.False(doc.RootElement.GetProperty("nothingToPromote").GetBoolean());
+    }
+
+    // ── Test 11: nothing to promote → clear message, supplier mapping untouched ────
+
+    [Fact]
+    public async Task Promote_NoSourceMapNoOutput_ReportsNothingToPromote_DoesNotPersist()
+    {
+        await using var db = NewDb();
+        var orgId          = Guid.NewGuid();
+        var (ctrl, poSvc)  = Build(db, orgId);
+
+        var orderId = await SeedOrderNoOverrideAsync(db, orgId);
+
+        var result = await ctrl.PromoteMappingOverride(orderId, CancellationToken.None);
+        var ok     = Assert.IsType<OkObjectResult>(result);
+
+        var json = JsonSerializer.Serialize(ok.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var doc = JsonDocument.Parse(json);
+        Assert.True(doc.RootElement.GetProperty("nothingToPromote").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("totalFieldsPromoted").GetInt32());
+        var msg = doc.RootElement.GetProperty("message").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(msg));
+        Assert.Contains("Nothing to save", msg);
+
+        // No supplier mapping row was written for this supplier (genuine no-op, not a silent save).
+        var supplierId = await db.PurchaseOrders.Where(o => o.Id == orderId).Select(o => o.SupplierId).FirstAsync();
+        var saved = await poSvc.GetAsync(orgId, supplierId);
+        Assert.Null(saved);
+    }
+
+    // ── Test 12: override with ONLY unknown SourceMap fields → nothingToPromote ─────
+
+    [Fact]
+    public async Task Promote_OnlyUnknownSourceFields_NoOutput_ReportsNothingToPromote()
+    {
+        await using var db = NewDb();
+        var orgId          = Guid.NewGuid();
+        var (ctrl, poSvc)  = Build(db, orgId);
+
+        var @override = new OrderMappingOverride
+        {
+            SourceMap = new Dictionary<string, SourceFieldRule>
+            {
+                ["TotallyUnknown"] = new SourceFieldRule { SourceToken = "x" },
+            },
+        };
+
+        var (orderId, supplierId) = await SeedOrderWithSourceMapAsync(db, orgId, @override);
+
+        var result = await ctrl.PromoteMappingOverride(orderId, CancellationToken.None);
+        var ok     = Assert.IsType<OkObjectResult>(result);
+
+        var json = JsonSerializer.Serialize(ok.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var doc = JsonDocument.Parse(json);
+        Assert.True(doc.RootElement.GetProperty("nothingToPromote").GetBoolean());
+
+        // Nothing was persisted.
+        var saved = await poSvc.GetAsync(orgId, supplierId);
+        Assert.Null(saved);
+    }
+
+    // ── Test 13: empty output config (zero rules) does NOT clobber an existing one ──
+
+    [Fact]
+    public async Task Promote_EmptyOutputConfig_PreservesExistingSupplierOutput()
+    {
+        await using var db = NewDb();
+        var orgId          = Guid.NewGuid();
+        var (ctrl, poSvc)  = Build(db, orgId);
+
+        // SourceMap with a known field so the promote isn't a no-op, plus an EMPTY output config.
+        var @override = new OrderMappingOverride
+        {
+            SourceMap = new Dictionary<string, SourceFieldRule>
+            {
+                ["PoNumber"] = new SourceFieldRule { SourceToken = "po" },
+            },
+            Output = new OutputMappingConfig(), // zero header + zero line rules
+        };
+
+        var (orderId, supplierId) = await SeedOrderWithSourceMapAsync(db, orgId, @override);
+
+        // Pre-seed an existing supplier output mapping that must NOT be wiped by the empty one.
+        await poSvc.UpsertAsync(orgId, supplierId, new PoMappingConfig
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = new Dictionary<string, OutputFieldRule>
+                {
+                    ["keep"] = new OutputFieldRule { OutputPath = "KeepMe", CanonicalField = "PoNumber" },
+                },
+            },
+        });
+
+        var result = await ctrl.PromoteMappingOverride(orderId, CancellationToken.None);
+        var ok     = Assert.IsType<OkObjectResult>(result);
+
+        var saved = await poSvc.GetAsync(orgId, supplierId);
+        Assert.NotNull(saved);
+        // Inbound PoNumber was added.
+        Assert.True(saved!.Header.ContainsKey("PoNumber"));
+        // Existing output mapping preserved (empty incoming output must not clobber it).
+        Assert.NotNull(saved.Output);
+        Assert.True(saved.Output!.Header.ContainsKey("keep"));
+
+        // Reported counts: 1 inbound header, 0 output.
+        var json = JsonSerializer.Serialize(ok.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(1, doc.RootElement.GetProperty("headerFieldsPromoted").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("outputHeaderFieldsPromoted").GetInt32());
+        Assert.False(doc.RootElement.GetProperty("nothingToPromote").GetBoolean());
+    }
 }
