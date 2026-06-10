@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Services;
+using ProcuLink.Api.Tests.TestSupport;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -27,51 +28,7 @@ public class OrderServiceListPagedTests
             .Options);
 
     private static OrderService BuildService(ProcuLinkDbContext db)
-    {
-        var fileStorage = new Mock<IFileStorageService>();
-        var itemMappings = new Mock<IItemMappingService>();
-        itemMappings
-            .Setup(s => s.ResolveManyAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(),
-                It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyDictionary<string, string?>)new Dictionary<string, string?>());
-
-        var poMappings = new Mock<IPoMappingService>();
-        poMappings
-            .Setup(s => s.GetAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((PoMappingConfig?)null);
-
-        var aiMappings = new Mock<IAiMappingService>();
-        aiMappings
-            .Setup(s => s.SuggestSupplierItemCodesAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(),
-                It.IsAny<IReadOnlyList<AiMappingLineContext>>(),
-                It.IsAny<IReadOnlyList<AiMappingCandidate>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyDictionary<int, AiMappingSuggestion>)new Dictionary<int, AiMappingSuggestion>());
-
-        var integrationTrigger = new Mock<IIntegrationTriggerService>();
-        integrationTrigger
-            .Setup(s => s.EnqueueAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-
-        return new OrderService(
-            db,
-            fileStorage.Object,
-            new OrderParserFactory(new IPurchaseOrderParser[]
-            {
-                new CsvOrderParser(), new XlsxOrderParser(), new PdfOrderParser()
-            }),
-            itemMappings.Object,
-            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
-            poMappings.Object,
-            aiMappings.Object,
-            Array.Empty<ITransformService>(),
-            NullLogger<OrderService>.Instance,
-            integrationTrigger.Object,
-            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
-    }
+        => OrderListTestSupport.BuildOrderService(db);
 
     /// <summary>Seeds N purchase orders for a given org, returning their ids newest-first.</summary>
     private static async Task<(ProcuLinkDbContext db, Guid orgId, Guid supplierId, List<Guid> orderIds)>
@@ -89,28 +46,8 @@ public class OrderServiceListPagedTests
             CreatedAt = DateTime.UtcNow,
         });
 
-        var ids = new List<Guid>();
-        var baseTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        for (var i = 0; i < count; i++)
-        {
-            var id = Guid.NewGuid();
-            ids.Add(id);
-            db.PurchaseOrders.Add(new PurchaseOrderEntity
-            {
-                Id            = id,
-                OrgId         = orgId,
-                SupplierId    = supplierId,
-                PoNumber      = $"PO-{i + 1:D4}",
-                OrderDate     = DateOnly.FromDateTime(baseTime.AddDays(i)),
-                Currency      = "EUR",
-                Status        = status,
-                SourceFileKey = $"{orgId}/{id}/order.csv",
-                // CreatedAt increases so PO-0001 is oldest, PO-000N is newest.
-                CreatedAt     = baseTime.AddMinutes(i),
-                UpdatedAt     = baseTime.AddMinutes(i),
-            });
-        }
-
+        // CreatedAt increases so PO-0001 is oldest, PO-000N is newest (staggered, not shared).
+        var ids = OrderListTestSupport.AddOrders(db, orgId, supplierId, count, status);
         await db.SaveChangesAsync();
 
         // Reverse so index 0 = newest order id (matches DESC ordering).

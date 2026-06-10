@@ -116,6 +116,36 @@ public interface IOrderService
         CancellationToken ct);
 
     /// <summary>
+    /// Offset/limit window over the same filtered, newest-first order list as
+    /// <see cref="ListPagedAsync"/>. This is the underlying primitive: <c>ListPagedAsync</c>
+    /// delegates to it with <c>skip = (page-1)*pageSize, take = pageSize</c>. Exposing it lets
+    /// callers honour a REST-style arbitrary <c>offset</c> exactly (an offset that is not a
+    /// multiple of the page size cannot be expressed as a 1-based page).
+    /// Ordering carries a deterministic tiebreaker (CreatedAt DESC, then Id DESC) so windows
+    /// never overlap or drop rows when many orders share the same CreatedAt — the realistic
+    /// case for a large bulk API ingest.
+    /// </summary>
+    /// <param name="organisationId">Tenant scope — every row must match this id.</param>
+    /// <param name="skip">Number of rows to skip (0-based offset). Negative values are treated as 0.</param>
+    /// <param name="take">Maximum rows to return. Already clamped by the caller.</param>
+    /// <param name="status">Optional status filter (exact match, with the failure-bucket expansion).</param>
+    /// <param name="supplierId">Optional supplier id filter.</param>
+    /// <param name="search">Optional case-insensitive substring match over PO number, supplier name, buyer name.</param>
+    /// <param name="dateFrom">Inclusive lower bound on CreatedAt (UTC).</param>
+    /// <param name="dateTo">Inclusive upper bound on CreatedAt (UTC).</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(
+        Guid       organisationId,
+        int        skip,
+        int        take,
+        string?    status,
+        Guid?      supplierId,
+        string?    search,
+        DateTime?  dateFrom,
+        DateTime?  dateTo,
+        CancellationToken ct);
+
+    /// <summary>
     /// Transform a fully-resolved order to XML or CSV, upload the artifact to R2,
     /// persist the outbound_artifacts row, and advance the order status to "ready_to_deliver".
     /// Delivery workflow is responsible for "delivering", "delivered", and "delivery_failed".

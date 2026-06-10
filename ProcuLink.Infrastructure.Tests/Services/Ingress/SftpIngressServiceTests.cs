@@ -395,6 +395,8 @@ public class SftpIngressServiceTests
             => throw new NotImplementedException();
         public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(Guid organisationId, int page, int pageSize, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
             => throw new NotImplementedException();
+        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(Guid organisationId, int skip, int take, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
+            => throw new NotImplementedException();
         public Task<Result<TransformResponse>> TransformAsync(Guid o, Guid id, OutputFormat fmt, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<DownloadUrl>> GetDownloadUrlAsync(Guid o, Guid id, Guid aid, CancellationToken ct)
@@ -442,6 +444,8 @@ public class SftpIngressServiceTests
         public Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(Guid o, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(Guid organisationId, int page, int pageSize, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(Guid organisationId, int skip, int take, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<TransformResponse>> TransformAsync(Guid o, Guid id, OutputFormat fmt, CancellationToken ct)
             => throw new NotImplementedException();

@@ -45,7 +45,7 @@ internal sealed class OrderQueryService
 
     // ── ListPagedAsync ────────────────────────────────────────────────────────
 
-    public async Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(
+    public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(
         Guid      organisationId,
         int       page,
         int       pageSize,
@@ -55,7 +55,31 @@ internal sealed class OrderQueryService
         DateTime? dateFrom,
         DateTime? dateTo,
         CancellationToken ct)
+        // Page/pageSize is just a window: skip whole pages, take one page. The offset/limit
+        // primitive does the real work so both entry points share one code path.
+        => ListWindowAsync(
+            organisationId,
+            skip: (Math.Max(1, page) - 1) * pageSize,
+            take: pageSize,
+            status, supplierId, search, dateFrom, dateTo, ct);
+
+    // ── ListWindowAsync ─────────────────────────────────────────────────────────
+
+    public async Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(
+        Guid      organisationId,
+        int       skip,
+        int       take,
+        string?   status,
+        Guid?     supplierId,
+        string?   search,
+        DateTime? dateFrom,
+        DateTime? dateTo,
+        CancellationToken ct)
     {
+        // Defensive clamps — the caller normally clamps, but never trust a raw window.
+        skip = Math.Max(0, skip);
+        take = Math.Max(0, take);
+
         // ── Step 1: build base query with SQL-filterable predicates ────────────
         // Org scope is mandatory on every query — never omit.
         var baseQuery = _db.PurchaseOrders
@@ -106,11 +130,17 @@ internal sealed class OrderQueryService
                 (Array.Empty<PurchaseOrderSummary>(), 0));
 
         // ── Step 4: paginate in SQL, select minimal columns ────────────────────
-        var skip  = (page - 1) * pageSize;
+        // CreatedAt DESC is the user-visible order, but it is NOT unique: a large bulk API
+        // ingest can stamp many orders with the same CreatedAt. SQL gives no ordering
+        // guarantee for rows with equal sort keys, so Skip/Take over a CreatedAt-only sort
+        // can let adjacent windows overlap and drop rows (plan/scan/concurrency dependent).
+        // The Id DESC tiebreaker makes the sort total → every window is disjoint and the
+        // union of all windows covers the full set exactly once, deterministically.
         var paged = await baseQuery
             .OrderByDescending(o => o.CreatedAt)
+            .ThenByDescending(o => o.Id)
             .Skip(skip)
-            .Take(pageSize)
+            .Take(take)
             .Select(o => new
             {
                 o.Id,

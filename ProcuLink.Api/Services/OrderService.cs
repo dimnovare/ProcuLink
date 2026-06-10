@@ -92,6 +92,11 @@ public sealed class OrderService : IOrderService
         string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
         => _query.ListPagedAsync(organisationId, page, pageSize, status, supplierId, search, dateFrom, dateTo, ct);
 
+    public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(
+        Guid organisationId, int skip, int take, string? status, Guid? supplierId,
+        string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
+        => _query.ListWindowAsync(organisationId, skip, take, status, supplierId, search, dateFrom, dateTo, ct);
+
     public Task<Result<DownloadUrl>> GetDownloadUrlAsync(
         Guid organisationId, Guid orderId, Guid artifactId, CancellationToken ct)
         => _query.GetDownloadUrlAsync(organisationId, orderId, artifactId, ct);
