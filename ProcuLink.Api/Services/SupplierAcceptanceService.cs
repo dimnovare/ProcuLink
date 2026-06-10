@@ -99,30 +99,43 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         var prior = _db.OrderValidationResults.Where(r => r.OrgId == orgId && r.OrderId == orderId);
         _db.OrderValidationResults.RemoveRange(prior);
 
-        var results = new List<OrderValidationResult>();
-
-        if (profile is not null)
-        {
-            foreach (var rule in profile.Rules)
-            {
-                if (rule.Scope == "order")
-                {
-                    var (pass, val) = EvaluateOrderField(order, rule);
-                    results.Add(MakeResult(orgId, orderId, profile.Id, rule, null, pass, val, now));
-                }
-                else
-                {
-                    foreach (var line in order.Lines)
-                    {
-                        var (pass, val) = EvaluateLineField(line, rule);
-                        results.Add(MakeResult(orgId, orderId, profile.Id, rule, line.LineNumber, pass, val, now));
-                    }
-                }
-            }
-        }
+        var results = EvaluateProfile(orgId, orderId, profile, order, now);
 
         _db.OrderValidationResults.AddRange(results);
         await _db.SaveChangesAsync(ct);
+        return results;
+    }
+
+    /// <summary>
+    /// Pure, NON-MUTATING evaluation of an acceptance <paramref name="profile"/> against a loaded
+    /// <paramref name="order"/>. Produces the same <see cref="OrderValidationResult"/> rows
+    /// <see cref="ValidateOrderAsync"/> persists, but writes nothing to the database. Reused by the
+    /// V2 replay path so a DRAFT connection revision's bound validation can be evaluated against a
+    /// historical order WITHOUT touching its stored validation state. A null profile yields an empty
+    /// list (no active validation). The returned rows are detached (not added to any DbSet).
+    /// </summary>
+    public static IReadOnlyList<OrderValidationResult> EvaluateProfile(
+        Guid orgId, Guid orderId, SupplierAcceptanceProfile? profile, PurchaseOrderEntity order, DateTime now)
+    {
+        var results = new List<OrderValidationResult>();
+        if (profile is null) return results;
+
+        foreach (var rule in profile.Rules)
+        {
+            if (rule.Scope == "order")
+            {
+                var (pass, val) = EvaluateOrderField(order, rule);
+                results.Add(MakeResult(orgId, orderId, profile.Id, rule, null, pass, val, now));
+            }
+            else
+            {
+                foreach (var line in order.Lines)
+                {
+                    var (pass, val) = EvaluateLineField(line, rule);
+                    results.Add(MakeResult(orgId, orderId, profile.Id, rule, line.LineNumber, pass, val, now));
+                }
+            }
+        }
         return results;
     }
 
