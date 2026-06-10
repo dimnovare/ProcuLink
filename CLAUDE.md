@@ -213,8 +213,21 @@ source. All UI/UX and design decisions run through the local design system,
 
 ---
 
-## Current direction — WIN THE FIRST CUSTOMERS (freeze features)
+## Current direction — NORTH STAR: the Versioned Supplier Connection (PIVOT 2026-06-09)
 
+> **★ ACTIVE DIRECTION (decided 2026-06-09).** Source of truth:
+> [supplier-connection-north-star](docs/strategy/2026-06-09-supplier-connection-north-star.md).
+> The founder DROPPED the "Baltic bootstrap / sell-first / freeze-features / win-customer-#1"
+> constraint (the box below is now ARCHIVED prior context, not the active plan). The engine
+> is strong; the goal now is to unify mappings/rules/templates/delivery/catalog/connectors
+> into ONE first-class, **versioned Supplier Connection** (draft → test → publish → archive),
+> with every order pinning a `ConnectionRevisionId` for reproducibility, replay, and rollback.
+> Sequenced groups V1–V10 + cross-cutting are in the memo; **start with V1 (versioned
+> connection core), then V2 (replay/impact testing).** Keep Scriban as the power-user escape
+> hatch (not the default); give new connection concepts FIRST-CLASS tables (stop overloading
+> `CanonicalJson`); never equate HTTP 200 with supplier business acceptance.
+
+> **⚠️ ARCHIVED (2026-05-30 plan, superseded by the 2026-06-09 pivot above):**
 > **⚠️ ROADMAP UPDATED 2026-05-30** after the investor-grade + four-lens analyses.
 > Strategic source of truth: [investor-analysis](docs/strategy/2026-05-30-investor-analysis.md)
 > · [four-lens](docs/strategy/2026-05-30-four-lens-product-analysis.md)
