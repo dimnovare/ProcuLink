@@ -72,7 +72,19 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   http/sftp/ftps/smtp/erp_erply/erp_directo — each mirrors a REAL wired dispatcher; bare ftp excluded as it
   has none), `GET /api/connector-manifests/{key}`, `POST /api/connector-manifests/{key}/validate-config`
   ({valid,missing[],unknown[]}). LIVE-verified: 6 manifests returned, validate-config correctly flags
-  missing `url` + unknown keys. FE follow-up (manifest-driven connector config UI) still open.
+  missing `url` + unknown keys.
+  **V7 FE — ✅ SHIPPED + LIVE-VERIFIED (FE `main` = `a9c8992` → Vercel).** Branch `auto/fe-v7-connector-ui`,
+  built+adversarially reviewed (verdict safe; save-path untouched — `DeliveryConfigEditor.tsx` diff is
+  exactly 8 lines: 1 import + 1 mount; 696 insertions / 0 deletions). A manifest-driven
+  `ConnectorRequirementsPanel` (collapsed-by-default disclosure) on the supplier **Delivery** tab:
+  fetches `GET /api/connector-manifests/{protocol}`, renders Required/Credential/Optional field groups
+  with Required/Secret/type pills + the encrypted-vault note (secrets never rendered/posted), and an
+  advisory **"Check configuration"** button calling `validate-config` with `buildConfigObject()`. LIVE:
+  expands, shows HTTP fields, Check → "Looks complete". `connectors.ts` api-client + mock twins;
+  queries gated on isApiMockMode||clerkReady. KNOWN advisory limitation: validate checks required-key
+  PRESENCE and `buildConfigObject` always emits the keys, so "missing required" rarely fires for the
+  standard editor — value is the requirements display + unknown-key detection (refine later to check
+  value emptiness / credential presence). Optional UX tweak: panel is collapsed by default.
 - **V8 conformance reports** — ✅ SHIPPED + LIVE (`10bb6f1`). 5 profile checkers (cXML/UBL/X12/
   EDIFACT/IDoc), `GET /api/orders/{id}/conformance?format=`, downloadable Markdown. FE tab pending.
 - **V9 AI decision history** — table SHIPPED; calibration is the follow-up.
