@@ -131,8 +131,13 @@ Workflow `wsfy7y3p0` (build → Fable-5 + Sonnet parallel review). Behavior-pres
   silently false (it proved via consumer-grep that no current call site breaks). Its note: "a textual
   diff alone would have called this a pure move." Use Fable-5 as a diverse adversarial lens; keep Sonnet
   for implementation.
-- FOLLOW-UP IN FLIGHT (`a7c980f81ab909b95` → branch `auto/fe-api-core`): extract `src/lib/api/core.ts`
-  (single `ApiHttpError` + shared helpers) to close Fable's #1+#2. MERGE when it lands → build → Vercel.
+- FOLLOW-UP ✅ SHIPPED (FE `main` = `15e02be` → Vercel): `src/lib/api/core.ts` now holds the SINGLE
+  `ApiHttpError` + shared helpers (`API_BASE_URL`/`USE_MOCK`/`isApiMockMode`/`authHeader`/`fetchWithTimeout`/
+  `delay`); billing/operations/settings/api-client import from it (grep confirms ONE `class ApiHttpError`).
+  Public surface unchanged; build + 20/20 vitest green. `delivery.ts`/`connectors.ts` intentionally left on
+  their simpler non-normalizing `API_BASE_URL` (unifying could change behavior for scheme-less env values).
+  Closes Fable-5's class-identity finding — and 5 panels (ReplayPanel/ConnectionDetail/ConformancePanel/
+  PoMappingEditor/UploadWorkbench) that do `err instanceof ApiHttpError` now match errors from ALL api modules.
 - RUNNER BUGS found (fix `scripts/live-matrix/runner.js`): (1) it reads the order id at `up.json.id`
   but the upload API returns `{order:{id}}` → it never tracked orders; (2) it treats `/transform` as
   returning output inline, but `/transform` is ASYNC (enqueues a Worker job) — the INLINE path for all
