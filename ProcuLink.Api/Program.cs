@@ -397,6 +397,10 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IPromoteMappingServic
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
+// Group V1 — versioned Supplier Connection (lifecycle service, ingest-time resolver, backfill).
+builder.Services.AddScoped<ISupplierConnectionService, SupplierConnectionService>();
+builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
+builder.Services.AddScoped<IConnectionBackfillService, ConnectionBackfillService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IPassportService, PassportService>();
 builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>();
@@ -798,6 +802,26 @@ app.Lifetime.ApplicationStarted.Register(() =>
                 migLogger.LogInformation("Database migrations applied (attempt {Attempt}).", attempt);
                 // P2: transition to Succeeded — /health/ready becomes Healthy.
                 ProcuLink.Api.Controllers.MigrationReadiness.MarkSucceeded();
+
+                // ── Group V1: idempotent connection backfill ─────────────────
+                // Turn each supplier's current loose config into a published "revision 1"
+                // under a SupplierConnection (zero behaviour change). Idempotent — the
+                // UNIQUE(org_id, supplier_id) connection guard makes re-runs a no-op, so
+                // it's safe to call on every boot. Best-effort: a backfill failure must
+                // NOT keep the app from serving (migrations already succeeded).
+                try
+                {
+                    var backfill = scope.ServiceProvider.GetRequiredService<IConnectionBackfillService>();
+                    var createdCount = await backfill.BackfillAllAsync(CancellationToken.None);
+                    migLogger.LogInformation(
+                        "Group V1 connection backfill complete: {Count} new connection(s) created.", createdCount);
+                }
+                catch (Exception backfillEx)
+                {
+                    migLogger.LogError(backfillEx,
+                        "Group V1 connection backfill failed (app stays up; orders fall back to live config).");
+                    SentrySdk.CaptureException(backfillEx);
+                }
                 return;
             }
             catch (Exception ex)
