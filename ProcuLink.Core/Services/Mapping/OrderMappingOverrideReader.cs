@@ -51,4 +51,14 @@ public static class OrderMappingOverrideReader
     public static bool HasUsableOutput(OrderMappingOverride? @override) =>
         @override?.Output is { } output
         && (output.Header.Count > 0 || output.Lines.Count > 0);
+
+    /// <summary>
+    /// True only when an override is present AND carries a non-blank whole-document
+    /// <see cref="OrderMappingOverride.OutputTemplate"/>. Template mode takes precedence over the
+    /// field-by-field <see cref="OrderMappingOverride.Output"/> config: when a usable template is
+    /// present, the transform renders the whole document from it. A null/blank template leaves the
+    /// existing (field-by-field override, or fixed transformer) path unchanged.
+    /// </summary>
+    public static bool HasUsableTemplate(OrderMappingOverride? @override) =>
+        !string.IsNullOrWhiteSpace(@override?.OutputTemplate);
 }

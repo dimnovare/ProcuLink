@@ -1,5 +1,6 @@
 using System.Globalization;
 using Scriban;
+using Scriban.Functions;
 using Scriban.Parsing;
 using Scriban.Runtime;
 
@@ -178,4 +179,69 @@ public static class ScribanFieldEvaluator
 
         return obj;
     }
+
+    // ── Shared sandbox (also used by ScribanTemplateTransformService) ──────────────
+
+    /// <summary>
+    /// Build a <see cref="TemplateContext"/> with the SAME sandbox posture the per-field evaluator
+    /// uses (identity member renamer so <c>order.PoNumber</c> matches the literal key; relaxed member
+    /// access so an unknown member renders empty instead of throwing; bounded loops/recursion), and
+    /// push <paramref name="global"/> as the global scope.
+    ///
+    /// <para><b>Builtins.</b> A bare per-field expression needs no helper functions, so the per-field
+    /// path passes <paramref name="enableSafeBuiltins"/> = <c>false</c> (a bare <see cref="ScriptObject"/>
+    /// global — no <c>BuiltinFunctions</c> surface at all). WHOLE-DOCUMENT templates legitimately need
+    /// the pure value-transform helpers (<c>string.*</c>, <c>array.*</c>, <c>math.*</c>, <c>date.*</c>,
+    /// <c>object.*</c>) to reshape values into a supplier's structure, so the template path passes
+    /// <c>true</c> to import that CURATED set. Even then the context is still sandboxed: Scriban has no
+    /// file/network/process surface, and <c>include</c>/<c>import</c> are inert because
+    /// <see cref="TemplateContext.TemplateLoader"/> is left null (no loader = those statements fail
+    /// closed). The <c>html</c>/<c>regex</c>/<c>object.eval</c>-style reflection helpers are NOT
+    /// imported.</para>
+    /// </summary>
+    internal static TemplateContext BuildSafeTemplateContext(ScriptObject global, bool enableSafeBuiltins)
+    {
+        var context = new TemplateContext
+        {
+            // Identity renamer: {{ OrderNr }} / {{ order.PoNumber }} look up the literal key, NOT
+            // Scriban's default snake_case.
+            MemberRenamer = member => member.Name,
+            // Unknown members render as empty rather than throwing — additive + safe.
+            EnableRelaxedMemberAccess = true,
+            // Bound loops/recursion a (misguided) template might contain.
+            LoopLimit = 100_000,
+            RecursiveLimit = 100,
+            // No template loader → {{ include }} / {{ import }} fail closed (no file/IO surface).
+            TemplateLoader = null,
+        };
+
+        if (enableSafeBuiltins)
+        {
+            // Curated, PURE value-transform builtins only — string/array/math/date/object — each
+            // exposed under its conventional lowercase family name (string.upcase, array.size,
+            // math.round, date.to_string, object.default). Built from Scriban's own function classes,
+            // which do no IO. The risky families are deliberately NOT imported: there is no `regex`,
+            // no `html`, no `include`/`import` (the latter need a TemplateLoader, left null above).
+            // Pushed UNDER the data global so order data still wins on a name clash.
+            var families = new ScriptObject
+            {
+                ["string"] = NewFunctionFamily<StringFunctions>(),
+                ["array"]  = NewFunctionFamily<ArrayFunctions>(),
+                ["math"]   = NewFunctionFamily<MathFunctions>(),
+                ["date"]   = NewFunctionFamily<DateTimeFunctions>(),
+                ["object"] = NewFunctionFamily<ObjectFunctions>(),
+            };
+            context.PushGlobal(families);
+        }
+
+        context.PushGlobal(global);
+        return context;
+    }
+
+    /// <summary>
+    /// Instantiate one of Scriban's built-in function families. Each family type derives from
+    /// <see cref="ScriptObject"/> and self-registers its snake_case functions in its constructor,
+    /// so a bare <c>new()</c> yields a ready-to-use <c>string</c>/<c>array</c>/… object.
+    /// </summary>
+    private static ScriptObject NewFunctionFamily<T>() where T : ScriptObject, new() => new T();
 }

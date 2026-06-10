@@ -57,20 +57,25 @@ internal sealed class OrderTransformService
             return Result<TransformResponse>.Fail(
                 $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolved)}.");
 
-        // heart-piece-flex Phase 2: route to the override-aware builder ONLY when this order carries a
-        // usable per-order output mapping AND the format is one the override builder supports (CSV/JSON).
-        // Otherwise fall through to the EXISTING fixed transformer, unchanged — so the default (no
-        // override) path is byte-for-byte identical to today. An override with only custom fields, an
-        // empty output config, or an unsupported format never diverts the transform.
+        // heart-piece-flex flexible mapping: three transform modes, in precedence order.
+        //   1. TEMPLATE MODE — the order carries a non-blank whole-document OutputTemplate. Renders the
+        //      ENTIRE document from that single Scriban template against the stable model namespace.
+        //      Works for ANY format (the template defines the structure), so it does not require a
+        //      registered fixed transformer.
+        //   2. FIELD-BY-FIELD OVERRIDE — the order carries a usable per-order output mapping AND the
+        //      format is one the override builder supports (CSV/JSON).
+        //   3. FIXED TRANSFORMER — the default. Byte-for-byte identical to today when no override is set.
         var mappingOverride = OrderMappingOverrideReader.Read(entity.CanonicalJson);
-        var useOverride =
-            OrderMappingOverrideReader.HasUsableOutput(mappingOverride)
+        var useTemplate     = OrderMappingOverrideReader.HasUsableTemplate(mappingOverride);
+        var useOverride     =
+            !useTemplate
+            && OrderMappingOverrideReader.HasUsableOutput(mappingOverride)
             && MappedTransformService.SupportsOverride(format);
 
-        // Locate the correct fixed transformer (Xml/Csv/Json/...). Always required for the non-override
-        // path; we still resolve it up-front so a missing transformer fails before status mutation.
+        // Locate the correct fixed transformer (Xml/Csv/Json/...). Required only for the fixed path;
+        // we still resolve it up-front so a missing transformer fails before status mutation.
         var transformer = _transformers.FirstOrDefault(t => t.CanTransform(format));
-        if (!useOverride && transformer is null)
+        if (!useTemplate && !useOverride && transformer is null)
             return Result<TransformResponse>.Fail($"No transform service registered for format '{format}'.");
 
         // Mark as transforming so the UI can show a spinner
@@ -82,9 +87,20 @@ internal sealed class OrderTransformService
         TransformResult transformResult;
         try
         {
-            transformResult = useOverride
-                ? new MappedTransformService().Build(entity, mappingOverride!, format)
-                : await transformer!.TransformAsync(entity, format, ct);
+            transformResult = useTemplate
+                ? new ScribanTemplateTransformService().Build(entity, mappingOverride!)
+                : useOverride
+                    ? new MappedTransformService().Build(entity, mappingOverride!, format)
+                    : await transformer!.TransformAsync(entity, format, ct);
+        }
+        catch (TransformTemplateException ex)
+        {
+            // Broken template — revert status and surface the compile/render error. The order is
+            // never delivered from a template that did not render.
+            entity.Status    = "ready";
+            entity.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            return Result<TransformResponse>.Fail(ex.Message);
         }
         catch (TransformValidationException ex)
         {
