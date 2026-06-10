@@ -46,8 +46,19 @@ public sealed class ConnectionBackfillService : IConnectionBackfillService
                 .AnyAsync(x => x.OrgId == c.OrgId && x.SupplierId == c.SupplierId, ct);
             if (alreadyExists) continue;
 
-            var revId = await BackfillSupplierAsync(c.OrgId, c.SupplierId, ct);
-            if (revId is not null) created++;
+            // Isolate per-supplier failures: one bad supplier must not abort the whole
+            // backfill. EF tracks per-DbContext, so on a failure detach the half-added
+            // graph before continuing.
+            try
+            {
+                var revId = await BackfillSupplierAsync(c.OrgId, c.SupplierId, ct);
+                if (revId is not null) created++;
+            }
+            catch (Exception ex)
+            {
+                _db.ChangeTracker.Clear();
+                Console.Error.WriteLine($"[ConnectionBackfill] supplier {c.SupplierId} (org {c.OrgId}) failed: {ex.Message}");
+            }
         }
         return created;
     }
@@ -135,14 +146,21 @@ public sealed class ConnectionBackfillService : IConnectionBackfillService
             OrgId            = orgId,
             SupplierId       = supplierId,
             Name             = supplierName,
-            ActiveRevisionId = revisionId,
+            // Break the connection<->revision circular FK: insert with NO active pointer
+            // first, then set it. Adding both rows (each referencing the other) in ONE
+            // SaveChanges throws on PostgreSQL ("cannot determine insert order") — the
+            // InMemory test provider does NOT enforce this, which masked it in tests.
+            ActiveRevisionId = null,
             CreatedBy        = "system:backfill",
             CreatedAt        = now,
             UpdatedAt        = now,
         };
 
-        _db.SupplierConnectionRevisions.Add(revision);
-        _db.SupplierConnections.Add(connection);
+        _db.SupplierConnections.Add(connection);          // active_revision_id = NULL → no FK to revision yet
+        _db.SupplierConnectionRevisions.Add(revision);    // connection_id → the connection above (now insertable)
+        await _db.SaveChangesAsync(ct);
+
+        connection.ActiveRevisionId = revisionId;          // now both rows exist → set the pointer
         await _db.SaveChangesAsync(ct);
 
         return revisionId;
