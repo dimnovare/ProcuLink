@@ -91,8 +91,24 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   verify rAF features by reasoning + the founder's focused screen.
 - `dotnet`/long bash need `dangerouslyDisableSandbox:true`. bun never npm.
 
+## BATCH 2 IN FLIGHT (launched 2026-06-09 after V1 shipped) — MERGE when they land
+- `auto/be-v2-replay` — Group V2 replay/impact testing (run historical orders through a
+  DRAFT revision, non-mutating, never delivers; returns canonical/validation/output diff).
+  NO migration. Backend worktree.
+- `auto/be-v10-catalog` — Group V10 indexed Postgres catalog retrieval (pg_trgm + GIN
+  index; exact-match → trigram ranking; small catalogs unchanged). **OWNS the only
+  migration this batch.** ⚠️ trigram needs LIVE-POSTGRES verification (InMemory can't test
+  pg_trgm — see project-inmemory-masks-postgres-fk); verify the indexed path live after deploy.
+- `auto/fe-v1-connections-ui` (project-proculink) — the Connections list + detail +
+  draft→test→publish→archive/rollback lifecycle UI against the live /api/connections API.
+  Replay UI is a placeholder until V2 lands.
+  MERGE: backend two (V10 owns the migration, V2 disjoint) → one `dotnet test` → push →
+  Railway (verify the pg_trgm migration applied + catalog path live). FE → bun build → push.
+
 ## Resume instructions
-1. Merge the 3 in-flight branches (recipe above), verify combined green, deploy both.
+1. Merge BATCH 2 (above) + any earlier in-flight branches (recipe in the merge section),
+   verify combined green, deploy, verify the V10 migration + trigram path on live Postgres,
+   and confirm the V1 Connections UI renders the backfilled connections.
 2. Build the **V1 Connection UI** page (the per-supplier editors become "edit draft
    revision"; publish/rollback controls) against the V1 API.
 3. Execute **V2 (replay)**, then continue V4/V6/V8/V10 per priority.
