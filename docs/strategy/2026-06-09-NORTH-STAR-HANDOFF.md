@@ -142,6 +142,18 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   lifted to 6000.
 
 ## ✅ FULL ORDER CYCLE PROVEN LIVE + wire hover-highlight fix (2026-06-10)
+- **Flying source wires in COLLAPSED doc FIXED + shipped (FE `main` = `10b94bb` → Vercel).** Founder
+  video showed source wires flying to the page TOP-LEFT and staying there when the reconstructed-doc detail
+  was collapsed (the default). Root cause: the collapsed body used `display:none`, but its `onSection` zone
+  refs were still registered → `getBoundingClientRect()` on a display:none element returns a ZERO-RECT at
+  (0,0) → `sx=0-g.left, sy≈0-g.top` → wires originate from the page origin (never even hit the
+  `SRC_Y_FALLBACK` branch, which required a null ref). FIX: render the collapsed summary as a REAL card
+  (ternary, NOT display:none) carrying the same zone anchors (header/header-meta/parties/terms/lines/totals)
+  on visible elements; source wires always-on; + zero-rect detection routing to a hardened
+  `fallbackSourceAnchor` pinned to the source-column right edge at the node's own y (never the top). 24/24
+  bridge tests green. DURABLE LESSON: a `display:none` element still resolves refs but its rect is a
+  zero-rect at (0,0) — measuring it puts SVG endpoints at the page origin; detect zero-rects + render real
+  elements (ternary, not display toggle) for anything you measure.
 - **Wire hover-highlight bug FIXED + shipped (FE `main` = `a02a2db` → Vercel).** Regression from the
   `header-meta` change: `SpineNodeCard` fired BOTH `onHover(node.id)` AND `onZoneHover(srcRef)`; the zone
   handler clobbered `hoveredId` with `nodeIdForZone(srcRef)` = the FIRST node sharing that zone. Since
