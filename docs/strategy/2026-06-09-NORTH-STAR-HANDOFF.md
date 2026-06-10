@@ -66,7 +66,13 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
 - **V5 deepen canonical** — staged; Scriban template is the flexible escape hatch.
 - **V6 exception-first UI** — progressive disclosure (what's wrong/why/fix/remember/
   notified+accepted); topology as overview. Model delivered≠accepted (receipts/ACK). **NEXT (FE).**
-- **V7 connector SDK** — manifest-driven config UI.
+- **V7 connector SDK** — ✅ BACKEND SHIPPED + LIVE (`082393b`). Code-defined `ConnectorManifestCatalog`
+  (no migration, additive — 6 new files only), built + adversarially reviewed (verdict: safe, additive-only,
+  offer⇔works, migration-free, 1942 tests green incl. 571 new). `GET /api/connector-manifests` (6 manifests:
+  http/sftp/ftps/smtp/erp_erply/erp_directo — each mirrors a REAL wired dispatcher; bare ftp excluded as it
+  has none), `GET /api/connector-manifests/{key}`, `POST /api/connector-manifests/{key}/validate-config`
+  ({valid,missing[],unknown[]}). LIVE-verified: 6 manifests returned, validate-config correctly flags
+  missing `url` + unknown keys. FE follow-up (manifest-driven connector config UI) still open.
 - **V8 conformance reports** — ✅ SHIPPED + LIVE (`10bb6f1`). 5 profile checkers (cXML/UBL/X12/
   EDIFACT/IDoc), `GET /api/orders/{id}/conformance?format=`, downloadable Markdown. FE tab pending.
 - **V9 AI decision history** — table SHIPPED; calibration is the follow-up.
@@ -161,18 +167,27 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   interface matches the raw prod JSON exactly (`profile`/`profileName`/`profileVersion`/`overallPass`
   at report level; `profileRef` per-check) — no casing bug.
 
-## Resume instructions (BATCH 1+2+3 all shipped + live — backend `10bb6f1`, FE `040d972`)
-Backend North-Star groups V1, V2, V3, V4, V8, V9, V10 are all SHIPPED + LIVE-VERIFIED. Remaining:
-1. **V6 exception-first UI (FE, highest value next)** — progressive disclosure: what's wrong /
-   why / how to fix / remember-this / who's notified + accepted. Topology as overview. Surface
-   the V8 conformance report + V4 rule bindings here. Model delivered≠accepted (ACK/receipts).
-2. **Batch-3 FE follow-ups (read-only over live endpoints):** rule-definitions/bindings catalog
-   view; a "Conformance" tab/button on order/connection detail (calls `/conformance`, renders +
-   downloads the Markdown report).
-3. **V5 deepen canonical** (staged; Scriban is the escape hatch) and **V7 connector SDK**
-   (manifest-driven config UI).
-4. **Eng hygiene:** PageShell-in-CI, typed OpenAPI client, decompose SpineReview/api-client,
+## Resume instructions — backend `082393b`, FE `a5d1854` (all live)
+North-Star groups V1, V2, V3, V4, V6, V7(backend), V8, V9, V10 are all SHIPPED + LIVE-VERIFIED.
+**Only V5 remains of the numbered groups**, plus FE follow-ups + eng hygiene. Remaining, by priority:
+1. **V5 deepen canonical** — HIGH BLAST RADIUS (touches the core ParsedOrder model + every
+   transform; output for existing orders MUST stay byte-identical). Do NOT autonomous-background
+   this — design it carefully, add fields additively, prove byte-identical output on the 8×7 matrix
+   + a live order before/after. Scriban remains the flexible escape hatch for anything not yet
+   first-class.
+2. **FE follow-ups (net-new, read/CRUD over live endpoints):** (a) a manifest-driven connector
+   CONFIG UI consuming `GET /api/connector-manifests` + `validate-config` (render the right fields
+   per transport, secret-mask secret fields, validate before save) — wire into the supplier
+   Delivery tab / connections; (b) deeper V6 polish if the founder wants it.
+3. **Eng hygiene:** PageShell-in-CI, typed OpenAPI client, decompose SpineReview/api-client,
    `@next/mdx` v16→15 align. **Live 2000-combo matrix** (runner at
    project-proculink/scripts/live-matrix/runner.js) — deterministic 56/56 already proves validity.
-5. Keep a real order flowing end-to-end at every step. One FE agent at a time (FE repo can't be
+4. Keep a real order flowing end-to-end at every step. One FE agent at a time (FE repo can't be
    worktree-isolated); backend agents worktree-isolated, ONE migration per parallel batch.
+
+PROVEN THIS SESSION (recipe): backend agent(s) in worktrees → commit to `auto/be-*` → (adversarial
+review for risky ones) → `git merge --no-ff` → ONE `dotnet test ProcuLink.slnx` → push → poll the
+new route 404→401 to confirm the Railway deploy → live-verify content via the authenticated browser
+tab 1405651030 (`window.Clerk.session.getToken()` → fetch the endpoint). FE: merge → `bun run build`
+→ push → poll `proculink.eu/<newroute>` DOM (not curl — Next middleware 200s everything) → verify
+real data renders. Then `git worktree remove --force` + `git branch -D` + `git worktree prune`.
