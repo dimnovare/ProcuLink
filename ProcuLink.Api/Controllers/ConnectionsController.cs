@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 
@@ -18,11 +19,14 @@ namespace ProcuLink.Api.Controllers;
 public sealed class ConnectionsController : ControllerBase
 {
     private readonly ISupplierConnectionService _service;
+    private readonly IReplayService             _replay;
     private readonly ICurrentTenantService      _tenant;
 
-    public ConnectionsController(ISupplierConnectionService service, ICurrentTenantService tenant)
+    public ConnectionsController(
+        ISupplierConnectionService service, IReplayService replay, ICurrentTenantService tenant)
     {
         _service = service;
+        _replay  = replay;
         _tenant  = tenant;
     }
 
@@ -152,6 +156,24 @@ public sealed class ConnectionsController : ControllerBase
     {
         var result = await _service.ArchiveAsync(OrgId, connectionId, revisionId, ct);
         return result is null ? NotFound() : NoContent();
+    }
+
+    /// <summary>
+    /// Group V2 — REPLAY / impact testing. Runs historical orders through this revision (typically a
+    /// DRAFT being evaluated before publish) and returns a per-order DIFF vs. the order's CURRENT
+    /// result: output text diff, effective canonical-value changes, and validation pass/fail flips.
+    /// NON-MUTATING and NEVER delivers — no order/artifact/validation/connection state is written.
+    /// A published/archived revision can also be replayed (read-only). Bounded at
+    /// <see cref="ReplayService.MaxOrders"/> orders per call.
+    /// </summary>
+    [HttpPost("{connectionId:guid}/revisions/{revisionId:guid}/replay")]
+    [ProducesResponseType(typeof(ReplayResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Replay(
+        Guid connectionId, Guid revisionId, [FromBody] ReplayRequest? request, CancellationToken ct)
+    {
+        var result = await _replay.ReplayAsync(OrgId, connectionId, revisionId, request ?? new ReplayRequest(), ct);
+        return result is null ? NotFound() : Ok(result);
     }
 
     // ── mappers ──────────────────────────────────────────────────────────────

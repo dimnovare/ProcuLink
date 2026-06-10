@@ -401,6 +401,8 @@ builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService
 builder.Services.AddScoped<ISupplierConnectionService, SupplierConnectionService>();
 builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
 builder.Services.AddScoped<IConnectionBackfillService, ConnectionBackfillService>();
+// Group V2 — replay / impact testing (non-mutating; reuses the transform + acceptance engines).
+builder.Services.AddScoped<IReplayService, ReplayService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IPassportService, PassportService>();
 builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>();
