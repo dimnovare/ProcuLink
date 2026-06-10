@@ -259,14 +259,30 @@ public sealed class OrdersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> List([FromQuery] OrderListQuery query, CancellationToken ct)
     {
-        // Clamp page and pageSize to valid ranges.
-        var page     = Math.Max(1, query.Page);
-        var pageSize = Math.Clamp(query.PageSize, 1, 100);
+        const int MaxPageSize = 100;
 
-        var result = await _orders.ListPagedAsync(
+        // Resolve the page window. REST-style offset/limit wins when supplied (the live bug
+        // was that these were silently ignored, so any client using them got the default
+        // first 25 rows). Otherwise fall back to page/pageSize. Either way, take is capped at
+        // MaxPageSize so a `limit=3000` can't pull an unbounded page.
+        int skip, take;
+        if (query.Offset.HasValue || query.Limit.HasValue)
+        {
+            take = Math.Clamp(query.Limit ?? query.PageSize, 1, MaxPageSize);
+            skip = Math.Max(0, query.Offset ?? 0);
+        }
+        else
+        {
+            var page     = Math.Max(1, query.Page);
+            var pageSize = Math.Clamp(query.PageSize, 1, MaxPageSize);
+            take = pageSize;
+            skip = (page - 1) * pageSize;
+        }
+
+        var result = await _orders.ListWindowAsync(
             _tenant.OrganisationId,
-            page,
-            pageSize,
+            skip,
+            take,
             query.Status,
             query.SupplierId,
             query.Search,
@@ -278,7 +294,12 @@ public sealed class OrdersController : ControllerBase
             return BadRequest(new { error = result.Error });
 
         var (items, totalCount) = result.Value;
-        return Ok(new PaginatedResult<PurchaseOrderSummary>(items, totalCount, page, pageSize));
+
+        // Report the window back as page/pageSize so the envelope is identical regardless of
+        // which paging style the caller used. With a non-page-aligned offset, page is the
+        // 1-based index of the window that starts at `skip`.
+        var effectivePage = take > 0 ? (skip / take) + 1 : 1;
+        return Ok(new PaginatedResult<PurchaseOrderSummary>(items, totalCount, effectivePage, take));
     }
 
     // ── GET /api/orders/{id} ──────────────────────────────────────────────────
