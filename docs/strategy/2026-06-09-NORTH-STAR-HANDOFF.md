@@ -85,8 +85,9 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   PRESENCE and `buildConfigObject` always emits the keys, so "missing required" rarely fires for the
   standard editor — value is the requirements display + unknown-key detection (refine later to check
   value emptiness / credential presence). Optional UX tweak: panel is collapsed by default.
-  **V7 FE polish — MERGED + pushed (FE `main` = `039a952` → Vercel); live-verify pending** (fold into the
-  V5 live pass). Branch `auto/fe-v7-polish`, additive (DeliveryConfigEditor zero diff), reviewer-clean.
+  **V7 FE polish — ✅ SHIPPED + LIVE-VERIFIED (FE `main` = `039a952` → Vercel).** LIVE: empty `url` →
+  Check → "Configuration incomplete · Missing required: url" (was the buggy "Looks complete").
+  Branch `auto/fe-v7-polish`, additive (DeliveryConfigEditor zero diff), reviewer-clean.
   (1) `stripEmptyValues` strips null/undefined/empty-whitespace from `buildConfig()` BEFORE the advisory
   validate POST → an empty required `url` now correctly shows "Missing required" (fixes the limitation
   above; keeps false/0). (2) Connectors overview (`/operations/connectors`) ConnectorPanel now shows a
