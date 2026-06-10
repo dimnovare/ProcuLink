@@ -125,11 +125,13 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
 - `auto/be-v8-conformance` — Group V8 standards conformance reports: ConformanceService
   validating outbound docs vs named profiles (cXML1.2/UBL2.1/X12 850/EDIFACT ORDERS/IDoc
   ORDERS05) + a downloadable report endpoint. NO migration.
-- `auto/fe-v2-replay-ui` (project-proculink) — replace the "Coming soon" replay placeholder
-  on ConnectionDetail with the real impact view (output diff + validation flips + effective-
-  value changes; flags "would start failing"). Against the live replay endpoint.
-  MERGE: backend two (V4 owns migration, V8 disjoint) → one dotnet test → push → Railway
-  (verify rule_definitions migration + backfill LIVE) → FE → bun build → push.
+- `auto/fe-v2-replay-ui` — ✅ SHIPPED (FE `main` = `040d972` → Vercel). ReplayPanel on
+  ConnectionDetail: revision picker + recent-window, per-order rows sorted most-dangerous-
+  first, "would start failing" flagged red, expandable output diff / field-change table /
+  validation-flip rows, non-destructive. Uses the live replay endpoint.
+  MERGE (V4+V8, still in flight): backend two (V4 owns the rule_definitions migration, V8
+  disjoint) → one dotnet test → push → Railway (**verify rule_definitions migration +
+  backfill LIVE** per the InMemory-masks-Postgres lesson) → then any V4/V8 FE.
 
 ## Resume instructions
 1. Merge BATCH 2 (above) + any earlier in-flight branches (recipe in the merge section),
