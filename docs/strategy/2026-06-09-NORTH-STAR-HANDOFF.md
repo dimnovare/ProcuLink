@@ -96,6 +96,31 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   read-only manifest requirements section (`resolveManifestKey` maps connector type → the 6 keys; silent
   for unknown), reusing the Required/Secret/type pills.
 
+## 2026-06-10 — HEART-PIECE WIRE FIX + LIVE E2E HARNESS
+- **Heart-piece wire fix SHIPPED (FE `main` = `63c6492` → Vercel)** — fixes the two bugs from the founder's
+  video/screenshot: (A) wires JUMP when expanding the "Reconstructed from parsed fields" doc — root cause:
+  `display:none` toggle → measure ran before layout committed → fallback origin. Fix: re-measure on the
+  expand toggle (3-frame rAF burst + 120ms safety, reusing the existing `measure`) + ResizeObserver on the
+  source column. (B) ORDER DATE wire pointed at the header CENTER (buyer area), not the date — root cause:
+  `date`/`po` nodes' `srcRef:"header"` snapped to the whole-header center. Fix: new `header-meta` anchor on
+  the `{poNumber}·{date}` line; `po`+`date` nodes → `srcRef:"header-meta"`. Build green; 2 files. **Founder
+  to VISUALLY confirm** (the backgrounded MCP automation tab has rAF paused + the heavy SVG froze the
+  renderer, so I couldn't auto-measure; verify on a focused screen: expand the doc → no jump + the ORDER
+  DATE wire lands on the "UBL-2 · 2026-06-10" line).
+- **LIVE E2E: 2000 orders ingested via the API channel** — created a `plk_` API key + lifted the org order
+  cap to 6000 (`POST /api/admin/organisations/{id}/limits`); built a headless harness
+  `project-proculink/scripts/live-matrix/ingest-harness.mjs` (POSTs structured orders to
+  `/api/ingress/{slug}/orders`, header `X-ProcuLink-Key`, varied currency/lines/qty/price/buyer). Ran it →
+  **2000/2000 orders created, ALL HTTP 200, 0 failures** in ~2 min (ingress channel NOT rate-limited;
+  structured ingest skips the parser/Worker — cheap volume). Org slug `personal-workspace-d3be`,
+  id `00000000-0000-0000-0000-000000000000`. API key is LIVE (revocable via `DELETE /api/api-keys/{id}` or
+  the Settings → API Keys tab). HONEST SCOPE of "test everything": the API channel + volume is DONE; still
+  open (browser/infra-bound, multi-session): file-upload FORMAT variety (8 parsers — already proven by the
+  deterministic 56/56 + the earlier live matrix), other INGEST channels (inbound-email webhook = feasible to
+  add to the harness; SMTP/SFTP/S3 polling need real mail/SFTP/S3 infra), outbound delivery test-fires per
+  channel (need controlled endpoints), and full UI click-through + heart-piece drag/edit (rAF-drag has MCP
+  automation limits). See [[project-live-matrix-and-diverse-review]].
+
 ## ✅ LIVE-MATRIX FINDING (2026-06-10) — csv/json preview 500 FOUND + FIXED + LIVE-VERIFIED (`e7b5965`)
 Driving the live in×out matrix surfaced a REAL prod 500 the deterministic 56/56 + byte-identical tests
 + adversarial review ALL missed:
