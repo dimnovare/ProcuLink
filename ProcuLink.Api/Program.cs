@@ -520,6 +520,13 @@ builder.Services.AddSingleton<IParsedOrderTransform, X12ParsedOrderTransform>();
 builder.Services.AddSingleton<IParsedOrderTransform, EdifactParsedOrderTransform>(); // UN/EDIFACT ORDERS D.96A
 builder.Services.AddSingleton<ParsedOrderTransformFactory>();
 
+// ── Group V8: standards conformance reports ─────────────────────────────────
+// Validates a generated outbound document against its NAMED standard profile
+// (cXML 1.2 / UBL 2.1 / X12 850 / EDIFACT ORDERS D.96A / SAP IDoc ORDERS05).
+// Pure/stateless — used by OrdersController's GET /api/orders/{id}/conformance.
+builder.Services.AddSingleton<ProcuLink.Transform.Conformance.IConformanceService,
+    ProcuLink.Transform.Conformance.ConformanceService>();
+
 // ── Wave 3: Invoice parsers ────────────────────────────────────────────────
 builder.Services.AddSingleton<IInvoiceParser, UblInvoiceParser>();
 builder.Services.AddSingleton<IInvoiceParser, EdifactInvoiceParser>();
