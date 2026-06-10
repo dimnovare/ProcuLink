@@ -49,6 +49,14 @@ public static class PlanConstants
     /// Stripe invoice item at the period boundary — going over the cap is always
     /// allowed, never blocked. Pilot has no overage (it is a hard trial cap) and
     /// Enterprise is custom-contracted (effectively unlimited).
+    ///
+    /// <para>NOTE: the raw per-order fee alone produced a "pricing overage
+    /// inversion" — at some volumes a lower tier + overage cost MORE than the
+    /// next flat tier, disincentivising upgrades (e.g. Growth@500 ≈ €324 &lt;
+    /// Operations €399; Operations@1,500 ≈ €899 &lt; Integration €999). The
+    /// best-price logic in <see cref="BestPriceOverageOrders"/> caps the metered
+    /// overage so a customer is NEVER charged more than the cheapest tier whose
+    /// included volume covers their usage — see that method for the formula.</para>
     /// </summary>
     public const decimal OveragePerOrderEur = 0.50m;
 
@@ -99,6 +107,93 @@ public static class PlanConstants
 
     public static bool IsPaidPlan(string plan) =>
         plan is Growth or Operations or Integration or Distributor or Enterprise;
+
+    // ── Best-price overage (fixes the upgrade-disincentivising inversion) ──
+    /// <summary>
+    /// Ordered self-serve PAID tiers (lowest included-volume → highest), each
+    /// paired with its included monthly order volume and flat list price. This is
+    /// the single source of truth the best-price overage calc walks; every value
+    /// is derived from <see cref="Limits"/> + <see cref="MonthlyPriceEur"/> so there
+    /// are NO duplicated magic numbers. Pilot (trial) and Enterprise (custom /
+    /// contact-sales, no fixed list price) are intentionally excluded — neither
+    /// meters overage. Declared AFTER both source dictionaries so the static field
+    /// initializer reads fully-populated values.
+    /// </summary>
+    public static readonly IReadOnlyList<(string Plan, int Included, decimal FlatEur)> SelfServeLadder =
+    [
+        (Growth,      GetOrderLimit(Growth),      GetMonthlyPriceEur(Growth)),
+        (Operations,  GetOrderLimit(Operations),  GetMonthlyPriceEur(Operations)),
+        (Integration, GetOrderLimit(Integration), GetMonthlyPriceEur(Integration)),
+        (Distributor, GetOrderLimit(Distributor), GetMonthlyPriceEur(Distributor)),
+    ];
+
+    /// <summary>
+    /// BEST-PRICE overage: returns how many "overage orders" (at
+    /// <see cref="OveragePerOrderEur"/> each) an org on <paramref name="plan"/> with
+    /// <paramref name="effectiveLimit"/> included orders should be billed for after
+    /// processing <paramref name="ordersUsed"/> orders — WITHOUT ever charging more
+    /// than the cheapest higher self-serve tier whose included volume covers the
+    /// usage. This removes the upgrade-disincentivising "overage inversion".
+    ///
+    /// <para><b>Formula.</b> Let r = <see cref="OveragePerOrderEur"/>, F_T = this
+    /// plan's flat price, over = max(0, used − limit), and rawEur = over × r:
+    /// <code>
+    ///   topTier = the highest self-serve tier (largest included volume)
+    ///   if used ≤ topTier.Included:
+    ///       capEur            = min flat price over tiers whose Included ≥ used
+    ///       effectiveTotalEur = min(F_T + rawEur, capEur)      // never beat the next flat tier
+    ///   else:                                                   // above the TOP self-serve tier:
+    ///       effectiveTotalEur = topTier.FlatEur + (used − topTier.Included) × r
+    ///   effectiveOverageEur   = max(0, effectiveTotalEur − F_T)
+    ///   return round(effectiveOverageEur / r)                   // back to an integer order count for Stripe
+    /// </code>
+    /// Because every tier flat price is a whole number of euros and r = €0.50, the
+    /// capped overage is always an exact integer number of orders.</para>
+    ///
+    /// <para>Returns 0 for non-self-serve plans (Pilot/Enterprise) and whenever the
+    /// org is within its included volume. Admin per-org limit overrides flow through
+    /// <paramref name="effectiveLimit"/>, so a granted-headroom org is metered against
+    /// its real limit (and a raised limit only ever shrinks the overage). The cap is
+    /// applied against the PLAN's published flat price (<see cref="MonthlyPriceEur"/>),
+    /// independent of any admin limit override.</para>
+    /// </summary>
+    public static int BestPriceOverageOrders(string plan, int effectiveLimit, int ordersUsed)
+    {
+        // Only active self-serve paid plans meter overage.
+        if (!IsPaidPlan(plan) || plan == Enterprise) return 0;
+
+        var over = Math.Max(0, ordersUsed - effectiveLimit);
+        if (over == 0) return 0;
+
+        var rate    = OveragePerOrderEur;
+        var flatEur = GetMonthlyPriceEur(plan);
+        var rawEur  = over * rate;
+
+        // The top self-serve tier (largest included volume) — above its inclusion
+        // there is no higher tier to cap against, so pure metered overage applies.
+        var topTier = SelfServeLadder[^1];
+
+        decimal effectiveTotalEur;
+        if (ordersUsed <= topTier.Included)
+        {
+            // Cap the monthly total at the cheapest tier whose inclusion covers usage
+            // (always exists here because used ≤ topTier.Included). Never charge more
+            // than that flat price — this is the upgrade-incentive guarantee.
+            var capEur = SelfServeLadder
+                .Where(t => t.Included >= ordersUsed)
+                .Min(t => t.FlatEur);
+            effectiveTotalEur = Math.Min(flatEur + rawEur, capEur);
+        }
+        else
+        {
+            // Above the top self-serve tier: charge as if on the top tier plus pure
+            // metered overage for the excess (no higher self-serve tier exists to cap).
+            effectiveTotalEur = topTier.FlatEur + (ordersUsed - topTier.Included) * rate;
+        }
+
+        var effectiveOverageEur = Math.Max(0m, effectiveTotalEur - flatEur);
+        return (int)Math.Round(effectiveOverageEur / rate, MidpointRounding.AwayFromZero);
+    }
 
     // ── Feature gate: minimum plan required per feature ───────────────────
     private static readonly IReadOnlyDictionary<BillingFeature, string> MinimumPlan =

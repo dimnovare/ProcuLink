@@ -141,10 +141,17 @@ public sealed class StripeBillingService : IBillingService
             : statusAllowsProcessing && !isTrialExpired && !isSupplierLimitReached;
 
         // ── Overage (active paid self-serve plans only) ──────────────────────
-        // overage = max(0, used - effectiveLimit); fee = overage × €0.50.
-        // Pilot accrues no overage (hard trial cap); Enterprise is custom.
+        // BEST-PRICE overage: orders over the effective cap accrue €0.50/order, but
+        // the total is capped so a lower tier + overage NEVER costs more than the
+        // cheapest higher self-serve tier whose included volume covers the usage —
+        // this removes the upgrade-disincentivising "overage inversion". Only above
+        // the TOP self-serve tier's included volume does pure per-order overage apply.
+        // Pilot accrues no overage (hard trial cap); Enterprise is custom. See
+        // PlanConstants.BestPriceOverageOrders for the formula.
         var chargesOverage = PlanConstants.IsPaidPlan(plan) && plan != PlanConstants.Enterprise;
-        var overageOrders = chargesOverage ? Math.Max(0, ordersUsed - orderLimit) : 0;
+        var overageOrders = chargesOverage
+            ? PlanConstants.BestPriceOverageOrders(plan, orderLimit, ordersUsed)
+            : 0;
         var overageAmountEur = overageOrders * PlanConstants.OveragePerOrderEur;
         var nearLimit = orderLimit > 0 && ordersUsed >= (int)Math.Ceiling(orderLimit * 0.8);
         var atLimit = ordersUsed >= orderLimit;
@@ -628,11 +635,14 @@ public sealed class StripeBillingService : IBillingService
         _db.Suppliers.CountAsync(s => s.OrgId == orgId && s.DeletedAt == null, ct);
 
     /// <summary>
-    /// Computes how many orders an org processed ABOVE its effective monthly cap
-    /// within the given billing window [periodStart, periodEnd) — i.e. the overage
-    /// order count for that period. Sample orders are excluded (they never count
-    /// against quota). Pilot/Enterprise return 0 (no overage applies). Used by the
-    /// webhook to bill the just-closed period.
+    /// Computes how many BILLABLE overage orders an org processed ABOVE its effective
+    /// monthly cap within the given billing window [periodStart, periodEnd). Uses the
+    /// BEST-PRICE cap (see <see cref="PlanConstants.BestPriceOverageOrders"/>) so the
+    /// billed overage never makes a lower tier + overage cost more than the cheapest
+    /// higher self-serve tier that would have covered the volume — pure per-order
+    /// overage only applies above the top self-serve tier's included volume. Sample
+    /// orders are excluded (they never count against quota). Pilot/Enterprise return 0
+    /// (no overage applies). Used by the webhook to bill the just-closed period.
     /// </summary>
     public async Task<int> ComputePeriodOverageOrdersAsync(
         Guid orgId,
@@ -649,7 +659,7 @@ public sealed class StripeBillingService : IBillingService
         var used = await _db.PurchaseOrders.CountAsync(
             o => o.OrgId == orgId && !o.IsSample &&
                  o.CreatedAt >= periodStart && o.CreatedAt < periodEnd, ct);
-        return Math.Max(0, used - limit);
+        return PlanConstants.BestPriceOverageOrders(plan, limit, used);
     }
 
     private static DateTime GetTrialEndsAt(Core.Entities.Organisation org) =>

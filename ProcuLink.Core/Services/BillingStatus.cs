@@ -8,9 +8,14 @@ namespace ProcuLink.Core.Services;
 /// Overage model: an active PAID plan is NEVER blocked for going over its monthly
 /// order limit. Over the cap, orders still process and the surplus accrues a
 /// per-order fee (<c>OverageOrders</c> × €0.50 = <c>OverageAmountEur</c>) billed
-/// via Stripe at the period boundary. <c>OrderLimit</c> here is the EFFECTIVE
-/// limit (admin override ?? plan default). <c>NearLimit</c> is ≥80% usage,
-/// <c>AtLimit</c> is ≥100% — both are warnings, not blocks.
+/// via Stripe at the period boundary. The billable <c>OverageOrders</c> is
+/// BEST-PRICE capped (see <c>PlanConstants.BestPriceOverageOrders</c>): a lower
+/// tier + overage is NEVER charged more than the cheapest higher self-serve tier
+/// whose included volume covers the usage, so upgrading is always at least as cheap.
+/// Pure per-order overage applies only above the top self-serve tier's included
+/// volume. <c>OrderLimit</c> here is the EFFECTIVE limit (admin override ?? plan
+/// default). <c>NearLimit</c> is ≥80% usage, <c>AtLimit</c> is ≥100% — both are
+/// warnings, not blocks.
 /// </para>
 /// </summary>
 public sealed record BillingStatus(
