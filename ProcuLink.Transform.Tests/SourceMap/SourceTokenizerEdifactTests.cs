@@ -92,6 +92,70 @@ public class SourceTokenizerEdifactTests
         tokens.Should().NotContain(t => t.Id == "seg:BGM[1].el2.c1");
     }
 
+    // ── Readable labels (segment + element meaning) ────────────────────────────
+
+    [Fact]
+    public async Task Edifact_BgmDocumentNumber_LabelledByMeaning()
+    {
+        var bytes = Encoding.UTF8.GetBytes(MinimalOrdersMessage);
+
+        var tokens = await Tokenizer.TokenizeAsync(bytes, ".edi");
+
+        var token = tokens.First(t => t.Id == "seg:BGM[1].el2");
+        token.Label.Should().Be("BGM document no");
+    }
+
+    [Fact]
+    public async Task Edifact_LinItemCode_LabelledByMeaning()
+    {
+        var bytes = Encoding.UTF8.GetBytes(MinimalOrdersMessage);
+
+        var tokens = await Tokenizer.TokenizeAsync(bytes, ".edi");
+
+        // LIN+1++ITEM-A:IN — element 3 component 1 is the item code.
+        var token = tokens.First(t => t.Id == "seg:LIN[1].el3.c1");
+        token.Label.Should().Be("LIN item code");
+    }
+
+    [Fact]
+    public async Task Edifact_QtyQuantity_LabelledByMeaning()
+    {
+        var bytes = Encoding.UTF8.GetBytes(MinimalOrdersMessage);
+
+        var tokens = await Tokenizer.TokenizeAsync(bytes, ".edi");
+
+        // QTY+21:10:PCE — element 1 component 2 is the quantity.
+        var token = tokens.First(t => t.Id == "seg:QTY[1].el1.c2");
+        token.Label.Should().Be("QTY quantity");
+    }
+
+    [Fact]
+    public async Task Edifact_RepeatedTag_LabelCarriesOccurrenceSuffix()
+    {
+        var bytes = Encoding.UTF8.GetBytes(MinimalOrdersMessage);
+
+        var tokens = await Tokenizer.TokenizeAsync(bytes, ".edi");
+
+        // First QTY has no occurrence suffix; the second QTY (LIN[2]) reads "#2".
+        var first  = tokens.First(t => t.Id == "seg:QTY[1].el1.c2");
+        first.Label.Should().Be("QTY quantity");
+        var second = tokens.First(t => t.Id == "seg:QTY[2].el1.c2");
+        second.Label.Should().Be("QTY quantity #2");
+    }
+
+    [Fact]
+    public async Task Edifact_UnknownPosition_FallsBackToElementNumber()
+    {
+        // A segment with no entry in the meaning table falls back to "{TAG} element {n}".
+        const string msg = "ZZZ+foo+bar'";
+        var bytes = Encoding.UTF8.GetBytes(msg);
+
+        var tokens = await Tokenizer.TokenizeAsync(bytes, ".edi");
+
+        var token = tokens.First(t => t.Id == "seg:ZZZ[1].el1");
+        token.Label.Should().Be("ZZZ element 1");
+    }
+
     // ── Group tagging ────────────────────────────────────────────────────────
 
     [Fact]

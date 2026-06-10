@@ -180,7 +180,7 @@ public class SourceTokenizerXlsxTests
     }
 
     [Fact]
-    public async Task Xlsx_HeaderGroupTokens_HaveLabelPrefixedWithHeader()
+    public async Task Xlsx_HeaderGroupTokens_LabelledByColumnNameItself()
     {
         var bytes = BuildXlsx(new string?[,]
         {
@@ -190,7 +190,56 @@ public class SourceTokenizerXlsxTests
 
         var tokens = await Tokenizer.TokenizeAsync(bytes, ".xlsx");
 
+        // Header-row tokens are labelled by the column name itself (no "Header:" prefix).
         var headerToken = tokens.First(t => t.Group == "header");
-        headerToken.Label.Should().StartWith("Header:");
+        headerToken.Label.Should().Be("Description");
+    }
+
+    [Fact]
+    public async Task Xlsx_DataLabel_UsesHeaderNameDotRowFormat()
+    {
+        // Founder ask: a source chip should read "Unit Price · row 3", not "row 3".
+        var bytes = BuildXlsx(new string?[,]
+        {
+            { "Line", "Item", "Unit Price" },
+            { "1",    "A",    "5.50"       },  // row 2
+            { "2",    "B",    "9.99"       },  // row 3
+        });
+
+        var tokens = await Tokenizer.TokenizeAsync(bytes, ".xlsx");
+
+        var unitPriceCell = tokens.First(t => t.Id == "cell:r3c3");
+        unitPriceCell.Label.Should().Be("Unit Price · row 3");
+    }
+
+    [Fact]
+    public async Task Xlsx_DataLabel_FallsBackToColumnLetterWhenHeaderBlank()
+    {
+        // Column C (3rd) has a blank header cell → label must fall back to "Col C · row N".
+        var bytes = BuildXlsx(new string?[,]
+        {
+            { "Line", "Item", null   },
+            { "1",    "A",    "extra" },  // row 2, col 3 has no header
+        });
+
+        var tokens = await Tokenizer.TokenizeAsync(bytes, ".xlsx");
+
+        var noHeaderCell = tokens.First(t => t.Id == "cell:r2c3");
+        noHeaderCell.Label.Should().Be("Col C · row 2");
+    }
+
+    [Fact]
+    public async Task Xlsx_HeaderTokens_NeverUseOldHeaderPrefixCopy()
+    {
+        var bytes = BuildXlsx(new string?[,]
+        {
+            { "Line", "Item", null },
+            { "1",    "A",    "x"  },
+        });
+
+        var tokens = await Tokenizer.TokenizeAsync(bytes, ".xlsx");
+
+        tokens.Where(t => t.Group == "header")
+              .Should().NotContain(t => t.Label.StartsWith("Header"));
     }
 }
