@@ -61,14 +61,14 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   revision without delivering; diff canonical/validation/output before publish.
 - **V3 output templates runtime** — engine done (Scriban + editor); finish supplier
   assignment + artifact revision pinning + rollback as part of V1's revision bundle.
-- **V4 unified validation** — catalog → reusable rule defs; connections → versioned rule
-  bindings. BIND to SupplierAcceptanceService, don't rebuild.
+- **V4 unified validation** — ✅ SHIPPED + LIVE (`10bb6f1`). Org-level RuleDefinition + versioned
+  bindings; EvaluateProfile unchanged (bind, didn't rebuild); 12-entry catalog seeded live.
 - **V5 deepen canonical** — staged; Scriban template is the flexible escape hatch.
 - **V6 exception-first UI** — progressive disclosure (what's wrong/why/fix/remember/
-  notified+accepted); topology as overview. Model delivered≠accepted (receipts/ACK).
+  notified+accepted); topology as overview. Model delivered≠accepted (receipts/ACK). **NEXT (FE).**
 - **V7 connector SDK** — manifest-driven config UI.
-- **V8 conformance reports** — validate vs named profiles; downloadable cXML/UBL/X12/
-  EDIFACT/IDoc reports (seed = the 8×7 matrix).
+- **V8 conformance reports** — ✅ SHIPPED + LIVE (`10bb6f1`). 5 profile checkers (cXML/UBL/X12/
+  EDIFACT/IDoc), `GET /api/orders/{id}/conformance?format=`, downloadable Markdown. FE tab pending.
 - **V9 AI decision history** — table SHIPPED; calibration is the follow-up.
 - **V10 catalog scale** — indexed Postgres (pg_trgm/full-text) replacing ≤2000 in-memory.
   NEEDS A MIGRATION → run in a batch where V1's migration isn't also pending.
@@ -116,28 +116,50 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   MERGE: backend two (V10 owns the migration, V2 disjoint) → one `dotnet test` → push →
   Railway (verify the pg_trgm migration applied + catalog path live). FE → bun build → push.
 
-## BATCH 3 IN FLIGHT (launched after V1/V2/V10 shipped) — MERGE when they land
-- `auto/be-v4-validation` — Group V4 unified validation: reusable org-level RuleDefinition
-  + versioned bindings; SupplierAcceptanceService stays the executor (bind, don't rebuild);
-  idempotent boot backfill of existing rules → definitions; seeds the global catalog as
-  definitions. **OWNS the only migration this batch** (rule_definitions). Watch circular-FK
-  inserts; verify migration + backfill LIVE after deploy (like V1's backfill).
-- `auto/be-v8-conformance` — Group V8 standards conformance reports: ConformanceService
-  validating outbound docs vs named profiles (cXML1.2/UBL2.1/X12 850/EDIFACT ORDERS/IDoc
-  ORDERS05) + a downloadable report endpoint. NO migration.
+## BATCH 3 — ✅ ALL SHIPPED + LIVE (backend `main` = `10bb6f1` → Railway, API 200/200, 1872 tests green)
+- **V4 unified validation** — SHIPPED + VERIFIED LIVE. Migration `20260610123131_AddRuleDefinitions`
+  (purely additive: new `rule_definitions` table with a SINGLE FK→organisations + two nullable
+  columns `rule_definition_id`/`rule_code` on `supplier_acceptance_rules` + 2 indexes — **NO
+  circular FK by design**, the V1 trap avoided) applied clean on Neon. `RuleDefinition` is an
+  org-level rule TEMPLATE; `SupplierAcceptanceRule` gained an optional versioned binding (nullable
+  FK + denormalised `rule_code`); **`EvaluateProfile` is byte-for-byte unchanged** — the rule's own
+  scalar columns stay the executor's source of truth (a per-binding severity override still flows).
+  Idempotent boot backfill seeds the 12-entry `RuleCatalog` per org + links loose rules (never
+  mutates rule scalars), wired after the V1 connection backfill. Read API: `GET /api/rule-definitions`,
+  `GET /api/rule-definitions/{id}`, `GET /api/suppliers/{id}/rule-bindings` (Definition carries the
+  standards refs → satisfies the standards-visibility rule). **LIVE PROOF:** `GET /api/rule-definitions`
+  = 200, **12 seeded defs** with real UBL/EDIFACT/X12/cXML refs → migration + seed confirmed ran on
+  Postgres (NOT the V1 zero-backfill bug); `rule-bindings` = 200 (count 0 for the sample supplier =
+  correct, it has no acceptance rules).
+- **V8 conformance reports** — SHIPPED + VERIFIED LIVE. Pure stateless `ConformanceService` in
+  ProcuLink.Transform/Conformance validates a generated OUTBOUND doc vs its NAMED profile
+  (structural + mandatory-element/segment + key-cardinality; NOT a full XSD/EDI engine). 5 checkers
+  (Cxml/Ubl/X12/Edifact/IDoc), each finding a named `ConformanceCheck{code,severity,passed,message,
+  profileRef}`, overall pass = no Error-severity failure, deterministic `ToMarkdown()` downloadable.
+  `GET /api/orders/{id}/conformance?format=cxml|ubl|x12` (defaults to supplier delivery format;
+  honest 400 when no format). NO migration. **LIVE PROOF:** on a real order — cXML→`CXml12OrderRequest`
+  (15 checks, pass), UBL→`Ubl21Order` (14, pass), X12→`X12_850` (12, pass), all 0 failing.
 - `auto/fe-v2-replay-ui` — ✅ SHIPPED (FE `main` = `040d972` → Vercel). ReplayPanel on
   ConnectionDetail: revision picker + recent-window, per-order rows sorted most-dangerous-
   first, "would start failing" flagged red, expandable output diff / field-change table /
   validation-flip rows, non-destructive. Uses the live replay endpoint.
-  MERGE (V4+V8, still in flight): backend two (V4 owns the rule_definitions migration, V8
-  disjoint) → one dotnet test → push → Railway (**verify rule_definitions migration +
-  backfill LIVE** per the InMemory-masks-Postgres lesson) → then any V4/V8 FE.
+- **FE follow-up still OPEN for batch 3:** no V4 or V8 frontend yet. Candidates: a rule-definitions
+  catalog / per-supplier bindings view (reads the new read API; standards refs already exposed), and
+  a "Conformance" tab/button on the order/connection detail that calls the conformance endpoint and
+  renders/downloads the report. Both are read-only over endpoints that are already live.
 
-## Resume instructions
-1. Merge BATCH 2 (above) + any earlier in-flight branches (recipe in the merge section),
-   verify combined green, deploy, verify the V10 migration + trigram path on live Postgres,
-   and confirm the V1 Connections UI renders the backfilled connections.
-2. Build the **V1 Connection UI** page (the per-supplier editors become "edit draft
-   revision"; publish/rollback controls) against the V1 API.
-3. Execute **V2 (replay)**, then continue V4/V6/V8/V10 per priority.
-4. Keep a real order flowing end-to-end at every step.
+## Resume instructions (BATCH 1+2+3 all shipped + live — backend `10bb6f1`, FE `040d972`)
+Backend North-Star groups V1, V2, V3, V4, V8, V9, V10 are all SHIPPED + LIVE-VERIFIED. Remaining:
+1. **V6 exception-first UI (FE, highest value next)** — progressive disclosure: what's wrong /
+   why / how to fix / remember-this / who's notified + accepted. Topology as overview. Surface
+   the V8 conformance report + V4 rule bindings here. Model delivered≠accepted (ACK/receipts).
+2. **Batch-3 FE follow-ups (read-only over live endpoints):** rule-definitions/bindings catalog
+   view; a "Conformance" tab/button on order/connection detail (calls `/conformance`, renders +
+   downloads the Markdown report).
+3. **V5 deepen canonical** (staged; Scriban is the escape hatch) and **V7 connector SDK**
+   (manifest-driven config UI).
+4. **Eng hygiene:** PageShell-in-CI, typed OpenAPI client, decompose SpineReview/api-client,
+   `@next/mdx` v16→15 align. **Live 2000-combo matrix** (runner at
+   project-proculink/scripts/live-matrix/runner.js) — deterministic 56/56 already proves validity.
+5. Keep a real order flowing end-to-end at every step. One FE agent at a time (FE repo can't be
+   worktree-isolated); backend agents worktree-isolated, ONE migration per parallel batch.
