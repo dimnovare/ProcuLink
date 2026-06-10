@@ -24,14 +24,27 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
 - 8×7 IN×OUT matrix (every parser × every transform) = **56/56 structurally valid**
   (`ProcuLink.Transform.Tests/FormatMatrix/FullInOutMatrixTests.cs`).
 
-## In flight (launched 2026-06-09, will land on branches — MERGE these next)
-1. **Group V1 backend core** → branch `auto/be-v1-connection`. SupplierConnection +
-   SupplierConnectionRevision tables, draft→test→publish→archive, ConnectionRevisionId
-   pinned to orders, backfill existing config → "rev 1 (published)", service + API,
-   tests. **Owns the only migration this batch.**
-2. **Source-token labels** → branch `auto/be-source-token-labels`. "row 9" → meaningful
-   labels (column header + row/value) so a user can identify + map the exact source
-   field. No migration.
+## V1 + labels — ✅ SHIPPED (backend `main` = `14c2144` → Railway, API 200/200, 1807 tests green)
+1. **Group V1 backend core** — SHIPPED. Migration `20260610110331_AddSupplierConnections`
+   applied clean on prod; `supplier_connections` + `supplier_connection_revisions` +
+   child tables + `purchase_orders.connection_revision_id`; idempotent boot backfill;
+   ConnectionRevisionId pinned at ingest; `/api/connections` API (list/get/ensure-not-
+   present/create-draft/update/test/publish/archive) live; 21 new tests incl.
+   byte-identical backfill + lifecycle + org-scoping + pinning. **`ConnectionResolver`,
+   `ConnectionBackfillService`, `SupplierConnectionService` in ProcuLink.Api.**
+   ⚠️ **OPEN VERIFICATION:** `GET /api/connections` returned **0** on prod (org "Dim's
+   Organization"). Not a blocker (orders use NULL-pin → live-config fallback, nothing
+   broke). Determine which: (a) the org's suppliers have no real config ROWS (PoMapping/
+   Delivery/ItemMapping/Acceptance/Products) → 0 is CORRECT; or (b) the boot backfill
+   errored (best-effort, Sentry-reported). CHECK: Neon `supplier_connections` table +
+   Sentry for a backfill error + whether `supplier_po_mappings`/`item_mappings` actually
+   have rows for these suppliers (the GET endpoints return 200 even for empty defaults).
+   The backfill is idempotent → safe to re-trigger after diagnosis. NOTE: the API has no
+   `/api/connections/ensure` route (returned 404) — use the create-draft path; confirm
+   the exact route names in `ConnectionsController.cs` for the FE.
+2. **Source-token labels** — SHIPPED. "row 9" → meaningful labels (column header + row,
+   readable XML paths, EDIFACT/X12 segment meanings); +21 Transform tests. token.id
+   unchanged.
 3. **FE cleanups** → ✅ SHIPPED (FE `main` = `274320b` → Vercel). Editable PO#/supplier
    node (sends poNumber/supplierName via resolve) + full hide-wires-when-editor-open
    (OutputPreview relays mapOpen up; SpineReview feeds the wire layers' `hidden` prop +
