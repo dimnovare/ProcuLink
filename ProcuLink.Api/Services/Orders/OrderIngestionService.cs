@@ -33,6 +33,7 @@ internal sealed class OrderIngestionService
     private readonly IFormatDetector            _formatDetector;
     private readonly IStructuredOrderExtractor? _structuredExtractor;
     private readonly OrderServiceShared         _shared;
+    private readonly IConnectionResolver        _connectionResolver;
 
     public OrderIngestionService(
         ProcuLinkDbContext         db,
@@ -58,7 +59,14 @@ internal sealed class OrderIngestionService
         _formatDetector      = formatDetector;
         _structuredExtractor = structuredExtractor;
         _shared              = shared;
+        _connectionResolver  = new ConnectionResolver(db);
     }
+
+    // ── Group V1: pin the active connection revision at ingest ─────────────────
+    // Resolved ONCE, at create. A null result (no connection / no active published
+    // revision) means "fall back to live config" — exactly today's behaviour.
+    private Task<Guid?> ResolveConnectionRevisionAsync(Guid orgId, Guid supplierId, CancellationToken ct)
+        => _connectionResolver.ResolveActiveRevisionAsync(orgId, supplierId, ct);
 
     // ── CreateFromFileAsync ───────────────────────────────────────────────────
 
@@ -133,11 +141,15 @@ internal sealed class OrderIngestionService
         // 7. Build the order entity
         var now = DateTime.UtcNow;
 
+        // V1: pin the supplier's active connection revision (null = fall back to live config).
+        var connectionRevisionId = await ResolveConnectionRevisionAsync(organisationId, supplierId, ct);
+
         var entity = new PurchaseOrderEntity
         {
             Id           = orderId,
             OrgId        = organisationId,
             SupplierId   = supplierId,
+            ConnectionRevisionId = connectionRevisionId,
             PoNumber     = string.IsNullOrWhiteSpace(parsedOrder.PoNumber)
                                ? $"PO-{now:yyyyMMddHHmmss}"
                                : parsedOrder.PoNumber,
@@ -162,7 +174,8 @@ internal sealed class OrderIngestionService
             sourceFileKey,
             lineCount       = lineEntities.Count,
             unresolvedCount = lineEntities.Count(l => l.NeedsReview),
-            aiSuggestionCount
+            aiSuggestionCount,
+            connectionRevisionId
         }));
 
         await _db.SaveChangesAsync(ct);
@@ -226,12 +239,17 @@ internal sealed class OrderIngestionService
 
         // Create stub order — no lines yet, status = "parsing"
         var now = DateTime.UtcNow;
+
+        // V1: pin the supplier's active connection revision now, so the async parse job inherits it.
+        var connectionRevisionId = await ResolveConnectionRevisionAsync(organisationId, supplierId, ct);
+
         var entity = new PurchaseOrderEntity
         {
             Id            = orderId,
             OrgId         = organisationId,
             SupplierId    = supplierId,
             Supplier      = supplier,
+            ConnectionRevisionId = connectionRevisionId,
             PoNumber      = $"PO-{now:yyyyMMddHHmmss}",
             OrderDate     = DateOnly.FromDateTime(now),
             Currency      = "EUR",
@@ -245,7 +263,8 @@ internal sealed class OrderIngestionService
         _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Created", new
         {
             sourceFileKey,
-            mode = "async"
+            mode = "async",
+            connectionRevisionId
         }));
 
         await _db.SaveChangesAsync(ct);
@@ -345,12 +364,16 @@ internal sealed class OrderIngestionService
         };
         var canonicalJson = JsonDocument.Parse(JsonSerializer.Serialize(canonicalPayload));
 
+        // V1: pin the supplier's active connection revision (null = fall back to live config).
+        var connectionRevisionId = await ResolveConnectionRevisionAsync(organisationId, supplierId, ct);
+
         var entity = new PurchaseOrderEntity
         {
             Id            = orderId,
             OrgId         = organisationId,
             SupplierId    = supplierId,
             Supplier      = supplier,
+            ConnectionRevisionId = connectionRevisionId,
             PoNumber      = string.IsNullOrWhiteSpace(order.PoNumber)
                                 ? $"PO-{now:yyyyMMddHHmmss}"
                                 : order.PoNumber!,
@@ -385,6 +408,7 @@ internal sealed class OrderIngestionService
             aiSuggestionCount,
             documentType,
             classifiedAsInvoice = isInvoice,
+            connectionRevisionId,
         }));
         if (isInvoice)
         {

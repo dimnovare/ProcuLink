@@ -52,6 +52,11 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<SupplierAcceptanceProfile>   SupplierAcceptanceProfiles   { get; set; } = null!;
     public DbSet<SupplierAcceptanceRule>      SupplierAcceptanceRules      { get; set; } = null!;
     public DbSet<OrderValidationResult>       OrderValidationResults       { get; set; } = null!;
+    // ── Group V1: versioned Supplier Connection ─────────────────────────────
+    public DbSet<SupplierConnection>             SupplierConnections           { get; set; } = null!;
+    public DbSet<SupplierConnectionRevision>     SupplierConnectionRevisions   { get; set; } = null!;
+    public DbSet<ConnectionRevisionItemMapping>  ConnectionRevisionItemMappings { get; set; } = null!;
+    public DbSet<ConnectionRevisionTestCase>     ConnectionRevisionTestCases   { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -314,6 +319,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.GrandTotal).HasColumnName("grand_total").HasColumnType("numeric(18,4)");
             b.Property(x => x.PaymentTerms).HasColumnName("payment_terms");
             b.Property(x => x.DocumentType).HasColumnName("document_type");
+            // Group V1: the connection revision this order was pinned to at ingest (nullable; legacy = null).
+            b.Property(x => x.ConnectionRevisionId).HasColumnName("connection_revision_id");
             // Composite indexes for cross-tenant maintenance sweeps and inbox/list queries.
             // (OrgId, Status): inbox list — filter by tenant then status bucket.
             b.HasIndex(x => new { x.OrgId, x.Status })
@@ -757,6 +764,110 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
             b.HasIndex(x => new { x.OrgId, x.OrderId })
              .HasDatabaseName("IX_order_validation_results_org_id_order_id");
+        });
+
+        // ── supplier_connections (Group V1 aggregate root) ──────────────
+        modelBuilder.Entity<SupplierConnection>(b =>
+        {
+            b.ToTable("supplier_connections");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            b.Property(x => x.Name).HasColumnName("name").IsRequired();
+            b.Property(x => x.ActiveRevisionId).HasColumnName("active_revision_id");
+            b.Property(x => x.CreatedBy).HasColumnName("created_by");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
+            b.HasOne(x => x.Supplier).WithMany().HasForeignKey(x => x.SupplierId);
+            // One connection per supplier (matches every existing loose-config surface).
+            b.HasIndex(x => new { x.OrgId, x.SupplierId })
+             .IsUnique()
+             .HasDatabaseName("IX_supplier_connections_org_supplier");
+            // The live pointer — a real FK to the active revision, but with NO navigation property
+            // on either side (a second SupplierConnection→Revision navigation would create the
+            // two-navigations-to-same-type ambiguity the model validator rejects). The active
+            // revision is loaded via an explicit query on ActiveRevisionId. RESTRICT so a pinned
+            // revision can never be deleted out from under a connection.
+            b.HasOne<SupplierConnectionRevision>()
+             .WithMany()
+             .HasForeignKey(x => x.ActiveRevisionId)
+             .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ── supplier_connection_revisions (the immutable versioned bundle) ──
+        modelBuilder.Entity<SupplierConnectionRevision>(b =>
+        {
+            b.ToTable("supplier_connection_revisions");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.ConnectionId).HasColumnName("connection_id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            b.Property(x => x.VersionNo).HasColumnName("version_no");
+            b.Property(x => x.Status).HasColumnName("status").IsRequired();
+            b.Property(x => x.EffectiveFrom).HasColumnName("effective_from").HasColumnType("timestamptz");
+            b.Property(x => x.EffectiveTo).HasColumnName("effective_to").HasColumnType("timestamptz");
+            b.Property(x => x.PublishedAt).HasColumnName("published_at").HasColumnType("timestamptz");
+            b.Property(x => x.CreatedBy).HasColumnName("created_by");
+            b.Property(x => x.PublishedBy).HasColumnName("published_by");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            // Bundle components (jsonb blobs kept component-shaped so existing readers re-point with no reshaping).
+            b.Property(x => x.InputMappingJson).HasColumnName("input_mapping_json").HasColumnType("jsonb");
+            b.Property(x => x.OutputMappingJson).HasColumnName("output_mapping_json").HasColumnType("jsonb");
+            b.Property(x => x.OutputFormat).HasColumnName("output_format");
+            b.Property(x => x.DeliveryProtocol).HasColumnName("delivery_protocol");
+            b.Property(x => x.DeliveryConfigJson).HasColumnName("delivery_config_json").HasColumnType("jsonb");
+            b.Property(x => x.DeliveryAutoDeliver).HasColumnName("delivery_auto_deliver").HasDefaultValue(false);
+            b.Property(x => x.CredentialsRef).HasColumnName("credentials_ref");
+            b.Property(x => x.AcceptanceProfileId).HasColumnName("acceptance_profile_id");
+            b.Property(x => x.AcceptanceVersionNo).HasColumnName("acceptance_version_no");
+            b.Property(x => x.CatalogMode).HasColumnName("catalog_mode").IsRequired();
+            b.HasOne(x => x.Connection)
+             .WithMany(c => c.Revisions)
+             .HasForeignKey(x => x.ConnectionId)
+             .OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
+            b.HasMany(x => x.ItemMappings).WithOne(m => m.Revision).HasForeignKey(m => m.RevisionId);
+            b.HasMany(x => x.TestCases).WithOne(t => t.Revision).HasForeignKey(t => t.RevisionId);
+            // Versioning precedent (mirror supplier_acceptance_profiles).
+            b.HasIndex(x => new { x.ConnectionId, x.VersionNo })
+             .IsUnique()
+             .HasDatabaseName("IX_supplier_connection_revisions_connection_version");
+            // Ingest-time "resolve active revision" path.
+            b.HasIndex(x => new { x.OrgId, x.SupplierId, x.Status })
+             .HasDatabaseName("IX_supplier_connection_revisions_org_supplier_status");
+        });
+
+        // ── connection_revision_item_mappings (snapshot of ItemMapping rows) ──
+        modelBuilder.Entity<ConnectionRevisionItemMapping>(b =>
+        {
+            b.ToTable("connection_revision_item_mappings");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.RevisionId).HasColumnName("revision_id");
+            b.Property(x => x.BuyerItemCode).HasColumnName("buyer_item_code").IsRequired();
+            b.Property(x => x.SupplierItemCode).HasColumnName("supplier_item_code").IsRequired();
+            b.Property(x => x.Confidence).HasColumnName("confidence");
+            b.Property(x => x.Source).HasColumnName("source").IsRequired();
+            b.HasIndex(x => x.RevisionId)
+             .HasDatabaseName("IX_connection_revision_item_mappings_revision_id");
+        });
+
+        // ── connection_revision_test_cases (test pack; empty for backfilled rev-1) ──
+        modelBuilder.Entity<ConnectionRevisionTestCase>(b =>
+        {
+            b.ToTable("connection_revision_test_cases");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.RevisionId).HasColumnName("revision_id");
+            b.Property(x => x.Name).HasColumnName("name").IsRequired();
+            b.Property(x => x.SampleSourceFileKey).HasColumnName("sample_source_file_key");
+            b.Property(x => x.ExpectedOutputKey).HasColumnName("expected_output_key");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.HasIndex(x => x.RevisionId)
+             .HasDatabaseName("IX_connection_revision_test_cases_revision_id");
         });
 
         // ── buyers ─────────────────────────────────────────────────────

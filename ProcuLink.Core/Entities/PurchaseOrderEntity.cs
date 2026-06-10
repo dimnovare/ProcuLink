@@ -86,6 +86,16 @@ public class PurchaseOrderEntity
     /// </summary>
     public string? DocumentType { get; set; }
 
+    /// <summary>
+    /// Group V1: the exact <see cref="SupplierConnectionRevision"/> this order was processed with,
+    /// pinned ONCE at ingest (never re-pinned). This is the reproducibility invariant — the order
+    /// records which immutable connection revision drove its parse/map/transform/deliver.
+    /// Null for legacy orders created before V1, or for suppliers with no active published revision
+    /// (zero-config); NULL means "fall back to live config", preserving prior behaviour.
+    /// Additive column <c>connection_revision_id</c> (migration <c>AddSupplierConnections</c>).
+    /// </summary>
+    public Guid? ConnectionRevisionId { get; set; }
+
     // Navigation
     public Organisation Organisation { get; set; } = null!;
     public Supplier Supplier { get; set; } = null!;
