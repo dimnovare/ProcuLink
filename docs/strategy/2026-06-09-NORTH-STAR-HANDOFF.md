@@ -116,6 +116,21 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   MERGE: backend two (V10 owns the migration, V2 disjoint) → one `dotnet test` → push →
   Railway (verify the pg_trgm migration applied + catalog path live). FE → bun build → push.
 
+## BATCH 3 IN FLIGHT (launched after V1/V2/V10 shipped) — MERGE when they land
+- `auto/be-v4-validation` — Group V4 unified validation: reusable org-level RuleDefinition
+  + versioned bindings; SupplierAcceptanceService stays the executor (bind, don't rebuild);
+  idempotent boot backfill of existing rules → definitions; seeds the global catalog as
+  definitions. **OWNS the only migration this batch** (rule_definitions). Watch circular-FK
+  inserts; verify migration + backfill LIVE after deploy (like V1's backfill).
+- `auto/be-v8-conformance` — Group V8 standards conformance reports: ConformanceService
+  validating outbound docs vs named profiles (cXML1.2/UBL2.1/X12 850/EDIFACT ORDERS/IDoc
+  ORDERS05) + a downloadable report endpoint. NO migration.
+- `auto/fe-v2-replay-ui` (project-proculink) — replace the "Coming soon" replay placeholder
+  on ConnectionDetail with the real impact view (output diff + validation flips + effective-
+  value changes; flags "would start failing"). Against the live replay endpoint.
+  MERGE: backend two (V4 owns migration, V8 disjoint) → one dotnet test → push → Railway
+  (verify rule_definitions migration + backfill LIVE) → FE → bun build → push.
+
 ## Resume instructions
 1. Merge BATCH 2 (above) + any earlier in-flight branches (recipe in the merge section),
    verify combined green, deploy, verify the V10 migration + trigram path on live Postgres,
