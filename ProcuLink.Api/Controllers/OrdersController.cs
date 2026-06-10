@@ -578,18 +578,41 @@ public sealed class OrdersController : ControllerBase
     // ── POST /api/orders/{id}/mapping-override/preview ────────────────────────
 
     /// <summary>
-    /// Dry-run (heart-piece-flex Phase 3): applies the supplied override to this order IN MEMORY and
-    /// returns the would-be output document. NEVER writes, NEVER changes status, NEVER delivers.
-    /// Override preview supports EVERY entity-based output format —
-    /// <c>csv | json | xml | cxml | ubl | x12</c>:
-    /// <list type="bullet">
-    ///   <item>CSV/JSON are emitted natively by <c>MappedTransformService</c> (arbitrary output paths).</item>
-    ///   <item>XML/cXML/UBL/X12 resolve an effective entity (override canonical-field changes applied)
-    ///         and run the EXISTING fixed transform.</item>
+    /// Dry-run (heart-piece-flex Phase 3): applies an override to this order IN MEMORY and returns the
+    /// would-be output document. NEVER writes, NEVER changes status, NEVER delivers, NEVER touches
+    /// <c>canonical_json</c>.
+    ///
+    /// <para><b>Two preview modes — template takes precedence:</b></para>
+    /// <list type="number">
+    ///   <item>
+    ///     <description>
+    ///       <b>WHOLE-DOCUMENT TEMPLATE</b> — when the effective override carries a non-blank
+    ///       <see cref="OrderMappingOverride.OutputTemplate"/>, the draft template is rendered with
+    ///       <see cref="ScribanTemplateTransformService.Render"/> (the preview overload — it does NOT
+    ///       enforce the review guard, so the editor previews while lines are still being resolved).
+    ///       The <c>format</c> query is IGNORED in this mode. Returns
+    ///       <c>{ ok:true, output, contentType }</c> on success; on a compile/render error it returns
+    ///       <b>HTTP 200</b> with <c>{ ok:false, error }</c> (NOT 400/500) so the editor can show the
+    ///       error inline as the user types.
+    ///     </description>
+    ///   </item>
+    ///   <item>
+    ///     <description>
+    ///       <b>FIELD-BY-FIELD</b> (unchanged) — no template present → the existing per-format preview
+    ///       runs over <c>format=csv|json|xml|cxml|ubl|x12</c> and returns
+    ///       <c>{ format, contentType, content }</c> (or <c>{ format, warning, content:null }</c> when
+    ///       a transform-time guard like an unresolved line trips).
+    ///     </description>
+    ///   </item>
     /// </list>
-    /// An unknown format returns 400. A bad manipulator returns 400; an order whose lines still need
-    /// review (or fails a format's required-field guard) returns 200 with a <c>warning</c> (the same
-    /// guard a real transform would hit) and no content. Org-scoped: a cross-tenant order id returns 404.
+    ///
+    /// <para><b>Draft vs stored override.</b> The request body is OPTIONAL. When a draft
+    /// <see cref="OrderMappingOverride"/> is supplied, the preview uses IT (so the editor can preview a
+    /// template / field-mapping the user is still typing, before saving). When the body is omitted, the
+    /// order's STORED override is used. Either way the preview is non-mutating.</para>
+    ///
+    /// An unknown <c>format</c> (field-by-field mode only) returns 400. A bad manipulator returns 400.
+    /// Org-scoped: a cross-tenant or unknown order id returns 404.
     /// </summary>
     [HttpPost("{id:guid}/mapping-override/preview")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -597,12 +620,62 @@ public sealed class OrdersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> PreviewMappingOverride(
         Guid id,
-        [FromBody] OrderMappingOverride request,
+        [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)]
+        OrderMappingOverride? request,
         [FromQuery] string format = "csv",
         CancellationToken ct = default)
     {
-        if (request is null)
+        // Resolve the effective override: a supplied DRAFT body wins; otherwise the STORED override.
+        // Either way this is read-only — the draft is never persisted and the stored read never mutates.
+        var draftSupplied   = request is not null;
+        var effectiveOverride = request
+            ?? await _mappingOverrides.GetAsync(_tenant.OrganisationId, id, ct);
+
+        // Load the order WITH lines, org-scoped, read-only (needed by BOTH preview modes).
+        var order = await _db.PurchaseOrders
+            .Include(o => o.Lines)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == _tenant.OrganisationId, ct);
+        if (order is null)
+            return NotFound();
+
+        // Supplier name feeds the structured transforms / template model (Supplier?.Name). Load it
+        // separately + defensively so a missing supplier can never filter the order out (an
+        // Include of the required Supplier nav drops the row under the in-memory provider).
+        if (order.Supplier is null && order.SupplierId != Guid.Empty)
+        {
+            var supplier = await _db.Suppliers
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.Id == order.SupplierId && s.OrgId == _tenant.OrganisationId, ct);
+            if (supplier is not null)
+                order.Supplier = supplier;
+        }
+
+        // ── Mode 1: WHOLE-DOCUMENT TEMPLATE (takes precedence) ────────────────────
+        // When the effective override carries a usable template, render it. A compile/render error is
+        // returned as { ok:false, error } at HTTP 200 (never 400/500) so the editor shows it inline.
+        if (OrderMappingOverrideReader.HasUsableTemplate(effectiveOverride))
+        {
+            var outcome = new ScribanTemplateTransformService()
+                .Render(effectiveOverride!.OutputTemplate!, order, effectiveOverride);
+
+            if (!outcome.Ok)
+                return Ok(new { ok = false, error = outcome.Error });
+
+            var contentType = string.IsNullOrWhiteSpace(effectiveOverride.OutputTemplateContentType)
+                ? ScribanTemplateTransformService.DefaultContentType
+                : effectiveOverride.OutputTemplateContentType!.Trim();
+
+            return Ok(new { ok = true, output = outcome.Text, contentType });
+        }
+
+        // ── Mode 2: FIELD-BY-FIELD preview (existing behaviour, unchanged) ─────────
+        // This path needs an override. Preserve the original contract: a request without a body (and
+        // with no stored template) still requires a body for the field-mapping preview.
+        if (!draftSupplied && effectiveOverride is null)
             return BadRequest(new { error = "A mapping override body is required." });
+
+        var fieldOverride = effectiveOverride ?? request!;
 
         // Preview supports every entity-based output format an override can influence.
         var fmt = (format?.Trim().ToLowerInvariant()) switch
@@ -619,29 +692,9 @@ public sealed class OrdersController : ControllerBase
             return BadRequest(new { error = "Override preview supports csv, json, xml, cxml, ubl, and x12." });
 
         // Same manipulator guard as PUT — surface a bad rule at edit time, never at transform time.
-        var validationError = ValidateOverrideManipulators(request);
+        var validationError = ValidateOverrideManipulators(fieldOverride);
         if (validationError is not null)
             return BadRequest(new { error = validationError });
-
-        // Load the order WITH lines, org-scoped, read-only.
-        var order = await _db.PurchaseOrders
-            .Include(o => o.Lines)
-            .AsNoTracking()
-            .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == _tenant.OrganisationId, ct);
-        if (order is null)
-            return NotFound();
-
-        // Supplier name feeds the structured transforms (XML/UBL read Supplier?.Name). Load it
-        // separately + defensively so a missing supplier can never filter the order out (an
-        // Include of the required Supplier nav drops the row under the in-memory provider).
-        if (order.Supplier is null && order.SupplierId != Guid.Empty)
-        {
-            var supplier = await _db.Suppliers
-                .AsNoTracking()
-                .FirstOrDefaultAsync(s => s.Id == order.SupplierId && s.OrgId == _tenant.OrganisationId, ct);
-            if (supplier is not null)
-                order.Supplier = supplier;
-        }
 
         try
         {
@@ -649,7 +702,7 @@ public sealed class OrdersController : ControllerBase
             if (MappedTransformService.SupportsOverride(fmt.Value))
             {
                 // CSV/JSON — the override builder emits the document natively.
-                result = new MappedTransformService().Build(order, request, fmt.Value);
+                result = new MappedTransformService().Build(order, fieldOverride, fmt.Value);
             }
             else
             {
@@ -658,7 +711,7 @@ public sealed class OrdersController : ControllerBase
                 if (transformer is null)
                     return BadRequest(new { error = $"No transform service registered for format '{fmt.Value}'." });
 
-                var effective = EffectiveEntityResolver.Resolve(order, request);
+                var effective = EffectiveEntityResolver.Resolve(order, fieldOverride);
                 result = await transformer.TransformAsync(effective, fmt.Value, ct);
             }
 
