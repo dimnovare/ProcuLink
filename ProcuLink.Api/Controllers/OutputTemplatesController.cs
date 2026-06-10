@@ -25,8 +25,8 @@ public class OutputTemplatesController : ControllerBase
     public async Task<IActionResult> GetTemplates(CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
-        var list  = await _templates.ListAsync(orgId, ct);
-        return Ok(list.Select(ToDto));
+        var list  = await _templates.ListWithUsageAsync(orgId, ct);
+        return Ok(list.Select(v => ToDto(v.Template, v.SuppliersCount)));
     }
 
     // ── POST /api/templates ───────────────────────────────────────────────────
@@ -75,14 +75,16 @@ public class OutputTemplatesController : ControllerBase
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    private static TemplateDto ToDto(ProcuLink.Core.Entities.OutputTemplate t) => new(
+    private static TemplateDto ToDto(ProcuLink.Core.Entities.OutputTemplate t, int suppliersCount = 0) => new(
         Id:             t.Id.ToString(),
         Name:           t.Name,
         Format:         t.Format,
         Version:        t.Version,
-        SuppliersCount: 0,
+        SuppliersCount: suppliersCount,
         LastUsed:       FormatAge(t.UpdatedAt),
-        Config:         null
+        // Surface the real stored config (parsed JSON), not a stub null. JsonElement is owned
+        // by the JsonDocument, which lives for the duration of this request scope.
+        Config:         t.ConfigJson?.RootElement
     );
 
     private static string FormatAge(DateTime dt)
