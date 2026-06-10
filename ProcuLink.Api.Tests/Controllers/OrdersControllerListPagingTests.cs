@@ -5,14 +5,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
-using ProcuLink.Api.Services;
+using ProcuLink.Api.Tests.TestSupport;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
-using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Output;
-using ProcuLink.Transform.Parsing;
 using ProcuLink.Transform.Tokenizing;
 using Xunit;
 
@@ -31,49 +29,6 @@ public class OrdersControllerListPagingTests
         new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
-
-    // A real OrderService over the supplied DbContext — the List endpoint must actually
-    // query, paginate, and count against the database, not a canned mock.
-    private static OrderService BuildRealOrderService(ProcuLinkDbContext db)
-    {
-        var fileStorage = new Mock<IFileStorageService>();
-
-        var itemMappings = new Mock<IItemMappingService>();
-        itemMappings
-            .Setup(s => s.ResolveManyAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(),
-                It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyDictionary<string, string?>)new Dictionary<string, string?>());
-
-        var poMappings = new Mock<IPoMappingService>();
-        poMappings
-            .Setup(s => s.GetAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((PoMappingConfig?)null);
-
-        var aiMappings = new Mock<IAiMappingService>();
-
-        var integrationTrigger = new Mock<IIntegrationTriggerService>();
-        integrationTrigger
-            .Setup(s => s.EnqueueAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-
-        return new OrderService(
-            db,
-            fileStorage.Object,
-            new OrderParserFactory(new IPurchaseOrderParser[]
-            {
-                new CsvOrderParser(), new XlsxOrderParser(), new PdfOrderParser()
-            }),
-            itemMappings.Object,
-            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
-            poMappings.Object,
-            aiMappings.Object,
-            Array.Empty<ITransformService>(),
-            NullLogger<OrderService>.Instance,
-            integrationTrigger.Object,
-            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
-    }
 
     private static OrdersController BuildController(IOrderService orders, Guid orgId, ProcuLinkDbContext db)
     {
@@ -109,26 +64,7 @@ public class OrdersControllerListPagingTests
             Id = supplierId, OrgId = orgId, Name = "Seed Supplier", CreatedAt = DateTime.UtcNow,
         });
 
-        var ids      = new HashSet<Guid>();
-        var baseTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        for (var i = 0; i < count; i++)
-        {
-            var id = Guid.NewGuid();
-            ids.Add(id);
-            db.PurchaseOrders.Add(new PurchaseOrderEntity
-            {
-                Id            = id,
-                OrgId         = orgId,
-                SupplierId    = supplierId,
-                PoNumber      = $"PO-{i + 1:D4}",
-                OrderDate     = DateOnly.FromDateTime(baseTime.AddDays(i)),
-                Currency      = "EUR",
-                Status        = "ready",
-                SourceFileKey = $"{orgId}/{id}/order.csv",
-                CreatedAt     = baseTime.AddMinutes(i),
-                UpdatedAt     = baseTime.AddMinutes(i),
-            });
-        }
+        var ids = OrderListTestSupport.AddOrders(db, orgId, supplierId, count).ToHashSet();
         await db.SaveChangesAsync();
         return (db, orgId, ids);
     }
@@ -145,7 +81,7 @@ public class OrdersControllerListPagingTests
         const int total = 57;
         const int limit = 20;
         var (db, orgId, seededIds) = await SeedAsync(total);
-        var ctrl = BuildController(BuildRealOrderService(db), orgId, db);
+        var ctrl = BuildController(OrderListTestSupport.BuildOrderService(db), orgId, db);
 
         var collected = new List<Guid>();
         for (var offset = 0; offset < total; offset += limit)
@@ -168,7 +104,7 @@ public class OrdersControllerListPagingTests
     public async Task List_LimitExceedingMaxPageSize_ClampedTo100()
     {
         var (db, orgId, _) = await SeedAsync(130);
-        var ctrl = BuildController(BuildRealOrderService(db), orgId, db);
+        var ctrl = BuildController(OrderListTestSupport.BuildOrderService(db), orgId, db);
 
         var page = Unwrap(await ctrl.List(
             new OrderListQuery { Limit = 3000, Offset = 0 }, CancellationToken.None));
@@ -181,7 +117,7 @@ public class OrdersControllerListPagingTests
     public async Task List_OffsetBeyondEnd_ReturnsEmptyItemsButCorrectTotal()
     {
         var (db, orgId, _) = await SeedAsync(57);
-        var ctrl = BuildController(BuildRealOrderService(db), orgId, db);
+        var ctrl = BuildController(OrderListTestSupport.BuildOrderService(db), orgId, db);
 
         var page = Unwrap(await ctrl.List(
             new OrderListQuery { Limit = 20, Offset = 200 }, CancellationToken.None));

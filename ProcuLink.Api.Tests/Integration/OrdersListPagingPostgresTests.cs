@@ -1,14 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
-using Moq;
 using ProcuLink.Api.Services;
+using ProcuLink.Api.Tests.TestSupport;
 using ProcuLink.Core.Entities;
-using ProcuLink.Core.Services;
-using ProcuLink.Core.Services.Ai;
-using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
-using ProcuLink.Transform.Output;
-using ProcuLink.Transform.Parsing;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -73,37 +67,6 @@ public sealed class OrdersListPagingPostgresTests : IAsyncLifetime
             await _pg.DisposeAsync();
     }
 
-    private static OrderService BuildRealOrderService(ProcuLinkDbContext db)
-    {
-        var itemMappings = new Mock<IItemMappingService>();
-        itemMappings
-            .Setup(s => s.ResolveManyAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(),
-                It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyDictionary<string, string?>)new Dictionary<string, string?>());
-
-        var poMappings = new Mock<IPoMappingService>();
-        poMappings
-            .Setup(s => s.GetAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((PoMappingConfig?)null);
-
-        return new OrderService(
-            db,
-            new Mock<IFileStorageService>().Object,
-            new OrderParserFactory(new IPurchaseOrderParser[]
-            {
-                new CsvOrderParser(), new XlsxOrderParser(), new PdfOrderParser()
-            }),
-            itemMappings.Object,
-            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
-            poMappings.Object,
-            new Mock<IAiMappingService>().Object,
-            Array.Empty<ITransformService>(),
-            NullLogger<OrderService>.Instance,
-            new Mock<IIntegrationTriggerService>().Object,
-            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
-    }
-
     [DockerRequiredFact]
     public async Task ListWindow_OverIdenticalCreatedAt_PagesCoverEveryOrderExactlyOnce()
     {
@@ -135,31 +98,17 @@ public sealed class OrdersListPagingPostgresTests : IAsyncLifetime
             {
                 Id = supplierId, OrgId = orgId, Name = "Bulk Ingest Supplier", CreatedAt = sharedCreatedAt,
             });
-            for (var i = 0; i < total; i++)
-            {
-                var id = Guid.NewGuid();
+            // Every order shares one CreatedAt (sharedCreatedAt) — the bulk-ingest tie.
+            foreach (var id in OrderListTestSupport.AddOrders(
+                         db, orgId, supplierId, total, "pending_review", sharedCreatedAt))
                 seededIds.Add(id);
-                db.PurchaseOrders.Add(new PurchaseOrderEntity
-                {
-                    Id            = id,
-                    OrgId         = orgId,
-                    SupplierId    = supplierId,
-                    PoNumber      = $"PO-{i + 1:D5}",
-                    OrderDate     = DateOnly.FromDateTime(sharedCreatedAt),
-                    Currency      = "EUR",
-                    Status        = "pending_review",
-                    SourceFileKey = $"{orgId}/{id}/order.csv",
-                    CreatedAt     = sharedCreatedAt,   // ← deliberately identical for every row
-                    UpdatedAt     = sharedCreatedAt,
-                });
-            }
             await db.SaveChangesAsync();
         }
 
         var collected = new List<Guid>();
         await using (var db = new ProcuLinkDbContext(_options!))
         {
-            var svc = BuildRealOrderService(db);
+            var svc = OrderListTestSupport.BuildOrderService(db);
             for (var skip = 0; skip < total; skip += take)
             {
                 var result = await svc.ListWindowAsync(
