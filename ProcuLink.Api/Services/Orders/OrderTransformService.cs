@@ -57,25 +57,29 @@ internal sealed class OrderTransformService
             return Result<TransformResponse>.Fail(
                 $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolved)}.");
 
-        // heart-piece-flex flexible mapping: three transform modes, in precedence order.
-        //   1. TEMPLATE MODE — the order carries a non-blank whole-document OutputTemplate. Renders the
-        //      ENTIRE document from that single Scriban template against the stable model namespace.
-        //      Works for ANY format (the template defines the structure), so it does not require a
-        //      registered fixed transformer.
-        //   2. FIELD-BY-FIELD OVERRIDE — the order carries a usable per-order output mapping AND the
-        //      format is one the override builder supports (CSV/JSON).
-        //   3. FIXED TRANSFORMER — the default. Byte-for-byte identical to today when no override is set.
+        // heart-piece-flex flexible mapping: FOUR transform modes, in precedence order.
+        //   1. TEMPLATE MODE — order carries a non-blank whole-document OutputTemplate → render the
+        //      ENTIRE document from that one Scriban template (ANY format, no fixed transformer needed).
+        //   2. NATIVE OVERRIDE (CSV/JSON) — per-order output mapping + a format the override builder
+        //      emits natively from the output-field rules.
+        //   3. STRUCTURED OVERRIDE (XML/cXML/UBL/X12) — resolve the override's canonical-field changes
+        //      into an EFFECTIVE entity, then hand it to the EXISTING fixed transform (no per-format
+        //      re-implementation).
+        //   4. FIXED TRANSFORMER — the default; byte-for-byte identical to today when no override is set.
+        // An override with only custom fields or an empty output config never diverts the transform.
         var mappingOverride = OrderMappingOverrideReader.Read(entity.CanonicalJson);
         var useTemplate     = OrderMappingOverrideReader.HasUsableTemplate(mappingOverride);
-        var useOverride     =
+        var hasUsableOverride =
             !useTemplate
             && OrderMappingOverrideReader.HasUsableOutput(mappingOverride)
-            && MappedTransformService.SupportsOverride(format);
+            && MappedTransformService.SupportsOverrideFormat(format);
+        var useNativeOverride = hasUsableOverride && MappedTransformService.SupportsOverride(format);
 
-        // Locate the correct fixed transformer (Xml/Csv/Json/...). Required only for the fixed path;
-        // we still resolve it up-front so a missing transformer fails before status mutation.
+        // Locate the fixed transformer (Xml/Csv/Json/...). Required EXCEPT for template mode and the
+        // native CSV/JSON override path; resolved up-front so a missing transformer fails before status
+        // mutation.
         var transformer = _transformers.FirstOrDefault(t => t.CanTransform(format));
-        if (!useTemplate && !useOverride && transformer is null)
+        if (!useTemplate && !useNativeOverride && transformer is null)
             return Result<TransformResponse>.Fail($"No transform service registered for format '{format}'.");
 
         // Mark as transforming so the UI can show a spinner
@@ -83,15 +87,31 @@ internal sealed class OrderTransformService
         entity.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
-        // Generate the document
+        // Generate the document.
+        //  • Native CSV/JSON override → the override builder emits the document.
+        //  • Structured-format override → resolve an effective entity (canonical-field overrides
+        //    applied to the typed columns) and feed it to the EXISTING fixed transform.
+        //  • No override → the fixed transform on the original entity, byte-for-byte unchanged.
         TransformResult transformResult;
         try
         {
-            transformResult = useTemplate
-                ? new ScribanTemplateTransformService().Build(entity, mappingOverride!)
-                : useOverride
-                    ? new MappedTransformService().Build(entity, mappingOverride!, format)
-                    : await transformer!.TransformAsync(entity, format, ct);
+            if (useTemplate)
+            {
+                transformResult = new ScribanTemplateTransformService().Build(entity, mappingOverride!);
+            }
+            else if (useNativeOverride)
+            {
+                transformResult = new MappedTransformService().Build(entity, mappingOverride!, format);
+            }
+            else if (hasUsableOverride)
+            {
+                var effective = EffectiveEntityResolver.Resolve(entity, mappingOverride!);
+                transformResult = await transformer!.TransformAsync(effective, format, ct);
+            }
+            else
+            {
+                transformResult = await transformer!.TransformAsync(entity, format, ct);
+            }
         }
         catch (TransformTemplateException ex)
         {

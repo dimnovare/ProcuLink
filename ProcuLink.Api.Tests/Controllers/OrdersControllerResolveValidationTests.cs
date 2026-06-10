@@ -50,7 +50,8 @@ public class OrdersControllerResolveValidationTests
             new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
             new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
             new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object);
+            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
+            Array.Empty<ProcuLink.Core.Services.ITransformService>());
 
         return (ctrl, orders, orgId);
     }

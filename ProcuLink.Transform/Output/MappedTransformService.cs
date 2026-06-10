@@ -33,9 +33,25 @@ public sealed class MappedTransformService
         WriteIndented = true,
     };
 
-    /// <summary>True only for the flat formats an override can drive in v1.</summary>
+    /// <summary>
+    /// True only for the flat formats the override builder drives NATIVELY (it emits the document
+    /// itself from the output-field rules). CSV + JSON. The structured formats (XML/cXML/UBL/X12)
+    /// apply overrides differently — by resolving an effective entity and feeding it to the fixed
+    /// transform — see <see cref="SupportsOverrideFormat"/>.
+    /// </summary>
     public static bool SupportsOverride(OutputFormat format) =>
         format is OutputFormat.Csv or OutputFormat.Json;
+
+    /// <summary>
+    /// True for ANY entity-based output format an override can influence: the two flat formats the
+    /// override builder drives natively (CSV/JSON), PLUS the structured formats where overrides are
+    /// applied by resolving an effective <see cref="PurchaseOrderEntity"/> (header/line canonical
+    /// values overridden) and feeding it to the existing fixed transform (XML/cXML/UBL/X12).
+    /// The canonical-model output formats (<see cref="OutputFormat.UblOrder"/> etc.) are out of scope.
+    /// </summary>
+    public static bool SupportsOverrideFormat(OutputFormat format) => format is
+        OutputFormat.Csv or OutputFormat.Json or
+        OutputFormat.Xml or OutputFormat.CXml or OutputFormat.Ubl or OutputFormat.X12;
 
     /// <summary>
     /// Build the override-driven output document. Throws <see cref="TransformValidationException"/>
@@ -169,7 +185,7 @@ public sealed class MappedTransformService
     /// <c>PoMappingEngine.ResolveField</c>. The expression layer is purely additive: with no
     /// <c>Expression</c> set, behaviour is byte-for-byte identical to before.
     /// </summary>
-    private static string? ResolveRule(
+    internal static string? ResolveRule(
         OutputFieldRule rule, IReadOnlyDictionary<string, string> row, bool lineScope)
     {
         string? value = ResolveExpressionOrField(
@@ -221,7 +237,7 @@ public sealed class MappedTransformService
     /// fields. Keys match the canonical names accepted in <see cref="OutputFieldRule.CanonicalField"/>.
     /// Manipulators that read sibling columns (Concat/Fallback) see this same bag as their row.
     /// </summary>
-    private static Dictionary<string, string> BuildHeaderRow(
+    internal static Dictionary<string, string> BuildHeaderRow(
         PurchaseOrderEntity order, OrderMappingOverride @override)
     {
         var row = new Dictionary<string, string>
@@ -248,7 +264,7 @@ public sealed class MappedTransformService
     /// (so a line rule can reference order-level values), plus any line-scoped custom field's value
     /// for this line number. Header custom fields are included too.
     /// </summary>
-    private static Dictionary<string, string> BuildLineRow(
+    internal static Dictionary<string, string> BuildLineRow(
         PurchaseOrderEntity order, OrderMappingOverride @override, PurchaseOrderLineEntity line)
     {
         // Start from the header bag so line rules can reference order-level fields.
