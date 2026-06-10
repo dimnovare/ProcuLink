@@ -63,7 +63,9 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   assignment + artifact revision pinning + rollback as part of V1's revision bundle.
 - **V4 unified validation** — ✅ SHIPPED + LIVE (`10bb6f1`). Org-level RuleDefinition + versioned
   bindings; EvaluateProfile unchanged (bind, didn't rebuild); 12-entry catalog seeded live.
-- **V5 deepen canonical** — staged; Scriban template is the flexible escape hatch.
+- **V5 deepen canonical** — ✅ MERGED + PUSHED (`5dc2edb`); additive canonical fields, byte-identical,
+  real-Postgres round-trip proven. ⏳ live Neon migration verify pending an external GitHub/Railway
+  incident (see BATCH 4). Scriban remains the escape hatch for anything still not first-class.
 - **V6 exception-first UI** — progressive disclosure (what's wrong/why/fix/remember/
   notified+accepted); topology as overview. Model delivered≠accepted (receipts/ACK). **NEXT (FE).**
 - **V7 connector SDK** — ✅ BACKEND SHIPPED + LIVE (`082393b`). Code-defined `ConnectorManifestCatalog`
@@ -94,13 +96,37 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   read-only manifest requirements section (`resolveManifestKey` maps connector type → the 6 keys; silent
   for unknown), reusing the Required/Secret/type pills.
 
-## BATCH 4 IN FLIGHT — V5 deepen canonical (backend workflow `wq2uausgf`)
-3-lens design panel → conservative synthesis → ADDITIVE implementation (NO migration — fields ride
-canonical_json; existing transform output byte-identical) → 2-lens verify (byte-identical proof +
-adversarial). Branch will be `auto/be-v5-deepen-canonical`. MERGE GATE (when it reports): both verdicts
-pass + testsPassed + migrationAdded=false → merge → full `dotnet test` MYSELF → push → Railway →
-**live-verify an EXISTING supplier's output is byte-identical (not just that new orders carry new
-fields)**. If either verdict fails byte-identical, DO NOT merge — iterate.
+## BATCH 4 — V5 deepen canonical ✅ MERGED + PUSHED (backend `main` = `5dc2edb`); ⏳ live Neon verify pending an external incident
+Workflow `wq2uausgf` (3-lens design → conservative synth → implement → 2-lens verify) + a follow-up fix
+agent. SHIPPED to `main`:
+- **Conservative offer⇔works synthesis** — rejected ~13 sourceless proposed fields (ship-to, party GLNs,
+  classification codes, Incoterms, contract refs, etc. — no shipped parser produces them); implemented
+  only fields with a real source or sound derivation.
+- **Implemented:** header `RequestedDeliveryDate` (IDoc E1EDK03 IDDAT=012) + per-line `DeliveryDate`
+  (IDoc E1EDP20 EDATU); per-line `TaxRate`/`LineAmount` already existed (Phase 4), now exposed; derived
+  `SubTotal`/`TaxTotal`/`GrandTotal` + `PaymentTerms` in the header row-bag. All NEW fields are available
+  to Scriban/override/mapping ONLY — fixed transforms read typed columns directly, so existing output is
+  **byte-identical** (proven by direct CSV/XML byte-comparison tests + cXML/JSON field-absence guards;
+  all 19 V5 tests green).
+- **Adversarial review CAUGHT a real prod bug** the 19 tests missed: header `RequestedDeliveryDate` was
+  EF-`Ignore`d ("rides canonical_json") but the async ingest persists via `ExecuteUpdateAsync` of typed
+  columns only → always null at transform in prod. FIXED → made it a **real persisted column**
+  `requested_delivery_date` (migration `20260610152849_AddRequestedDeliveryDate`, additive single nullable
+  `date`, no FK), added to the `ExecuteUpdateAsync` chain, + a **real-Postgres Testcontainers round-trip
+  test** (IDoc IDDAT=012 → ingest → reload → `RequestedDeliveryDate==2026-05-25`, ran + passed). See
+  [[project-inmemory-masks-postgres-fk]] (second burn recorded).
+- **My merge-gate caught a 2nd issue:** the new mapping test used `IEntityType.GetIgnoredMembers()` which
+  doesn't compile in this EF context → Infrastructure.Tests failed to build on my machine (agent's env
+  masked it). Fixed → `GetColumnName()` assertion (`5dc2edb`). Full suite **1964 green** (Transform 862 +
+  Infrastructure 492 + Api 610), 0 failed, verified by me on `main`.
+- ⏳ **LIVE NEON MIGRATION VERIFY PENDING:** pushed `5dc2edb`, but the Railway build STALLED at 10+ min on
+  an active **GitHub API incident** (normal deploys were ~1-2 min). The new build isn't serving yet (the
+  200s observed are the OLD build). The migration is additive + already proven on REAL Postgres via the
+  Testcontainers test, so risk is low. **TO CONFIRM once Railway finishes (1-call check):** authenticated
+  `GET /api/orders` → 200 under the new build (a missing `requested_delivery_date` column would 500 the
+  SELECT under the new EF model); ideally also upload an IDoc with IDDAT=012 and confirm the header date
+  persists. If `/api/orders` 500s post-deploy with "column ... does not exist", the migration didn't apply
+  — investigate Neon (but additive nullable migrations have applied clean all session, incl. V4).
 
 - **V8 conformance reports** — ✅ SHIPPED + LIVE (`10bb6f1`). 5 profile checkers (cXML/UBL/X12/
   EDIFACT/IDoc), `GET /api/orders/{id}/conformance?format=`, downloadable Markdown. FE tab pending.
