@@ -38,7 +38,8 @@ public sealed class OrderService : IOrderService
         IIntegrationTriggerService     integrationTrigger,
         IFormatDetector                formatDetector,
         IStructuredOrderExtractor?     structuredExtractor = null,
-        IAiSuggestionDecisionService?  aiDecisions = null)
+        IAiSuggestionDecisionService?  aiDecisions = null,
+        ICatalogRetrievalService?      catalogRetrieval = null)
     {
         // Shared helpers (best-effort exception reconcile, passport events, audit-event
         // builder, extraction-review flagging) used by more than one sub-service.
@@ -46,7 +47,8 @@ public sealed class OrderService : IOrderService
 
         _ingestion = new OrderIngestionService(
             db, fileStorage, parserFactory, mappings, poMappingService, aiMappings,
-            logger, integrationTrigger, formatDetector, structuredExtractor, shared);
+            logger, integrationTrigger, formatDetector, structuredExtractor, shared,
+            catalogRetrieval);
 
         _query = new OrderQueryService(db, fileStorage);
 

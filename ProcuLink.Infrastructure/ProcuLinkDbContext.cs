@@ -427,10 +427,17 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.IsActive).HasColumnName("is_active").HasDefaultValue(true);
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
-            // One row per real code per (org, supplier) — the upsert key.
+            // One row per real code per (org, supplier) — the upsert key. Also serves the
+            // V10 indexed EXACT code lookup (org_id, supplier_id, code) without a second btree.
             b.HasIndex(x => new { x.OrgId, x.SupplierId, x.Code }).IsUnique();
             // Active-catalog listing / typeahead read path.
             b.HasIndex(x => new { x.OrgId, x.SupplierId, x.IsActive });
+            // V10 — indexed EXACT barcode (GTIN/EAN) lookup, the strongest match key when
+            // buyers carry it. Btree on (org, supplier, barcode). The GIN trigram indexes on
+            // code+name (for the fuzzy ranking pass) are added in the migration via raw SQL
+            // because EF model config cannot express the gin_trgm_ops operator class.
+            b.HasIndex(x => new { x.OrgId, x.SupplierId, x.Barcode })
+             .HasDatabaseName("IX_supplier_products_org_id_supplier_id_barcode");
             b.HasOne(x => x.Organisation)
              .WithMany()
              .HasForeignKey(x => x.OrgId);

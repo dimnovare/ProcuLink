@@ -10,6 +10,7 @@ using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Mapping;
 using ProcuLink.Transform.Parsing;
 
@@ -34,6 +35,7 @@ internal sealed class OrderIngestionService
     private readonly IStructuredOrderExtractor? _structuredExtractor;
     private readonly OrderServiceShared         _shared;
     private readonly IConnectionResolver        _connectionResolver;
+    private readonly ICatalogRetrievalService   _catalogRetrieval;
 
     public OrderIngestionService(
         ProcuLinkDbContext         db,
@@ -46,7 +48,8 @@ internal sealed class OrderIngestionService
         IIntegrationTriggerService integrationTrigger,
         IFormatDetector            formatDetector,
         IStructuredOrderExtractor? structuredExtractor,
-        OrderServiceShared         shared)
+        OrderServiceShared         shared,
+        ICatalogRetrievalService?  catalogRetrieval = null)
     {
         _db                  = db;
         _fileStorage         = fileStorage;
@@ -60,6 +63,9 @@ internal sealed class OrderIngestionService
         _structuredExtractor = structuredExtractor;
         _shared              = shared;
         _connectionResolver  = new ConnectionResolver(db);
+        // V10 — indexed catalog retrieval for large catalogs. Self-constructed from the same
+        // DbContext (mirrors _connectionResolver); the optional param lets tests inject a fake.
+        _catalogRetrieval    = catalogRetrieval ?? new CatalogRetrievalService(db);
     }
 
     // ── Group V1: pin the active connection revision at ingest ─────────────────
@@ -965,6 +971,35 @@ internal sealed class OrderIngestionService
         IReadOnlyList<AiMappingCandidate> mappingCandidates,
         CancellationToken ct)
     {
+        // V10 — INDEXED retrieval for large catalogs. Baltic IT distributors carry tens of
+        // thousands of SKUs; loading them all and scoring in-memory silently truncated at
+        // CatalogRetrievalPoolCap. When the active catalog EXCEEDS that threshold (and the
+        // provider is Postgres), retrieve the closest products with indexed exact + trigram
+        // queries instead of loading the whole catalog. Below the threshold (today's customers),
+        // OR on a non-Postgres provider / a translation failure, keep the byte-identical
+        // in-memory lexical path — so existing behaviour never changes.
+        if (await _catalogRetrieval.ShouldUseIndexedRetrievalAsync(
+                organisationId, supplierId, CatalogRetrievalPoolCap, ct))
+        {
+            var queries = unresolvedContexts
+                .Select(l => new CatalogRetrievalQuery(l.LineNumber, l.BuyerItemCode, l.Description))
+                .ToList();
+
+            var retrieved = await _catalogRetrieval.RetrieveCandidatesAsync(
+                organisationId, supplierId, queries, CatalogCandidatesPerLine, MaxCandidates, ct);
+
+            // null ⇒ indexed path unavailable (provider can't translate); fall through to in-memory.
+            if (retrieved is not null)
+            {
+                // A large catalog with zero retrieved candidates still means "has catalog" — the
+                // grounding intent (constrain the model to real codes) holds, so do NOT silently
+                // fall back to free suggestion. Return only what was retrieved (+ supporting maps).
+                var groundedIndexed = BuildGroundedFromProducts(retrieved, mappingCandidates);
+                return groundedIndexed;
+            }
+        }
+
+        // ── In-memory path (small catalogs, non-Postgres, or indexed fallback) ────────────────
         // One org+supplier-scoped read of the active catalog. Never cross-tenant.
         var catalog = await _db.SupplierProducts
             .AsNoTracking()
@@ -982,32 +1017,54 @@ internal sealed class OrderIngestionService
             return mappingCandidates;
 
         // Per-line lexical retrieval → deduped union of the closest real products (catalog-first).
-        var union = new Dictionary<string, AiMappingCandidate>(StringComparer.OrdinalIgnoreCase);
+        var union = new List<SupplierProduct>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var line in unresolvedContexts)
         {
             foreach (var product in RetrieveCatalogMatches(line, catalog, CatalogCandidatesPerLine))
             {
                 var code = product.Code.Trim();
-                if (string.IsNullOrEmpty(code) || union.ContainsKey(code)) continue;
-
-                union[code] = new AiMappingCandidate(
-                    BuyerItemCode: string.Empty,
-                    SupplierItemCode: code,
-                    Provenance: string.IsNullOrWhiteSpace(product.Name)
-                        ? $"catalog product {code}"
-                        : $"catalog product {code} — {product.Name!.Trim()}",
-                    IsCatalogProduct: true,
-                    Name: product.Name,
-                    Unit: product.Unit,
-                    Price: product.Price,
-                    Barcode: product.Barcode);
+                if (string.IsNullOrEmpty(code) || !seen.Add(code)) continue;
+                union.Add(product);
             }
         }
 
-        // Catalog candidates first (ground truth), then past mappings as supporting evidence,
-        // capped to MaxCandidates so the AI service's own Take(40) never truncates the catalog.
+        return BuildGroundedFromProducts(union, mappingCandidates);
+    }
+
+    /// <summary>
+    /// Folds a ranked, deduped set of real catalog products into the AI candidate set: catalog
+    /// candidates first (ground truth), then past mappings as supporting evidence, capped to
+    /// <see cref="MaxCandidates"/> so the AI service's own Take(40) never truncates the catalog.
+    /// Shared by both the indexed (V10) and in-memory retrieval paths so the produced candidate
+    /// shape / provenance copy is identical.
+    /// </summary>
+    private static IReadOnlyList<AiMappingCandidate> BuildGroundedFromProducts(
+        IReadOnlyList<SupplierProduct> products,
+        IReadOnlyList<AiMappingCandidate> mappingCandidates)
+    {
         var grounded = new List<AiMappingCandidate>(MaxCandidates);
-        grounded.AddRange(union.Values.Take(MaxCandidates));
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var product in products)
+        {
+            if (grounded.Count >= MaxCandidates) break;
+            var code = (product.Code ?? string.Empty).Trim();
+            if (code.Length == 0 || !seen.Add(code)) continue;
+
+            grounded.Add(new AiMappingCandidate(
+                BuyerItemCode: string.Empty,
+                SupplierItemCode: code,
+                Provenance: string.IsNullOrWhiteSpace(product.Name)
+                    ? $"catalog product {code}"
+                    : $"catalog product {code} — {product.Name!.Trim()}",
+                IsCatalogProduct: true,
+                Name: product.Name,
+                Unit: product.Unit,
+                Price: product.Price,
+                Barcode: product.Barcode));
+        }
+
         foreach (var m in mappingCandidates)
         {
             if (grounded.Count >= MaxCandidates) break;
