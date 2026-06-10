@@ -42,6 +42,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IFileStorageService          _fileStorage;
     private readonly ISourceTokenizer             _tokenizer;
     private readonly IEnumerable<ITransformService> _transformers;
+    private readonly IAiSuggestionDecisionService _aiDecisions;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -73,7 +74,8 @@ public sealed class OrdersController : ControllerBase
         IPromoteMappingService       promoteMapping,
         IFileStorageService          fileStorage,
         ISourceTokenizer             tokenizer,
-        IEnumerable<ITransformService> transformers)
+        IEnumerable<ITransformService> transformers,
+        IAiSuggestionDecisionService? aiDecisions = null)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -89,6 +91,10 @@ public sealed class OrdersController : ControllerBase
         _fileStorage      = fileStorage;
         _tokenizer        = tokenizer;
         _transformers     = transformers;
+        // Optional in the ctor so existing positional test constructions stay valid; when DI does
+        // not supply one we build the concrete recorder against the injected DbContext.
+        _aiDecisions      = aiDecisions
+            ?? new ProcuLink.Infrastructure.Services.AiSuggestionDecisionService(db);
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -1057,6 +1063,48 @@ public sealed class OrdersController : ControllerBase
         );
 
         return Ok(dto);
+    }
+
+    // ── GET /api/orders/{id}/ai-decisions ─────────────────────────────────────
+
+    /// <summary>
+    /// Returns the durable AI-suggestion decision history for this order, newest first.
+    /// Each row records what happened to one AI mapping suggestion on one line — accepted,
+    /// rejected (a different code was chosen), superseded, or resolved manually — along with
+    /// the suggestion's confidence and candidate-set evidence. This is the history the live
+    /// resolve flow would otherwise discard (the line's Ai* fields are cleared on resolution);
+    /// persisting it lets confidence be calibrated later. Org-scoped: a cross-tenant or unknown
+    /// order id returns 404.
+    /// </summary>
+    [HttpGet("{id:guid}/ai-decisions")]
+    [ProducesResponseType(typeof(IReadOnlyList<AiSuggestionDecisionDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetAiDecisions(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+
+        // Confirm the order exists for this org so an order with no decisions (200 empty)
+        // is distinguishable from a non-existent / cross-tenant order (404).
+        var exists = await _db.PurchaseOrders
+            .AsNoTracking()
+            .AnyAsync(o => o.Id == id && o.OrgId == orgId, ct);
+
+        if (!exists)
+            return NotFound();
+
+        var rows = await _aiDecisions.ListForOrderAsync(orgId, id, ct);
+
+        return Ok(rows.Select(d => new AiSuggestionDecisionDto(
+            d.Id,
+            d.LineNumber,
+            d.SuggestedSupplierItemCode,
+            d.ChosenSupplierItemCode,
+            d.CandidateSetJson,
+            d.Confidence,
+            d.ModelVersion,
+            d.Decision,
+            d.DecidedBy,
+            d.DecidedAt)).ToList());
     }
 
     // ── GET /api/orders/{id}/audit ────────────────────────────────────────────

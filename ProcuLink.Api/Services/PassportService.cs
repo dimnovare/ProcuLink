@@ -162,8 +162,9 @@ public sealed class PassportService : IPassportService
                 Status:                    "pending"))
             .ToList();
 
-        notes.Add("AI suggestion accept/reject history is not retained — resolving a line clears its AI "
-                + "metadata. Only suggestions still pending a decision are listed; a bulk-accept appears in "
+        notes.Add("Only AI suggestions still PENDING a decision are listed here — resolving a line clears its "
+                + "AI metadata on the line. The durable accept/reject decision history (which survives "
+                + "resolution) is available at GET /api/orders/{id}/ai-decisions; a bulk-accept also appears in "
                 + "manual corrections as 'AiSuggestionsBulkAccepted'.");
 
         var latestArtifact = artifacts.FirstOrDefault();

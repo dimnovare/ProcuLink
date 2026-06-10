@@ -20,6 +20,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<PurchaseOrderLineEntity> PurchaseOrderLines => Set<PurchaseOrderLineEntity>();
     public DbSet<ItemMapping> ItemMappings => Set<ItemMapping>();
     public DbSet<SupplierProduct> SupplierProducts => Set<SupplierProduct>();
+    public DbSet<AiSuggestionDecision> AiSuggestionDecisions => Set<AiSuggestionDecision>();
     public DbSet<OutboundArtifact> OutboundArtifacts => Set<OutboundArtifact>();
     public DbSet<DeliveryAttempt> DeliveryAttempts => Set<DeliveryAttempt>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
@@ -429,6 +430,39 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Supplier)
              .WithMany(x => x.Products)
              .HasForeignKey(x => x.SupplierId);
+        });
+
+        // ── ai_suggestion_decisions ────────────────────────────────────
+        // Durable, append-only decision history for AI mapping suggestions. Tenancy and
+        // snake_case conventions mirror the rest of the schema; the unique index is what
+        // makes the write idempotent across Hangfire retries / double-submits.
+        modelBuilder.Entity<AiSuggestionDecision>(b =>
+        {
+            b.ToTable("ai_suggestion_decisions");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.OrderId).HasColumnName("order_id");
+            b.Property(x => x.LineNumber).HasColumnName("line_number");
+            b.Property(x => x.SuggestedSupplierItemCode).HasColumnName("suggested_supplier_item_code").IsRequired();
+            b.Property(x => x.ChosenSupplierItemCode).HasColumnName("chosen_supplier_item_code");
+            b.Property(x => x.CandidateSetJson).HasColumnName("candidate_set_json").HasColumnType("jsonb");
+            b.Property(x => x.Confidence).HasColumnName("confidence");
+            b.Property(x => x.ModelVersion).HasColumnName("model_version");
+            b.Property(x => x.Decision).HasColumnName("decision").IsRequired();
+            b.Property(x => x.DecidedBy).HasColumnName("decided_by");
+            b.Property(x => x.DecidedAt).HasColumnName("decided_at").HasColumnType("timestamptz");
+            // Read path: list an order's decisions newest-first within a tenant.
+            b.HasIndex(x => new { x.OrgId, x.OrderId, x.DecidedAt })
+             .HasDatabaseName("IX_ai_suggestion_decisions_org_id_order_id_decided_at");
+            // Idempotency key: one row per (org, order, line, suggested code, decision).
+            // A replayed accept/reject (retry, double-click) UPDATEs in place instead of inserting.
+            b.HasIndex(x => new { x.OrgId, x.OrderId, x.LineNumber, x.SuggestedSupplierItemCode, x.Decision })
+             .IsUnique()
+             .HasDatabaseName("IX_ai_suggestion_decisions_idempotency");
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
         });
 
         // ── outbound_artifacts ─────────────────────────────────────────

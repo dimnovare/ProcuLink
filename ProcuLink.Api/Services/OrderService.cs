@@ -37,7 +37,8 @@ public sealed class OrderService : IOrderService
         ILogger<OrderService>          logger,
         IIntegrationTriggerService     integrationTrigger,
         IFormatDetector                formatDetector,
-        IStructuredOrderExtractor?     structuredExtractor = null)
+        IStructuredOrderExtractor?     structuredExtractor = null,
+        IAiSuggestionDecisionService?  aiDecisions = null)
     {
         // Shared helpers (best-effort exception reconcile, passport events, audit-event
         // builder, extraction-review flagging) used by more than one sub-service.
@@ -49,7 +50,13 @@ public sealed class OrderService : IOrderService
 
         _query = new OrderQueryService(db, fileStorage);
 
-        _resolution = new OrderResolutionService(db, mappings, logger, shared);
+        // Decision-history recorder. When the DI container supplies one we use it; otherwise
+        // (older positional test ctors) we build the concrete recorder against the same DbContext
+        // so the resolve/accept paths still persist durable history.
+        var decisions = aiDecisions
+            ?? new ProcuLink.Infrastructure.Services.AiSuggestionDecisionService(db);
+
+        _resolution = new OrderResolutionService(db, mappings, logger, shared, decisions);
 
         _transform = new OrderTransformService(db, fileStorage, transformers, logger);
     }

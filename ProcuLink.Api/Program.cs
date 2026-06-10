@@ -386,6 +386,8 @@ else
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 // Supplier product catalog (ground truth for AI code suggestions) — Scoped (DbContext is Scoped).
 builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
+// Durable AI-suggestion accept/reject decision history (confidence calibration) — Scoped.
+builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
 // heart-piece-flex Phase 1: per-order mapping/override stored in canonical_json (no new table).
 builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService,
                            ProcuLink.Infrastructure.Services.OrderMappingOverrideService>();
