@@ -141,6 +141,25 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   E2E test API key (`plk_uUTz…`, org slug `personal-workspace-d3be`) is LIVE + revocable; org order cap
   lifted to 6000.
 
+## ✅ FULL ORDER CYCLE PROVEN LIVE + wire hover-highlight fix (2026-06-10)
+- **Wire hover-highlight bug FIXED + shipped (FE `main` = `a02a2db` → Vercel).** Regression from the
+  `header-meta` change: `SpineNodeCard` fired BOTH `onHover(node.id)` AND `onZoneHover(srcRef)`; the zone
+  handler clobbered `hoveredId` with `nodeIdForZone(srcRef)` = the FIRST node sharing that zone. Since
+  `po`+`date` share `header-meta` (and `supplier`+`buyer` share `parties`), hovering ORDER DATE resolved to
+  PO → DATE's wire stayed greyed. Fix: node cards hover by `node.id` only + hovered wire paints last. 25/25
+  FE tests green. (Founder visually confirm.)
+- **FULL ORDER CYCLE proven LIVE to `delivered`** against a real external endpoint (webhook.site catcher):
+  set the sample supplier's HTTP delivery-config (autoDeliver=true) → for 6 ingested orders: resolve →
+  transform → **auto-deliver** → **all 6 reached status `delivered`**, real JSON docs (poNumber/orderDate/
+  currency/lines) landed at the catcher with 200 responses. Then set config outputFormat=xml → 1 more order
+  → delivered a real `<PurchaseOrder><Header>…` XML doc. So: API ingest → resolve → transform → deliver →
+  delivered works live. **KEY MECHANISM:** the DELIVERED format = the supplier's `delivery-config.outputFormat`
+  (per-supplier, by design — `/transform?format=` is for preview/ad-hoc, NOT delivery). To "send in any type"
+  set the supplier output format; transform-validity for all 6 formats already proven (36/36 live + 56/56
+  deterministic). Channels: HTTP proven live; SFTP/FTPS/SMTP/Erply/Directo need real endpoints. Test catcher
+  `https://webhook.site/3f84dc65-a3f6-4539-9357-b0b57ac286d3` (expires 2026-06-17); sample supplier left with
+  autoDeliver=true→that catcher (reset if undesired). See [[project-live-matrix-and-diverse-review]].
+
 ## ✅ LIVE-MATRIX FINDING (2026-06-10) — csv/json preview 500 FOUND + FIXED + LIVE-VERIFIED (`e7b5965`)
 Driving the live in×out matrix surfaced a REAL prod 500 the deterministic 56/56 + byte-identical tests
 + adversarial review ALL missed:
