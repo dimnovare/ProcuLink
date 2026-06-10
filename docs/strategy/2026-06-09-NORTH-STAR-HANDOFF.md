@@ -63,9 +63,9 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   assignment + artifact revision pinning + rollback as part of V1's revision bundle.
 - **V4 unified validation** — ✅ SHIPPED + LIVE (`10bb6f1`). Org-level RuleDefinition + versioned
   bindings; EvaluateProfile unchanged (bind, didn't rebuild); 12-entry catalog seeded live.
-- **V5 deepen canonical** — ✅ MERGED + PUSHED (`5dc2edb`); additive canonical fields, byte-identical,
-  real-Postgres round-trip proven. ⏳ live Neon migration verify pending an external GitHub/Railway
-  incident (see BATCH 4). Scriban remains the escape hatch for anything still not first-class.
+- **V5 deepen canonical** — ✅ SHIPPED + LIVE-VERIFIED (`5dc2edb`); additive canonical fields,
+  byte-identical, real-Postgres round-trip proven, migration confirmed live on Neon (see BATCH 4).
+  Scriban remains the escape hatch for anything still not first-class.
 - **V6 exception-first UI** — progressive disclosure (what's wrong/why/fix/remember/
   notified+accepted); topology as overview. Model delivered≠accepted (receipts/ACK). **NEXT (FE).**
 - **V7 connector SDK** — ✅ BACKEND SHIPPED + LIVE (`082393b`). Code-defined `ConnectorManifestCatalog`
@@ -96,7 +96,11 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   read-only manifest requirements section (`resolveManifestKey` maps connector type → the 6 keys; silent
   for unknown), reusing the Required/Secret/type pills.
 
-## BATCH 4 — V5 deepen canonical ✅ MERGED + PUSHED (backend `main` = `5dc2edb`); ⏳ live Neon verify pending an external incident
+## BATCH 4 — V5 deepen canonical ✅ SHIPPED + LIVE-VERIFIED (backend `main` = `5dc2edb` → Railway)
+LIVE-VERIFIED on Neon (after the GitHub/Railway incident cleared): new build Online; authenticated
+`GET /api/orders` list + detail both 200 → `requested_delivery_date` migration applied cleanly on live
+Postgres (a missing column would 500 the SELECT under the new EF model). Migration applied + round-trip
+proven on real Postgres (Testcontainers) + byte-identical existing output (test suite). Detail below.
 Workflow `wq2uausgf` (3-lens design → conservative synth → implement → 2-lens verify) + a follow-up fix
 agent. SHIPPED to `main`:
 - **Conservative offer⇔works synthesis** — rejected ~13 sourceless proposed fields (ship-to, party GLNs,
