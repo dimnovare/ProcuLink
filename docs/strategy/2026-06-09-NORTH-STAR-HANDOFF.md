@@ -96,7 +96,31 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   read-only manifest requirements section (`resolveManifestKey` maps connector type → the 6 keys; silent
   for unknown), reusing the Required/Secret/type pills.
 
-## BATCH 4 — V5 deepen canonical ✅ SHIPPED + LIVE-VERIFIED (backend `main` = `5dc2edb` → Railway)
+## ⚠️ LIVE-MATRIX FINDING (2026-06-10) — V5 introduced a csv/json preview 500 (HOTFIX IN FLIGHT)
+Driving the live in×out matrix (the runner) surfaced a REAL prod regression that the deterministic
+56/56 + V5 byte-identical tests + adversarial review ALL missed:
+- **`POST /api/orders/{id}/mapping-override/preview?format=csv|json` → HTTP 500** (unhandled exception)
+  for RESOLVED orders, on EVERY order (incl. pre-existing `ef6138c2`). `?format=xml|cxml|ubl|x12` → 200.
+- ROOT CAUSE (hypothesis, agent confirming): **V5 added derived totals (SubTotal/TaxTotal/GrandTotal)
+  + PaymentTerms + per-line TaxRate/LineAmount into `MappedTransformService.BuildHeaderRow/BuildLineRow`
+  — the row-bag used by the NATIVE csv/json override+preview path.** The byte-identical tests only
+  covered the FIXED transforms (typed-column readers), NOT this path → the new derived-total code
+  throws on csv/json preview. The csv/json all-format preview WORKED before V5.
+- HOTFIX: background agent `a3fd2c1a68652cfca` → branch `auto/be-fix-csvjson-preview-500` (reproduce
+  red test → null-safe derived totals → regression test covering the csv/json preview/override path →
+  full suite → I deploy + re-verify csv/json preview = 200 live). **MERGE GATE: do not call V5 "done"
+  until this lands + csv/json preview is 200 live.**
+- LESSON: the deterministic matrix proves transforms on RESOLVED, RICH fixtures; live minimal-CSV
+  orders behave differently. Also: CSV-inbound → cxml/ubl/x12 preview returns 200 with a `warning` +
+  EMPTY content (insufficient structured data — honest, not a crash); xml-out works from CSV. Cover the
+  override/preview/row-bag path in tests, not just fixed transforms.
+- RUNNER BUGS found (fix `scripts/live-matrix/runner.js`): (1) it reads the order id at `up.json.id`
+  but the upload API returns `{order:{id}}` → it never tracked orders; (2) it treats `/transform` as
+  returning output inline, but `/transform` is ASYNC (enqueues a Worker job) — the INLINE path for all
+  formats is `/mapping-override/preview?format=`; (3) it never RESOLVES lines, so structured-format
+  legs correctly 422 "resolve first". The 25s parse poll is also too short under Worker load.
+
+## BATCH 4 — V5 deepen canonical ✅ SHIPPED (backend `main` = `5dc2edb` → Railway) — ⚠️ csv/json-preview regression hotfix in flight (above)
 LIVE-VERIFIED on Neon (after the GitHub/Railway incident cleared): new build Online; authenticated
 `GET /api/orders` list + detail both 200 → `requested_delivery_date` migration applied cleanly on live
 Postgres (a missing column would 500 the SELECT under the new EF model). Migration applied + round-trip
