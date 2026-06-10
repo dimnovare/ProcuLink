@@ -19,6 +19,44 @@ public sealed class OutputTemplateService : IOutputTemplateService
             .ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyList<TemplateView>> ListWithUsageAsync(Guid orgId, CancellationToken ct)
+    {
+        var templates = await _db.OutputTemplates
+            .AsNoTracking()
+            .Where(t => t.OrgId == orgId)
+            .OrderByDescending(t => t.CreatedAt)
+            .ToListAsync(ct);
+
+        if (templates.Count == 0)
+            return Array.Empty<TemplateView>();
+
+        // The only supplier↔template link the store models is the required output format.
+        // Count distinct active suppliers (one per supplier, even if they have several delivery
+        // configs) per output format, org-scoped. Soft-deleted suppliers are excluded.
+        var formatCounts = await _db.SupplierDeliveryConfigs
+            .AsNoTracking()
+            .Where(c => c.OrgId == orgId
+                        && c.OutputFormat != null
+                        && c.Supplier.DeletedAt == null)
+            .Select(c => new { c.OutputFormat, c.SupplierId })
+            .Distinct()
+            .GroupBy(c => c.OutputFormat!)
+            .Select(g => new { Format = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        // Case-insensitive lookup: template "XML" matches delivery format "xml".
+        var byFormat = formatCounts.ToDictionary(
+            x => x.Format,
+            x => x.Count,
+            StringComparer.OrdinalIgnoreCase);
+
+        return templates
+            .Select(t => new TemplateView(
+                t,
+                t.Format is { Length: > 0 } && byFormat.TryGetValue(t.Format, out var n) ? n : 0))
+            .ToList();
+    }
+
     public async Task<OutputTemplate> CreateAsync(Guid orgId, CreateTemplateRequest req, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
