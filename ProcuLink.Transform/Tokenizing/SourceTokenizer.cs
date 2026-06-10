@@ -128,9 +128,12 @@ public sealed class SourceTokenizer : ISourceTokenizer
 
                         if (cell.IsEmpty()) continue;
 
+                        // Header-row tokens are labelled by the column name itself so the
+                        // chip reads exactly as the column it represents; fall back to the
+                        // spreadsheet column letter when the header cell is blank.
                         var label = string.IsNullOrWhiteSpace(headerText)
-                            ? $"Header col {colNum}"
-                            : $"Header: {headerText}";
+                            ? $"Col {ColumnLetter(colNum)} · header row"
+                            : headerText;
 
                         tokens.Add(new SourceToken(
                             Id:    $"cell:r{rowNum}c{colNum}",
@@ -149,13 +152,16 @@ public sealed class SourceTokenizer : ISourceTokenizer
 
                     var colNum   = cell.Address.ColumnNumber;
                     var value    = cell.GetString().Trim();
+
+                    // Prefer the column header name ("Unit Price · row 9"); fall back to the
+                    // spreadsheet column letter ("Col C · row 9") when no header is available.
                     var colLabel = colNum <= headers.Count && !string.IsNullOrWhiteSpace(headers[colNum - 1])
                         ? headers[colNum - 1]
-                        : $"col{colNum}";
+                        : $"Col {ColumnLetter(colNum)}";
 
                     tokens.Add(new SourceToken(
                         Id:    $"cell:r{rowNum}c{colNum}",
-                        Label: $"Row {rowNum}, {colLabel}",
+                        Label: $"{colLabel} · row {rowNum}",
                         Value: value,
                         Group: "line"
                     ));
@@ -201,18 +207,27 @@ public sealed class SourceTokenizer : ISourceTokenizer
 
             for (int col = 0; col < fieldCount; col++)
             {
-                var value = csv.GetField(col) ?? string.Empty;
-                var colLabel = col < headers.Count ? headers[col] : $"col{col + 1}";
+                var value  = csv.GetField(col) ?? string.Empty;
+                var colNum = col + 1; // 1-based column number for labelling
+
+                // Prefer the column header name ("Unit Price · row 9"); fall back to the
+                // column letter ("Col C · row 9") when the header cell is blank/missing.
+                var colLabel = col < headers.Count && !string.IsNullOrWhiteSpace(headers[col])
+                    ? headers[col]
+                    : $"Col {ColumnLetter(colNum)}";
 
                 if (rowIndex == 1)
                 {
                     // First row is the header; capture it for labelling subsequent rows.
                     headers.Add(value);
+
+                    // Header-row tokens are labelled by the column name itself; fall back to
+                    // the column letter when the header cell is blank.
                     var label = string.IsNullOrWhiteSpace(value)
-                        ? $"Header col {col + 1}"
-                        : $"Header: {value}";
+                        ? $"Col {ColumnLetter(colNum)} · header row"
+                        : value;
                     tokens.Add(new SourceToken(
-                        Id:    $"cell:r{rowIndex}c{col + 1}",
+                        Id:    $"cell:r{rowIndex}c{colNum}",
                         Label: label,
                         Value: value,
                         Group: "header"
@@ -221,8 +236,8 @@ public sealed class SourceTokenizer : ISourceTokenizer
                 else
                 {
                     tokens.Add(new SourceToken(
-                        Id:    $"cell:r{rowIndex}c{col + 1}",
-                        Label: $"Row {rowIndex}, {colLabel}",
+                        Id:    $"cell:r{rowIndex}c{colNum}",
+                        Label: $"{colLabel} · row {rowIndex}",
                         Value: value,
                         Group: "line"
                     ));
@@ -239,6 +254,23 @@ public sealed class SourceTokenizer : ISourceTokenizer
         using var reader = new StreamReader(ms, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
         var firstLine = reader.ReadLine() ?? string.Empty;
         return firstLine.Contains(';') && !firstLine.Contains(',') ? ";" : ",";
+    }
+
+    /// <summary>
+    /// Converts a 1-based column number to its spreadsheet column letter
+    /// (1→A, 2→B, 26→Z, 27→AA, …) for use in human-readable fallback labels.
+    /// </summary>
+    private static string ColumnLetter(int colNum)
+    {
+        if (colNum < 1) return colNum.ToString();
+        var sb = new StringBuilder();
+        while (colNum > 0)
+        {
+            var rem = (colNum - 1) % 26;
+            sb.Insert(0, (char)('A' + rem));
+            colNum = (colNum - 1) / 26;
+        }
+        return sb.ToString();
     }
 
     // ── XML ───────────────────────────────────────────────────────────────────
@@ -261,19 +293,41 @@ public sealed class SourceTokenizer : ISourceTokenizer
         if (doc.Root is null) return tokens;
 
         // Walk the document depth-first; emit leaf text + all attributes.
-        WalkXmlElement(doc.Root, path: "/" + XmlLocalName(doc.Root), tokens: tokens);
+        // - id   keeps the raw XPath (stable address) — UNCHANGED.
+        // - label uses a short readable path of element local-names (prefix preserved),
+        //   e.g. "cbc:ID" or "OrderRequestHeader@orderID".
+        WalkXmlElement(
+            doc.Root,
+            path:          "/" + XmlLocalName(doc.Root),
+            selfDisplay:   XmlReadableName(doc.Root),
+            parentDisplay: string.Empty,
+            tokens:        tokens);
         return tokens;
     }
 
-    private static void WalkXmlElement(XElement element, string path, List<SourceToken> tokens)
+    /// <param name="selfDisplay">
+    ///   This element's readable display name including any positional marker assigned by its
+    ///   parent (e.g. <c>"Line[2]"</c>). Passed down to become each child's parentDisplay.
+    /// </param>
+    /// <param name="parentDisplay">
+    ///   The immediate parent element's display name (or empty at the root). Used to give leaf
+    ///   labels a short parent context, e.g. <c>"Line[2] › ItemCode"</c>.
+    /// </param>
+    private static void WalkXmlElement(
+        XElement element, string path, string selfDisplay, string parentDisplay, List<SourceToken> tokens)
     {
-        // Emit attributes on this element.
+        // Readable name for this element: prefix-qualified local name, e.g. "cbc:ID".
+        var selfLabel = XmlReadableName(element);
+
+        // Emit attributes on this element. Label = "{ownerLocalName}@{attrName}",
+        // e.g. "OrderRequestHeader@orderID". The id keeps the raw XPath.
         foreach (var attr in element.Attributes())
         {
-            var attrPath = $"{path}/@{attr.Name.LocalName}";
+            var attrPath  = $"{path}/@{attr.Name.LocalName}";
+            var attrLabel = $"{element.Name.LocalName}@{attr.Name.LocalName}";
             tokens.Add(new SourceToken(
                 Id:    attrPath,
-                Label: $"{path}/@{attr.Name.LocalName}",
+                Label: attrLabel,
                 Value: attr.Value,
                 Group: null
             ));
@@ -284,10 +338,15 @@ public sealed class SourceTokenizer : ISourceTokenizer
         if (children.Count == 0)
         {
             // Leaf element — emit its text value.
+            // Label shows the parent context when present ("Line[2] › cbc:ID") so common
+            // names like "ID" remain distinguishable; otherwise just the element name.
             var text = element.Value ?? string.Empty;
+            var leafLabel = string.IsNullOrEmpty(parentDisplay)
+                ? selfLabel
+                : $"{parentDisplay} › {selfLabel}";
             tokens.Add(new SourceToken(
                 Id:    path,
-                Label: path,
+                Label: leafLabel,
                 Value: text,
                 Group: null
             ));
@@ -315,12 +374,34 @@ public sealed class SourceTokenizer : ISourceTokenizer
                     ? $"{path}/{localName}[{idx + 1}]"
                     : $"{path}/{localName}";
 
-                WalkXmlElement(child, childPath, tokens);
+                // The child's own display carries a positional marker when it repeats so
+                // its descendant leaf tokens stay distinguishable (e.g. "Line[2] › ItemCode").
+                var childDisplay = isRepeated
+                    ? $"{XmlReadableName(child)}[{idx + 1}]"
+                    : XmlReadableName(child);
+
+                WalkXmlElement(child, childPath, childDisplay, selfDisplay, tokens);
             }
         }
     }
 
     private static string XmlLocalName(XElement element) => element.Name.LocalName;
+
+    /// <summary>
+    /// Returns a short, human-readable element name for a label: the namespace prefix
+    /// plus the local name when the document declares a prefix (e.g. <c>cbc:ID</c>),
+    /// otherwise just the local name (e.g. <c>PoNumber</c>). The raw XPath stays in the
+    /// token id; this is purely for display.
+    /// </summary>
+    private static string XmlReadableName(XElement element)
+    {
+        var local = element.Name.LocalName;
+        var ns    = element.Name.Namespace;
+        if (ns == XNamespace.None) return local;
+
+        var prefix = element.GetPrefixOfNamespace(ns);
+        return string.IsNullOrEmpty(prefix) ? local : $"{prefix}:{local}";
+    }
 
     // ── EDIFACT ──────────────────────────────────────────────────────────────
 
@@ -392,6 +473,10 @@ public sealed class SourceTokenizer : ISourceTokenizer
                 // Build the segment label prefix, e.g. "BGM[1]"
                 var segPrefix = $"seg:{tag}[{count}]";
 
+                // Occurrence suffix only when the same tag repeats (keeps "BGM document no"
+                // clean while still disambiguating "LIN item code #2").
+                var occ = count > 1 ? $" #{count}" : string.Empty;
+
                 for (int elIdx = 1; elIdx < parts.Count; elIdx++)
                 {
                     var elementRaw = parts[elIdx];
@@ -403,9 +488,14 @@ public sealed class SourceTokenizer : ISourceTokenizer
                         var val = Unescape(components[0], relSep);
                         if (string.IsNullOrEmpty(val)) continue;
 
+                        var meaning = EdifactMeaning(tag, elIdx, component: 0);
+                        var label   = meaning is null
+                            ? $"{tag} element {elIdx}{occ}"
+                            : $"{tag} {meaning}{occ}";
+
                         tokens.Add(new SourceToken(
                             Id:    $"{segPrefix}.el{elIdx}",
-                            Label: $"{tag}[{count}] element {elIdx}",
+                            Label: label,
                             Value: val,
                             Group: group
                         ));
@@ -418,9 +508,14 @@ public sealed class SourceTokenizer : ISourceTokenizer
                             var val = Unescape(components[cIdx], relSep);
                             if (string.IsNullOrEmpty(val)) continue;
 
+                            var meaning = EdifactMeaning(tag, elIdx, component: cIdx + 1);
+                            var label   = meaning is null
+                                ? $"{tag} element {elIdx} component {cIdx + 1}{occ}"
+                                : $"{tag} {meaning}{occ}";
+
                             tokens.Add(new SourceToken(
                                 Id:    $"{segPrefix}.el{elIdx}.c{cIdx + 1}",
-                                Label: $"{tag}[{count}] element {elIdx} component {cIdx + 1}",
+                                Label: label,
                                 Value: val,
                                 Group: group
                             ));
@@ -602,14 +697,22 @@ public sealed class SourceTokenizer : ISourceTokenizer
 
                 var segPrefix = $"seg:{tag}[{count}]";
 
+                // Occurrence suffix only when the same tag repeats.
+                var occ = count > 1 ? $" #{count}" : string.Empty;
+
                 for (int elIdx = 1; elIdx < parts.Length; elIdx++)
                 {
                     var val = parts[elIdx].Trim();
                     if (string.IsNullOrEmpty(val)) continue;
 
+                    var meaning = X12Meaning(tag, elIdx);
+                    var label   = meaning is null
+                        ? $"{tag} element {elIdx}{occ}"
+                        : $"{tag} {meaning}{occ}";
+
                     tokens.Add(new SourceToken(
                         Id:    $"{segPrefix}.el{elIdx}",
-                        Label: $"{tag}[{count}] element {elIdx}",
+                        Label: label,
                         Value: val,
                         Group: group
                     ));
@@ -648,4 +751,95 @@ public sealed class SourceTokenizer : ISourceTokenizer
 
         return (elem: '*', seg: '~');
     }
+
+    // ── EDIFACT / X12 element-meaning lookups (display labels only) ─────────────
+
+    /// <summary>
+    /// Returns a short human-readable meaning for a known EDIFACT ORDERS element/component
+    /// (e.g. <c>BGM</c> el2 → <c>"document no"</c>, <c>QTY</c> el1 c2 → <c>"quantity"</c>),
+    /// or <c>null</c> when the position is not in the table (caller falls back to
+    /// <c>"{TAG} element {n}"</c>). Keyed on UN/EDIFACT D96A ORDERS segment layouts.
+    /// <paramref name="component"/> is 0 for a simple element, or the 1-based component
+    /// index inside a composite.
+    /// </summary>
+    private static string? EdifactMeaning(string tag, int element, int component) => (tag, element, component) switch
+    {
+        // BGM — Beginning of message
+        ("BGM", 1, 0) => "document name code",
+        ("BGM", 1, 1) => "document name code",
+        ("BGM", 2, 0) => "document no",
+        ("BGM", 3, 0) => "message function",
+        // DTM — Date/time/period (composite C507)
+        ("DTM", 1, 1) => "date qualifier",
+        ("DTM", 1, 2) => "date",
+        ("DTM", 1, 3) => "date format",
+        // NAD — Name and address
+        ("NAD", 1, 0) => "party qualifier",
+        ("NAD", 2, 1) => "party id",
+        ("NAD", 4, 0) => "party name",
+        ("NAD", 4, 1) => "party name",
+        // CUX — Currencies (composite C504)
+        ("CUX", 1, 1) => "currency usage",
+        ("CUX", 1, 2) => "currency",
+        ("CUX", 1, 3) => "currency qualifier",
+        // LIN — Line item
+        ("LIN", 1, 0) => "line number",
+        ("LIN", 3, 1) => "item code",
+        ("LIN", 3, 2) => "item code type",
+        // IMD — Item description (composite C273 — text in components 3+)
+        ("IMD", 3, 3) => "item description",
+        ("IMD", 3, 4) => "item description",
+        // QTY — Quantity (composite C186)
+        ("QTY", 1, 1) => "quantity qualifier",
+        ("QTY", 1, 2) => "quantity",
+        ("QTY", 1, 3) => "unit of measure",
+        // PRI — Price details (composite C509)
+        ("PRI", 1, 1) => "price qualifier",
+        ("PRI", 1, 2) => "unit price",
+        // MOA — Monetary amount (composite C516)
+        ("MOA", 1, 1) => "amount qualifier",
+        ("MOA", 1, 2) => "amount",
+        // RFF — Reference (composite C506)
+        ("RFF", 1, 1) => "reference qualifier",
+        ("RFF", 1, 2) => "reference number",
+        _ => null,
+    };
+
+    /// <summary>
+    /// Returns a short human-readable meaning for a known ANSI X12 850 element
+    /// (e.g. <c>BEG</c> el3 → <c>"PO number"</c>, <c>PO1</c> el2 → <c>"quantity"</c>),
+    /// or <c>null</c> when the position is not in the table (caller falls back to
+    /// <c>"{TAG} element {n}"</c>).
+    /// </summary>
+    private static string? X12Meaning(string tag, int element) => (tag, element) switch
+    {
+        // BEG — Beginning segment for purchase order
+        ("BEG", 1) => "purpose code",
+        ("BEG", 2) => "PO type",
+        ("BEG", 3) => "PO number",
+        ("BEG", 5) => "PO date",
+        // PO1 — Baseline item data
+        ("PO1", 1) => "line number",
+        ("PO1", 2) => "quantity",
+        ("PO1", 3) => "unit of measure",
+        ("PO1", 4) => "unit price",
+        ("PO1", 6) => "product id qualifier",
+        ("PO1", 7) => "item code",
+        // REF — Reference identification
+        ("REF", 1) => "reference qualifier",
+        ("REF", 2) => "reference number",
+        // DTM — Date/time reference
+        ("DTM", 1) => "date qualifier",
+        ("DTM", 2) => "date",
+        // N1 — Name
+        ("N1", 1) => "entity qualifier",
+        ("N1", 2) => "party name",
+        ("N1", 4) => "party id",
+        // PID — Product/item description
+        ("PID", 5) => "item description",
+        // CUR — Currency
+        ("CUR", 1) => "currency entity",
+        ("CUR", 2) => "currency",
+        _ => null,
+    };
 }

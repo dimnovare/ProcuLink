@@ -13,7 +13,23 @@ namespace ProcuLink.Transform.Tokenizing;
 ///           e.g. <c>"/Order/Header/PoNumber"</c> or <c>"/Order/Line[2]/@qty"</c>.</item>
 ///   </list>
 /// </param>
-/// <param name="Label">Human-readable display name shown in the mapping editor UI.</param>
+/// <param name="Label">
+///   Human-readable display name shown in the mapping editor UI. Designed so a user can
+///   identify the exact source field at a glance (the Id is the machine address, the Label
+///   is the human one):
+///   <list type="bullet">
+///     <item>CSV / XLSX data cell: <c>"{ColumnHeader} · row {n}"</c> (e.g. <c>"Unit Price · row 9"</c>),
+///           falling back to <c>"Col {Letter} · row {n}"</c> (e.g. <c>"Col C · row 9"</c>) when the
+///           column has no header. Header-row cells are labelled by the column name itself.</item>
+///     <item>XML / cXML / UBL / IDoc: the element local-name (namespace prefix preserved, e.g.
+///           <c>"cbc:ID"</c>) with a short parent context (<c>"Order › PoNumber"</c>); attributes
+///           read <c>"{ownerElement}@{attrName}"</c> (e.g. <c>"OrderRequestHeader@orderID"</c>).</item>
+///     <item>EDIFACT / X12: the segment tag plus the element meaning where known
+///           (e.g. <c>"BGM document no"</c>, <c>"LIN item code"</c>, <c>"QTY quantity"</c>),
+///           falling back to <c>"{TAG} element {n}"</c> for unmapped positions. A
+///           <c>" #{n}"</c> suffix disambiguates repeated segments.</item>
+///   </list>
+/// </param>
 /// <param name="Value">The raw text value extracted from the source file.</param>
 /// <param name="Group">
 ///   Optional grouping hint: <c>"header"</c> for order-level tokens, <c>"line"</c> for
