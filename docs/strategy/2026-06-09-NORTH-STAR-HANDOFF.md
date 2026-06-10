@@ -32,16 +32,15 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
    present/create-draft/update/test/publish/archive) live; 21 new tests incl.
    byte-identical backfill + lifecycle + org-scoping + pinning. **`ConnectionResolver`,
    `ConnectionBackfillService`, `SupplierConnectionService` in ProcuLink.Api.**
-   ⚠️ **OPEN VERIFICATION:** `GET /api/connections` returned **0** on prod (org "Dim's
-   Organization"). Not a blocker (orders use NULL-pin → live-config fallback, nothing
-   broke). Determine which: (a) the org's suppliers have no real config ROWS (PoMapping/
-   Delivery/ItemMapping/Acceptance/Products) → 0 is CORRECT; or (b) the boot backfill
-   errored (best-effort, Sentry-reported). CHECK: Neon `supplier_connections` table +
-   Sentry for a backfill error + whether `supplier_po_mappings`/`item_mappings` actually
-   have rows for these suppliers (the GET endpoints return 200 even for empty defaults).
-   The backfill is idempotent → safe to re-trigger after diagnosis. NOTE: the API has no
-   `/api/connections/ensure` route (returned 404) — use the create-draft path; confirm
-   the exact route names in `ConnectionsController.cs` for the FE.
+   ✅ **BACKFILL RESOLVED** (`f6ee1c1`): prod `/api/connections` first returned 0 — root
+   cause was a connection↔revision **circular-FK insert in ONE SaveChanges** (Postgres
+   can't order two mutually-referencing inserts → threw → backfill aborted). The InMemory
+   test provider doesn't enforce FKs so 21 tests passed anyway. Fixed: insert connection
+   with `active_revision_id=NULL`, then revision, save, then set the pointer + save again;
+   + per-supplier try/catch so one bad row can't abort the batch. **Verified live: 2
+   connections backfilled** (both suppliers, published rev-1). NOTE: API has no
+   `/api/connections/ensure` (404) — use create-draft; confirm exact routes in
+   `ConnectionsController.cs` for the FE.
 2. **Source-token labels** — SHIPPED. "row 9" → meaningful labels (column header + row,
    readable XML paths, EDIFACT/X12 segment meanings); +21 Transform tests. token.id
    unchanged.
