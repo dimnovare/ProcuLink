@@ -85,6 +85,22 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   PRESENCE and `buildConfigObject` always emits the keys, so "missing required" rarely fires for the
   standard editor — value is the requirements display + unknown-key detection (refine later to check
   value emptiness / credential presence). Optional UX tweak: panel is collapsed by default.
+  **V7 FE polish — MERGED + pushed (FE `main` = `039a952` → Vercel); live-verify pending** (fold into the
+  V5 live pass). Branch `auto/fe-v7-polish`, additive (DeliveryConfigEditor zero diff), reviewer-clean.
+  (1) `stripEmptyValues` strips null/undefined/empty-whitespace from `buildConfig()` BEFORE the advisory
+  validate POST → an empty required `url` now correctly shows "Missing required" (fixes the limitation
+  above; keeps false/0). (2) Connectors overview (`/operations/connectors`) ConnectorPanel now shows a
+  read-only manifest requirements section (`resolveManifestKey` maps connector type → the 6 keys; silent
+  for unknown), reusing the Required/Secret/type pills.
+
+## BATCH 4 IN FLIGHT — V5 deepen canonical (backend workflow `wq2uausgf`)
+3-lens design panel → conservative synthesis → ADDITIVE implementation (NO migration — fields ride
+canonical_json; existing transform output byte-identical) → 2-lens verify (byte-identical proof +
+adversarial). Branch will be `auto/be-v5-deepen-canonical`. MERGE GATE (when it reports): both verdicts
+pass + testsPassed + migrationAdded=false → merge → full `dotnet test` MYSELF → push → Railway →
+**live-verify an EXISTING supplier's output is byte-identical (not just that new orders carry new
+fields)**. If either verdict fails byte-identical, DO NOT merge — iterate.
+
 - **V8 conformance reports** — ✅ SHIPPED + LIVE (`10bb6f1`). 5 profile checkers (cXML/UBL/X12/
   EDIFACT/IDoc), `GET /api/orders/{id}/conformance?format=`, downloadable Markdown. FE tab pending.
 - **V9 AI decision history** — table SHIPPED; calibration is the follow-up.
