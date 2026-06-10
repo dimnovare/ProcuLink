@@ -120,6 +120,26 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   add to the harness; SMTP/SFTP/S3 polling need real mail/SFTP/S3 infra), outbound delivery test-fires per
   channel (need controlled endpoints), and full UI click-through + heart-piece drag/edit (rAF-drag has MCP
   automation limits). See [[project-live-matrix-and-diverse-review]].
+- **LIVE E2E PROVEN through the full pipeline (API channel):** inbox now holds **2167 orders**
+  (`/api/orders/summary`: 2132 pending_review, 15 ready, 3 delivered). 6 sampled ingested orders →
+  resolve → all-6-format preview = **36/36 valid** (csv/json/xml/cxml/ubl/x12). API→canonical→resolve→
+  transform→every-format works live. (Structured/API orders carry richer data than minimal CSV uploads,
+  so they produce full cxml/ubl/x12 — unlike the minimal-CSV warning case.)
+- **FOUND (chip `task_b5037d63`):** `GET /api/orders` list HARD-CAPS at 25 rows (ignores limit/offset) —
+  with 2167 orders the inbox UI only shows 25. Fix endpoint pagination + wire inbox to page. (summary is
+  correct.)
+- **DURABLE LIVE-E2E SUITE SHIPPED (FE `main` = `6bbd569` → Vercel):** `tests/e2e/live-full-e2e.spec.ts`
+  (26 tests — every screen + heart-piece incl. expand/collapse jump-regression guard, edit PO#/date,
+  resolve, save mappings, Edit-mapping all-format preview, Conformance/Passport/Supplier-response tabs,
+  supplier/connection/ops/settings/marketing) + harnesses `scripts/live-matrix/{ingest,inbound-email,
+  delivery-testfire,format-upload}-harness.mjs`. RUN: `bunx playwright open --save-storage=tests/.auth/state.json
+  https://app.proculink.eu` then `PLAYWRIGHT_LIVE=1 PLAYWRIGHT_FULL=1 PLAYWRIGHT_BASE_URL=https://app.proculink.eu
+  PLAYWRIGHT_API_URL=https://api.proculink.eu PLAYWRIGHT_STORAGE_STATE=tests/.auth/state.json bunx playwright
+  test live-full-e2e.spec.ts`. Harnesses: inbound-email needs Railway `Inbound__Postmark__WebhookToken`;
+  delivery-testfire needs a catcher URL + a ~60s Clerk token; format-upload needs a Clerk token.
+  STILL NEEDS REAL INFRA (not faked): SMTP/SFTP/S3 polling channels; delivery to real supplier endpoints.
+  E2E test API key (`plk_uUTz…`, org slug `personal-workspace-d3be`) is LIVE + revocable; org order cap
+  lifted to 6000.
 
 ## ✅ LIVE-MATRIX FINDING (2026-06-10) — csv/json preview 500 FOUND + FIXED + LIVE-VERIFIED (`e7b5965`)
 Driving the live in×out matrix surfaced a REAL prod 500 the deterministic 56/56 + byte-identical tests
