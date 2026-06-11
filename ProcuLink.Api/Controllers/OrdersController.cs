@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Helpers;
 using ProcuLink.Api.Jobs;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
@@ -45,6 +46,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IAiSuggestionDecisionService _aiDecisions;
     private readonly ProcuLink.Transform.Conformance.IConformanceService _conformance;
     private readonly IPoMappingService            _poMappings;
+    private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -79,7 +81,8 @@ public sealed class OrdersController : ControllerBase
         IEnumerable<ITransformService> transformers,
         IAiSuggestionDecisionService? aiDecisions = null,
         ProcuLink.Transform.Conformance.IConformanceService? conformance = null,
-        IPoMappingService?           poMappings = null)
+        IPoMappingService?           poMappings = null,
+        IEffectiveConnectionConfigResolver? effectiveConfig = null)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -108,6 +111,12 @@ public sealed class OrdersController : ControllerBase
         // fallback the real transform applies (launch batch 4A), so preview == delivery.
         _poMappings       = poMappings
             ?? new ProcuLink.Infrastructure.Services.PoMappingService(db);
+        // Read-parity (launch batch 7 follow-up) — revision authority for the READ surfaces: the
+        // mapping-override preview and the conformance report resolve the pinned revision's bundle
+        // through the SAME resolver the transform uses, so what they show equals what delivery
+        // produces. Null (older positional test constructions / unregistered hosts) behaves exactly
+        // like flag-OFF: the live path drives everything, byte-identical.
+        _effectiveConfig  = effectiveConfig;
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -651,6 +660,14 @@ public sealed class OrdersController : ControllerBase
     /// template / field-mapping the user is still typing, before saving). When the body is omitted, the
     /// order's STORED override is used. Either way the preview is non-mutating.</para>
     ///
+    /// <para><b>Pinned-revision parity (read-parity, flag-gated).</b> When
+    /// <c>Connections:RevisionAuthority</c> is ON and the order is pinned to a published revision, the
+    /// field-by-field preview resolves the SAME effective priority the transform applies (per-order
+    /// override → the PINNED revision's output snapshot → fixed transformer; the live supplier-promoted
+    /// mapping is NOT consulted) and renders in the revision's snapshotted format regardless of the
+    /// <c>format</c> query — so the preview equals the delivered bytes. Flag off / unpinned is
+    /// byte-identical to before.</para>
+    ///
     /// An unknown <c>format</c> (field-by-field mode only) returns 400. A bad manipulator returns 400.
     /// Org-scoped: a cross-tenant or unknown order id returns 404.
     /// </summary>
@@ -710,23 +727,33 @@ public sealed class OrdersController : ControllerBase
         }
 
         // ── Mode 2: FIELD-BY-FIELD preview ─────────────────────────────────────────
-        // Supplier-promoted fallback (launch batch 4A — parity with OrderTransformService): when
-        // neither the draft nor the stored override carries a USABLE output mapping, the supplier's
-        // promoted PoMappingConfig.Output drives the real transform at delivery time — so the
-        // preview resolves the SAME effective priority (per-order override → supplier-promoted →
-        // fixed). Defensive: a missing/malformed/unusable supplier mapping yields null and the
+        // Read-parity (launch batch 7 follow-up): resolve the pinned revision's bundle ONCE through
+        // the SAME resolver the transform uses. Live bundle when the flag is off / the order is
+        // unpinned / the pin is orphaned / no resolver — byte-identical to the pre-read-parity path.
+        var effectiveConfig = _effectiveConfig is null
+            ? EffectiveConnectionConfig.Live
+            : await _effectiveConfig.ResolveAsync(_tenant.OrganisationId, order.ConnectionRevisionId, ct);
+
+        // Config fallback — parity with OrderTransformService when neither the draft nor the stored
+        // override carries a USABLE output mapping:
+        //   • PINNED (flag on): the pinned revision's output snapshot drives delivery, and the live
+        //     supplier-promoted mapping is NOT consulted (reproducibility) — mirror exactly that.
+        //   • LIVE: the supplier's promoted PoMappingConfig.Output drives delivery (launch batch 4A).
+        // Defensive: a missing/malformed/unusable mapping on either side yields null and the
         // existing behaviour (including the body-required 400 below) is unchanged.
-        OrderMappingOverride? supplierFallback = null;
+        OrderMappingOverride? configFallback = null;
         if (!OrderMappingOverrideReader.HasUsableOutput(effectiveOverride))
-            supplierFallback = await TryBuildSupplierPromotedOverrideAsync(order.SupplierId, effectiveOverride, ct);
+            configFallback = effectiveConfig.IsRevision
+                ? TryBuildPinnedRevisionOverride(effectiveConfig, effectiveOverride, id)
+                : await TryBuildSupplierPromotedOverrideAsync(order.SupplierId, effectiveOverride, ct);
 
         // This path needs an override. Preserve the original contract: a request without a body (and
-        // with no stored template/override AND no supplier-promoted output mapping) still requires a
-        // body for the field-mapping preview.
-        if (!draftSupplied && effectiveOverride is null && supplierFallback is null)
+        // with no stored template/override AND no revision/supplier-promoted output mapping) still
+        // requires a body for the field-mapping preview.
+        if (!draftSupplied && effectiveOverride is null && configFallback is null)
             return BadRequest(new { error = "A mapping override body is required." });
 
-        var fieldOverride = supplierFallback ?? effectiveOverride ?? request!;
+        var fieldOverride = configFallback ?? effectiveOverride ?? request!;
 
         // Preview supports every entity-based output format an override can influence.
         var fmt = (format?.Trim().ToLowerInvariant()) switch
@@ -741,6 +768,29 @@ public sealed class OrdersController : ControllerBase
         };
         if (fmt is null || !MappedTransformService.SupportsOverrideFormat(fmt.Value))
             return BadRequest(new { error = "Override preview supports csv, json, xml, cxml, ubl, and x12." });
+
+        // Read-parity: a PINNED order delivers in the revision's snapshotted format regardless of the
+        // requested one (OrderTransformService swaps it the same way), so the preview must too —
+        // otherwise preview ≠ delivered bytes. Null/unparseable/unsupported snapshot → the requested
+        // format stands (granular fallback, logged), exactly like the transform.
+        if (effectiveConfig.IsRevision && !string.IsNullOrWhiteSpace(effectiveConfig.OutputFormat))
+        {
+            if (Enum.TryParse<OutputFormat>(effectiveConfig.OutputFormat, ignoreCase: true, out var revisionFormat)
+                && MappedTransformService.SupportsOverrideFormat(revisionFormat))
+            {
+                if (revisionFormat != fmt)
+                    _logger.LogInformation(
+                        "Order {OrderId}: preview format {RevisionFormat} taken from pinned {Source} (requested {Requested}).",
+                        id, revisionFormat, effectiveConfig.Source, fmt);
+                fmt = revisionFormat;
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Order {OrderId}: pinned {Source} output format '{Format}' is not previewable — using the requested format {Requested}.",
+                    id, effectiveConfig.Source, effectiveConfig.OutputFormat, fmt);
+            }
+        }
 
         // Same manipulator guard as PUT — surface a bad rule at edit time, never at transform time.
         var validationError = ValidateOverrideManipulators(fieldOverride);
@@ -826,6 +876,38 @@ public sealed class OrdersController : ControllerBase
                 supplierId);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Preview-side twin of <c>OrderTransformService.TryBuildRevisionOutputOverride</c> (read-parity):
+    /// wraps the PINNED revision's <c>output_mapping_json</c> snapshot as a synthetic per-order-shaped
+    /// override via the SAME deserialize + wrap helpers the replay engine uses
+    /// (<see cref="ReplayService.DeserializeOutputConfig"/> / <see cref="ReplayService.BuildRevisionOverride"/>
+    /// — custom fields preserved, SourceMap/template intentionally not carried). Returns null — leaving
+    /// the fixed transformer / body-required contract untouched — for a null/blank/empty/malformed
+    /// snapshot, or when its manipulators would not survive a real transform (which falls back to the
+    /// fixed transformer; a misleading revision-driven preview must not be shown for that case).
+    /// Never throws.
+    /// </summary>
+    private OrderMappingOverride? TryBuildPinnedRevisionOverride(
+        EffectiveConnectionConfig effective, OrderMappingOverride? effectiveOverride, Guid orderId)
+    {
+        var synthetic = ReplayService.BuildRevisionOverride(
+            effectiveOverride, ReplayService.DeserializeOutputConfig(effective.OutputMappingJson));
+        if (synthetic is null)
+            return null;
+
+        if (ValidateOverrideManipulators(synthetic) is { } error)
+        {
+            _logger.LogWarning(
+                "Order {OrderId}: pinned {Source} output mapping failed manipulator validation during preview ({Error}) — using the fixed transformer.",
+                orderId, effective.Source, error);
+            return null;
+        }
+
+        _logger.LogInformation(
+            "Order {OrderId}: preview output mapping taken from pinned {Source}.", orderId, effective.Source);
+        return synthetic;
     }
 
     // ── POST /api/orders/{id}/mapping-override/promote ───────────────────────
@@ -1505,6 +1587,18 @@ public sealed class OrdersController : ControllerBase
     /// <c>?download=md</c> for a <c>text/markdown</c> downloadable report instead of
     /// JSON. Org-scoped: a cross-tenant or unknown order id returns 404.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Pinned-revision parity (read-parity, flag-gated).</b> When
+    /// <c>Connections:RevisionAuthority</c> is ON and the order is pinned to a published
+    /// revision, the report covers the document delivery would ACTUALLY produce: the
+    /// revision's snapshotted output format governs (outranking the explicit query,
+    /// exactly as the transform swaps it), and the document is rendered with the same
+    /// effective priority (per-order override → the pinned revision's output snapshot →
+    /// fixed transformer; the live supplier-promoted mapping is NOT consulted). A pinned
+    /// format with no named profile returns 400 honestly. Flag off / unpinned is
+    /// byte-identical to before.
+    /// </para>
     /// </summary>
     [HttpGet("{id:guid}/conformance")]
     [ProducesResponseType(typeof(ConformanceReportDto), StatusCodes.Status200OK)]
@@ -1538,8 +1632,25 @@ public sealed class OrdersController : ControllerBase
                 order.Supplier = supplier;
         }
 
-        // Resolve the format: explicit query wins; else the supplier's configured delivery format.
-        var formatStr = format?.Trim().ToLowerInvariant();
+        // Read-parity (launch batch 7 follow-up): resolve the pinned revision's bundle ONCE through
+        // the SAME resolver the transform uses. Live bundle when the flag is off / the order is
+        // unpinned / the pin is orphaned / no resolver — byte-identical to the pre-read-parity path.
+        var effectiveConfig = _effectiveConfig is null
+            ? EffectiveConnectionConfig.Live
+            : await _effectiveConfig.ResolveAsync(orgId, order.ConnectionRevisionId, ct);
+
+        // Resolve the format: a PINNED order delivers in the revision's snapshotted format, which
+        // outranks the explicit query exactly as the transform swaps it (read-parity — the report
+        // must cover the document that would actually go out); else explicit query wins; else the
+        // supplier's configured delivery format.
+        var formatStr     = format?.Trim().ToLowerInvariant();
+        var formatFromPin = false;
+        if (effectiveConfig.IsRevision && !string.IsNullOrWhiteSpace(effectiveConfig.OutputFormat)
+            && Enum.TryParse<OutputFormat>(effectiveConfig.OutputFormat, ignoreCase: true, out _))
+        {
+            formatStr     = effectiveConfig.OutputFormat.Trim().ToLowerInvariant();
+            formatFromPin = true;
+        }
         if (string.IsNullOrEmpty(formatStr))
         {
             var supplierFormat = await (
@@ -1568,8 +1679,11 @@ public sealed class OrdersController : ControllerBase
         if (outputFormat is null || !_conformance.SupportsFormat(outputFormat.Value))
             return BadRequest(new
             {
-                error = "Conformance reports are available for the named standards formats: cxml, ubl, x12. " +
-                        "Generic csv/json/xml templates have no named profile.",
+                error = formatFromPin
+                    ? $"This order is pinned to a connection revision that delivers '{formatStr}', " +
+                      "which has no named standards profile. Conformance reports cover cxml, ubl, x12."
+                    : "Conformance reports are available for the named standards formats: cxml, ubl, x12. " +
+                      "Generic csv/json/xml templates have no named profile.",
             });
 
         // Transform the order to the standards document IN MEMORY. The transform applies the
@@ -1582,9 +1696,13 @@ public sealed class OrdersController : ControllerBase
         string documentText;
         try
         {
-            var result = await transformer.TransformAsync(order, outputFormat.Value, ct);
-            using var sr = new StreamReader(result.Content);
-            documentText = await sr.ReadToEndAsync(ct);
+            // Read-parity: a PINNED order's document is rendered with the SAME effective priority
+            // delivery applies (per-order override → pinned revision output → fixed). Flag off /
+            // unpinned keeps the original fixed-transform render, byte-identical.
+            documentText = effectiveConfig.IsRevision
+                ? await RenderPinnedEffectiveDocumentAsync(order, effectiveConfig, transformer, outputFormat.Value, ct)
+                : await ReadTransformResultAsync(
+                      await transformer.TransformAsync(order, outputFormat.Value, ct), ct);
         }
         catch (TransformValidationException ex)
         {
@@ -1594,6 +1712,18 @@ public sealed class OrdersController : ControllerBase
                         "checked for conformance. Resolve the flagged lines first.",
                 detail = ex.Message,
                 unresolvedLines = ex.UnresolvedLineNumbers,
+            });
+        }
+        catch (TransformTemplateException ex)
+        {
+            // Only reachable on the pinned path when the per-order override carries a broken
+            // whole-document template — the order could not be delivered from it either, so the
+            // honest answer is "no document to check", not a misleading fixed-transform report.
+            return UnprocessableEntity(new
+            {
+                error = "The order's output template does not render, so there is no document to " +
+                        "check for conformance. Fix the template first.",
+                detail = ex.Message,
             });
         }
 
@@ -1622,6 +1752,81 @@ public sealed class OrdersController : ControllerBase
                 .ToList());
 
         return Ok(dto);
+    }
+
+    /// <summary>
+    /// Read-parity render for a PINNED order's conformance document: the SAME mode precedence
+    /// <c>OrderTransformService.TransformAsync</c> applies at delivery, in memory, for the named
+    /// standards formats (cxml/ubl/x12 — structured, so the native CSV/JSON override builder never
+    /// applies here):
+    /// <list type="number">
+    ///   <item>whole-document template (per-order override, highest-priority seam) — a broken
+    ///        template throws <see cref="TransformTemplateException"/> (mapped to 422 by the caller,
+    ///        mirroring "the order could not deliver from it");</item>
+    ///   <item>per-order usable output override → effective entity → fixed transform;</item>
+    ///   <item>the PINNED revision's output snapshot (the live supplier-promoted mapping is
+    ///        intentionally NOT consulted) → effective entity → fixed transform, with the transform's
+    ///        defensive fall-to-fixed on any non-validation failure;</item>
+    ///   <item>the fixed transformer.</item>
+    /// </list>
+    /// </summary>
+    private async Task<string> RenderPinnedEffectiveDocumentAsync(
+        PurchaseOrderEntity order,
+        EffectiveConnectionConfig effective,
+        ITransformService transformer,
+        OutputFormat outputFormat,
+        CancellationToken ct)
+    {
+        var mappingOverride = OrderMappingOverrideReader.Read(order.CanonicalJson);
+
+        // Mode 1 — whole-document template.
+        if (OrderMappingOverrideReader.HasUsableTemplate(mappingOverride))
+            return await ReadTransformResultAsync(
+                new ScribanTemplateTransformService().Build(order, mappingOverride!), ct);
+
+        // Mode 3 — per-order usable output override (structured: canonical-field changes resolved
+        // into an effective entity, then the existing fixed transform).
+        if (OrderMappingOverrideReader.HasUsableOutput(mappingOverride)
+            && MappedTransformService.SupportsOverrideFormat(outputFormat))
+        {
+            var effectiveEntity = EffectiveEntityResolver.Resolve(order, mappingOverride!);
+            return await ReadTransformResultAsync(
+                await transformer.TransformAsync(effectiveEntity, outputFormat, ct), ct);
+        }
+
+        // Mode 4 — the pinned revision's output snapshot, wrapped via the SAME deserialize + wrap
+        // helpers the replay engine uses (no second copy of the snapshot logic).
+        var revisionOverride = ReplayService.BuildRevisionOverride(
+            mappingOverride, ReplayService.DeserializeOutputConfig(effective.OutputMappingJson));
+        if (revisionOverride is not null && MappedTransformService.SupportsOverrideFormat(outputFormat))
+        {
+            try
+            {
+                var effectiveEntity = EffectiveEntityResolver.Resolve(order, revisionOverride);
+                return await ReadTransformResultAsync(
+                    await transformer.TransformAsync(effectiveEntity, outputFormat, ct), ct);
+            }
+            catch (Exception ex) when (ex is not TransformValidationException and not TransformTemplateException)
+            {
+                // Defensive parity with the transform: a pinned revision's output snapshot must
+                // never break the report — fall back to the fixed transformer (which is what
+                // delivery would produce in the same situation).
+                _logger.LogWarning(ex,
+                    "Pinned revision output mapping failed for order {OrderId} ({Source}) during conformance; falling back to the fixed transformer.",
+                    order.Id, effective.Source);
+            }
+        }
+
+        // Mode 6 — fixed transformer (byte-identical default).
+        return await ReadTransformResultAsync(
+            await transformer.TransformAsync(order, outputFormat, ct), ct);
+    }
+
+    /// <summary>Reads a transform result's content stream to a string (in-memory, never persisted).</summary>
+    private static async Task<string> ReadTransformResultAsync(TransformResult result, CancellationToken ct)
+    {
+        using var sr = new StreamReader(result.Content);
+        return await sr.ReadToEndAsync(ct);
     }
 
     // ── Mapping helper ────────────────────────────────────────────────────────
