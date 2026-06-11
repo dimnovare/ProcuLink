@@ -369,6 +369,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.UnitPrice).HasColumnName("unit_price");
             b.Property(x => x.Confidence).HasColumnName("confidence");
             b.Property(x => x.NeedsReview).HasColumnName("needs_review");
+            // P2 hardening: short "why was this flagged" string written at parse time (nullable; additive).
+            b.Property(x => x.ReviewReason).HasColumnName("review_reason");
             b.Property(x => x.AiSuggestedSupplierItemCode).HasColumnName("ai_suggested_supplier_item_code");
             b.Property(x => x.AiSuggestionConfidence).HasColumnName("ai_suggestion_confidence");
             b.Property(x => x.AiSuggestionReason).HasColumnName("ai_suggestion_reason");

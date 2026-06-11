@@ -16,6 +16,15 @@ public class PurchaseOrderLineEntity
     public decimal UnitPrice { get; set; }
     public float Confidence { get; set; }
     public bool NeedsReview { get; set; }
+
+    /// <summary>
+    /// Short human-readable explanation of WHY this line was flagged for review,
+    /// written at parse time where the flag originates (unresolved supplier code,
+    /// parser numeric ambiguity, AI anti-hallucination mismatch, scanned-PDF vision
+    /// extraction). Null for never-flagged lines and for rows created before the
+    /// column existed. Cleared when a human resolves the line.
+    /// </summary>
+    public string? ReviewReason { get; set; }
     public string? AiSuggestedSupplierItemCode { get; set; }
     public float? AiSuggestionConfidence { get; set; }
     public string? AiSuggestionReason { get; set; }

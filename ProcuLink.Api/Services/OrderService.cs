@@ -128,12 +128,15 @@ public sealed class OrderService : IOrderService
     // svc.ParsePdfAsync(...) on an OrderService instance and OrderService.ApplyExtractionReviewFlags(...)
     // statically. Both forward to where the logic now lives.
 
-    internal Task<(ParsedOrder parsed, IReadOnlyCollection<int> reviewLineNumbers)> ParsePdfAsync(
+    internal Task<(ParsedOrder parsed,
+                   IReadOnlyCollection<int> reviewLineNumbers,
+                   IReadOnlyDictionary<int, string>? reviewReasons)> ParsePdfAsync(
         byte[] bytes, Guid organisationId, Guid orderId, CancellationToken ct)
         => _ingestion.ParsePdfAsync(bytes, organisationId, orderId, ct);
 
     internal static void ApplyExtractionReviewFlags(
         IReadOnlyList<PurchaseOrderLineEntity> lines,
-        IReadOnlyCollection<int> reviewLineNumbers)
-        => OrderServiceShared.ApplyExtractionReviewFlags(lines, reviewLineNumbers);
+        IReadOnlyCollection<int> reviewLineNumbers,
+        IReadOnlyDictionary<int, string>? reviewReasons = null)
+        => OrderServiceShared.ApplyExtractionReviewFlags(lines, reviewLineNumbers, reviewReasons);
 }

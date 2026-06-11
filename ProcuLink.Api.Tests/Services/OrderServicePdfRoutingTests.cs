@@ -80,7 +80,7 @@ public class OrderServicePdfRoutingTests
 
         // Deliberately NOT a real PDF — if the deterministic parser ran it would
         // throw, so a clean structured result proves the LLM path was taken.
-        var (parsed, review) = await svc.ParsePdfAsync(
+        var (parsed, review, _) = await svc.ParsePdfAsync(
             Encoding.UTF8.GetBytes("not a real pdf"), orgId, Guid.NewGuid(), CancellationToken.None);
 
         parsed.PoNumber.Should().Be("PO-PDF-1");
@@ -104,7 +104,7 @@ public class OrderServicePdfRoutingTests
 
         var svc = BuildService(extractor.Object);
 
-        var (parsed, review) = await svc.ParsePdfAsync(
+        var (parsed, review, _) = await svc.ParsePdfAsync(
             CreatePdf("PO Number: PO-DET-1", "1 DET-CODE Widget 4 PCS 12.50"),
             Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None);
 
@@ -129,7 +129,7 @@ public class OrderServicePdfRoutingTests
 
         var svc = BuildService(extractor.Object);
 
-        var (parsed, review) = await svc.ParsePdfAsync(
+        var (parsed, review, _) = await svc.ParsePdfAsync(
             CreatePdf("PO Number: PO-DET-2", "1 DET-CODE Widget 4 PCS 12.50"),
             Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None);
 
@@ -156,7 +156,7 @@ public class OrderServicePdfRoutingTests
 
         var svc = BuildService(db, extractor.Object);
 
-        var (parsed, review) = await svc.ParsePdfAsync(
+        var (parsed, review, _) = await svc.ParsePdfAsync(
             CreatePdf("PO Number: PO-NOEGRESS", "1 DET-CODE Widget 4 PCS 12.50"),
             orgId, Guid.NewGuid(), CancellationToken.None);
 
@@ -189,7 +189,7 @@ public class OrderServicePdfRoutingTests
 
         var svc = BuildService(extractor.Object);
 
-        var (parsed, _) = await svc.ParsePdfAsync(
+        var (parsed, _, _) = await svc.ParsePdfAsync(
             Encoding.UTF8.GetBytes("not a real pdf"), orgId, Guid.NewGuid(), CancellationToken.None);
 
         parsed.DocumentType.Should().Be("invoice");

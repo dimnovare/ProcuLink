@@ -89,6 +89,7 @@ internal sealed class OrderResolutionService
 
             line.SupplierItemCode = chosen;
             line.NeedsReview     = false;
+            line.ReviewReason    = null; // human resolved the line — the "why flagged" no longer applies
             line.Confidence      = 1.0f;
             line.AiSuggestedSupplierItemCode = null;
             line.AiSuggestionConfidence = null;
@@ -286,6 +287,7 @@ internal sealed class OrderResolutionService
             line.SupplierItemCode           = chosen;
             line.Confidence                 = (float)(line.AiSuggestionConfidence ?? line.Confidence);
             line.NeedsReview                = false;
+            line.ReviewReason               = null; // suggestion accepted — the "why flagged" no longer applies
             line.AiSuggestedSupplierItemCode = null;
             line.AiSuggestionConfidence     = null;
             line.AiSuggestionReason         = null;

@@ -69,14 +69,19 @@ StripeConfiguration.AppInfo = new AppInfo { Name = "ProcuLink", Url = "https://p
 // API gets 30 (it serves HTTP + enqueues Hangfire jobs); the Worker (WorkerCount=10)
 // gets 20. ConnectionIdleLifetime returns idle pooled connections to Neon so the
 // pool doesn't pin its ceiling. Existing settings in the string are preserved.
-builder.Services.AddDbContext<ProcuLinkDbContext>(options =>
+// P2 hardening: log-only order state-machine observer. Singleton interceptor attached to
+// every DbContext, so all tracked Status writes flow through one observation point. It
+// only logs warnings on unexpected transitions — it never blocks or mutates a save.
+builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>();
+builder.Services.AddDbContext<ProcuLinkDbContext>((sp, options) =>
     // Read the connection string LAZILY here (per DbContext creation, after the host is
     // built) so WebApplicationFactory integration tests that override
     // ConnectionStrings:DefaultConnection are honoured. An eager read at builder-config
     // time would capture the pre-override (empty) value. The pool ceiling is applied via
     // BuildPooledConnectionString.
     options.UseNpgsql(BuildPooledConnectionString(
-        builder.Configuration.GetConnectionString("DefaultConnection"), maxPoolSize: 30)));
+            builder.Configuration.GetConnectionString("DefaultConnection"), maxPoolSize: 30))
+        .AddInterceptors(sp.GetRequiredService<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>()));
 
 static string? BuildPooledConnectionString(string? raw, int maxPoolSize)
 {

@@ -118,8 +118,12 @@ static string? BuildPooledConnectionString(string? raw, int maxPoolSize)
     return b.ConnectionString;
 }
 
-builder.Services.AddDbContext<ProcuLinkDbContext>(options =>
-    options.UseNpgsql(connectionString));
+// P2 hardening: same log-only order state-machine observer as the API host — delivery,
+// stuck-detection, and job-driven Status writes happen here too. Warnings only; never blocks.
+builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>();
+builder.Services.AddDbContext<ProcuLinkDbContext>((sp, options) =>
+    options.UseNpgsql(connectionString)
+        .AddInterceptors(sp.GetRequiredService<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>()));
 
 builder.Services.AddHangfire(cfg => cfg
     .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)

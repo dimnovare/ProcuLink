@@ -22,5 +22,10 @@ public record ParsedOrderLine(
     // entity's NeedsReview so the line surfaces in /operations/exceptions instead of
     // being delivered with a corrupted number. Additive + defaulted: other parsers
     // that always produce clean numbers leave it false.
-    bool NeedsReview = false
+    bool NeedsReview = false,
+    // P2 hardening: short human-readable explanation of WHY the parser flagged this
+    // line (set alongside NeedsReview = true; null otherwise). Carried onto the
+    // persisted line entity's review_reason so the review UI can say "why flagged".
+    // Additive + defaulted: parsers that never flag leave it null.
+    string? ReviewReason = null
 );

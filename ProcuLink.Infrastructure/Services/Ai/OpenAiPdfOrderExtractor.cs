@@ -384,7 +384,13 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             if (result.Success && result.Order is not null)
             {
                 var allLines = result.Order.Lines.Select(l => l.LineNumber).ToArray();
-                result = result with { ReviewLineNumbers = allLines };
+                const string scannedReason =
+                    "Extracted from a scanned (image-only) PDF — there was no text layer to verify the numbers against.";
+                result = result with
+                {
+                    ReviewLineNumbers = allLines,
+                    ReviewReasons     = allLines.ToDictionary(n => n, _ => scannedReason),
+                };
                 _logger.LogInformation(
                     "Order vision-extracted from {Pages} scanned page(s) (org {OrgId}) — all {Lines} lines flagged for review.",
                     pages.Count, organisationId, allLines.Length);
@@ -432,6 +438,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 
         var lines = new List<ExtractedOrderLine>(rawLines.Count);
         var reviewLineNumbers = new List<int>();
+        // P2 hardening: per-line "why flagged" causes, persisted onto review_reason.
+        var reviewReasons = new Dictionary<int, string>();
 
         for (var idx = 0; idx < rawLines.Count; idx++)
         {
@@ -441,35 +449,35 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             // (it may duplicate or echo a "Pos" column), so we don't trust it here.
             var lineNumber = idx + 1;
 
-            var needsReview = false;
+            var causes = new List<string>();
 
             // Convert numbers safely — a NaN/Infinity/out-of-range value from the
             // model flags the line instead of throwing.
             if (!TryToDecimal(l.Quantity, out var quantity) && l.Quantity is not null)
-                needsReview = true;
+                causes.Add("an extracted numeric value was unreadable");
 
             decimal? unitPrice = null;
             if (l.UnitPrice is not null)
             {
                 if (TryToDecimal(l.UnitPrice, out var up)) unitPrice = up;
-                else needsReview = true;
+                else causes.Add("the extracted unit price was unreadable");
             }
 
             decimal? lineAmount = null;
             if (l.LineAmount is not null)
             {
                 if (TryToDecimal(l.LineAmount, out var la)) lineAmount = la;
-                else needsReview = true;
+                else causes.Add("the extracted line amount was unreadable");
             }
 
             // Anti-hallucination: every emitted number must appear verbatim in the
             // source text. A zero quantity means "not stated" and is not checked.
             if (quantity != 0m && !NumberAppearsInSource(quantity, sourceNumbers))
-                needsReview = true;
+                causes.Add("the extracted quantity does not appear in the source document");
             if (unitPrice is { } up2 && up2 != 0m && !NumberAppearsInSource(up2, sourceNumbers))
-                needsReview = true;
+                causes.Add("the extracted unit price does not appear in the source document");
             if (lineAmount is { } la2 && la2 != 0m && !NumberAppearsInSource(la2, sourceNumbers))
-                needsReview = true;
+                causes.Add("the extracted line amount does not appear in the source document");
 
             // Arithmetic: quantity × unit price must reconcile with the stated line amount.
             if (unitPrice is { } u && lineAmount is { } amount && amount != 0m)
@@ -477,11 +485,14 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 var expected = quantity * u;
                 var tolerance = Math.Max(0.02m * Math.Abs(amount), 0.05m);
                 if (Math.Abs(expected - amount) > tolerance)
-                    needsReview = true;
+                    causes.Add("quantity × unit price does not match the stated line amount");
             }
 
-            if (needsReview)
+            if (causes.Count > 0)
+            {
                 reviewLineNumbers.Add(lineNumber);
+                reviewReasons[lineNumber] = $"AI extraction flagged this line: {string.Join("; ", causes)}.";
+            }
 
             // Phase 4 enrichment (captured as metadata; not gated by anti-hallucination).
             decimal? taxRate = TryToDecimal(l.TaxRate, out var tr) ? tr : null;
@@ -519,7 +530,9 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             PaymentTerms: string.IsNullOrWhiteSpace(dto.PaymentTerms) ? null : dto.PaymentTerms.Trim(),
             DocumentType: NormalizeDocumentType(dto.DocumentType));
 
-        return new StructuredExtractionResult(true, confidence, order, null, reviewLineNumbers);
+        return new StructuredExtractionResult(
+            true, confidence, order, null, reviewLineNumbers,
+            reviewReasons.Count > 0 ? reviewReasons : null);
     }
 
     private static DateOnly? ParseDateOnly(string? value) =>
