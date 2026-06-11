@@ -78,10 +78,11 @@ public sealed record PromoteMappingResult(
 ///   </item>
 /// </list>
 ///
-/// <para>Caveat:</para> the supplier-level <see cref="PoMappingConfig.Output"/> is PERSISTED here but
-/// not yet CONSUMED by the transform path (the per-order override is still the only output-divert
-/// seam in <c>OrderTransformService</c>). Persisting + reporting it removes the founder-reported
-/// silent no-op; wiring re-upload consumption of the supplier output mapping is a separate follow-up.
+/// <para>Consumption (launch batch 4A):</para> the supplier-level <see cref="PoMappingConfig.Output"/>
+/// is PERSISTED here AND CONSUMED by the transform path — when a future order from this supplier
+/// carries no usable per-order template/output override, <c>OrderTransformService</c> (and the
+/// mapping-override preview / replay current side) apply the promoted output mapping. The per-order
+/// override always stays the higher-priority seam.
 /// </summary>
 public interface IPromoteMappingService
 {

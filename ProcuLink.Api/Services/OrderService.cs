@@ -60,7 +60,7 @@ public sealed class OrderService : IOrderService
 
         _resolution = new OrderResolutionService(db, mappings, logger, shared, decisions);
 
-        _transform = new OrderTransformService(db, fileStorage, transformers, logger);
+        _transform = new OrderTransformService(db, fileStorage, transformers, logger, poMappingService);
     }
 
     // ── Ingestion ─────────────────────────────────────────────────────────────

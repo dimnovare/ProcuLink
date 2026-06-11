@@ -18,10 +18,11 @@ public record PoMappingConfig
     /// <para>
     /// Additive + safe: this property serialises into the SAME <c>SupplierPoMapping.ConfigJson</c>
     /// JSONB column (no new table, no EF migration). Older configs that predate it simply deserialise
-    /// it as null. It is NOT consumed by the transform path yet (the per-order override remains the
-    /// only output-divert seam in <c>OrderTransformService</c>); persisting it here makes the founder's
-    /// "Save mappings" button actually save the output side and report it, removing the silent no-op.
-    /// Wiring re-upload consumption is a separate follow-up.
+    /// it as null. It IS consumed by the transform path (launch batch 4A): when an order carries no
+    /// usable per-order template/output override, <c>OrderTransformService</c> (and the
+    /// mapping-override preview / replay current side) apply this promoted output mapping; the
+    /// per-order override always stays the higher-priority seam, and a malformed/unusable value
+    /// falls back to the fixed transformer.
     /// </para>
     /// </summary>
     public OutputMappingConfig? Output { get; init; }

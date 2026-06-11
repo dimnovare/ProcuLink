@@ -44,6 +44,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IEnumerable<ITransformService> _transformers;
     private readonly IAiSuggestionDecisionService _aiDecisions;
     private readonly ProcuLink.Transform.Conformance.IConformanceService _conformance;
+    private readonly IPoMappingService            _poMappings;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -77,7 +78,8 @@ public sealed class OrdersController : ControllerBase
         ISourceTokenizer             tokenizer,
         IEnumerable<ITransformService> transformers,
         IAiSuggestionDecisionService? aiDecisions = null,
-        ProcuLink.Transform.Conformance.IConformanceService? conformance = null)
+        ProcuLink.Transform.Conformance.IConformanceService? conformance = null,
+        IPoMappingService?           poMappings = null)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -101,6 +103,11 @@ public sealed class OrdersController : ControllerBase
         // conformance checker is pure/stateless, so a default instance is safe to construct.
         _conformance      = conformance
             ?? new ProcuLink.Transform.Conformance.ConformanceService();
+        // Optional for the same reason; the concrete service only needs the injected DbContext.
+        // Used by the mapping-override preview to resolve the SAME supplier-promoted-output
+        // fallback the real transform applies (launch batch 4A), so preview == delivery.
+        _poMappings       = poMappings
+            ?? new ProcuLink.Infrastructure.Services.PoMappingService(db);
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -702,13 +709,24 @@ public sealed class OrdersController : ControllerBase
             return Ok(new { ok = true, output = outcome.Text, contentType });
         }
 
-        // ── Mode 2: FIELD-BY-FIELD preview (existing behaviour, unchanged) ─────────
+        // ── Mode 2: FIELD-BY-FIELD preview ─────────────────────────────────────────
+        // Supplier-promoted fallback (launch batch 4A — parity with OrderTransformService): when
+        // neither the draft nor the stored override carries a USABLE output mapping, the supplier's
+        // promoted PoMappingConfig.Output drives the real transform at delivery time — so the
+        // preview resolves the SAME effective priority (per-order override → supplier-promoted →
+        // fixed). Defensive: a missing/malformed/unusable supplier mapping yields null and the
+        // existing behaviour (including the body-required 400 below) is unchanged.
+        OrderMappingOverride? supplierFallback = null;
+        if (!OrderMappingOverrideReader.HasUsableOutput(effectiveOverride))
+            supplierFallback = await TryBuildSupplierPromotedOverrideAsync(order.SupplierId, effectiveOverride, ct);
+
         // This path needs an override. Preserve the original contract: a request without a body (and
-        // with no stored template) still requires a body for the field-mapping preview.
-        if (!draftSupplied && effectiveOverride is null)
+        // with no stored template/override AND no supplier-promoted output mapping) still requires a
+        // body for the field-mapping preview.
+        if (!draftSupplied && effectiveOverride is null && supplierFallback is null)
             return BadRequest(new { error = "A mapping override body is required." });
 
-        var fieldOverride = effectiveOverride ?? request!;
+        var fieldOverride = supplierFallback ?? effectiveOverride ?? request!;
 
         // Preview supports every entity-based output format an override can influence.
         var fmt = (format?.Trim().ToLowerInvariant()) switch
@@ -774,6 +792,42 @@ public sealed class OrdersController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Preview-side twin of <c>OrderTransformService.TryReadSupplierPromotedOutputAsync</c> (launch
+    /// batch 4A): reads the supplier's reusable <see cref="PoMappingConfig"/> and wraps a USABLE
+    /// promoted output mapping as a synthetic per-order-shaped override (the effective override's
+    /// custom fields are preserved so promoted rules referencing them still resolve; SourceMap /
+    /// template are intentionally NOT carried). Returns null — leaving the existing preview
+    /// behaviour untouched — when the supplier has no usable promoted output, when reading it fails,
+    /// or when its manipulators would not survive a real transform (which falls back to the fixed
+    /// transformer; a misleading supplier-driven preview must not be shown for that case).
+    /// </summary>
+    private async Task<OrderMappingOverride?> TryBuildSupplierPromotedOverrideAsync(
+        Guid supplierId, OrderMappingOverride? effectiveOverride, CancellationToken ct)
+    {
+        try
+        {
+            var supplierConfig = await _poMappings.GetAsync(_tenant.OrganisationId, supplierId, ct);
+            if (!OrderMappingOverrideReader.HasUsablePromotedOutput(supplierConfig))
+                return null;
+
+            var synthetic = new OrderMappingOverride
+            {
+                CustomFields = effectiveOverride?.CustomFields ?? new List<CustomField>(),
+                Output       = supplierConfig!.Output,
+            };
+
+            return ValidateOverrideManipulators(synthetic) is null ? synthetic : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to read the supplier-promoted output mapping for supplier {SupplierId} during preview.",
+                supplierId);
+            return null;
+        }
+    }
+
     // ── POST /api/orders/{id}/mapping-override/promote ───────────────────────
 
     /// <summary>
@@ -801,10 +855,11 @@ public sealed class OrdersController : ControllerBase
     /// message }</c>. The original four keys are preserved for backward compatibility; the rest are
     /// additive.
     ///
-    /// <para>Output-side caveat:</para>
-    /// The supplier-level <c>Output</c> mapping is PERSISTED + REPORTED here but not yet CONSUMED on
-    /// re-upload (the per-order override remains the only output-divert seam at transform time). This
-    /// removes the founder-reported silent no-op; wiring re-upload consumption is a separate follow-up.
+    /// <para>Output side:</para>
+    /// The supplier-level <c>Output</c> mapping is PERSISTED + REPORTED here AND CONSUMED at
+    /// transform time (launch batch 4A): when a future order from this supplier carries no usable
+    /// per-order override, <c>OrderTransformService</c> (and the mapping-override preview) apply the
+    /// promoted output mapping. The per-order override always stays the higher-priority seam.
     ///
     /// <para>Schema fingerprint note:</para>
     /// The mapping is stored at the supplier level, not per-fingerprint. The returned

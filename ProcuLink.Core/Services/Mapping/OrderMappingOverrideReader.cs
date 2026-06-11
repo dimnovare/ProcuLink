@@ -77,6 +77,17 @@ public static class OrderMappingOverrideReader
         && (output.Header.Count > 0 || output.Lines.Count > 0);
 
     /// <summary>
+    /// Supplier-config equivalent of <see cref="HasUsableOutput"/> (launch batch 4A — consuming
+    /// promoted mappings): true only when a supplier-level <see cref="PoMappingConfig"/> carries a
+    /// promoted output mapping with at least one header or line rule. A null config, a null
+    /// <see cref="PoMappingConfig.Output"/>, or an empty output config must NOT divert the
+    /// transform — the fixed transformer stays in control, byte-for-byte identical to today.
+    /// </summary>
+    public static bool HasUsablePromotedOutput(PoMappingConfig? config) =>
+        config?.Output is { } output
+        && (output.Header.Count > 0 || output.Lines.Count > 0);
+
+    /// <summary>
     /// True only when an override is present AND carries a non-blank whole-document
     /// <see cref="OrderMappingOverride.OutputTemplate"/>. Template mode takes precedence over the
     /// field-by-field <see cref="OrderMappingOverride.Output"/> config: when a usable template is
