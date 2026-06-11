@@ -4,6 +4,34 @@ Durable state so work continues per the plan if context resets. **Read this firs
 then `docs/strategy/2026-06-09-supplier-connection-north-star.md` (the plan of record)
 and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint).
 
+## FINAL-PUSH COMPLETE STATE (2026-06-11 evening) — supersedes batch-by-batch notes below
+ALL plan batches + ALL founder doNotDo-flips SHIPPED (except retention in flight + batch 6 gate pending).
+BE main 6eb8277, FE main e825595. Suites: BE 2175+ green, FE 88 unit + 48 e2e mock green.
+- Batches 1-5 (truth/billing-copy/ROI, heart-piece honesty+a11y, provenance+lifecycle, promoted-consumption,
+  revision-context+exception-strip, polish+PageHeader): LIVE.
+- Batch 7 REVISION AUTHORITY: LIVE behind Connections:RevisionAuthority (default OFF). Read-parity follow-up
+  LIVE (preview==delivered char-for-char under flag). Fable fixes LIVE (promoted Output re-backfill —
+  BLOCKED on prod by immutability trigger until retention batch ships fill-only exemption; trim fix).
+- Batch 8 YEARLY: BE+FE LIVE incl. Stripe-verified amounts 1488/3972/9948/14928; CRITICAL fixes LIVE:
+  month-window invoice decomposition, org_plan_history as-of metering (kills retroactive re-metering),
+  draft-invoice item pinning (kills 1yr float).
+- Batch 9 REDESIGN Phases A+B+C LIVE: Fix Queue Triage + Context Stage + Send-Readiness + keyboard flow
+  (A/E/S/?, g-d/g-b, auto-advance) + responsive matrix (1280 zero-overflow, 768-1279 repaired) + e2e parity
+  both views. Classic = ?view=classic + Full-document submode. Default flip awaits G8 founder session.
+- Flips: A replay-from-source parse leg LIVE (test pack parseLeg evidence); B PageShell 24/25 LIVE;
+  D delivered-meter LIVE behind Billing:CountDeliveredOnly (default OFF; flip-day copy in commit d473637 body).
+- Hardening LIVE: DB trigger immutability on published revisions; state-transition log-observer;
+  per-line review_reason (+DTO).
+- IN FLIGHT: auto/be-retention (retention sweep org-opt-in+dry-run+audit + trigger fill-only exemption rider).
+- REMAINING: batch 6 FINAL GATE = golden byte-diff, live E2E both views vs :5223/prod, test-mode yearly
+  checkout click-through, revision-flag cutover protocol (BOTH Railway hosts env Connections__RevisionAuthority,
+  re-backfill AFTER exemption, per-supplier stale-snapshot audit, one pinned golden run real Postgres),
+  retention dry-run audit verify, delivered-meter flip decision + copy. Then G8 founder session
+  (watch real Triage session; sign conditional-checkbox + triptych-submode) -> default flip -> LAUNCH.
+- Fable open watch-items (theoretical/low): numeric-string OutputFormat enum parse; resolver lacks
+  published-status filter (lifecycle invariant holds); anchor-month double-allowance (customer-favorable);
+  cancellation final-partial unmetered; webhook 12-window latency.
+
 ## FINAL-PUSH EXECUTION (2026-06-11) — plan: docs/strategy/2026-06-11-FINAL-PUSH-PLAN.md
 - 11-agent analysis: Codex revision-authority claim TRUE (14 file:line); lifecycle PARTIAL (no rollback,
   ungated publish, status-flip-only test); promote no-op TRUE; provenance PARTIAL. 62 UI/UX findings, 9 P0.
