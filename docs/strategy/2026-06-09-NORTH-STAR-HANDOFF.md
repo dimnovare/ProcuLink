@@ -4,6 +4,25 @@ Durable state so work continues per the plan if context resets. **Read this firs
 then `docs/strategy/2026-06-09-supplier-connection-north-star.md` (the plan of record)
 and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint).
 
+## FINAL-PUSH EXECUTION (2026-06-11) — plan: docs/strategy/2026-06-11-FINAL-PUSH-PLAN.md
+- 11-agent analysis: Codex revision-authority claim TRUE (14 file:line); lifecycle PARTIAL (no rollback,
+  ungated publish, status-flip-only test); promote no-op TRUE; provenance PARTIAL. 62 UI/UX findings, 9 P0.
+- **Batch 1 SHIPPED LIVE (FE `858b885`)**: claims truth sweep (SOC2/pen-test/AWS/Frankfurt/90-day retreats;
+  single-source src/lib/subprocessors.ts; OpenAI claim defensible; status-dot removed), billing copy=engine
+  (FAQ counts-at-processing + overage in Terms §5 + visible on cards; yearly toggle REMOVED — was display-only
+  fiction), cost-optimal ROI recommender (200→Growth €174; net-of-plan headline; start-smaller CTA). 43/43 tests.
+- **Batch 3 SHIPPED LIVE (BE `f8ba52d`)**: migration `20260611095227_AddProvenanceAndConnectionTestEvidence`
+  (10 nullable cols; applied on Neon — verified SELECT 200). Artifact+delivery provenance (ConnectionRevisionId,
+  ConfigDigest, ArtifactSha256 via ProvenanceHash, never-throws); RunTestPackAsync (replay+conformance legs,
+  evidence JSON on revision); publish gate TestPassed && TestedAt>=UpdatedAt (edit VOIDS evidence; pre-existing
+  published rows untouched); RollbackAsync = clone-publish + atomic pointer (POST .../rollback). 2001 tests
+  green + real-Postgres round-trip. Contract: POST .../test now 200-with-evidence (was 204).
+- **Batch 2 IN FLIGHT** (`auto/fe-heartpiece-a11y`): fabricated confidence chips → real-only; focus-visible
+  restore + muted-ink AA token sweep; heart-piece quick wins (UnifiedStatusBadge, aiReason line, confirm copy,
+  tab deep-link replace, promote honest copy, font floors).
+- NEXT: batch 4 (promoted-mapping consumption guarded + revision-context banners), 5 (polish), 6 (verification
+  gate: golden byte-identical diff + live E2E re-run + exercise test-pack/rollback live on a fresh draft).
+
 ## Where we are (all shipped + live + verified)
 - **Strategic PIVOT done:** dropped Baltic-bootstrap/sell-first/freeze-features. Active
   goal = the **Versioned Supplier Connection** platform. `CLAUDE.md` "Current direction"
