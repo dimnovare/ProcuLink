@@ -495,6 +495,12 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Format).HasColumnName("format").IsRequired();
             b.Property(x => x.FileKey).HasColumnName("file_key").IsRequired();
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
+            // Provenance (launch batch 3) — REAL persisted nullable columns (NOT EF-Ignored:
+            // the EF-Ignore + ExecuteUpdateAsync silent-drop lesson). Plain uuid, no FK —
+            // mirrors purchase_orders.connection_revision_id.
+            b.Property(x => x.ConnectionRevisionId).HasColumnName("connection_revision_id");
+            b.Property(x => x.ConfigDigest).HasColumnName("config_digest");
+            b.Property(x => x.ArtifactSha256).HasColumnName("artifact_sha256");
             b.HasOne(x => x.Order)
              .WithMany(x => x.OutboundArtifacts)
              .HasForeignKey(x => x.OrderId);
@@ -523,6 +529,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // Rejection capture (full NACK body) + ACK round-trip timestamp (Group O reliability).
             b.Property(x => x.ResponseBody).HasColumnName("response_body");
             b.Property(x => x.AcknowledgedAt).HasColumnName("acknowledged_at").HasColumnType("timestamptz");
+            // Provenance (launch batch 3) — REAL persisted nullable columns (see outbound_artifacts note).
+            b.Property(x => x.ConnectionRevisionId).HasColumnName("connection_revision_id");
+            b.Property(x => x.ConfigDigest).HasColumnName("config_digest");
+            b.Property(x => x.ArtifactSha256).HasColumnName("artifact_sha256");
             b.HasOne(x => x.Order)
              .WithMany(x => x.DeliveryAttempts)
              .HasForeignKey(x => x.OrderId)
@@ -859,6 +869,11 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.CreatedBy).HasColumnName("created_by");
             b.Property(x => x.PublishedBy).HasColumnName("published_by");
             b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            // Launch batch 3 — content-update stamp + test evidence (all nullable; legacy rows null).
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.Property(x => x.TestResultJson).HasColumnName("test_result_json").HasColumnType("jsonb");
+            b.Property(x => x.TestedAt).HasColumnName("tested_at").HasColumnType("timestamptz");
+            b.Property(x => x.TestPassed).HasColumnName("test_passed");
             // Bundle components (jsonb blobs kept component-shaped so existing readers re-point with no reshaping).
             b.Property(x => x.InputMappingJson).HasColumnName("input_mapping_json").HasColumnType("jsonb");
             b.Property(x => x.OutputMappingJson).HasColumnName("output_mapping_json").HasColumnType("jsonb");

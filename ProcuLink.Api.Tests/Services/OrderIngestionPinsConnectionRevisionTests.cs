@@ -100,6 +100,28 @@ public class OrderIngestionPinsConnectionRevisionTests
         "{}", null, fmt, "http", "{}", false, null, null, null, "live",
         new List<ConnectionItemMappingInput>());
 
+    private static SupplierConnectionService MakeConnSvc(ProcuLinkDbContext db) =>
+        new(db,
+            new ReplayService(db, Array.Empty<ITransformService>()),
+            new ProcuLink.Transform.Conformance.ConformanceService());
+
+    /// <summary>
+    /// Publishes a revision through the evidence-gated PublishAsync by stamping passing test
+    /// evidence directly — these tests exercise PINNING, not the launch-batch-3 lifecycle gate
+    /// (which has its own dedicated tests).
+    /// </summary>
+    private static async Task PublishWithEvidenceAsync(
+        SupplierConnectionService conn, ProcuLinkDbContext db, Guid orgId, Guid connectionId,
+        SupplierConnectionRevision rev)
+    {
+        rev.TestPassed     = true;
+        rev.TestedAt       = DateTime.UtcNow;
+        rev.TestResultJson = "{}";
+        await db.SaveChangesAsync();
+        var outcome = await conn.PublishAsync(orgId, connectionId, rev.Id, "u", CancellationToken.None);
+        Assert.Equal(ConnectionPublishOutcome.Published, outcome);
+    }
+
     [Fact]
     public async Task CreateFromFile_PinsActiveRevision()
     {
@@ -107,10 +129,10 @@ public class OrderIngestionPinsConnectionRevisionTests
         var (orgId, supplierId) = await SeedSupplier(db);
 
         // Publish a connection revision for the supplier.
-        var conn = new SupplierConnectionService(db);
+        var conn = MakeConnSvc(db);
         var c = await conn.EnsureConnectionAsync(orgId, supplierId, "u", CancellationToken.None);
         var v1 = await conn.CreateDraftAsync(orgId, c!.Id, SimpleBundle("xml"), false, "u", CancellationToken.None);
-        await conn.PublishAsync(orgId, c.Id, v1!.Id, "u", CancellationToken.None);
+        await PublishWithEvidenceAsync(conn, db, orgId, c.Id, v1!);
 
         var svc = BuildService(db, CsvStorage(out _));
         var result = await svc.CreateFromFileAsync(orgId, supplierId, CsvFile(), "order.csv", "text/csv", CancellationToken.None);
@@ -126,10 +148,10 @@ public class OrderIngestionPinsConnectionRevisionTests
         var db = NewDb();
         var (orgId, supplierId) = await SeedSupplier(db);
 
-        var conn = new SupplierConnectionService(db);
+        var conn = MakeConnSvc(db);
         var c = await conn.EnsureConnectionAsync(orgId, supplierId, "u", CancellationToken.None);
         var v1 = await conn.CreateDraftAsync(orgId, c!.Id, SimpleBundle("xml"), false, "u", CancellationToken.None);
-        await conn.PublishAsync(orgId, c.Id, v1!.Id, "u", CancellationToken.None);
+        await PublishWithEvidenceAsync(conn, db, orgId, c.Id, v1!);
 
         var svc = BuildService(db, CsvStorage(out _));
         var first = await svc.CreateFromFileAsync(orgId, supplierId, CsvFile(), "order1.csv", "text/csv", CancellationToken.None);
@@ -138,7 +160,7 @@ public class OrderIngestionPinsConnectionRevisionTests
 
         // Publish a NEW revision (active flips to v2).
         var v2 = await conn.CreateDraftAsync(orgId, c.Id, SimpleBundle("csv"), false, "u", CancellationToken.None);
-        await conn.PublishAsync(orgId, c.Id, v2!.Id, "u", CancellationToken.None);
+        await PublishWithEvidenceAsync(conn, db, orgId, c.Id, v2!);
 
         // The first order's pin must still point at v1 (reproducibility).
         var firstOrder = await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == firstOrderId);
@@ -171,10 +193,10 @@ public class OrderIngestionPinsConnectionRevisionTests
         var db = NewDb();
         var (orgId, supplierId) = await SeedSupplier(db);
 
-        var conn = new SupplierConnectionService(db);
+        var conn = MakeConnSvc(db);
         var c = await conn.EnsureConnectionAsync(orgId, supplierId, "u", CancellationToken.None);
         var v1 = await conn.CreateDraftAsync(orgId, c!.Id, SimpleBundle("xml"), false, "u", CancellationToken.None);
-        await conn.PublishAsync(orgId, c.Id, v1!.Id, "u", CancellationToken.None);
+        await PublishWithEvidenceAsync(conn, db, orgId, c.Id, v1!);
 
         var svc = BuildService(db, CsvStorage(out _));
         var result = await svc.CreateStubAsync(orgId, supplierId, CsvFile(), "order.csv", "text/csv", CancellationToken.None);

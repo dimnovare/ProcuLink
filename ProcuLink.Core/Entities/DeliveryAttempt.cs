@@ -32,6 +32,21 @@ public class DeliveryAttempt
     /// <summary>1-based attempt index within an order's delivery retry sequence; 0 for test-fire rows.</summary>
     public int AttemptNumber { get; set; }
 
+    // ── Provenance (launch batch 3 — nullable; legacy rows stay null) ────────────
+    /// <summary>
+    /// The connection revision that produced the dispatched artifact (copied from the artifact,
+    /// falling back to the order's pin). Plain column, no FK. Null for legacy/test-fire rows.
+    /// </summary>
+    public Guid? ConnectionRevisionId { get; set; }
+    /// <summary>SHA-256 hex of the effective transform config — copied from the artifact's <c>ConfigDigest</c>.</summary>
+    public string? ConfigDigest { get; set; }
+    /// <summary>
+    /// SHA-256 hex of the payload bytes ACTUALLY dispatched on this attempt. Comparing it to the
+    /// artifact's <c>ArtifactSha256</c> proves the delivered payload matches the generated artifact
+    /// (corruption detection). Null when the attempt failed before the payload was downloaded.
+    /// </summary>
+    public string? ArtifactSha256 { get; set; }
+
     /// <summary>Upper bound on persisted <see cref="ResponseBody"/> length — keeps a hostile/huge supplier body from bloating the row.</summary>
     public const int MaxResponseBodyLength = 8_000;
 

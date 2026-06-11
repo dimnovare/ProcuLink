@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 
@@ -137,6 +138,10 @@ public sealed class DeliveryService : IDeliveryService
             "Delivery {OrderId}: artifact downloaded ({Bytes} bytes); dispatching via {Protocol}",
             orderId, content.Length, config.Protocol);
 
+        // Provenance: hash the payload bytes ACTUALLY dispatched (best-effort, never throws) —
+        // comparing this to the artifact's stored ArtifactSha256 detects corruption in transit/storage.
+        var dispatchedPayloadSha = ProvenanceHash.TrySha256Hex(content);
+
         var result = await dispatcher.DispatchAsync(
             content,
             BuildFileName(order, artifact),
@@ -149,7 +154,10 @@ public sealed class DeliveryService : IDeliveryService
             "Delivery {OrderId}: dispatch returned success={Success} code={Code}",
             orderId, result.Success, result.ResponseCode);
 
-        await PersistAttemptAsync(order, artifact, config, result, ct, reconcile: reconcileFailedAttempt);
+        await PersistAttemptAsync(
+            order, artifact, config, result, ct,
+            reconcile: reconcileFailedAttempt,
+            dispatchedPayloadSha256: dispatchedPayloadSha);
         return result;
     }
 
@@ -239,6 +247,11 @@ public sealed class DeliveryService : IDeliveryService
             AttemptNumber = attemptNumber,
             AttemptedAt = now,
             ErrorMessage = error,
+            // Provenance: copy what we know even on a pre-dispatch failure. No payload was
+            // downloaded, so there is honestly no dispatched-payload hash.
+            ConnectionRevisionId = artifact.ConnectionRevisionId ?? order.ConnectionRevisionId,
+            ConfigDigest = artifact.ConfigDigest,
+            ArtifactSha256 = null,
         });
 
         await _db.SaveChangesAsync(ct);
@@ -269,7 +282,8 @@ public sealed class DeliveryService : IDeliveryService
         SupplierDeliveryConfig config,
         DeliveryResult result,
         CancellationToken ct,
-        bool reconcile = true)
+        bool reconcile = true,
+        string? dispatchedPayloadSha256 = null)
     {
         var now = DateTime.UtcNow;
 
@@ -316,6 +330,12 @@ public sealed class DeliveryService : IDeliveryService
             ResponseBody = TruncateResponseBody(result.ResponseBody),
             // ACK round-trip: stamp the confirmation time on a successful dispatch.
             AcknowledgedAt = result.Success ? now : null,
+            // Provenance: which connection revision/config produced the artifact this attempt
+            // dispatched, plus the SHA-256 of the payload bytes actually sent (null when the
+            // attempt failed before the payload was downloaded).
+            ConnectionRevisionId = artifact.ConnectionRevisionId ?? order.ConnectionRevisionId,
+            ConfigDigest = artifact.ConfigDigest,
+            ArtifactSha256 = dispatchedPayloadSha256,
         });
 
         await _db.SaveChangesAsync(ct);
