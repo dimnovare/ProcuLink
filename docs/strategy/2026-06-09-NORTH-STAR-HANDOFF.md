@@ -183,7 +183,9 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   endpoint (the real fix). Remaining 175 = the smaller earlier test batches (matrix + 8 format-upload + originals).
   INPUT-FORMAT live result: 7/8 parse (CSV/UBL/cXML/IDoc/EDIFACT/X12/XLSX); PDF fixture is scanned/image-only
   → correctly rejected with the honest "scanned or image-only" message (text-PDF path proven on the 22-doc benchmark).
-  Test API key (`plk_uUTz…`) + cap-override (6000) still ACTIVE on org personal-workspace-d3be (revocable).
+  Test API key (`plk_uUTz…`) REVOKED at session close. Cap-override (6000 orders) on org
+  personal-workspace-d3be left in place (benign on a pilot test org; clear via admin limits if undesired).
+  Sample-supplier delivery-config was deleted (reset) earlier.
   See [[project-live-matrix-and-diverse-review]].
 
 ## ✅ LIVE-MATRIX FINDING (2026-06-10) — csv/json preview 500 FOUND + FIXED + LIVE-VERIFIED (`e7b5965`)
