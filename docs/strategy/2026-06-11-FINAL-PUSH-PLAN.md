@@ -96,3 +96,19 @@
 4. Batch 4 — Versioning honesty + promoted-mapping consumption (ZERO migration, after batch 3 confirms semantics): Agent A = revision-context banners + Connection tab/links on supplier surfaces (P1-3, wording matches verified backend behavior); Agent B = promoted
 5. Batch 5 — Polish sweeps (P2, parallel, ZERO migration unless the review-reason column is pulled in — if so it is this batch's single migration): PageHeader demo-path swaps (P1-8) + dead status component deletion; token sweeps webhooks/connectors/admin modals; 
 6. Batch 6 — Verification gate (no merge to main without ALL green): full dotnet test suite + bun run build; golden-order byte-identical diff across the existing order set (proves batches 3-4 changed nothing for unconfigured suppliers); live E2E re-run of the pro
+
+=== FOUNDER FLIPS (2026-06-11, approved) ===
+- FLIP doNotDo#2: Batch 7 — RUNTIME REVISION AUTHORITY. New EffectiveConnectionConfigResolver; pinned
+  revision drives parse-mapping/item-codes/validation/output/delivery WHEN order has pin; live-table
+  fallback when not. Backfilled rev-1 = clone of live tables -> identical behavior at cutover. GATE:
+  golden byte-diff over existing orders + full suite + live E2E. BE only.
+- FLIP (partial) exception prominence: dashboard strip when openExceptions>0 — IN batch 4B.
+- FLIP doNotDo#7: Batch 8 — YEARLY BILLING wiring. Stripe yearly prices confirmed by founder. Checkout
+  interval param end-to-end via existing Stripe:*YearlyPriceId config keys; restore pricing toggle ONLY
+  after wired; verify amounts via test-mode checkout live.
+- FLIP (safe variant) doNotDo#1: Batch 9 — SpineReview DECOMPOSITION, behavior-preserving extraction
+  ONLY ("without bugs"): move DocumentAnatomy/ConfirmDialog/panels/badges to own files, explicit props,
+  ZERO logic edits, gates = unit+e2e+build+visual spot-check. NOT a rewrite.
+- Order: 4A+4B merge -> batch 7 (BE) PARALLEL batch 5 polish (FE) -> merge -> batch 8 + batch 9
+  (parallel, 8=mostly BE+pricing, 9=FE) -> batch 6 FINAL verification gate (golden byte-diff, live E2E,
+  exercise test-pack/rollback/yearly-checkout live).
