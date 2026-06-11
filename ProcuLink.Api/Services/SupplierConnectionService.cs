@@ -517,12 +517,18 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
             .Select(m => NewMapping(revisionId, m)).ToList();
     }
 
+    // Live-parity normalisation (launch-batch-7 review fix): the live ItemMappingService.UpsertAsync
+    // TRIMS both codes, and BOTH resolvers (live ResolveManyAsync and the pinned-revision
+    // ResolveFromSnapshot) match against TRIMMED requested codes — so a padded code written into a
+    // revision snapshot could never resolve. Trim at every snapshot-write seam (draft input AND
+    // clone) so snapshot rows behave exactly like live item-mapping rows. (The V1 backfill copy
+    // stays verbatim by design: it mirrors live rows, which the live writer already trims.)
     private static ConnectionRevisionItemMapping NewMapping(Guid revisionId, ConnectionItemMappingInput m) => new()
     {
         Id               = Guid.NewGuid(),
         RevisionId       = revisionId,
-        BuyerItemCode    = m.BuyerItemCode,
-        SupplierItemCode = m.SupplierItemCode,
+        BuyerItemCode    = m.BuyerItemCode?.Trim() ?? string.Empty,
+        SupplierItemCode = m.SupplierItemCode?.Trim() ?? string.Empty,
         Confidence       = m.Confidence,
         Source           = m.Source,
     };
@@ -531,8 +537,8 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
     {
         Id               = Guid.NewGuid(),
         RevisionId       = revisionId,
-        BuyerItemCode    = m.BuyerItemCode,
-        SupplierItemCode = m.SupplierItemCode,
+        BuyerItemCode    = m.BuyerItemCode?.Trim() ?? string.Empty,
+        SupplierItemCode = m.SupplierItemCode?.Trim() ?? string.Empty,
         Confidence       = m.Confidence,
         Source           = m.Source,
     };

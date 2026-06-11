@@ -3,6 +3,7 @@ using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Transform.Parsing;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Services;
@@ -279,5 +280,60 @@ public class SupplierConnectionServiceTests
 
         // Cross-tenant: org B resolves nothing.
         Assert.Null(await resolver.ResolveActiveRevisionAsync(Guid.NewGuid(), supplierId, CancellationToken.None));
+    }
+
+    // ── Launch-batch-7 review fix (finding 2): snapshot item codes are TRIMMED at write ──
+    // The live ItemMappingService.UpsertAsync trims both codes, and BOTH resolvers (live
+    // ResolveManyAsync and the pinned-revision ResolveFromSnapshot) match against TRIMMED
+    // requested codes — a padded snapshot code could never resolve.
+
+    [Fact]
+    public async Task CreateDraft_PaddedItemCodes_AreTrimmed_AndResolveFromSnapshot()
+    {
+        var db = MakeDb();
+        var svc = MakeSvc(db);
+        var (orgId, supplierId) = await SeedSupplier(db);
+        var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
+
+        var input = Bundle() with
+        {
+            ItemMappings = new List<ConnectionItemMappingInput> { new("  B-100  ", "  S-200 ", 1.0f, "manual") },
+        };
+        var draft = await svc.CreateDraftAsync(orgId, conn!.Id, input, cloneFromActive: false, "user", CancellationToken.None);
+
+        var row = Assert.Single(draft!.ItemMappings);
+        Assert.Equal("B-100", row.BuyerItemCode);   // trimmed at write — mirrors ItemMappingService.UpsertAsync
+        Assert.Equal("S-200", row.SupplierItemCode);
+
+        // …and therefore the pinned-revision snapshot resolver (trimmed Ordinal keys) resolves a
+        // padded incoming line against it — the exact scenario the padded write used to break.
+        var snapshot = new[] { new EffectiveRevisionItemMapping(row.BuyerItemCode, row.SupplierItemCode) };
+        var lines = new List<ParsedOrderLine>
+        {
+            new(LineNumber: 1, BuyerItemCode: "  B-100 ", Description: "Widget",
+                Quantity: 1m, Unit: "EA", UnitPrice: 10m),
+        };
+        var map = OrderIngestionService.ResolveFromSnapshot(snapshot, lines);
+        Assert.Equal("S-200", map["B-100"]);
+    }
+
+    [Fact]
+    public async Task UpdateDraft_PaddedItemCodes_AreTrimmed()
+    {
+        var db = MakeDb();
+        var svc = MakeSvc(db);
+        var (orgId, supplierId) = await SeedSupplier(db);
+        var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
+        var draft = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle(), cloneFromActive: false, "user", CancellationToken.None);
+
+        var updated = await svc.UpdateDraftAsync(orgId, conn.Id, draft!.Id, Bundle() with
+        {
+            ItemMappings = new List<ConnectionItemMappingInput> { new(" B-9\t", " S-9 ", 0.8f, "imported") },
+        }, CancellationToken.None);
+
+        Assert.True(updated);
+        var row = await db.ConnectionRevisionItemMappings.SingleAsync(m => m.RevisionId == draft.Id);
+        Assert.Equal("B-9", row.BuyerItemCode);
+        Assert.Equal("S-9", row.SupplierItemCode);
     }
 }

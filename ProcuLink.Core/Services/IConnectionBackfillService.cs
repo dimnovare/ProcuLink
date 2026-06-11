@@ -24,4 +24,21 @@ public interface IConnectionBackfillService
     /// active revision id, or null if the supplier has no config to snapshot.
     /// </summary>
     Task<Guid?> BackfillSupplierAsync(Guid orgId, Guid supplierId, CancellationToken ct);
+
+    /// <summary>
+    /// Launch-batch-7 review fix: repair pass for backfilled revisions created BEFORE the
+    /// backfill snapshotted the supplier-promoted Output section. Those rows carry a null
+    /// <c>output_mapping_json</c> even when the supplier's live PoMappingConfig has a usable
+    /// promoted Output — so flag-ON pinned orders would silently revert to the fixed transformer.
+    /// Fills ONLY null snapshots on rows created by the backfill itself ("system:backfill");
+    /// never overwrites a non-null snapshot; never touches user-authored revisions. Idempotent
+    /// (safe on every boot); per-row failures are skipped + logged, which keeps the pass
+    /// compatible with the published-row immutability DB trigger (migration
+    /// AddReviewReasonAndPublishedRevisionImmutability). DEPLOY ORDER: this pass must run (one
+    /// boot) against a database BEFORE that trigger migration is applied — or the trigger must
+    /// exempt NULL→value fills of output_mapping_json — otherwise remaining null-output rows
+    /// are skipped with a warning instead of repaired.
+    /// Returns the number of revisions updated.
+    /// </summary>
+    Task<int> RebackfillPromotedOutputAsync(CancellationToken ct);
 }

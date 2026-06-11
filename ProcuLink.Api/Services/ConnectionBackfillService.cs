@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Services;
@@ -14,9 +16,45 @@ namespace ProcuLink.Api.Services;
 /// <para>EF-only (no raw SQL, per the project convention). Idempotent — the
 /// UNIQUE(org_id, supplier_id) connection guard plus an existence check make re-running a no-op,
 /// so this is safe to call on every boot or under deploy/Hangfire retries.</para>
+///
+/// <para>Launch-batch-7 review fix: the revision's <c>output_mapping_json</c> now snapshots the
+/// supplier-promoted Output section (launch batch 4A) of <c>SupplierPoMapping.ConfigJson</c> when
+/// a usable one exists, and <see cref="RebackfillPromotedOutputAsync"/> repairs rows created
+/// before this fix (fill-null-only, idempotent, per-row skip+warn).</para>
 /// </summary>
 public sealed class ConnectionBackfillService : IConnectionBackfillService
 {
+    /// <summary>
+    /// Actor stamped on rows this service creates. The promoted-output re-backfill pass only
+    /// ever touches rows carrying it — a USER-authored revision with a null output mapping
+    /// means "fixed transformer" by choice and must never be rewritten.
+    /// </summary>
+    public const string BackfillActor = "system:backfill";
+
+    /// <summary>
+    /// Deserializer for <c>SupplierPoMapping.ConfigJson</c> — IDENTICAL options to
+    /// <c>PoMappingService</c> (camelCase + case-insensitive) so the promoted Output section is
+    /// read exactly as the live transform path (launch batch 4A) reads it.
+    /// </summary>
+    private static readonly JsonSerializerOptions PoMappingJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
+
+    /// <summary>
+    /// Serializer for the snapshotted Output section — camelCase, matching BOTH how
+    /// <c>PoMappingService</c> persists the promoted Output inside ConfigJson AND how the
+    /// revision-pinned transform path reads <c>output_mapping_json</c> back into an
+    /// <see cref="OutputMappingConfig"/> (<c>OrderTransformService.RevisionOutputSerializerOptions</c>
+    /// / <c>ReplayService.DeserializeOutputConfig</c>). This IS the consumable shape of the
+    /// revision output snapshot.
+    /// </summary>
+    private static readonly JsonSerializerOptions PromotedOutputJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
     private readonly ProcuLinkDbContext _db;
     public ConnectionBackfillService(ProcuLinkDbContext db) => _db = db;
 
@@ -111,13 +149,16 @@ public sealed class ConnectionBackfillService : IConnectionBackfillService
             EffectiveFrom = now,
             PublishedAt   = now,
             CreatedAt     = now,
-            CreatedBy     = "system:backfill",
-            PublishedBy   = "system:backfill",
-            // Input/parse mapping snapshot.
+            CreatedBy     = BackfillActor,
+            PublishedBy   = BackfillActor,
+            // Input/parse mapping snapshot (full ConfigJson, byte-identical).
             InputMappingJson = poMapping?.ConfigJson,
-            // Output: no per-supplier template assignment exists today, so leave null
-            // (= the fixed transformer path, reproducing current behaviour exactly).
-            OutputMappingJson = null,
+            // Output: snapshot the supplier-promoted Output section (launch batch 4A) when the
+            // po-mapping carries a usable one, so a flag-ON pinned order keeps rendering through
+            // the promoted layout instead of silently reverting to the fixed transformer.
+            // Null (no/unusable/malformed Output) = the fixed transformer path, reproducing
+            // current behaviour exactly.
+            OutputMappingJson = TryExtractPromotedOutputJson(poMapping?.ConfigJson),
             OutputFormat      = delivery?.OutputFormat,
             // Delivery channel snapshot.
             DeliveryProtocol    = delivery?.Protocol,
@@ -151,7 +192,7 @@ public sealed class ConnectionBackfillService : IConnectionBackfillService
             // SaveChanges throws on PostgreSQL ("cannot determine insert order") — the
             // InMemory test provider does NOT enforce this, which masked it in tests.
             ActiveRevisionId = null,
-            CreatedBy        = "system:backfill",
+            CreatedBy        = BackfillActor,
             CreatedAt        = now,
             UpdatedAt        = now,
         };
@@ -164,5 +205,93 @@ public sealed class ConnectionBackfillService : IConnectionBackfillService
         await _db.SaveChangesAsync(ct);
 
         return revisionId;
+    }
+
+    // ── Launch-batch-7 review fix: promoted-output re-backfill ─────────────────
+
+    public async Task<int> RebackfillPromotedOutputAsync(CancellationToken ct)
+    {
+        // Candidates: ONLY rows this service created (see BackfillActor) whose output snapshot
+        // is still null. Fill-null-only — a non-null snapshot is NEVER overwritten, and a
+        // user-authored revision (different CreatedBy) is NEVER touched. Idempotent: once a row
+        // is filled it stops matching; rows whose supplier config has no usable promoted Output
+        // are simply re-examined (cheaply) and left untouched on every run.
+        var candidates = await _db.SupplierConnectionRevisions
+            .AsNoTracking()
+            .Where(r => r.OutputMappingJson == null && r.CreatedBy == BackfillActor)
+            .Select(r => new { r.Id, r.OrgId, r.SupplierId })
+            .ToListAsync(ct);
+
+        var updated = 0;
+        foreach (var c in candidates)
+        {
+            try
+            {
+                var configJson = await _db.SupplierPoMappings
+                    .AsNoTracking()
+                    .Where(x => x.OrgId == c.OrgId && x.SupplierId == c.SupplierId)
+                    .Select(x => x.ConfigJson)
+                    .FirstOrDefaultAsync(ct);
+
+                var outputJson = TryExtractPromotedOutputJson(configJson);
+                if (outputJson is null) continue; // no usable promoted Output — row left untouched
+
+                // Re-load TRACKED with the null guard re-applied so this pass only ever FILLS a
+                // null snapshot — it cannot overwrite a concurrent writer's value.
+                var revision = await _db.SupplierConnectionRevisions
+                    .FirstOrDefaultAsync(r => r.Id == c.Id && r.OutputMappingJson == null, ct);
+                if (revision is null) continue;
+
+                revision.OutputMappingJson = outputJson;
+                await _db.SaveChangesAsync(ct);
+                updated++;
+            }
+            catch (OperationCanceledException)
+            {
+                throw; // cancellation is the caller's signal — never swallow it
+            }
+            catch (Exception ex)
+            {
+                // Per-row isolation, deliberately trigger-compatible: this UPDATEs published
+                // rows, so if the published-row immutability DB trigger (migration
+                // AddReviewReasonAndPublishedRevisionImmutability — its IS-DISTINCT-FROM guard
+                // covers output_mapping_json) or anything else rejects it, skip + warn and keep
+                // going — the remaining rows still get repaired. DEPLOY ORDER: this pass must
+                // boot against a database BEFORE that trigger migration is applied (or the
+                // trigger must exempt NULL→value fills of output_mapping_json); otherwise the
+                // affected rows stay null (skipped with this warning) and their pinned orders
+                // keep using the fixed transformer.
+                _db.ChangeTracker.Clear();
+                Console.Error.WriteLine(
+                    $"[ConnectionBackfill] promoted-output re-backfill skipped revision {c.Id} (org {c.OrgId}): {ex.Message}");
+            }
+        }
+        return updated;
+    }
+
+    /// <summary>
+    /// Extracts the supplier-promoted Output section of a <c>SupplierPoMapping.ConfigJson</c> as
+    /// the revision-consumable snapshot JSON: a camelCase-serialized <see cref="OutputMappingConfig"/>,
+    /// exactly what the pinned-revision transform path deserializes from <c>output_mapping_json</c>.
+    /// Returns null — meaning "fixed transformer", today's behaviour — when the config is
+    /// null/blank, malformed, or carries no usable Output
+    /// (<see cref="OrderMappingOverrideReader.HasUsablePromotedOutput"/>). Never throws.
+    /// </summary>
+    internal static string? TryExtractPromotedOutputJson(string? configJson)
+    {
+        if (string.IsNullOrWhiteSpace(configJson)) return null;
+
+        try
+        {
+            var config = JsonSerializer.Deserialize<PoMappingConfig>(configJson, PoMappingJsonOptions);
+            if (!OrderMappingOverrideReader.HasUsablePromotedOutput(config)) return null;
+            return JsonSerializer.Serialize(config!.Output, PromotedOutputJsonOptions);
+        }
+        catch (JsonException)
+        {
+            // Not a parseable PoMappingConfig (legacy/free-form mapping JSON) — there is no
+            // promoted output to snapshot; the fixed transformer stays in control, as today.
+            return null;
+        }
     }
 }
