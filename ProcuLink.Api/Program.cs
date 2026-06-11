@@ -843,6 +843,29 @@ app.Lifetime.ApplicationStarted.Register(() =>
                     SentrySdk.CaptureException(backfillEx);
                 }
 
+                // ── Launch batch 7 review fix: promoted-output re-backfill ───
+                // Earlier V1 backfills left output_mapping_json NULL even when the supplier's
+                // PoMappingConfig carried a promoted Output section (batch 4A) — flag-ON pinned
+                // orders would silently lose the promoted layout. Fills ONLY null snapshots on
+                // "system:backfill" rows; idempotent; per-row skip+warn keeps it compatible with
+                // the published-row immutability trigger (AddReviewReasonAndPublishedRevision-
+                // Immutability — it must run BEFORE that trigger migration is applied, or the
+                // trigger must exempt NULL→value output fills, so rows are repaired rather than
+                // skipped). Best-effort, like V1.
+                try
+                {
+                    var rebackfill = scope.ServiceProvider.GetRequiredService<IConnectionBackfillService>();
+                    var repairedCount = await rebackfill.RebackfillPromotedOutputAsync(CancellationToken.None);
+                    migLogger.LogInformation(
+                        "Promoted-output re-backfill complete: {Count} backfilled revision(s) repaired.", repairedCount);
+                }
+                catch (Exception rebackfillEx)
+                {
+                    migLogger.LogError(rebackfillEx,
+                        "Promoted-output re-backfill failed (app stays up; affected pinned orders use the fixed transformer until repaired).");
+                    SentrySdk.CaptureException(rebackfillEx);
+                }
+
                 // ── Group V4: idempotent rule-definition seed + link ─────────
                 // Seed the global rule catalog as org-scoped RuleDefinitions and link existing
                 // free-floating acceptance rules to a matching definition. ZERO evaluation change
