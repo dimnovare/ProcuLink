@@ -646,6 +646,205 @@ public class BillingControllerTests
             "no overage must mean no billing call");
     }
 
+    // ── Yearly billing: price-id → plan webhook mapping ───────────────────────
+    // MapPriceIdToPlan must resolve YEARLY price ids to the same plan as their
+    // monthly siblings — otherwise a customer.subscription.updated event for an
+    // annual subscription would silently leave the org's plan unmapped.
+
+    [Theory]
+    [InlineData("price_growth_yearly_test", PlanConstants.Growth)]
+    [InlineData("price_ops_yearly_test", PlanConstants.Operations)]
+    [InlineData("price_int_yearly_test", PlanConstants.Integration)]
+    [InlineData("price_dist_yearly_test", PlanConstants.Distributor)]
+    [InlineData("price_growth_test", PlanConstants.Growth)]
+    [InlineData("price_ops_test", PlanConstants.Operations)]
+    [InlineData("price_int_test", PlanConstants.Integration)]
+    [InlineData("price_dist_test", PlanConstants.Distributor)]
+    public async Task HandleSubscriptionUpdated_PriceId_MapsToCorrectPlan_IncludingYearly(
+        string priceId, string expectedPlan)
+    {
+        var (ctrl, _, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id                   = orgId,
+            Plan                 = PlanConstants.Pilot,
+            AccountStatus        = AccountStatusConstants.Trialing,
+            StripeCustomerId     = "cus_interval_map",
+            ClerkOrgId           = "org_interval_map",
+            Name                 = "Interval Map Org",
+            Slug                 = "interval-map-org",
+        });
+        await db.SaveChangesAsync();
+
+        var sub = new Stripe.Subscription
+        {
+            Id         = "sub_interval_map",
+            CustomerId = "cus_interval_map",
+            Status     = "active",
+            Items      = new Stripe.StripeList<Stripe.SubscriptionItem>
+            {
+                Data = new List<Stripe.SubscriptionItem>
+                {
+                    new() { Price = new Stripe.Price { Id = priceId } },
+                },
+            },
+        };
+
+        await ctrl.HandleSubscriptionUpdatedAsync(sub, CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+        updated!.Plan.Should().Be(expectedPlan,
+            $"price id '{priceId}' must map to plan '{expectedPlan}' (yearly ids included)");
+        updated.StripePriceId.Should().Be(priceId, "the raw price id must be persisted for interval derivation");
+        updated.AccountStatus.Should().Be(AccountStatusConstants.Active);
+    }
+
+    // ── Yearly billing: invoice-period → calendar-month overage windows ───────
+    // The order quota is MONTHLY on every paid plan regardless of payment interval.
+    // A yearly renewal invoice spans ~12 months; metering it as ONE window would
+    // count the whole year's orders against the monthly cap. SplitBillingPeriod…
+    // must decompose multi-month periods into calendar-month windows while leaving
+    // single-month (monthly subscription) periods byte-identical.
+
+    [Fact]
+    public void SplitBillingPeriod_MonthlyAnchorPeriod_PassesThroughUnchanged()
+    {
+        // A mid-month Stripe anchor period (Jan 15 → Feb 15, 31 days) must NOT be
+        // decomposed — the monthly billing path stays byte-identical.
+        var start = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc);
+        var end   = new DateTime(2026, 2, 15, 0, 0, 0, DateTimeKind.Utc);
+
+        var windows = BillingController.SplitBillingPeriodIntoMonthlyWindows(start, end);
+
+        windows.Should().ContainSingle();
+        windows[0].Should().Be((start, end));
+    }
+
+    [Fact]
+    public void SplitBillingPeriod_CalendarMonthPeriod_PassesThroughUnchanged()
+    {
+        var start = new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc);
+        var end   = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var windows = BillingController.SplitBillingPeriodIntoMonthlyWindows(start, end);
+
+        windows.Should().ContainSingle();
+        windows[0].Should().Be((start, end));
+    }
+
+    [Fact]
+    public void SplitBillingPeriod_YearlyPeriod_SplitsIntoContiguousCalendarMonths()
+    {
+        // Mid-month annual anchor: Jun 15 2026 → Jun 15 2027.
+        var start = new DateTime(2026, 6, 15, 0, 0, 0, DateTimeKind.Utc);
+        var end   = new DateTime(2027, 6, 15, 0, 0, 0, DateTimeKind.Utc);
+
+        var windows = BillingController.SplitBillingPeriodIntoMonthlyWindows(start, end);
+
+        // Partial first month + 11 full months + partial last month = 13 windows.
+        windows.Should().HaveCount(13);
+        windows[0].Should().Be((start, new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc)),
+            "the first window runs from the anchor day to the next calendar-month boundary");
+        windows[^1].Should().Be((new DateTime(2027, 6, 1, 0, 0, 0, DateTimeKind.Utc), end),
+            "the last window runs from the final month boundary to the anchor day");
+
+        // Contiguity: no gaps, no overlaps, every window ≤ 1 calendar month.
+        for (var i = 1; i < windows.Count; i++)
+            windows[i].Start.Should().Be(windows[i - 1].End, "windows must be contiguous");
+        foreach (var (s, e) in windows)
+        {
+            e.Should().BeAfter(s);
+            (e - s).TotalDays.Should().BeLessThanOrEqualTo(31);
+        }
+    }
+
+    [Fact]
+    public void SplitBillingPeriod_YearlyPeriodOnCalendarBoundary_IsTwelveFullMonths()
+    {
+        var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var end   = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var windows = BillingController.SplitBillingPeriodIntoMonthlyWindows(start, end);
+
+        windows.Should().HaveCount(12);
+        windows[0].Should().Be((start, new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc)));
+        windows[^1].Should().Be((new DateTime(2026, 12, 1, 0, 0, 0, DateTimeKind.Utc), end));
+    }
+
+    [Fact]
+    public async Task HandleInvoiceCreated_YearlyInvoicePeriod_MetersEachCalendarMonth_NeverTheWholeYear()
+    {
+        var (ctrl, billing, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id               = orgId,
+            Plan             = PlanConstants.Operations,
+            AccountStatus    = AccountStatusConstants.Active,
+            StripeCustomerId = "cus_yearly_overage",
+            ClerkOrgId       = "org_yearly_overage",
+            Name             = "Yearly Overage Org",
+            Slug             = "yearly-overage-org",
+        });
+        await db.SaveChangesAsync();
+
+        // A yearly subscription's renewal invoice covers the whole closed year.
+        var periodStart = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var periodEnd   = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        // Only March went over the cap: compute returns 4 for the March window, 0 otherwise.
+        var marchStart = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+        var aprilStart = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+        billing
+            .Setup(b => b.ComputePeriodOverageOrdersAsync(
+                orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, DateTime s, DateTime _, CancellationToken _) =>
+                s == marchStart ? 4 : 0);
+        billing
+            .Setup(b => b.BillOverageForInvoiceAsync(
+                orgId, It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid o, string key, int orders, CancellationToken _) =>
+                new OverageBillingResult(o, key, orders, orders * 50L, AlreadyBilled: false, StripeItemId: "ii_march"));
+
+        var invoice = new Stripe.Invoice
+        {
+            Id          = "in_yearly",
+            CustomerId  = "cus_yearly_overage",
+            PeriodStart = periodStart,
+            PeriodEnd   = periodEnd,
+            Parent      = new Stripe.InvoiceParent
+            {
+                SubscriptionDetails = new Stripe.InvoiceParentSubscriptionDetails
+                {
+                    SubscriptionId = "sub_yearly",
+                },
+            },
+        };
+
+        await ctrl.HandleInvoiceCreatedAsync(invoice, CancellationToken.None);
+
+        // The year is metered as 12 calendar-month windows — NEVER the raw 12-month span.
+        billing.Verify(b => b.ComputePeriodOverageOrdersAsync(
+            orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(12), "a yearly invoice period must be metered per calendar month");
+        billing.Verify(b => b.ComputePeriodOverageOrdersAsync(
+            orgId, periodStart, periodEnd, It.IsAny<CancellationToken>()),
+            Times.Never, "the whole-year window must never be counted against the monthly cap");
+        billing.Verify(b => b.ComputePeriodOverageOrdersAsync(
+            orgId, marchStart, aprilStart, It.IsAny<CancellationToken>()),
+            Times.Once, "March must be metered as exactly [Mar 1, Apr 1)");
+
+        // Only the over-cap month is billed, keyed on ITS window start (own ledger row).
+        var marchKey = BillingController.BuildPeriodBillingKey(orgId, marchStart);
+        billing.Verify(b => b.BillOverageForInvoiceAsync(
+            orgId, marchKey, 4, It.IsAny<CancellationToken>()), Times.Once,
+            "the over-cap month is billed with its own per-month period key");
+        billing.Verify(b => b.BillOverageForInvoiceAsync(
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Once, "under-cap months must not be billed at all");
+    }
+
     // ── Minimal in-memory DbContext ──────────────────────────────────────────
 
     private sealed class BillingTestDbContext : ProcuLinkDbContext

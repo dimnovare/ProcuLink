@@ -163,6 +163,11 @@ public sealed class StripeBillingService : IBillingService
         // Dashboard). See docs/strategy/2026-06-08-sso-saml-implementation.md.
         var ssoAvailable = PlanConstants.PlanHasFeature(plan, BillingFeature.Sso);
 
+        // Payment interval (monthly|yearly) derived from the persisted Stripe price id
+        // — cheap (config compare, no Stripe HTTP). Informational only: the order
+        // quota above is ALWAYS a calendar-month window regardless of interval.
+        var billingInterval = GetBillingIntervalFromPriceId(org.StripePriceId);
+
         return new BillingStatus(
             Plan: plan,
             AccountStatus: org.AccountStatus,
@@ -183,7 +188,37 @@ public sealed class StripeBillingService : IBillingService
             OverageAmountEur: overageAmountEur,
             NearLimit: nearLimit,
             AtLimit: atLimit,
-            SsoAvailable: ssoAvailable);
+            SsoAvailable: ssoAvailable,
+            BillingInterval: billingInterval);
+    }
+
+    // Config keys whose values are the YEARLY Stripe price ids. A persisted
+    // org.StripePriceId matching any of these means the subscription is annual.
+    private static readonly string[] YearlyPriceConfigKeys =
+    {
+        "Stripe:GrowthYearlyPriceId",
+        "Stripe:OperationsYearlyPriceId",
+        "Stripe:IntegrationYearlyPriceId",
+        "Stripe:DistributorYearlyPriceId",
+    };
+
+    /// <summary>
+    /// Maps a persisted Stripe price id to a billing interval: null when no price is
+    /// on file (no Stripe subscription — Pilot / manual Enterprise), "yearly" when it
+    /// matches a configured <c>Stripe:*YearlyPriceId</c>, otherwise "monthly".
+    /// Pure config comparison — never calls Stripe.
+    /// </summary>
+    private string? GetBillingIntervalFromPriceId(string? stripePriceId)
+    {
+        if (string.IsNullOrWhiteSpace(stripePriceId)) return null;
+
+        foreach (var key in YearlyPriceConfigKeys)
+        {
+            var configured = _config[key];
+            if (!string.IsNullOrWhiteSpace(configured) && configured == stripePriceId)
+                return "yearly";
+        }
+        return "monthly";
     }
 
     public async Task<bool> CanProcessOrdersAsync(Guid orgId, CancellationToken ct = default) =>

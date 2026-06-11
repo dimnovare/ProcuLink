@@ -383,21 +383,68 @@ public sealed class BillingController : ControllerBase
             ? DateTime.UtcNow
             : DateTime.SpecifyKind(invoice.PeriodEnd, DateTimeKind.Utc);
 
-        var overageOrders = await _billing.ComputePeriodOverageOrdersAsync(
-            org.Id, periodStart, periodEnd, ct);
-        if (overageOrders <= 0) return;
+        // ── Yearly-subscription correctness: monthly windows, not the raw period ──
+        // The order quota is a MONTHLY allowance on every paid plan regardless of the
+        // payment interval. A monthly subscription's invoice period (~1 month) passes
+        // through unchanged — single window keyed on periodStart, byte-identical to
+        // the pre-yearly behaviour. A YEARLY subscription's renewal invoice spans ~12
+        // months; counting the whole year's orders against the MONTHLY cap would
+        // grotesquely over-bill, so multi-month periods are decomposed into
+        // calendar-month windows and each month is computed + billed separately, each
+        // with its own period-based idempotency key.
+        var windows = SplitBillingPeriodIntoMonthlyWindows(periodStart, periodEnd);
 
-        // Idempotent: keyed on the BILLING PERIOD ("{orgId}:{periodStart:O}"), NOT the
-        // invoice id. The same period maps to the same key, so the unique
-        // (org_id, billing_key) row blocks a second charge even if Stripe emits a new
-        // invoice id for the same/overlapping period (e.g. a voided + re-issued draft).
-        var billingKey = BuildPeriodBillingKey(org.Id, periodStart);
-        var result = await _billing.BillOverageForInvoiceAsync(
-            org.Id, billingKey, overageOrders, ct);
+        foreach (var (windowStart, windowEnd) in windows)
+        {
+            var overageOrders = await _billing.ComputePeriodOverageOrdersAsync(
+                org.Id, windowStart, windowEnd, ct);
+            if (overageOrders <= 0) continue;
 
-        _logger.LogInformation(
-            "invoice.created overage for org {OrgId}: {Orders} orders, period={Period}, alreadyBilled={Already}, item={Item}",
-            org.Id, result.OverageOrders, billingKey, result.AlreadyBilled, result.StripeItemId);
+            // Idempotent: keyed on the BILLING PERIOD ("{orgId}:{periodStart:O}"), NOT the
+            // invoice id. The same period maps to the same key, so the unique
+            // (org_id, billing_key) row blocks a second charge even if Stripe emits a new
+            // invoice id for the same/overlapping period (e.g. a voided + re-issued draft).
+            var billingKey = BuildPeriodBillingKey(org.Id, windowStart);
+            var result = await _billing.BillOverageForInvoiceAsync(
+                org.Id, billingKey, overageOrders, ct);
+
+            _logger.LogInformation(
+                "invoice.created overage for org {OrgId}: {Orders} orders, period={Period}, alreadyBilled={Already}, item={Item}",
+                org.Id, result.OverageOrders, billingKey, result.AlreadyBilled, result.StripeItemId);
+        }
+    }
+
+    /// <summary>
+    /// Splits an invoice billing period into per-calendar-month windows for overage
+    /// metering. A period no longer than a single month (≤ 32 days — every monthly
+    /// Stripe anchor period) is returned UNCHANGED as one window, keeping the monthly
+    /// billing path byte-identical. Longer periods (yearly/quarterly subscriptions)
+    /// are cut on UTC calendar-month boundaries: the first/last windows may be partial
+    /// (anchor day → month end, month start → anchor day); each full month in between
+    /// is its own window. Each window's start feeds <see cref="BuildPeriodBillingKey"/>,
+    /// so every month gets its own idempotency ledger row and a webhook replay (or a
+    /// re-issued invoice for the same period) can never double-bill any month.
+    /// </summary>
+    internal static IReadOnlyList<(DateTime Start, DateTime End)> SplitBillingPeriodIntoMonthlyWindows(
+        DateTime periodStart,
+        DateTime periodEnd)
+    {
+        // Single-month periods (all monthly subscriptions: 28–31 days, plus a safety
+        // margin) pass through untouched — the monthly path stays byte-identical.
+        if (periodEnd <= periodStart || (periodEnd - periodStart).TotalDays <= 32)
+            return new[] { (periodStart, periodEnd) };
+
+        var windows = new List<(DateTime Start, DateTime End)>();
+        var cursor = periodStart;
+        while (cursor < periodEnd)
+        {
+            var nextMonthBoundary = new DateTime(cursor.Year, cursor.Month, 1, 0, 0, 0, DateTimeKind.Utc)
+                .AddMonths(1);
+            var windowEnd = nextMonthBoundary < periodEnd ? nextMonthBoundary : periodEnd;
+            windows.Add((cursor, windowEnd));
+            cursor = windowEnd;
+        }
+        return windows;
     }
 
     /// <summary>

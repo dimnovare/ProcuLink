@@ -47,4 +47,13 @@ public sealed record BillingStatus(
     // configured for the org — that is provisioned per-org in the Clerk Dashboard
     // (see docs/strategy/2026-06-08-sso-saml-implementation.md). Defaults to false
     // so existing positional construction sites stay correct.
-    bool SsoAvailable = false);
+    bool SsoAvailable = false,
+    // ── Subscription payment interval: "monthly" | "yearly" | null ───────────
+    // Derived from the persisted Stripe price id (org.StripePriceId, written by the
+    // checkout/subscription webhooks) compared against the configured
+    // Stripe:*YearlyPriceId keys — no Stripe HTTP round-trip. null when the org has
+    // no Stripe subscription price on file (Pilot, manual Enterprise). Purely
+    // informational for the frontend billing UI; the ORDER QUOTA stays a
+    // calendar-month allowance regardless of this value. Defaults to null so
+    // existing positional construction sites stay correct.
+    string? BillingInterval = null);
