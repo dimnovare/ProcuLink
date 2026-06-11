@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -9,7 +10,20 @@ namespace ProcuLink.Api.Services;
 public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
 {
     private readonly ProcuLinkDbContext _db;
-    public SupplierAcceptanceService(ProcuLinkDbContext db) => _db = db;
+    private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
+    private readonly ILogger<SupplierAcceptanceService>? _logger;
+
+    public SupplierAcceptanceService(
+        ProcuLinkDbContext db,
+        IEffectiveConnectionConfigResolver? effectiveConfig = null,
+        ILogger<SupplierAcceptanceService>? logger = null)
+    {
+        _db = db;
+        // Launch batch 7 — revision authority. Null (older positional test ctors / unregistered
+        // hosts) behaves exactly like flag-OFF: the live active profile drives validation.
+        _effectiveConfig = effectiveConfig;
+        _logger = logger;
+    }
 
     public async Task<SupplierAcceptanceProfile?> GetActiveAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
         await _db.SupplierAcceptanceProfiles
@@ -170,7 +184,7 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
             .FirstOrDefaultAsync(ct);
         if (order is null) return null;
 
-        var profile = await GetActiveAsync(orgId, order.SupplierId, ct);
+        var profile = await ResolveEffectiveProfileAsync(orgId, order, ct);
         var now = DateTime.UtcNow;
 
         // Re-validation overwrites prior results for this order.
@@ -182,6 +196,65 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         _db.OrderValidationResults.AddRange(results);
         await _db.SaveChangesAsync(ct);
         return results;
+    }
+
+    // ── Launch batch 7 — revision authority ────────────────────────────────────
+
+    /// <summary>
+    /// The acceptance profile that GOVERNS validation for this order:
+    /// <list type="bullet">
+    ///   <item>Flag ON + pinned + revision resolves: the revision's BOUND profile
+    ///   (<c>AcceptanceProfileId</c> + <c>AcceptanceVersionNo</c>, loaded by id org-scoped — each
+    ///   profile version is its own immutable row, so the id IS the version pin). A revision that
+    ///   binds NO profile (<c>AcceptanceProfileId</c> = null) honestly means "this published
+    ///   contract has no validation" → null (no rules), NOT the live active profile.</item>
+    ///   <item>Flag off / unpinned / orphan pin: the LIVE active profile — byte-identical to the
+    ///   pre-batch-7 behaviour.</item>
+    ///   <item>Defensive: a bound profile row that no longer exists falls back to the live active
+    ///   profile (logged) — validation must never brick on a dangling binding.</item>
+    /// </list>
+    /// </summary>
+    private async Task<SupplierAcceptanceProfile?> ResolveEffectiveProfileAsync(
+        Guid orgId, PurchaseOrderEntity order, CancellationToken ct)
+    {
+        if (_effectiveConfig is not null)
+        {
+            var effective = await _effectiveConfig.ResolveAsync(orgId, order.ConnectionRevisionId, ct);
+            if (effective.IsRevision)
+            {
+                if (effective.AcceptanceProfileId is null)
+                {
+                    _logger?.LogInformation(
+                        "Order {OrderId}: pinned {Source} binds no acceptance profile — validating with no rules.",
+                        order.Id, effective.Source);
+                    return null;
+                }
+
+                var bound = await _db.SupplierAcceptanceProfiles
+                    .Include(p => p.Rules)
+                    .Where(p => p.OrgId == orgId && p.Id == effective.AcceptanceProfileId.Value)
+                    .FirstOrDefaultAsync(ct);
+
+                if (bound is not null)
+                {
+                    if (effective.AcceptanceVersionNo is int boundVersion && bound.VersionNo != boundVersion)
+                        _logger?.LogWarning(
+                            "Order {OrderId}: pinned {Source} acceptance binding version {Expected} does not match profile {ProfileId} version {Actual} — the id-bound row governs.",
+                            order.Id, effective.Source, boundVersion, bound.Id, bound.VersionNo);
+
+                    _logger?.LogInformation(
+                        "Order {OrderId}: validating against pinned {Source} acceptance profile v{Version}.",
+                        order.Id, effective.Source, bound.VersionNo);
+                    return bound;
+                }
+
+                _logger?.LogWarning(
+                    "Order {OrderId}: pinned {Source} acceptance profile {ProfileId} not found — falling back to the live active profile.",
+                    order.Id, effective.Source, effective.AcceptanceProfileId);
+            }
+        }
+
+        return await GetActiveAsync(orgId, order.SupplierId, ct);
     }
 
     /// <summary>
