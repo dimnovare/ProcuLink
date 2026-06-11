@@ -87,12 +87,19 @@ internal sealed class OrderServiceShared
     /// appear in the source text, or a quantity × unit price that did not reconcile
     /// with the stated amount) to "needs review" — even if its code resolved
     /// deterministically — and caps its confidence so it surfaces for a human.
+    /// P2 hardening: also records WHY onto <c>review_reason</c> (the extractor's
+    /// per-line reason when provided, else a generic extraction reason), appended
+    /// after any reason already written at line-entity creation (e.g. unresolved code).
     /// </summary>
     public static void ApplyExtractionReviewFlags(
         IReadOnlyList<PurchaseOrderLineEntity> lines,
-        IReadOnlyCollection<int> reviewLineNumbers)
+        IReadOnlyCollection<int> reviewLineNumbers,
+        IReadOnlyDictionary<int, string>? reviewReasons = null)
     {
         if (reviewLineNumbers.Count == 0) return;
+
+        const string genericExtractionReason =
+            "AI extraction flagged this line: a number could not be verified against the source document.";
 
         var reviewSet = reviewLineNumbers.ToHashSet();
         foreach (var le in lines)
@@ -100,6 +107,13 @@ internal sealed class OrderServiceShared
             if (!reviewSet.Contains(le.LineNumber)) continue;
             le.NeedsReview = true;
             if (le.Confidence > 0.5f) le.Confidence = 0.5f;
+
+            var reason = reviewReasons is not null && reviewReasons.TryGetValue(le.LineNumber, out var r)
+                ? r
+                : genericExtractionReason;
+            le.ReviewReason = string.IsNullOrWhiteSpace(le.ReviewReason)
+                ? reason
+                : $"{le.ReviewReason} {reason}";
         }
     }
 }

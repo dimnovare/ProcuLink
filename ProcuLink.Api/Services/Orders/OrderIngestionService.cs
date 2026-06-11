@@ -560,13 +560,14 @@ internal sealed class OrderIngestionService
             buffer.Position = 0;
             ParsedOrder parsedOrder;
             IReadOnlyCollection<int> structuredReviewLineNumbers = Array.Empty<int>();
+            IReadOnlyDictionary<int, string>? structuredReviewReasons = null;
             try
             {
                 if (extension == ".pdf")
                 {
                     // Primary PDF path: text → LLM structured extraction, with a
                     // deterministic-parser fallback. See ParsePdfAsync.
-                    (parsedOrder, structuredReviewLineNumbers) =
+                    (parsedOrder, structuredReviewLineNumbers, structuredReviewReasons) =
                         await ParsePdfAsync(buffer.ToArray(), organisationId, orderId, ct);
                 }
                 else if (poMapping is not null && extension == ".csv")
@@ -637,7 +638,8 @@ internal sealed class OrderIngestionService
 
             // Overlay structured-extraction review flags so a numerically-suspect
             // line surfaces in /operations/exceptions rather than being delivered blind.
-            OrderServiceShared.ApplyExtractionReviewFlags(lineEntities, structuredReviewLineNumbers);
+            OrderServiceShared.ApplyExtractionReviewFlags(
+                lineEntities, structuredReviewLineNumbers, structuredReviewReasons);
 
             bool anyUnresolved    = lineEntities.Any(l => l.NeedsReview);
             var  aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
@@ -762,9 +764,12 @@ internal sealed class OrderIngestionService
     /// Routes a PDF to the LLM structured extractor when one is available and it
     /// returns a confident order with lines; otherwise falls back to the
     /// deterministic <c>PdfOrderParser</c>. Returns the parsed order plus the set
-    /// of line numbers the extractor flagged for review (empty for the fallback).
+    /// of line numbers the extractor flagged for review (empty for the fallback)
+    /// and the optional per-line "why flagged" reasons (null for the fallback).
     /// </summary>
-    internal async Task<(ParsedOrder parsed, IReadOnlyCollection<int> reviewLineNumbers)> ParsePdfAsync(
+    internal async Task<(ParsedOrder parsed,
+                         IReadOnlyCollection<int> reviewLineNumbers,
+                         IReadOnlyDictionary<int, string>? reviewReasons)> ParsePdfAsync(
         byte[] bytes, Guid organisationId, Guid orderId, CancellationToken ct)
     {
         // No-egress orgs: never send PDF data to OpenAI. Use the deterministic parser,
@@ -784,7 +789,7 @@ internal sealed class OrderIngestionService
                 orderId, organisationId);
             var noEgressParser = _parserFactory.GetParser(".pdf");
             using var noEgressStream = new MemoryStream(bytes);
-            return (await noEgressParser.ParseAsync(noEgressStream, ct), Array.Empty<int>());
+            return (await noEgressParser.ParseAsync(noEgressStream, ct), Array.Empty<int>(), null);
         }
 
         if (_structuredExtractor is { IsAvailable: true })
@@ -799,7 +804,7 @@ internal sealed class OrderIngestionService
                 _logger.LogInformation(
                     "Order {OrderId}: PDF parsed via structured extractor — {Lines} lines, {Review} flagged for review.",
                     orderId, extractedOrder.Lines.Count, extraction.ReviewLineNumbers.Count);
-                return (MapExtractedToParsed(extractedOrder), extraction.ReviewLineNumbers);
+                return (MapExtractedToParsed(extractedOrder), extraction.ReviewLineNumbers, extraction.ReviewReasons);
             }
 
             _logger.LogInformation(
@@ -810,7 +815,7 @@ internal sealed class OrderIngestionService
         var parser = _parserFactory.GetParser(".pdf");
         using var stream = new MemoryStream(bytes);
         var parsed = await parser.ParseAsync(stream, ct);
-        return (parsed, Array.Empty<int>());
+        return (parsed, Array.Empty<int>(), null);
     }
 
     /// <summary>
@@ -962,6 +967,8 @@ internal sealed class OrderIngestionService
                 UnitPrice        = line.UnitPrice ?? 0m,
                 Confidence       = resolved ? (parserFlagged ? 0.5f : 1.0f) : 0.0f,
                 NeedsReview      = !resolved || parserFlagged,
+                // P2 hardening: persist WHY the line was flagged so the review UI can say so.
+                ReviewReason     = ComposeReviewReason(resolved, parserFlagged, line),
                 AiSuggestedSupplierItemCode = suggestion?.SupplierItemCode,
                 AiSuggestionConfidence = suggestion?.Confidence,
                 AiSuggestionReason = suggestion?.Reason,
@@ -974,6 +981,32 @@ internal sealed class OrderIngestionService
         }
 
         return entities;
+    }
+
+    /// <summary>
+    /// Short "why was this flagged" string written at parse time (P2 hardening).
+    /// Combines the unresolved-code reason with the parser's own numeric-ambiguity
+    /// reason when both apply; null when the line was not flagged here. (The
+    /// structured-extraction overlay adds its own reasons afterwards via
+    /// <see cref="OrderServiceShared.ApplyExtractionReviewFlags"/>.)
+    /// </summary>
+    internal static string? ComposeReviewReason(bool resolved, bool parserFlagged, ParsedOrderLine line)
+    {
+        if (resolved && !parserFlagged) return null;
+
+        var parts = new List<string>(2);
+        if (!resolved)
+        {
+            parts.Add(string.IsNullOrWhiteSpace(line.BuyerItemCode)
+                ? "The line has no buyer item code to resolve against supplier mappings."
+                : $"No supplier item code mapping was found for buyer code '{line.BuyerItemCode.Trim()}'.");
+        }
+        if (parserFlagged)
+        {
+            parts.Add(line.ReviewReason
+                ?? "A quantity or unit price could not be read unambiguously from the source file.");
+        }
+        return string.Join(" ", parts);
     }
 
     // ── Launch batch 7 — revision-authority snapshot helpers ───────────────────

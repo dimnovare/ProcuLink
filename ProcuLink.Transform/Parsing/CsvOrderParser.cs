@@ -122,7 +122,8 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
                 // Refuse to deliver a silently-wrong number: a quantity or unit price the
                 // parser could not unambiguously read (e.g. scientific notation "1.5e2",
                 // letters) flags the line so it surfaces for human review.
-                NeedsReview:   qtyAmbiguous || priceAmbiguous
+                NeedsReview:   qtyAmbiguous || priceAmbiguous,
+                ReviewReason:  BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous)
             ));
 
             autoLineNum++;
@@ -130,6 +131,19 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
 
         return new ParsedOrder(poNumber, orderDate, buyerName, currency, lines);
     }
+
+    /// <summary>
+    /// Short "why was this flagged" string for the review UI. Null when nothing was
+    /// ambiguous (the line is not parser-flagged).
+    /// </summary>
+    private static string? BuildAmbiguityReason(bool qtyAmbiguous, bool priceAmbiguous) =>
+        (qtyAmbiguous, priceAmbiguous) switch
+        {
+            (true,  true)  => "The quantity and unit price could not be read unambiguously from the source file.",
+            (true,  false) => "The quantity could not be read unambiguously from the source file.",
+            (false, true)  => "The unit price could not be read unambiguously from the source file.",
+            _              => null,
+        };
 
     /// <summary>
     /// Parse a decimal that may be US ("1,234.56", "73.22") or European

@@ -33,12 +33,21 @@ namespace ProcuLink.Core.Services.Ai;
 /// "needs review" so they surface for a human in the exceptions dashboard
 /// rather than being silently delivered. Empty when nothing needs review.
 /// </param>
+/// <param name="ReviewReasons">
+/// Optional short human-readable explanation per flagged line number (keys are a
+/// subset of <see cref="ReviewLineNumbers"/>), e.g. "a number did not appear in the
+/// source text" or "extracted from a scanned PDF with no text layer". The caller
+/// persists these onto the corresponding lines' <c>review_reason</c> so the review
+/// UI can say WHY a line was flagged. Null/absent keys fall back to a generic
+/// extraction reason. Additive + defaulted so existing construction sites compile.
+/// </param>
 public sealed record StructuredExtractionResult(
     bool Success,
     double Confidence,
     ExtractedOrder? Order,
     string? FailureReason,
-    IReadOnlyCollection<int> ReviewLineNumbers)
+    IReadOnlyCollection<int> ReviewLineNumbers,
+    IReadOnlyDictionary<int, string>? ReviewReasons = null)
 {
     /// <summary>A failure result carrying a reason and no order.</summary>
     public static StructuredExtractionResult Fail(string reason) =>

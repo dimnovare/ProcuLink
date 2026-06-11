@@ -1851,7 +1851,9 @@ public sealed class OrdersController : ControllerBase
                 // Phase 4 per-line enrichment (null for parsers that don't emit it).
                 LineAmount:   l.LineAmount,
                 TaxRate:      l.TaxRate,
-                DeliveryDate: l.DeliveryDate?.ToString("yyyy-MM-dd")))
+                DeliveryDate: l.DeliveryDate?.ToString("yyyy-MM-dd"),
+                // P2 hardening: why the line was flagged for review (null when never flagged).
+                ReviewReason: l.ReviewReason))
             .ToList(),
         Artifacts: e.OutboundArtifacts
             .OrderByDescending(a => a.CreatedAt)

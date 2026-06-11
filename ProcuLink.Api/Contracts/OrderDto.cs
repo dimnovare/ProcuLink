@@ -53,7 +53,11 @@ public record OrderLineDto(
     /// <summary>Per-line tax rate (percent) as extracted; null when not captured.</summary>
     decimal? TaxRate = null,
     /// <summary>Per-line delivery date as ISO yyyy-MM-dd; null when not captured.</summary>
-    string?  DeliveryDate = null
+    string?  DeliveryDate = null,
+    /// <summary>Short human-readable explanation of why the line was flagged for review
+    /// (unresolved code / numeric ambiguity / AI anti-hallucination / scanned-PDF vision).
+    /// Null for never-flagged lines and rows created before the column existed.</summary>
+    string?  ReviewReason = null
 );
 
 public record AiMappingSuggestionDto(
