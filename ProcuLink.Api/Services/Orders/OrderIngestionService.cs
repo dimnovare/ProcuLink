@@ -1018,6 +1018,35 @@ internal sealed class OrderIngestionService
         PropertyNameCaseInsensitive = true,
     };
 
+    /// <summary>How a revision's input-mapping snapshot failed to yield a usable <see cref="PoMappingConfig"/> (replay flip A shared helper).</summary>
+    internal enum SnapshotPoMappingProblem { None, NotSnapshotted, Empty, Malformed }
+
+    /// <summary>
+    /// Replay flip A — the SHARED deserialize for a revision's <c>input_mapping_json</c> snapshot,
+    /// used by both the live parse path (<see cref="ResolveSnapshotPoMapping"/>) and the replay
+    /// parse-from-source leg (<c>ReplayService</c>) so there is exactly ONE reading of the snapshot.
+    /// Returns the config only when USABLE (at least one header or line rule); otherwise null plus
+    /// the reason (and the <see cref="JsonException"/> for malformed JSON). Never throws.
+    /// </summary>
+    internal static (PoMappingConfig? Config, SnapshotPoMappingProblem Problem, JsonException? Error)
+        TryDeserializeSnapshotPoMapping(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return (null, SnapshotPoMappingProblem.NotSnapshotted, null);
+
+        try
+        {
+            var config = JsonSerializer.Deserialize<PoMappingConfig>(json, SnapshotPoMappingSerializerOptions);
+            if (config is null || (config.Header.Count == 0 && config.Lines.Count == 0))
+                return (null, SnapshotPoMappingProblem.Empty, null);
+            return (config, SnapshotPoMappingProblem.None, null);
+        }
+        catch (JsonException ex)
+        {
+            return (null, SnapshotPoMappingProblem.Malformed, ex);
+        }
+    }
+
     /// <summary>
     /// The parse-mapping config snapshotted into the pinned revision, when USABLE (at least one
     /// header or line rule). Returns null — meaning "fall back to the LIVE supplier PO mapping" —
@@ -1029,30 +1058,24 @@ internal sealed class OrderIngestionService
         if (!effective.IsRevision || string.IsNullOrWhiteSpace(effective.InputMappingJson))
             return null;
 
-        try
+        var (config, problem, error) = TryDeserializeSnapshotPoMapping(effective.InputMappingJson);
+        switch (problem)
         {
-            var config = JsonSerializer.Deserialize<PoMappingConfig>(
-                effective.InputMappingJson, SnapshotPoMappingSerializerOptions);
-
-            if (config is null || (config.Header.Count == 0 && config.Lines.Count == 0))
-            {
+            case SnapshotPoMappingProblem.Empty:
                 _logger.LogInformation(
                     "Order {OrderId}: pinned {Source} input mapping is empty — using the live PO mapping.",
                     orderId, effective.Source);
                 return null;
-            }
+            case SnapshotPoMappingProblem.Malformed:
+                _logger.LogWarning(error,
+                    "Order {OrderId}: pinned {Source} input mapping is malformed — using the live PO mapping.",
+                    orderId, effective.Source);
+                return null;
+        }
 
-            _logger.LogInformation(
-                "Order {OrderId}: parse mapping taken from pinned {Source}.", orderId, effective.Source);
-            return config;
-        }
-        catch (JsonException ex)
-        {
-            _logger.LogWarning(ex,
-                "Order {OrderId}: pinned {Source} input mapping is malformed — using the live PO mapping.",
-                orderId, effective.Source);
-            return null;
-        }
+        _logger.LogInformation(
+            "Order {OrderId}: parse mapping taken from pinned {Source}.", orderId, effective.Source);
+        return config;
     }
 
     /// <summary>
@@ -1318,7 +1341,12 @@ internal sealed class OrderIngestionService
         return set;
     }
 
-    private static Task<ParsedOrder> ParseWithMappingTemplateAsync(
+    /// <summary>
+    /// CSV parse through a supplier/revision PO mapping template. Internal (was private) so the
+    /// replay parse-from-source leg (<c>ReplayService</c> — replay flip A) re-parses with EXACTLY
+    /// the routing <see cref="ParseStoredFileAsync"/> uses; body unchanged.
+    /// </summary>
+    internal static Task<ParsedOrder> ParseWithMappingTemplateAsync(
         byte[] buffer, PoMappingConfig config, CancellationToken ct)
     {
         using var stream = new MemoryStream(buffer);
