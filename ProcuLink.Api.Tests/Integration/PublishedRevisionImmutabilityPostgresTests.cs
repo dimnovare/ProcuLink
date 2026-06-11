@@ -230,6 +230,151 @@ public sealed class PublishedRevisionImmutabilityPostgresTests : IAsyncLifetime
         }
     }
 
+    // ── Fill-only exemption (retention batch rider, migration AddBlobRetentionSweep) ──
+
+    /// <summary>
+    /// The Fable re-backfill (merged 699b3c6) must FILL <c>output_mapping_json</c> on
+    /// published revisions that predate output snapshotting. Proves the replaced trigger
+    /// function allows EXACTLY the NULL→value transition on output_mapping_json — and
+    /// nothing else: a non-null overwrite, an erase back to NULL, and every other content
+    /// column are all still rejected on a published row.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task PublishedRevision_OutputMappingFillOnly_IsAllowed_EverythingElseStillBlocked()
+    {
+        var (orgId, supplierId, connectionId) = await SeedOrgSupplierConnectionAsync();
+
+        var publishedId = Guid.NewGuid();
+        var now         = DateTime.UtcNow;
+
+        // A published revision from BEFORE output snapshotting: output_mapping_json is NULL.
+        await using (var db = new ProcuLinkDbContext(_options!))
+        {
+            db.SupplierConnectionRevisions.Add(new SupplierConnectionRevision
+            {
+                Id = publishedId, ConnectionId = connectionId, OrgId = orgId, SupplierId = supplierId,
+                VersionNo = 1, Status = "published", PublishedAt = now, EffectiveFrom = now,
+                CreatedAt = now, CatalogMode = "live",
+                InputMappingJson  = """{"columns":{"po":"PO Number"}}""",
+                OutputMappingJson = null, // pre-snapshot era
+                OutputFormat      = "csv",
+                DeliveryProtocol  = "http",
+            });
+            await db.SaveChangesAsync();
+        }
+
+        // ── 1. FILL (NULL→value) on the published row → ALLOWED (the exemption) ──
+        const string backfilled = """{"fields":[{"target":"poNumber","source":"po_number"}]}""";
+        await using (var db = new ProcuLinkDbContext(_options!))
+        {
+            var published = await db.SupplierConnectionRevisions.SingleAsync(r => r.Id == publishedId);
+            published.OutputMappingJson = backfilled;
+            await db.SaveChangesAsync(); // must NOT throw — re-backfill write shape
+        }
+
+        await using (var db = new ProcuLinkDbContext(_options!))
+        {
+            var published = await db.SupplierConnectionRevisions.AsNoTracking().SingleAsync(r => r.Id == publishedId);
+            // jsonb normalizes formatting/key order — assert semantically, not byte-for-byte.
+            Assert.NotNull(published.OutputMappingJson);
+            Assert.Contains("po_number", published.OutputMappingJson);
+        }
+
+        // ── 2. OVERWRITE (value→other value) → still REJECTED ──
+        await AssertContentUpdateRejectedAsync(publishedId, r => r.OutputMappingJson = """{"fields":[]}""");
+
+        // ── 3. ERASE (value→NULL) → still REJECTED (fill-only, not clear-and-refill) ──
+        await AssertContentUpdateRejectedAsync(publishedId, r => r.OutputMappingJson = null);
+
+        // ── 4. Every OTHER content column → still REJECTED on the same row ──
+        await AssertContentUpdateRejectedAsync(publishedId, r => r.InputMappingJson    = """{"columns":{"po":"TAMPERED"}}""");
+        await AssertContentUpdateRejectedAsync(publishedId, r => r.OutputFormat        = "xml");
+        await AssertContentUpdateRejectedAsync(publishedId, r => r.DeliveryProtocol    = "sftp");
+        await AssertContentUpdateRejectedAsync(publishedId, r => r.DeliveryConfigJson  = """{"endpoint":"https://evil.example"}""");
+        await AssertContentUpdateRejectedAsync(publishedId, r => r.CredentialsRef      = "tampered");
+
+        // The backfilled value survived every rejected tamper attempt.
+        await using (var verify = new ProcuLinkDbContext(_options!))
+        {
+            var published = await verify.SupplierConnectionRevisions.AsNoTracking().SingleAsync(r => r.Id == publishedId);
+            Assert.NotNull(published.OutputMappingJson);
+            Assert.Contains("po_number", published.OutputMappingJson);
+            Assert.Contains("PO Number", published.InputMappingJson);
+        }
+    }
+
+    // ── Retention schema (same migration) — real persisted columns/table ──────
+
+    /// <summary>
+    /// Proves on real Postgres that the retention batch's schema is REAL (the EF-Ignore /
+    /// silent-drop lesson): <c>organisations.retention_days</c>,
+    /// <c>purchase_orders.source_file_purged_at</c>, <c>outbound_artifacts.blob_purged_at</c>
+    /// and a full <c>retention_audit_log</c> row all round-trip through save + fresh-context
+    /// reload, and the columns default to NULL (= retention disabled / blob present).
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task RetentionSchema_RoundTripsThroughRealPostgres()
+    {
+        var (orgId, supplierId, _) = await SeedOrgSupplierConnectionAsync();
+        var orderId    = Guid.NewGuid();
+        var artifactId = Guid.NewGuid();
+        var auditId    = Guid.NewGuid();
+        var now        = DateTime.UtcNow;
+
+        await using (var db = new ProcuLinkDbContext(_options!))
+        {
+            // Defaults: a freshly-seeded org has retention DISABLED.
+            var org = await db.Organisations.SingleAsync(o => o.Id == orgId);
+            Assert.Null(org.RetentionDays);
+            org.RetentionDays = 90;
+
+            db.PurchaseOrders.Add(new PurchaseOrderEntity
+            {
+                Id = orderId, OrgId = orgId, SupplierId = supplierId,
+                PoNumber = "PO-RET-1", OrderDate = DateOnly.FromDateTime(now), Currency = "EUR",
+                Status = "delivered", SourceFileKey = $"{orgId}/{orderId}/source.csv",
+                SourceFilePurgedAt = now, CreatedAt = now.AddDays(-100), UpdatedAt = now,
+            });
+            db.OutboundArtifacts.Add(new OutboundArtifact
+            {
+                Id = artifactId, OrderId = orderId, OrgId = orgId, Format = "csv",
+                FileKey = $"{orgId}/{orderId}/artifacts/{artifactId}.csv", CreatedAt = now.AddDays(-100),
+                ArtifactSha256 = "sha-survives-the-purge", BlobPurgedAt = now,
+            });
+            db.RetentionAuditLogs.Add(new RetentionAuditLog
+            {
+                Id = auditId, OrgId = orgId, RunAt = now, Mode = "delete",
+                FilesDeleted = 2, BytesEstimated = 12_345,
+                DetailsJson = """{"retentionDays":90,"sourceFiles":1,"artifactBlobs":1}""",
+            });
+            await db.SaveChangesAsync();
+        }
+
+        // Reload through a FRESH context — values must come back from Postgres itself.
+        await using (var verify = new ProcuLinkDbContext(_options!))
+        {
+            var org = await verify.Organisations.AsNoTracking().SingleAsync(o => o.Id == orgId);
+            Assert.Equal(90, org.RetentionDays);
+
+            var order = await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId);
+            Assert.NotNull(order.SourceFilePurgedAt);
+            Assert.NotNull(order.SourceFileKey); // blob-only: the key survives
+
+            var artifact = await verify.OutboundArtifacts.AsNoTracking().SingleAsync(a => a.Id == artifactId);
+            Assert.NotNull(artifact.BlobPurgedAt);
+            Assert.Equal("sha-survives-the-purge", artifact.ArtifactSha256); // hash survives
+
+            var audit = await verify.RetentionAuditLogs.AsNoTracking().SingleAsync(a => a.Id == auditId);
+            Assert.Equal("delete", audit.Mode);
+            Assert.Equal(2, audit.FilesDeleted);
+            Assert.Equal(12_345, audit.BytesEstimated);
+            // jsonb normalizes formatting — parse, don't string-match.
+            using var details = System.Text.Json.JsonDocument.Parse(audit.DetailsJson!);
+            Assert.Equal(90, details.RootElement.GetProperty("retentionDays").GetInt32());
+            Assert.Equal(1, details.RootElement.GetProperty("sourceFiles").GetInt32());
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private async Task<(Guid orgId, Guid supplierId, Guid connectionId)> SeedOrgSupplierConnectionAsync()

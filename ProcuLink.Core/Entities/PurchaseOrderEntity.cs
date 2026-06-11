@@ -86,6 +86,16 @@ public class PurchaseOrderEntity
     /// </summary>
     public string? DocumentType { get; set; }
 
+    /// <summary>
+    /// Set (UTC) when the blob-retention sweep deleted this order's SOURCE FILE blob from
+    /// R2 per the org's retention policy. The DB row, <see cref="SourceFileKey"/>, hashes,
+    /// provenance and audit trail are KEPT — only the blob is gone. Null = blob still
+    /// present (or there never was one). Download/preview paths must check this and return
+    /// a clear "purged per retention policy" answer instead of a 500.
+    /// Additive column <c>source_file_purged_at</c> (migration <c>AddBlobRetentionSweep</c>).
+    /// </summary>
+    public DateTime? SourceFilePurgedAt { get; set; }
+
     // ── V5 deepen-canonical (nullable; real persisted column) ───────────────────
     /// <summary>
     /// Requested delivery date at the header level (Peppol BIS 3.0 mandatory).

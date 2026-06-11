@@ -13,4 +13,13 @@ public interface IFileStorageService
 
     /// <summary>Deletes the object at the given key.</summary>
     Task DeleteAsync(string key, CancellationToken ct);
+
+    /// <summary>
+    /// Best-effort size (bytes) of the object at the given key, or null when unknown
+    /// (missing object, transient storage error, or an implementation that does not
+    /// support metadata). Used by the blob-retention sweep to estimate reclaimed bytes —
+    /// MUST never throw. Default implementation returns null so existing test doubles
+    /// keep compiling unchanged.
+    /// </summary>
+    Task<long?> TryGetSizeAsync(string key, CancellationToken ct) => Task.FromResult<long?>(null);
 }

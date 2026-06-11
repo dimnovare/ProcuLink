@@ -334,6 +334,53 @@ public sealed class AdminController : ControllerBase
             EffectiveTrialEndsAt:   effectiveTrialEnd));
     }
 
+    // ── POST /api/admin/organisations/{id}/retention ──────────────────────
+    /// <summary>
+    /// Sets (or clears) the per-org BLOB-retention window. NULL/cleared = retention
+    /// DISABLED — the default; nothing is ever deleted for an org that has not opted in.
+    /// Setting a value (≥ 1 day) opts the org into the daily blob-retention sweep, which
+    /// purges ONLY the R2 file blobs (source files + generated artifacts) of TERMINAL
+    /// orders older than the window — DB rows, hashes, provenance and audit trail stay.
+    /// A second global latch (<c>Retention:DryRun</c>, default true on the Worker) must
+    /// ALSO be flipped before anything is actually deleted. Admin-only by the class
+    /// <see cref="AdminOnlyAttribute"/> gate — org admins cannot self-serve this yet.
+    /// </summary>
+    [HttpPost("organisations/{id:guid}/retention")]
+    [ProducesResponseType(typeof(OrgRetentionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetOrganisationRetention(
+        Guid id,
+        [FromBody] SetOrgRetentionRequest request,
+        CancellationToken ct)
+    {
+        if (request is null)
+            return BadRequest(new { error = "Request body is required." });
+        if (!request.Clear && request.RetentionDays is null)
+            return BadRequest(new { error = "Provide retentionDays (>= 1) to enable retention, or clear=true to disable it." });
+        if (!request.Clear && request.RetentionDays is < 1)
+            return BadRequest(new { error = "retentionDays must be at least 1. Use clear=true to disable retention." });
+
+        // Cross-tenant by design — the org is targeted by route id (admin surface).
+        var org = await _db.Organisations.FirstOrDefaultAsync(o => o.Id == id, ct);
+        if (org is null)
+            return NotFound(new { error = $"Organisation {id} not found." });
+
+        org.RetentionDays = request.Clear ? null : request.RetentionDays;
+        await _db.SaveChangesAsync(ct);
+
+        // Deliberate operator trail for a destructive-capability toggle.
+        _logger.LogWarning(
+            "Admin set blob retention for org {OrgId}: retentionDays={RetentionDays} (null = disabled).",
+            org.Id, org.RetentionDays);
+
+        return Ok(new OrgRetentionResponse(
+            Id:               org.Id,
+            Name:             org.Name,
+            RetentionDays:    org.RetentionDays,
+            RetentionEnabled: org.RetentionDays is not null));
+    }
+
     // ── DELETE /api/admin/organisations/{orgId}/orders/{orderId} ──────────
     // GDPR right-to-erasure: hard-deletes an order's R2 blobs + every order-tied
     // DB row, strictly org-scoped (closes audit d-5). Admin-only (class [AdminOnly]).

@@ -31,6 +31,17 @@ public class OutboundArtifact
     /// </summary>
     public string? ArtifactSha256 { get; set; }
 
+    /// <summary>
+    /// Set (UTC) when the blob-retention sweep deleted this artifact's file blob from R2
+    /// per the org's retention policy. The row itself — including <see cref="FileKey"/>,
+    /// <see cref="ArtifactSha256"/>, <see cref="ConfigDigest"/> and the revision provenance —
+    /// is KEPT for auditability; only the blob is gone. Null = blob still present.
+    /// Download paths must check this and return a clear "purged per retention policy"
+    /// answer (410), never a 500.
+    /// Additive column <c>blob_purged_at</c> (migration <c>AddBlobRetentionSweep</c>).
+    /// </summary>
+    public DateTime? BlobPurgedAt { get; set; }
+
     // Navigation
     public PurchaseOrderEntity Order { get; set; } = null!;
     public Organisation Organisation { get; set; } = null!;

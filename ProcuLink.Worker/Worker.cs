@@ -67,7 +67,16 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "30 3 * * *");
 
-        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection (every 15 min), data-retention-sweep (daily 03:30 UTC).");
+        // Blob retention: purge R2 file blobs of TERMINAL orders past each opted-in org's
+        // retention_days window (daily at 04:15 UTC, after the row sweep). DOUBLE-latched
+        // OFF by default: per-org retention_days NULL + global Retention:DryRun=true.
+        // Blob-only — DB rows, hashes, provenance and audit trail always stay.
+        _recurringJobs.AddOrUpdate<BlobRetentionSweepJob>(
+            "blob-retention-sweep",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "15 4 * * *");
+
+        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection (every 15 min), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

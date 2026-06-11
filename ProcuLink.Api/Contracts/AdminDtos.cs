@@ -79,3 +79,20 @@ public sealed record OrgLimitsResponse(
     int EffectiveOrderLimit,
     int EffectiveSupplierLimit,
     DateTime? EffectiveTrialEndsAt);
+
+/// <summary>
+/// Request body for POST /api/admin/organisations/{id}/retention (admin-only — org admins
+/// cannot self-serve retention yet). Set <see cref="RetentionDays"/> (≥ 1) to enable the
+/// blob-retention sweep for the org, or <see cref="Clear"/> = true to disable it (NULL —
+/// the safe default). When both are supplied, Clear wins.
+/// </summary>
+public sealed record SetOrgRetentionRequest(
+    int? RetentionDays = null,
+    bool Clear = false);
+
+/// <summary>Response for POST /api/admin/organisations/{id}/retention.</summary>
+public sealed record OrgRetentionResponse(
+    Guid Id,
+    string Name,
+    int? RetentionDays,
+    bool RetentionEnabled);
