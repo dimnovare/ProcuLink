@@ -50,11 +50,19 @@ public sealed class ReplayService : IReplayService
 
     private readonly ProcuLinkDbContext             _db;
     private readonly IEnumerable<ITransformService> _transformers;
+    private readonly IPoMappingService              _poMappings;
 
-    public ReplayService(ProcuLinkDbContext db, IEnumerable<ITransformService> transformers)
+    public ReplayService(
+        ProcuLinkDbContext             db,
+        IEnumerable<ITransformService> transformers,
+        IPoMappingService?             poMappings = null)
     {
         _db           = db;
         _transformers = transformers;
+        // Optional so existing positional constructions stay valid; the concrete service only
+        // needs the same DbContext. Used so the CURRENT side of a replay diff mirrors the live
+        // transform's supplier-promoted-output fallback (launch batch 4A).
+        _poMappings   = poMappings ?? new ProcuLink.Infrastructure.Services.PoMappingService(db);
     }
 
     public async Task<ReplayResponse?> ReplayAsync(
@@ -96,10 +104,26 @@ public sealed class ReplayService : IReplayService
         // ValidateOrderAsync would persist today.
         var currentProfile = await LoadActiveProfileAsync(orgId, revision.SupplierId, ct);
 
+        // launch batch 4A — the CURRENT side must mirror the live transform's effective priority:
+        // per-order override → supplier-promoted output (PoMappingConfig.Output) → fixed transformer.
+        // Loaded ONCE per replay; defensive — a missing/malformed/unusable supplier mapping yields
+        // null and the current side keeps its existing (per-order override / fixed) behaviour.
+        OutputMappingConfig? supplierPromotedOutput = null;
+        try
+        {
+            var supplierConfig = await _poMappings.GetAsync(orgId, revision.SupplierId, ct);
+            if (OrderMappingOverrideReader.HasUsablePromotedOutput(supplierConfig))
+                supplierPromotedOutput = supplierConfig!.Output;
+        }
+        catch
+        {
+            // A malformed supplier mapping must never abort a replay — fall back to fixed.
+        }
+
         var now = DateTime.UtcNow;
         var diffs = new List<ReplayOrderDiffDto>(orders.Count);
         foreach (var order in orders)
-            diffs.Add(BuildDiff(order, draftOutputConfig, draftFormat, currentFormat, currentProfile, draftProfile, now));
+            diffs.Add(BuildDiff(order, draftOutputConfig, draftFormat, currentFormat, currentProfile, draftProfile, now, supplierPromotedOutput));
 
         return new ReplayResponse(
             connectionId, revisionId, revision.VersionNo, revision.Status, diffs.Count, diffs);
@@ -180,12 +204,16 @@ public sealed class ReplayService : IReplayService
         OutputFormat currentFormat,
         SupplierAcceptanceProfile? currentProfile,
         SupplierAcceptanceProfile? draftProfile,
-        DateTime now)
+        DateTime now,
+        OutputMappingConfig? supplierPromotedOutput)
     {
         // ── Output side ────────────────────────────────────────────────────────
-        // CURRENT: the order's own per-order override (or fixed transformer), at the current format.
-        var currentOverride = OrderMappingOverrideReader.Read(order.CanonicalJson);
-        var current = Render(order, currentOverride, currentFormat);
+        // CURRENT: the order's own per-order override, ELSE the supplier-promoted output mapping
+        // (launch batch 4A — exactly the live transform's priority), ELSE the fixed transformer —
+        // at the current format.
+        var currentOverride  = OrderMappingOverrideReader.Read(order.CanonicalJson);
+        var currentEffective = ResolveCurrentEffectiveOverride(currentOverride, supplierPromotedOutput);
+        var current = Render(order, currentEffective, currentFormat);
 
         // DRAFT/replayed: the revision's output config wrapped as an override, at the revision's format.
         // The order's existing CustomFields are preserved so custom-field references in the revision's
@@ -196,7 +224,7 @@ public sealed class ReplayService : IReplayService
         var outputChanged = current.Ok && draft.Ok && !string.Equals(current.Text, draft.Text, StringComparison.Ordinal);
 
         // ── Effective-value diff (header + line) ─────────────────────────────────
-        var effectiveChanges = BuildEffectiveValueChanges(order, currentOverride, draftOverride);
+        var effectiveChanges = BuildEffectiveValueChanges(order, currentEffective, draftOverride);
 
         // ── Validation side (reuse SupplierAcceptanceService.EvaluateProfile) ────
         var currentResults = SupplierAcceptanceService.EvaluateProfile(order.OrgId, order.Id, currentProfile, order, now);
@@ -286,6 +314,32 @@ public sealed class ReplayService : IReplayService
         if (stream.CanSeek) stream.Position = 0;
         using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: false);
         return reader.ReadToEnd();
+    }
+
+    // ── Building the current-side effective override (launch batch 4A) ────────
+
+    /// <summary>
+    /// Resolves the override that drives the CURRENT side of the diff with the SAME priority the
+    /// live transform applies: the per-order override when it carries a usable template or output
+    /// mapping; ELSE a synthetic override wrapping the supplier-promoted output (custom fields
+    /// preserved, SourceMap/template intentionally not carried — mirrors
+    /// <see cref="BuildRevisionOverride"/>); ELSE the per-order override unchanged (so a
+    /// custom-fields-only / SourceMap-only override still falls through to the fixed transformer
+    /// exactly as before).
+    /// </summary>
+    private static OrderMappingOverride? ResolveCurrentEffectiveOverride(
+        OrderMappingOverride? currentOverride, OutputMappingConfig? supplierPromotedOutput)
+    {
+        if (supplierPromotedOutput is null
+            || OrderMappingOverrideReader.HasUsableTemplate(currentOverride)
+            || OrderMappingOverrideReader.HasUsableOutput(currentOverride))
+            return currentOverride;
+
+        return new OrderMappingOverride
+        {
+            CustomFields = currentOverride?.CustomFields ?? new List<CustomField>(),
+            Output       = supplierPromotedOutput,
+        };
     }
 
     // ── Building the revision-side override ───────────────────────────────────

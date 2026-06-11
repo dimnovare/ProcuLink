@@ -35,10 +35,12 @@ namespace ProcuLink.Infrastructure.Services;
 /// table, no EF migration). This makes the founder's "Save mappings for &lt;supplier&gt;" button
 /// actually save the output side and report what it saved — fixing the silent no-op.
 ///
-/// Caveat: the supplier-level output mapping is PERSISTED + REPORTED here but not yet CONSUMED on
-/// re-upload (the per-order override remains the only output-divert seam in <c>OrderTransformService</c>).
-/// Consuming the promoted supplier output mapping at transform time is a separate, intentionally
-/// out-of-scope follow-up.
+/// Consumption (launch batch 4A): the promoted supplier output mapping IS consumed at transform
+/// time — when a future order from this supplier carries no usable per-order template/output
+/// override, <c>OrderTransformService</c> (and the mapping-override preview / replay current side)
+/// apply <see cref="PoMappingConfig.Output"/>. The per-order override always stays the
+/// higher-priority seam, and a malformed/unusable promoted mapping falls back to the fixed
+/// transformer.
 /// </summary>
 public sealed class PromoteMappingService : IPromoteMappingService
 {
