@@ -31,8 +31,10 @@ namespace ProcuLink.Api.Services;
 /// <para><b>What is compared.</b>
 /// <list type="bullet">
 ///   <item><description>Output text — the revision's would-be output vs. the order's CURRENT would-be
-///   output (re-derived deterministically from the order's per-order <c>mappingOverride</c> / fixed
-///   transformer). A failure to render the revision side surfaces as <c>OutputError</c>, never a crash.</description></item>
+///   output (re-derived deterministically with the live transform's effective priority: per-order
+///   <c>mappingOverride</c> → pinned revision output [flag on + pinned, read-parity] / supplier-promoted
+///   output [unpinned] → fixed transformer). A failure to render the revision side surfaces as
+///   <c>OutputError</c>, never a crash.</description></item>
 ///   <item><description>Effective canonical values — per-field header/line value changes the revision's
 ///   mapping would introduce.</description></item>
 ///   <item><description>Validation — pass/fail under the order's current active profile vs. the
@@ -51,11 +53,13 @@ public sealed class ReplayService : IReplayService
     private readonly ProcuLinkDbContext             _db;
     private readonly IEnumerable<ITransformService> _transformers;
     private readonly IPoMappingService              _poMappings;
+    private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
 
     public ReplayService(
         ProcuLinkDbContext             db,
         IEnumerable<ITransformService> transformers,
-        IPoMappingService?             poMappings = null)
+        IPoMappingService?             poMappings = null,
+        IEffectiveConnectionConfigResolver? effectiveConfig = null)
     {
         _db           = db;
         _transformers = transformers;
@@ -63,6 +67,11 @@ public sealed class ReplayService : IReplayService
         // needs the same DbContext. Used so the CURRENT side of a replay diff mirrors the live
         // transform's supplier-promoted-output fallback (launch batch 4A).
         _poMappings   = poMappings ?? new ProcuLink.Infrastructure.Services.PoMappingService(db);
+        // Read-parity (launch batch 7 follow-up) — revision authority for the CURRENT side: when the
+        // Connections:RevisionAuthority flag is ON and a replayed order is PINNED, the current side
+        // of the diff must mirror the runtime priority (per-order override → pinned revision output →
+        // fixed; supplier-promoted NOT consulted). Null (older positional ctors) = flag-OFF behaviour.
+        _effectiveConfig = effectiveConfig;
     }
 
     public async Task<ReplayResponse?> ReplayAsync(
@@ -123,7 +132,15 @@ public sealed class ReplayService : IReplayService
         var now = DateTime.UtcNow;
         var diffs = new List<ReplayOrderDiffDto>(orders.Count);
         foreach (var order in orders)
-            diffs.Add(BuildDiff(order, draftOutputConfig, draftFormat, currentFormat, currentProfile, draftProfile, now, supplierPromotedOutput));
+        {
+            // Read-parity: resolve the order's pinned-revision bundle through the SAME resolver the
+            // runtime uses (flag off / unpinned / orphan pin / null resolver = Live, byte-identical).
+            // Per-order because each replayed order may be pinned to a different revision.
+            var effective = _effectiveConfig is null
+                ? EffectiveConnectionConfig.Live
+                : await _effectiveConfig.ResolveAsync(orgId, order.ConnectionRevisionId, ct);
+            diffs.Add(BuildDiff(order, draftOutputConfig, draftFormat, currentFormat, currentProfile, draftProfile, now, supplierPromotedOutput, effective));
+        }
 
         return new ReplayResponse(
             connectionId, revisionId, revision.VersionNo, revision.Status, diffs.Count, diffs);
@@ -205,15 +222,39 @@ public sealed class ReplayService : IReplayService
         SupplierAcceptanceProfile? currentProfile,
         SupplierAcceptanceProfile? draftProfile,
         DateTime now,
-        OutputMappingConfig? supplierPromotedOutput)
+        OutputMappingConfig? supplierPromotedOutput,
+        EffectiveConnectionConfig effective)
     {
         // ── Output side ────────────────────────────────────────────────────────
-        // CURRENT: the order's own per-order override, ELSE the supplier-promoted output mapping
-        // (launch batch 4A — exactly the live transform's priority), ELSE the fixed transformer —
-        // at the current format.
-        var currentOverride  = OrderMappingOverrideReader.Read(order.CanonicalJson);
-        var currentEffective = ResolveCurrentEffectiveOverride(currentOverride, supplierPromotedOutput);
-        var current = Render(order, currentEffective, currentFormat);
+        // CURRENT: mirrors the live transform's effective priority so the diff compares against what
+        // delivery ACTUALLY produces today.
+        //   • PINNED (flag on, read-parity): per-order override → the PINNED revision's output
+        //     snapshot → fixed transformer, at the PINNED revision's snapshotted format. The live
+        //     supplier-promoted mapping is intentionally NOT consulted (mutable table — exactly
+        //     OrderTransformService's reproducibility rule for a pinned order).
+        //   • LIVE (flag off / unpinned / orphan pin): the order's own per-order override, ELSE the
+        //     supplier-promoted output mapping (launch batch 4A), ELSE the fixed transformer — at
+        //     the current format. Byte-identical to the pre-read-parity behaviour.
+        var currentOverride   = OrderMappingOverrideReader.Read(order.CanonicalJson);
+        var currentSideFormat = currentFormat;
+        OrderMappingOverride? currentEffective;
+        if (effective.IsRevision)
+        {
+            currentEffective =
+                OrderMappingOverrideReader.HasUsableTemplate(currentOverride)
+                || OrderMappingOverrideReader.HasUsableOutput(currentOverride)
+                    ? currentOverride
+                    // Unusable/null revision snapshot → the per-order override unchanged (a
+                    // custom-fields-only override still falls through to the fixed transformer).
+                    : BuildRevisionOverride(currentOverride, DeserializeOutputConfig(effective.OutputMappingJson))
+                      ?? currentOverride;
+            currentSideFormat = ParseFormat(effective.OutputFormat) ?? currentFormat;
+        }
+        else
+        {
+            currentEffective = ResolveCurrentEffectiveOverride(currentOverride, supplierPromotedOutput);
+        }
+        var current = Render(order, currentEffective, currentSideFormat);
 
         // DRAFT/replayed: the revision's output config wrapped as an override, at the revision's format.
         // The order's existing CustomFields are preserved so custom-field references in the revision's
@@ -351,8 +392,10 @@ public sealed class ReplayService : IReplayService
     /// The order's per-order template/SourceMap is intentionally NOT carried over — the revision defines
     /// the field-by-field output. Returns null when the revision has no usable output config, so the
     /// fixed transformer drives the draft side (matching a backfilled rev-1 with null output mapping).
+    /// Internal (not private) so the read-parity surfaces in <c>OrdersController</c> (mapping-override
+    /// preview + conformance) wrap a PINNED revision's snapshot with the SAME logic — no second copy.
     /// </summary>
-    private static OrderMappingOverride? BuildRevisionOverride(
+    internal static OrderMappingOverride? BuildRevisionOverride(
         OrderMappingOverride? currentOverride, OutputMappingConfig? draftOutputConfig)
     {
         if (draftOutputConfig is null
@@ -366,7 +409,13 @@ public sealed class ReplayService : IReplayService
         };
     }
 
-    private static OutputMappingConfig? DeserializeOutputConfig(string? json)
+    /// <summary>
+    /// Deserializes a revision's <c>output_mapping_json</c> snapshot (camelCase, case-insensitive;
+    /// null on blank/malformed — never throws). Internal so the read-parity surfaces in
+    /// <c>OrdersController</c> read the SAME snapshot identically (mirrors
+    /// <c>OrderTransformService.RevisionOutputSerializerOptions</c>).
+    /// </summary>
+    internal static OutputMappingConfig? DeserializeOutputConfig(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return null;
         try
