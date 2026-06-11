@@ -59,6 +59,111 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<SupplierConnectionRevision>     SupplierConnectionRevisions   { get; set; } = null!;
     public DbSet<ConnectionRevisionItemMapping>  ConnectionRevisionItemMappings { get; set; } = null!;
     public DbSet<ConnectionRevisionTestCase>     ConnectionRevisionTestCases   { get; set; } = null!;
+    // ── Billing: append-only plan/override history (as-of overage metering) ──
+    public DbSet<OrgPlanHistory>                 OrgPlanHistories              { get; set; } = null!;
+
+    // ── Org plan-history chokepoint ──────────────────────────────────────────
+    // Overage metering must resolve the plan + order-limit override AS OF each
+    // billed window (a yearly renewal invoice decomposes into ~12 PAST months;
+    // metering them with today's plan retroactively re-prices history). Rather
+    // than instrumenting every write point (Stripe webhook plan mapping ×3,
+    // checkout completion, admin limits endpoint, MarkPilotStartedAsync, and any
+    // future one), SaveChanges is the single chokepoint: whenever a TRACKED
+    // Organisation is inserted, or its Plan / OrderLimitOverride is modified, a
+    // history row is appended in the SAME save (atomic with the org mutation).
+    // NOTE: this covers tracked-entity writes only — there are no
+    // ExecuteUpdate/raw-SQL writers of these two columns (and none may be added
+    // without writing history).
+    //
+    // Test-model guard: several test harnesses subclass this context with a
+    // reduced model that does not map OrgPlanHistory; the hook no-ops there.
+    // The production model always maps it, so this guard can never skip a real
+    // write.
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        AppendOrgPlanHistoryAsync(useAsync: false).GetAwaiter().GetResult();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override async Task<int> SaveChangesAsync(
+        bool acceptAllChangesOnSuccess,
+        CancellationToken cancellationToken = default)
+    {
+        await AppendOrgPlanHistoryAsync(useAsync: true, cancellationToken);
+        return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private async Task AppendOrgPlanHistoryAsync(bool useAsync, CancellationToken ct = default)
+    {
+        // Reduced test models (and only those) may not map the history entity.
+        if (Model.FindEntityType(typeof(OrgPlanHistory)) is null) return;
+
+        // Snapshot the entries first — we mutate the change tracker below.
+        var orgEntries = ChangeTracker.Entries<Organisation>()
+            .Where(e => e.State is EntityState.Added or EntityState.Modified)
+            .ToList();
+        if (orgEntries.Count == 0) return;
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var entry in orgEntries)
+        {
+            var org = entry.Entity;
+
+            if (entry.State == EntityState.Added)
+            {
+                // New org: one baseline row so every later window resolves as-of.
+                // CreatedAt may still be unset when the DB generates it; fall back to now.
+                OrgPlanHistories.Add(NewRow(org.Id, org.Plan, org.OrderLimitOverride,
+                    org.CreatedAt == default ? now : new DateTimeOffset(EnsureUtc(org.CreatedAt))));
+                continue;
+            }
+
+            var planProp     = entry.Property(nameof(Organisation.Plan));
+            var overrideProp = entry.Property(nameof(Organisation.OrderLimitOverride));
+            var planChanged     = !string.Equals((string?)planProp.OriginalValue, org.Plan, StringComparison.Ordinal);
+            var overrideChanged = (int?)overrideProp.OriginalValue != org.OrderLimitOverride;
+            if (!planChanged && !overrideChanged) continue;
+
+            // Self-healing baseline: an org that predates the history table (boot
+            // seed not yet run, or created before this feature) gets its OLD values
+            // recorded at org creation, so the windows BEFORE this change still
+            // resolve to the pre-change plan/override instead of falling back.
+            var hasHistory = OrgPlanHistories.Local.Any(h => h.OrgId == org.Id)
+                || (useAsync
+                    ? await OrgPlanHistories.AsNoTracking().AnyAsync(h => h.OrgId == org.Id, ct)
+                    : OrgPlanHistories.AsNoTracking().Any(h => h.OrgId == org.Id));
+            if (!hasHistory)
+            {
+                // Baseline strictly BEFORE the change row (1 ms guard for the
+                // degenerate CreatedAt==default case) so as-of resolution can
+                // never tie the old and new values at the same instant.
+                var baselineFrom = org.CreatedAt == default
+                    ? now.AddMilliseconds(-1)
+                    : new DateTimeOffset(EnsureUtc(org.CreatedAt));
+                OrgPlanHistories.Add(NewRow(
+                    org.Id,
+                    (string?)planProp.OriginalValue ?? org.Plan,
+                    (int?)overrideProp.OriginalValue,
+                    baselineFrom));
+            }
+
+            OrgPlanHistories.Add(NewRow(org.Id, org.Plan, org.OrderLimitOverride, now));
+        }
+
+        static OrgPlanHistory NewRow(Guid orgId, string plan, int? orderLimitOverride, DateTimeOffset effectiveFrom) =>
+            new()
+            {
+                Id                 = Guid.NewGuid(),
+                OrgId              = orgId,
+                Plan               = plan,
+                OrderLimitOverride = orderLimitOverride,
+                EffectiveFrom      = effectiveFrom,
+            };
+
+        static DateTime EnsureUtc(DateTime value) =>
+            value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -593,6 +698,24 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasColumnName("created_at")
              .HasColumnType("timestamptz");
             b.HasIndex(x => new { x.OrgId, x.BillingKey }).IsUnique();
+        });
+
+        // ── org_plan_history ───────────────────────────────────────────
+        // Append-only plan/override history. Overage metering resolves the
+        // plan + order-limit override AS OF each billed window's start via
+        // the (org_id, effective_from) index — see StripeBillingService.
+        modelBuilder.Entity<OrgPlanHistory>(b =>
+        {
+            b.ToTable("org_plan_history");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.Plan).HasColumnName("plan").IsRequired();
+            b.Property(x => x.OrderLimitOverride).HasColumnName("order_limit_override");
+            b.Property(x => x.EffectiveFrom)
+             .HasColumnName("effective_from")
+             .HasColumnType("timestamptz");
+            b.HasIndex(x => new { x.OrgId, x.EffectiveFrom });
         });
 
         // ── sftp_ingress_configs ───────────────────────────────────────

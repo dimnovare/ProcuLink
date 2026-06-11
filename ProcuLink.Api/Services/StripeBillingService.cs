@@ -39,17 +39,24 @@ public sealed class StripeBillingService : IBillingService
     private readonly ILogger<StripeBillingService> _logger;
     private readonly IAnalyticsService _analytics;
     private readonly bool _countDeliveredOnly;
+    private readonly IStripeClient? _stripeClient;
 
     public StripeBillingService(
         ProcuLinkDbContext db,
         IConfiguration config,
         ILogger<StripeBillingService> logger,
-        IAnalyticsService analytics)
+        IAnalyticsService analytics,
+        // Optional Stripe transport override, used ONLY by tests to capture the
+        // overage invoice-item request without HTTP. Unregistered in DI (the
+        // default), so production resolves null and the Stripe.net services use
+        // the global client exactly as before.
+        IStripeClient? stripeClient = null)
     {
         _db = db;
         _config = config;
         _logger = logger;
         _analytics = analytics;
+        _stripeClient = stripeClient;
         // Raw read + bool.TryParse (no Binder dependency) — same pattern as the
         // Connections:RevisionAuthority flag. Anything but "true", including the key being
         // absent (the safe production default), leaves the flag OFF and the billing meter
@@ -480,11 +487,39 @@ public sealed class StripeBillingService : IBillingService
     /// <param name="orgId">Organisation to bill.</param>
     /// <param name="billingKey">Period-based idempotency key (<c>{orgId}:{periodStart:O}</c>).</param>
     /// <param name="overageOrders">Orders above the cap for the period being closed.</param>
-    public async Task<OverageBillingResult> BillOverageForInvoiceAsync(
+    public Task<OverageBillingResult> BillOverageForInvoiceAsync(
         Guid orgId,
         string billingKey,
         int overageOrders,
+        CancellationToken ct = default) =>
+        BillOverageCoreAsync(orgId, billingKey, overageOrders, stripeInvoiceId: null, ct);
+
+    /// <summary>
+    /// Attach variant: identical money path, but the created invoice item carries
+    /// <c>Invoice = stripeInvoiceId</c> so it lands ON the triggering DRAFT invoice
+    /// (the period-close invoice) instead of sweeping to the customer's next one —
+    /// which on a yearly subscription is ~a year of float, and is never issued at
+    /// all after a cancellation. The caller (webhook) only passes an id when the
+    /// event's invoice status is <c>draft</c>. Idempotency keys are unchanged.
+    /// </summary>
+    public Task<OverageBillingResult> BillOverageForInvoiceAsync(
+        Guid orgId,
+        string billingKey,
+        int overageOrders,
+        string stripeInvoiceId,
         CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(stripeInvoiceId))
+            throw new ArgumentException("stripeInvoiceId is required on the attach overload.", nameof(stripeInvoiceId));
+        return BillOverageCoreAsync(orgId, billingKey, overageOrders, stripeInvoiceId, ct);
+    }
+
+    private async Task<OverageBillingResult> BillOverageCoreAsync(
+        Guid orgId,
+        string billingKey,
+        int overageOrders,
+        string? stripeInvoiceId,
+        CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(billingKey))
             throw new ArgumentException("billingKey is required.", nameof(billingKey));
@@ -544,10 +579,17 @@ public sealed class StripeBillingService : IBillingService
             // No Stripe customer to bill — keep the auditable record, skip Stripe.
             return new OverageBillingResult(orgId, billingKey, clamped, amountCents, AlreadyBilled: false, StripeItemId: null);
 
-        var itemService = new InvoiceItemService();
+        // The injected client exists only in tests; production always takes the
+        // parameterless path (global Stripe client) — byte-identical behaviour.
+        var itemService = _stripeClient is null ? new InvoiceItemService() : new InvoiceItemService(_stripeClient);
         var item = await itemService.CreateAsync(new InvoiceItemCreateOptions
         {
             Customer    = org.StripeCustomerId,
+            // When the webhook saw a DRAFT period-close invoice, pin the item to it
+            // (Stripe rejects attaching to a finalised invoice; the webhook never
+            // passes an id for those). Null ⇒ property omitted ⇒ the historical
+            // customer-sweep behaviour, unchanged.
+            Invoice     = stripeInvoiceId,
             Currency    = "eur",
             Amount      = amountCents,
             Description = $"Order overage: {clamped} orders x EUR{PlanConstants.OveragePerOrderEur:0.00}",
@@ -754,11 +796,32 @@ public sealed class StripeBillingService : IBillingService
         CancellationToken ct = default)
     {
         var org = await LoadOrgAsync(orgId, asTracking: false, ct);
-        var plan = NormalizePlan(org.Plan);
+
+        // ── AS-OF plan/override resolution (yearly-billing correctness) ──────
+        // A yearly renewal invoice decomposes into ~12 PAST monthly windows; each
+        // must be metered at the plan + admin order-limit override in force AT THAT
+        // window's start, never at today's values — otherwise a mid-year DOWNGRADE
+        // retroactively re-meters old months at the new lower cap (wrongful overage
+        // charges) and an upgrade under-bills. The latest org_plan_history row at or
+        // before the window start wins; an org with NO row at or before the window
+        // (pre-feature orgs whose boot baseline seed has not run, or a window that
+        // somehow precedes the org's first row) falls back to the org's CURRENT
+        // values — exactly the pre-history behaviour, documented and pinned by tests.
+        var windowStart = new DateTimeOffset(
+            periodStart.Kind == DateTimeKind.Utc ? periodStart : DateTime.SpecifyKind(periodStart, DateTimeKind.Utc));
+        var asOf = await _db.OrgPlanHistories
+            .AsNoTracking()
+            .Where(h => h.OrgId == orgId && h.EffectiveFrom <= windowStart)
+            .OrderByDescending(h => h.EffectiveFrom)
+            .ThenByDescending(h => h.Id) // deterministic tie-break (same-instant rows)
+            .FirstOrDefaultAsync(ct);
+
+        var plan = NormalizePlan(asOf?.Plan ?? org.Plan);
+        var orderLimitOverride = asOf is not null ? asOf.OrderLimitOverride : org.OrderLimitOverride;
         if (!PlanConstants.IsPaidPlan(plan) || plan == PlanConstants.Enterprise)
             return 0;
 
-        var limit = PlanConstants.GetEffectiveOrderLimit(plan, org.OrderLimitOverride);
+        var limit = PlanConstants.GetEffectiveOrderLimit(plan, orderLimitOverride);
         var windowOrders = _db.PurchaseOrders
             .Where(o => o.OrgId == orgId && !o.IsSample &&
                         o.CreatedAt >= periodStart && o.CreatedAt < periodEnd);

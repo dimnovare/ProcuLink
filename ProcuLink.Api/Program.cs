@@ -891,6 +891,28 @@ app.Lifetime.ApplicationStarted.Register(() =>
                         "Group V4 rule-definition backfill failed (app stays up; acceptance evaluation unaffected).");
                     SentrySdk.CaptureException(ruleBackfillEx);
                 }
+
+                // ── Billing: idempotent org-plan-history baseline seed ───────
+                // Orgs that predate org_plan_history get ONE baseline row from
+                // their current plan + order-limit override (effective_from =
+                // CreatedAt) so as-of overage metering has a floor; orgs with
+                // any history row are skipped, so re-running every boot is a
+                // no-op. Best-effort: a seed failure must NOT keep the app from
+                // serving — metering falls back to current org values for
+                // unseeded orgs (the pre-history behaviour).
+                try
+                {
+                    var seeded = await ProcuLink.Infrastructure.Services.OrgPlanHistorySeeder
+                        .SeedMissingBaselinesAsync(db, CancellationToken.None);
+                    migLogger.LogInformation(
+                        "Org plan-history baseline seed complete: {Count} baseline row(s) inserted.", seeded);
+                }
+                catch (Exception planHistorySeedEx)
+                {
+                    migLogger.LogError(planHistorySeedEx,
+                        "Org plan-history baseline seed failed (app stays up; unseeded orgs meter with current plan values).");
+                    SentrySdk.CaptureException(planHistorySeedEx);
+                }
                 return;
             }
             catch (Exception ex)
