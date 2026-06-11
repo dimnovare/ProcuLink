@@ -38,6 +38,23 @@ public class StripeBillingServicePricingTests
             NullLogger<StripeBillingService>.Instance,
             new FakeAnalyticsService());
 
+    /// <summary>Service with price-id config (still no Stripe:SecretKey → no live HTTP).</summary>
+    private static StripeBillingService MakeServiceWithPriceConfig(ProcuLinkDbContext db) =>
+        new(db,
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Stripe:GrowthPriceId"]            = "price_growth_test",
+                ["Stripe:GrowthYearlyPriceId"]      = "price_growth_yearly_test",
+                ["Stripe:OperationsPriceId"]        = "price_ops_test",
+                ["Stripe:OperationsYearlyPriceId"]  = "price_ops_yearly_test",
+                ["Stripe:IntegrationPriceId"]       = "price_int_test",
+                ["Stripe:IntegrationYearlyPriceId"] = "price_int_yearly_test",
+                ["Stripe:DistributorPriceId"]       = "price_dist_test",
+                ["Stripe:DistributorYearlyPriceId"] = "price_dist_yearly_test",
+            }).Build(),
+            NullLogger<StripeBillingService>.Instance,
+            new FakeAnalyticsService());
+
     private static Organisation Org(
         string plan,
         string status,
@@ -410,6 +427,106 @@ public class StripeBillingServicePricingTests
         var status = await MakeService(db).GetStatusAsync(org.Id);
 
         status.SsoAvailable.Should().BeFalse($"SSO is Enterprise-only, not available on {plan}");
+    }
+
+    // ── BillingInterval surfacing on the status DTO ───────────────────────
+    // Derived from the persisted org.StripePriceId vs the configured
+    // Stripe:*YearlyPriceId keys — pure config compare, no Stripe HTTP.
+
+    [Theory]
+    [InlineData("price_growth_yearly_test", PlanConstants.Growth)]
+    [InlineData("price_ops_yearly_test", PlanConstants.Operations)]
+    [InlineData("price_int_yearly_test", PlanConstants.Integration)]
+    [InlineData("price_dist_yearly_test", PlanConstants.Distributor)]
+    public async Task GetStatus_YearlyPriceIdOnFile_ReportsYearlyInterval(string priceId, string plan)
+    {
+        var db = MakeDb();
+        var org = Org(plan, AccountStatusConstants.Active);
+        org.StripePriceId = priceId;
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var status = await MakeServiceWithPriceConfig(db).GetStatusAsync(org.Id);
+
+        status.BillingInterval.Should().Be("yearly");
+    }
+
+    [Theory]
+    [InlineData("price_growth_test")]
+    [InlineData("price_ops_test")]
+    [InlineData("price_unknown_legacy")] // unrecognised but present ⇒ a subscription exists ⇒ monthly default
+    public async Task GetStatus_MonthlyOrUnknownPriceIdOnFile_ReportsMonthlyInterval(string priceId)
+    {
+        var db = MakeDb();
+        var org = Org(PlanConstants.Growth, AccountStatusConstants.Active);
+        org.StripePriceId = priceId;
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var status = await MakeServiceWithPriceConfig(db).GetStatusAsync(org.Id);
+
+        status.BillingInterval.Should().Be("monthly");
+    }
+
+    [Fact]
+    public async Task GetStatus_NoStripePriceOnFile_ReportsNullInterval()
+    {
+        var db = MakeDb();
+        var org = Org(PlanConstants.Pilot, AccountStatusConstants.Trialing); // no Stripe subscription
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var status = await MakeServiceWithPriceConfig(db).GetStatusAsync(org.Id);
+
+        status.BillingInterval.Should().BeNull("an org without a Stripe price on file has no payment interval");
+    }
+
+    // ── monthly quota window is CALENDAR-MONTH, even on a yearly subscription ──
+    // Regression pin: CountOrdersAsync derives the paid-plan window from the UTC
+    // calendar month (1st of the current month), NOT from the Stripe subscription's
+    // current_period — it takes no interval/period input at all. An annual payment
+    // interval therefore cannot widen the quota window: last month's orders never
+    // count against this month's allowance.
+
+    [Fact]
+    public async Task PaidPlanOnYearlyPrice_OrderQuota_CountsOnlyTheCurrentCalendarMonth()
+    {
+        var db = MakeDb();
+        var org = Org(PlanConstants.Growth, AccountStatusConstants.Active); // limit 150
+        org.StripePriceId = "price_growth_yearly_test"; // annual payment interval
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        // 200 orders LAST month (over the monthly cap back then) + 3 this month.
+        await SeedOrdersThisMonthAsync(db, org.Id, 3);
+        var lastMonth = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc)
+            .AddMonths(-1);
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = org.Id, Name = "Old Sup", CreatedAt = lastMonth });
+        for (var i = 0; i < 200; i++)
+        {
+            db.PurchaseOrders.Add(new PurchaseOrderEntity
+            {
+                Id         = Guid.NewGuid(),
+                OrgId      = org.Id,
+                SupplierId = supplierId,
+                PoNumber   = $"PO-OLD-{i}",
+                Status     = "delivered",
+                OrderDate  = DateOnly.FromDateTime(lastMonth),
+                Currency   = "EUR",
+                CreatedAt  = lastMonth.AddMinutes(i + 1),
+                UpdatedAt  = lastMonth.AddMinutes(i + 1),
+            });
+        }
+        await db.SaveChangesAsync();
+
+        var status = await MakeServiceWithPriceConfig(db).GetStatusAsync(org.Id);
+
+        status.BillingInterval.Should().Be("yearly");
+        status.OrdersThisMonth.Should().Be(3,
+            "the quota window is the current calendar month, regardless of the annual subscription period");
+        status.OverageOrders.Should().Be(0, "3 < 150 ⇒ no overage; last month's 200 must not leak in");
+        status.AtLimit.Should().BeFalse();
     }
 
     // ── period overage compute helper ─────────────────────────────────────
