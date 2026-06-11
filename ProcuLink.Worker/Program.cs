@@ -218,6 +218,17 @@ builder.Services.AddSingleton(_ =>
 });
 builder.Services.AddScoped<IDataRetentionService, DataRetentionService>();
 builder.Services.AddScoped<DataRetentionSweepJob>();
+// Blob-retention sweep (file blobs only): per-org opt-in via organisations.retention_days
+// (NULL = disabled, the default) AND the global Retention:DryRun latch (default TRUE —
+// audit-only). Both must be deliberately flipped before anything is actually deleted.
+builder.Services.AddSingleton(_ =>
+{
+    var opts = new BlobRetentionOptions();
+    builder.Configuration.GetSection(BlobRetentionOptions.SectionName).Bind(opts);
+    return opts;
+});
+builder.Services.AddScoped<IBlobRetentionService, BlobRetentionService>();
+builder.Services.AddScoped<BlobRetentionSweepJob>();
 
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();

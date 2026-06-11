@@ -73,6 +73,17 @@ public class Organisation
     public bool SelfHostedOcr { get; set; }
 
     /// <summary>
+    /// Per-org data-retention window in DAYS for FILE BLOBS (source files + generated
+    /// artifacts in R2). NULL (the default) = retention DISABLED — nothing is ever
+    /// deleted for this org. Set only by the platform admin surface
+    /// (POST /api/admin/organisations/{id}/retention); org admins cannot self-serve yet.
+    /// When set, the blob-retention sweep purges ONLY the file blobs of TERMINAL orders
+    /// older than the window; DB rows, hashes, provenance and the audit trail always stay.
+    /// Additive column <c>retention_days</c> (migration <c>AddBlobRetentionSweep</c>).
+    /// </summary>
+    public int? RetentionDays { get; set; }
+
+    /// <summary>
     /// Per-org presentation flag for the primary order flow. Outbound (default) =
     /// this org is the buyer sending POs out; Inbound = this org is the supplier
     /// receiving customer POs. Direction-agnostic data model underneath — this only

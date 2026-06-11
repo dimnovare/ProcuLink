@@ -481,6 +481,96 @@ public class AdminControllerTests
             .Should().NotBeNull("the bulk-erase endpoint must exist on the gated controller");
     }
 
+    // ── POST organisations/{id}/retention (blob retention — admin-only opt-in) ──
+
+    [Fact]
+    public async Task SetOrganisationRetention_SetsWindow_AndReportsEnabled()
+    {
+        var db = MakeDb();
+        var org = Org("Retention Co", PlanConstants.Operations, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationRetention(
+            org.Id, new SetOrgRetentionRequest(RetentionDays: 90), CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<OrgRetentionResponse>().Subject;
+        dto.RetentionDays.Should().Be(90);
+        dto.RetentionEnabled.Should().BeTrue();
+
+        (await db.Organisations.FindAsync(org.Id))!.RetentionDays.Should().Be(90);
+    }
+
+    [Fact]
+    public async Task SetOrganisationRetention_Clear_DisablesRetention()
+    {
+        var db = MakeDb();
+        var org = Org("Retention Co", PlanConstants.Operations, AccountStatusConstants.Active);
+        org.RetentionDays = 30;
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationRetention(
+            org.Id, new SetOrgRetentionRequest(Clear: true), CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<OrgRetentionResponse>().Subject;
+        dto.RetentionDays.Should().BeNull();
+        dto.RetentionEnabled.Should().BeFalse();
+
+        (await db.Organisations.FindAsync(org.Id))!.RetentionDays.Should().BeNull(
+            "NULL = retention disabled, the safe default");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-7)]
+    public async Task SetOrganisationRetention_RejectsNonPositiveWindow(int days)
+    {
+        var db = MakeDb();
+        var org = Org("Retention Co", PlanConstants.Operations, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationRetention(
+            org.Id, new SetOrgRetentionRequest(RetentionDays: days), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        (await db.Organisations.FindAsync(org.Id))!.RetentionDays.Should().BeNull("a rejected request must change nothing");
+    }
+
+    [Fact]
+    public async Task SetOrganisationRetention_RejectsEmptyRequest()
+    {
+        var db = MakeDb();
+        var org = Org("Retention Co", PlanConstants.Operations, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        // Neither a value nor clear=true — ambiguous for a destructive capability → 400.
+        var result = await ctrl.SetOrganisationRetention(
+            org.Id, new SetOrgRetentionRequest(), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task SetOrganisationRetention_UnknownOrg_Returns404()
+    {
+        var db = MakeDb();
+        var ctrl = Build(db);
+
+        var result = await ctrl.SetOrganisationRetention(
+            Guid.NewGuid(), new SetOrgRetentionRequest(RetentionDays: 30), CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
     // ── helper ────────────────────────────────────────────────────────────
 
     private static PurchaseOrderEntity MakeOrder(

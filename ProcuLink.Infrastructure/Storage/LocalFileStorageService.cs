@@ -53,6 +53,22 @@ public sealed class LocalFileStorageService : IFileStorageService
         return Task.CompletedTask;
     }
 
+    public Task<long?> TryGetSizeAsync(string key, CancellationToken ct)
+    {
+        // Best-effort by contract: any failure (bad key, missing file) → null, never throw.
+        try
+        {
+            var fullPath = GetFullPath(key);
+            return Task.FromResult(File.Exists(fullPath)
+                ? (long?)new FileInfo(fullPath).Length
+                : null);
+        }
+        catch
+        {
+            return Task.FromResult<long?>(null);
+        }
+    }
+
     // ── Internal helpers ───────────────────────────────────────────────────
 
     /// <summary>

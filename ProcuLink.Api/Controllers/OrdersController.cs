@@ -1010,7 +1010,7 @@ public sealed class OrdersController : ControllerBase
         var order = await _db.PurchaseOrders
             .AsNoTracking()
             .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId)
-            .Select(o => new { o.SourceFileKey })
+            .Select(o => new { o.SourceFileKey, o.SourceFilePurgedAt })
             .FirstOrDefaultAsync(ct);
 
         if (order is null)
@@ -1018,6 +1018,12 @@ public sealed class OrdersController : ControllerBase
 
         // No stored source file → empty list (valid, not an error).
         if (string.IsNullOrEmpty(order.SourceFileKey))
+            return Ok(Array.Empty<SourceToken>());
+
+        // Source blob purged per the org's retention policy → same graceful empty list
+        // (the SourceMap editor degrades to manual entry), never a 500 or a pointless
+        // storage call for a blob we know is gone.
+        if (order.SourceFilePurgedAt is not null)
             return Ok(Array.Empty<SourceToken>());
 
         // Derive file extension from the stored R2 key.
@@ -1545,11 +1551,14 @@ public sealed class OrdersController : ControllerBase
     /// <summary>
     /// Returns a 15-minute pre-signed URL for the given artifact.
     /// The frontend opens this URL directly — file bytes never flow through the API.
+    /// Returns 410 Gone (not a 500, not a dead signed URL) when the artifact's blob was
+    /// purged per the org's data-retention policy — the row, hash and audit trail remain.
     /// </summary>
     [HttpGet("{id:guid}/artifacts/{artifactId:guid}/download")]
     [EnableRateLimiting("signed-url")]
     [ProducesResponseType(typeof(DownloadUrl), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status410Gone)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> Download(Guid id, Guid artifactId, CancellationToken ct)
     {
@@ -1557,7 +1566,14 @@ public sealed class OrdersController : ControllerBase
             _tenant.OrganisationId, id, artifactId, ct);
 
         if (!result.IsSuccess)
+        {
+            // Retention honesty: a purged blob is a deliberate, explainable state — 410 Gone
+            // with the policy message, distinct from "no such artifact" (404).
+            if (result.Error == RetentionConstants.BlobPurgedError)
+                return StatusCode(StatusCodes.Status410Gone, new { error = result.Error });
+
             return NotFound();
+        }
 
         return Ok(result.Value);
     }

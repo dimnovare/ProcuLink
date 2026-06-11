@@ -61,6 +61,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<ConnectionRevisionTestCase>     ConnectionRevisionTestCases   { get; set; } = null!;
     // ── Billing: append-only plan/override history (as-of overage metering) ──
     public DbSet<OrgPlanHistory>                 OrgPlanHistories              { get; set; } = null!;
+    // ── Data retention: append-only evidence trail of the blob-retention sweep ─
+    public DbSet<RetentionAuditLog>              RetentionAuditLogs            { get; set; } = null!;
 
     // ── Org plan-history chokepoint ──────────────────────────────────────────
     // Overage metering must resolve the plan + order-limit override AS OF each
@@ -254,6 +256,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.SelfHostedOcr)
              .HasColumnName("self_hosted_ocr")
              .HasDefaultValue(false);
+            // Blob retention: NULL (default) = retention DISABLED for this org.
+            b.Property(x => x.RetentionDays)
+             .HasColumnName("retention_days");
             b.Property(x => x.OrderDirection)
              .HasColumnName("order_direction")
              .HasConversion<string>()
@@ -431,6 +436,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // V5 deepen-canonical: real persisted nullable date column (mirrors per-line delivery_date).
             // Migration AddRequestedDeliveryDate. Null for formats with no header-level delivery date.
             b.Property(x => x.RequestedDeliveryDate).HasColumnName("requested_delivery_date");
+            // Blob retention: when the source-file blob was purged from R2 (row + key stay).
+            b.Property(x => x.SourceFilePurgedAt)
+             .HasColumnName("source_file_purged_at")
+             .HasColumnType("timestamptz");
             // Composite indexes for cross-tenant maintenance sweeps and inbox/list queries.
             // (OrgId, Status): inbox list — filter by tenant then status bucket.
             b.HasIndex(x => new { x.OrgId, x.Status })
@@ -608,6 +617,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.ConnectionRevisionId).HasColumnName("connection_revision_id");
             b.Property(x => x.ConfigDigest).HasColumnName("config_digest");
             b.Property(x => x.ArtifactSha256).HasColumnName("artifact_sha256");
+            // Blob retention: when the artifact blob was purged from R2 (row + hash stay).
+            b.Property(x => x.BlobPurgedAt)
+             .HasColumnName("blob_purged_at")
+             .HasColumnType("timestamptz");
             b.HasOne(x => x.Order)
              .WithMany(x => x.OutboundArtifacts)
              .HasForeignKey(x => x.OrderId);
@@ -716,6 +729,32 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasColumnName("effective_from")
              .HasColumnType("timestamptz");
             b.HasIndex(x => new { x.OrgId, x.EffectiveFrom });
+        });
+
+        // ── retention_audit_log ────────────────────────────────────────
+        // Append-only evidence trail of the blob-retention sweep: one row per
+        // opted-in org per run (mode dry_run = "would delete", delete = "did delete").
+        modelBuilder.Entity<RetentionAuditLog>(b =>
+        {
+            b.ToTable("retention_audit_log");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.RunAt)
+             .HasColumnName("run_at")
+             .HasColumnType("timestamptz");
+            b.Property(x => x.Mode).HasColumnName("mode").IsRequired();
+            b.Property(x => x.FilesDeleted).HasColumnName("files_deleted");
+            b.Property(x => x.BytesEstimated).HasColumnName("bytes_estimated");
+            b.Property(x => x.DetailsJson)
+             .HasColumnName("details")
+             .HasColumnType("jsonb");
+            // Read path: an org's retention history, newest first.
+            b.HasIndex(x => new { x.OrgId, x.RunAt })
+             .HasDatabaseName("IX_retention_audit_log_org_id_run_at");
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
         });
 
         // ── sftp_ingress_configs ───────────────────────────────────────

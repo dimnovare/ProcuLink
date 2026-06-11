@@ -556,12 +556,15 @@ public class SuppliersController : ControllerBase
             return NotFound();
 
         // Most-recent order for this supplier that actually has a stored source file.
-        // Orders created via the API/email-body path have a null SourceFileKey and are skipped.
+        // Orders created via the API/email-body path have a null SourceFileKey and are skipped,
+        // as are orders whose source blob was purged per the org's retention policy (the key
+        // remains on the row, but the blob is gone — pick the newest NON-purged file instead).
         var source = await _db.PurchaseOrders
             .AsNoTracking()
             .Where(o => o.OrgId == orgId
                      && o.SupplierId == id
-                     && o.SourceFileKey != null)
+                     && o.SourceFileKey != null
+                     && o.SourceFilePurgedAt == null)
             .OrderByDescending(o => o.CreatedAt)
             .Select(o => new { o.Id, o.SourceFileKey })
             .FirstOrDefaultAsync(ct);

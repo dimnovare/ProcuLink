@@ -229,6 +229,12 @@ internal sealed class OrderQueryService
         if (artifact is null)
             return Result<DownloadUrl>.Fail("Artifact not found.");
 
+        // Blob-retention honesty: the row survives a retention purge but the blob is gone.
+        // Surface the EXACT marker error so the controller maps it to 410 Gone with an
+        // honest explanation instead of handing out a signed URL to a missing object.
+        if (artifact.BlobPurgedAt is not null)
+            return Result<DownloadUrl>.Fail(RetentionConstants.BlobPurgedError);
+
         var expiry    = TimeSpan.FromMinutes(15);
         var url       = await _fileStorage.GetSignedDownloadUrlAsync(artifact.FileKey, expiry, ct);
         var expiresAt = DateTime.UtcNow + expiry;

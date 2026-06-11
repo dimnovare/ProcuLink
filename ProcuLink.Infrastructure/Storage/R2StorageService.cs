@@ -111,6 +111,23 @@ public sealed class R2StorageService : IFileStorageService, IAsyncDisposable
         await _client.DeleteObjectAsync(request, ct);
     }
 
+    /// <inheritdoc/>
+    public async Task<long?> TryGetSizeAsync(string key, CancellationToken ct)
+    {
+        // Same client/auth as every other call; HEAD-equivalent metadata request.
+        // Best-effort by contract: any failure (missing key, transient error) → null.
+        try
+        {
+            var metadata = await _client.GetObjectMetadataAsync(
+                new GetObjectMetadataRequest { BucketName = _bucketName, Key = key }, ct);
+            return metadata.ContentLength;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         _client.Dispose();
