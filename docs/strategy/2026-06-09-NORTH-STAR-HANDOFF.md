@@ -169,8 +169,14 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   (per-supplier, by design — `/transform?format=` is for preview/ad-hoc, NOT delivery). To "send in any type"
   set the supplier output format; transform-validity for all 6 formats already proven (36/36 live + 56/56
   deterministic). Channels: HTTP proven live; SFTP/FTPS/SMTP/Erply/Directo need real endpoints. Test catcher
-  `https://webhook.site/3f84dc65-a3f6-4539-9357-b0b57ac286d3` (expires 2026-06-17); sample supplier left with
-  autoDeliver=true→that catcher (reset if undesired). See [[project-live-matrix-and-diverse-review]].
+  `https://webhook.site/3f84dc65-a3f6-4539-9357-b0b57ac286d3` (expires 2026-06-17). **UPDATE 2026-06-11: ALL
+  6 OUTPUT FORMATS now delivered live to the catcher** (verified content): JSON, XML, CSV
+  (`SupplierItemCode,Description,…`), cXML (`<cXML payloadID=…>`), UBL (`<Order xmlns:cac="urn:oasis…ubl…">`),
+  X12 (`ISA*…*ZZ*PROCULINK…`) — "send in any type" proven end-to-end. Sample supplier delivery-config DELETED
+  (reset) afterward. **PURGE NOT DONE:** the admin order-delete is a PERMANENT HARD-ERASE
+  (`AdminController.EraseOrder`, no bulk endpoint) — flagged to founder for explicit informed confirmation
+  before erasing the ~2000 `E2E-API-*` test orders (exact ids in scripts/live-matrix/ingest-results.ndjson).
+  See [[project-live-matrix-and-diverse-review]].
 
 ## ✅ LIVE-MATRIX FINDING (2026-06-10) — csv/json preview 500 FOUND + FIXED + LIVE-VERIFIED (`e7b5965`)
 Driving the live in×out matrix surfaced a REAL prod 500 the deterministic 56/56 + byte-identical tests
