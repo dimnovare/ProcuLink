@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ProcuLink.Api.Contracts;
 
 /// <summary>
@@ -10,7 +12,17 @@ public sealed record ReplayRequest(
     /// <summary>Explicit order ids to replay (org-scoped, capped at <c>ReplayService.MaxOrders</c>). When empty, a recent window is used.</summary>
     IReadOnlyList<Guid>? OrderIds = null,
     /// <summary>When <see cref="OrderIds"/> is empty, replay the most recent N orders for the supplier (default 20, capped).</summary>
-    int RecentLimit = 20);
+    int RecentLimit = 20,
+    /// <summary>
+    /// Replay flip A — opt-in PARSE-FROM-SOURCE leg. When true, each replayed order that has a
+    /// stored source file is re-parsed IN MEMORY under the replayed revision's input-mapping
+    /// snapshot (item codes resolved against the revision's item-mapping snapshot), and the
+    /// per-order diff vs. the order's CURRENT stored canonical is returned in
+    /// <see cref="ReplayOrderDiffDto.ParseLeg"/>. Default false → the response is byte-identical
+    /// to the pre-flip contract (no <c>parseLeg</c> field is emitted). Non-mutating: nothing is
+    /// written; orders without a stored file / PDF (AI-extracted) sources are skipped with a note.
+    /// </summary>
+    bool IncludeParseLeg = false);
 
 /// <summary>
 /// Group V2 — the full replay result: the revision that was replayed plus one diff per order.
@@ -55,7 +67,16 @@ public sealed record ReplayOrderDiffDto(
     ReplayValidationSummaryDto CurrentValidation,
     ReplayValidationSummaryDto DraftValidation,
     /// <summary>Per-rule status flips (pass→fail or fail→pass) the replayed revision's validation introduces.</summary>
-    IReadOnlyList<ReplayValidationFlipDto> ValidationFlips);
+    IReadOnlyList<ReplayValidationFlipDto> ValidationFlips,
+
+    // ── Parse-from-source leg (replay flip A — additive, opt-in) ──────────────
+    /// <summary>
+    /// Parse-from-source diff for this order. Only populated when
+    /// <see cref="ReplayRequest.IncludeParseLeg"/> was true; omitted from the JSON entirely when
+    /// null so the default replay contract stays byte-identical.
+    /// </summary>
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ReplayParseLegDto? ParseLeg = null);
 
 /// <summary>A single effective canonical-value change (header- or line-scoped).</summary>
 public sealed record ReplayFieldChangeDto(
@@ -75,6 +96,48 @@ public sealed record ReplayValidationSummaryDto(
     int FailCount,
     /// <summary>True when a bound acceptance profile was evaluated; false when there was no profile to evaluate.</summary>
     bool HasProfile);
+
+/// <summary>
+/// Replay flip A — the PARSE-FROM-SOURCE result for one replayed order: the order's stored
+/// source file re-parsed in memory under the replayed revision's input-mapping snapshot, item
+/// codes resolved against the revision's item-mapping snapshot, diffed against the order's
+/// CURRENT stored canonical (header fields, line count, review flags, code resolution).
+/// Parse DIFFERENCES are informational — a mapping change SHOULD change parsing; only a
+/// re-parse FAILURE is a problem. Nothing here is persisted.
+/// </summary>
+public sealed record ReplayParseLegDto(
+    /// <summary>"reparsed" (source re-parsed and diffed) | "skipped" (no file / AI-extracted source) | "failed" (download/parse error — recorded, never thrown).</summary>
+    string Status,
+    /// <summary>Why the leg was skipped or failed; null for a clean re-parse.</summary>
+    string? Note,
+    /// <summary>True when ANY difference vs. the current stored canonical was detected.</summary>
+    bool ParseChanged,
+    /// <summary>Header fields whose value would change under the revision's input mapping (scope "header").</summary>
+    IReadOnlyList<ReplayFieldChangeDto> HeaderChanges,
+    bool LineCountChanged,
+    /// <summary>The order's currently stored line count (null when the leg was skipped/failed before comparing).</summary>
+    int? CurrentLineCount,
+    /// <summary>The re-parsed line count (null when the leg was skipped/failed).</summary>
+    int? ReParsedLineCount,
+    /// <summary>Line numbers that would NEWLY need review under this revision (unresolved code or parser-flagged) but are clean today.</summary>
+    IReadOnlyList<int> LinesNewlyFlagged,
+    /// <summary>Line numbers flagged today that would be clean under this revision.</summary>
+    IReadOnlyList<int> LinesNewlyUnflagged,
+    /// <summary>Buyer codes unresolved today that the revision's item-mapping snapshot WOULD resolve.</summary>
+    IReadOnlyList<ReplayParseCodeChangeDto> CodesNewlyResolved,
+    /// <summary>Buyer codes resolved today that would become UNRESOLVED under the revision's snapshot.</summary>
+    IReadOnlyList<ReplayParseCodeChangeDto> CodesNewlyUnresolved,
+    /// <summary>Buyer codes resolved on both sides but to a DIFFERENT supplier item code.</summary>
+    IReadOnlyList<ReplayParseCodeChangeDto> CodesResolvedDifferently);
+
+/// <summary>One per-line supplier-item-code resolution change between the current canonical and the parse-leg re-parse.</summary>
+public sealed record ReplayParseCodeChangeDto(
+    int LineNumber,
+    string? BuyerItemCode,
+    /// <summary>The supplier item code stored on the order's current line (null = unresolved today).</summary>
+    string? CurrentSupplierItemCode,
+    /// <summary>The supplier item code the revision's snapshot would resolve (null = would be unresolved).</summary>
+    string? ReParsedSupplierItemCode);
 
 /// <summary>One rule whose pass/fail status differs between the current and replayed validation.</summary>
 public sealed record ReplayValidationFlipDto(

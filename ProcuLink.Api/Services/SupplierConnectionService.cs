@@ -404,18 +404,29 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
     // ── test pack internals ──────────────────────────────────────────────────
 
     /// <summary>Serializable summary stored in <c>test_result_json</c> (camelCase).</summary>
-    private sealed record TestPackSummary(ReplayLeg? Replay, ConformanceLeg? Conformance, string? Error);
+    private sealed record TestPackSummary(ReplayLeg? Replay, ConformanceLeg? Conformance, string? Error, ParseLegSummary? ParseLeg = null);
     private sealed record ReplayLeg(bool Passed, int OrderCount, int OutputErrors, int OutputChanged, int ValidationChanged, string? Note);
     private sealed record ConformanceLeg(bool Skipped, bool? Passed, string? Profile, int Errors, int Warnings, string? Note);
+    /// <summary>Replay flip A — parse-from-source leg evidence: how many orders re-parsed / would parse differently / failed / were skipped.</summary>
+    private sealed record ParseLegSummary(bool Passed, int OrdersReParsed, int ParseChanges, int Failures, int Skipped, string? Note);
 
     /// <summary>
-    /// Runs the two test-pack legs. (a) REPLAY: the revision is replayed over the most recent
+    /// Runs the test-pack legs. (a) REPLAY: the revision is replayed over the most recent
     /// <see cref="TestPackRecentOrders"/> orders via the existing replay engine (non-mutating,
     /// never delivers). 0 orders = pass-with-note. With orders, the leg passes when at least one
     /// order rendered (i.e. the revision can actually produce output); per-order render errors
     /// are counted honestly in the summary. (b) CONFORMANCE: a replayed output is validated
     /// against its NAMED standards profile where the revision's format has one; skip-with-note
-    /// otherwise. NO delivery test-fire — side effects are out of bounds here.
+    /// otherwise. (c) PARSE-FROM-SOURCE (replay flip A): orders with a stored source file are
+    /// re-parsed IN MEMORY under the revision's input-mapping + item-mapping snapshots. The leg
+    /// runs UNCONDITIONALLY (not just when InputMappingJson differs from the previous published
+    /// revision's): the pack is bounded at ≤<see cref="TestPackRecentOrders"/> orders, the leg is
+    /// deterministic-only (PDF/AI sources skip-with-note) and in-memory, so it is cheap — and an
+    /// always-on leg also catches ITEM-MAPPING snapshot drift plus the no-previous-revision case
+    /// that an input-mapping-diff trigger would miss. Pass criterion: when any order with a
+    /// source file exists, at least ONE must re-parse successfully; parse DIFFERENCES are
+    /// informational (a mapping change SHOULD change parsing), only failures gate. NO delivery
+    /// test-fire — side effects are out of bounds here.
     /// </summary>
     private async Task<(bool Passed, string SummaryJson)> ExecuteTestPackAsync(
         Guid orgId, Guid connectionId, Guid revisionId, SupplierConnectionRevision rev, CancellationToken ct)
@@ -428,20 +439,22 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
             var emptySummary = new TestPackSummary(
                 new ReplayLeg(true, 0, 0, 0, 0, "No orders exist for this supplier yet — replay pass-with-note."),
                 new ConformanceLeg(true, null, null, 0, 0, "No replayed output available to conformance-check."),
-                Error: null);
+                Error: null,
+                new ParseLegSummary(true, 0, 0, 0, 0, "No orders exist for this supplier yet — nothing to re-parse."));
             return (true, JsonSerializer.Serialize(emptySummary, SummaryJsonOptions));
         }
 
         var replay = await _replay.ReplayAsync(
             orgId, connectionId, revisionId,
-            new ReplayRequest(OrderIds: null, RecentLimit: TestPackRecentOrders), ct);
+            new ReplayRequest(OrderIds: null, RecentLimit: TestPackRecentOrders, IncludeParseLeg: true), ct);
 
         if (replay is null)
         {
             var missing = new TestPackSummary(
                 new ReplayLeg(false, 0, 0, 0, 0, "Replay could not resolve the connection/revision."),
                 new ConformanceLeg(true, null, null, 0, 0, "Skipped — replay produced no output."),
-                Error: null);
+                Error: null,
+                new ParseLegSummary(true, 0, 0, 0, 0, "Skipped — replay produced no orders to re-parse."));
             return (false, JsonSerializer.Serialize(missing, SummaryJsonOptions));
         }
 
@@ -483,8 +496,28 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
                 report.OverallPass ? null : "Replayed output failed its named standards profile.");
         }
 
-        var passed = replayPassed && (conformanceLeg.Skipped || conformanceLeg.Passed == true);
-        var summary = new TestPackSummary(replayLeg, conformanceLeg, Error: null);
+        // Parse-from-source leg (replay flip A): aggregate the per-order parse legs the replay
+        // produced. Skips (no stored file / AI-extracted PDF source / host without storage) are
+        // honest non-evidence; with ≥1 eligible order, at least one must re-parse successfully.
+        // Parse DIFFERENCES are informational only — they never fail the pack.
+        var parseLegs     = replay.Orders.Select(o => o.ParseLeg).OfType<ReplayParseLegDto>().ToList();
+        var reParsed      = parseLegs.Count(p => p.Status == "reparsed");
+        var parseChanges  = parseLegs.Count(p => p.ParseChanged);
+        var parseFailures = parseLegs.Count(p => p.Status == "failed");
+        var parseSkipped  = parseLegs.Count(p => p.Status == "skipped");
+        var parseEligible = reParsed + parseFailures;
+        var parsePassed   = parseEligible == 0 || reParsed > 0;
+        var parseNote = parseEligible == 0
+            ? "No replayed order had a re-parsable stored source file — parse leg skip-with-note."
+            : parseFailures > 0
+                ? $"{parseFailures} of {parseEligible} order(s) with source files failed to re-parse under this revision's input mapping."
+                : parseChanges > 0
+                    ? $"{parseChanges} order(s) would parse differently under this revision (informational, not a failure)."
+                    : null;
+        var parseLegSummary = new ParseLegSummary(parsePassed, reParsed, parseChanges, parseFailures, parseSkipped, parseNote);
+
+        var passed = replayPassed && (conformanceLeg.Skipped || conformanceLeg.Passed == true) && parsePassed;
+        var summary = new TestPackSummary(replayLeg, conformanceLeg, Error: null, parseLegSummary);
         return (passed, JsonSerializer.Serialize(summary, SummaryJsonOptions));
     }
 

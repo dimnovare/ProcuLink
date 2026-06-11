@@ -7,6 +7,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Output;
+using ProcuLink.Transform.Parsing;
 
 namespace ProcuLink.Api.Services;
 
@@ -54,12 +55,18 @@ public sealed class ReplayService : IReplayService
     private readonly IEnumerable<ITransformService> _transformers;
     private readonly IPoMappingService              _poMappings;
     private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
+    private readonly IFileStorageService?           _fileStorage;
+    private readonly OrderParserFactory?            _parserFactory;
+    private readonly IItemMappingService            _itemMappings;
 
     public ReplayService(
         ProcuLinkDbContext             db,
         IEnumerable<ITransformService> transformers,
         IPoMappingService?             poMappings = null,
-        IEffectiveConnectionConfigResolver? effectiveConfig = null)
+        IEffectiveConnectionConfigResolver? effectiveConfig = null,
+        IFileStorageService?           fileStorage = null,
+        OrderParserFactory?            parserFactory = null,
+        IItemMappingService?           itemMappings = null)
     {
         _db           = db;
         _transformers = transformers;
@@ -72,6 +79,16 @@ public sealed class ReplayService : IReplayService
         // of the diff must mirror the runtime priority (per-order override → pinned revision output →
         // fixed; supplier-promoted NOT consulted). Null (older positional ctors) = flag-OFF behaviour.
         _effectiveConfig = effectiveConfig;
+        // Replay flip A — parse-from-source leg dependencies. Both are optional so older positional
+        // constructions stay valid; when either is missing and a parse leg is requested, the leg is
+        // recorded as skipped-with-note per order (never a throw). The file download goes through
+        // IFileStorageService.DownloadAsync EXACTLY (the R2 pre-signed-URL path).
+        _fileStorage   = fileStorage;
+        _parserFactory = parserFactory;
+        // Live item-mapping fallback for the parse leg when the revision snapshotted NO item
+        // mappings — mirrors the runtime contract in OrderIngestionService.BuildLineEntitiesAsync
+        // (empty snapshot ⇒ live table). Same self-construction pattern as _poMappings.
+        _itemMappings  = itemMappings ?? new ProcuLink.Infrastructure.Services.ItemMappingService(db);
     }
 
     public async Task<ReplayResponse?> ReplayAsync(
@@ -129,6 +146,26 @@ public sealed class ReplayService : IReplayService
             // A malformed supplier mapping must never abort a replay — fall back to fixed.
         }
 
+        // ── Replay flip A — parse-from-source leg context (resolved ONCE per replay) ─────────
+        // The DRAFT revision's parse mapping with the SAME priority the live parse applies
+        // (OrderIngestionService.ParseStoredFileAsync): a USABLE input-mapping snapshot governs;
+        // a null/blank/empty/malformed snapshot falls back to the LIVE supplier PO mapping.
+        // The item-mapping snapshot is the revision's own child rows (already Include'd above).
+        PoMappingConfig? parseLegMapping = null;
+        IReadOnlyList<EffectiveRevisionItemMapping> parseLegItemSnapshot = Array.Empty<EffectiveRevisionItemMapping>();
+        if (request.IncludeParseLeg)
+        {
+            parseLegMapping = OrderIngestionService.TryDeserializeSnapshotPoMapping(revision.InputMappingJson).Config;
+            if (parseLegMapping is null)
+            {
+                try { parseLegMapping = await _poMappings.GetAsync(orgId, revision.SupplierId, ct); }
+                catch { /* a malformed live mapping must never abort a replay — parse without a template */ }
+            }
+            parseLegItemSnapshot = revision.ItemMappings
+                .Select(m => new EffectiveRevisionItemMapping(m.BuyerItemCode, m.SupplierItemCode))
+                .ToList();
+        }
+
         var now = DateTime.UtcNow;
         var diffs = new List<ReplayOrderDiffDto>(orders.Count);
         foreach (var order in orders)
@@ -139,7 +176,17 @@ public sealed class ReplayService : IReplayService
             var effective = _effectiveConfig is null
                 ? EffectiveConnectionConfig.Live
                 : await _effectiveConfig.ResolveAsync(orgId, order.ConnectionRevisionId, ct);
-            diffs.Add(BuildDiff(order, draftOutputConfig, draftFormat, currentFormat, currentProfile, draftProfile, now, supplierPromotedOutput, effective));
+            var diff = BuildDiff(order, draftOutputConfig, draftFormat, currentFormat, currentProfile, draftProfile, now, supplierPromotedOutput, effective);
+
+            // Opt-in parse-from-source leg: default-off keeps the existing contract byte-identical.
+            if (request.IncludeParseLeg)
+                diff = diff with
+                {
+                    ParseLeg = await BuildParseLegAsync(
+                        order, parseLegMapping, parseLegItemSnapshot, orgId, revision.SupplierId, ct),
+                };
+
+            diffs.Add(diff);
         }
 
         return new ReplayResponse(
@@ -529,5 +576,209 @@ public sealed class ReplayService : IReplayService
             .OrderBy(f => f.LineNumber ?? -1)
             .ThenBy(f => f.Code, StringComparer.Ordinal)
             .ToList();
+    }
+
+    // ── Replay flip A — parse-from-source leg ─────────────────────────────────
+    // Completes "published revision = tested contract": the revision's InputMappingJson +
+    // item-mapping snapshot are exercised against the order's REAL stored source file, entirely
+    // in memory. Never mutates (no order/line writes, no uploads); never throws — every failure
+    // is recorded as a per-order note. PDF sources are SKIPPED (the primary PDF path is the
+    // AI extractor — expensive + external; deterministic formats only re-parse here).
+
+    /// <summary>Skip-note factory: leg not run for this order (no file / AI source / host without storage).</summary>
+    private static ReplayParseLegDto ParseLegSkipped(string note) => new(
+        "skipped", note, ParseChanged: false,
+        HeaderChanges: Array.Empty<ReplayFieldChangeDto>(), LineCountChanged: false,
+        CurrentLineCount: null, ReParsedLineCount: null,
+        LinesNewlyFlagged: Array.Empty<int>(), LinesNewlyUnflagged: Array.Empty<int>(),
+        CodesNewlyResolved: Array.Empty<ReplayParseCodeChangeDto>(),
+        CodesNewlyUnresolved: Array.Empty<ReplayParseCodeChangeDto>(),
+        CodesResolvedDifferently: Array.Empty<ReplayParseCodeChangeDto>());
+
+    /// <summary>Failure-note factory: the leg ran but could not complete (download/parse error) — recorded, never thrown.</summary>
+    private static ReplayParseLegDto ParseLegFailed(string note) => new(
+        "failed", note, ParseChanged: false,
+        HeaderChanges: Array.Empty<ReplayFieldChangeDto>(), LineCountChanged: false,
+        CurrentLineCount: null, ReParsedLineCount: null,
+        LinesNewlyFlagged: Array.Empty<int>(), LinesNewlyUnflagged: Array.Empty<int>(),
+        CodesNewlyResolved: Array.Empty<ReplayParseCodeChangeDto>(),
+        CodesNewlyUnresolved: Array.Empty<ReplayParseCodeChangeDto>(),
+        CodesResolvedDifferently: Array.Empty<ReplayParseCodeChangeDto>());
+
+    /// <summary>
+    /// Runs the parse-from-source leg for ONE order: download the raw stored file (via the
+    /// existing <see cref="IFileStorageService.DownloadAsync"/> — the R2 pre-signed-URL path),
+    /// re-parse it in memory under <paramref name="parseMapping"/> with EXACTLY the routing
+    /// <c>OrderIngestionService.ParseStoredFileAsync</c> uses (mapping template for .csv, else
+    /// the content-aware parser factory), resolve item codes against the revision's snapshot
+    /// (live-table fallback when the snapshot is empty — the runtime contract), and diff the
+    /// result against the order's CURRENT stored canonical. Defensive end to end: any failure
+    /// becomes a per-order note.
+    /// </summary>
+    private async Task<ReplayParseLegDto> BuildParseLegAsync(
+        PurchaseOrderEntity order,
+        PoMappingConfig? parseMapping,
+        IReadOnlyList<EffectiveRevisionItemMapping> itemSnapshot,
+        Guid orgId,
+        Guid supplierId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(order.SourceFileKey))
+            return ParseLegSkipped("No stored source file for this order (API/email ingress) — parse leg skipped.");
+
+        var extension = Path.GetExtension(order.SourceFileKey).ToLowerInvariant();
+        if (extension == ".pdf")
+            return ParseLegSkipped("AI-extracted source, parse leg skipped.");
+
+        if (_fileStorage is null || _parserFactory is null)
+            return ParseLegSkipped("File storage / parser routing is not available to this replay host — parse leg skipped.");
+
+        // Download raw bytes — reuse IFileStorageService.DownloadAsync exactly (R2 SDK-signing gotcha).
+        byte[] bytes;
+        try
+        {
+            await using var download = await _fileStorage.DownloadAsync(order.SourceFileKey, ct);
+            using var buffer = new MemoryStream();
+            await download.CopyToAsync(buffer, ct);
+            bytes = buffer.ToArray();
+        }
+        catch (Exception ex)
+        {
+            return ParseLegFailed($"Could not download the source file: {ex.Message}");
+        }
+
+        if (bytes.Length == 0)
+            return ParseLegFailed("The stored source file is empty.");
+
+        // Re-parse in memory under the revision's input mapping — same routing as the live parse:
+        // a usable mapping template drives .csv; everything else goes through the content-aware
+        // parser factory (.xlsx/.xml/.edi/.txt/.x12/... — deterministic parsers only; PDF excluded above).
+        ParsedOrder parsed;
+        try
+        {
+            if (parseMapping is not null && extension == ".csv")
+            {
+                parsed = await OrderIngestionService.ParseWithMappingTemplateAsync(bytes, parseMapping, ct);
+            }
+            else
+            {
+                using var stream = new MemoryStream(bytes);
+                var parser = _parserFactory.GetParser(extension, stream);
+                stream.Position = 0;
+                parsed = await parser.ParseAsync(stream, ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            return ParseLegFailed($"Re-parse failed under this revision's input mapping: {ex.Message}");
+        }
+
+        if (parsed.Lines.Count == 0)
+            return ParseLegFailed("Re-parse produced no line items under this revision's input mapping.");
+
+        // Item-code resolution: the revision's snapshot governs when non-empty (exact-match,
+        // trimmed Ordinal — OrderIngestionService.ResolveFromSnapshot); an EMPTY snapshot falls
+        // back to the live item mappings, mirroring BuildLineEntitiesAsync's runtime contract.
+        IReadOnlyDictionary<string, string?> resolvedMap;
+        try
+        {
+            resolvedMap = itemSnapshot.Count > 0
+                ? OrderIngestionService.ResolveFromSnapshot(itemSnapshot, parsed.Lines)
+                : await _itemMappings.ResolveManyAsync(
+                    orgId, supplierId, parsed.Lines.Select(l => l.BuyerItemCode), ct);
+        }
+        catch (Exception ex)
+        {
+            return ParseLegFailed($"Item-code resolution failed: {ex.Message}");
+        }
+
+        return BuildParseDiff(order, parsed, resolvedMap);
+    }
+
+    /// <summary>
+    /// Pure diff of a re-parsed order against the CURRENT stored canonical: header fields that
+    /// would change, line-count change, lines that would newly flag/unflag for review (mirrors
+    /// <c>BuildLineEntitiesAsync</c>'s <c>NeedsReview = !resolved || parserFlagged</c>), and
+    /// per-line code-resolution changes. Differences are informational, never failures.
+    /// </summary>
+    internal static ReplayParseLegDto BuildParseDiff(
+        PurchaseOrderEntity order,
+        ParsedOrder parsed,
+        IReadOnlyDictionary<string, string?> resolvedMap)
+    {
+        // Header diff. Values are normalised the way the live parse persists them; fields the
+        // parse would runtime-generate when absent (blank PO number → "PO-{timestamp}", missing
+        // order date → today) are only compared when the re-parse produced a definite value.
+        var headerChanges = new List<ReplayFieldChangeDto>();
+        if (!string.IsNullOrWhiteSpace(parsed.PoNumber))
+            AddHeaderChange(headerChanges, "PoNumber", order.PoNumber, parsed.PoNumber);
+        var newBuyerName = string.IsNullOrWhiteSpace(parsed.BuyerName) ? null : parsed.BuyerName.Trim();
+        AddHeaderChange(headerChanges, "BuyerName", order.BuyerName, newBuyerName);
+        AddHeaderChange(headerChanges, "Currency", order.Currency, parsed.Currency ?? "EUR");
+        if (parsed.OrderDate.HasValue)
+            AddHeaderChange(headerChanges, "OrderDate",
+                order.OrderDate.ToString("O"),
+                DateOnly.FromDateTime(parsed.OrderDate.Value).ToString("O"));
+
+        // Line-level diff, matched by line number (defensive grouping — duplicates never throw).
+        var currentByNo = order.Lines
+            .GroupBy(l => l.LineNumber)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var newlyFlagged    = new List<int>();
+        var newlyUnflagged  = new List<int>();
+        var newlyResolved   = new List<ReplayParseCodeChangeDto>();
+        var newlyUnresolved = new List<ReplayParseCodeChangeDto>();
+        var resolvedDifferently = new List<ReplayParseCodeChangeDto>();
+
+        foreach (var line in parsed.Lines.OrderBy(l => l.LineNumber))
+        {
+            // Lines that only exist on one side are covered by the line-count diff.
+            if (!currentByNo.TryGetValue(line.LineNumber, out var current)) continue;
+
+            var code     = ResolveCodeFromMap(resolvedMap, line.BuyerItemCode);
+            var resolved = !string.IsNullOrWhiteSpace(code);
+
+            // Mirrors BuildLineEntitiesAsync: a line needs review when its code is unresolved OR
+            // the parser itself flagged an ambiguous number.
+            var wouldFlag        = !resolved || line.NeedsReview;
+            var currentlyFlagged = current.NeedsReview;
+            if (wouldFlag && !currentlyFlagged) newlyFlagged.Add(line.LineNumber);
+            if (!wouldFlag && currentlyFlagged) newlyUnflagged.Add(line.LineNumber);
+
+            var currentCode     = current.SupplierItemCode;
+            var currentResolved = !string.IsNullOrWhiteSpace(currentCode);
+            if (resolved && !currentResolved)
+                newlyResolved.Add(new ReplayParseCodeChangeDto(line.LineNumber, line.BuyerItemCode, currentCode, code));
+            else if (!resolved && currentResolved)
+                newlyUnresolved.Add(new ReplayParseCodeChangeDto(line.LineNumber, line.BuyerItemCode, currentCode, null));
+            else if (resolved && currentResolved && !string.Equals(currentCode, code, StringComparison.Ordinal))
+                resolvedDifferently.Add(new ReplayParseCodeChangeDto(line.LineNumber, line.BuyerItemCode, currentCode, code));
+        }
+
+        var lineCountChanged = parsed.Lines.Count != order.Lines.Count;
+        var parseChanged = headerChanges.Count > 0 || lineCountChanged
+            || newlyFlagged.Count > 0 || newlyUnflagged.Count > 0
+            || newlyResolved.Count > 0 || newlyUnresolved.Count > 0
+            || resolvedDifferently.Count > 0;
+
+        return new ReplayParseLegDto(
+            "reparsed", Note: null, ParseChanged: parseChanged,
+            HeaderChanges: headerChanges,
+            LineCountChanged: lineCountChanged,
+            CurrentLineCount: order.Lines.Count,
+            ReParsedLineCount: parsed.Lines.Count,
+            LinesNewlyFlagged: newlyFlagged,
+            LinesNewlyUnflagged: newlyUnflagged,
+            CodesNewlyResolved: newlyResolved,
+            CodesNewlyUnresolved: newlyUnresolved,
+            CodesResolvedDifferently: resolvedDifferently);
+    }
+
+    /// <summary>Trimmed-key lookup mirroring <c>ItemMappingService.ResolveManyAsync</c> / <c>ResolveFromSnapshot</c> keying.</summary>
+    private static string? ResolveCodeFromMap(IReadOnlyDictionary<string, string?> map, string? buyerItemCode)
+    {
+        if (string.IsNullOrWhiteSpace(buyerItemCode)) return null;
+        return map.TryGetValue(buyerItemCode.Trim(), out var code) ? code : null;
     }
 }
