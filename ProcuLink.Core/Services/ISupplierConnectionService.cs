@@ -24,6 +24,59 @@ public sealed record ConnectionItemMappingInput(
     string BuyerItemCode, string SupplierItemCode, float Confidence, string Source);
 
 /// <summary>
+/// Evidence from one test-pack run over a revision (launch batch 3): the outcome, when it ran,
+/// and an honest summary JSON (replay leg + conformance leg + any execution error).
+/// </summary>
+public sealed record ConnectionTestEvidence(bool Passed, DateTime TestedAt, string SummaryJson);
+
+/// <summary>Outcome of <see cref="ISupplierConnectionService.MarkTestAsync"/>.</summary>
+public enum ConnectionTestStatus
+{
+    /// <summary>Connection/revision not found in this org.</summary>
+    NotFound,
+    /// <summary>Revision is published/archived — only draft/test revisions can be tested.</summary>
+    InvalidStatus,
+    /// <summary>The test pack ran (pass OR fail — see the evidence) and the revision is marked test.</summary>
+    Completed,
+}
+
+public sealed record ConnectionTestOutcome(ConnectionTestStatus Status, ConnectionTestEvidence? Evidence);
+
+/// <summary>Outcome of <see cref="ISupplierConnectionService.PublishAsync"/>.</summary>
+public enum ConnectionPublishOutcome
+{
+    /// <summary>Connection/revision not found in this org.</summary>
+    NotFound,
+    /// <summary>Revision is already published/archived (frozen).</summary>
+    InvalidStatus,
+    /// <summary>
+    /// Evidence gate: the revision has no PASSING test evidence newer than its last content
+    /// update. Run tests on the revision before publishing. Pre-existing published revisions
+    /// (e.g. the V1 backfilled rev-1 rows) are untouched — the gate only applies to NEW
+    /// publish attempts on draft/test revisions.
+    /// </summary>
+    EvidenceRequired,
+    /// <summary>Published: revision frozen, prior published revision archived, active pointer flipped.</summary>
+    Published,
+}
+
+/// <summary>Outcome of <see cref="ISupplierConnectionService.RollbackAsync"/>.</summary>
+public enum ConnectionRollbackStatus
+{
+    /// <summary>Connection/target revision not found in this org.</summary>
+    NotFound,
+    /// <summary>Target is not a previously-published (now archived) revision of this connection.</summary>
+    InvalidTarget,
+    /// <summary>Rollback completed: target's bundle cloned into a new published revision, pointer moved.</summary>
+    Completed,
+}
+
+public sealed record ConnectionRollbackOutcome(
+    ConnectionRollbackStatus Status,
+    Entities.SupplierConnectionRevision? NewRevision,
+    string? Message);
+
+/// <summary>
 /// Group V1 — lifecycle (draft → test → published → archived) for the versioned Supplier
 /// Connection. Generalises the <see cref="ISupplierAcceptanceService"/> versioning precedent
 /// from "just acceptance" to the whole connection bundle. All methods are org-scoped.
@@ -62,15 +115,41 @@ public interface ISupplierConnectionService
     Task<bool?> UpdateDraftAsync(
         Guid orgId, Guid connectionId, Guid revisionId, ConnectionRevisionDraftInput input, CancellationToken ct);
 
-    /// <summary>Marks a draft as <c>test</c> (readiness marker; still editable). Returns null if not found.</summary>
-    Task<bool?> MarkTestAsync(Guid orgId, Guid connectionId, Guid revisionId, CancellationToken ct);
+    /// <summary>
+    /// Executes the REAL test pack over a revision and stores the evidence on it
+    /// (TestResultJson + TestedAt + TestPassed): (a) replays the revision over recent orders via
+    /// the replay engine (0 orders = pass-with-note), (b) conformance-checks a replayed output
+    /// against its named standards profile where the format is resolvable (skip-with-note
+    /// otherwise). NEVER delivers (no side effects beyond the stored evidence). Failures are
+    /// stored honestly, not thrown. Returns null when the revision is not found in this org.
+    /// </summary>
+    Task<ConnectionTestEvidence?> RunTestPackAsync(Guid orgId, Guid connectionId, Guid revisionId, CancellationToken ct);
+
+    /// <summary>
+    /// Runs the test pack (<see cref="RunTestPackAsync"/>), stores the evidence, and marks the
+    /// revision <c>test</c> (still editable). The evidence is returned for the caller to surface.
+    /// </summary>
+    Task<ConnectionTestOutcome> MarkTestAsync(Guid orgId, Guid connectionId, Guid revisionId, CancellationToken ct);
 
     /// <summary>
     /// Publishes a draft/test revision: freezes it, archives the prior published revision, and flips
-    /// the connection's active pointer — all in one transaction. Returns null if not found, false if
-    /// the revision is already published/archived.
+    /// the connection's active pointer — all in one transaction. EVIDENCE-GATED: the revision must
+    /// carry PASSING test evidence newer than its last content update
+    /// (<see cref="ConnectionPublishOutcome.EvidenceRequired"/> otherwise). Pre-existing published
+    /// revisions are untouched by the gate.
     /// </summary>
-    Task<bool?> PublishAsync(Guid orgId, Guid connectionId, Guid revisionId, string? publishedBy, CancellationToken ct);
+    Task<ConnectionPublishOutcome> PublishAsync(Guid orgId, Guid connectionId, Guid revisionId, string? publishedBy, CancellationToken ct);
+
+    /// <summary>
+    /// Rolls the connection back to a previously-published (now archived) revision: clones the
+    /// target's full bundle (including item-mapping child rows) into a NEW revision (next version
+    /// number, status <c>published</c>, CreatedBy <c>rollback:{user}</c>), archives the currently
+    /// published revision, and moves the active pointer to the clone. The target itself stays
+    /// archived/immutable. The evidence gate does NOT apply — rollback restores a bundle that was
+    /// already published before.
+    /// </summary>
+    Task<ConnectionRollbackOutcome> RollbackAsync(
+        Guid orgId, Guid connectionId, Guid targetRevisionId, string? requestedBy, CancellationToken ct);
 
     /// <summary>
     /// Archives a revision. If it was the active published one, the connection's active pointer is

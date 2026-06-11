@@ -20,6 +20,25 @@ public class SupplierConnectionServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
+    /// <summary>
+    /// Service under test. The suppliers in this fixture have no orders, so the launch-batch-3
+    /// test pack short-circuits to pass-with-note (the replay engine is constructed but never
+    /// invoked); the lifecycle behaviour under test is unchanged.
+    /// </summary>
+    private static SupplierConnectionService MakeSvc(ProcuLinkDbContext db) =>
+        new(db,
+            new ReplayService(db, Array.Empty<ITransformService>()),
+            new ProcuLink.Transform.Conformance.ConformanceService());
+
+    /// <summary>Evidence-gated publish: run the test pack (stores evidence) then publish.</summary>
+    private static async Task<ConnectionPublishOutcome> TestThenPublishAsync(
+        SupplierConnectionService svc, Guid orgId, Guid connectionId, Guid revisionId)
+    {
+        var test = await svc.MarkTestAsync(orgId, connectionId, revisionId, CancellationToken.None);
+        Assert.Equal(ConnectionTestStatus.Completed, test.Status);
+        return await svc.PublishAsync(orgId, connectionId, revisionId, "user", CancellationToken.None);
+    }
+
     private static ConnectionRevisionDraftInput Bundle(string? output = "xml") =>
         new(
             InputMappingJson: "{\"x\":1}",
@@ -50,7 +69,7 @@ public class SupplierConnectionServiceTests
     public async Task EnsureConnection_CreatesOnce_AndIsIdempotent()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var (orgId, supplierId) = await SeedSupplier(db);
 
         var c1 = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
@@ -67,7 +86,7 @@ public class SupplierConnectionServiceTests
     public async Task EnsureConnection_CrossTenant_ReturnsNull()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var (orgId, supplierId) = await SeedSupplier(db);
 
         var otherOrg = Guid.NewGuid();
@@ -80,7 +99,7 @@ public class SupplierConnectionServiceTests
     public async Task CreateDraft_FirstRevision_IsVersion1Draft()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var (orgId, supplierId) = await SeedSupplier(db);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
 
@@ -97,13 +116,13 @@ public class SupplierConnectionServiceTests
     public async Task Publish_FlipsActive_AndArchivesPrior()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var (orgId, supplierId) = await SeedSupplier(db);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
 
         var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle("xml"), false, "user", CancellationToken.None);
-        var pub1 = await svc.PublishAsync(orgId, conn.Id, v1!.Id, "user", CancellationToken.None);
-        Assert.True(pub1);
+        var pub1 = await TestThenPublishAsync(svc, orgId, conn.Id, v1!.Id);
+        Assert.Equal(ConnectionPublishOutcome.Published, pub1);
 
         // connection now points at v1
         var afterFirst = await svc.GetAsync(orgId, conn.Id, CancellationToken.None);
@@ -111,8 +130,8 @@ public class SupplierConnectionServiceTests
 
         // second draft + publish
         var v2 = await svc.CreateDraftAsync(orgId, conn.Id, Bundle("csv"), false, "user", CancellationToken.None);
-        var pub2 = await svc.PublishAsync(orgId, conn.Id, v2!.Id, "user", CancellationToken.None);
-        Assert.True(pub2);
+        var pub2 = await TestThenPublishAsync(svc, orgId, conn.Id, v2!.Id);
+        Assert.Equal(ConnectionPublishOutcome.Published, pub2);
 
         var afterSecond = await svc.GetAsync(orgId, conn.Id, CancellationToken.None);
         Assert.Equal(v2.Id, afterSecond!.ActiveRevisionId); // active flipped to v2
@@ -131,25 +150,25 @@ public class SupplierConnectionServiceTests
     public async Task Publish_AlreadyPublished_ReturnsFalse()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var (orgId, supplierId) = await SeedSupplier(db);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
         var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle(), false, "user", CancellationToken.None);
-        await svc.PublishAsync(orgId, conn.Id, v1!.Id, "user", CancellationToken.None);
+        await TestThenPublishAsync(svc, orgId, conn.Id, v1!.Id);
 
         var second = await svc.PublishAsync(orgId, conn.Id, v1.Id, "user", CancellationToken.None);
-        Assert.False(second);
+        Assert.Equal(ConnectionPublishOutcome.InvalidStatus, second);
     }
 
     [Fact]
     public async Task UpdateDraft_RejectsPublishedRevision_Immutability()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var (orgId, supplierId) = await SeedSupplier(db);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
         var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle(), false, "user", CancellationToken.None);
-        await svc.PublishAsync(orgId, conn.Id, v1!.Id, "user", CancellationToken.None);
+        await TestThenPublishAsync(svc, orgId, conn.Id, v1!.Id);
 
         var result = await svc.UpdateDraftAsync(orgId, conn.Id, v1.Id, Bundle("csv"), CancellationToken.None);
         Assert.False(result); // published is frozen
@@ -163,7 +182,7 @@ public class SupplierConnectionServiceTests
     public async Task UpdateDraft_AllowsDraft_AndReplacesBundle()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var (orgId, supplierId) = await SeedSupplier(db);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
         var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle("xml"), false, "user", CancellationToken.None);
@@ -179,11 +198,11 @@ public class SupplierConnectionServiceTests
     public async Task CreateDraft_CloneFromActive_SnapshotsPublishedBundle()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var (orgId, supplierId) = await SeedSupplier(db);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
         var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle("xml"), false, "user", CancellationToken.None);
-        await svc.PublishAsync(orgId, conn.Id, v1!.Id, "user", CancellationToken.None);
+        await TestThenPublishAsync(svc, orgId, conn.Id, v1!.Id);
 
         var v2 = await svc.CreateDraftAsync(orgId, conn.Id, input: null, cloneFromActive: true, "user", CancellationToken.None);
 
@@ -200,11 +219,11 @@ public class SupplierConnectionServiceTests
     public async Task Archive_ActiveRevision_ClearsActivePointer()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var (orgId, supplierId) = await SeedSupplier(db);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
         var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle(), false, "user", CancellationToken.None);
-        await svc.PublishAsync(orgId, conn.Id, v1!.Id, "user", CancellationToken.None);
+        await TestThenPublishAsync(svc, orgId, conn.Id, v1!.Id);
 
         var archived = await svc.ArchiveAsync(orgId, conn.Id, v1.Id, CancellationToken.None);
         Assert.True(archived);
@@ -219,7 +238,7 @@ public class SupplierConnectionServiceTests
     public async Task AllQueries_AreOrgScoped()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var (orgA, supplierA) = await SeedSupplier(db);
         var connA = await svc.EnsureConnectionAsync(orgA, supplierA, "a", CancellationToken.None);
         var vA = await svc.CreateDraftAsync(orgA, connA!.Id, Bundle(), false, "a", CancellationToken.None);
@@ -230,15 +249,21 @@ public class SupplierConnectionServiceTests
         Assert.Null(await svc.GetAsync(orgB, connA.Id, CancellationToken.None));
         Assert.Null(await svc.GetRevisionAsync(orgB, connA.Id, vA!.Id, CancellationToken.None));
         Assert.Empty(await svc.ListAsync(orgB, CancellationToken.None));
-        // org B cannot publish org A's revision.
-        Assert.Null(await svc.PublishAsync(orgB, connA.Id, vA.Id, "b", CancellationToken.None));
+        // org B cannot publish, test, or roll back org A's revision.
+        Assert.Equal(ConnectionPublishOutcome.NotFound,
+            await svc.PublishAsync(orgB, connA.Id, vA.Id, "b", CancellationToken.None));
+        Assert.Equal(ConnectionTestStatus.NotFound,
+            (await svc.MarkTestAsync(orgB, connA.Id, vA.Id, CancellationToken.None)).Status);
+        Assert.Null(await svc.RunTestPackAsync(orgB, connA.Id, vA.Id, CancellationToken.None));
+        Assert.Equal(ConnectionRollbackStatus.NotFound,
+            (await svc.RollbackAsync(orgB, connA.Id, vA.Id, "b", CancellationToken.None)).Status);
     }
 
     [Fact]
     public async Task Resolver_ReturnsActiveRevision_ForOrgScopedConnection()
     {
         var db = MakeDb();
-        var svc = new SupplierConnectionService(db);
+        var svc = MakeSvc(db);
         var resolver = new ConnectionResolver(db);
         var (orgId, supplierId) = await SeedSupplier(db);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
@@ -247,7 +272,7 @@ public class SupplierConnectionServiceTests
         Assert.Null(await resolver.ResolveActiveRevisionAsync(orgId, supplierId, CancellationToken.None));
 
         var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle(), false, "user", CancellationToken.None);
-        await svc.PublishAsync(orgId, conn.Id, v1!.Id, "user", CancellationToken.None);
+        await TestThenPublishAsync(svc, orgId, conn.Id, v1!.Id);
 
         var resolved = await resolver.ResolveActiveRevisionAsync(orgId, supplierId, CancellationToken.None);
         Assert.Equal(v1.Id, resolved);

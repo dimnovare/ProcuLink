@@ -43,6 +43,30 @@ public static class OrderMappingOverrideReader
     }
 
     /// <summary>
+    /// Raw JSON text of the <c>"mappingOverride"</c> node, exactly as stored in canonical_json
+    /// (used for provenance config digests — hashing the stored text, not a re-serialization).
+    /// Returns null when the document is null, not an object, has no override key, or the key
+    /// is JSON null. Never throws.
+    /// </summary>
+    public static string? ReadRawJson(JsonDocument? canonicalJson)
+    {
+        if (canonicalJson is null) return null;
+
+        try
+        {
+            if (canonicalJson.RootElement.ValueKind != JsonValueKind.Object) return null;
+            if (!canonicalJson.RootElement.TryGetProperty(CanonicalKey, out var node)) return null;
+            if (node.ValueKind == JsonValueKind.Null) return null;
+
+            return node.GetRawText();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// True only when an override is present AND actually carries an output mapping with at least one
     /// header or line rule. An override that has only custom fields (no <see cref="OutputMappingConfig"/>),
     /// or an empty output config, must NOT divert the transform — the fixed transformer stays in control

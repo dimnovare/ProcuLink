@@ -119,18 +119,25 @@ public sealed class ConnectionsController : ControllerBase
         };
     }
 
+    /// <summary>
+    /// Launch batch 3 — runs the REAL test pack (replay over recent orders + conformance check;
+    /// never delivers), stores the evidence on the revision, marks it <c>test</c>, and returns
+    /// the evidence summary. A FAILED pack still returns 200 with <c>Passed=false</c> — the run
+    /// succeeded; the evidence is honest.
+    /// </summary>
     [HttpPost("{connectionId:guid}/revisions/{revisionId:guid}/test")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ConnectionTestEvidenceDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> MarkTest(Guid connectionId, Guid revisionId, CancellationToken ct)
     {
         var result = await _service.MarkTestAsync(OrgId, connectionId, revisionId, ct);
-        return result switch
+        return result.Status switch
         {
-            null  => NotFound(),
-            false => Conflict("Only draft/test revisions can be marked test."),
-            true  => NoContent(),
+            ConnectionTestStatus.NotFound      => NotFound(),
+            ConnectionTestStatus.InvalidStatus => Conflict("Only draft/test revisions can be marked test."),
+            _ => Ok(new ConnectionTestEvidenceDto(
+                result.Evidence!.Passed, result.Evidence.TestedAt, result.Evidence.SummaryJson)),
         };
     }
 
@@ -143,9 +150,32 @@ public sealed class ConnectionsController : ControllerBase
         var result = await _service.PublishAsync(OrgId, connectionId, revisionId, CurrentUser, ct);
         return result switch
         {
-            null  => NotFound(),
-            false => Conflict("Revision is already published/archived."),
-            true  => NoContent(),
+            ConnectionPublishOutcome.NotFound         => NotFound(),
+            ConnectionPublishOutcome.InvalidStatus    => Conflict("Revision is already published/archived."),
+            ConnectionPublishOutcome.EvidenceRequired => Conflict("Run tests on this revision before publishing."),
+            _ => NoContent(),
+        };
+    }
+
+    /// <summary>
+    /// Launch batch 3 — ROLLBACK: clones a previously-published (now archived) revision's full
+    /// bundle into a NEW published revision (next version number, CreatedBy <c>rollback:{user}</c>),
+    /// archives the currently published revision, and moves the connection's active pointer.
+    /// The target stays archived/immutable; orders already pinned to it are unaffected.
+    /// </summary>
+    [HttpPost("{connectionId:guid}/revisions/{revisionId:guid}/rollback")]
+    [ProducesResponseType(typeof(ConnectionRevisionDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Rollback(Guid connectionId, Guid revisionId, CancellationToken ct)
+    {
+        var result = await _service.RollbackAsync(OrgId, connectionId, revisionId, CurrentUser, ct);
+        return result.Status switch
+        {
+            ConnectionRollbackStatus.NotFound      => NotFound(),
+            ConnectionRollbackStatus.InvalidTarget => Conflict(
+                result.Message ?? "Rollback target must be a previously published (now archived) revision."),
+            _ => Ok(ToRevisionDto(result.NewRevision!)),
         };
     }
 
@@ -188,7 +218,8 @@ public sealed class ConnectionsController : ControllerBase
         !string.IsNullOrEmpty(r.CredentialsRef),
         r.AcceptanceProfileId, r.AcceptanceVersionNo, r.CatalogMode,
         r.ItemMappings.Select(m => new ConnectionItemMappingDto(
-            m.BuyerItemCode, m.SupplierItemCode, m.Confidence, m.Source)).ToList());
+            m.BuyerItemCode, m.SupplierItemCode, m.Confidence, m.Source)).ToList(),
+        r.TestPassed, r.TestedAt, r.TestResultJson);
 
     private static ConnectionRevisionDraftInput ToInput(ConnectionRevisionBundleDto b) => new(
         b.InputMappingJson, b.OutputMappingJson, b.OutputFormat,

@@ -43,6 +43,24 @@ public class SupplierConnectionRevision
     public string? PublishedBy { get; set; }
     public DateTime CreatedAt { get; set; }
 
+    /// <summary>
+    /// UTC timestamp of the last CONTENT (bundle) update via <c>UpdateDraftAsync</c>. Null for
+    /// revisions never edited after creation (including all pre-existing rows). Used by the
+    /// evidence-gated publish: test evidence taken BEFORE the last content update is stale.
+    /// </summary>
+    public DateTime? UpdatedAt { get; set; }
+
+    // ── Test evidence (launch batch 3 — nullable; legacy rows stay null) ─────────
+    /// <summary>
+    /// Summary JSON of the last test-pack run (replay leg + conformance leg + any execution
+    /// error), stored honestly whether the pack passed or failed. Null = never tested.
+    /// </summary>
+    public string? TestResultJson { get; set; }
+    /// <summary>UTC timestamp of the last test-pack run. Null = never tested.</summary>
+    public DateTime? TestedAt { get; set; }
+    /// <summary>Outcome of the last test-pack run. Null = never tested.</summary>
+    public bool? TestPassed { get; set; }
+
     // ── Bundle: input / parse mapping ────────────────────────────────────────
     /// <summary>Snapshot of <c>SupplierPoMapping.ConfigJson</c> (= serialized PoMappingConfig). Null = none.</summary>
     public string? InputMappingJson { get; set; }

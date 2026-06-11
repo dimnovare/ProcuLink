@@ -27,7 +27,16 @@ public record ConnectionRevisionDto(
     string? DeliveryProtocol, string? DeliveryConfigJson, bool DeliveryAutoDeliver,
     bool HasCredentials,
     Guid? AcceptanceProfileId, int? AcceptanceVersionNo, string CatalogMode,
-    IReadOnlyList<ConnectionItemMappingDto> ItemMappings);
+    IReadOnlyList<ConnectionItemMappingDto> ItemMappings,
+    // Launch batch 3 — test evidence (null on never-tested / legacy revisions).
+    bool? TestPassed = null, DateTime? TestedAt = null, string? TestResultJson = null);
+
+/// <summary>
+/// Launch batch 3 — evidence summary returned by POST .../test: the test pack ran (replay leg +
+/// conformance leg), its outcome, and the stored summary JSON. A failed pack is returned honestly
+/// (200 with <c>Passed=false</c>) — failure to PASS is not failure to RUN.
+/// </summary>
+public record ConnectionTestEvidenceDto(bool Passed, DateTime TestedAt, string SummaryJson);
 
 /// <summary>Body for creating a new draft revision (clone-from-active by default).</summary>
 public record CreateConnectionRevisionRequest(
