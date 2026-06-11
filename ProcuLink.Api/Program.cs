@@ -407,6 +407,11 @@ builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfil
 builder.Services.AddScoped<ISupplierConnectionService, SupplierConnectionService>();
 builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
 builder.Services.AddScoped<IConnectionBackfillService, ConnectionBackfillService>();
+// Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by
+// parse-mapping/item-codes, validation, transform, and delivery. Flag-gated by
+// Connections:RevisionAuthority (default OFF = live tables, byte-identical behaviour).
+builder.Services.AddScoped<IEffectiveConnectionConfigResolver,
+                           ProcuLink.Infrastructure.Services.EffectiveConnectionConfigResolver>();
 // Group V2 — replay / impact testing (non-mutating; reuses the transform + acceptance engines).
 builder.Services.AddScoped<IReplayService, ReplayService>();
 builder.Services.AddScoped<IOrderService, OrderService>();

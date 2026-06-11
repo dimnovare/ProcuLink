@@ -183,6 +183,10 @@ builder.Services.AddSingleton(sp =>
     builder.Configuration.GetSection(DeliveryReliabilityOptions.SectionName).Bind(opts);
     return opts;
 });
+// Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by the
+// Worker's parse (ParseOrderJob → OrderService), transform (TransformOrderJob), and delivery
+// jobs. Flag-gated by Connections:RevisionAuthority (default OFF = live tables, byte-identical).
+builder.Services.AddScoped<IEffectiveConnectionConfigResolver, EffectiveConnectionConfigResolver>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();

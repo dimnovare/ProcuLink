@@ -28,24 +28,40 @@ internal sealed class OrderTransformService
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
+    /// <summary>
+    /// Deserializer for a pinned revision's <c>output_mapping_json</c> snapshot (launch batch 7).
+    /// Mirrors <c>ReplayService.DeserializeOutputConfig</c> so the live transform and the replay
+    /// engine read the SAME snapshot identically.
+    /// </summary>
+    private static readonly JsonSerializerOptions RevisionOutputSerializerOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
+
     private readonly ProcuLinkDbContext              _db;
     private readonly IFileStorageService             _fileStorage;
     private readonly IEnumerable<ITransformService>  _transformers;
     private readonly ILogger<OrderService>           _logger;
     private readonly IPoMappingService               _poMappings;
+    private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
 
     public OrderTransformService(
         ProcuLinkDbContext             db,
         IFileStorageService            fileStorage,
         IEnumerable<ITransformService> transformers,
         ILogger<OrderService>          logger,
-        IPoMappingService              poMappings)
+        IPoMappingService              poMappings,
+        IEffectiveConnectionConfigResolver? effectiveConfig = null)
     {
         _db           = db;
         _fileStorage  = fileStorage;
         _transformers = transformers;
         _logger       = logger;
         _poMappings   = poMappings;
+        // Launch batch 7 — revision authority. Null (older positional ctors / unregistered
+        // hosts) behaves exactly like flag-OFF: the live path drives everything.
+        _effectiveConfig = effectiveConfig;
     }
 
     // ── TransformAsync ────────────────────────────────────────────────────────
@@ -72,7 +88,37 @@ internal sealed class OrderTransformService
             return Result<TransformResponse>.Fail(
                 $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolved)}.");
 
-        // heart-piece-flex flexible mapping: FIVE transform modes, in precedence order.
+        // ── Launch batch 7 — revision authority ────────────────────────────────
+        // Resolve the pinned revision's effective bundle ONCE per transform. Live bundle when
+        // the flag is off / the order is unpinned / the pin is orphaned — byte-identical to the
+        // pre-batch-7 path in all of those cases.
+        var effective = _effectiveConfig is null
+            ? EffectiveConnectionConfig.Live
+            : await _effectiveConfig.ResolveAsync(organisationId, entity.ConnectionRevisionId, ct);
+
+        // Effective output format: [flag+pin] the revision's snapshotted format governs;
+        // null/unparseable snapshot → the caller's format (which the controller already resolved
+        // as explicit-request ?? live delivery-config format ?? safe default).
+        var effectiveFormat = format;
+        if (effective.IsRevision && !string.IsNullOrWhiteSpace(effective.OutputFormat))
+        {
+            if (Enum.TryParse<OutputFormat>(effective.OutputFormat, ignoreCase: true, out var revisionFormat))
+            {
+                if (revisionFormat != format)
+                    _logger.LogInformation(
+                        "Order {OrderId}: output format {RevisionFormat} taken from pinned {Source} (requested {Requested}).",
+                        orderId, revisionFormat, effective.Source, format);
+                effectiveFormat = revisionFormat;
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Order {OrderId}: pinned {Source} output format '{Format}' is not recognised — using the requested format {Requested}.",
+                    orderId, effective.Source, effective.OutputFormat, format);
+            }
+        }
+
+        // heart-piece-flex flexible mapping: SIX transform modes, in precedence order.
         //   1. TEMPLATE MODE — order carries a non-blank whole-document OutputTemplate → render the
         //      ENTIRE document from that one Scriban template (ANY format, no fixed transformer needed).
         //   2. NATIVE OVERRIDE (CSV/JSON) — per-order output mapping + a format the override builder
@@ -80,41 +126,55 @@ internal sealed class OrderTransformService
         //   3. STRUCTURED OVERRIDE (XML/cXML/UBL/X12) — resolve the override's canonical-field changes
         //      into an EFFECTIVE entity, then hand it to the EXISTING fixed transform (no per-format
         //      re-implementation).
-        //   4. SUPPLIER-PROMOTED OUTPUT (launch batch 4A) — no usable per-order template/output, but
-        //      the supplier carries a promoted PoMappingConfig.Output ("Save mappings for this
-        //      supplier") → wrap it as a synthetic override and reuse modes 2/3 verbatim. The
-        //      per-order override always stays the higher-priority seam.
-        //   5. FIXED TRANSFORMER — the default; byte-for-byte identical to today when neither a
-        //      per-order override nor a promoted supplier output mapping is set.
+        //   4. REVISION-PINNED OUTPUT (launch batch 7, flag-gated) — the order is pinned to a
+        //      published revision whose output_mapping_json snapshot is usable → wrap it as a
+        //      synthetic override and reuse modes 2/3 verbatim. For a PINNED order the LIVE
+        //      supplier-promoted mapping is intentionally NOT consulted (it is a mutable table and
+        //      would break reproducibility); an unusable/null snapshot falls to the FIXED transformer.
+        //   5. SUPPLIER-PROMOTED OUTPUT (launch batch 4A — unpinned/flag-off only) — the supplier
+        //      carries a promoted PoMappingConfig.Output ("Save mappings for this supplier") →
+        //      wrap it as a synthetic override and reuse modes 2/3 verbatim. The per-order
+        //      override always stays the higher-priority seam.
+        //   6. FIXED TRANSFORMER — the default; byte-for-byte identical to today when nothing above applies.
         // An override with only custom fields or an empty output config never diverts the transform.
         var mappingOverride = OrderMappingOverrideReader.Read(entity.CanonicalJson);
         var useTemplate     = OrderMappingOverrideReader.HasUsableTemplate(mappingOverride);
         var hasUsableOverride =
             !useTemplate
             && OrderMappingOverrideReader.HasUsableOutput(mappingOverride)
-            && MappedTransformService.SupportsOverrideFormat(format);
-        var useNativeOverride = hasUsableOverride && MappedTransformService.SupportsOverride(format);
+            && MappedTransformService.SupportsOverrideFormat(effectiveFormat);
+        var useNativeOverride = hasUsableOverride && MappedTransformService.SupportsOverride(effectiveFormat);
 
-        // Supplier-promoted output mapping — consulted ONLY when no per-order template/output drives
-        // the transform AND the format is one an override can influence (read ONCE per transform).
-        // Defensive: a missing / malformed / unusable supplier mapping yields null and the fixed
-        // transformer stays in control (logged, never a throw). supplierOutputJson is the camelCase
-        // serialization of the promoted Output config, used for the provenance ConfigDigest below.
+        // Revision-pinned output vs supplier-promoted output — mutually exclusive by construction:
+        // a pinned order consults ONLY its revision snapshot; an unpinned/flag-off order consults
+        // ONLY the live supplier-promoted mapping (read ONCE per transform). Defensive: a missing /
+        // malformed / unusable mapping on either side yields null and the fixed transformer stays
+        // in control (logged, never a throw). supplierOutputJson is the camelCase serialization of
+        // the promoted Output config, used for the provenance ConfigDigest below.
+        OrderMappingOverride? revisionOverride   = null;
         OrderMappingOverride? supplierOverride   = null;
         string?               supplierOutputJson = null;
-        if (!useTemplate && !hasUsableOverride && MappedTransformService.SupportsOverrideFormat(format))
-            (supplierOverride, supplierOutputJson) =
-                await TryReadSupplierPromotedOutputAsync(organisationId, entity.SupplierId, mappingOverride, ct);
+        if (!useTemplate && !hasUsableOverride && MappedTransformService.SupportsOverrideFormat(effectiveFormat))
+        {
+            if (effective.IsRevision)
+                revisionOverride = TryBuildRevisionOutputOverride(effective, mappingOverride, orderId);
+            else
+                (supplierOverride, supplierOutputJson) =
+                    await TryReadSupplierPromotedOutputAsync(organisationId, entity.SupplierId, mappingOverride, ct);
+        }
+        var useRevisionOutput  = revisionOverride is not null;
+        var useRevisionNative  = useRevisionOutput && MappedTransformService.SupportsOverride(effectiveFormat);
         var useSupplierMapping = supplierOverride is not null;
-        var useSupplierNative  = useSupplierMapping && MappedTransformService.SupportsOverride(format);
+        var useSupplierNative  = useSupplierMapping && MappedTransformService.SupportsOverride(effectiveFormat);
 
         // Locate the fixed transformer (Xml/Csv/Json/...). Required EXCEPT for template mode and the
         // native CSV/JSON override path; resolved up-front so a missing transformer fails before status
-        // mutation. NOTE: the supplier-promoted path deliberately does NOT relax this requirement —
-        // the fixed transformer must exist so the defensive fallback below is always possible.
-        var transformer = _transformers.FirstOrDefault(t => t.CanTransform(format));
+        // mutation. NOTE: the revision-pinned and supplier-promoted paths deliberately do NOT relax
+        // this requirement — the fixed transformer must exist so the defensive fallback below is
+        // always possible.
+        var transformer = _transformers.FirstOrDefault(t => t.CanTransform(effectiveFormat));
         if (!useTemplate && !useNativeOverride && transformer is null)
-            return Result<TransformResponse>.Fail($"No transform service registered for format '{format}'.");
+            return Result<TransformResponse>.Fail($"No transform service registered for format '{effectiveFormat}'.");
 
         // Mark as transforming so the UI can show a spinner
         entity.Status    = "transforming";
@@ -137,21 +197,42 @@ internal sealed class OrderTransformService
             }
             else if (useNativeOverride)
             {
-                transformResult = new MappedTransformService().Build(entity, mappingOverride!, format);
+                transformResult = new MappedTransformService().Build(entity, mappingOverride!, effectiveFormat);
             }
             else if (hasUsableOverride)
             {
-                var effective = EffectiveEntityResolver.Resolve(entity, mappingOverride!);
-                transformResult = await transformer!.TransformAsync(effective, format, ct);
+                var effectiveEntity = EffectiveEntityResolver.Resolve(entity, mappingOverride!);
+                transformResult = await transformer!.TransformAsync(effectiveEntity, effectiveFormat, ct);
+            }
+            else if (useRevisionOutput)
+            {
+                try
+                {
+                    transformResult = useRevisionNative
+                        ? new MappedTransformService().Build(entity, revisionOverride!, effectiveFormat)
+                        : await transformer!.TransformAsync(
+                              EffectiveEntityResolver.Resolve(entity, revisionOverride!), effectiveFormat, ct);
+                }
+                catch (Exception ex) when (ex is not TransformValidationException and not TransformTemplateException)
+                {
+                    // Defensive: a pinned revision's output snapshot must never break delivery. Fall
+                    // back to the fixed transformer and log — the provenance digest below then
+                    // records the fixed marker, not the revision one.
+                    _logger.LogWarning(ex,
+                        "Pinned revision output mapping failed for order {OrderId} ({Source}); falling back to the fixed transformer.",
+                        orderId, effective.Source);
+                    useRevisionOutput = false;
+                    transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct);
+                }
             }
             else if (useSupplierMapping)
             {
                 try
                 {
                     transformResult = useSupplierNative
-                        ? new MappedTransformService().Build(entity, supplierOverride!, format)
+                        ? new MappedTransformService().Build(entity, supplierOverride!, effectiveFormat)
                         : await transformer!.TransformAsync(
-                              EffectiveEntityResolver.Resolve(entity, supplierOverride!), format, ct);
+                              EffectiveEntityResolver.Resolve(entity, supplierOverride!), effectiveFormat, ct);
                 }
                 catch (Exception ex) when (ex is not TransformValidationException and not TransformTemplateException)
                 {
@@ -162,12 +243,12 @@ internal sealed class OrderTransformService
                         "Supplier-promoted output mapping failed for order {OrderId} (supplier {SupplierId}); falling back to the fixed transformer.",
                         orderId, entity.SupplierId);
                     useSupplierMapping = false;
-                    transformResult = await transformer!.TransformAsync(entity, format, ct);
+                    transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct);
                 }
             }
             else
             {
-                transformResult = await transformer!.TransformAsync(entity, format, ct);
+                transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct);
             }
         }
         catch (TransformTemplateException ex)
@@ -211,10 +292,11 @@ internal sealed class OrderTransformService
         // ── Provenance (best-effort; must NEVER fail the transform) ────────────────
         // ConfigDigest = SHA-256 of the EFFECTIVE config that drove this transform: the order's
         // per-order mappingOverride JSON (template / native / structured override modes), else
-        // "supplier:{outputJson}" when the supplier-promoted output mapping drove it, else the
-        // marker "fixed:{format}" for the fixed-transformer path — the prefixes keep the three
-        // sources distinguishable. ArtifactSha256 = SHA-256 of the exact generated bytes.
-        // ConnectionRevisionId = the order's ingest-time pin.
+        // "revision:{revisionId}:{outputMappingJson}" when the pinned revision's output snapshot
+        // drove it (launch batch 7), else "supplier:{outputJson}" when the supplier-promoted
+        // output mapping drove it, else the marker "fixed:{format}" for the fixed-transformer
+        // path — the prefixes keep the four sources distinguishable. ArtifactSha256 = SHA-256 of
+        // the exact generated bytes. ConnectionRevisionId = the order's ingest-time pin.
         string? configDigest = null;
         string? artifactSha  = null;
         try
@@ -222,9 +304,11 @@ internal sealed class OrderTransformService
             artifactSha = ProvenanceHash.TrySha256Hex(artifactBytes);
             var configDescriptor = (useTemplate || useNativeOverride || hasUsableOverride)
                 ? OrderMappingOverrideReader.ReadRawJson(entity.CanonicalJson)
-                : useSupplierMapping
-                    ? $"supplier:{supplierOutputJson}"
-                    : $"fixed:{format.ToString().ToLowerInvariant()}";
+                : useRevisionOutput
+                    ? $"revision:{effective.RevisionId}:{effective.OutputMappingJson}"
+                    : useSupplierMapping
+                        ? $"supplier:{supplierOutputJson}"
+                        : $"fixed:{effectiveFormat.ToString().ToLowerInvariant()}";
             configDigest = ProvenanceHash.TrySha256HexUtf8(configDescriptor);
         }
         catch (Exception ex)
@@ -241,7 +325,7 @@ internal sealed class OrderTransformService
             Id                   = artifactId,
             OrderId              = orderId,
             OrgId                = organisationId,
-            Format               = format.ToString().ToLowerInvariant(),
+            Format               = effectiveFormat.ToString().ToLowerInvariant(),
             FileKey              = artifactKey,
             CreatedAt            = now,
             ConnectionRevisionId = entity.ConnectionRevisionId,
@@ -265,9 +349,52 @@ internal sealed class OrderTransformService
 
         _logger.LogInformation(
             "Order {OrderId} transformed to {Format}, artifact {ArtifactId}",
-            orderId, format, artifactId);
+            orderId, effectiveFormat, artifactId);
 
         return Result<TransformResponse>.Ok(new TransformResponse(artifactId, artifact.Format, now));
+    }
+
+    // ── Revision-pinned output mapping (launch batch 7) ───────────────────────
+
+    /// <summary>
+    /// Builds the synthetic override the PINNED revision's <c>output_mapping_json</c> snapshot
+    /// would apply, reusing the existing override machinery verbatim (mirrors
+    /// <c>ReplayService.BuildRevisionOverride</c>: the order's custom fields are preserved so
+    /// output rules referencing them still resolve; the per-order SourceMap / template are NOT
+    /// carried). Returns null — meaning "the FIXED transformer drives the output" — for a
+    /// null/blank snapshot, an empty snapshot (no header AND no line rules; matches a backfilled
+    /// rev-1), or a malformed snapshot (logged). Never throws.
+    /// </summary>
+    private OrderMappingOverride? TryBuildRevisionOutputOverride(
+        EffectiveConnectionConfig effective, OrderMappingOverride? mappingOverride, Guid orderId)
+    {
+        if (string.IsNullOrWhiteSpace(effective.OutputMappingJson))
+            return null;
+
+        try
+        {
+            var output = JsonSerializer.Deserialize<OutputMappingConfig>(
+                effective.OutputMappingJson, RevisionOutputSerializerOptions);
+
+            if (output is null || (output.Header.Count == 0 && output.Lines.Count == 0))
+                return null; // empty snapshot — the fixed transformer stays in control
+
+            _logger.LogInformation(
+                "Order {OrderId}: output mapping taken from pinned {Source}.", orderId, effective.Source);
+
+            return new OrderMappingOverride
+            {
+                CustomFields = mappingOverride?.CustomFields ?? new List<CustomField>(),
+                Output       = output,
+            };
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex,
+                "Order {OrderId}: pinned {Source} output mapping is malformed — using the fixed transformer.",
+                orderId, effective.Source);
+            return null;
+        }
     }
 
     // ── Supplier-promoted output mapping (launch batch 4A) ────────────────────

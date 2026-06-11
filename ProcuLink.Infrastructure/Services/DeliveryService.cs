@@ -21,6 +21,7 @@ public sealed class DeliveryService : IDeliveryService
     private readonly IOrderExceptionService _exceptions;
     private readonly DeliveryReliabilityOptions _reliability;
     private readonly ILogger<DeliveryService> _logger;
+    private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
 
     public DeliveryService(
         ProcuLinkDbContext db,
@@ -31,7 +32,8 @@ public sealed class DeliveryService : IDeliveryService
         IAnalyticsService analytics,
         IOrderExceptionService exceptions,
         ILogger<DeliveryService> logger,
-        DeliveryReliabilityOptions? reliability = null)
+        DeliveryReliabilityOptions? reliability = null,
+        IEffectiveConnectionConfigResolver? effectiveConfig = null)
     {
         _db = db;
         _fileStorage = fileStorage;
@@ -42,6 +44,9 @@ public sealed class DeliveryService : IDeliveryService
         _exceptions = exceptions;
         _reliability = reliability ?? new DeliveryReliabilityOptions();
         _logger = logger;
+        // Launch batch 7 — revision authority. Null (older positional test ctors / unregistered
+        // hosts) behaves exactly like flag-OFF: the live supplier delivery config drives dispatch.
+        _effectiveConfig = effectiveConfig;
     }
 
     /// <summary>
@@ -92,9 +97,12 @@ public sealed class DeliveryService : IDeliveryService
         if (artifact is null || order is null)
             return new DeliveryResult(false, "Order artifact not found.");
 
-        var config = await _db.SupplierDeliveryConfigs
-            .Where(x => x.OrgId == orgId && x.SupplierId == order.SupplierId)
-            .FirstOrDefaultAsync(ct);
+        // ── Launch batch 7 — revision authority ────────────────────────────────
+        // A pinned order delivers over the CHANNEL its published revision snapshotted
+        // (protocol + non-secret config + encrypted credentials), so a later live
+        // delivery-config edit can never silently re-route an already-pinned order.
+        // Live config when the flag is off / unpinned / orphan pin / blank snapshot.
+        var config = await ResolveEffectiveDeliveryConfigAsync(orgId, order, artifact, ct);
 
         if (config is null)
             return await FailMissingConfigAsync(order, artifact, reconcileFailedAttempt, ct);
@@ -159,6 +167,62 @@ public sealed class DeliveryService : IDeliveryService
             reconcile: reconcileFailedAttempt,
             dispatchedPayloadSha256: dispatchedPayloadSha);
         return result;
+    }
+
+    /// <summary>
+    /// Launch batch 7 — the delivery config that GOVERNS this dispatch. When the
+    /// <c>Connections:RevisionAuthority</c> flag is ON and the artifact/order pin resolves to a
+    /// revision with a NON-BLANK delivery protocol, a detached (never persisted) config is built
+    /// from the revision snapshot: protocol, non-secret config JSON, auto-deliver, and the
+    /// VERBATIM-copied encrypted credentials (<c>CredentialsRef</c>) — decrypted by the exact same
+    /// <see cref="DeliveryEncryptionService"/> path as a live row. A revision with no delivery
+    /// channel (blank protocol — e.g. a backfilled rev-1 for a supplier configured later) falls
+    /// back to the LIVE supplier delivery config, logged. Flag off / unpinned / orphan pin →
+    /// live config, byte-identical to the pre-batch-7 behaviour.
+    /// </summary>
+    private async Task<SupplierDeliveryConfig?> ResolveEffectiveDeliveryConfigAsync(
+        Guid orgId, PurchaseOrderEntity order, OutboundArtifact artifact, CancellationToken ct)
+    {
+        if (_effectiveConfig is not null)
+        {
+            // Prefer the ARTIFACT's pin (stamped at transform from the same order pin) — those are
+            // the exact bytes being dispatched; fall back to the order's pin for older artifacts.
+            var effective = await _effectiveConfig.ResolveAsync(
+                orgId, artifact.ConnectionRevisionId ?? order.ConnectionRevisionId, ct);
+
+            if (effective.IsRevision)
+            {
+                if (!string.IsNullOrWhiteSpace(effective.DeliveryProtocol))
+                {
+                    _logger.LogInformation(
+                        "Order {OrderId}: delivery channel taken from pinned {Source} (protocol {Protocol}).",
+                        order.Id, effective.Source, effective.DeliveryProtocol);
+
+                    // Detached snapshot view — NEVER added to the DbContext, only read by the
+                    // dispatcher / attempt-persistence below.
+                    return new SupplierDeliveryConfig
+                    {
+                        Id                   = Guid.Empty,
+                        OrgId                = orgId,
+                        SupplierId           = order.SupplierId,
+                        Protocol             = effective.DeliveryProtocol!,
+                        AutoDeliver          = effective.DeliveryAutoDeliver,
+                        ConfigJson           = string.IsNullOrWhiteSpace(effective.DeliveryConfigJson)
+                                                   ? "{}"
+                                                   : effective.DeliveryConfigJson!,
+                        EncryptedCredentials = effective.CredentialsRef ?? string.Empty,
+                    };
+                }
+
+                _logger.LogInformation(
+                    "Order {OrderId}: pinned {Source} has no delivery channel — using the live supplier delivery config.",
+                    order.Id, effective.Source);
+            }
+        }
+
+        return await _db.SupplierDeliveryConfigs
+            .Where(x => x.OrgId == orgId && x.SupplierId == order.SupplierId)
+            .FirstOrDefaultAsync(ct);
     }
 
     public async Task<DeliveryTestResult> TestFireAsync(Guid orgId, Guid supplierId, CancellationToken ct)

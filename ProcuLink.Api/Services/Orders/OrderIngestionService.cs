@@ -36,6 +36,7 @@ internal sealed class OrderIngestionService
     private readonly OrderServiceShared         _shared;
     private readonly IConnectionResolver        _connectionResolver;
     private readonly ICatalogRetrievalService   _catalogRetrieval;
+    private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
 
     public OrderIngestionService(
         ProcuLinkDbContext         db,
@@ -49,7 +50,8 @@ internal sealed class OrderIngestionService
         IFormatDetector            formatDetector,
         IStructuredOrderExtractor? structuredExtractor,
         OrderServiceShared         shared,
-        ICatalogRetrievalService?  catalogRetrieval = null)
+        ICatalogRetrievalService?  catalogRetrieval = null,
+        IEffectiveConnectionConfigResolver? effectiveConfig = null)
     {
         _db                  = db;
         _fileStorage         = fileStorage;
@@ -66,7 +68,21 @@ internal sealed class OrderIngestionService
         // V10 — indexed catalog retrieval for large catalogs. Self-constructed from the same
         // DbContext (mirrors _connectionResolver); the optional param lets tests inject a fake.
         _catalogRetrieval    = catalogRetrieval ?? new CatalogRetrievalService(db);
+        // Launch batch 7 — revision authority. Null (older positional test ctors / hosts that
+        // don't register it) behaves exactly like flag-OFF: the live tables drive everything.
+        _effectiveConfig     = effectiveConfig;
     }
+
+    /// <summary>
+    /// Launch batch 7 — the effective config bundle for one order: the pinned revision snapshot
+    /// when the <c>Connections:RevisionAuthority</c> flag is ON and the pin resolves, else the
+    /// live-tables bundle (byte-identical pre-batch-7 behaviour). Never throws.
+    /// </summary>
+    private async Task<EffectiveConnectionConfig> ResolveEffectiveConfigAsync(
+        Guid orgId, Guid? connectionRevisionId, CancellationToken ct)
+        => _effectiveConfig is null
+            ? EffectiveConnectionConfig.Live
+            : await _effectiveConfig.ResolveAsync(orgId, connectionRevisionId, ct);
 
     // ── Group V1: pin the active connection revision at ingest ─────────────────
     // Resolved ONCE, at create. A null result (no connection / no active published
@@ -512,7 +528,17 @@ internal sealed class OrderIngestionService
 
             var extension = Path.GetExtension(entity.SourceFileKey).ToLowerInvariant();
 
-            var poMapping = await _poMappingService.GetAsync(organisationId, entity.SupplierId, ct);
+            // ── Launch batch 7 — revision authority ───────────────────────────
+            // Resolve the pinned revision's effective bundle ONCE for this parse. The pin was
+            // stamped at ingest (CreateStubAsync) and persists across Hangfire retries, so a
+            // re-run of this job sees the SAME revision (idempotent + reproducible). Live
+            // bundle when the flag is off / order unpinned / pin orphaned.
+            var effective = await ResolveEffectiveConfigAsync(organisationId, entity.ConnectionRevisionId, ct);
+
+            // Parse mapping: a usable revision snapshot governs; a null/empty/malformed
+            // snapshot falls back to the LIVE supplier PO mapping (parse must never brick).
+            var poMapping = ResolveSnapshotPoMapping(effective, orderId)
+                            ?? await _poMappingService.GetAsync(organisationId, entity.SupplierId, ct);
 
             // Validate extension when no mapping template is available (fast-fail before R2 download already done)
             if (poMapping is null || extension != ".csv")
@@ -579,12 +605,35 @@ internal sealed class OrderIngestionService
                 return Result<ParsedFileOutput>.Fail("File contains no line items.");
             }
 
-            // Auto-resolve lines against item_mappings (batched), then one AI call for leftovers
+            // Auto-resolve lines against item_mappings (batched), then one AI call for leftovers.
+            // Revision authority: a pinned revision with a NON-EMPTY item-mapping snapshot is the
+            // exact-match dictionary (codes outside it go to review, as an unmapped code does
+            // today); an EMPTY snapshot falls back to the live item mappings. AI suggestions stay
+            // candidates-from-live + suggestions-only (human review) — they never auto-resolve.
+            IReadOnlyList<EffectiveRevisionItemMapping>? itemMappingSnapshot = null;
+            if (effective.IsRevision)
+            {
+                if (effective.ItemMappings.Count > 0)
+                {
+                    itemMappingSnapshot = effective.ItemMappings;
+                    _logger.LogInformation(
+                        "Order {OrderId}: resolving item codes from pinned {Source} snapshot ({Count} mappings).",
+                        orderId, effective.Source, effective.ItemMappings.Count);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Order {OrderId}: pinned {Source} has no item-mapping snapshot — resolving from live item mappings.",
+                        orderId, effective.Source);
+                }
+            }
+
             var supplierName = entity.Supplier?.Name
                                ?? await GetSupplierNameAsync(organisationId, entity.SupplierId, ct);
             var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, entity.SupplierId, ct);
             var lineEntities = await BuildLineEntitiesAsync(
-                organisationId, entity.SupplierId, supplierName, parsedOrder.Lines, aiCandidates, ct);
+                organisationId, entity.SupplierId, supplierName, parsedOrder.Lines, aiCandidates, ct,
+                itemMappingSnapshot);
 
             // Overlay structured-extraction review flags so a numerically-suspect
             // line surfaces in /operations/exceptions rather than being delivered blind.
@@ -813,20 +862,25 @@ internal sealed class OrderIngestionService
             // V5: propagate header-level requested delivery date.
             RequestedDeliveryDate: o.RequestedDeliveryDate);
 
-    private async Task<List<PurchaseOrderLineEntity>> BuildLineEntitiesAsync(
+    internal async Task<List<PurchaseOrderLineEntity>> BuildLineEntitiesAsync(
         Guid organisationId,
         Guid supplierId,
         string supplierName,
         IReadOnlyList<ParsedOrderLine> lines,
         IReadOnlyList<AiMappingCandidate> aiCandidates,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyList<EffectiveRevisionItemMapping>? itemMappingSnapshot = null)
     {
-        // Pass 1 — deterministic resolve for every line in a single query.
-        var resolvedMap = await _mappings.ResolveManyAsync(
-            organisationId,
-            supplierId,
-            lines.Select(l => l.BuyerItemCode),
-            ct);
+        // Pass 1 — deterministic resolve for every line. Either the pinned revision's
+        // item-mapping SNAPSHOT (launch batch 7 — exact-match, in-memory, mirrors
+        // ResolveManyAsync's trimmed Ordinal keying) or the live table in a single query.
+        var resolvedMap = itemMappingSnapshot is not null
+            ? ResolveFromSnapshot(itemMappingSnapshot, lines)
+            : await _mappings.ResolveManyAsync(
+                organisationId,
+                supplierId,
+                lines.Select(l => l.BuyerItemCode),
+                ct);
 
         // Lookup helper mirroring ResolveManyAsync's trimmed, case-sensitive keys.
         static string? ResolveFromMap(IReadOnlyDictionary<string, string?> map, string? buyerItemCode)
@@ -920,6 +974,86 @@ internal sealed class OrderIngestionService
         }
 
         return entities;
+    }
+
+    // ── Launch batch 7 — revision-authority snapshot helpers ───────────────────
+
+    /// <summary>Mirrors <c>PoMappingService</c>'s serializer so a snapshotted ConfigJson round-trips identically.</summary>
+    private static readonly JsonSerializerOptions SnapshotPoMappingSerializerOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
+
+    /// <summary>
+    /// The parse-mapping config snapshotted into the pinned revision, when USABLE (at least one
+    /// header or line rule). Returns null — meaning "fall back to the LIVE supplier PO mapping" —
+    /// for the live bundle, a null/blank snapshot, an empty snapshot, or a malformed snapshot
+    /// (logged). Parse must never brick on a bad snapshot.
+    /// </summary>
+    internal PoMappingConfig? ResolveSnapshotPoMapping(EffectiveConnectionConfig effective, Guid orderId)
+    {
+        if (!effective.IsRevision || string.IsNullOrWhiteSpace(effective.InputMappingJson))
+            return null;
+
+        try
+        {
+            var config = JsonSerializer.Deserialize<PoMappingConfig>(
+                effective.InputMappingJson, SnapshotPoMappingSerializerOptions);
+
+            if (config is null || (config.Header.Count == 0 && config.Lines.Count == 0))
+            {
+                _logger.LogInformation(
+                    "Order {OrderId}: pinned {Source} input mapping is empty — using the live PO mapping.",
+                    orderId, effective.Source);
+                return null;
+            }
+
+            _logger.LogInformation(
+                "Order {OrderId}: parse mapping taken from pinned {Source}.", orderId, effective.Source);
+            return config;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex,
+                "Order {OrderId}: pinned {Source} input mapping is malformed — using the live PO mapping.",
+                orderId, effective.Source);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Exact-match resolution against the pinned revision's item-mapping snapshot. Mirrors
+    /// <c>ItemMappingService.ResolveManyAsync</c> semantics precisely: the returned dictionary is
+    /// keyed by the TRIMMED buyer item code (Ordinal), is total over the non-blank input set
+    /// (missing mapping ⇒ null value ⇒ the line flows to review exactly as today), and matches
+    /// snapshot rows case-sensitively against the trimmed requested codes (the last duplicate
+    /// snapshot row wins, like the live resolver's row loop).
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string?> ResolveFromSnapshot(
+        IReadOnlyList<EffectiveRevisionItemMapping> snapshot,
+        IReadOnlyList<ParsedOrderLine> lines)
+    {
+        var requested = lines
+            .Select(l => l.BuyerItemCode)
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Select(c => c.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var result = new Dictionary<string, string?>(requested.Count, StringComparer.Ordinal);
+        foreach (var code in requested)
+            result[code] = null;
+
+        foreach (var mapping in snapshot)
+        {
+            // Only overwrite a key that was actually requested (case-sensitive) — same guard
+            // as the live resolver.
+            if (result.ContainsKey(mapping.BuyerItemCode))
+                result[mapping.BuyerItemCode] = mapping.SupplierItemCode;
+        }
+
+        return result;
     }
 
     private async Task<string> GetSupplierNameAsync(
