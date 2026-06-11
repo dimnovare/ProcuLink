@@ -396,6 +396,12 @@ public sealed class BillingController : ControllerBase
 
         foreach (var (windowStart, windowEnd) in windows)
         {
+            // Delivered-only meter (Billing:CountDeliveredOnly, default OFF): the flag and
+            // its status filter live INSIDE ComputePeriodOverageOrdersAsync, so each monthly
+            // window here automatically counts only orders that reached the supplier when
+            // the flag is ON (creation-month attribution, evaluated at invoice time —
+            // late deliveries after a period's invoice are never caught up). The
+            // period-based idempotency keys below are intentionally UNCHANGED.
             var overageOrders = await _billing.ComputePeriodOverageOrdersAsync(
                 org.Id, windowStart, windowEnd, ct);
             if (overageOrders <= 0) continue;

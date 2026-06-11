@@ -14,6 +14,20 @@ namespace ProcuLink.Api.Services;
 /// </summary>
 public sealed class StripeBillingService : IBillingService
 {
+    /// <summary>
+    /// Feature-flag configuration key for the DELIVERED-ONLY billing meter (founder-approved
+    /// flip, 2026-06-11). Absent/false — the default — keeps the historical meter: every
+    /// non-sample order counts against quota/overage the moment it enters processing
+    /// (CreatedAt), which is exactly what the pricing FAQ and Terms currently describe, so
+    /// flag OFF keeps the published copy true. True switches both the quota count
+    /// (<see cref="CountOrdersAsync"/>) and the overage meter
+    /// (<see cref="ComputePeriodOverageOrdersAsync"/>) to count only orders that REACHED
+    /// the supplier — see those methods for the exact status set and the late-delivery
+    /// semantics. Flipping this flag requires the matching FAQ/Terms copy change (kept in
+    /// the introducing commit's message), never the other way round.
+    /// </summary>
+    public const string CountDeliveredOnlyFlagKey = "Billing:CountDeliveredOnly";
+
     private static readonly HashSet<string> ProcessingAllowedStatuses = new(StringComparer.OrdinalIgnoreCase)
     {
         AccountStatusConstants.Trialing,
@@ -24,6 +38,7 @@ public sealed class StripeBillingService : IBillingService
     private readonly IConfiguration _config;
     private readonly ILogger<StripeBillingService> _logger;
     private readonly IAnalyticsService _analytics;
+    private readonly bool _countDeliveredOnly;
 
     public StripeBillingService(
         ProcuLinkDbContext db,
@@ -35,6 +50,11 @@ public sealed class StripeBillingService : IBillingService
         _config = config;
         _logger = logger;
         _analytics = analytics;
+        // Raw read + bool.TryParse (no Binder dependency) — same pattern as the
+        // Connections:RevisionAuthority flag. Anything but "true", including the key being
+        // absent (the safe production default), leaves the flag OFF and the billing meter
+        // byte-identical to the pre-flag created-at behaviour.
+        _countDeliveredOnly = bool.TryParse(config[CountDeliveredOnlyFlagKey], out var deliveredOnly) && deliveredOnly;
     }
 
     /// <summary>
@@ -653,18 +673,49 @@ public sealed class StripeBillingService : IBillingService
             ?? throw new InvalidOperationException($"Organisation {orgId} not found.");
     }
 
+    /// <summary>
+    /// Counts the org's quota-relevant orders: cumulative since trial start for Pilot,
+    /// UTC-calendar-month-to-date for paid plans. Sample orders never count in either mode.
+    ///
+    /// <para><b>Delivered-only meter (<see cref="CountDeliveredOnlyFlagKey"/>, default OFF).</b>
+    /// Flag OFF: every non-sample order counts when it enters processing (CreatedAt) —
+    /// byte-identical to the historical meter. Flag ON: the window stays CreatedAt-based
+    /// (CREATION-MONTH attribution — an order always belongs to the month it was created
+    /// in), but an order is only COUNTED once its status — evaluated at count time — shows
+    /// it reached the supplier: <c>delivered</c> OR <c>rejected_by_supplier</c>.
+    /// Rejected-by-supplier counts because the full parse/transform/delivery work was
+    /// performed and the document actually reached the supplier; the rejection is the
+    /// supplier's business outcome, not a ProcuLink delivery failure. All undelivered
+    /// states (pending/parsing/review/ready/transforming/delivering, plus the failure
+    /// bucket <c>failed</c>/<c>transform_failed</c>/<c>delivery_failed</c>/
+    /// <c>delivery_dead_letter</c>) do NOT count.</para>
+    /// </summary>
     private async Task<int> CountOrdersAsync(Core.Entities.Organisation org, CancellationToken ct)
     {
         if (NormalizePlan(org.Plan) == PlanConstants.Pilot)
         {
-            return await _db.PurchaseOrders
-                .CountAsync(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= org.TrialStartedAt, ct);
+            var pilotOrders = _db.PurchaseOrders
+                .Where(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= org.TrialStartedAt);
+            return await ApplyMeterStatusFilter(pilotOrders).CountAsync(ct);
         }
 
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        return await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= monthStart, ct);
+        var monthOrders = _db.PurchaseOrders
+            .Where(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= monthStart);
+        return await ApplyMeterStatusFilter(monthOrders).CountAsync(ct);
     }
+
+    /// <summary>
+    /// Applies the delivered-only status filter when <see cref="CountDeliveredOnlyFlagKey"/>
+    /// is ON; a no-op pass-through (the historical count-at-creation meter) when OFF.
+    /// Single source of truth for the billable status set: <c>delivered</c> +
+    /// <c>rejected_by_supplier</c> (see <see cref="CountOrdersAsync"/> for the rationale).
+    /// </summary>
+    private IQueryable<PurchaseOrderEntity> ApplyMeterStatusFilter(IQueryable<PurchaseOrderEntity> orders) =>
+        _countDeliveredOnly
+            ? orders.Where(o => o.Status == OrderStatusConstants.Delivered ||
+                                o.Status == OrderStatusConstants.RejectedBySupplier)
+            : orders;
 
     private Task<int> CountSuppliersAsync(Guid orgId, CancellationToken ct) =>
         _db.Suppliers.CountAsync(s => s.OrgId == orgId && s.DeletedAt == null, ct);
@@ -677,7 +728,24 @@ public sealed class StripeBillingService : IBillingService
     /// higher self-serve tier that would have covered the volume — pure per-order
     /// overage only applies above the top self-serve tier's included volume. Sample
     /// orders are excluded (they never count against quota). Pilot/Enterprise return 0
-    /// (no overage applies). Used by the webhook to bill the just-closed period.
+    /// (no overage applies). Used by the webhook to bill the just-closed period (each
+    /// calendar-month window of it, for yearly subscriptions).
+    ///
+    /// <para><b>Delivered-only meter (<see cref="CountDeliveredOnlyFlagKey"/>, default OFF).</b>
+    /// Same flag + same status filter as <see cref="CountOrdersAsync"/>: when ON, an order
+    /// is attributed to the window containing its CreatedAt (creation-month attribution —
+    /// the window predicate is unchanged) but only counted if, at invoice/count time, it
+    /// has reached the supplier (<c>delivered</c> or <c>rejected_by_supplier</c>).</para>
+    ///
+    /// <para><b>Late-delivery semantics (flag ON) — customer-favorable, NO catch-up
+    /// billing.</b> An order created in May but delivered in June AFTER the May invoice was
+    /// issued is NEVER billed: at May-invoice time it was undelivered (excluded from the
+    /// May window count), and every June-or-later window filters on CreatedAt inside that
+    /// window (creation-month attribution), so the May-created order can never re-enter a
+    /// later window. No job re-opens closed periods to catch late deliveries — that
+    /// under-counting is deliberate. (A Stripe webhook replay for an already-billed period
+    /// is additionally blocked by the period-based idempotency key in
+    /// <c>BillingController.HandleInvoiceCreatedAsync</c>, which is unchanged.)</para>
     /// </summary>
     public async Task<int> ComputePeriodOverageOrdersAsync(
         Guid orgId,
@@ -691,9 +759,10 @@ public sealed class StripeBillingService : IBillingService
             return 0;
 
         var limit = PlanConstants.GetEffectiveOrderLimit(plan, org.OrderLimitOverride);
-        var used = await _db.PurchaseOrders.CountAsync(
-            o => o.OrgId == orgId && !o.IsSample &&
-                 o.CreatedAt >= periodStart && o.CreatedAt < periodEnd, ct);
+        var windowOrders = _db.PurchaseOrders
+            .Where(o => o.OrgId == orgId && !o.IsSample &&
+                        o.CreatedAt >= periodStart && o.CreatedAt < periodEnd);
+        var used = await ApplyMeterStatusFilter(windowOrders).CountAsync(ct);
         return PlanConstants.BestPriceOverageOrders(plan, limit, used);
     }
 
