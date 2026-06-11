@@ -1,3 +1,7 @@
+FOUNDER APPROVED 2026-06-11: structural redesign GO, with flag-fallback plan (classic view default
+until parity gates G1-G7 green + founder watches one real Triage session and signs off G8: conditional
+confirm checkbox + triptych-as-submode identity). Execution = batch 9 phases A->B->C after batch 5 merges.
+
 === SCORES ===
 Current screen (baseline): total=45 (resolve=3 clicks=3 13in=2 scale=2 kb=4 learn=4 brand=9 risk=10)
 Fix Queue — guided exception triage with Context Stage: total=93 (resolve=9 clicks=9 13in=9 scale=9 kb=9 learn=8 brand=6 risk=7)
