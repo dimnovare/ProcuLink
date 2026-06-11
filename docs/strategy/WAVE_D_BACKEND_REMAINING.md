@@ -68,6 +68,18 @@ missing/empty `azp`; Clerk prod-instance cutover done), migrate-fail-loud, B1-B8
   `DELETE /api/admin/orders/{id}`). Risk: med (additive, but data-loss if mis-scoped).
 - **Test:** erases ONLY the target org's target order + its R2 keys; a second org's order untouched;
   R2 DeleteAsync called with the right keys; idempotent on a missing order.
+- **✅ SHIPPED** as `DELETE /api/admin/organisations/{orgId}/orders/{orderId}` (`AdminController.EraseOrder`).
+  Permanent hard-erase, admin-only, org-scoped.
+- **✅ SHIPPED — bulk variant** `POST /api/admin/organisations/{orgId}/orders/bulk-erase`
+  (`AdminController.BulkEraseOrders` → `IDataErasureService.BulkEraseOrdersAsync`). Body is a filter
+  `{ poNumberPrefix?, status?, ids?[], olderThan? }` (fields AND-combined); reuses `EraseOrderAsync`
+  per matched order in ONE server-side batch and returns the erased count + summed child counts.
+  Strictly org-scoped (route org id ANDed into every match — even foreign `ids` are ignored) and
+  refuses an empty filter (400) so it can never mass-wipe an org.
+  **OPERATIONS NOTE:** the per-order `DELETE` is rate-limited (global 300/min → 429), so purging a
+  large test org one-by-one needs many paced passes. **For bulk cleanup, always use the `bulk-erase`
+  endpoint** — one call, no per-row HTTP, e.g. `{ "poNumberPrefix": "TEST-" }` or
+  `{ "olderThan": "2026-01-01T00:00:00Z" }`.
 
 ### RLS — Postgres Row-Level Security defence-in-depth (audit §2.5 / 2.8.redesign4)
 - **Why:** tenant isolation is 100% app-code; one forgotten `.Where(OrgId==…)` leaks. History of

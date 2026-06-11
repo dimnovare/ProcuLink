@@ -24,11 +24,14 @@ public class DataErasureServiceTests
 
     // Seeds a full order graph incl. an order confirmation + line (sensitive PO data
     // with its own R2 source) so the erase is exercised end to end. Returns the keys.
-    private static void SeedOrderGraph(ProcuLinkDbContext db, Guid orgId, Guid orderId, string prefix)
+    // PoNumber/status/createdAt default sensibly but are overridable for bulk-filter tests.
+    private static void SeedOrderGraph(
+        ProcuLinkDbContext db, Guid orgId, Guid orderId, string prefix,
+        string poNumber = "PO-0001", string status = "delivered", DateTime? createdAt = null)
     {
         var lineId = Guid.NewGuid();
         var confId = Guid.NewGuid();
-        db.PurchaseOrders.Add(new PurchaseOrderEntity { Id = orderId, OrgId = orgId, Status = "delivered", SourceFileKey = $"{prefix}/source.csv" });
+        db.PurchaseOrders.Add(new PurchaseOrderEntity { Id = orderId, OrgId = orgId, PoNumber = poNumber, Status = status, CreatedAt = createdAt ?? DateTime.UtcNow, SourceFileKey = $"{prefix}/source.csv" });
         db.PurchaseOrderLines.Add(new PurchaseOrderLineEntity { Id = lineId, OrderId = orderId });
         db.OutboundArtifacts.Add(new OutboundArtifact { Id = Guid.NewGuid(), OrgId = orgId, OrderId = orderId, FileKey = $"{prefix}/out.xml" });
         db.DeliveryAttempts.Add(new DeliveryAttempt { Id = Guid.NewGuid(), OrgId = orgId, OrderId = orderId });
@@ -120,6 +123,129 @@ public class DataErasureServiceTests
 
         result.Found.Should().BeFalse();
         storage.Deleted.Should().BeEmpty();
+    }
+
+    // ── bulk erase ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task BulkEraseOrdersAsync_PoNumberPrefix_ErasesOnlyMatching_OrgScoped()
+    {
+        await using var db = CreateDb();
+        var storage = new RecordingFileStorage();
+
+        var org1 = Guid.NewGuid(); var org2 = Guid.NewGuid();
+        var t1 = Guid.NewGuid(); var t2 = Guid.NewGuid();
+        var keep = Guid.NewGuid(); var otherOrg = Guid.NewGuid();
+        SeedOrderGraph(db, org1, t1,   "org1/t1",   poNumber: "TEST-001");
+        SeedOrderGraph(db, org1, t2,   "org1/t2",   poNumber: "TEST-002");
+        SeedOrderGraph(db, org1, keep, "org1/keep", poNumber: "KEEP-001");
+        SeedOrderGraph(db, org2, otherOrg, "org2/t", poNumber: "TEST-999"); // matches prefix but WRONG org
+        await db.SaveChangesAsync();
+
+        var service = new DataErasureService(db, storage, NullLogger<DataErasureService>.Instance);
+        var result = await service.BulkEraseOrdersAsync(org1, new BulkEraseFilter(PoNumberPrefix: "TEST-"), default);
+
+        result.OrdersErased.Should().Be(2, "only org1's two TEST- orders match");
+        (await db.PurchaseOrders.AnyAsync(o => o.Id == t1)).Should().BeFalse();
+        (await db.PurchaseOrders.AnyAsync(o => o.Id == t2)).Should().BeFalse();
+        (await db.PurchaseOrders.AnyAsync(o => o.Id == keep)).Should().BeTrue("KEEP- does not match the prefix");
+        (await db.PurchaseOrders.AnyAsync(o => o.Id == otherOrg)).Should().BeTrue("org2 is never touched");
+        storage.Deleted.Should().NotContain(k => k.StartsWith("org2/"));
+    }
+
+    [Fact]
+    public async Task BulkEraseOrdersAsync_OrgGuard_IdsFromAnotherOrgAreNeverErased()
+    {
+        await using var db = CreateDb();
+        var storage = new RecordingFileStorage();
+
+        var org1 = Guid.NewGuid(); var org2 = Guid.NewGuid();
+        var org2Order = Guid.NewGuid();
+        SeedOrderGraph(db, org2, org2Order, "org2/o", poNumber: "PO-1");
+        await db.SaveChangesAsync();
+
+        var service = new DataErasureService(db, storage, NullLogger<DataErasureService>.Instance);
+        // Caller is org1 but tries to target org2's order id explicitly.
+        var result = await service.BulkEraseOrdersAsync(org1, new BulkEraseFilter(Ids: new[] { org2Order }), default);
+
+        result.OrdersErased.Should().Be(0);
+        (await db.PurchaseOrders.AnyAsync(o => o.Id == org2Order)).Should().BeTrue("the org guard prevents cross-tenant erase");
+        storage.Deleted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BulkEraseOrdersAsync_EmptyFilter_MatchesNothing_NeverWipesOrg()
+    {
+        await using var db = CreateDb();
+        var storage = new RecordingFileStorage();
+        var org1 = Guid.NewGuid(); var o1 = Guid.NewGuid();
+        SeedOrderGraph(db, org1, o1, "org1/o1", poNumber: "PO-1");
+        await db.SaveChangesAsync();
+
+        var service = new DataErasureService(db, storage, NullLogger<DataErasureService>.Instance);
+        var result = await service.BulkEraseOrdersAsync(org1, new BulkEraseFilter(), default);
+
+        result.OrdersErased.Should().Be(0, "an empty filter must NEVER mass-wipe the org");
+        (await db.PurchaseOrders.AnyAsync(o => o.Id == o1)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task BulkEraseOrdersAsync_BlankPrefix_MatchesNothing()
+    {
+        await using var db = CreateDb();
+        var storage = new RecordingFileStorage();
+        var org1 = Guid.NewGuid(); var o1 = Guid.NewGuid();
+        SeedOrderGraph(db, org1, o1, "org1/o1", poNumber: "PO-1");
+        await db.SaveChangesAsync();
+
+        var service = new DataErasureService(db, storage, NullLogger<DataErasureService>.Instance);
+        // An empty/whitespace prefix must NOT StartsWith-match every order.
+        var result = await service.BulkEraseOrdersAsync(org1, new BulkEraseFilter(PoNumberPrefix: "   "), default);
+
+        result.OrdersErased.Should().Be(0);
+        (await db.PurchaseOrders.AnyAsync(o => o.Id == o1)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task BulkEraseOrdersAsync_StatusFilter_ErasesMatching_AndSumsChildCounts()
+    {
+        await using var db = CreateDb();
+        var storage = new RecordingFileStorage();
+        var org1 = Guid.NewGuid();
+        var d1 = Guid.NewGuid(); var d2 = Guid.NewGuid(); var pending = Guid.NewGuid();
+        SeedOrderGraph(db, org1, d1, "org1/d1", poNumber: "PO-1", status: "delivered");
+        SeedOrderGraph(db, org1, d2, "org1/d2", poNumber: "PO-2", status: "delivered");
+        SeedOrderGraph(db, org1, pending, "org1/p", poNumber: "PO-3", status: "pending_parse");
+        await db.SaveChangesAsync();
+
+        var service = new DataErasureService(db, storage, NullLogger<DataErasureService>.Instance);
+        var result = await service.BulkEraseOrdersAsync(org1, new BulkEraseFilter(Status: "delivered"), default);
+
+        result.OrdersErased.Should().Be(2);
+        result.LinesDeleted.Should().Be(2, "each erased order graph has one line — counts are summed");
+        result.R2ObjectsDeleted.Should().Be(6, "3 blobs per order × 2 orders");
+        result.ConfirmationsDeleted.Should().Be(2);
+        (await db.PurchaseOrders.AnyAsync(o => o.Id == pending)).Should().BeTrue("the pending order does not match the status filter");
+    }
+
+    [Fact]
+    public async Task BulkEraseOrdersAsync_OlderThan_ErasesOnlyOlderOrders()
+    {
+        await using var db = CreateDb();
+        var storage = new RecordingFileStorage();
+        var org1 = Guid.NewGuid();
+        var old1 = Guid.NewGuid(); var recent = Guid.NewGuid();
+        SeedOrderGraph(db, org1, old1,   "org1/old", poNumber: "PO-1", createdAt: DateTime.UtcNow.AddDays(-40));
+        SeedOrderGraph(db, org1, recent, "org1/new", poNumber: "PO-2", createdAt: DateTime.UtcNow.AddDays(-1));
+        await db.SaveChangesAsync();
+
+        var service = new DataErasureService(db, storage, NullLogger<DataErasureService>.Instance);
+        var result = await service.BulkEraseOrdersAsync(
+            org1, new BulkEraseFilter(OlderThan: DateTime.UtcNow.AddDays(-7)), default);
+
+        result.OrdersErased.Should().Be(1);
+        (await db.PurchaseOrders.AnyAsync(o => o.Id == old1)).Should().BeFalse();
+        (await db.PurchaseOrders.AnyAsync(o => o.Id == recent)).Should().BeTrue();
     }
 
     private sealed class ErasureTestDbContext : ProcuLinkDbContext

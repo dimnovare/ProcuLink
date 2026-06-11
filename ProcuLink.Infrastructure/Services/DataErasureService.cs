@@ -135,4 +135,78 @@ public sealed class DataErasureService : IDataErasureService
             ConfirmationsDeleted: confirmations.Count,
             ConfirmationLinesDeleted: confirmationLines.Count);
     }
+
+    public async Task<BulkOrderErasureResult> BulkEraseOrdersAsync(
+        Guid organisationId, BulkEraseFilter filter, CancellationToken ct)
+    {
+        // Org guard FIRST and ALWAYS: the org id is the base of the query, so every
+        // criterion below only ever narrows WITHIN this tenant. A filter (even one
+        // carrying another org's Ids) can never reach across tenants.
+        var query = _db.PurchaseOrders.Where(o => o.OrgId == organisationId);
+
+        // A blank/whitespace prefix or status, or an empty Ids list, is "not supplied".
+        // Critically this stops PoNumberPrefix="" from StartsWith-matching the whole org.
+        var prefix = string.IsNullOrWhiteSpace(filter.PoNumberPrefix) ? null : filter.PoNumberPrefix;
+        var status = string.IsNullOrWhiteSpace(filter.Status) ? null : filter.Status;
+        var ids = filter.Ids is { Count: > 0 } ? filter.Ids : null;
+        // Normalise to UTC Kind: a DateTime deserialised from JSON is Kind=Unspecified,
+        // which Npgsql refuses to write to a `timestamptz` column (would 500 in prod;
+        // InMemory tests wouldn't catch it). Same guard as AdminController.SetOrganisationLimits.
+        var olderThan = filter.OlderThan is { } ot
+            ? DateTime.SpecifyKind(ot, DateTimeKind.Utc)
+            : (DateTime?)null;
+
+        var hasCriterion = prefix is not null || status is not null || ids is not null || olderThan is not null;
+        if (!hasCriterion)
+        {
+            // No active criterion ⇒ match nothing. NEVER interpret an empty filter as
+            // "erase the whole org" — that is the one mistake this method must not make.
+            _logger.LogWarning(
+                "Bulk erase (org {OrgId}): empty filter — matched nothing, erased nothing.", organisationId);
+            return new BulkOrderErasureResult(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+
+        if (prefix is not null)    query = query.Where(o => o.PoNumber.StartsWith(prefix));
+        if (status is not null)    query = query.Where(o => o.Status == status);
+        if (ids is not null)       query = query.Where(o => ids.Contains(o.Id));
+        if (olderThan is { } cutoff) query = query.Where(o => o.CreatedAt < cutoff);
+
+        var matchedIds = await query.Select(o => o.Id).ToListAsync(ct);
+
+        _logger.LogWarning(
+            "Bulk erase (org {OrgId}): {Count} orders matched (prefix={Prefix} status={Status} ids={IdCount} olderThan={OlderThan}) — erasing.",
+            organisationId, matchedIds.Count, prefix, status, ids?.Count, olderThan);
+
+        // Reuse the per-order erase so R2 blobs + every child table + the confirmation
+        // FK-ordering are handled identically to the single-order path. Each order is
+        // its own atomic erase; we sum the counts for the batch result. (Idempotent: a
+        // concurrently-erased order just returns Found=false and is skipped.)
+        var result = new BulkOrderErasureResult(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        foreach (var id in matchedIds)
+        {
+            ct.ThrowIfCancellationRequested();
+            var r = await EraseOrderAsync(organisationId, id, ct);
+            if (!r.Found) continue;
+            result = result with
+            {
+                OrdersErased             = result.OrdersErased + 1,
+                R2ObjectsDeleted         = result.R2ObjectsDeleted + r.R2ObjectsDeleted,
+                LinesDeleted             = result.LinesDeleted + r.LinesDeleted,
+                ArtifactsDeleted         = result.ArtifactsDeleted + r.ArtifactsDeleted,
+                DeliveryAttemptsDeleted  = result.DeliveryAttemptsDeleted + r.DeliveryAttemptsDeleted,
+                ExceptionsDeleted        = result.ExceptionsDeleted + r.ExceptionsDeleted,
+                ValidationResultsDeleted = result.ValidationResultsDeleted + r.ValidationResultsDeleted,
+                PassportEventsDeleted    = result.PassportEventsDeleted + r.PassportEventsDeleted,
+                AuditEventsDeleted       = result.AuditEventsDeleted + r.AuditEventsDeleted,
+                ConfirmationsDeleted     = result.ConfirmationsDeleted + r.ConfirmationsDeleted,
+                ConfirmationLinesDeleted = result.ConfirmationLinesDeleted + r.ConfirmationLinesDeleted,
+            };
+        }
+
+        _logger.LogWarning(
+            "Bulk erase (org {OrgId}): erased {Erased}/{Matched} orders.",
+            organisationId, result.OrdersErased, matchedIds.Count);
+
+        return result;
+    }
 }

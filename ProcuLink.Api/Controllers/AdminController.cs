@@ -351,4 +351,47 @@ public sealed class AdminController : ControllerBase
             orderId, orgId, result);
         return Ok(result);
     }
+
+    // ── POST /api/admin/organisations/{orgId}/orders/bulk-erase ───────────
+    /// <summary>
+    /// Bulk hard-erase: permanently removes every order in the org that matches the
+    /// supplied filter, in ONE server-side batch. Built for cleaning a large test org
+    /// without the per-order <see cref="EraseOrder"/> path's ~thousands of rate-limited
+    /// HTTP deletes. Filter fields (poNumberPrefix / status / ids / olderThan) combine
+    /// with AND. At least one real criterion is REQUIRED — an empty filter is rejected
+    /// (400) so it can never mass-wipe the org. Strictly org-scoped (route org id is
+    /// ANDed into every match) and admin-only (class <see cref="AdminOnlyAttribute"/>);
+    /// it can never erase across orgs. Returns the erased count + summed child counts.
+    /// </summary>
+    [HttpPost("organisations/{orgId:guid}/orders/bulk-erase")]
+    [ProducesResponseType(typeof(BulkOrderErasureResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> BulkEraseOrders(
+        Guid orgId,
+        [FromBody] BulkEraseFilter filter,
+        CancellationToken ct)
+    {
+        // Require at least one REAL criterion. Blank/whitespace strings and an empty
+        // ids list are not criteria — this is the fat-finger guard against {} wiping
+        // an entire org. (The service enforces the same invariant defensively.)
+        var hasCriterion =
+            filter is not null &&
+            (!string.IsNullOrWhiteSpace(filter.PoNumberPrefix)
+             || !string.IsNullOrWhiteSpace(filter.Status)
+             || filter.Ids is { Count: > 0 }
+             || filter.OlderThan is not null);
+        if (!hasCriterion)
+            return BadRequest(new
+            {
+                error = "At least one filter criterion (poNumberPrefix, status, ids, or olderThan) is required. "
+                      + "An empty filter is refused so it cannot mass-erase the organisation.",
+            });
+
+        var result = await _erasure.BulkEraseOrdersAsync(orgId, filter!, ct);
+
+        _logger.LogWarning(
+            "ADMIN BULK ERASE: org {OrgId} — {Count} orders hard-deleted by admin — {@Result}.",
+            orgId, result.OrdersErased, result);
+        return Ok(result);
+    }
 }

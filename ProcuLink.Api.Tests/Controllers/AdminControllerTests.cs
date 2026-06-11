@@ -40,10 +40,45 @@ public class AdminControllerTests
         return new AdminController(db, billing, config, NullLogger<AdminController>.Instance, new NoopErasureService());
     }
 
+    /// <summary>Builds an AdminController with an explicit (recording) erasure service.</summary>
+    private static AdminController Build(ProcuLinkDbContext db, ProcuLink.Core.Services.IDataErasureService erasure)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+        var billing = new StripeBillingService(
+            db, config, NullLogger<StripeBillingService>.Instance, new FakeAnalyticsService());
+        return new AdminController(db, billing, config, NullLogger<AdminController>.Instance, erasure);
+    }
+
     private sealed class NoopErasureService : ProcuLink.Core.Services.IDataErasureService
     {
         public Task<ProcuLink.Core.Services.OrderErasureResult> EraseOrderAsync(Guid org, Guid orderId, CancellationToken ct)
             => Task.FromResult(new ProcuLink.Core.Services.OrderErasureResult(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+
+        public Task<ProcuLink.Core.Services.BulkOrderErasureResult> BulkEraseOrdersAsync(
+            Guid org, ProcuLink.Core.Services.BulkEraseFilter filter, CancellationToken ct)
+            => Task.FromResult(new ProcuLink.Core.Services.BulkOrderErasureResult(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+    }
+
+    /// <summary>Captures the org id + filter the controller forwards, returns a canned result.</summary>
+    private sealed class RecordingErasureService : ProcuLink.Core.Services.IDataErasureService
+    {
+        private readonly ProcuLink.Core.Services.BulkOrderErasureResult _result;
+        public Guid? LastOrgId { get; private set; }
+        public ProcuLink.Core.Services.BulkEraseFilter? LastFilter { get; private set; }
+        public RecordingErasureService(ProcuLink.Core.Services.BulkOrderErasureResult result) => _result = result;
+
+        public Task<ProcuLink.Core.Services.OrderErasureResult> EraseOrderAsync(Guid org, Guid orderId, CancellationToken ct)
+            => Task.FromResult(new ProcuLink.Core.Services.OrderErasureResult(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+
+        public Task<ProcuLink.Core.Services.BulkOrderErasureResult> BulkEraseOrdersAsync(
+            Guid org, ProcuLink.Core.Services.BulkEraseFilter filter, CancellationToken ct)
+        {
+            LastOrgId = org;
+            LastFilter = filter;
+            return Task.FromResult(_result);
+        }
     }
 
     private static Organisation Org(string name, string plan, string status, DateTime? createdAt = null) =>
@@ -388,6 +423,62 @@ public class AdminControllerTests
         typeof(AdminController)
             .GetMethod(nameof(AdminController.SetOrganisationLimits))
             .Should().NotBeNull("the admin limits endpoint must exist on the gated controller");
+    }
+
+    // ── bulk erase ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task BulkEraseOrders_EmptyFilter_Returns400()
+    {
+        var ctrl = Build(MakeDb());
+        var result = await ctrl.BulkEraseOrders(
+            Guid.NewGuid(), new ProcuLink.Core.Services.BulkEraseFilter(), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>(
+            "an empty filter must be rejected so a fat-finger can never mass-wipe an org");
+    }
+
+    [Fact]
+    public async Task BulkEraseOrders_BlankPrefix_Returns400()
+    {
+        var ctrl = Build(MakeDb());
+        var result = await ctrl.BulkEraseOrders(
+            Guid.NewGuid(), new ProcuLink.Core.Services.BulkEraseFilter(PoNumberPrefix: "  "), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>("a blank prefix is not a real criterion");
+    }
+
+    [Fact]
+    public async Task BulkEraseOrders_PassesOrgScopedFilter_AndReturnsResult()
+    {
+        var recording = new RecordingErasureService(
+            new ProcuLink.Core.Services.BulkOrderErasureResult(7, 21, 7, 7, 7, 0, 0, 0, 7, 0, 0));
+        var ctrl = Build(MakeDb(), recording);
+        var orgId = Guid.NewGuid();
+
+        var result = await ctrl.BulkEraseOrders(
+            orgId, new ProcuLink.Core.Services.BulkEraseFilter(PoNumberPrefix: "TEST-"), CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ProcuLink.Core.Services.BulkOrderErasureResult>().Subject;
+        dto.OrdersErased.Should().Be(7);
+
+        recording.LastOrgId.Should().Be(orgId, "the route org id is forwarded — the erase is org-scoped");
+        recording.LastFilter!.PoNumberPrefix.Should().Be("TEST-");
+    }
+
+    [Fact]
+    public void BulkEraseOrders_IsOnTheAdminOnlyGatedController()
+    {
+        // Same fail-closed gate as every other admin action: the class-level
+        // [AdminOnly] filter rejects a non-admin with 403 before this action runs.
+        typeof(AdminController)
+            .GetCustomAttributes(typeof(ProcuLink.Api.Auth.AdminOnlyAttribute), inherit: true)
+            .Should().NotBeEmpty();
+
+        typeof(AdminController)
+            .GetMethod(nameof(AdminController.BulkEraseOrders))
+            .Should().NotBeNull("the bulk-erase endpoint must exist on the gated controller");
     }
 
     // ── helper ────────────────────────────────────────────────────────────
