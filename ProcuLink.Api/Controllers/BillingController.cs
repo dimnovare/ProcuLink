@@ -394,6 +394,23 @@ public sealed class BillingController : ControllerBase
         // with its own period-based idempotency key.
         var windows = SplitBillingPeriodIntoMonthlyWindows(periodStart, periodEnd);
 
+        // ── Attach overage items to THIS invoice when it is still a draft ────
+        // invoice.created fires ~1h before auto-finalisation, so the invoice is
+        // normally a draft and the overage items can be pinned onto the very
+        // invoice that closes the period. Items created on the customer alone
+        // sweep into the NEXT invoice — on a yearly subscription that is ~a year
+        // of float, and after a cancellation the next invoice never comes, so the
+        // item is stranded. Non-draft statuses (e.g. a replayed event processed
+        // after finalisation would 400 on attach) fall back to the historical
+        // customer-sweep behaviour with a warning. Idempotency keys are unchanged
+        // in both paths.
+        var attachToInvoiceId = invoice.Status == "draft" ? invoice.Id : null;
+        if (attachToInvoiceId is null)
+            _logger.LogWarning(
+                "invoice.created for org {OrgId}: invoice {InvoiceId} status '{Status}' is not draft — " +
+                "overage items (if any) will be created on the customer and sweep into the next invoice.",
+                org.Id, invoice.Id, invoice.Status);
+
         foreach (var (windowStart, windowEnd) in windows)
         {
             // Delivered-only meter (Billing:CountDeliveredOnly, default OFF): the flag and
@@ -411,8 +428,13 @@ public sealed class BillingController : ControllerBase
             // (org_id, billing_key) row blocks a second charge even if Stripe emits a new
             // invoice id for the same/overlapping period (e.g. a voided + re-issued draft).
             var billingKey = BuildPeriodBillingKey(org.Id, windowStart);
-            var result = await _billing.BillOverageForInvoiceAsync(
-                org.Id, billingKey, overageOrders, ct);
+            // Draft invoice → attach overload (items land on THIS invoice);
+            // otherwise the historical customer-sweep overload, byte-identical.
+            var result = attachToInvoiceId is not null
+                ? await _billing.BillOverageForInvoiceAsync(
+                    org.Id, billingKey, overageOrders, attachToInvoiceId, ct)
+                : await _billing.BillOverageForInvoiceAsync(
+                    org.Id, billingKey, overageOrders, ct);
 
             _logger.LogInformation(
                 "invoice.created overage for org {OrgId}: {Orders} orders, period={Period}, alreadyBilled={Already}, item={Item}",
