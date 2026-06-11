@@ -176,6 +176,14 @@ and `docs/strategy/2026-06-09-V1-versioned-connection-plan.md` (the V1 blueprint
   (reset) afterward. **PURGE NOT DONE:** the admin order-delete is a PERMANENT HARD-ERASE
   (`AdminController.EraseOrder`, no bulk endpoint) — flagged to founder for explicit informed confirmation
   before erasing the ~2000 `E2E-API-*` test orders (exact ids in scripts/live-matrix/ingest-results.ndjson).
+  **UPDATE 2026-06-11: PURGE COMPLETE** — all 2000 E2E-API orders erased (inbox 2175→175), via
+  `scripts/live-matrix/purge-e2e.mjs` (progress-persistent `purge-done.txt`, reverse-order, 429-tolerant).
+  **Admin erase is HARD + rate-limited (~300/window, 429) + Clerk token 60s** → it took 7 paced passes
+  (~300/pass, ~55s refill wait + fresh token each). Filed chip `task_16a2eea6` for a proper bulk-erase
+  endpoint (the real fix). Remaining 175 = the smaller earlier test batches (matrix + 8 format-upload + originals).
+  INPUT-FORMAT live result: 7/8 parse (CSV/UBL/cXML/IDoc/EDIFACT/X12/XLSX); PDF fixture is scanned/image-only
+  → correctly rejected with the honest "scanned or image-only" message (text-PDF path proven on the 22-doc benchmark).
+  Test API key (`plk_uUTz…`) + cap-override (6000) still ACTIVE on org personal-workspace-d3be (revocable).
   See [[project-live-matrix-and-diverse-review]].
 
 ## ✅ LIVE-MATRIX FINDING (2026-06-10) — csv/json preview 500 FOUND + FIXED + LIVE-VERIFIED (`e7b5965`)
