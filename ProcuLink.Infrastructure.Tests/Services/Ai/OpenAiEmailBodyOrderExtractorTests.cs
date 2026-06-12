@@ -75,9 +75,11 @@ public class OpenAiEmailBodyOrderExtractorTests
         // dispatching any OpenAI call. IncrementAsync must never be called.
         var orgId = Guid.NewGuid();
         var tracker = new Mock<IAiUsageTracker>(MockBehavior.Strict);
-        tracker.SetupGet(t => t.MonthlyLimit).Returns(1000);
         tracker.Setup(t => t.IsAtOrOverLimitAsync(orgId, It.IsAny<CancellationToken>()))
                .ReturnsAsync(true);
+        // The blocked-path log line resolves the org's limit via the snapshot.
+        tracker.Setup(t => t.GetCurrentAsync(orgId, It.IsAny<CancellationToken>()))
+               .ReturnsAsync(new AiUsageSnapshot(orgId, 2026, 6, 1000, 1000));
 
         // Pass overrideClient=null so no real HTTP call can sneak through —
         // the test-ctor still blocks creation of a ChatClient because no
@@ -113,7 +115,6 @@ public class OpenAiEmailBodyOrderExtractorTests
         // "blocked" rather than silently bypass the cap.
         var orgId = Guid.NewGuid();
         var tracker = new Mock<IAiUsageTracker>(MockBehavior.Strict);
-        tracker.SetupGet(t => t.MonthlyLimit).Returns(1000);
         tracker.Setup(t => t.IsAtOrOverLimitAsync(orgId, It.IsAny<CancellationToken>()))
                .ThrowsAsync(new InvalidOperationException("simulated DB outage"));
 

@@ -446,9 +446,10 @@ public sealed class OpenAiSchemaInferencer : ISchemaInferencer
         {
             if (await _tracker.IsAtOrOverLimitAsync(orgId, ct))
             {
+                var snapshot = await _tracker.GetCurrentAsync(orgId, ct);
                 _logger.LogWarning(
                     "OpenAI schema inference skipped — org {OrgId} reached monthly token limit {Limit}.",
-                    orgId, _tracker.MonthlyLimit);
+                    orgId, snapshot.TokensLimit);
                 return true;
             }
             return false;

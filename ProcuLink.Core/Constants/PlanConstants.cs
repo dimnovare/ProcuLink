@@ -43,6 +43,36 @@ public static class PlanConstants
             [Enterprise]  = (int.MaxValue,     int.MaxValue),
         };
 
+    // ── Per-plan monthly AI token limits ───────────────────────────────────
+    // ONE shared monthly OpenAI token budget per org across ALL AI features
+    // (PDF text/vision extraction, line-SKU mapping suggestions, email-body
+    // NLP, schema inference). Sized so PDF-heavy orgs do not silently latch
+    // the cap mid-month (~4k tokens/PDF → Pilot ≈ 50 PDFs, Growth ≈ 250,
+    // Operations ≈ 625, Integration/Distributor ≈ 1,250, Enterprise ≈ 2,500).
+    // PRECEDENCE: the global config key Ai:OpenAI:MonthlyTokenLimitPerOrg
+    // (when set and > 0) overrides EVERY plan value — it is the production
+    // emergency lever (see AiUsageTracker).
+    public static readonly IReadOnlyDictionary<string, long> AiMonthlyTokenLimits =
+        new Dictionary<string, long>
+        {
+            [Pilot]       = 200_000,
+            [Growth]      = 1_000_000,
+            [Operations]  = 2_500_000,
+            [Integration] = 5_000_000,
+            [Distributor] = 5_000_000,
+            [Enterprise]  = 10_000_000,
+        };
+
+    /// <summary>
+    /// Monthly AI token limit for a plan. Unknown or null plans fall back to
+    /// the Pilot value (fail-safe: an unrecognised plan never gets a bigger
+    /// AI budget than the trial tier).
+    /// </summary>
+    public static long GetAiMonthlyTokenLimit(string? plan) =>
+        plan is not null && AiMonthlyTokenLimits.TryGetValue(plan, out var limit)
+            ? limit
+            : AiMonthlyTokenLimits[Pilot];
+
     /// <summary>
     /// Per-order overage fee (EUR) charged on every order an active paid
     /// self-serve plan processes ABOVE its monthly order limit. Billed via a

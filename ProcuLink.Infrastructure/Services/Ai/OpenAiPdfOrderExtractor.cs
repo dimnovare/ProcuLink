@@ -708,9 +708,10 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             {
                 // LogError (→ Sentry): a latched cap silently degrades every PDF upload
                 // for this org to the regex fallback, so ops must see it without grepping.
+                var snapshot = await tracker.GetCurrentAsync(orgId, ct);
                 _logger.LogError(
                     "PDF extraction skipped — org {OrgId} reached monthly token limit {Limit}.",
-                    orgId, tracker.MonthlyLimit);
+                    orgId, snapshot.TokensLimit);
                 return true;
             }
             return false;

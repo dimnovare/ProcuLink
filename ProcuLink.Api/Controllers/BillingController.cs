@@ -132,8 +132,10 @@ public sealed class BillingController : ControllerBase
 
     /// <summary>
     /// Returns the current calendar month's OpenAI token usage for the caller's
-    /// organisation, plus the configured per-org monthly cap. Used by the
-    /// settings UI and by support to diagnose AI no-op behaviour.
+    /// organisation, plus the org's RESOLVED monthly cap (the global config
+    /// override <c>Ai:OpenAI:MonthlyTokenLimitPerOrg</c> when set, otherwise the
+    /// org's plan default from <c>PlanConstants.GetAiMonthlyTokenLimit</c>).
+    /// Used by the settings UI and by support to diagnose AI no-op behaviour.
     /// </summary>
     [HttpGet("ai-usage")]
     [Authorize]
