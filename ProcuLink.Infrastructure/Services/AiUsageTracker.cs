@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Ai;
 
@@ -8,14 +9,25 @@ namespace ProcuLink.Infrastructure.Services;
 /// <summary>
 /// EF-backed implementation of <see cref="IAiUsageTracker"/>.
 /// Persists token usage in <c>ai_usage_monthly</c> keyed by (OrgId, Year, Month).
+///
+/// <para>The monthly limit is PLAN-AWARE and resolved per org at check time:
+/// the global config override <c>Ai:OpenAI:MonthlyTokenLimitPerOrg</c> (when
+/// set and &gt; 0) beats EVERY plan — preserved as the production emergency
+/// lever. Otherwise the org's plan maps to its default via
+/// <see cref="PlanConstants.GetAiMonthlyTokenLimit"/>; a missing org row or an
+/// unrecognised plan falls back to the Pilot value (fail-safe).</para>
 /// </summary>
 public sealed class AiUsageTracker : IAiUsageTracker
 {
-    /// <summary>Fallback default when the config key is missing or unparseable.</summary>
-    internal const long DefaultMonthlyTokenLimit = 100_000;
-
     private readonly ProcuLinkDbContext _db;
     private readonly Func<DateTimeOffset> _clock;
+
+    /// <summary>
+    /// Global config override (<c>Ai:OpenAI:MonthlyTokenLimitPerOrg</c>).
+    /// Null when the key is missing, unparseable, or non-positive — in which
+    /// case the per-plan defaults apply.
+    /// </summary>
+    private readonly long? _configOverrideLimit;
 
     public AiUsageTracker(ProcuLinkDbContext db, IConfiguration configuration)
         : this(db, configuration, () => DateTimeOffset.UtcNow)
@@ -32,12 +44,10 @@ public sealed class AiUsageTracker : IAiUsageTracker
         _clock = clock;
 
         var raw = configuration["Ai:OpenAI:MonthlyTokenLimitPerOrg"];
-        MonthlyLimit = long.TryParse(raw, out var parsed) && parsed > 0
+        _configOverrideLimit = long.TryParse(raw, out var parsed) && parsed > 0
             ? parsed
-            : DefaultMonthlyTokenLimit;
+            : null;
     }
-
-    public long MonthlyLimit { get; }
 
     public async Task<bool> IsAtOrOverLimitAsync(Guid organisationId, CancellationToken ct = default)
     {
@@ -48,8 +58,11 @@ public sealed class AiUsageTracker : IAiUsageTracker
                 u => u.OrgId == organisationId && u.Year == year && u.Month == month,
                 ct);
 
+        // Zero usage can never be at/over a positive limit — skip the plan lookup.
         if (row is null) return false;
-        return row.TokensUsed >= MonthlyLimit;
+
+        var limit = await ResolveLimitAsync(organisationId, ct);
+        return row.TokensUsed >= limit;
     }
 
     public async Task IncrementAsync(Guid organisationId, long tokens, CancellationToken ct = default)
@@ -92,7 +105,27 @@ public sealed class AiUsageTracker : IAiUsageTracker
                 u => u.OrgId == organisationId && u.Year == year && u.Month == month,
                 ct);
 
-        return new AiUsageSnapshot(organisationId, year, month, row?.TokensUsed ?? 0, MonthlyLimit);
+        var limit = await ResolveLimitAsync(organisationId, ct);
+        return new AiUsageSnapshot(organisationId, year, month, row?.TokensUsed ?? 0, limit);
+    }
+
+    /// <summary>
+    /// Resolves the org's monthly token limit. PRECEDENCE: the explicit config
+    /// override (set and &gt; 0) beats ALL plans; otherwise the org's plan
+    /// default. A missing org row or unknown plan resolves to the Pilot value
+    /// (fail-safe).
+    /// </summary>
+    private async Task<long> ResolveLimitAsync(Guid organisationId, CancellationToken ct)
+    {
+        if (_configOverrideLimit is { } configured) return configured;
+
+        var plan = await _db.Organisations
+            .AsNoTracking()
+            .Where(o => o.Id == organisationId)
+            .Select(o => o.Plan)
+            .FirstOrDefaultAsync(ct);
+
+        return PlanConstants.GetAiMonthlyTokenLimit(plan);
     }
 
     private (int year, int month) CurrentYearMonth()

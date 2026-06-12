@@ -255,10 +255,11 @@ public sealed class OpenAiMappingService : IAiMappingService
             {
                 if (await tracker.IsAtOrOverLimitAsync(organisationId, ct))
                 {
+                    var snapshot = await tracker.GetCurrentAsync(organisationId, ct);
                     _logger.LogWarning(
                         "OpenAI mapping skipped — org {OrgId} reached monthly token limit {Limit}",
                         organisationId,
-                        tracker.MonthlyLimit);
+                        snapshot.TokensLimit);
                     return null;
                 }
             }
@@ -420,13 +421,14 @@ public sealed class OpenAiMappingService : IAiMappingService
                 {
                     if (await tracker.IsAtOrOverLimitAsync(organisationId, ct))
                     {
+                        var snapshot = await tracker.GetCurrentAsync(organisationId, ct);
                         _logger.LogWarning(
                             "OpenAI batch mapping stopped at chunk offset {Offset}/{Total} — " +
                             "org {OrgId} reached monthly token limit {Limit}; remaining lines go to manual review",
                             offset,
                             payloadLines.Count,
                             organisationId,
-                            tracker.MonthlyLimit);
+                            snapshot.TokensLimit);
                         break;
                     }
                 }
@@ -600,10 +602,11 @@ public sealed class OpenAiMappingService : IAiMappingService
             {
                 if (await tracker.IsAtOrOverLimitAsync(organisationId, ct))
                 {
+                    var snapshot = await tracker.GetCurrentAsync(organisationId, ct);
                     _logger.LogWarning(
                         "OpenAI field mapping skipped — org {OrgId} reached monthly token limit {Limit}",
                         organisationId,
-                        tracker.MonthlyLimit);
+                        snapshot.TokensLimit);
                     return Array.Empty<AiFieldMappingSuggestion>();
                 }
             }

@@ -424,9 +424,11 @@ public class OpenAiPdfOrderExtractorTests
     {
         var orgId = Guid.NewGuid();
         var tracker = new Mock<IAiUsageTracker>(MockBehavior.Strict);
-        tracker.SetupGet(t => t.MonthlyLimit).Returns(1000);
         tracker.Setup(t => t.IsAtOrOverLimitAsync(orgId, It.IsAny<CancellationToken>()))
                .ReturnsAsync(true);
+        // The blocked-path log line resolves the org's limit via the snapshot.
+        tracker.Setup(t => t.GetCurrentAsync(orgId, It.IsAny<CancellationToken>()))
+               .ReturnsAsync(new AiUsageSnapshot(orgId, 2026, 6, 1000, 1000));
 
         var extractor = CreateExtractor(
             new Dictionary<string, string?>
