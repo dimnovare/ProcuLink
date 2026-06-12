@@ -586,6 +586,11 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Username).HasColumnName("username");
             b.Property(x => x.EncryptedPassword).HasColumnName("encrypted_password");
             b.Property(x => x.RemotePath).HasColumnName("remote_path").IsRequired();
+            // HTTP(S) pull columns (plan 2026-06-12 v2). All nullable — sftp/ftp rows leave them null.
+            b.Property(x => x.Url).HasColumnName("url");
+            b.Property(x => x.AuthMethod).HasColumnName("auth_method");
+            b.Property(x => x.AuthConfigEncrypted).HasColumnName("auth_config_encrypted");
+            b.Property(x => x.HttpMethod).HasColumnName("http_method").HasDefaultValue("GET");
             b.Property(x => x.FileFormat).HasColumnName("file_format").IsRequired().HasDefaultValue("auto");
             b.Property(x => x.SyncIntervalHours).HasColumnName("sync_interval_hours").HasDefaultValue(24);
             b.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(false);

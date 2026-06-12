@@ -840,29 +840,55 @@ public class SuppliersController : ControllerBase
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
 
         var protocol = request.Protocol?.Trim().ToLowerInvariant();
-        if (protocol is not ("sftp" or "ftp" or "ftps"))
-            return BadRequest(new { error = "Protocol must be one of: sftp, ftp, ftps." });
-        if (string.IsNullOrWhiteSpace(request.Host))
-            return BadRequest(new { error = "Host is required." });
-        if (string.IsNullOrWhiteSpace(request.RemotePath))
-            return BadRequest(new { error = "Remote file path is required." });
-        if (protocol is "sftp" or "ftps" && string.IsNullOrWhiteSpace(request.Username))
-            return BadRequest(new { error = "Username is required for sftp and ftps." });
+        if (protocol is not ("sftp" or "ftp" or "ftps" or "http" or "https"))
+            return BadRequest(new { error = "Protocol must be one of: sftp, ftp, ftps, http, https." });
+
+        var isHttp = protocol is "http" or "https";
 
         var fileFormat = string.IsNullOrWhiteSpace(request.FileFormat)
             ? "auto"
             : request.FileFormat.Trim().ToLowerInvariant();
-        if (fileFormat is not ("auto" or "csv" or "xlsx"))
-            return BadRequest(new { error = "File format must be one of: auto, csv, xlsx." });
+        if (fileFormat is not ("auto" or "csv" or "xlsx" or "json"))
+            return BadRequest(new { error = "File format must be one of: auto, csv, xlsx, json." });
 
-        // sftp/ftps need a password: either provided now, or kept from a previous save.
-        if (protocol is "sftp" or "ftps")
+        // ── http/https branch — URL-based, auth in auth_config (never in the URL) ──
+        if (isHttp)
         {
-            var current = await settings.GetAsync(orgId, id, ct);
-            var hasPassword = !string.IsNullOrWhiteSpace(request.Password)
-                              || (request.Password is null && current?.HasPassword == true);
-            if (!hasPassword)
-                return BadRequest(new { error = "Password is required for sftp and ftps." });
+            if (string.IsNullOrWhiteSpace(request.Url))
+                return BadRequest(new { error = "URL is required for http and https." });
+            if (!Uri.TryCreate(request.Url.Trim(), UriKind.Absolute, out var url)
+                || (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))
+                return BadRequest(new { error = "URL must be an absolute http or https URL." });
+            // SECURITY: credentials must never live in the URL (they would leak to logs/Sentry/db).
+            if (!string.IsNullOrEmpty(url.UserInfo))
+                return BadRequest(new { error = "credentials_in_url_not_allowed" });
+
+            var authMethod = request.AuthMethod?.Trim().ToLowerInvariant();
+            if (authMethod is not (null or "" or "none" or "apikey" or "bearer" or "basic" or "oauth2_client_credentials"))
+                return BadRequest(new { error = "Auth method must be one of: none, apikey, bearer, basic, oauth2_client_credentials." });
+            // v2: GET only (POST-with-body is out of scope).
+            var httpMethod = request.HttpMethod?.Trim().ToUpperInvariant();
+            if (httpMethod is not (null or "" or "GET"))
+                return BadRequest(new { error = "Only the GET http method is supported." });
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(request.Host))
+                return BadRequest(new { error = "Host is required." });
+            if (string.IsNullOrWhiteSpace(request.RemotePath))
+                return BadRequest(new { error = "Remote file path is required." });
+            if (protocol is "sftp" or "ftps" && string.IsNullOrWhiteSpace(request.Username))
+                return BadRequest(new { error = "Username is required for sftp and ftps." });
+
+            // sftp/ftps need a password: either provided now, or kept from a previous save.
+            if (protocol is "sftp" or "ftps")
+            {
+                var current = await settings.GetAsync(orgId, id, ct);
+                var hasPassword = !string.IsNullOrWhiteSpace(request.Password)
+                                  || (request.Password is null && current?.HasPassword == true);
+                if (!hasPassword)
+                    return BadRequest(new { error = "Password is required for sftp and ftps." });
+            }
         }
 
         // Billing gate on enablement (pull reuses the SFTP-ingestion feature tier).
@@ -872,10 +898,19 @@ public class SuppliersController : ControllerBase
 
         // Save-time SSRF pre-check — fail fast in the UI instead of at the first poll.
         // The pull pipeline re-validates immediately before EVERY connect regardless.
-        var port = request.Port > 0 ? request.Port : (protocol == "sftp" ? 22 : 21);
-        var guardResult = await guard.ValidateHostAsync(request.Host.Trim(), port, ct);
-        if (!guardResult.Allowed)
-            return BadRequest(new { error = "host_not_allowed" });
+        if (isHttp)
+        {
+            var urlGuard = await guard.ValidateAsync(request.Url!.Trim(), ct);
+            if (!urlGuard.Allowed)
+                return BadRequest(new { error = "host_not_allowed" });
+        }
+        else
+        {
+            var port = request.Port > 0 ? request.Port : (protocol == "sftp" ? 22 : 21);
+            var guardResult = await guard.ValidateHostAsync(request.Host.Trim(), port, ct);
+            if (!guardResult.Allowed)
+                return BadRequest(new { error = "host_not_allowed" });
+        }
 
         var result = await settings.UpsertAsync(orgId, id, request, ct);
         return Ok(new { source = result.Source, syncEnqueued = result.SyncEnqueued });

@@ -245,4 +245,149 @@ public class SupplierCatalogFileParserTests
         map.Should().Contain(new KeyValuePair<int, string>(2, "name"));
         map.Should().NotContainKey(3);                                    // unknown column unmapped
     }
+
+    // ── JSON catalog parser (http API pull, B4) ───────────────────────────────
+
+    private static Stream Json(string content) => new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+    [Fact]
+    public async Task ParseJson_TopLevelArray_MapsAliases_NumberAndStringPrices()
+    {
+        var json = """
+        [
+          { "sku": "RES-220", "description": "Resistor 220 Ohm", "unit_price": 0.04, "gtin": "4001234000010", "erp_id": "ERP-7" },
+          { "sku": "CAP-100", "name": "Capacitor", "price": "1.25", "currency": "EUR", "uom": "pcs" }
+        ]
+        """;
+
+        var result = await SupplierCatalogFileParser.ParseJsonAsync(Json(json), CancellationToken.None);
+
+        result.Format.Should().Be("json");
+        result.Drafts.Should().HaveCount(2);
+
+        var a = result.Drafts[0];
+        a.Code.Should().Be("RES-220");
+        a.Name.Should().Be("Resistor 220 Ohm");
+        a.Price.Should().Be(0.04m);          // JSON number flattened to invariant text then parsed
+        a.Barcode.Should().Be("4001234000010");
+        a.ExternalId.Should().Be("ERP-7");
+
+        var b = result.Drafts[1];
+        b.Code.Should().Be("CAP-100");
+        b.Price.Should().Be(1.25m);          // string price
+        b.Currency.Should().Be("EUR");
+        b.Unit.Should().Be("pcs");
+    }
+
+    [Fact]
+    public async Task ParseJson_ObjectWrappedArray_IsUnwrapped()
+    {
+        // Common catalog-API envelope: { "products": [ ... ] }
+        var json = """{ "products": [ { "code": "A-1", "name": "Widget" } ], "total": 1 }""";
+
+        var result = await SupplierCatalogFileParser.ParseJsonAsync(Json(json), CancellationToken.None);
+
+        result.Drafts.Should().ContainSingle().Which.Code.Should().Be("A-1");
+    }
+
+    [Fact]
+    public async Task ParseJson_HeaderColumns_AreUnionOfPropertyNames_FirstSeenOrder()
+    {
+        var json = """
+        [
+          { "sku": "A-1", "description": "Widget", "warehouse_zone": "Z1" },
+          { "sku": "B-2", "currency": "EUR" }
+        ]
+        """;
+
+        var result = await SupplierCatalogFileParser.ParseJsonAsync(Json(json), CancellationToken.None);
+
+        // The header report drives the test-fetch mapped/unmapped honesty view.
+        result.HeaderColumns.Should().Equal("sku", "description", "warehouse_zone", "currency");
+        var colMap = SupplierCatalogFileParser.MapHeaderColumns(result.HeaderColumns.ToList());
+        colMap.Values.Should().Contain("code");
+        colMap.Values.Should().Contain("name");
+        result.HeaderColumns.Should().Contain("warehouse_zone"); // unmapped, still reported
+    }
+
+    [Fact]
+    public async Task ParseJson_NoCodeProperty_ReturnsEmpty()
+    {
+        var json = """[ { "name": "Widget", "price": 1.00 } ]""";
+
+        var result = await SupplierCatalogFileParser.ParseJsonAsync(Json(json), CancellationToken.None);
+
+        result.Drafts.Should().BeEmpty("no row carries a product code");
+    }
+
+    [Fact]
+    public async Task ParseJson_NonArrayRoot_ReturnsEmpty()
+    {
+        var json = """{ "message": "no catalog here" }""";
+
+        var result = await SupplierCatalogFileParser.ParseJsonAsync(Json(json), CancellationToken.None);
+
+        result.Format.Should().Be("json");
+        result.Drafts.Should().BeEmpty();
+        result.HeaderColumns.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ParseJson_MalformedJson_ThrowsInvalidData()
+    {
+        var act = () => SupplierCatalogFileParser.ParseJsonAsync(Json("{ not json"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidDataException>();
+    }
+
+    [Fact]
+    public async Task ParseJson_RowCap_AbortsOverLimit()
+    {
+        var sb = new StringBuilder("[");
+        for (var i = 0; i < SupplierCatalogFileParser.MaxCatalogRows + 1; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append("{\"code\":\"C-").Append(i).Append("\"}");
+        }
+        sb.Append(']');
+
+        var act = () => SupplierCatalogFileParser.ParseJsonAsync(Json(sb.ToString()), CancellationToken.None);
+
+        await act.Should().ThrowAsync<CatalogTooLargeException>().WithMessage("*row limit*");
+    }
+
+    [Fact]
+    public async Task ParseByFileName_JsonExtension_RoutesToJson()
+    {
+        var json = """[ { "code": "A-1", "name": "Widget" } ]""";
+
+        var result = await SupplierCatalogFileParser.ParseByFileNameAsync(Json(json), "catalog.json", CancellationToken.None);
+
+        result.Format.Should().Be("json");
+        result.Drafts.Should().ContainSingle().Which.Code.Should().Be("A-1");
+    }
+
+    [Fact]
+    public async Task ParseByContentType_JsonContentType_RoutesToJson_EvenWithoutExtension()
+    {
+        var json = """[ { "code": "A-1" } ]""";
+
+        var result = await SupplierCatalogFileParser.ParseByContentTypeAsync(
+            Json(json), "application/json; charset=utf-8", fileName: null, CancellationToken.None);
+
+        result.Format.Should().Be("json");
+        result.Drafts.Should().ContainSingle().Which.Code.Should().Be("A-1");
+    }
+
+    [Fact]
+    public async Task ParseByContentType_CsvContentType_RoutesToCsv()
+    {
+        var csv = "code,name\nA-1,Widget\n";
+
+        var result = await SupplierCatalogFileParser.ParseByContentTypeAsync(
+            Csv(csv), "text/csv", fileName: null, CancellationToken.None);
+
+        result.Format.Should().Be("csv");
+        result.Drafts.Should().ContainSingle().Which.Code.Should().Be("A-1");
+    }
 }

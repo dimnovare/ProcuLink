@@ -1,5 +1,7 @@
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
@@ -24,7 +26,10 @@ namespace ProcuLink.Infrastructure.Services.Catalog;
 /// carry exclusively the enumerated safe messages below (no host/username/banner text,
 /// no inner exception), so Hangfire dashboards and Sentry never see tenant secrets.
 /// </summary>
-public sealed class CatalogPullService : ICatalogPullService
+// Not sealed: a test subclass overrides CreateHttpClient() to inject a fake HTTP transport
+// (mirrors HttpDeliveryDispatcher's CreateSendClient seam). The per-protocol factories are
+// already faked; this seam lets the http branch run end-to-end without a live server.
+public class CatalogPullService : ICatalogPullService
 {
     // ── Enumerated safe messages (M4) — the ONLY strings that may be persisted ──
     internal const string ErrAuthFailed       = "Authentication failed — check the username and password.";
@@ -35,17 +40,29 @@ public sealed class CatalogPullService : ICatalogPullService
     internal const string ErrCredentialsUnreadable = "Stored credentials could not be read — re-enter the password.";
     internal const string ErrSupplierGone     = "Supplier no longer exists.";
     internal const string ErrNoCodeColumn     = "No rows with a product code were found — ensure the file has a 'code' column.";
-    internal const string ErrParseFailed      = "Could not read the catalog file. Provide a CSV or XLSX with a 'code' column.";
+    internal const string ErrParseFailed      = "Could not read the catalog file. Provide a CSV, XLSX, or JSON catalog with a 'code' column.";
     internal const string ErrUnexpected       = "Catalog sync failed before the file could be imported.";
     internal const string ErrNoSourceConfigured = "No catalog source is configured for this supplier.";
+    internal const string ErrUrlNotAllowed    = "The configured URL is not allowed.";
+    internal const string ErrAuthConfigUnreadable = "Stored authentication settings could not be read — re-enter the credentials.";
+    internal const string ErrHttpAuthFailed   = "Authentication failed.";
+    internal const string ErrHttpStatus       = "The catalog server returned an error response.";
 
     private readonly ProcuLinkDbContext        _db;
     private readonly DeliveryEncryptionService _encryption;
     private readonly OutboundRequestGuard      _guard;
     private readonly ISftpClientFactory        _sftpFactory;
     private readonly IFtpFetchClientFactory    _ftpFactory;
+    private readonly IHttpClientFactory        _httpClientFactory;
+    private readonly HttpAuthApplier           _auth;
     private readonly ISupplierCatalogService   _catalog;
     private readonly ILogger<CatalogPullService> _logger;
+
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
 
     /// <summary>H3 — overall per-pull deadline (linked CTS over the caller token). Internal test seam.</summary>
     internal TimeSpan OverallDeadline { get; set; } = TimeSpan.FromMinutes(5);
@@ -56,17 +73,30 @@ public sealed class CatalogPullService : ICatalogPullService
         OutboundRequestGuard        guard,
         ISftpClientFactory          sftpFactory,
         IFtpFetchClientFactory      ftpFactory,
+        IHttpClientFactory          httpClientFactory,
         ISupplierCatalogService     catalog,
         ILogger<CatalogPullService> logger)
     {
-        _db          = db;
-        _encryption  = encryption;
-        _guard       = guard;
-        _sftpFactory = sftpFactory;
-        _ftpFactory  = ftpFactory;
-        _catalog     = catalog;
-        _logger      = logger;
+        _db                = db;
+        _encryption        = encryption;
+        _guard             = guard;
+        _sftpFactory       = sftpFactory;
+        _ftpFactory        = ftpFactory;
+        _httpClientFactory = httpClientFactory;
+        // ONE shared auth applier (B1) — identical none/apikey/bearer/basic/oauth2 model and
+        // SSRF-guarded OAuth token fetch used by the delivery dispatcher.
+        _auth              = new HttpAuthApplier(guard, logger);
+        _catalog           = catalog;
+        _logger            = logger;
     }
+
+    /// <summary>
+    /// Test seam: resolves the HTTP client used for the catalog fetch (and OAuth token request).
+    /// Production returns the named <c>delivery</c> client, whose primary handler is the guard's
+    /// connect-time-revalidating <see cref="SocketsHttpHandler"/> (DNS-rebind / redirect-to-private
+    /// blocked at TCP connect) with a 30 s timeout. Tests override this to inject a fake transport.
+    /// </summary>
+    internal virtual HttpClient CreateHttpClient() => _httpClientFactory.CreateClient("delivery");
 
     // ── Pull (persists success; throws sanitized on failure) ──────────────────
 
@@ -191,6 +221,9 @@ public sealed class CatalogPullService : ICatalogPullService
         long Bytes,
         CatalogFileParseResult? Parse);
 
+    /// <summary>Bytes downloaded from a source plus the routing hints used to pick a parser.</summary>
+    private sealed record DownloadOutcome(MemoryStream Data, string? FileName, string? ContentType);
+
     private async Task<FetchOutcome> FetchAndParseAsync(
         SupplierCatalogSource source, CancellationToken ct, bool skipUnchangedShortCircuit = false)
     {
@@ -201,10 +234,12 @@ public sealed class CatalogPullService : ICatalogPullService
         if (!supplierExists)
             throw new CatalogSyncException(ErrSupplierGone);
 
+        var isHttp = source.Protocol is "http" or "https";
+
         // Credentials: write-only AES-GCM envelope. Decrypt returns null on any error
         // (wrong key, corrupt envelope) — surface that honestly instead of an auth error.
         var password = string.Empty;
-        if (!string.IsNullOrEmpty(source.EncryptedPassword))
+        if (!isHttp && !string.IsNullOrEmpty(source.EncryptedPassword))
         {
             password = _encryption.Decrypt(source.EncryptedPassword)
                 ?? throw new CatalogSyncException(ErrCredentialsUnreadable);
@@ -220,25 +255,18 @@ public sealed class CatalogPullService : ICatalogPullService
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, deadlineCts.Token);
         var token = linkedCts.Token;
 
-        // SSRF guard IMMEDIATELY before connect (every poll AND test-fetch). Residual risk
-        // L1 (accepted): a DNS rebind between this resolution and the library's own
-        // re-resolution at connect is the same documented TOCTOU window the delivery
-        // dispatchers carry (SftpDeliveryDispatcher) — pinning the IP would break SFTP
-        // host-key / TLS hostname semantics. The separate PASV-redirect hole is closed by
-        // PASVEX in the FTP factory (H1).
-        var guardResult = await _guard.ValidateHostAsync(source.Host, source.Port, token);
-        if (!guardResult.Allowed)
-            throw new CatalogSyncException(ErrHostNotAllowed);
-
-        var data = await DownloadAsync(source, password, token);
+        var downloaded = isHttp
+            ? await DownloadHttpAsync(source, token)
+            : await DownloadFileChannelAsync(source, password, token);
 
         string fileHash;
-        using (data)
+        using (downloaded.Data)
         {
+            var data = downloaded.Data;
             var byteCount = data.Length; // captured up front — the CSV parser's StreamReader closes the stream
             fileHash = Convert.ToHexString(SHA256.HashData(data.GetBuffer().AsSpan(0, (int)byteCount)));
 
-            var fileName = Path.GetFileName(source.RemotePath.Replace('\\', '/'));
+            var fileName = downloaded.FileName;
 
             // Unchanged-skip: same bytes as the last completed import AND no failure since
             // (LastSyncError == null distinguishes "last completed fine" even while the
@@ -257,6 +285,11 @@ public sealed class CatalogPullService : ICatalogPullService
             {
                 "csv"  => await SupplierCatalogFileParser.ParseCsvAsync(data, token),
                 "xlsx" => SupplierCatalogFileParser.ParseXlsx(data),
+                "json" => await SupplierCatalogFileParser.ParseJsonAsync(data, token),
+                // 'auto': http uses the server's Content-Type first (then filename, then CSV);
+                // the file channels route on the remote file extension.
+                _ when isHttp => await SupplierCatalogFileParser.ParseByContentTypeAsync(
+                                     data, downloaded.ContentType, fileName, token),
                 _      => await SupplierCatalogFileParser.ParseByFileNameAsync(data, fileName, token),
             };
 
@@ -264,22 +297,37 @@ public sealed class CatalogPullService : ICatalogPullService
         }
     }
 
-    private async Task<MemoryStream> DownloadAsync(
+    // ── SFTP / FTP(S) channel ─────────────────────────────────────────────────
+
+    private async Task<DownloadOutcome> DownloadFileChannelAsync(
         SupplierCatalogSource source, string password, CancellationToken token)
     {
+        // SSRF guard IMMEDIATELY before connect (every poll AND test-fetch). Residual risk
+        // L1 (accepted): a DNS rebind between this resolution and the library's own
+        // re-resolution at connect is the same documented TOCTOU window the delivery
+        // dispatchers carry (SftpDeliveryDispatcher) — pinning the IP would break SFTP
+        // host-key / TLS hostname semantics. The separate PASV-redirect hole is closed by
+        // PASVEX in the FTP factory (H1).
+        var guardResult = await _guard.ValidateHostAsync(source.Host, source.Port, token);
+        if (!guardResult.Allowed)
+            throw new CatalogSyncException(ErrHostNotAllowed);
+
+        var fileName = Path.GetFileName(source.RemotePath.Replace('\\', '/'));
+
         switch (source.Protocol)
         {
             case "sftp":
                 // SSH.NET's Connect is synchronous (no CT). The factory's 30 s socket
                 // timeouts (H3) bound it; Task.Run + WaitAsync additionally honours the
                 // overall deadline so a stalling server can never pin this job past it.
-                return await Task.Run(async () =>
+                var sftpData = await Task.Run(async () =>
                 {
                     using var session = _sftpFactory.Connect(
                         source.Host, source.Port, source.Username ?? string.Empty, password);
                     using var remote = session.OpenRead(source.RemotePath);
                     return await BoundedRead.CopyAsync(remote, IngressLimits.MaxFileBytes, token);
                 }, CancellationToken.None).WaitAsync(token);
+                return new DownloadOutcome(sftpData, fileName, ContentType: null);
 
             case "ftp":
             case "ftps":
@@ -288,12 +336,79 @@ public sealed class CatalogPullService : ICatalogPullService
                            string.IsNullOrWhiteSpace(source.Username) ? "anonymous" : source.Username,
                            password, explicitTls: source.Protocol == "ftps"))
                 {
-                    return await ftp.DownloadAsync(source.RemotePath, IngressLimits.MaxFileBytes, token);
+                    var ftpData = await ftp.DownloadAsync(source.RemotePath, IngressLimits.MaxFileBytes, token);
+                    return new DownloadOutcome(ftpData, fileName, ContentType: null);
                 }
 
             default:
                 throw new CatalogSyncException(ErrUnexpected); // unreachable: protocol validated at save
         }
+    }
+
+    // ── HTTP(S) channel (plan 2026-06-12 v2 — B3) ─────────────────────────────
+
+    /// <summary>
+    /// Fetches the catalog over http/https. Security controls, in order:
+    ///  1. up-front <see cref="OutboundRequestGuard.ValidateAsync"/> on the URL (and the OAuth
+    ///     token URL inside the shared auth applier) — rejects loopback/private/metadata targets;
+    ///  2. the request itself goes through the named <c>delivery</c> client, whose primary
+    ///     handler is the guard's connect-time-revalidating socket handler — so a DNS rebind or
+    ///     an http redirect to a private IP is blocked AT TCP CONNECT (no fetch reaches the
+    ///     attacker's internal target);
+    ///  3. the response body is read through <see cref="BoundedRead"/> (cap+1) so a lying /
+    ///     endless server can never materialize more than the ingress cap in memory;
+    ///  4. the 30 s client timeout + the overall deadline bound the whole exchange.
+    /// All failures map to enumerated safe messages via <see cref="Sanitize"/> upstream; the
+    /// auth applier returns safe strings (never host/token/secret) on its own failures.
+    /// </summary>
+    private async Task<DownloadOutcome> DownloadHttpAsync(SupplierCatalogSource source, CancellationToken token)
+    {
+        var url = source.Url;
+        if (string.IsNullOrWhiteSpace(url))
+            throw new CatalogSyncException(ErrUnexpected); // url required for http — validated at save
+
+        // (1) Up-front SSRF validation on the URL (scheme + DNS range).
+        var guardResult = await _guard.ValidateAsync(url, token);
+        if (!guardResult.Allowed)
+            throw new CatalogSyncException(ErrUrlNotAllowed);
+
+        // Decrypt the write-only auth-config envelope (decrypt returns null on any error).
+        JsonElement creds = default;
+        if (!string.IsNullOrEmpty(source.AuthConfigEncrypted))
+        {
+            var json = _encryption.Decrypt(source.AuthConfigEncrypted)
+                ?? throw new CatalogSyncException(ErrAuthConfigUnreadable);
+            try { creds = JsonSerializer.Deserialize<JsonElement>(json, JsonOpts); }
+            catch (JsonException) { throw new CatalogSyncException(ErrAuthConfigUnreadable); }
+        }
+
+        var method = string.IsNullOrWhiteSpace(source.HttpMethod) ? "GET" : source.HttpMethod.Trim().ToUpperInvariant();
+        var client = CreateHttpClient();
+        using var request = new HttpRequestMessage(new HttpMethod(method), url);
+
+        // (2) Apply auth via the shared applier (oauth2 fetches a fresh token, SSRF-guarded).
+        var authError = await _auth.ApplyAsync(request, creds, client, token);
+        if (authError is not null)
+            // Auth applier returns SAFE strings; collapse to a single enumerated message so the
+            // persisted status never carries a token-URL or guard reason fragment.
+            throw new CatalogSyncException(ErrHttpAuthFailed);
+
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        if (!response.IsSuccessStatusCode)
+            throw new CatalogSyncException(ErrHttpStatus);
+
+        // (3) Bounded streamed read — at most cap+1 bytes ever buffered.
+        await using var responseStream = await response.Content.ReadAsStreamAsync(token);
+        var data = await BoundedRead.CopyAsync(responseStream, IngressLimits.MaxFileBytes, token);
+
+        var contentType = response.Content.Headers.ContentType?.MediaType;
+        // Filename hint: the URL's last path segment (drives 'auto' extension routing as a
+        // fallback when the server sends no decisive Content-Type).
+        var fileName = Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            ? Path.GetFileName(uri.AbsolutePath)
+            : null;
+
+        return new DownloadOutcome(data, string.IsNullOrWhiteSpace(fileName) ? null : fileName, contentType);
     }
 
     // ── M4 — sanitized error mapping ───────────────────────────────────────────
@@ -326,6 +441,10 @@ public sealed class CatalogPullService : ICatalogPullService
             SocketException                                    => ErrConnectFailed,
             Renci.SshNet.Common.SshConnectionException         => ErrConnectFailed,
             FluentFTP.Exceptions.FtpException                  => ErrConnectFailed,
+            // http(s): a guarded connect-time block (redirect/rebind to a private IP) surfaces
+            // as HttpRequestException; map it (and any other transport failure) to the safe
+            // connect message — the raw text (which may carry the host) is logged at Debug only.
+            HttpRequestException                               => ErrConnectFailed,
             IOException                                        => ErrConnectFailed,
             InvalidDataException                               => ErrParseFailed,
             FormatException                                    => ErrParseFailed,

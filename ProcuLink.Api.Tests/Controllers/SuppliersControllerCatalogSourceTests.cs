@@ -111,6 +111,18 @@ public class SuppliersControllerCatalogSourceTests
         bool isEnabled = false)
         => new(protocol, host, port, username, password, remotePath, fileFormat, intervalHours, isEnabled);
 
+    private static UpsertCatalogSourceRequest HttpRequest(
+        string protocol = "https",
+        string? url = "https://supplier.example/catalog.json",
+        string? authMethod = "none",
+        CatalogHttpAuthConfig? authConfig = null,
+        string? httpMethod = null,
+        bool isEnabled = false,
+        string? fileFormat = null)
+        => new(protocol, Host: "", Port: 0, Username: null, Password: null, RemotePath: "",
+               fileFormat, SyncIntervalHours: null, isEnabled,
+               Url: url, AuthMethod: authMethod, AuthConfig: authConfig, HttpMethod: httpMethod);
+
     // ── GET masking ───────────────────────────────────────────────────────────
 
     [Fact]
@@ -211,7 +223,7 @@ public class SuppliersControllerCatalogSourceTests
     // ── validation ────────────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("http")]
+    [InlineData("gopher")] // http/https are now valid (catalog HTTP pull v2) — use a still-invalid scheme
     [InlineData("scp")]
     [InlineData("")]
     public async Task Put_InvalidProtocol_Returns400(string protocol)
@@ -462,5 +474,150 @@ public class SuppliersControllerCatalogSourceTests
             .Cast<Microsoft.AspNetCore.RateLimiting.EnableRateLimitingAttribute>()
             .Single();
         attr.PolicyName.Should().Be("upload");
+    }
+
+    // ── HTTP(S) catalog pull (plan 2026-06-12 v2 — B5/B6) ─────────────────────
+
+    [Fact]
+    public async Task Put_Http_SavesUrlAndAuthMethod()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(authMethod: "bearer", authConfig: new CatalogHttpAuthConfig(BearerToken: "tok-abc")),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var stored = await h.Db.SupplierCatalogSources.AsNoTracking().SingleAsync();
+        stored.Protocol.Should().Be("https");
+        stored.Url.Should().Be("https://supplier.example/catalog.json");
+        stored.AuthMethod.Should().Be("bearer");
+        stored.HttpMethod.Should().Be("GET");
+        stored.AuthConfigEncrypted.Should().NotBeNullOrEmpty();
+        // The secret is encrypted, not stored as plaintext.
+        stored.AuthConfigEncrypted.Should().NotContain("tok-abc");
+        h.Encryption.Decrypt(stored.AuthConfigEncrypted!).Should().Contain("tok-abc");
+    }
+
+    [Fact]
+    public async Task Get_Http_MasksAuthConfig_NeverReturnsSecretOrCiphertext()
+    {
+        var h = Build();
+        await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(authMethod: "apikey",
+                authConfig: new CatalogHttpAuthConfig(ApiKeyHeader: "X-Api-Key", ApiKeyValue: "super-secret-key")),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        var result = await h.Controller.GetCatalogSource(h.Supplier.Id, h.Settings, CancellationToken.None);
+
+        var ok = result.Should().BeOfType<OkObjectResult>().Subject;
+        var source = (CatalogSourceResponse)((dynamic)ok.Value!).source;
+        source.AuthMethod.Should().Be("apikey");
+        source.HasAuthConfig.Should().BeTrue();
+        source.Url.Should().Be("https://supplier.example/catalog.json");
+
+        var stored = await h.Db.SupplierCatalogSources.AsNoTracking().SingleAsync();
+        // Serializing the masked response must leak NEITHER the plaintext secret NOR the ciphertext.
+        System.Text.Json.JsonSerializer.Serialize(source)
+            .Should().NotContain("super-secret-key")
+            .And.NotContain(stored.AuthConfigEncrypted!);
+    }
+
+    [Fact]
+    public async Task Put_Http_NullAuthConfig_KeepsStoredSecret()
+    {
+        var h = Build();
+        await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(authMethod: "bearer", authConfig: new CatalogHttpAuthConfig(BearerToken: "original-token")),
+            h.Settings, h.Guard, CancellationToken.None);
+        var originalCipher = (await h.Db.SupplierCatalogSources.AsNoTracking().SingleAsync()).AuthConfigEncrypted;
+
+        // Re-save with no AuthConfig (null = keep).
+        await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(authMethod: "bearer", authConfig: null),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        var stored = await h.Db.SupplierCatalogSources.AsNoTracking().SingleAsync();
+        stored.AuthConfigEncrypted.Should().Be(originalCipher, "null AuthConfig means keep");
+        h.Encryption.Decrypt(stored.AuthConfigEncrypted!).Should().Contain("original-token");
+    }
+
+    [Fact]
+    public async Task Put_Http_UrlWithUserInfo_Returns400_CredentialsInUrlNotAllowed()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(url: "https://user:pass@supplier.example/catalog.json"),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        var bad = result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        string error = ((dynamic)bad.Value!).error;
+        error.Should().Be("credentials_in_url_not_allowed");
+        (await h.Db.SupplierCatalogSources.CountAsync()).Should().Be(0, "nothing is persisted on a rejected save");
+    }
+
+    [Fact]
+    public async Task Put_Http_MissingUrl_Returns400()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(url: null),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task Put_Http_NonHttpScheme_Returns400()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(url: "ftp://supplier.example/catalog.json"),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task Put_Http_PrivateUrl_Returns400_HostNotAllowed()
+    {
+        var h = Build(allowPrivate: false);
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(url: "http://169.254.169.254/latest/meta-data/"),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        var bad = result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        string error = ((dynamic)bad.Value!).error;
+        error.Should().Be("host_not_allowed");
+        (await h.Db.SupplierCatalogSources.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Put_Http_PostMethod_Returns400()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(httpMethod: "POST"),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>("v2 supports GET only");
+    }
+
+    [Fact]
+    public async Task Put_Http_JsonFileFormat_IsAccepted()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(fileFormat: "json"),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        (await h.Db.SupplierCatalogSources.AsNoTracking().SingleAsync()).FileFormat.Should().Be("json");
     }
 }

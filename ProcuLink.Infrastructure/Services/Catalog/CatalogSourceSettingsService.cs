@@ -68,22 +68,56 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
         }
 
         var protocol = request.Protocol.Trim().ToLowerInvariant();
+        var isHttp = protocol is "http" or "https";
+
         source.Protocol = protocol;
-        source.Host = request.Host.Trim();
-        source.Port = request.Port > 0 ? request.Port : (protocol == "sftp" ? 22 : 21);
-        source.Username = string.IsNullOrWhiteSpace(request.Username) ? null : request.Username.Trim();
-        source.RemotePath = request.RemotePath.Trim();
         source.FileFormat = string.IsNullOrWhiteSpace(request.FileFormat) ? "auto" : request.FileFormat.Trim().ToLowerInvariant();
         source.SyncIntervalHours = Math.Clamp(request.SyncIntervalHours ?? source.SyncIntervalHours, 1, 336);
         source.IsEnabled = request.IsEnabled;
 
-        // Write-only secret semantics (precedent PullIngressSettingsService): null = keep,
-        // "" = clear, value = re-encrypt. Plaintext is never stored or echoed back.
-        if (request.Password is not null)
+        if (isHttp)
         {
-            source.EncryptedPassword = string.IsNullOrWhiteSpace(request.Password)
-                ? null
-                : _encryption.Encrypt(request.Password);
+            // http/https: the full URL carries scheme+host+path+query; host/port/username/
+            // remote-path are unused (cleared so a protocol switch leaves no stale values).
+            source.Url = request.Url?.Trim();
+            source.Host = string.Empty;
+            source.Port = 0;
+            source.Username = null;
+            source.RemotePath = string.Empty;
+            source.EncryptedPassword = null;
+            source.HttpMethod = "GET"; // v2: GET only (POST-with-body out of scope).
+            source.AuthMethod = NormalizeAuthMethod(request.AuthMethod);
+
+            // Write-only auth-config secret: null = keep, cleared = clear, value = re-encrypt.
+            var authJson = BuildAuthConfigJson(source.AuthMethod, request.AuthConfig);
+            if (authJson is not null)
+            {
+                source.AuthConfigEncrypted = authJson.Length == 0 ? null : _encryption.Encrypt(authJson);
+            }
+            // 'none' carries no secret — drop any previously stored config.
+            if (source.AuthMethod == "none")
+                source.AuthConfigEncrypted = null;
+        }
+        else
+        {
+            // sftp/ftp/ftps: clear the http columns so a protocol switch leaves no stale state.
+            source.Host = request.Host.Trim();
+            source.Port = request.Port > 0 ? request.Port : (protocol == "sftp" ? 22 : 21);
+            source.Username = string.IsNullOrWhiteSpace(request.Username) ? null : request.Username.Trim();
+            source.RemotePath = request.RemotePath.Trim();
+            source.Url = null;
+            source.AuthMethod = null;
+            source.AuthConfigEncrypted = null;
+            source.HttpMethod = null;
+
+            // Write-only secret semantics (precedent PullIngressSettingsService): null = keep,
+            // "" = clear, value = re-encrypt. Plaintext is never stored or echoed back.
+            if (request.Password is not null)
+            {
+                source.EncryptedPassword = string.IsNullOrWhiteSpace(request.Password)
+                    ? null
+                    : _encryption.Encrypt(request.Password);
+            }
         }
 
         source.UpdatedAt = now;
@@ -120,12 +154,68 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
     private static CatalogSourceResponse ToResponse(SupplierCatalogSource s)
     {
         var hasPassword = !string.IsNullOrWhiteSpace(s.EncryptedPassword);
+        var hasAuthConfig = !string.IsNullOrWhiteSpace(s.AuthConfigEncrypted);
         return new CatalogSourceResponse(
             s.Id, s.Protocol, s.Host, s.Port, s.Username,
             hasPassword, hasPassword ? Mask : null,
             s.RemotePath, s.FileFormat, s.SyncIntervalHours, s.IsEnabled,
             s.LastSyncAt, s.LastSyncStatus, s.LastSyncError,
             s.LastSyncCreated, s.LastSyncUpdated, s.LastSyncSkipped,
-            s.UpdatedAt);
+            s.UpdatedAt,
+            // http/https: surface the URL (no secrets) + the auth method + whether auth secrets
+            // are stored. The ciphertext (AuthConfigEncrypted) and any plaintext NEVER leave here.
+            s.Url, s.AuthMethod, hasAuthConfig, s.HttpMethod);
+    }
+
+    /// <summary>Normalizes the http auth method; unknown/empty → 'none'.</summary>
+    private static string NormalizeAuthMethod(string? method)
+    {
+        var m = method?.Trim().ToLowerInvariant();
+        return m is "apikey" or "bearer" or "basic" or "oauth2_client_credentials" ? m : "none";
+    }
+
+    /// <summary>
+    /// Builds the canonical auth-config JSON (the SAME shape <c>HttpAuthApplier</c> reads:
+    /// a <c>type</c> discriminator plus the method's fields) from the PUT body, or returns:
+    ///  • <c>null</c> when no <see cref="CatalogHttpAuthConfig"/> was supplied AND the method
+    ///    is not 'none' → KEEP the stored secret;
+    ///  • <c>""</c> when the secret should be CLEARED (method 'none', or the supplied config has
+    ///    no usable secret for the method) → the caller clears the ciphertext;
+    ///  • a JSON string to ENCRYPT otherwise.
+    /// Plaintext is never stored or echoed back.
+    /// </summary>
+    private static string? BuildAuthConfigJson(string authMethod, CatalogHttpAuthConfig? cfg)
+    {
+        if (authMethod == "none")
+            return string.Empty; // no secret for this method — clear any stored config
+
+        if (cfg is null)
+            return null; // not provided → keep whatever is stored (write-only "null = keep")
+
+        // Project only the fields the chosen method uses into the canonical applier shape.
+        object? payload = authMethod switch
+        {
+            "apikey" when NotBlank(cfg.ApiKeyHeader) && cfg.ApiKeyValue is not null =>
+                new { type = "apikey", header = cfg.ApiKeyHeader!.Trim(), value = cfg.ApiKeyValue },
+            "bearer" when NotBlank(cfg.BearerToken) =>
+                new { type = "bearer", token = cfg.BearerToken },
+            "basic" when cfg.BasicUsername is not null || cfg.BasicPassword is not null =>
+                new { type = "basic", username = cfg.BasicUsername ?? string.Empty, password = cfg.BasicPassword ?? string.Empty },
+            "oauth2_client_credentials" when NotBlank(cfg.TokenUrl) =>
+                new
+                {
+                    type = "oauth2_client_credentials",
+                    tokenUrl = cfg.TokenUrl!.Trim(),
+                    clientId = cfg.ClientId ?? string.Empty,
+                    clientSecret = cfg.ClientSecret ?? string.Empty,
+                    scope = cfg.Scope ?? string.Empty,
+                },
+            _ => null,
+        };
+
+        // A config object that carries no usable secret for the method clears the stored one.
+        return payload is null ? string.Empty : System.Text.Json.JsonSerializer.Serialize(payload);
+
+        static bool NotBlank(string? v) => !string.IsNullOrWhiteSpace(v);
     }
 }

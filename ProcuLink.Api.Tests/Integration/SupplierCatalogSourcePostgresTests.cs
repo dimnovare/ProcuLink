@@ -153,4 +153,79 @@ public sealed class SupplierCatalogSourcePostgresTests : IAsyncLifetime
 
         await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
     }
+
+    [DockerRequiredFact]
+    public async Task AddCatalogHttpSource_Migration_RoundTripsHttpColumns_WithDefault()
+    {
+        // BE-2 (v2): the AddCatalogHttpSource migration adds url/auth_method/auth_config_encrypted/
+        // http_method. Prove the new columns persist on real Postgres and http_method defaults to 'GET'.
+        var (org, supplier) = NewOrgAndSupplier();
+        Guid sourceId;
+
+        await using (var db = new ProcuLinkDbContext(_options!))
+        {
+            db.Organisations.Add(org);
+            db.Suppliers.Add(supplier);
+            var source = new SupplierCatalogSource
+            {
+                Id         = Guid.NewGuid(),
+                OrgId      = org.Id,
+                SupplierId = supplier.Id,
+                Protocol   = "https",
+                Host       = string.Empty,
+                Port       = 0,
+                RemotePath = string.Empty,
+                Url        = "https://supplier.example/catalog.json",
+                AuthMethod = "bearer",
+                AuthConfigEncrypted = "ZW5jcnlwdGVkLWJsb2I=",
+                CreatedAt  = DateTime.UtcNow,
+                UpdatedAt  = DateTime.UtcNow,
+            };
+            sourceId = source.Id;
+            db.SupplierCatalogSources.Add(source);
+            await db.SaveChangesAsync();
+        }
+
+        await using (var db = new ProcuLinkDbContext(_options!))
+        {
+            var row = await db.SupplierCatalogSources.AsNoTracking()
+                .SingleAsync(s => s.Id == sourceId && s.OrgId == org.Id);
+
+            Assert.Equal("https", row.Protocol);
+            Assert.Equal("https://supplier.example/catalog.json", row.Url);
+            Assert.Equal("bearer", row.AuthMethod);
+            Assert.Equal("ZW5jcnlwdGVkLWJsb2I=", row.AuthConfigEncrypted);
+            Assert.Equal("GET", row.HttpMethod); // DB default
+        }
+    }
+
+    [DockerRequiredFact]
+    public async Task AddCatalogHttpSource_SftpRow_LeavesHttpColumnsNull()
+    {
+        // The new columns are nullable and additive — an sftp row leaves url/auth_method/
+        // auth_config_encrypted null (http_method falls to its 'GET' default but is unused).
+        var (org, supplier) = NewOrgAndSupplier();
+        Guid sourceId;
+
+        await using (var db = new ProcuLinkDbContext(_options!))
+        {
+            db.Organisations.Add(org);
+            db.Suppliers.Add(supplier);
+            var source = NewSource(org.Id, supplier.Id);
+            sourceId = source.Id;
+            db.SupplierCatalogSources.Add(source);
+            await db.SaveChangesAsync();
+        }
+
+        await using (var db = new ProcuLinkDbContext(_options!))
+        {
+            var row = await db.SupplierCatalogSources.AsNoTracking()
+                .SingleAsync(s => s.Id == sourceId);
+
+            Assert.Equal("sftp", row.Protocol);
+            Assert.Null(row.Url);
+            Assert.Null(row.AuthMethod);
+            Assert.Null(row.AuthConfigEncrypted);
+        }
+    }
 }

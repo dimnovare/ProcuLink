@@ -118,7 +118,8 @@ public class CatalogPullServiceTests
         await db.SaveChangesAsync();
 
         var service = new CatalogPullService(
-            db, encryption, guard, sftp, new ThrowingFtpFactory(), sink,
+            db, encryption, guard, sftp, new ThrowingFtpFactory(),
+            new ThrowingHttpClientFactory(), sink,
             NullLogger<CatalogPullService>.Instance);
 
         return new Harness(db, service, encryption, sftp, sink, orgId, supplierId, source.Id);
@@ -456,6 +457,13 @@ public class CatalogPullServiceTests
     {
         public IFtpFetchSession Connect(string host, int port, string username, string password, bool explicitTls)
             => throw new InvalidOperationException("FTP factory must not be invoked in these tests.");
+    }
+
+    /// <summary>The HTTP client factory must never be touched by sftp/ftp-protocol tests.</summary>
+    private sealed class ThrowingHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name)
+            => throw new InvalidOperationException("HTTP client factory must not be invoked in these tests.");
     }
 
     /// <summary>Wraps the REAL catalog sink, counting upsert calls.</summary>

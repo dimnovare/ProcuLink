@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using ProcuLink.Core.Entities;
 
@@ -61,8 +62,8 @@ public static class SupplierCatalogFileParser
 
     /// <summary>
     /// Routes on the file extension exactly like the original upload endpoint:
-    /// <c>.xlsx</c>/<c>.xls</c> → XLSX, <c>.csv</c> → CSV, anything else (including a
-    /// missing name) falls back to CSV parsing.
+    /// <c>.xlsx</c>/<c>.xls</c> → XLSX, <c>.json</c> → JSON, <c>.csv</c> → CSV, anything else
+    /// (including a missing name) falls back to CSV parsing.
     /// </summary>
     public static async Task<CatalogFileParseResult> ParseByFileNameAsync(
         Stream stream, string? fileName, CancellationToken ct)
@@ -71,9 +72,31 @@ public static class SupplierCatalogFileParser
         return ext switch
         {
             ".xlsx" or ".xls" => ParseXlsx(stream),
+            ".json"           => await ParseJsonAsync(stream, ct),
             ".csv"            => await ParseCsvAsync(stream, ct),
             _                 => await ParseCsvAsync(stream, ct),
         };
+    }
+
+    /// <summary>
+    /// Routes on a content-type / declared format hint (http catalog pull): a hint containing
+    /// <c>json</c> → JSON, <c>spreadsheet</c>/<c>xlsx</c>/<c>excel</c> → XLSX, otherwise CSV.
+    /// Used when the HTTP source declares <c>auto</c> and a Content-Type is available; the
+    /// caller falls back to <see cref="ParseByFileNameAsync"/> (extension routing) when no
+    /// content-type is present.
+    /// </summary>
+    public static async Task<CatalogFileParseResult> ParseByContentTypeAsync(
+        Stream stream, string? contentType, string? fileName, CancellationToken ct)
+    {
+        var ct0 = contentType?.ToLowerInvariant() ?? string.Empty;
+        if (ct0.Contains("json"))
+            return await ParseJsonAsync(stream, ct);
+        if (ct0.Contains("spreadsheet") || ct0.Contains("xlsx") || ct0.Contains("excel"))
+            return ParseXlsx(stream);
+        if (ct0.Contains("csv"))
+            return await ParseCsvAsync(stream, ct);
+        // No decisive content-type — fall back to extension routing (then CSV).
+        return await ParseByFileNameAsync(stream, fileName, ct);
     }
 
     private static SupplierProduct? RowToDraft(IReadOnlyDictionary<string, string?> fields)
@@ -222,6 +245,131 @@ public static class SupplierCatalogFileParser
 
         return new CatalogFileParseResult(drafts, header, "xlsx");
     }
+
+    // ── JSON catalog parser (http API pull, plan 2026-06-12 v2 — B4) ───────────
+
+    /// <summary>
+    /// Property names a catalog API commonly wraps its array of products under, when the
+    /// response root is an object rather than a bare array. Case-insensitive.
+    /// </summary>
+    private static readonly string[] JsonArrayWrapperKeys =
+        { "items", "products", "data", "results", "catalog", "rows", "records" };
+
+    /// <summary>
+    /// Parses a JSON catalog: a top-level array of objects, OR an object wrapping that array
+    /// under a common key (<c>items</c>/<c>products</c>/<c>data</c>/…). Each object's property
+    /// names are alias-detected to the same canonical catalog fields the CSV/XLSX paths use
+    /// (code/name/unit/price/currency/barcode/external_id). The header column list reported is
+    /// the union of property names seen across the (capped) rows, so the test-fetch honesty
+    /// report can show mapped/unmapped fields exactly like the tabular formats.
+    ///
+    /// Hardening: the element count is bounded by <see cref="MaxCatalogRows"/> — iteration
+    /// aborts with <see cref="CatalogTooLargeException"/> rather than materializing an unbounded
+    /// draft list (mirrors the CSV/XLSX row cap). A non-array / non-object root, or a root with
+    /// no recognizable array, yields an empty result (no code column → nothing usable), exactly
+    /// like a CSV without a code column.
+    /// </summary>
+    public static async Task<CatalogFileParseResult> ParseJsonAsync(Stream stream, CancellationToken ct)
+    {
+        var drafts = new List<SupplierProduct>();
+
+        JsonDocument doc;
+        try
+        {
+            doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        }
+        catch (JsonException ex)
+        {
+            // Surface as the same parse-failure family the CSV/XLSX paths raise on bad input.
+            throw new InvalidDataException("Catalog JSON could not be parsed.", ex);
+        }
+
+        using (doc)
+        {
+            if (!TryGetArray(doc.RootElement, out var array))
+                return new CatalogFileParseResult(drafts, Array.Empty<string>(), "json");
+
+            // Preserve first-seen order of property names across rows for an honest header report.
+            var headerOrder = new List<string>();
+            var headerSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var dataRows = 0;
+            foreach (var element in array.EnumerateArray())
+            {
+                if (element.ValueKind != JsonValueKind.Object) continue;
+
+                if (++dataRows > MaxCatalogRows)
+                    throw new CatalogTooLargeException(RowCapMessage);
+
+                var fields = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+                foreach (var prop in element.EnumerateObject())
+                {
+                    var name = prop.Name.Trim();
+                    if (name.Length == 0) continue;
+                    if (headerSeen.Add(name)) headerOrder.Add(name);
+
+                    if (CatalogColumnAliases.TryGetValue(name, out var canonical)
+                        && !fields.ContainsKey(canonical)) // first matching alias wins, like the tabular paths
+                    {
+                        fields[canonical] = JsonValueToString(prop.Value);
+                    }
+                }
+
+                var draft = RowToDraft(fields);
+                if (draft is not null) drafts.Add(draft);
+            }
+
+            return new CatalogFileParseResult(drafts, headerOrder, "json");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the products array: the root itself when it is an array, otherwise the first
+    /// recognized wrapper property whose value is an array.
+    /// </summary>
+    private static bool TryGetArray(JsonElement root, out JsonElement array)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            array = root;
+            return true;
+        }
+
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var key in JsonArrayWrapperKeys)
+                if (root.TryGetProperty(key, out var candidate) && candidate.ValueKind == JsonValueKind.Array)
+                {
+                    array = candidate;
+                    return true;
+                }
+
+            // Case-insensitive second pass (TryGetProperty is case-sensitive).
+            foreach (var prop in root.EnumerateObject())
+                if (prop.Value.ValueKind == JsonValueKind.Array
+                    && JsonArrayWrapperKeys.Contains(prop.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    array = prop.Value;
+                    return true;
+                }
+        }
+
+        array = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Flattens a scalar JSON value to the string the shared <c>RowToDraft</c> expects.
+    /// Numbers/booleans use their raw text; null/objects/arrays map to null (unmappable).
+    /// </summary>
+    private static string? JsonValueToString(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => value.GetString(),
+        JsonValueKind.Number => value.GetRawText(),
+        JsonValueKind.True   => "true",
+        JsonValueKind.False  => "false",
+        _                    => null,
+    };
 
     // ── H4 — XLSX decompression-bomb guard ────────────────────────────────────
 

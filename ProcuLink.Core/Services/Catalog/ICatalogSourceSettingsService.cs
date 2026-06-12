@@ -24,7 +24,15 @@ public interface ICatalogSourceSettingsService
     Task<bool> DeleteAsync(Guid orgId, Guid supplierId, CancellationToken ct);
 }
 
-/// <summary>PUT body. Password: null = keep stored, "" = clear, value = re-encrypt.</summary>
+/// <summary>
+/// PUT body. Secret semantics (both <see cref="Password"/> and <see cref="AuthConfig"/>):
+/// null = keep stored, an empty/cleared value = clear, a value = re-encrypt.
+///
+/// For sftp/ftp/ftps the host/port/username/password/remote-path fields apply. For http/https
+/// the <see cref="Url"/>, <see cref="AuthMethod"/>, <see cref="AuthConfig"/>, and
+/// <see cref="HttpMethod"/> fields apply (host/port/remote-path are unused). Credentials MUST
+/// NOT be embedded in the URL — <c>Uri.UserInfo</c> is rejected at save.
+/// </summary>
 public sealed record UpsertCatalogSourceRequest(
     string Protocol,
     string Host,
@@ -34,7 +42,33 @@ public sealed record UpsertCatalogSourceRequest(
     string RemotePath,
     string? FileFormat,
     int? SyncIntervalHours,
-    bool IsEnabled);
+    bool IsEnabled,
+    // http/https only (null/ignored for sftp/ftp):
+    string? Url = null,
+    string? AuthMethod = null,
+    CatalogHttpAuthConfig? AuthConfig = null,
+    string? HttpMethod = null);
+
+/// <summary>
+/// HTTP auth secrets supplied on PUT (write-only). The exact field set used depends on
+/// <see cref="UpsertCatalogSourceRequest.AuthMethod"/>:
+///  • apikey → <see cref="ApiKeyHeader"/> + <see cref="ApiKeyValue"/>;
+///  • bearer → <see cref="BearerToken"/>;
+///  • basic  → <see cref="BasicUsername"/> + <see cref="BasicPassword"/>;
+///  • oauth2_client_credentials → <see cref="TokenUrl"/> + <see cref="ClientId"/> +
+///    <see cref="ClientSecret"/> + optional <see cref="Scope"/>.
+/// Serialized to a normalized auth-config JSON, AES-GCM encrypted at rest, and never echoed back.
+/// </summary>
+public sealed record CatalogHttpAuthConfig(
+    string? ApiKeyHeader = null,
+    string? ApiKeyValue = null,
+    string? BearerToken = null,
+    string? BasicUsername = null,
+    string? BasicPassword = null,
+    string? TokenUrl = null,
+    string? ClientId = null,
+    string? ClientSecret = null,
+    string? Scope = null);
 
 /// <summary>Masked GET/PUT response — never carries ciphertext or plaintext secrets.</summary>
 public sealed record CatalogSourceResponse(
@@ -55,7 +89,13 @@ public sealed record CatalogSourceResponse(
     int? LastSyncCreated,
     int? LastSyncUpdated,
     int? LastSyncSkipped,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    // http/https only (null for sftp/ftp). Auth secrets are NEVER returned — only whether
+    // they are present (HasAuthConfig) and the (non-secret) auth method.
+    string? Url = null,
+    string? AuthMethod = null,
+    bool HasAuthConfig = false,
+    string? HttpMethod = null);
 
 /// <summary>Upsert outcome: the masked state + whether an immediate first sync was enqueued.</summary>
 public sealed record CatalogSourceUpsertResult(CatalogSourceResponse Source, bool SyncEnqueued);
