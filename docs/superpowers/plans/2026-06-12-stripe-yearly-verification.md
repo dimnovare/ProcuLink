@@ -46,6 +46,13 @@ Today `customer.subscription.deleted` bills nothing; overage is only charged at 
   scales with the whole year. Middle path: contract language reserving the right to
   invoice accrued overage on termination; implement Option B later if needed.
 
+## DECIDED (founder, 2026-06-12)
+Recommendation adopted: Option A stays for monthly (final-period overage waived as
+courtesy); annual protected by Terms §5 contract language reserving the right to invoice
+accrued overage on termination (shipped FE `f7480ca`). Option B (automated final invoice
+on `subscription.deleted`) NOT implemented — revisit only if annual churn-overage becomes
+material.
+
 ## Hygiene
 Test clock `clock_1ThXvyLMyzXaWowfFqCCo6LG` deleted (customer/sub/invoices cascaded);
 `sk_test_` verified before every call; key never written to file/echoed/committed.
