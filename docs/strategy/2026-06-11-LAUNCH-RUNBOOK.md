@@ -3,6 +3,21 @@
 State: ALL batches + flips LIVE. BE `96949c5` (2226 tests), FE `e825595` (88 unit + 48 e2e).
 Migrations verified applied on Neon. Machine-verifiable gate items done.
 
+## ✅ EXECUTED 2026-06-12 (founder decisions applied)
+- §1.4 SIGN-OFF A: founder chose conditional confirm → `NEXT_PUBLIC_CONFIRM_ALWAYS=false`
+  set on Vercel Production + redeployed (Ready). Checkbox now appears only when something is wrong.
+- §1.5 SIGN-OFF B: founder chose KEEP current default (Triage iff exceptions). No change.
+- §2 REVISION-AUTHORITY FLIP: DONE + VERIFIED. Pre-flip republish per supplier (both suppliers:
+  draft cloned → test pack PASSED → published). `Connections__RevisionAuthority=true` set on BOTH
+  Railway services, deploys SUCCESS 10:25. Post-flip proof: fresh order `9cde8a19…` pinned
+  `connection_revision_id = a23eac14…` == the supplier's activeRevisionId; `outbound_artifacts`
+  row carries ConfigDigest + ArtifactSha256. Rollback remains: remove the env var.
+- §3 YEARLY CHECKOUT: server-side verified (yearly Operations checkout session creates, Stripe
+  accepts). Visual eyeball of the Stripe page still on founder (automation blocked on stripe.com).
+- ALSO (2026-06-12 bug wave): AI cap unlatched (`Ai__OpenAI__MonthlyTokenLimitPerOrg=5000000`
+  both services) + honest cap error (`0d13569`); G8 FE bug-wave fixes live (`024dcb5`);
+  13/13 founder PDFs parse. Plan-aware cap tiers + onboarding overhaul in flight.
+
 ## 1. G8 session (the redesign sign-off) — ~15 min
 1. Open any order with exceptions on https://proculink.eu → lands in **Triage** view.
 2. Work it for real: `A` accept suggestion, `E` manual entry, `S` skip, watch auto-advance,
