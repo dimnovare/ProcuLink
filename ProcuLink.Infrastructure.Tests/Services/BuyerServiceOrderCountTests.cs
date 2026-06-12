@@ -1,4 +1,3 @@
-using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
@@ -9,13 +8,13 @@ namespace ProcuLink.Infrastructure.Tests.Services;
 
 /// <summary>
 /// Verifies that <see cref="BuyerService.ListAsync"/> returns a real
-/// <c>OrderCount</c> (and <c>LastOrderAge</c>) derived from
-/// <see cref="PurchaseOrderEntity.CanonicalJson"/> rather than a hard-coded 0.
+/// <c>OrderCount</c> (and <c>LastOrderAge</c>) derived from the denormalised
+/// <see cref="PurchaseOrderEntity.BuyerName"/> column rather than a hard-coded 0.
 ///
-/// Correlation key: <c>Buyer.Name == CanonicalJson["buyerName"]</c>.
-/// The buyer name is written into canonical JSON by <c>OrderService</c> after
-/// parsing.  Because <c>purchase_orders</c> has no dedicated <c>buyer_name</c>
-/// column, the count is derived in memory — no schema change is needed.
+/// Correlation key: <c>Buyer.Name == PurchaseOrderEntity.BuyerName</c> (case-insensitive).
+/// The column is populated at parse time (<c>OrderIngestionService</c>) and indexed
+/// via <c>IX_purchase_orders_org_id_buyer_name</c>, so the rollup aggregates in SQL
+/// without loading CanonicalJson blobs.
 /// </summary>
 public class BuyerServiceOrderCountTests
 {
@@ -38,10 +37,8 @@ public class BuyerServiceOrderCountTests
             Status     = "ready",
             CreatedAt  = DateTime.UtcNow,
             UpdatedAt  = DateTime.UtcNow,
-            // Mirror the JSON layout that OrderService writes: camelCase "buyerName".
-            CanonicalJson = buyerName is null
-                ? null
-                : JsonDocument.Parse($"{{\"buyerName\":\"{buyerName}\"}}"),
+            // Mirror the ingestion write path: the denormalised buyer_name column.
+            BuyerName  = buyerName,
         };
 
     // ── tests ──────────────────────────────────────────────────────────────────
@@ -53,7 +50,7 @@ public class BuyerServiceOrderCountTests
         var orgId      = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
 
-        // Seed one buyer record and two parsed orders whose canonical JSON names that buyer.
+        // Seed one buyer record and two parsed orders whose buyer_name column names that buyer.
         db.Buyers.Add(new Buyer
         {
             Id        = Guid.NewGuid(),
@@ -147,9 +144,9 @@ public class BuyerServiceOrderCountTests
             CreatedAt = DateTime.UtcNow,
         });
 
-        // Order with no canonical JSON (still in pending_parse state).
+        // Order with no buyer name (still in pending_parse state).
         db.PurchaseOrders.Add(MakeOrder(orgId, supplierId, buyerName: null));
-        // Order where buyerName is set to a different buyer — should not count for "Visible Buyer".
+        // Order where buyer name is a different buyer — should not count for "Visible Buyer".
         db.PurchaseOrders.Add(MakeOrder(orgId, supplierId, buyerName: "Other Buyer"));
         await db.SaveChangesAsync();
 
@@ -161,9 +158,11 @@ public class BuyerServiceOrderCountTests
     }
 
     [Fact]
-    public async Task ListAsync_SupportsPascalCaseBuyerNameKey()
+    public async Task ListAsync_MatchesBuyerNameCaseInsensitively()
     {
-        // Older parsers write "BuyerName" (PascalCase) into canonical JSON.
+        // Buyer↔order name matching has always been OrdinalIgnoreCase; orders whose
+        // buyer_name differs from Buyer.Name only by case must still be counted and
+        // merged into a single rollup.
         await using var db = NewDb();
         var orgId      = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
@@ -177,25 +176,13 @@ public class BuyerServiceOrderCountTests
             CreatedAt = DateTime.UtcNow,
         });
 
-        // Use PascalCase key.
-        db.PurchaseOrders.Add(new PurchaseOrderEntity
-        {
-            Id            = Guid.NewGuid(),
-            OrgId         = orgId,
-            SupplierId    = supplierId,
-            PoNumber      = "PO-LEGACY",
-            OrderDate     = DateOnly.FromDateTime(DateTime.UtcNow),
-            Currency      = "EUR",
-            Status        = "ready",
-            CreatedAt     = DateTime.UtcNow,
-            UpdatedAt     = DateTime.UtcNow,
-            CanonicalJson = JsonDocument.Parse("{\"BuyerName\":\"Legacy Buyer\"}"),
-        });
+        db.PurchaseOrders.Add(MakeOrder(orgId, supplierId, buyerName: "LEGACY BUYER"));
+        db.PurchaseOrders.Add(MakeOrder(orgId, supplierId, buyerName: "legacy buyer"));
         await db.SaveChangesAsync();
 
         var svc = new BuyerService(db);
         var results = await svc.ListAsync(orgId, default);
 
-        results[0].OrderCount.Should().Be(1, "PascalCase BuyerName key must also be matched");
+        results[0].OrderCount.Should().Be(2, "buyer name matching is case-insensitive");
     }
 }
