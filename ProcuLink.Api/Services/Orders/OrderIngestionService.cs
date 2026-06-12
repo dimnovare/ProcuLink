@@ -540,6 +540,9 @@ internal sealed class OrderIngestionService
             var poMapping = ResolveSnapshotPoMapping(effective, orderId)
                             ?? await _poMappingService.GetAsync(organisationId, entity.SupplierId, ct);
 
+            if (IsEmptyTemplate(poMapping))
+                poMapping = null;
+
             // Validate extension when no mapping template is available (fast-fail before R2 download already done)
             if (poMapping is null || extension != ".csv")
             {
@@ -769,6 +772,15 @@ internal sealed class OrderIngestionService
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// An EMPTY template (no header rules AND no line rules) can never produce a line with
+    /// content — template-parsing under it silently blanks every field of every CSV upload
+    /// for that supplier. Treated as "no mapping" so the generic CSV parser (header aliases)
+    /// takes over instead.
+    /// </summary>
+    internal static bool IsEmptyTemplate(PoMappingConfig? poMapping) =>
+        poMapping is not null && poMapping.Header.Count == 0 && poMapping.Lines.Count == 0;
 
     /// <summary>
     /// Routes a PDF to the LLM structured extractor when one is available and it
