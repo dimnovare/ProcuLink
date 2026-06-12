@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Headers;
 using Hangfire;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -152,6 +154,7 @@ public sealed class ProgramHardeningTests : IClassFixture<HardeningTestFactory>
     [InlineData("ai")]
     [InlineData("signed-url")]
     [InlineData("webhook")]
+    [InlineData("support")]
     public void RateLimiter_NamedPolicy_IsRegistered(string policyName)
     {
         var options = _factory.Services
@@ -181,6 +184,31 @@ public sealed class ProgramHardeningTests : IClassFixture<HardeningTestFactory>
             .GetRequiredService<IOptions<RateLimiterOptions>>().Value;
 
         Assert.Equal(StatusCodes.Status429TooManyRequests, options.RejectionStatusCode);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Audit item 10: forwarded-headers processing behind the Railway edge.
+    // Without it every external caller shares the proxy IP, collapsing all
+    // IP-partitioned rate-limit buckets into one. Config smoke: XFF + XFP are
+    // processed, ForwardLimit=1 (only the edge-appended right-most entry is
+    // honoured), and the loopback-only KnownNetworks/KnownProxies defaults are
+    // cleared (they would make the middleware a silent no-op behind Railway —
+    // the trust decision is documented at the registration in Program.cs).
+    // ────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ForwardedHeaders_AreConfigured_ForRailwayEdge()
+    {
+        var options = _factory.Services
+            .GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value;
+
+        Assert.True(options.ForwardedHeaders.HasFlag(ForwardedHeaders.XForwardedFor),
+            "X-Forwarded-For must be processed so rate-limit partitions see the real client IP.");
+        Assert.True(options.ForwardedHeaders.HasFlag(ForwardedHeaders.XForwardedProto),
+            "X-Forwarded-Proto must be processed so Request.Scheme is honest behind TLS termination.");
+        Assert.Equal(1, options.ForwardLimit);
+        Assert.Empty(options.KnownNetworks);
+        Assert.Empty(options.KnownProxies);
     }
 
     // ────────────────────────────────────────────────────────────────────────

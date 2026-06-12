@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -198,6 +199,36 @@ builder.Services.AddAuthorization();
 // Consumed by [AdminOnly] on AdminController. Fails closed when both are unset.
 builder.Services.AddSingleton<ProcuLink.Api.Auth.AdminAllowlist>();
 
+// ── Forwarded headers — restore the real client IP behind the Railway edge ─
+// Railway's edge proxy terminates TLS and forwards plain HTTP to this
+// container, so without forwarded-header processing EVERY external caller
+// shares the proxy's connection IP. That collapses all IP-partitioned
+// rate-limit buckets below (webhook 120/min, global 300/min) into one shared
+// partition — a single abuser exhausts the bucket for every webhook sender —
+// and guts the IP axis of TenantResolutionMiddleware's trial-farming throttle.
+//
+// TRUST DECISION (documented per the 2026-06-12 audit, item 10): Railway does
+// not publish a pinnable edge IP range, so KnownNetworks/KnownProxies cannot
+// be populated — we CLEAR both (the loopback-only defaults would otherwise
+// make the middleware a silent no-op behind Railway) and compensate with
+// ForwardLimit = 1: only the RIGHT-MOST X-Forwarded-For entry — the one the
+// Railway edge itself appends with the real client address — is consumed.
+// Railway always terminates in front of this container in production, so a
+// caller who sends a forged X-Forwarded-For header only pushes their fake
+// values further left where they are never read. Even in the hypothetical
+// case of a direct-to-container connection, a spoofed header merely lets the
+// caller pick a DIFFERENT rate-limit partition for themselves — it cannot
+// escape limiting (every partition stays bounded by the same window), cannot
+// impersonate an authenticated caller (partitioning prefers the Clerk `sub`
+// claim), and no auth, routing, or tenancy decision reads the client IP.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = 1;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
 // ── Rate limiting (P2-4) ───────────────────────────────────────────────────
 // Named per-user fixed-window policies for expensive / cost-bearing / abusable
 // endpoints, PLUS a global fallback limiter so every endpoint has a backstop.
@@ -249,6 +280,11 @@ builder.Services.AddRateLimiter(options =>
     // Higher ceiling (legitimate integrations are chatty) but still bounded so a
     // single source can't flood the HMAC-verify / parse path.
     options.AddPolicy("webhook", ctx => Window(ctx, "webhook", permit: 120, seconds: 60));
+
+    // The anonymous support contact form feeds an outbound email sender, so it
+    // is a spam/amplification + SMTP-cost vector. Nobody legitimately files
+    // more than a handful of tickets a minute — keep this tight.
+    options.AddPolicy("support", ctx => Window(ctx, "support", permit: 5, seconds: 60));
 
     // Global backstop: every request (including ones with no named policy) is
     // bounded per partition. Generous so it never bites normal usage, but it
@@ -668,6 +704,13 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IFieldMappingSuggeste
 // ──────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 // ──────────────────────────────────────────────────────────────────────────
+
+// ── Forwarded headers — FIRST middleware in the pipeline ─────────────────
+// Must run before anything that reads Connection.RemoteIpAddress (the rate
+// limiter's partition key, TenantResolutionMiddleware's trial-farming
+// throttle) or Request.Scheme. Trust decision + ForwardLimit=1 rationale are
+// documented at the ForwardedHeadersOptions registration above.
+app.UseForwardedHeaders();
 
 // ── Startup configuration validation ─────────────────────────────────────
 // In Production any missing required key throws and lists every gap in one

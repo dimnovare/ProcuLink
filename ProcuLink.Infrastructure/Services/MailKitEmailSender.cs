@@ -47,7 +47,7 @@ public sealed class MailKitEmailSender : IEmailSender
             var message = new MimeMessage();
             message.From.Add(MailboxAddress.Parse(from));
             message.To.Add(MailboxAddress.Parse(to));
-            message.Subject = subject;
+            message.Subject = SanitizeHeaderValue(subject);
             message.Body    = new TextPart("plain") { Text = body };
 
             using var client = new SmtpClient();
@@ -63,5 +63,25 @@ public sealed class MailKitEmailSender : IEmailSender
         {
             _log.LogError(ex, "MailKitEmailSender failed to send email to {To}", to);
         }
+    }
+
+    /// <summary>
+    /// Strips CR/LF from a value destined for a MIME header (e.g. Subject).
+    /// User-controlled input reaches the subject line via the anonymous support
+    /// contact form (<c>SupportContactService</c> builds it from the request's
+    /// Category + Subject), so without this a crafted value containing
+    /// <c>\r\n</c> could attempt to smuggle additional headers into the
+    /// outbound message. Each CR/LF is replaced with a space (defence in depth
+    /// on top of MimeKit's own header encoding). Internal for unit testing via
+    /// InternalsVisibleTo.
+    /// </summary>
+    internal static string SanitizeHeaderValue(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+
+        return value.IndexOfAny(['\r', '\n']) < 0
+            ? value
+            : value.Replace('\r', ' ').Replace('\n', ' ');
     }
 }
