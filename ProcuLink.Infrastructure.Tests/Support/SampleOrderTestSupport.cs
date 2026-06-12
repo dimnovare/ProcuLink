@@ -95,7 +95,6 @@ internal sealed class SampleOrderTestDbContext : ProcuLinkDbContext
         modelBuilder.Ignore<Membership>();
         modelBuilder.Ignore<SupplierProfileEntity>();
         modelBuilder.Ignore<PurchaseOrderLineEntity>();
-        modelBuilder.Ignore<ItemMapping>();
         modelBuilder.Ignore<OutboundArtifact>();
         modelBuilder.Ignore<DeliveryAttempt>();
         modelBuilder.Ignore<AuditEvent>();
@@ -142,6 +141,23 @@ internal sealed class SampleOrderTestDbContext : ProcuLinkDbContext
             b.Ignore(x => x.ItemMappings);
             b.Ignore(x => x.PoMappings);
             b.Ignore(x => x.DeliveryConfigs);
+            b.Ignore(x => x.Products);
+        });
+
+        // Seeded by SampleOrderService (catalog + 2-of-3 mappings) — mapped standalone,
+        // navigations ignored, same style as the other entities in this trimmed context.
+        modelBuilder.Entity<ItemMapping>(b =>
+        {
+            b.HasKey(x => x.Id);
+            b.Ignore(x => x.Organisation);
+            b.Ignore(x => x.Supplier);
+        });
+
+        modelBuilder.Entity<SupplierProduct>(b =>
+        {
+            b.HasKey(x => x.Id);
+            b.Ignore(x => x.Organisation);
+            b.Ignore(x => x.Supplier);
         });
 
         modelBuilder.Entity<PurchaseOrderEntity>(b =>
