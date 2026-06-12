@@ -28,6 +28,7 @@ namespace ProcuLink.Api.Tests.Integration;
 /// Docker-gated (mirrors <see cref="ProvenancePersistencePostgresTests"/>); skips
 /// where Docker is absent instead of failing the suite.
 /// </summary>
+[Collection("postgres-container")]
 public sealed class PublishedRevisionImmutabilityPostgresTests : IAsyncLifetime
 {
     private PostgreSqlContainer? _pg;

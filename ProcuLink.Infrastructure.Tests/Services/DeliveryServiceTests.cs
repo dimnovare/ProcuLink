@@ -148,6 +148,32 @@ public class DeliveryServiceTests
     }
 
     [Fact]
+    public async Task DispatchArtifactAsync_StorageDownloadThrows_BecomesFailedResultNotThrow()
+    {
+        // A thrown storage error (e.g. an R2 clock-skew signing failure) must surface as a
+        // FAILED DeliveryResult with a persisted attempt — never as an unhandled exception.
+        // DeliverOrderJob runs with AutomaticRetry(Attempts = 0), so a throw here would
+        // strand the order in 'delivering' with no attempt row and no retry scheduling.
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+        await db.SaveChangesAsync();
+        var dispatcher = new FakeDispatcher(new DeliveryResult(true, null, 200));
+        var service = CreateService(db, dispatcher, encryption, new ThrowingFileStorage());
+
+        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+        result.Success.Should().BeFalse();
+        result.ErrorMessage.Should().Contain("download failed");
+        dispatcher.Calls.Should().Be(0, "nothing was downloaded, so nothing may be dispatched");
+        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.DeliveryFailed);
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.Status.Should().Be("failed");
+        attempt.ErrorMessage.Should().Contain("download failed");
+    }
+
+    [Fact]
     public async Task TestFireAsync_WritesAttemptWithNullOrderId()
     {
         await using var db = CreateDb();
@@ -170,10 +196,11 @@ public class DeliveryServiceTests
     private static DeliveryService CreateService(
         ProcuLinkDbContext db,
         IDeliveryDispatcher dispatcher,
-        DeliveryEncryptionService? encryption = null) =>
+        DeliveryEncryptionService? encryption = null,
+        IFileStorageService? storage = null) =>
         new(
             db,
-            new FakeFileStorage(),
+            storage ?? new FakeFileStorage(),
             encryption ?? CreateEncryption(),
             new[] { dispatcher },
             new NoOpIntegrationTriggerService(),
@@ -244,6 +271,22 @@ public class DeliveryServiceTests
             Task.FromResult<Stream>(new MemoryStream("order,line\r\n1,ok\r\n"u8.ToArray()));
 
         public Task DeleteAsync(string key, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    /// <summary>Simulates a transient storage failure (e.g. R2 SignatureDoesNotMatch).</summary>
+    private sealed class ThrowingFileStorage : IFileStorageService
+    {
+        public Task<string> UploadAsync(Stream content, string key, string contentType, CancellationToken ct) =>
+            throw new InvalidOperationException("SignatureDoesNotMatch");
+
+        public Task<string> GetSignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct) =>
+            throw new InvalidOperationException("SignatureDoesNotMatch");
+
+        public Task<Stream> DownloadAsync(string key, CancellationToken ct) =>
+            throw new InvalidOperationException("SignatureDoesNotMatch");
+
+        public Task DeleteAsync(string key, CancellationToken ct) =>
+            throw new InvalidOperationException("SignatureDoesNotMatch");
     }
 
     private sealed class DeliveryServiceTestDbContext : ProcuLinkDbContext

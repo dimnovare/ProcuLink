@@ -135,11 +135,24 @@ public sealed class DeliveryService : IDeliveryService
             orderId, artifact.FileKey, config.Protocol);
 
         byte[] content;
-        await using (var stream = await _fileStorage.DownloadAsync(artifact.FileKey, ct))
+        try
         {
+            await using var stream = await _fileStorage.DownloadAsync(artifact.FileKey, ct);
             using var buffer = new MemoryStream();
             await stream.CopyToAsync(buffer, ct);
             content = buffer.ToArray();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A thrown storage error (e.g. an R2 clock-skew signing failure) must become a
+            // FAILED DeliveryResult, not an unhandled job exception: the persisted failed
+            // attempt routes the order through the single RetryDeliveryJob backoff queue,
+            // whereas a throw would leave it stranded in 'delivering' with no attempt row.
+            _logger.LogWarning(ex,
+                "Delivery {OrderId}: artifact download failed ({FileKey}).", orderId, artifact.FileKey);
+            return await FailBeforeDispatchAsync(
+                order, artifact, config,
+                $"Artifact download failed: {ex.Message}", reconcileFailedAttempt, ct);
         }
 
         _logger.LogInformation(
@@ -150,13 +163,25 @@ public sealed class DeliveryService : IDeliveryService
         // comparing this to the artifact's stored ArtifactSha256 detects corruption in transit/storage.
         var dispatchedPayloadSha = ProvenanceHash.TrySha256Hex(content);
 
-        var result = await dispatcher.DispatchAsync(
-            content,
-            BuildFileName(order, artifact),
-            GetContentType(artifact.Format),
-            config,
-            credentials,
-            ct);
+        DeliveryResult result;
+        try
+        {
+            result = await dispatcher.DispatchAsync(
+                content,
+                BuildFileName(order, artifact),
+                GetContentType(artifact.Format),
+                config,
+                credentials,
+                ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Dispatchers are hardened to return failed results, but a throw here must
+            // still land in the normal attempt/retry flow rather than escape the job.
+            _logger.LogWarning(ex,
+                "Delivery {OrderId}: dispatcher threw ({Protocol}).", orderId, config.Protocol);
+            result = new DeliveryResult(false, $"Delivery dispatch failed: {ex.Message}");
+        }
 
         _logger.LogInformation(
             "Delivery {OrderId}: dispatch returned success={Success} code={Code}",

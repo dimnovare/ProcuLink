@@ -10,10 +10,10 @@ namespace ProcuLink.Api.Jobs;
 /// the supplier delivery workflow. The workflow owns delivery state transitions.
 ///
 /// <para>
-/// On a transient delivery failure (5xx / network — <c>DispatchArtifactAsync</c> returns a
-/// failed result without throwing, so Hangfire's own AutomaticRetry does not fire) this job
-/// hands the order to the automatic retry queue (<see cref="RetryDeliveryJob"/>) with the first
-/// exponential-backoff delay. A 4xx supplier rejection is terminal and is left for operator review.
+/// On a transient delivery failure (5xx / network / thrown storage error — <c>DispatchArtifactAsync</c>
+/// always returns a failed result without throwing) this job hands the order to the automatic
+/// retry queue (<see cref="RetryDeliveryJob"/>) with the first exponential-backoff delay.
+/// A 4xx supplier rejection is terminal and is left for operator review.
 /// </para>
 /// </summary>
 public class DeliverOrderJob
@@ -38,8 +38,13 @@ public class DeliverOrderJob
         _logger = logger;
     }
 
+    // No Hangfire AutomaticRetry (mirrors RetryDeliveryJob): DeliveryService turns every
+    // failure — including a thrown storage download error — into a failed DeliveryResult,
+    // and the single retry authority is the RetryDeliveryJob backoff queue scheduled below.
+    // A Hangfire-level retry would re-dispatch on top of that queue (double-delivery risk)
+    // and double-count attempts past the dead-letter cap.
     [Queue("critical")]
-    [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 30, 120, 600 })]
+    [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(
         Guid orderId,
         Guid organisationId,

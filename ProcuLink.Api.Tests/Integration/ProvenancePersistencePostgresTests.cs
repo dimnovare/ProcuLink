@@ -14,6 +14,7 @@ namespace ProcuLink.Api.Tests.Integration;
 /// silent-drop lesson — an Ignored property would silently vanish here).
 /// Docker-gated; skips where Docker is absent.
 /// </summary>
+[Collection("postgres-container")]
 public sealed class ProvenancePersistencePostgresTests : IAsyncLifetime
 {
     private PostgreSqlContainer? _pg;

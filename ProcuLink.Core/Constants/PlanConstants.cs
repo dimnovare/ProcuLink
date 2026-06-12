@@ -172,6 +172,8 @@ public static class PlanConstants
     ///   if used ≤ topTier.Included:
     ///       capEur            = min flat price over tiers whose Included ≥ used
     ///       effectiveTotalEur = min(F_T + rawEur, capEur)      // never beat the next flat tier
+    ///   else if limit ≥ topTier.Included:                       // admin headroom above the top tier:
+    ///       effectiveTotalEur = F_T + (used − limit) × r        // meter only beyond the granted limit
     ///   else:                                                   // above the TOP self-serve tier:
     ///       effectiveTotalEur = topTier.FlatEur + (used − topTier.Included) × r
     ///   effectiveOverageEur   = max(0, effectiveTotalEur − F_T)
@@ -213,6 +215,14 @@ public static class PlanConstants
                 .Where(t => t.Included >= ordersUsed)
                 .Min(t => t.FlatEur);
             effectiveTotalEur = Math.Min(flatEur + rawEur, capEur);
+        }
+        else if (effectiveLimit >= topTier.Included)
+        {
+            // Admin-granted headroom at/above the top tier's inclusion: the org keeps its
+            // plan's flat price and meters ONLY beyond its real (overridden) limit — a
+            // raised limit must only ever shrink the overage, never re-meter the granted
+            // orders against the smaller published inclusion.
+            effectiveTotalEur = flatEur + (ordersUsed - effectiveLimit) * rate;
         }
         else
         {

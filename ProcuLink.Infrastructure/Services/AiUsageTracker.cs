@@ -72,6 +72,61 @@ public sealed class AiUsageTracker : IAiUsageTracker
         var (year, month) = CurrentYearMonth();
         var now = _clock();
 
+        if (!_db.Database.IsRelational())
+        {
+            // EF InMemory test provider cannot translate ExecuteUpdateAsync — emulate the
+            // increment through the change tracker (tests are single-threaded there).
+            await IncrementViaTrackerAsync(organisationId, year, month, tokens, now, ct);
+            return;
+        }
+
+        // Atomic RELATIVE increment (TokensUsed = TokensUsed + tokens) — a read-modify-write
+        // absolute UPDATE loses concurrent increments from parallel Hangfire workers,
+        // silently under-counting the billing/quota meter.
+        var updated = await _db.AiUsageMonthly
+            .Where(u => u.OrgId == organisationId && u.Year == year && u.Month == month)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(u => u.TokensUsed, u => u.TokensUsed + tokens)
+                .SetProperty(u => u.UpdatedAt, now), ct);
+        if (updated > 0) return;
+
+        // First usage this month — insert the row.
+        _db.AiUsageMonthly.Add(new AiUsageMonthly
+        {
+            OrgId      = organisationId,
+            Year       = year,
+            Month      = month,
+            TokensUsed = tokens,
+            UpdatedAt  = now,
+        });
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // A concurrent worker won the first-insert race (Postgres 23505 on the
+            // (OrgId, Year, Month) key). Detach the stale Added entity and fall back to
+            // the atomic update against the winner's row (mirrors
+            // SchemaFingerprintService.RecoverFromConcurrentInsertAsync).
+            var stale = _db.ChangeTracker.Entries<AiUsageMonthly>()
+                .FirstOrDefault(e => e.State == EntityState.Added);
+            if (stale is not null) stale.State = EntityState.Detached;
+
+            var recovered = await _db.AiUsageMonthly
+                .Where(u => u.OrgId == organisationId && u.Year == year && u.Month == month)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(u => u.TokensUsed, u => u.TokensUsed + tokens)
+                    .SetProperty(u => u.UpdatedAt, now), ct);
+            if (recovered == 0) throw; // not the insert race — surface the original failure
+        }
+    }
+
+    /// <summary>Tracker-based increment for the non-relational (InMemory) test provider.</summary>
+    private async Task IncrementViaTrackerAsync(
+        Guid organisationId, int year, int month, long tokens, DateTimeOffset now, CancellationToken ct)
+    {
         var row = await _db.AiUsageMonthly.FirstOrDefaultAsync(
             u => u.OrgId == organisationId && u.Year == year && u.Month == month,
             ct);

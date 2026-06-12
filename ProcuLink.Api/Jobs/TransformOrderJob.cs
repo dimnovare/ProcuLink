@@ -9,7 +9,10 @@ namespace ProcuLink.Api.Jobs;
 
 /// <summary>
 /// Hangfire background job: transforms a resolved order to the requested output format
-/// and uploads the artifact to storage.  Idempotent via status check in OrderService.
+/// and uploads the artifact to storage. Idempotent via the atomic ready/transforming
+/// claim inside <c>OrderTransformService.TransformAsync</c>: a duplicated or retried
+/// job on an already-transformed order gets a <see cref="TransformResponse.Skipped"/>
+/// response and must NOT re-enqueue delivery (that would double-send the PO).
 /// </summary>
 public class TransformOrderJob
 {
@@ -60,6 +63,17 @@ public class TransformOrderJob
                 "TransformOrderJob failed for order {OrderId}: {Error}",
                 orderId, result.Error);
             throw new InvalidOperationException($"Transform failed: {result.Error}");
+        }
+
+        if (result.Value!.Skipped)
+        {
+            // The transform was already done (or is running elsewhere) — the run that
+            // produced the artifact also enqueued its delivery, so doing it again here
+            // would dispatch the same PO to the supplier twice.
+            _logger.LogInformation(
+                "TransformOrderJob skipped for order {OrderId}: already in flight or transformed (artifact {ArtifactId}); not enqueueing delivery.",
+                orderId, result.Value.ArtifactId);
+            return;
         }
 
         _logger.LogInformation(
