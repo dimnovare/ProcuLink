@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using ProcuLink.Core.Services;
 
 namespace ProcuLink.Api.Controllers;
@@ -20,11 +21,15 @@ public sealed class SupportController : ControllerBase
     /// <summary>
     /// Accepts a support contact form submission from authenticated or anonymous callers.
     /// Org-scoped submissions emit a <c>support_form_submitted</c> analytics event.
+    /// Anonymous + feeds an outbound email sender, so the tight "support" rate-limit
+    /// policy (5/60s per source) caps the spam/amplification surface.
     /// </summary>
     [AllowAnonymous]
+    [EnableRateLimiting("support")]
     [HttpPost("contact")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> Contact([FromBody] SupportContactRequest req, CancellationToken ct)
     {
         if (req is null)

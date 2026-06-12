@@ -42,6 +42,8 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
     // Signed-URL / file-download surfaces → "signed-url" (60/min).
     [InlineData(typeof(OrdersController), nameof(OrdersController.Download), "signed-url")]
     [InlineData(typeof(InvoiceController), nameof(InvoiceController.Download), "signed-url")]
+    // Anonymous support form feeds an outbound email sender → "support" (5/min).
+    [InlineData(typeof(SupportController), nameof(SupportController.Contact), "support")]
     public void Action_HasExpectedRateLimitPolicy(Type controller, string actionName, string expectedPolicy)
     {
         var method = controller.GetMethod(actionName, BindingFlags.Public | BindingFlags.Instance)
@@ -102,5 +104,38 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
 
         Assert.True(sawTooManyRequests,
             "The 'transform' rate-limit policy must reject with 429 once its per-window limit is exceeded.");
+    }
+
+    // ── Live enforcement: the "support" policy actually returns 429 ───────────
+    //
+    // The support contact form is [AllowAnonymous] and feeds an outbound email
+    // sender, so its 5/60s window is the abuse cap on that surface. In the test
+    // host no Smtp:Host is configured → ConsoleEmailSender (log-only), so the
+    // first requests 200 cheaply; the policy must reject within 12 attempts.
+    [Fact]
+    public async Task SupportContact_Returns429_AfterExceedingPolicyLimit()
+    {
+        var client = _factory.CreateClient();
+
+        const int requests = 12; // comfortably above the 5/min "support" cap
+        var sawTooManyRequests = false;
+
+        for (var i = 0; i < requests; i++)
+        {
+            var resp = await client.PostAsync(
+                "/api/support/contact",
+                new StringContent(
+                    """{"category":"question","subject":"rate limit probe","message":"probe"}""",
+                    System.Text.Encoding.UTF8, "application/json"));
+
+            if (resp.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                sawTooManyRequests = true;
+                break;
+            }
+        }
+
+        Assert.True(sawTooManyRequests,
+            "The 'support' rate-limit policy must reject with 429 once its 5/60s window is exceeded.");
     }
 }
