@@ -12,6 +12,7 @@ using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Worker.Jobs;
 
@@ -34,6 +35,7 @@ public sealed class EmailPollOrgJob
     private readonly IBackgroundJobClient _jobs;
     private readonly IBillingService _billing;
     private readonly IEmailSettingsService _emailSettings;
+    private readonly OutboundRequestGuard _guard;
     private readonly ILogger<EmailPollOrgJob> _logger;
 
     public EmailPollOrgJob(
@@ -43,6 +45,7 @@ public sealed class EmailPollOrgJob
         IBackgroundJobClient jobs,
         IBillingService billing,
         IEmailSettingsService emailSettings,
+        OutboundRequestGuard guard,
         ILogger<EmailPollOrgJob> logger)
     {
         _db = db;
@@ -51,6 +54,7 @@ public sealed class EmailPollOrgJob
         _jobs = jobs;
         _billing = billing;
         _emailSettings = emailSettings;
+        _guard = guard;
         _logger = logger;
     }
 
@@ -105,6 +109,20 @@ public sealed class EmailPollOrgJob
         if (password is null)
         {
             _logger.LogWarning("EmailPollOrgJob: IMAP password could not be decrypted for org {OrgId}.", orgId);
+            return;
+        }
+
+        // ── SSRF guard IMMEDIATELY before connect (SEC-1) ────────────────────
+        // The IMAP host is tenant-configured; without this an org could point it at an
+        // internal/metadata host. Same shared guard the delivery dispatchers + the SFTP/S3
+        // pollers use. Residual L1 (DNS-rebind TOCTOU between this resolve and MailKit's own
+        // resolve at connect) is the documented accepted risk shared with the other pull paths.
+        var guardResult = await _guard.ValidateHostAsync(config.Host, config.Port, ct);
+        if (!guardResult.Allowed)
+        {
+            _logger.LogWarning(
+                "EmailPollOrgJob: org {OrgId} — IMAP host blocked by SSRF guard, skipping poll. {Reason}",
+                orgId, guardResult.Reason);
             return;
         }
 

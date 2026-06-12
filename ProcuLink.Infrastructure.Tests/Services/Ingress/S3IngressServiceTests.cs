@@ -12,6 +12,7 @@ using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Ingress;
 
@@ -189,6 +190,69 @@ public class S3IngressServiceTests
             Times.Never);
     }
 
+    // ── SEC-1: SSRF — private custom ServiceUrl blocked before any S3 call ───
+
+    [Fact]
+    public async Task PrivateServiceUrl_IsBlockedBySsrfGuard_NoS3CallsMade()
+    {
+        await using var db = CreateDb();
+        // Custom ServiceUrl pointing at a private RFC-1918 host — the strict guard blocks it.
+        var orgId = await SeedConfigAsync(
+            db, isEnabled: true, bucket: "my-bucket", serviceUrl: "http://10.0.0.5:9000");
+
+        // Strict s3 mock: ANY S3 call would fail the test, proving the guard short-circuits
+        // BEFORE the client is built / used.
+        var s3 = new Mock<IAmazonS3>(MockBehavior.Strict);
+        var orders = new Mock<IOrderService>(MockBehavior.Strict);
+
+        var svc = MakeService(db, s3.Object, orders.Object, StrictGuard());
+
+        var count = await svc.PollAsync(orgId, CancellationToken.None);
+
+        count.Should().Be(0, "a poll with a private/internal custom endpoint must be refused");
+        s3.Verify(c => c.ListObjectsV2Async(It.IsAny<ListObjectsV2Request>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ── SEC-1 / H2: bounded read aborts when the server under-reports Size ────
+
+    [Fact]
+    public async Task UnderReportedSize_IsAbortedMidCopy_CreateStubNotCalled()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedConfigAsync(db, isEnabled: true, bucket: "my-bucket");
+
+        // ListObjectsV2 reports a tiny Size (passes the advisory pre-check), but the actual
+        // GetObject stream yields cap + 1 MB — the bounded read must abort mid-copy.
+        var s3 = new Mock<IAmazonS3>(MockBehavior.Loose);
+        s3.Setup(c => c.ListObjectsV2Async(It.IsAny<ListObjectsV2Request>(), It.IsAny<CancellationToken>()))
+          .ReturnsAsync(new ListObjectsV2Response
+          {
+              S3Objects = new List<S3Object>
+              {
+                  new() { Key = "sneaky.csv", ETag = "\"sneaky\"", Size = 10 },
+              },
+              IsTruncated = false,
+          });
+        s3.Setup(c => c.GetObjectAsync("my-bucket", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+          .ReturnsAsync(() => new GetObjectResponse
+          {
+              ResponseStream = new EndlessForwardStream(IngressLimits.MaxFileBytes + 1_048_576),
+          });
+
+        var orders = new Mock<IOrderService>(MockBehavior.Strict);
+
+        var svc = MakeService(db, s3.Object, orders.Object);
+
+        var count = await svc.PollAsync(orgId, CancellationToken.None);
+
+        count.Should().Be(0, "an object exceeding the cap (even with an under-reported Size) must be skipped");
+        orders.Verify(o =>
+            o.CreateStubAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
     // ── 5. Enabled config without supplier → skipped before S3 calls ────────
 
     [Fact]
@@ -319,6 +383,7 @@ public class S3IngressServiceTests
         var orders = new FakeOrderService();
         var svc = new S3IngressService(
             db, orders, encryption, new AmazonS3ClientFactory(),
+            AllowPrivateGuard(),
             NullLogger<S3IngressService>.Instance);
 
         var imported = await svc.PollAsync(orgId, default);
@@ -335,7 +400,8 @@ public class S3IngressServiceTests
     private static S3IngressService MakeService(
         ProcuLinkDbContext db,
         IAmazonS3 s3,
-        IOrderService? orders = null)
+        IOrderService? orders = null,
+        OutboundRequestGuard? guard = null)
     {
         var encryption = MakeEncryption();
         return new S3IngressService(
@@ -343,8 +409,28 @@ public class S3IngressServiceTests
             orders ?? new FakeOrderService(),
             encryption,
             new FakeAmazonS3ClientFactory(s3),
+            // Default guard allows private targets so the existing tests (no custom
+            // ServiceUrl, or fixture endpoints) never hit a real DNS lookup. The SSRF test
+            // below supplies a strict (flag=false) guard plus a private ServiceUrl explicitly.
+            guard ?? AllowPrivateGuard(),
             NullLogger<S3IngressService>.Instance);
     }
+
+    /// <summary>Guard with AllowPrivateNetworkTargets=true — skips range validation (no DNS).</summary>
+    private static OutboundRequestGuard AllowPrivateGuard() =>
+        new(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                { ["Delivery:AllowPrivateNetworkTargets"] = "true" })
+                .Build(),
+            NullLogger<OutboundRequestGuard>.Instance);
+
+    /// <summary>Strict guard (flag=false) — enforces the SSRF network-range blocklist.</summary>
+    private static OutboundRequestGuard StrictGuard() =>
+        new(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                { ["Delivery:AllowPrivateNetworkTargets"] = "false" })
+                .Build(),
+            NullLogger<OutboundRequestGuard>.Instance);
 
     /// <summary>
     /// Test double for <see cref="IAmazonS3ClientFactory"/> that returns a
@@ -382,7 +468,8 @@ public class S3IngressServiceTests
         ProcuLinkDbContext db,
         bool isEnabled,
         string bucket = "test-bucket",
-        bool createDefaultSupplier = true)
+        bool createDefaultSupplier = true,
+        string? serviceUrl = null)
     {
         var encryption = MakeEncryption();
         var orgId = Guid.NewGuid();
@@ -407,6 +494,7 @@ public class S3IngressServiceTests
             BucketName       = bucket,
             KeyPrefix        = string.Empty,
             Region           = "eu-west-1",
+            ServiceUrl       = serviceUrl,
             AccessKeyId      = "AKIAFAKE",
             EncryptedSecretKey = encryption.Encrypt("fake-secret"),
             DefaultSupplierId = supplierId,
@@ -426,6 +514,35 @@ public class S3IngressServiceTests
                 .Options);
 
     // ── Doubles ──────────────────────────────────────────────────────────────
+
+    /// <summary>Forward-only read stream that produces <c>length</c> zero bytes; not seekable.</summary>
+    private sealed class EndlessForwardStream : Stream
+    {
+        private readonly long _length;
+        private long _produced;
+
+        public EndlessForwardStream(long length) => _length = length;
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var remaining = _length - _produced;
+            if (remaining <= 0) return 0;
+            var n = (int)Math.Min(count, remaining);
+            Array.Clear(buffer, offset, n);
+            _produced += n;
+            return n;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _produced; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 
     private sealed class FakeOrderService : IOrderService
     {

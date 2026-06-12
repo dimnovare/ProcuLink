@@ -7,6 +7,7 @@ using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Organisation;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -20,6 +21,7 @@ public sealed class SettingsController : ControllerBase
     private readonly IPullIngressSettingsService _pullIngress;
     private readonly IOrganisationSettingsService _orgSettings;
     private readonly IBillingService _billing;
+    private readonly OutboundRequestGuard _guard;
     private readonly ProcuLinkDbContext _db;
 
     public SettingsController(
@@ -28,6 +30,7 @@ public sealed class SettingsController : ControllerBase
         IPullIngressSettingsService pullIngress,
         IOrganisationSettingsService orgSettings,
         IBillingService billing,
+        OutboundRequestGuard guard,
         ProcuLinkDbContext db)
     {
         _tenant = tenant;
@@ -35,6 +38,7 @@ public sealed class SettingsController : ControllerBase
         _pullIngress = pullIngress;
         _orgSettings = orgSettings;
         _billing = billing;
+        _guard = guard;
         _db = db;
     }
 
@@ -96,6 +100,13 @@ public sealed class SettingsController : ControllerBase
                 (request.Password is null && current.HasPassword);
             if (!hasPasswordAfterUpdate)
                 return BadRequest(new { error = "IMAP password is required." });
+
+            // Save-time SSRF pre-check (SEC-1): reject an internal/metadata IMAP host up
+            // front so the operator gets a 400 now instead of a silently-skipped poll later.
+            // The poller re-checks at connect time regardless (the authoritative control).
+            var hostGuard = await _guard.ValidateHostAsync(request.Host, request.Port, ct);
+            if (!hostGuard.Allowed)
+                return BadRequest(new { error = "host_not_allowed" });
         }
 
         if (request.DefaultSupplierId is { } supplierId && supplierId != Guid.Empty)
@@ -143,6 +154,12 @@ public sealed class SettingsController : ControllerBase
             var hasPassword = !string.IsNullOrWhiteSpace(request.Password) || (request.Password is null && current.HasPassword);
             if (!hasPassword)
                 return BadRequest(new { error = "SFTP password is required." });
+
+            // Save-time SSRF pre-check (SEC-1): reject an internal/metadata SFTP host up
+            // front. The poller re-checks at connect time regardless (authoritative control).
+            var hostGuard = await _guard.ValidateHostAsync(request.Host, request.Port, ct);
+            if (!hostGuard.Allowed)
+                return BadRequest(new { error = "host_not_allowed" });
         }
 
         if (request.DefaultSupplierId is { } supplierId && supplierId != Guid.Empty &&
@@ -185,6 +202,17 @@ public sealed class SettingsController : ControllerBase
             var hasSecret = !string.IsNullOrWhiteSpace(request.SecretKey) || (request.SecretKey is null && current.HasSecretKey);
             if (!hasSecret)
                 return BadRequest(new { error = "Secret access key is required." });
+
+            // Save-time SSRF pre-check (SEC-1): only a custom ServiceUrl (R2/MinIO/arbitrary
+            // endpoint) is tenant-controlled and therefore an SSRF vector — the standard AWS
+            // endpoint (ServiceUrl null/empty) resolves to public AWS infra. The poller
+            // re-checks at connect time regardless (authoritative control).
+            if (!string.IsNullOrWhiteSpace(request.ServiceUrl))
+            {
+                var urlGuard = await _guard.ValidateAsync(request.ServiceUrl, ct);
+                if (!urlGuard.Allowed)
+                    return BadRequest(new { error = "host_not_allowed" });
+            }
         }
 
         if (request.DefaultSupplierId is { } supplierId && supplierId != Guid.Empty &&

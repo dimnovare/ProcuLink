@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Infrastructure.Services;
 
@@ -92,6 +93,86 @@ public class StartupConfigurationValidatorTests
             StartupConfigurationValidator.ApiRequiredKeys,
             StartupConfigurationValidator.OptionalKeys,
             "ProcuLink.Api");
+    }
+
+    // ── M5 (SEC-1): AllowPrivateNetworkTargets loud startup warning ──────────
+
+    [Fact]
+    public void Validate_FlagTrue_Development_LogsLoudError_DoesNotThrow()
+    {
+        var logger = new RecordingLogger();
+        var config = BuildConfigWith(ValidKey, allowPrivateNetworkTargets: true);
+
+        // Development: the existing hard-fail does not apply, but the loud M5 warning must fire.
+        StartupConfigurationValidator.Validate(
+            config, logger, "Development",
+            StartupConfigurationValidator.ApiRequiredKeys,
+            StartupConfigurationValidator.OptionalKeys,
+            "ProcuLink.Api");
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Error && e.Message.Contains("AllowPrivateNetworkTargets"));
+    }
+
+    [Fact]
+    public void Validate_FlagFalse_Development_DoesNotLogTheWarning()
+    {
+        var logger = new RecordingLogger();
+        var config = BuildConfigWith(ValidKey, allowPrivateNetworkTargets: false);
+
+        StartupConfigurationValidator.Validate(
+            config, logger, "Development",
+            StartupConfigurationValidator.ApiRequiredKeys,
+            StartupConfigurationValidator.OptionalKeys,
+            "ProcuLink.Api");
+
+        Assert.DoesNotContain(logger.Entries, e =>
+            e.Level == LogLevel.Error && e.Message.Contains("AllowPrivateNetworkTargets"));
+    }
+
+    [Fact]
+    public void Validate_FlagTrue_Production_StillThrows_AndLogsLoudErrorFirst()
+    {
+        var logger = new RecordingLogger();
+        var config = BuildConfigWith(ValidKey, allowPrivateNetworkTargets: true);
+
+        // The pre-existing Production hard-fail is intentionally LEFT INTACT by SEC-1.
+        var ex = Assert.Throws<StartupConfigurationException>(() =>
+            StartupConfigurationValidator.Validate(
+                config, logger, "Production",
+                StartupConfigurationValidator.ApiRequiredKeys,
+                StartupConfigurationValidator.OptionalKeys,
+                "ProcuLink.Api"));
+
+        Assert.Contains("Delivery:AllowPrivateNetworkTargets", ex.MissingKeys);
+        // The loud Error log fires before the throw (so it reaches the log sink + Sentry).
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Error && e.Message.Contains("AllowPrivateNetworkTargets"));
+    }
+
+    private static IConfiguration BuildConfigWith(string encryptionKey, bool allowPrivateNetworkTargets)
+    {
+        var dict = new Dictionary<string, string?>();
+        foreach (var k in StartupConfigurationValidator.ApiRequiredKeys)
+            dict[k] = "configured-value";
+        dict["Delivery:EncryptionKey"] = encryptionKey;
+        dict["DataProtection:EncryptionKey"] = ValidKey;
+        dict["Delivery:AllowPrivateNetworkTargets"] = allowPrivateNetworkTargets ? "true" : "false";
+        return new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+    }
+
+    /// <summary>Minimal ILogger that records level + rendered message for assertions.</summary>
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
     }
 
     private static IConfiguration BuildConfig(string encryptionKey)

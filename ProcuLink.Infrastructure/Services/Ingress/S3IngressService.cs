@@ -4,7 +4,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Ingress;
 
@@ -34,6 +36,7 @@ public sealed class S3IngressService : IS3IngressService
     private readonly IOrderService _orderService;
     private readonly DeliveryEncryptionService _encryption;
     private readonly IAmazonS3ClientFactory _s3ClientFactory;
+    private readonly OutboundRequestGuard _guard;
     private readonly ILogger<S3IngressService> _logger;
 
     public S3IngressService(
@@ -41,12 +44,14 @@ public sealed class S3IngressService : IS3IngressService
         IOrderService orderService,
         DeliveryEncryptionService encryption,
         IAmazonS3ClientFactory s3ClientFactory,
+        OutboundRequestGuard guard,
         ILogger<S3IngressService> logger)
     {
         _db = db;
         _orderService = orderService;
         _encryption = encryption;
         _s3ClientFactory = s3ClientFactory;
+        _guard = guard;
         _logger = logger;
     }
 
@@ -89,6 +94,24 @@ public sealed class S3IngressService : IS3IngressService
                 "S3 ingress: cannot decrypt secret key for org {OrgId}. Skipping poll.",
                 organisationId);
             return 0;
+        }
+
+        // ── SSRF guard on a custom ServiceUrl (SEC-1) ────────────────────────
+        // A tenant-supplied ServiceUrl (R2/MinIO/arbitrary S3-compatible endpoint) is
+        // the SSRF vector here — it could point at an internal/metadata host. The
+        // standard AWS endpoint (ServiceUrl null) resolves to public AWS infra and is
+        // not tenant-controlled, so it is not guarded. ValidateAsync runs the same
+        // DNS-resolve + IP-range check as the delivery dispatchers.
+        if (!string.IsNullOrWhiteSpace(config.ServiceUrl))
+        {
+            var guardResult = await _guard.ValidateAsync(config.ServiceUrl, ct);
+            if (!guardResult.Allowed)
+            {
+                _logger.LogWarning(
+                    "S3 ingress: org {OrgId} — ServiceUrl blocked by SSRF guard, skipping poll. {Reason}",
+                    organisationId, guardResult.Reason);
+                return 0;
+            }
         }
 
         // Pass the per-org ServiceUrl when set (Cloudflare R2 / MinIO / other
@@ -174,19 +197,26 @@ public sealed class S3IngressService : IS3IngressService
                     continue;
                 }
 
+                // Bounded streamed read (H2): the server-reported Size pre-check above is
+                // only advisory — a lying/understated Size would let an unbounded
+                // CopyToAsync materialize a multi-GB object into memory. Stream through the
+                // shared bounded-read helper so at most MaxFileBytes+1 bytes are ever read;
+                // overflow throws CatalogFileTooLargeException, which we catch and skip.
                 await using var responseStream = getResponse.ResponseStream;
-                using var fileBytes = new MemoryStream();
-                await responseStream.CopyToAsync(fileBytes, ct);
-
-                // Defense-in-depth: re-check actual bytes in case the server under-reported Size.
-                if (fileBytes.Length > IngressLimits.MaxFileBytes)
+                MemoryStream fileBytes;
+                try
+                {
+                    fileBytes = await BoundedRead.CopyAsync(responseStream, IngressLimits.MaxFileBytes, ct);
+                }
+                catch (CatalogFileTooLargeException)
                 {
                     _logger.LogWarning(
-                        "S3 ingress: org {OrgId} — skipping {Key} after download ({Bytes} bytes > {Max} byte cap).",
-                        organisationId, s3Object.Key, fileBytes.Length, IngressLimits.MaxFileBytes);
+                        "S3 ingress: org {OrgId} — skipping {Key} during download (exceeds {Max} byte cap).",
+                        organisationId, s3Object.Key, IngressLimits.MaxFileBytes);
                     continue;
                 }
 
+                using var _fileBytes = fileBytes;
                 fileBytes.Position = 0;
 
                 var fileName = Path.GetFileName(s3Object.Key);

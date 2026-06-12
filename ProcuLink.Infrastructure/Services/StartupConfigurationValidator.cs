@@ -140,10 +140,34 @@ public static class StartupConfigurationValidator
                 new[] { "DataProtection:EncryptionKey" });
         }
 
+        // ── M5 (SEC-1): loud warning for the global SSRF kill-switch ─────────
+        // Delivery:AllowPrivateNetworkTargets=true disables ALL SSRF network-range
+        // protection across every delivery dispatcher AND every pull poller (SFTP/S3/IMAP).
+        // The catalog plan's M5 disposition is ACCEPTED-LITE: emit a loud Error-level
+        // startup log whenever the flag is true, regardless of environment. (A non-Production
+        // environment — e.g. a shared staging — would otherwise enable it silently.) The hard
+        // fail-closed in Production below already existed on main and is intentionally LEFT
+        // INTACT; M5 deliberately deferred ADDING a new hard-fail as a rider, not removing an
+        // existing one. In Production the Error log fires immediately before that throw, whose
+        // StartupConfigurationException is captured by the host Sentry integration — satisfying
+        // M5's "Sentry message in Production when the flag is true" without a direct Sentry
+        // dependency in this Infrastructure-layer validator.
+        var allowPrivateNetworkTargets =
+            configuration.GetValue<bool>("Delivery:AllowPrivateNetworkTargets", false);
+        if (allowPrivateNetworkTargets)
+        {
+            logger.LogError(
+                "{Component} startup ({Env}): Delivery:AllowPrivateNetworkTargets=true — SSRF protection " +
+                "is DISABLED for ALL tenant-configured delivery endpoints AND pull pollers (SFTP/S3/IMAP). " +
+                "This flag is for localhost dev testing ONLY and must never run with real tenant traffic. " +
+                "Unset the DELIVERY__ALLOWPRIVATENETWORKTARGETS environment variable.",
+                componentName, environmentName);
+        }
+
         // Production hardening: Delivery:AllowPrivateNetworkTargets=true bypasses all SSRF
         // network-range protection for HTTP delivery. This flag exists only for localhost dev testing
         // and must never reach production.
-        if (isProduction && configuration.GetValue<bool>("Delivery:AllowPrivateNetworkTargets", false))
+        if (isProduction && allowPrivateNetworkTargets)
         {
             throw new StartupConfigurationException(
                 $"{componentName} cannot start in Production with Delivery:AllowPrivateNetworkTargets=true — " +

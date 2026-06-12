@@ -3,7 +3,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Ingress;
 
@@ -28,6 +30,7 @@ public sealed class SftpIngressService : ISftpIngressService
     private readonly IOrderService _orderService;
     private readonly DeliveryEncryptionService _encryption;
     private readonly ISftpClientFactory _sftpClientFactory;
+    private readonly OutboundRequestGuard _guard;
     private readonly ILogger<SftpIngressService> _logger;
 
     public SftpIngressService(
@@ -35,12 +38,14 @@ public sealed class SftpIngressService : ISftpIngressService
         IOrderService orderService,
         DeliveryEncryptionService encryption,
         ISftpClientFactory sftpClientFactory,
+        OutboundRequestGuard guard,
         ILogger<SftpIngressService> logger)
     {
         _db = db;
         _orderService = orderService;
         _encryption = encryption;
         _sftpClientFactory = sftpClientFactory;
+        _guard = guard;
         _logger = logger;
     }
 
@@ -82,6 +87,22 @@ public sealed class SftpIngressService : ISftpIngressService
             _logger.LogWarning(
                 "SFTP ingress: cannot decrypt password for org {OrgId}. Skipping poll.",
                 organisationId);
+            return 0;
+        }
+
+        // ── SSRF guard IMMEDIATELY before connect (SEC-1) ────────────────────
+        // The order poller connects to a tenant-configured host; without this a tenant
+        // could point it at 169.254.169.254 (cloud metadata) or an RFC-1918 internal host.
+        // Same shared guard the delivery dispatchers + catalog pull use. Residual L1
+        // (DNS-rebind TOCTOU between this resolve and SSH.NET's own resolve at connect) is
+        // the documented accepted risk the SFTP delivery dispatcher also carries — pinning
+        // the IP would break SSH host-key semantics.
+        var guardResult = await _guard.ValidateHostAsync(config.Host, config.Port, ct);
+        if (!guardResult.Allowed)
+        {
+            _logger.LogWarning(
+                "SFTP ingress: org {OrgId} — host blocked by SSRF guard, skipping poll. {Reason}",
+                organisationId, guardResult.Reason);
             return 0;
         }
 
@@ -150,17 +171,27 @@ public sealed class SftpIngressService : ISftpIngressService
                 continue;
             }
 
-            // ── download + hash ───────────────────────────────────────────────
-            using var fileBytes = session.DownloadFile(remotePath);
-
-            // Size cap — skip oversized files before they enter the parse pipeline.
-            if (fileBytes.Length > IngressLimits.MaxFileBytes)
+            // ── bounded download + hash (H2) ─────────────────────────────────
+            // Stream through the shared bounded-read helper so a lying/endless remote
+            // file can never materialize more than the cap+1 bytes in memory (the prior
+            // DownloadFile materialized the WHOLE file before the size check — an OOM
+            // vector). At most MaxFileBytes+1 bytes are ever read; overflow throws
+            // CatalogFileTooLargeException, which we catch and skip the file.
+            MemoryStream fileBytes;
+            try
+            {
+                using var remote = session.OpenRead(remotePath);
+                fileBytes = await BoundedRead.CopyAsync(remote, IngressLimits.MaxFileBytes, ct);
+            }
+            catch (CatalogFileTooLargeException)
             {
                 _logger.LogWarning(
-                    "SFTP ingress: org {OrgId} — skipping {Path} ({Bytes} bytes > {Max} byte cap).",
-                    organisationId, remotePath, fileBytes.Length, IngressLimits.MaxFileBytes);
+                    "SFTP ingress: org {OrgId} — skipping {Path} (exceeds {Max} byte cap).",
+                    organisationId, remotePath, IngressLimits.MaxFileBytes);
                 continue;
             }
+
+            using var _fileBytes = fileBytes;
 
             var hash = ComputeSha256Hex(fileBytes);
             fileBytes.Position = 0;

@@ -8,6 +8,7 @@ using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Ingress;
 
@@ -148,6 +149,50 @@ public class SftpIngressServiceTests
         orders.CreateStubCalls.Should().Be(0, "oversized file must never reach CreateStubAsync");
     }
 
+    // ── SEC-1: SSRF — private host blocked BEFORE connect ────────────────────
+
+    [Fact]
+    public async Task PrivateHost_IsBlockedBySsrfGuard_NoConnectionAttempted()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        // Private literal IP (RFC-1918) — the strict guard blocks it without any DNS lookup.
+        await SeedConfigAsync(db, orgId, isEnabled: true, host: "10.0.0.5");
+
+        var sftpFactory = new RecordingFakeSftpFactory();
+        var orders = new RecordingOrderService();
+        var svc = MakeService(db, orders, sftpFactory, StrictGuard());
+
+        var result = await svc.PollAsync(orgId, default);
+
+        result.Should().Be(0, "a poll against a private/internal host must be refused");
+        sftpFactory.ConnectCalls.Should().Be(0,
+            "the SSRF guard must reject the host BEFORE the SFTP factory is ever invoked");
+        orders.CreateStubCalls.Should().Be(0);
+    }
+
+    // ── SEC-1 / H2: bounded read aborts on a stream that lies about its length ─
+
+    [Fact]
+    public async Task LyingOversizedStream_IsAbortedMidCopy_NeverReachesCreateStub()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(db, orgId, isEnabled: true);
+
+        const string remotePath = "/incoming/lying.csv";
+        // A stream that yields cap + 1 MB of bytes regardless of any declared size — the
+        // bounded read must abort at cap+1 instead of materializing the whole thing.
+        var lyingFactory = new LyingStreamSftpFactory(remotePath, totalBytes: IngressLimits.MaxFileBytes + 1_048_576);
+        var orders = new RecordingOrderService();
+        var svc = MakeService(db, orders, lyingFactory);
+
+        var result = await svc.PollAsync(orgId, default);
+
+        result.Should().Be(0, "a file exceeding the cap must be skipped, not imported");
+        orders.CreateStubCalls.Should().Be(0, "the oversized file must never reach CreateStubAsync");
+    }
+
     // ── 5. Happy path: new CSV file → imported, dedupe record written ────────
 
     [Fact]
@@ -234,7 +279,8 @@ public class SftpIngressServiceTests
     private static SftpIngressService MakeService(
         ProcuLinkDbContext db,
         IOrderService orders,
-        ISftpClientFactory sftpFactory)
+        ISftpClientFactory sftpFactory,
+        OutboundRequestGuard? guard = null)
     {
         // DeliveryEncryptionService requires a real 32-byte key.
         var config = new ConfigurationBuilder()
@@ -251,14 +297,35 @@ public class SftpIngressServiceTests
             orders,
             encryption,
             sftpFactory,
+            // Default guard allows private targets so the fixture host (sftp.example.com / a
+            // private literal) passes the network-range check without a real DNS lookup — the
+            // SSRF-blocked test below supplies a strict (flag=false) guard explicitly.
+            guard ?? AllowPrivateGuard(),
             NullLogger<SftpIngressService>.Instance);
     }
+
+    /// <summary>Guard with AllowPrivateNetworkTargets=true — skips range validation (no DNS).</summary>
+    private static OutboundRequestGuard AllowPrivateGuard() =>
+        new(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                { ["Delivery:AllowPrivateNetworkTargets"] = "true" })
+                .Build(),
+            NullLogger<OutboundRequestGuard>.Instance);
+
+    /// <summary>Strict guard (flag=false) — enforces the SSRF network-range blocklist.</summary>
+    private static OutboundRequestGuard StrictGuard() =>
+        new(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                { ["Delivery:AllowPrivateNetworkTargets"] = "false" })
+                .Build(),
+            NullLogger<OutboundRequestGuard>.Instance);
 
     private static async Task<Guid?> SeedConfigAsync(
         ProcuLinkDbContext db,
         Guid orgId,
         bool isEnabled,
-        bool createDefaultSupplier = true)
+        bool createDefaultSupplier = true,
+        string host = "sftp.example.com")
     {
         // The password is the empty string encrypted with the all-zero 32-byte key.
         var config = new ConfigurationBuilder()
@@ -287,7 +354,7 @@ public class SftpIngressServiceTests
         {
             Id = Guid.NewGuid(),
             OrgId = orgId,
-            Host = "sftp.example.com",
+            Host = host,
             Port = 22,
             Username = "testuser",
             EncryptedPassword = encryption.Encrypt("hunter2"),
@@ -351,6 +418,72 @@ public class SftpIngressServiceTests
             => new MemoryStream();
 
         public void Dispose() { }
+    }
+
+    /// <summary>
+    /// SFTP factory whose <c>OpenRead</c> returns a forward-only stream that yields
+    /// <c>totalBytes</c> bytes — used to prove the bounded read aborts at cap+1 instead
+    /// of buffering the whole (oversized) file (H2 regression).
+    /// </summary>
+    private sealed class LyingStreamSftpFactory : ISftpClientFactory
+    {
+        private readonly string _remotePath;
+        private readonly long _totalBytes;
+
+        public LyingStreamSftpFactory(string remotePath, long totalBytes)
+        {
+            _remotePath = remotePath;
+            _totalBytes = totalBytes;
+        }
+
+        public ISftpSession Connect(string host, int port, string username, string password)
+            => new LyingStreamSftpSession(_remotePath, _totalBytes);
+    }
+
+    private sealed class LyingStreamSftpSession : ISftpSession
+    {
+        private readonly string _remotePath;
+        private readonly long _totalBytes;
+
+        public LyingStreamSftpSession(string remotePath, long totalBytes)
+        {
+            _remotePath = remotePath;
+            _totalBytes = totalBytes;
+        }
+
+        public IEnumerable<string> ListFileNames(string remoteDirectory) => new[] { _remotePath };
+        public MemoryStream DownloadFile(string remotePath) => throw new NotSupportedException();
+        public Stream OpenRead(string remotePath) => new EndlessForwardStream(_totalBytes);
+        public void Dispose() { }
+    }
+
+    /// <summary>Forward-only read stream that produces <c>length</c> zero bytes; not seekable.</summary>
+    private sealed class EndlessForwardStream : Stream
+    {
+        private readonly long _length;
+        private long _produced;
+
+        public EndlessForwardStream(long length) => _length = length;
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var remaining = _length - _produced;
+            if (remaining <= 0) return 0;
+            var n = (int)Math.Min(count, remaining);
+            Array.Clear(buffer, offset, n);
+            _produced += n;
+            return n;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _produced; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class SingleFileSftpSession : ISftpSession

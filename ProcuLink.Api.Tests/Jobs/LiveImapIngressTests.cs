@@ -139,6 +139,10 @@ public class LiveImapIngressTests
 
         var job = new EmailPollOrgJob(
             db, enc, orders.Object, jobClient.Object, billing.Object, emailSettings.Object,
+            // Allow-private guard so the real (public) IMAP host passes the SSRF range check.
+            new OutboundRequestGuard(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Delivery:AllowPrivateNetworkTargets"] = "true" })
+                .Build(), NullLogger<OutboundRequestGuard>.Instance),
             NullLogger<EmailPollOrgJob>.Instance);
 
         await job.ExecuteAsync(orgId, CancellationToken.None);
