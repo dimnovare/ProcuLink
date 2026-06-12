@@ -347,6 +347,9 @@ public class SftpIngressServiceTests
         public MemoryStream DownloadFile(string remotePath)
             => new MemoryStream();
 
+        public Stream OpenRead(string remotePath)
+            => new MemoryStream();
+
         public void Dispose() { }
     }
 
@@ -370,6 +373,9 @@ public class SftpIngressServiceTests
             ms.Position = 0;
             return ms;
         }
+
+        public Stream OpenRead(string remotePath)
+            => new MemoryStream(_content);
 
         public void Dispose() { }
     }

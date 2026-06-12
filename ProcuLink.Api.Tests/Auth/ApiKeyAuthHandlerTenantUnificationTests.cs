@@ -227,6 +227,24 @@ public class ApiKeyAuthHandlerTenantUnificationTests
     }
 
     [Fact]
+    public async Task ApiKeyAuth_PrincipalCarriesPerKeySubClaim_ForRateLimitPartitioning()
+    {
+        // M3 regression (plan 2026-06-12): the rate limiter partitions on the `sub` claim
+        // (Program.cs PartitionKey). The ApiKey principal must therefore carry a stable,
+        // per-key subject — prefixed so it can never collide with a Clerk user id.
+        await using var db = NewDb();
+        Seed(db);
+        var keyId = (await db.TenantApiKeys.SingleAsync()).Id;
+
+        var ctx    = NewRequestContext();
+        var result = await AuthenticateAsync(db, ctx);
+
+        Assert.True(result.Succeeded);
+        var sub = result.Principal!.FindFirst("sub")?.Value;
+        Assert.Equal($"apikey:{keyId}", sub);
+    }
+
+    [Fact]
     public async Task IngressController_RejectsSlugMismatch_ViaUnifiedPath()
     {
         await using var db = NewDb();

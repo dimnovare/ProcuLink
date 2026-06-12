@@ -1,0 +1,248 @@
+using System.IO.Compression;
+using System.Text;
+using ClosedXML.Excel;
+using FluentAssertions;
+using ProcuLink.Transform.Catalog;
+
+namespace ProcuLink.Transform.Tests.Catalog;
+
+/// <summary>
+/// Tests for the shared catalog parser extracted from <c>SuppliersController</c> (BE-1).
+///
+///  • Behaviour parity: alias mapping, delimiter detection, quote trimming, and EU
+///    comma-decimal handling must match the original in-controller logic byte-for-byte
+///    (the controller-level <c>SuppliersControllerCatalogTests</c> stay green unmodified
+///    as the upload-path regression gate).
+///  • New hardening (H4): 50k row cap on both formats, XLSX zip-bomb entry-size guard,
+///    and forged-dimension rejection BEFORE the workbook is loaded.
+/// </summary>
+public class SupplierCatalogFileParserTests
+{
+    private static Stream Csv(string content) => new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+    private static MemoryStream BuildXlsx(string[] header, IEnumerable<string?[]> rows)
+    {
+        var ms = new MemoryStream();
+        using (var wb = new XLWorkbook())
+        {
+            var ws = wb.Worksheets.Add("Sheet1");
+            for (var c = 0; c < header.Length; c++)
+                ws.Cell(1, c + 1).Value = header[c];
+
+            var r = 2;
+            foreach (var row in rows)
+            {
+                for (var c = 0; c < row.Length; c++)
+                    if (row[c] is not null)
+                        ws.Cell(r, c + 1).Value = row[c];
+                r++;
+            }
+            wb.SaveAs(ms);
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
+    // ── Alias mapping parity (CSV + XLSX) ─────────────────────────────────────
+
+    [Fact]
+    public async Task ParseCsv_MapsAliases_AndTrimsQuotes()
+    {
+        var csv = "sku,description,unit_price,gtin,erp_id\n" +
+                  "\"RES-220\",\"Resistor 220 Ohm\",0.04,4001234000010,ERP-7\n";
+
+        var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(csv), CancellationToken.None);
+
+        result.Format.Should().Be("csv");
+        result.HeaderColumns.Should().Equal("sku", "description", "unit_price", "gtin", "erp_id");
+        var d = result.Drafts.Should().ContainSingle().Subject;
+        d.Code.Should().Be("RES-220");
+        d.Name.Should().Be("Resistor 220 Ohm");
+        d.Price.Should().Be(0.04m);
+        d.Barcode.Should().Be("4001234000010");
+        d.ExternalId.Should().Be("ERP-7");
+    }
+
+    [Fact]
+    public void ParseXlsx_MapsAliases_SameAsCsv()
+    {
+        using var xlsx = BuildXlsx(
+            new[] { "sku", "description", "unit_price", "gtin" },
+            new[] { new string?[] { "RES-220", "Resistor 220 Ohm", "0.04", "4001234000010" } });
+
+        var result = SupplierCatalogFileParser.ParseXlsx(xlsx);
+
+        result.Format.Should().Be("xlsx");
+        var d = result.Drafts.Should().ContainSingle().Subject;
+        d.Code.Should().Be("RES-220");
+        d.Name.Should().Be("Resistor 220 Ohm");
+        d.Price.Should().Be(0.04m);
+        d.Barcode.Should().Be("4001234000010");
+    }
+
+    [Fact]
+    public async Task ParseCsv_SemicolonDelimiter_IsDetected()
+    {
+        var csv = "code;name;price\nA-1;Widget;9.50\n";
+
+        var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(csv), CancellationToken.None);
+
+        var d = result.Drafts.Should().ContainSingle().Subject;
+        d.Code.Should().Be("A-1");
+        d.Price.Should().Be(9.50m);
+    }
+
+    [Fact]
+    public async Task ParseCsv_NoCodeColumn_ReturnsEmpty_WithHeaders()
+    {
+        var csv = "name,price\nSomething,1.00\n";
+
+        var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(csv), CancellationToken.None);
+
+        result.Drafts.Should().BeEmpty();
+        result.HeaderColumns.Should().Equal("name", "price");
+    }
+
+    // ── EU comma-decimal regression (locale-bug memory) ───────────────────────
+    // Parity gate: prices parse with NumberStyles.Any + InvariantCulture exactly as the
+    // original controller code did — including the invariant thousands-separator quirk.
+
+    [Theory]
+    [InlineData("0.04", "0.04")]
+    [InlineData("1,234.56", "1234.56")] // invariant thousands separator
+    [InlineData("9,99", "999")]         // invariant treats ',' as a group separator (original behaviour kept)
+    public async Task ParseCsv_PriceParsing_MatchesOriginalInvariantBehaviour(string raw, string expected)
+    {
+        var csv = $"code;name;price\nA-1;Widget;{raw}\n"; // ';' delimiter so ',' stays inside the cell
+
+        var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(csv), CancellationToken.None);
+
+        var d = result.Drafts.Should().ContainSingle().Subject;
+        d.Price.Should().Be(decimal.Parse(expected, System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    // ── Extension routing parity ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task ParseByFileName_UnknownExtension_FallsBackToCsv()
+    {
+        var csv = "code,name\nA-1,Widget\n";
+
+        var result = await SupplierCatalogFileParser.ParseByFileNameAsync(Csv(csv), "catalog.txt", CancellationToken.None);
+
+        result.Format.Should().Be("csv");
+        result.Drafts.Should().ContainSingle().Which.Code.Should().Be("A-1");
+    }
+
+    [Fact]
+    public async Task ParseByFileName_XlsxExtension_RoutesToXlsx()
+    {
+        using var xlsx = BuildXlsx(new[] { "code" }, new[] { new string?[] { "A-1" } });
+
+        var result = await SupplierCatalogFileParser.ParseByFileNameAsync(xlsx, "catalog.xlsx", CancellationToken.None);
+
+        result.Format.Should().Be("xlsx");
+        result.Drafts.Should().ContainSingle().Which.Code.Should().Be("A-1");
+    }
+
+    // ── H4: row cap ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ParseCsv_RowCap_AbortsAt50001Rows()
+    {
+        var sb = new StringBuilder("code\n");
+        for (var i = 0; i < SupplierCatalogFileParser.MaxCatalogRows + 1; i++)
+            sb.Append("C-").Append(i).Append('\n');
+
+        var act = () => SupplierCatalogFileParser.ParseCsvAsync(Csv(sb.ToString()), CancellationToken.None);
+
+        await act.Should().ThrowAsync<CatalogTooLargeException>()
+            .WithMessage("*50,000 row limit*");
+    }
+
+    [Fact]
+    public async Task ParseCsv_ExactlyAtRowCap_Parses()
+    {
+        // 3 rows with a tiny pretend-cap is not possible (cap is const), so prove the
+        // boundary the cheap way: cap rows exactly must NOT throw. 50k rows is ~400 KB.
+        var sb = new StringBuilder("code\n");
+        for (var i = 0; i < SupplierCatalogFileParser.MaxCatalogRows; i++)
+            sb.Append("C-").Append(i).Append('\n');
+
+        var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(sb.ToString()), CancellationToken.None);
+
+        result.Drafts.Should().HaveCount(SupplierCatalogFileParser.MaxCatalogRows);
+    }
+
+    // ── H4: forged XLSX dimension rejected BEFORE the workbook is loaded ───────
+
+    [Fact]
+    public void ParseXlsx_ForgedDimension_RejectedBeforeWorkbookLoad()
+    {
+        // A handcrafted zip whose worksheet part DECLARES ~1M rows. The guard must throw
+        // from the zip pre-scan — XLWorkbook never sees the stream (the zip is not even a
+        // complete/valid workbook, so reaching ClosedXML would throw a different error).
+        var ms = new MemoryStream();
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var entry = zip.CreateEntry("xl/worksheets/sheet1.xml");
+            using var w = new StreamWriter(entry.Open());
+            w.Write("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
+                    "<dimension ref=\"A1:G1048576\"/><sheetData/></worksheet>");
+        }
+        ms.Position = 0;
+
+        var act = () => SupplierCatalogFileParser.ParseXlsx(ms);
+
+        act.Should().Throw<CatalogTooLargeException>().WithMessage("*row limit*");
+    }
+
+    // ── H4: oversized declared zip entry rejected ─────────────────────────────
+
+    [Fact]
+    public void ParseXlsx_ZipEntryDeclaringOver64MB_Rejected()
+    {
+        // 65 MB of zeros compresses to ~64 KB but the entry DECLARES 65 MB uncompressed —
+        // the guard reads the declared length and rejects before any inflation happens.
+        var ms = new MemoryStream();
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var entry = zip.CreateEntry("xl/worksheets/sheet1.xml", CompressionLevel.SmallestSize);
+            using var s = entry.Open();
+            var zeros = new byte[1024 * 1024];
+            for (var i = 0; i < 65; i++) s.Write(zeros, 0, zeros.Length);
+        }
+        ms.Position = 0;
+
+        var act = () => SupplierCatalogFileParser.ParseXlsx(ms);
+
+        act.Should().Throw<CatalogTooLargeException>().WithMessage("*64 MB*");
+    }
+
+    [Fact]
+    public void ParseXlsx_LegitimateSmallWorkbook_PassesGuards()
+    {
+        using var xlsx = BuildXlsx(
+            new[] { "code", "name" },
+            Enumerable.Range(1, 50).Select(i => new string?[] { $"C-{i}", $"Item {i}" }));
+
+        var result = SupplierCatalogFileParser.ParseXlsx(xlsx);
+
+        result.Drafts.Should().HaveCount(50);
+    }
+
+    // ── Mapping-report helpers (consumed by test-fetch) ───────────────────────
+
+    [Fact]
+    public void MapHeaderColumns_FirstAliasWins_UnknownColumnsUnmapped()
+    {
+        var header = new[] { "sku", "item_code", "description", "weird_column" };
+
+        var map = SupplierCatalogFileParser.MapHeaderColumns(header);
+
+        map.Should().Contain(new KeyValuePair<int, string>(0, "code"));   // sku wins
+        map.Should().NotContainKey(1);                                    // item_code loses (code taken)
+        map.Should().Contain(new KeyValuePair<int, string>(2, "name"));
+        map.Should().NotContainKey(3);                                    // unknown column unmapped
+    }
+}

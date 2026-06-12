@@ -93,6 +93,11 @@ public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
             new Claim("org_slug",    apiKey.Organisation.Slug),
             new Claim("auth_method", "api_key"),
             new Claim("key_id",      apiKey.Id.ToString()),
+            // M3 (plan 2026-06-12): a stable per-key `sub` so consumers that partition on
+            // the subject claim (e.g. the rate limiter's PartitionKey in Program.cs) can
+            // limit per API key instead of per source IP. Prefixed so it can never collide
+            // with a Clerk user id.
+            new Claim("sub",         $"apikey:{apiKey.Id}"),
         };
         var identity  = new ClaimsIdentity(claims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);

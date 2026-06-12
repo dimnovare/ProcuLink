@@ -31,4 +31,12 @@ public interface ISftpSession : IDisposable
     /// (position reset to 0).
     /// </summary>
     MemoryStream DownloadFile(string remotePath);
+
+    /// <summary>
+    /// Open the file at <paramref name="remotePath"/> as a forward-only read stream.
+    /// Additive seam (catalog pull, finding H2): lets callers stream through a bounded
+    /// copy instead of materializing the whole file like <see cref="DownloadFile"/> does.
+    /// Caller disposes the returned stream before disposing the session.
+    /// </summary>
+    Stream OpenRead(string remotePath);
 }

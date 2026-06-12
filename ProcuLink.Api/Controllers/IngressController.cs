@@ -3,10 +3,14 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
+using ProcuLink.Transform.Catalog;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -167,6 +171,106 @@ public sealed class IngressController : ControllerBase
             result.Value.Status,
             LinesCount = result.Value.Lines.Count,
         });
+    }
+
+    // ── POST /api/ingress/{slug}/catalog/{supplierId} — supplier catalog push ──
+
+    /// <summary>
+    /// Machine-to-machine supplier-catalog push (BE-7, plan 2026-06-12). GUID-only
+    /// supplier segment (route-constrained — no name/code resolution). Two body forms:
+    /// <c>multipart/form-data</c> with a <c>file</c> part (CSV or XLSX, routed by file
+    /// name), or a raw CSV body (<c>text/csv</c> / <c>application/octet-stream</c>).
+    /// Caps: 10 MB request body (413) and 50,000 rows (400). Idempotent by the
+    /// (org, supplier, code) natural key — replaying the same file is a no-op (0 created),
+    /// so no Idempotency-Key header is needed. Rate-limited per API key via the
+    /// <c>"upload"</c> policy (the ApiKey principal carries <c>sub = apikey:{id}</c>).
+    /// Response is byte-compatible with the browser import:
+    /// <c>{ created, updated, skipped, total }</c>.
+    /// </summary>
+    [HttpPost("catalog/{supplierId:guid}")]
+    [EnableRateLimiting("upload")]
+    [RequestSizeLimit(IngressLimits.MaxFileBytes)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status413PayloadTooLarge)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
+    public async Task<IActionResult> PushCatalog(
+        string slug,
+        Guid supplierId,
+        [FromServices] ISupplierCatalogService catalog,
+        CancellationToken ct)
+    {
+        if (!await SlugMatchesCallerAsync(slug, ct))
+            return Forbid();
+
+        var orgId = _tenant.OrganisationId;
+
+        // Org-scoped, soft-delete-aware supplier check: foreign/unknown/deleted → 404.
+        var supplierExists = await _db.Suppliers
+            .AnyAsync(s => s.OrgId == orgId && s.Id == supplierId && s.DeletedAt == null, ct);
+        if (!supplierExists)
+            return NotFound(new { error = "Supplier not found." });
+
+        List<SupplierProduct> drafts;
+        try
+        {
+            if (Request.HasFormContentType)
+            {
+                var form = await Request.ReadFormAsync(ct);
+                var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
+                if (file is null || file.Length == 0)
+                    return BadRequest(new { error = "Multipart body must include a non-empty 'file' part." });
+
+                await using var stream = file.OpenReadStream();
+                var parsed = await SupplierCatalogFileParser.ParseByFileNameAsync(stream, file.FileName, ct);
+                drafts = parsed.Drafts;
+            }
+            else if (IsRawCsvContentType(Request.ContentType))
+            {
+                var parsed = await SupplierCatalogFileParser.ParseCsvAsync(Request.Body, ct);
+                drafts = parsed.Drafts;
+            }
+            else
+            {
+                return StatusCode(StatusCodes.Status415UnsupportedMediaType, new
+                {
+                    error = "Send multipart/form-data with a 'file' part, or a raw CSV body as text/csv.",
+                });
+            }
+        }
+        catch (CatalogTooLargeException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception)
+        {
+            return BadRequest(new { error = "Could not read the catalog file. Provide a CSV or XLSX with a 'code' column." });
+        }
+
+        var withCode = drafts.Count(d => !string.IsNullOrWhiteSpace(d.Code));
+        if (withCode == 0)
+            return BadRequest(new { error = "No rows with a product code were found. Ensure the file has a 'code' column." });
+
+        var (created, updated) = await catalog.UpsertManyAsync(orgId, supplierId, drafts, ct);
+
+        return Ok(new
+        {
+            created,
+            updated,
+            skipped = drafts.Count - withCode,
+            total   = created + updated,
+        });
+    }
+
+    /// <summary>Raw-body push accepts CSV only (JSON bodies are a v2 decision).</summary>
+    private static bool IsRawCsvContentType(string? contentType)
+    {
+        if (string.IsNullOrWhiteSpace(contentType)) return true; // be lenient: parse as CSV
+        var mediaType = contentType.Split(';')[0].Trim();
+        return mediaType.Equals("text/csv", StringComparison.OrdinalIgnoreCase)
+            || mediaType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase)
+            || mediaType.Equals("text/plain", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

@@ -458,6 +458,16 @@ builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
 builder.Services.AddScoped<IS3IngressService, S3IngressService>();
 
+// ── Catalog import channels: SFTP/FTP(S) pull + settings (plan 2026-06-12) ─
+// FluentFTP fetch seam is hardened (PASVEX + mandatory FTPS data encryption + 30 s
+// timeouts) inside the factory; CatalogPullService owns guard/deadline/bounded-read.
+builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.Ingress.IFtpFetchClientFactory,
+                              ProcuLink.Infrastructure.Services.Ingress.FluentFtpFetchClientFactory>();
+builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,
+                           ProcuLink.Infrastructure.Services.Catalog.CatalogPullService>();
+builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogSourceSettingsService,
+                           ProcuLink.Infrastructure.Services.Catalog.CatalogSourceSettingsService>();
+
 // PDF rasterizer for the vision fallback (scanned/no-text PDFs). Self-contained
 // PDFium + SkiaSharp natives — no extra system packages on the Debian base.
 builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
