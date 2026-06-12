@@ -20,6 +20,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<PurchaseOrderLineEntity> PurchaseOrderLines => Set<PurchaseOrderLineEntity>();
     public DbSet<ItemMapping> ItemMappings => Set<ItemMapping>();
     public DbSet<SupplierProduct> SupplierProducts => Set<SupplierProduct>();
+    public DbSet<SupplierCatalogSource> SupplierCatalogSources => Set<SupplierCatalogSource>();
     public DbSet<AiSuggestionDecision> AiSuggestionDecisions => Set<AiSuggestionDecision>();
     public DbSet<OutboundArtifact> OutboundArtifacts => Set<OutboundArtifact>();
     public DbSet<DeliveryAttempt> DeliveryAttempts => Set<DeliveryAttempt>();
@@ -564,6 +565,46 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasForeignKey(x => x.OrgId);
             b.HasOne(x => x.Supplier)
              .WithMany(x => x.Products)
+             .HasForeignKey(x => x.SupplierId);
+        });
+
+        // ── supplier_catalog_sources ───────────────────────────────────
+        // Pull-sync config for one supplier's catalog (SFTP/FTP/FTPS). One source per
+        // (org, supplier) — the unique index doubles as the upsert key. Conventions
+        // mirror supplier_products: org+supplier scoped, snake_case, explicit
+        // HasColumnName on every property (the migration relies on these).
+        modelBuilder.Entity<SupplierCatalogSource>(b =>
+        {
+            b.ToTable("supplier_catalog_sources");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            b.Property(x => x.Protocol).HasColumnName("protocol").IsRequired();
+            b.Property(x => x.Host).HasColumnName("host").IsRequired();
+            b.Property(x => x.Port).HasColumnName("port");
+            b.Property(x => x.Username).HasColumnName("username");
+            b.Property(x => x.EncryptedPassword).HasColumnName("encrypted_password");
+            b.Property(x => x.RemotePath).HasColumnName("remote_path").IsRequired();
+            b.Property(x => x.FileFormat).HasColumnName("file_format").IsRequired().HasDefaultValue("auto");
+            b.Property(x => x.SyncIntervalHours).HasColumnName("sync_interval_hours").HasDefaultValue(24);
+            b.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(false);
+            b.Property(x => x.LastSyncAt).HasColumnName("last_sync_at");
+            b.Property(x => x.LastSyncStatus).HasColumnName("last_sync_status");
+            b.Property(x => x.LastSyncError).HasColumnName("last_sync_error").HasMaxLength(500);
+            b.Property(x => x.LastSyncCreated).HasColumnName("last_sync_created");
+            b.Property(x => x.LastSyncUpdated).HasColumnName("last_sync_updated");
+            b.Property(x => x.LastSyncSkipped).HasColumnName("last_sync_skipped");
+            b.Property(x => x.LastFileHash).HasColumnName("last_file_hash");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at");
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            // ONE source per supplier per org (scope-review decision: multi-source is v2).
+            b.HasIndex(x => new { x.OrgId, x.SupplierId }).IsUnique();
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
+            b.HasOne(x => x.Supplier)
+             .WithMany()
              .HasForeignKey(x => x.SupplierId);
         });
 

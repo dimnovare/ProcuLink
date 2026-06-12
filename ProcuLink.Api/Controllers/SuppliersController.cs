@@ -1,7 +1,11 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Constants;
+using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Infrastructure.Services.Security;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services.StarterTemplates;
 using ProcuLink.Core.Canonical;
@@ -12,6 +16,7 @@ using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Repositories;
+using ProcuLink.Transform.Catalog;
 using ProcuLink.Transform.Mapping;
 
 namespace ProcuLink.Api.Controllers;
@@ -738,19 +743,19 @@ public class SuppliersController : ControllerBase
         var orgId = _tenant.OrganisationId;
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
 
-        var ext = System.IO.Path.GetExtension(file.FileName)?.ToLowerInvariant();
-
         List<SupplierProduct> drafts;
         try
         {
+            // Shared parser (extension routing identical to the previous in-controller logic;
+            // no/unknown extension falls back to CSV parsing). Also enforces the 50k row cap
+            // and the XLSX zip-bomb guard.
             await using var stream = file.OpenReadStream();
-            drafts = ext switch
-            {
-                ".xlsx" or ".xls" => ParseCatalogXlsx(stream),
-                ".csv"            => await ParseCatalogCsvAsync(stream, ct),
-                // No/unknown extension: fall back to CSV parsing (handles text/csv uploads with no name).
-                _                 => await ParseCatalogCsvAsync(stream, ct),
-            };
+            var parseResult = await SupplierCatalogFileParser.ParseByFileNameAsync(stream, file.FileName, ct);
+            drafts = parseResult.Drafts;
+        }
+        catch (CatalogTooLargeException ex)
+        {
+            return BadRequest(ex.Message);
         }
         catch (Exception)
         {
@@ -789,133 +794,134 @@ public class SuppliersController : ControllerBase
         return Ok(new { deleted });
     }
 
-    // ── Catalog file parsing (deterministic, alias-based column detection) ─────
+    // ── Catalog pull source (SFTP / FTP / FTPS) — plan 2026-06-12 ──────────────
+    // New dependencies arrive via [FromServices] so the (already large) constructor —
+    // and every existing controller test that builds it — stays untouched.
 
-    /// <summary>Case-insensitive aliases → canonical catalog field.</summary>
-    private static readonly Dictionary<string, string> CatalogColumnAliases =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["code"] = "code", ["product_code"] = "code", ["productcode"] = "code",
-            ["sku"] = "code", ["item_code"] = "code", ["itemcode"] = "code",
-            ["supplier_code"] = "code", ["suppliercode"] = "code", ["supplier_item_code"] = "code",
-            ["name"] = "name", ["product_name"] = "name", ["productname"] = "name",
-            ["description"] = "name", ["product"] = "name", ["title"] = "name",
-            ["unit"] = "unit", ["uom"] = "unit", ["unit_of_measure"] = "unit", ["unitname"] = "unit",
-            ["price"] = "price", ["unit_price"] = "price", ["unitprice"] = "price", ["list_price"] = "price",
-            ["currency"] = "currency", ["ccy"] = "currency",
-            ["barcode"] = "barcode", ["gtin"] = "barcode", ["ean"] = "barcode", ["upc"] = "barcode", ["code2"] = "barcode",
-            ["external_id"] = "external_id", ["externalid"] = "external_id", ["product_id"] = "external_id",
-            ["productid"] = "external_id", ["erp_id"] = "external_id",
-        };
-
-    private static SupplierProduct? RowToDraft(IReadOnlyDictionary<string, string?> fields)
+    /// <summary>
+    /// Returns the supplier's catalog pull-source config, or <c>{ source: null }</c> when
+    /// none is configured. Secrets are masked (<c>hasPassword</c> + <c>"********"</c>);
+    /// neither the plaintext nor the ciphertext ever leaves the server.
+    /// </summary>
+    [HttpGet("{id:guid}/catalog/source")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetCatalogSource(
+        Guid id,
+        [FromServices] ICatalogSourceSettingsService settings,
+        CancellationToken ct)
     {
-        var code = Pick(fields, "code");
-        if (string.IsNullOrWhiteSpace(code)) return null;
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
 
-        decimal? price = null;
-        var priceStr = Pick(fields, "price");
-        if (!string.IsNullOrWhiteSpace(priceStr)
-            && decimal.TryParse(priceStr, System.Globalization.NumberStyles.Any,
-                                System.Globalization.CultureInfo.InvariantCulture, out var p))
-            price = p;
-
-        return new SupplierProduct
-        {
-            Code       = code!.Trim(),
-            Name       = Pick(fields, "name"),
-            Unit       = Pick(fields, "unit"),
-            Price      = price,
-            Currency   = Pick(fields, "currency"),
-            Barcode    = Pick(fields, "barcode"),
-            ExternalId = Pick(fields, "external_id"),
-        };
-
-        static string? Pick(IReadOnlyDictionary<string, string?> f, string key) =>
-            f.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v) ? v.Trim() : null;
+        var source = await settings.GetAsync(orgId, id, ct);
+        return Ok(new { source });
     }
 
-    /// <summary>Builds header-index → canonical-field map from a header row's cell names.</summary>
-    private static Dictionary<int, string> MapHeaderColumns(IReadOnlyList<string> header)
+    /// <summary>
+    /// Upserts the supplier's catalog pull-source config. Password semantics:
+    /// null = keep stored, "" = clear, value = re-encrypt (AES-256-GCM, write-only).
+    /// Enabling is billing-gated; the host passes a save-time SSRF pre-check; flipping
+    /// IsEnabled false→true enqueues the first sync (deduped against running/recent syncs).
+    /// </summary>
+    [HttpPut("{id:guid}/catalog/source")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpsertCatalogSource(
+        Guid id,
+        [FromBody] UpsertCatalogSourceRequest request,
+        [FromServices] ICatalogSourceSettingsService settings,
+        [FromServices] OutboundRequestGuard guard,
+        CancellationToken ct)
     {
-        var map = new Dictionary<int, string>();
-        for (var i = 0; i < header.Count; i++)
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        var protocol = request.Protocol?.Trim().ToLowerInvariant();
+        if (protocol is not ("sftp" or "ftp" or "ftps"))
+            return BadRequest(new { error = "Protocol must be one of: sftp, ftp, ftps." });
+        if (string.IsNullOrWhiteSpace(request.Host))
+            return BadRequest(new { error = "Host is required." });
+        if (string.IsNullOrWhiteSpace(request.RemotePath))
+            return BadRequest(new { error = "Remote file path is required." });
+        if (protocol is "sftp" or "ftps" && string.IsNullOrWhiteSpace(request.Username))
+            return BadRequest(new { error = "Username is required for sftp and ftps." });
+
+        var fileFormat = string.IsNullOrWhiteSpace(request.FileFormat)
+            ? "auto"
+            : request.FileFormat.Trim().ToLowerInvariant();
+        if (fileFormat is not ("auto" or "csv" or "xlsx"))
+            return BadRequest(new { error = "File format must be one of: auto, csv, xlsx." });
+
+        // sftp/ftps need a password: either provided now, or kept from a previous save.
+        if (protocol is "sftp" or "ftps")
         {
-            var name = header[i]?.Trim().Trim('"') ?? string.Empty;
-            if (name.Length == 0) continue;
-            if (CatalogColumnAliases.TryGetValue(name, out var canonical) && !map.ContainsValue(canonical))
-                map[i] = canonical;
-        }
-        return map;
-    }
-
-    private static async Task<List<SupplierProduct>> ParseCatalogCsvAsync(Stream stream, CancellationToken ct)
-    {
-        var drafts = new List<SupplierProduct>();
-        using var reader = new System.IO.StreamReader(stream);
-
-        var headerLine = await reader.ReadLineAsync(ct);
-        if (headerLine is null) return drafts;
-
-        var delimiter = headerLine.Contains(';') && !headerLine.Contains(',') ? ';'
-                      : headerLine.Contains('\t') && !headerLine.Contains(',') ? '\t'
-                      : ',';
-
-        var header = headerLine.Split(delimiter).Select(h => h.Trim().Trim('"')).ToList();
-        var colMap = MapHeaderColumns(header);
-        if (!colMap.ContainsValue("code")) return drafts; // no code column → nothing usable
-
-        while (!reader.EndOfStream)
-        {
-            var line = await reader.ReadLineAsync(ct);
-            if (string.IsNullOrWhiteSpace(line)) continue;
-
-            var parts = line.Split(delimiter);
-            var fields = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (idx, canonical) in colMap)
-                fields[canonical] = idx < parts.Length ? parts[idx].Trim().Trim('"') : null;
-
-            var draft = RowToDraft(fields);
-            if (draft is not null) drafts.Add(draft);
+            var current = await settings.GetAsync(orgId, id, ct);
+            var hasPassword = !string.IsNullOrWhiteSpace(request.Password)
+                              || (request.Password is null && current?.HasPassword == true);
+            if (!hasPassword)
+                return BadRequest(new { error = "Password is required for sftp and ftps." });
         }
 
-        return drafts;
+        // Billing gate on enablement (pull reuses the SFTP-ingestion feature tier).
+        if (request.IsEnabled && !await _billing.HasFeatureAsync(orgId, BillingFeature.SftpIngestion, ct))
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "catalog_sync_requires_integration", upgradeUrl = "/settings" });
+
+        // Save-time SSRF pre-check — fail fast in the UI instead of at the first poll.
+        // The pull pipeline re-validates immediately before EVERY connect regardless.
+        var port = request.Port > 0 ? request.Port : (protocol == "sftp" ? 22 : 21);
+        var guardResult = await guard.ValidateHostAsync(request.Host.Trim(), port, ct);
+        if (!guardResult.Allowed)
+            return BadRequest(new { error = "host_not_allowed" });
+
+        var result = await settings.UpsertAsync(orgId, id, request, ct);
+        return Ok(new { source = result.Source, syncEnqueued = result.SyncEnqueued });
     }
 
-    private static List<SupplierProduct> ParseCatalogXlsx(Stream stream)
+    /// <summary>Deletes the supplier's catalog pull-source config. Returns <c>{ deleted }</c>.</summary>
+    [HttpDelete("{id:guid}/catalog/source")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteCatalogSource(
+        Guid id,
+        [FromServices] ICatalogSourceSettingsService settings,
+        CancellationToken ct)
     {
-        var drafts = new List<SupplierProduct>();
-        using var workbook = new ClosedXML.Excel.XLWorkbook(stream);
-        var worksheet = workbook.Worksheets.FirstOrDefault();
-        var rows = worksheet?.RangeUsed()?.RowsUsed().ToList();
-        if (rows is null || rows.Count < 2) return drafts;
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
 
-        var headerCells = rows[0].Cells().ToList();
-        // ColumnNumber (1-based) → canonical field.
-        var header = new List<string>();
-        var maxCol = headerCells.Count == 0 ? 0 : headerCells.Max(c => c.Address.ColumnNumber);
-        for (var c = 1; c <= maxCol; c++) header.Add(string.Empty);
-        foreach (var cell in headerCells)
-            header[cell.Address.ColumnNumber - 1] = cell.GetString().Trim();
-
-        var colMap = MapHeaderColumns(header); // 0-based index → canonical
-        if (!colMap.ContainsValue("code")) return drafts;
-
-        for (var i = 1; i < rows.Count; i++)
-        {
-            var row = rows[i];
-            if (row.IsEmpty()) continue;
-
-            var fields = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (idx, canonical) in colMap)
-                fields[canonical] = row.Cell(idx + 1).GetString().Trim();
-
-            var draft = RowToDraft(fields);
-            if (draft is not null) drafts.Add(draft);
-        }
-
-        return drafts;
+        var deleted = await settings.DeleteAsync(orgId, id, ct);
+        return Ok(new { deleted });
     }
+
+    /// <summary>
+    /// Read-only honesty probe: fetches the SAVED source through the exact production pull
+    /// path (SSRF guard, timeouts, bounded read, shared parse) and reports what would be
+    /// imported — mapped/unmapped columns, row counts, and ≤5 sample rows. Never writes:
+    /// no upsert, no last-sync mutation. Failures return <c>ok: false</c> with the same
+    /// sanitized message a real sync would persist.
+    /// </summary>
+    [HttpPost("{id:guid}/catalog/source/test-fetch")]
+    [EnableRateLimiting("upload")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> TestFetchCatalogSource(
+        Guid id,
+        [FromServices] ICatalogPullService pull,
+        CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        var result = await pull.TestFetchAsync(orgId, id, ct);
+        return Ok(result);
+    }
+
+    // Catalog file parsing lives in ProcuLink.Transform\Catalog\SupplierCatalogFileParser —
+    // shared verbatim with the API-key push endpoint and the Worker pull channel.
 
     private Task<bool> SupplierExistsAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
         _db.Suppliers.AnyAsync(s => s.Id == supplierId && s.OrgId == orgId && s.DeletedAt == null, ct);

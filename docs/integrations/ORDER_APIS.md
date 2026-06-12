@@ -256,6 +256,71 @@ curl -X POST "https://api.proculink.eu/api/ingress/nordic-distribution/orders" \
   }'
 ```
 
+### Supplier catalog push
+
+Machine-to-machine bulk import of one supplier's product catalog (the
+authoritative set of real supplier codes used for mapping resolution and
+AI suggestions). Same authentication and slug rules as the order API.
+
+```http
+POST /api/ingress/{slug}/catalog/{supplierId}
+X-ProcuLink-Key: plk_...
+```
+
+`{supplierId}` must be the supplier **GUID** (no name or code resolution —
+copy it from the supplier page). An unknown, foreign, or deleted supplier
+returns `404`.
+
+Two body forms are accepted:
+
+1. `multipart/form-data` with a `file` part — CSV or XLSX, routed by file name:
+
+```bash
+curl -X POST "https://api.proculink.eu/api/ingress/nordic-distribution/catalog/8fcb6240-8d7a-4a38-b011-0f39f4c21772" \
+  -H "X-ProcuLink-Key: plk_example" \
+  -F "file=@catalog.xlsx"
+```
+
+2. Raw CSV body (`Content-Type: text/csv` or `application/octet-stream`):
+
+```bash
+curl -X POST "https://api.proculink.eu/api/ingress/nordic-distribution/catalog/8fcb6240-8d7a-4a38-b011-0f39f4c21772" \
+  -H "X-ProcuLink-Key: plk_example" \
+  -H "Content-Type: text/csv" \
+  --data-binary @catalog.csv
+```
+
+Columns are auto-detected case-insensitively against the same aliases as the
+browser import: `code` (required; aliases `sku`, `item_code`,
+`supplier_code`, …), `name`, `unit`, `price`, `currency`, `barcode`
+(`gtin`/`ean`/`upc`), `external_id`.
+
+Success response (byte-compatible with the browser catalog import):
+
+```json
+{ "created": 120, "updated": 30, "skipped": 0, "total": 150 }
+```
+
+Limits and behaviour:
+
+| Property | Value |
+|---|---|
+| Max body size | 10 MB (`413` when exceeded) |
+| Max rows | 50,000 (`400` when exceeded) |
+| Rate limit | 20 requests/min per API key |
+| Idempotency | Rows upsert by the `(supplier, code)` natural key — replaying the same file is a no-op (`created: 0`). No `Idempotency-Key` header is needed or read. |
+
+Common errors:
+
+| Status | Meaning |
+|---|---|
+| `400` | No `code` column / no rows with a code / over the row cap |
+| `401` | Missing or invalid `X-ProcuLink-Key` |
+| `403` | API key belongs to a different organisation slug |
+| `404` | Supplier GUID unknown for this organisation (or deleted) |
+| `413` | Body over 10 MB |
+| `415` | Body is neither multipart nor raw CSV (JSON bodies are not supported) |
+
 ---
 
 ## Outbound webhooks

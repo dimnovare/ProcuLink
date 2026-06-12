@@ -33,6 +33,13 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/5 * * * *");
 
+        // Supplier-catalog pull sync (SFTP/FTP/FTPS): hourly dispatcher fanning out one
+        // child job per DUE source (per-supplier isolation; soft lock prevents overlap).
+        _recurringJobs.AddOrUpdate<ProcuLink.Infrastructure.Jobs.CatalogSyncDispatcherJob>(
+            "catalog-sync",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "0 * * * *");
+
         // P0 reliability: detect orders stuck in parsing/transforming (every 15 min).
         _recurringJobs.AddOrUpdate<StuckOrderDetectionJob>(
             "stuck-order-detection",
@@ -76,7 +83,7 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "15 4 * * *");
 
-        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection (every 15 min), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
+        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection (every 15 min), catalog-sync (hourly), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

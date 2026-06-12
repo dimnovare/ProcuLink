@@ -7,9 +7,18 @@ namespace ProcuLink.Infrastructure.Services.Ingress;
 /// </summary>
 public sealed class RenciSftpClientFactory : ISftpClientFactory
 {
+    /// <summary>
+    /// H3 — connection and per-operation timeout. Without these SSH.NET waits on the socket
+    /// indefinitely, so a stalling tenant-configured server could pin Worker threads.
+    /// Applies to BOTH the order poller and the catalog pull (strict improvement for both).
+    /// </summary>
+    private static readonly TimeSpan ConnectAndOperationTimeout = TimeSpan.FromSeconds(30);
+
     public ISftpSession Connect(string host, int port, string username, string password)
     {
         var client = new SftpClient(host, port, username, password);
+        client.ConnectionInfo.Timeout = ConnectAndOperationTimeout;
+        client.OperationTimeout = ConnectAndOperationTimeout;
         client.Connect();
         return new RenciSftpSession(client);
     }
@@ -40,6 +49,8 @@ public sealed class RenciSftpClientFactory : ISftpClientFactory
             ms.Position = 0;
             return ms;
         }
+
+        public Stream OpenRead(string remotePath) => _client.OpenRead(remotePath);
 
         public void Dispose()
         {

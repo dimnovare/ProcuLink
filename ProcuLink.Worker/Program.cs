@@ -266,6 +266,16 @@ builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
 builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
 builder.Services.AddScoped<IS3IngressService, S3IngressService>();
+
+// ── Catalog import channels: SFTP/FTP(S) pull (plan 2026-06-12) ────────────
+// DI foot-gun precedent 4607d6d: ISupplierCatalogService was Api-only — the Worker
+// executes CatalogSyncSourceJob, so the sink + pull pipeline must resolve here too.
+builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
+builder.Services.AddSingleton<IFtpFetchClientFactory, FluentFtpFetchClientFactory>();
+builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,
+                           ProcuLink.Infrastructure.Services.Catalog.CatalogPullService>();
+builder.Services.AddScoped<CatalogSyncDispatcherJob>();
+builder.Services.AddScoped<CatalogSyncSourceJob>();
 // IEmailBodyOrderExtractor intentionally NOT registered here: OpenAiEmailBodyOrderExtractor
 // depends on ICurrentTenantService (HttpContext-based) which only exists in the API.
 // Email-body NLP runs in the API's InboundEmailController scope (Postmark webhook),
