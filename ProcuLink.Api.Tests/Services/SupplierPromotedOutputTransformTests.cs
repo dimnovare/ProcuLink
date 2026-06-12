@@ -365,7 +365,10 @@ public class SupplierPromotedOutputTransformTests
         Assert.True(fixedResult.IsSuccess, fixedResult.Error);
         var fixedDigest = await DigestOfAsync(fixedResult.Value!.ArtifactId);
 
-        // 2. SUPPLIER-PROMOTED (promote an output mapping, transform again).
+        // 2. SUPPLIER-PROMOTED (promote an output mapping, transform again). The
+        //    idempotency guard only lets a 'ready' order start a transform, so return
+        //    the order to 'ready' first (as a re-resolve would in the real flow).
+        await ResetToReadyAsync(db, orderId);
         await new PoMappingService(db).UpsertAsync(orgId, supplierId,
             new PoMappingConfig { Output = PromotedOutput() }, CancellationToken.None);
         var supplierResult = await svc.TransformAsync(orgId, orderId, OutputFormat.Csv, CancellationToken.None);
@@ -373,6 +376,7 @@ public class SupplierPromotedOutputTransformTests
         var supplierDigest = await DigestOfAsync(supplierResult.Value!.ArtifactId);
 
         // 3. PER-ORDER OVERRIDE (store one, transform again — outranks the promoted mapping).
+        await ResetToReadyAsync(db, orderId);
         await new OrderMappingOverrideService(db).UpsertAsync(orgId, orderId, new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -390,5 +394,13 @@ public class SupplierPromotedOutputTransformTests
         Assert.NotEqual(fixedDigest,    supplierDigest);
         Assert.NotEqual(fixedDigest,    overrideDigest);
         Assert.NotEqual(supplierDigest, overrideDigest);
+    }
+
+    /// <summary>Returns a transformed order to 'ready' so the next transform can claim it.</summary>
+    private static async Task ResetToReadyAsync(ProcuLinkDbContext db, Guid orderId)
+    {
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        order.Status = "ready";
+        await db.SaveChangesAsync();
     }
 }

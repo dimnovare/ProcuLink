@@ -61,6 +61,13 @@ public sealed class DataErasureService : IDataErasureService
         // so this never matches another entity), org-scoped for defence in depth.
         var audits = await _db.AuditEvents
             .Where(e => e.EntityId == orderId && e.OrgId == organisationId).ToListAsync(ct);
+        // AI suggestion decisions carry real buyer/supplier item codes (Suggested/Chosen
+        // codes + the full CandidateSetJson) — sensitive PO content that must not survive
+        // the erase. Idempotency keys map back to the erased order id.
+        var aiDecisions = await _db.AiSuggestionDecisions
+            .Where(d => d.OrderId == orderId && d.OrgId == organisationId).ToListAsync(ct);
+        var idempotencyKeys = await _db.IdempotencyKeys
+            .Where(k => k.OrderId == orderId && k.OrgId == organisationId).ToListAsync(ct);
         // Order confirmations (inbound supplier confirmations) + their lines are tied to
         // this order and hold sensitive PO content (item codes/qty/price/notes + their own
         // R2 source). Lines have a RESTRICT FK onto purchase_order_lines, so they MUST go.
@@ -111,16 +118,19 @@ public sealed class DataErasureService : IDataErasureService
         _db.OrderValidationResults.RemoveRange(validations);
         _db.PoPassportEvents.RemoveRange(passport);
         _db.AuditEvents.RemoveRange(audits);
+        _db.AiSuggestionDecisions.RemoveRange(aiDecisions);
+        _db.IdempotencyKeys.RemoveRange(idempotencyKeys);
         _db.PurchaseOrders.Remove(order);
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
             "Erased order {OrderId} (org {OrgId}): R2={R2} lines={Lines} artifacts={Artifacts} " +
             "attempts={Attempts} exceptions={Exceptions} validations={Validations} passport={Passport} " +
-            "audit={Audit} confirmations={Confirmations} confirmationLines={ConfirmationLines}.",
+            "audit={Audit} confirmations={Confirmations} confirmationLines={ConfirmationLines} " +
+            "aiDecisions={AiDecisions} idempotencyKeys={IdempotencyKeys}.",
             orderId, organisationId, r2Deleted, lines.Count, artifacts.Count, attempts.Count,
             exceptions.Count, validations.Count, passport.Count, audits.Count,
-            confirmations.Count, confirmationLines.Count);
+            confirmations.Count, confirmationLines.Count, aiDecisions.Count, idempotencyKeys.Count);
 
         return new OrderErasureResult(
             Found: true,
@@ -133,7 +143,9 @@ public sealed class DataErasureService : IDataErasureService
             PassportEventsDeleted: passport.Count,
             AuditEventsDeleted: audits.Count,
             ConfirmationsDeleted: confirmations.Count,
-            ConfirmationLinesDeleted: confirmationLines.Count);
+            ConfirmationLinesDeleted: confirmationLines.Count,
+            AiSuggestionDecisionsDeleted: aiDecisions.Count,
+            IdempotencyKeysDeleted: idempotencyKeys.Count);
     }
 
     public async Task<BulkOrderErasureResult> BulkEraseOrdersAsync(
@@ -200,6 +212,8 @@ public sealed class DataErasureService : IDataErasureService
                 AuditEventsDeleted       = result.AuditEventsDeleted + r.AuditEventsDeleted,
                 ConfirmationsDeleted     = result.ConfirmationsDeleted + r.ConfirmationsDeleted,
                 ConfirmationLinesDeleted = result.ConfirmationLinesDeleted + r.ConfirmationLinesDeleted,
+                AiSuggestionDecisionsDeleted = result.AiSuggestionDecisionsDeleted + r.AiSuggestionDecisionsDeleted,
+                IdempotencyKeysDeleted       = result.IdempotencyKeysDeleted + r.IdempotencyKeysDeleted,
             };
         }
 

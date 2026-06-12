@@ -15,6 +15,12 @@ namespace ProcuLink.Api.Services;
 /// path (generate output document, upload, advance to ready_to_deliver). Method moved
 /// verbatim from the original God-class; only the host type and the shared-helper call
 /// site changed (audit W1/B1 decomposition).
+///
+/// <para><b>Idempotency:</b> <see cref="TransformAsync"/> atomically claims the order
+/// (ready/transforming → transforming) before generating anything; a duplicated Hangfire
+/// run or a concurrent enqueue on an already-transformed order returns a
+/// <see cref="TransformResponse.Skipped"/> no-op instead of uploading a duplicate
+/// artifact and re-triggering delivery.</para>
 /// </summary>
 internal sealed class OrderTransformService
 {
@@ -176,10 +182,71 @@ internal sealed class OrderTransformService
         if (!useTemplate && !useNativeOverride && transformer is null)
             return Result<TransformResponse>.Fail($"No transform service registered for format '{effectiveFormat}'.");
 
-        // Mark as transforming so the UI can show a spinner
-        entity.Status    = "transforming";
-        entity.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
+        // ── Idempotency / concurrency guard ────────────────────────────────────
+        // Atomically claim the order by flipping ready → transforming only while it is
+        // still claimable (mirrors the parse path's "only parse while parsing" guard).
+        // "transforming" is also claimable so a Hangfire retry can re-run a crashed
+        // attempt; a COMPLETED transform (ready_to_deliver and beyond) affects 0 rows
+        // and short-circuits below — re-running it would upload a duplicate artifact
+        // and re-enqueue delivery, double-sending the same PO to the supplier.
+        var claimedAt = DateTime.UtcNow;
+        int claimed;
+        if (_db.Database.IsRelational())
+        {
+            claimed = await _db.PurchaseOrders
+                .Where(x => x.Id == orderId && x.OrgId == organisationId
+                         && (x.Status == OrderStatusConstants.Ready
+                          || x.Status == OrderStatusConstants.Transforming))
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(o => o.Status, OrderStatusConstants.Transforming)
+                    .SetProperty(o => o.UpdatedAt, claimedAt), ct);
+        }
+        else
+        {
+            // EF InMemory test provider cannot translate ExecuteUpdateAsync — emulate the
+            // same transition through the change tracker (tests are single-threaded there).
+            claimed = entity.Status is OrderStatusConstants.Ready or OrderStatusConstants.Transforming ? 1 : 0;
+            if (claimed == 1)
+            {
+                entity.Status    = OrderStatusConstants.Transforming;
+                entity.UpdatedAt = claimedAt;
+                await _db.SaveChangesAsync(ct);
+            }
+        }
+
+        if (claimed == 0)
+        {
+            // Already transformed (or not in a transformable state): report the latest
+            // existing artifact as a benign no-op so a duplicated job neither re-uploads
+            // nor re-enqueues delivery.
+            var existing = await _db.OutboundArtifacts.AsNoTracking()
+                .Where(a => a.OrderId == orderId && a.OrgId == organisationId)
+                .OrderByDescending(a => a.CreatedAt)
+                .FirstOrDefaultAsync(ct);
+
+            _logger.LogInformation(
+                "Order {OrderId} transform skipped (status={Status}, existing artifact={ArtifactId}) — already in flight or done.",
+                orderId, entity.Status, existing?.Id);
+
+            return Result<TransformResponse>.Ok(new TransformResponse(
+                existing?.Id ?? Guid.Empty,
+                existing?.Format ?? effectiveFormat.ToString().ToLowerInvariant(),
+                existing?.CreatedAt ?? claimedAt,
+                Skipped: true));
+        }
+
+        // Sync the tracked entity with the row just claimed (the ExecuteUpdateAsync above
+        // bypasses the change tracker): both CURRENT and ORIGINAL values must say
+        // 'transforming', otherwise the failure paths' revert to "ready" would diff as
+        // a no-op against a stale original and never be written — stranding the order.
+        entity.Status    = OrderStatusConstants.Transforming;
+        entity.UpdatedAt = claimedAt;
+        if (_db.Database.IsRelational())
+        {
+            var entry = _db.Entry(entity);
+            entry.Property(x => x.Status).OriginalValue    = OrderStatusConstants.Transforming;
+            entry.Property(x => x.UpdatedAt).OriginalValue = claimedAt;
+        }
 
         // Generate the document.
         //  • Native CSV/JSON override → the override builder emits the document.

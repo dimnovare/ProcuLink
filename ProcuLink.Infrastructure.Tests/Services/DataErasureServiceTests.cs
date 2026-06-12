@@ -41,6 +41,19 @@ public class DataErasureServiceTests
         db.AuditEvents.Add(new AuditEvent { Id = Guid.NewGuid(), OrgId = orgId, EntityType = "order", EntityId = orderId });
         db.OrderConfirmations.Add(new OrderConfirmationEntity { Id = confId, OrgId = orgId, PurchaseOrderId = orderId, SourceFileKey = $"{prefix}/conf.pdf" });
         db.OrderConfirmationLines.Add(new OrderConfirmationLineEntity { Id = Guid.NewGuid(), OrgId = orgId, OrderConfirmationId = confId, PurchaseOrderLineId = lineId });
+        // Sensitive AI decision history (real buyer/supplier item codes) + the upload
+        // idempotency key pointing at this order — both must die with the order.
+        db.AiSuggestionDecisions.Add(new AiSuggestionDecision
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, OrderId = orderId, LineNumber = 1,
+            SuggestedSupplierItemCode = "SUP-SECRET-1", ChosenSupplierItemCode = "SUP-SECRET-1",
+            CandidateSetJson = "[\"SUP-SECRET-1\",\"SUP-SECRET-2\"]", Decision = "accepted",
+            DecidedAt = DateTime.UtcNow,
+        });
+        db.IdempotencyKeys.Add(new IdempotencyKey
+        {
+            Key = $"idem-{orderId:N}", OrgId = orgId, OrderId = orderId, CreatedAt = DateTimeOffset.UtcNow,
+        });
     }
 
     [Fact]
@@ -69,6 +82,8 @@ public class DataErasureServiceTests
         result.AuditEventsDeleted.Should().Be(1);
         result.ConfirmationsDeleted.Should().Be(1);
         result.ConfirmationLinesDeleted.Should().Be(1);
+        result.AiSuggestionDecisionsDeleted.Should().Be(1);
+        result.IdempotencyKeysDeleted.Should().Be(1);
 
         storage.Deleted.Should().BeEquivalentTo(new[]
         {
@@ -86,11 +101,17 @@ public class DataErasureServiceTests
         (await db.AuditEvents.AnyAsync(e => e.EntityId == order1)).Should().BeFalse();
         (await db.OrderConfirmations.AnyAsync(c => c.PurchaseOrderId == order1)).Should().BeFalse();
         (await db.OrderConfirmationLines.AnyAsync(cl => cl.OrgId == org1)).Should().BeFalse();
+        // Erase-completeness: ZERO rows remain in the AI-decision and idempotency tables —
+        // these carried real item codes / the order id and previously survived the erase.
+        (await db.AiSuggestionDecisions.AnyAsync(d => d.OrderId == order1)).Should().BeFalse();
+        (await db.IdempotencyKeys.AnyAsync(k => k.OrderId == order1)).Should().BeFalse();
 
         // Tenant isolation: org 2's graph is completely untouched.
         (await db.PurchaseOrders.AnyAsync(o => o.Id == order2)).Should().BeTrue();
         (await db.OrderConfirmations.AnyAsync(c => c.PurchaseOrderId == order2)).Should().BeTrue();
         (await db.AuditEvents.AnyAsync(e => e.EntityId == order2)).Should().BeTrue();
+        (await db.AiSuggestionDecisions.AnyAsync(d => d.OrderId == order2)).Should().BeTrue();
+        (await db.IdempotencyKeys.AnyAsync(k => k.OrderId == order2)).Should().BeTrue();
         storage.Deleted.Should().NotContain(k => k.StartsWith("org2/"));
     }
 
@@ -225,6 +246,8 @@ public class DataErasureServiceTests
         result.LinesDeleted.Should().Be(2, "each erased order graph has one line — counts are summed");
         result.R2ObjectsDeleted.Should().Be(6, "3 blobs per order × 2 orders");
         result.ConfirmationsDeleted.Should().Be(2);
+        result.AiSuggestionDecisionsDeleted.Should().Be(2);
+        result.IdempotencyKeysDeleted.Should().Be(2);
         (await db.PurchaseOrders.AnyAsync(o => o.Id == pending)).Should().BeTrue("the pending order does not match the status filter");
     }
 
@@ -263,7 +286,6 @@ public class DataErasureServiceTests
             modelBuilder.Ignore<ItemMapping>();
             modelBuilder.Ignore<SupplierPoMapping>();
             modelBuilder.Ignore<SupplierDeliveryConfig>();
-            modelBuilder.Ignore<IdempotencyKey>();
             modelBuilder.Ignore<AiUsageMonthly>();
             modelBuilder.Ignore<TenantApiKey>();
             modelBuilder.Ignore<IntegrationSubscription>();
@@ -310,6 +332,14 @@ public class DataErasureServiceTests
                 b.Ignore(x => x.OrderConfirmation);
                 b.Ignore(x => x.PurchaseOrderLine);
             });
+            modelBuilder.Entity<AiSuggestionDecision>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.Ignore(x => x.Organisation);
+            });
+            // Same composite key as the real model (the client-supplied key is only
+            // unique per org).
+            modelBuilder.Entity<IdempotencyKey>(b => b.HasKey(x => new { x.OrgId, x.Key }));
         }
     }
 }

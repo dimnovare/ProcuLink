@@ -15,6 +15,7 @@ namespace ProcuLink.Api.Tests.Integration;
 /// supplier, and (3) the supplier FK rejects an orphan source. Docker-gated so the suite
 /// skips (not fails) where Docker is absent, mirroring <see cref="EndToEndPipelineTests"/>.
 /// </summary>
+[Collection("postgres-container")]
 public sealed class SupplierCatalogSourcePostgresTests : IAsyncLifetime
 {
     private PostgreSqlContainer? _pg;

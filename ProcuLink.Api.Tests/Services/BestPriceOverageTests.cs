@@ -262,6 +262,44 @@ public class BestPriceOverageTests
         PlanConstants.BestPriceOverageOrders(PlanConstants.Growth, 1000, 1100).Should().Be(100);
     }
 
+    // ── ADMIN OVERRIDE ABOVE THE TOP TIER: meter only beyond the granted limit ──
+
+    [Fact]
+    public void AdminOverrideAboveTopTier_Distributor_MetersOnlyBeyondTheOverride()
+    {
+        // The operator granted a Distributor org 3,000 included orders (above the
+        // published 2,500). At 3,500 used, ONLY the 500 beyond the granted limit are
+        // billable — the old else-branch discarded the override and re-metered from
+        // 2,500, over-charging 1,000 orders (€500 real Stripe money) instead of 500.
+        PlanConstants.BestPriceOverageOrders(PlanConstants.Distributor, 3000, 3500)
+            .Should().Be(500, "metering starts at the granted limit, not the published inclusion");
+    }
+
+    [Fact]
+    public void AdminOverrideAboveTopTier_UsageWithinTheOverride_IsFree()
+    {
+        // 2,800 used with a 3,000 override: above the published 2,500 inclusion but
+        // inside the granted headroom ⇒ no overage at all.
+        PlanConstants.BestPriceOverageOrders(PlanConstants.Distributor, 3000, 2800).Should().Be(0);
+    }
+
+    [Fact]
+    public void AdminOverrideAboveTopTier_LowerPlan_AlsoMetersOnlyBeyondTheOverride()
+    {
+        // A Growth org granted 3,000 included orders keeps its own flat and meters only
+        // the excess beyond the override — a raised limit only ever SHRINKS the overage.
+        PlanConstants.BestPriceOverageOrders(PlanConstants.Growth, 3000, 3500).Should().Be(500);
+    }
+
+    [Fact]
+    public void AdminOverrideExactlyAtTopInclusion_BehavesLikeNoOverride()
+    {
+        // Boundary: an effective limit equal to the top tier's inclusion charges the
+        // same pure metered excess as the unoverridden top tier (200 over ⇒ 200).
+        var top = PlanConstants.SelfServeLadder[^1];
+        PlanConstants.BestPriceOverageOrders(top.Plan, top.Included, top.Included + 200).Should().Be(200);
+    }
+
     // ── INTEGRATION: best price flows through StripeBillingService ─────────
 
     [Fact]

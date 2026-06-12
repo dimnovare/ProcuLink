@@ -340,6 +340,7 @@ public sealed class DockerRequiredFactAttribute : FactAttribute
     }
 }
 
+[Collection("postgres-container")]
 public sealed class EndToEndPipelineTests : IAsyncLifetime
 {
     private PostgreSqlContainer? _pg;

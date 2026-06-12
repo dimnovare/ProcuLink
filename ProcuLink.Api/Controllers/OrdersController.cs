@@ -1058,6 +1058,8 @@ public sealed class OrdersController : ControllerBase
     /// Returns immediately with { status: "transforming" }.
     /// Poll GET /api/orders/{id}/status until status changes.
     /// All lines must have NeedsReview = false — returns 422 otherwise.
+    /// Only a 'ready' order can start a transform (atomic ready→transforming claim);
+    /// an in-flight order returns 202, any other state returns 409.
     /// </summary>
     [HttpPost("{id:guid}/transform")]
     [EnableRateLimiting("transform")]
@@ -1109,9 +1111,6 @@ public sealed class OrdersController : ControllerBase
                 error = $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolvedLines)}."
             });
 
-        if (order.Status == "transforming")
-            return Accepted(new { status = "transforming" }); // already in progress
-
         // Resolve the output format: an explicit request format wins (e.g. a manual download);
         // otherwise fall back to the supplier's configured delivery format so "send to supplier"
         // auto-uses the format that supplier requires; otherwise a safe default.
@@ -1133,8 +1132,50 @@ public sealed class OrdersController : ControllerBase
         if (!AllowedTransformFormats.Contains(formatStr))
             return BadRequest(new { error = "Format must be one of: xml, csv, cxml, json, ubl, x12." });
 
+        // Atomically claim ready → transforming BEFORE enqueueing — the same transition
+        // TransformAsync enforces. A racy read-then-enqueue here let two concurrent requests
+        // both see "ready" and enqueue two transform jobs for the same order.
+        var claimed = await _db.PurchaseOrders
+            .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId
+                     && o.Status == OrderStatusConstants.Ready)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(o => o.Status, OrderStatusConstants.Transforming)
+                .SetProperty(o => o.UpdatedAt, DateTime.UtcNow), ct);
+
+        if (claimed == 0)
+        {
+            var currentStatus = await _db.PurchaseOrders.AsNoTracking()
+                .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId)
+                .Select(o => o.Status)
+                .FirstOrDefaultAsync(ct);
+
+            if (currentStatus == OrderStatusConstants.Transforming)
+                return Accepted(new { status = "transforming" }); // already in progress
+
+            return Conflict(new
+            {
+                error = $"Order is not ready to transform (status '{currentStatus}'). " +
+                        "Only a 'ready' order can start a transform; re-resolve its lines to return it to 'ready'."
+            });
+        }
+
         // Enqueue transform job
-        TransformOrderJob.Enqueue(_jobs, id, _tenant.OrganisationId, formatStr);
+        try
+        {
+            TransformOrderJob.Enqueue(_jobs, id, _tenant.OrganisationId, formatStr);
+        }
+        catch
+        {
+            // Release the claim — a failed enqueue must not strand the order in
+            // 'transforming' (nothing else would ever pick it up again).
+            await _db.PurchaseOrders
+                .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId
+                         && o.Status == OrderStatusConstants.Transforming)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(o => o.Status, OrderStatusConstants.Ready)
+                    .SetProperty(o => o.UpdatedAt, DateTime.UtcNow), ct);
+            throw;
+        }
 
         _logger.LogInformation(
             "TransformOrderJob enqueued for order {OrderId}, format={Format}",

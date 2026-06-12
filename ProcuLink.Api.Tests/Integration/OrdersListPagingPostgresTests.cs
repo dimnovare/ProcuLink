@@ -29,6 +29,7 @@ namespace ProcuLink.Api.Tests.Integration;
 /// tiebreaker provides.) Docker-gated (mirrors <see cref="EndToEndPipelineTests"/>) so it
 /// skips where Docker is absent instead of failing the suite.</para>
 /// </summary>
+[Collection("postgres-container")]
 public sealed class OrdersListPagingPostgresTests : IAsyncLifetime
 {
     private PostgreSqlContainer? _pg;
