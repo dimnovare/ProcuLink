@@ -71,8 +71,18 @@ public class DashboardController : ControllerBase
 
     // ── GET /api/dashboard/topology ──────────────────────────────────────────
     // Buyer → supplier wire topology derived from all org orders.
-    // Buyer name lives in canonical_json (jsonb) — loaded in-memory per the
-    // same pattern used by OrderService.ListPagedAsync.
+    // Buyer name reads the denormalized, indexed buyer_name column (written by
+    // all current ingest paths); buyer/supplier/wire counts are aggregated with
+    // SQL GROUP BY so no per-order rows — and no canonical_json jsonb blobs —
+    // are loaded on this landing-page hot path. Rows that pre-date the
+    // Wave2BuyerNameColumn migration (null column) fall back to canonical_json,
+    // fetched separately and capped at LegacyBuyerNameFallbackRows.
+
+    // Cap on how many legacy (null buyer_name column) rows are fetched for the
+    // canonical_json fallback. Only rows created before the 2026-05-31
+    // Wave2BuyerNameColumn migration can hit this path — all current write paths
+    // populate the column — so the cap bounds cost without affecting new data.
+    private const int LegacyBuyerNameFallbackRows = 1000;
 
     private static readonly HashSet<string> FailedStatuses = new(StringComparer.Ordinal)
     {
@@ -99,77 +109,99 @@ public class DashboardController : ControllerBase
         // match the clock source used elsewhere in this controller (GetStats).
         var supplierHealthCutoff = DateTime.UtcNow.AddDays(-30);
 
-        var rows = await _db.PurchaseOrders
+        // Supplier health is a "last 30 days" acceptance rate — only orders inside
+        // that window feed its Total/Failed counts. Buyer + wire aggregations below
+        // stay all-time (their labels do not claim a window), so this filter is
+        // scoped to the supplier query only. Aggregated per supplier in SQL.
+        var supplierRows = await _db.PurchaseOrders
             .AsNoTracking()
-            .Where(o => o.OrgId == orgId)
+            .Where(o => o.OrgId == orgId && o.CreatedAt >= supplierHealthCutoff)
             .Select(o => new
             {
-                o.Id,
                 o.SupplierId,
                 SupplierName = o.Supplier != null ? o.Supplier.Name : "Unknown",
                 o.Status,
-                o.CreatedAt,
-                o.CanonicalJson,
+            })
+            .GroupBy(x => new { x.SupplierId, x.SupplierName })
+            .Select(g => new
+            {
+                g.Key.SupplierId,
+                g.Key.SupplierName,
+                Total      = g.Count(),
+                Failed     = g.Count(x => FailedStatuses.Contains(x.Status)),
+                Exceptions = g.Count(x => ExceptionStatuses.Contains(x.Status)),
             })
             .ToListAsync(ct);
 
-        // supMap keyed by SupplierId (GUID string) — stable, unique, collision-free
-        var supMap  = new Dictionary<string, (string Id, string Name, int Total, int Failed, int Exceptions)>(StringComparer.Ordinal);
+        // Buyer + wire counts (all-time), aggregated per (buyer_name, supplier) pair
+        // in SQL over the indexed buyer_name column — no canonical_json loaded.
+        var wireRows = await _db.PurchaseOrders
+            .AsNoTracking()
+            .Where(o => o.OrgId == orgId && o.BuyerName != null)
+            .GroupBy(o => new { o.BuyerName, o.SupplierId })
+            .Select(g => new
+            {
+                g.Key.BuyerName,
+                g.Key.SupplierId,
+                Total      = g.Count(),
+                Failed     = g.Count(o => FailedStatuses.Contains(o.Status)),
+                Exceptions = g.Count(o => ExceptionStatuses.Contains(o.Status)),
+            })
+            .ToListAsync(ct);
+
+        // Legacy fallback: rows whose buyer_name column is null may still carry the
+        // buyer name in canonical_json (pre-column data). Fetched separately, newest
+        // first, capped — so the legacy tail can never reintroduce a full-table
+        // jsonb scan on the landing page.
+        var legacyRows = await _db.PurchaseOrders
+            .AsNoTracking()
+            .Where(o => o.OrgId == orgId && o.BuyerName == null && o.CanonicalJson != null)
+            .OrderByDescending(o => o.CreatedAt)
+            .Take(LegacyBuyerNameFallbackRows)
+            .Select(o => new { o.SupplierId, o.Status, o.CanonicalJson })
+            .ToListAsync(ct);
+
         var buyMap  = new Dictionary<string, (string Id, string Name, int Total)>(StringComparer.OrdinalIgnoreCase);
         // wireMap key: "{buyerKey}|||{supplierId}"
         var wireMap = new Dictionary<string, (string BuyerKey, string SupplierKey, int Total, int Failed, int Exceptions)>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var row in rows)
+        // Postgres groups buyer names case-sensitively; this merge step recombines
+        // case variants under the same case-insensitive key, exactly like the
+        // previous in-memory loop did.
+        void Accumulate(string buyerName, string supplierKey, int total, int failed, int exceptions)
         {
-            var isFailed    = FailedStatuses.Contains(row.Status);
-            var isException = ExceptionStatuses.Contains(row.Status);
-
-            // Supplier health is a "last 30 days" acceptance rate — only orders inside
-            // that window feed its Total/Failed counts. Buyer + wire aggregations below
-            // stay all-time (their labels do not claim a window), so this filter is
-            // scoped to supMap only.
-            var sk = row.SupplierId.ToString(); // stable GUID string
-            if (row.CreatedAt >= supplierHealthCutoff)
-            {
-                if (!supMap.TryGetValue(sk, out var sa))
-                    sa = (sk, row.SupplierName.Trim(), 0, 0, 0);
-                supMap[sk] = sa with
-                {
-                    Total      = sa.Total + 1,
-                    Failed     = sa.Failed + (isFailed ? 1 : 0),
-                    Exceptions = sa.Exceptions + (isException ? 1 : 0),
-                };
-            }
-
-            string? buyerName = null;
-            if (row.CanonicalJson is not null)
-            {
-                try
-                {
-                    var root = row.CanonicalJson.RootElement;
-                    if (root.TryGetProperty("buyerName", out var el))
-                        buyerName = el.GetString();
-                    else if (root.TryGetProperty("BuyerName", out var el2))
-                        buyerName = el2.GetString();
-                }
-                catch { /* malformed json */ }
-            }
-            if (string.IsNullOrWhiteSpace(buyerName)) continue;
-
             var bk = buyerName.Trim().ToLowerInvariant();
             if (!buyMap.TryGetValue(bk, out var ba))
                 ba = ($"buy-{bk}", buyerName.Trim(), 0);
-            buyMap[bk] = ba with { Total = ba.Total + 1 };
+            buyMap[bk] = ba with { Total = ba.Total + total };
 
-            var wk = $"{bk}|||{sk}";
+            var wk = $"{bk}|||{supplierKey}";
             if (!wireMap.TryGetValue(wk, out var wa))
-                wa = (bk, sk, 0, 0, 0);
+                wa = (bk, supplierKey, 0, 0, 0);
             wireMap[wk] = wa with
             {
-                Total      = wa.Total + 1,
-                Failed     = wa.Failed + (isFailed ? 1 : 0),
-                Exceptions = wa.Exceptions + (isException ? 1 : 0),
+                Total      = wa.Total + total,
+                Failed     = wa.Failed + failed,
+                Exceptions = wa.Exceptions + exceptions,
             };
+        }
+
+        foreach (var row in wireRows)
+        {
+            if (string.IsNullOrWhiteSpace(row.BuyerName)) continue; // defensive: write paths trim + nullify
+            Accumulate(row.BuyerName, row.SupplierId.ToString(), row.Total, row.Failed, row.Exceptions);
+        }
+
+        foreach (var row in legacyRows)
+        {
+            var buyerName = ExtractBuyerNameFromJson(row.CanonicalJson);
+            if (string.IsNullOrWhiteSpace(buyerName)) continue;
+            Accumulate(
+                buyerName,
+                row.SupplierId.ToString(),
+                1,
+                FailedStatuses.Contains(row.Status) ? 1 : 0,
+                ExceptionStatuses.Contains(row.Status) ? 1 : 0);
         }
 
         var buyers = buyMap.Values
@@ -177,7 +209,8 @@ public class DashboardController : ControllerBase
             .Select(b => new TopologyBuyerDto(b.Id, b.Name, CodeFor(b.Name), $"{b.Total} ord"))
             .ToList();
 
-        var suppliers = supMap.Values
+        var suppliers = supplierRows
+            .Select(s => (Id: s.SupplierId.ToString(), Name: s.SupplierName.Trim(), s.Total, s.Failed))
             .OrderByDescending(s => s.Total)
             .Select(s => new TopologySupplierDto(
                 s.Id, s.Name, CodeFor(s.Name), $"{s.Total} ord",
@@ -204,6 +237,26 @@ public class DashboardController : ControllerBase
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Legacy buyer-name extraction from canonical_json for rows that pre-date the
+    /// denormalized buyer_name column. Keys may be "buyerName" (camelCase from
+    /// OrderService) or "BuyerName" (PascalCase from older parsers).
+    /// </summary>
+    private static string? ExtractBuyerNameFromJson(System.Text.Json.JsonDocument? json)
+    {
+        if (json is null) return null;
+        try
+        {
+            var root = json.RootElement;
+            if (root.TryGetProperty("buyerName", out var el))
+                return el.GetString();
+            if (root.TryGetProperty("BuyerName", out var el2))
+                return el2.GetString();
+        }
+        catch { /* malformed json */ }
+        return null;
+    }
 
     private static string CodeFor(string name)
     {

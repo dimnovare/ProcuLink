@@ -133,6 +133,47 @@ public class DashboardControllerTests
     }
 
     [Fact]
+    public async Task GetTopology_MixedColumnAndLegacyJsonRows_ProducesSameTotalsAsJsonOnlyDerivation()
+    {
+        // Equivalence guard for the column-first rewrite: seed both current-shaped
+        // rows (buyer_name column populated — written by all current ingest paths)
+        // AND legacy-shaped rows (null column, buyer name only in CanonicalJson).
+        // The old JSON-only per-row loop would have produced one buyer with 3
+        // orders, supplier health 67 and one "down" wire with alert 1 — the
+        // column-first + capped-fallback implementation must match exactly.
+        var (ctrl, orgId, db) = Build();
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier
+        {
+            Id = supplierId, OrgId = orgId, Name = "Acme Supplies",
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.PurchaseOrders.AddRange(
+            // Current-shaped rows: column + JSON.
+            MakeOrderWithBuyerColumn(orgId, supplierId, "delivered",       "Buyer Corp"),
+            MakeOrderWithBuyerColumn(orgId, supplierId, "delivered",       "Buyer Corp"),
+            // Legacy-shaped row: JSON only, null column — must still count via the fallback.
+            MakeOrderWithBuyer(orgId, supplierId, "delivery_failed", "Buyer Corp")
+        );
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.GetTopology(CancellationToken.None);
+        var ok     = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto    = ok.Value.Should().BeOfType<DashboardTopologyDto>().Subject;
+
+        dto.Buyers.Should().HaveCount(1, "column rows and legacy JSON rows name the same buyer");
+        dto.Buyers[0].Name.Should().Be("Buyer Corp");
+        dto.Buyers[0].Volume.Should().Be("3 ord", "all three orders must be counted regardless of where the buyer name lives");
+
+        dto.Suppliers.Should().HaveCount(1);
+        dto.Suppliers[0].Health.Should().Be(67); // 2/3 not-failed = 66.6 → round = 67
+
+        dto.Wires.Should().HaveCount(1);
+        dto.Wires[0].Health.Should().Be("down"); // legacy row carries the failure
+        dto.Wires[0].Alert.Should().Be(1);       // 1 delivery_failed (exception) from the legacy row
+    }
+
+    [Fact]
     public async Task GetTopology_CrossOrg_Excluded()
     {
         var (ctrl, orgId, db) = Build();
@@ -166,12 +207,28 @@ public class DashboardControllerTests
             Currency = "EUR", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         };
 
+    /// <summary>
+    /// Legacy-shaped row: buyer name ONLY in CanonicalJson, buyer_name column null —
+    /// the shape rows created before the Wave2BuyerNameColumn migration have.
+    /// </summary>
     private static PurchaseOrderEntity MakeOrderWithBuyer(
         Guid orgId, Guid supplierId, string status, string buyerName)
     {
         var o = MakeOrder(orgId, supplierId, status);
         o.CanonicalJson = System.Text.Json.JsonDocument.Parse(
             $"{{\"buyerName\":\"{buyerName}\"}}");
+        return o;
+    }
+
+    /// <summary>
+    /// Current-shaped row: buyer name in BOTH the denormalized column and
+    /// CanonicalJson — the shape every current ingest path writes.
+    /// </summary>
+    private static PurchaseOrderEntity MakeOrderWithBuyerColumn(
+        Guid orgId, Guid supplierId, string status, string buyerName)
+    {
+        var o = MakeOrderWithBuyer(orgId, supplierId, status, buyerName);
+        o.BuyerName = buyerName;
         return o;
     }
 }
