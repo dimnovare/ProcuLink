@@ -561,13 +561,14 @@ internal sealed class OrderIngestionService
             ParsedOrder parsedOrder;
             IReadOnlyCollection<int> structuredReviewLineNumbers = Array.Empty<int>();
             IReadOnlyDictionary<int, string>? structuredReviewReasons = null;
+            string? pdfExtractionFailureReason = null;
             try
             {
                 if (extension == ".pdf")
                 {
                     // Primary PDF path: text → LLM structured extraction, with a
                     // deterministic-parser fallback. See ParsePdfAsync.
-                    (parsedOrder, structuredReviewLineNumbers, structuredReviewReasons) =
+                    (parsedOrder, structuredReviewLineNumbers, structuredReviewReasons, pdfExtractionFailureReason) =
                         await ParsePdfAsync(buffer.ToArray(), organisationId, orderId, ct);
                 }
                 else if (poMapping is not null && extension == ".csv")
@@ -597,13 +598,22 @@ internal sealed class OrderIngestionService
             if (parsedOrder.Lines.Count == 0)
             {
                 await SetOrderFailedAsync(orderId, organisationId, ct);
+                // When the per-org AI usage cap blocked the LLM extractor, the regex
+                // fallback yielding 0 lines is a consequence of the cap — say so honestly
+                // instead of the misleading "scanned or image-only" PDF copy.
+                var aiCapReached = extension == ".pdf"
+                    && pdfExtractionFailureReason == StructuredExtractionResult.UsageCapFailureReason;
+                var emptyLinesError = aiCapReached
+                    ? ParseFailureExplain.ForAiCapReached()
+                    : ParseFailureExplain.ForEmptyLines(extension);
                 _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "ParseFailed",
-                    new { error = ParseFailureExplain.ForEmptyLines(extension), stage = "parse", detail = "0 lines parsed" }));
+                    new { error = emptyLinesError, stage = "parse", detail = "0 lines parsed" }));
                 await _db.SaveChangesAsync(ct);
                 await _shared.EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
-                    payload: new { error = "0 lines parsed" }, ct: ct);
+                    payload: new { error = aiCapReached ? emptyLinesError : "0 lines parsed" }, ct: ct);
                 await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
-                return Result<ParsedFileOutput>.Fail("File contains no line items.");
+                return Result<ParsedFileOutput>.Fail(
+                    aiCapReached ? emptyLinesError : "File contains no line items.");
             }
 
             // Auto-resolve lines against item_mappings (batched), then one AI call for leftovers.
@@ -764,12 +774,16 @@ internal sealed class OrderIngestionService
     /// Routes a PDF to the LLM structured extractor when one is available and it
     /// returns a confident order with lines; otherwise falls back to the
     /// deterministic <c>PdfOrderParser</c>. Returns the parsed order plus the set
-    /// of line numbers the extractor flagged for review (empty for the fallback)
-    /// and the optional per-line "why flagged" reasons (null for the fallback).
+    /// of line numbers the extractor flagged for review (empty for the fallback),
+    /// the optional per-line "why flagged" reasons (null for the fallback), and —
+    /// when the extractor was AVAILABLE but extraction failed — its failure reason,
+    /// so the caller can explain an empty fallback result honestly (e.g. the per-org
+    /// AI usage cap). Null when the extractor is unavailable or extraction succeeded.
     /// </summary>
     internal async Task<(ParsedOrder parsed,
                          IReadOnlyCollection<int> reviewLineNumbers,
-                         IReadOnlyDictionary<int, string>? reviewReasons)> ParsePdfAsync(
+                         IReadOnlyDictionary<int, string>? reviewReasons,
+                         string? extractionFailureReason)> ParsePdfAsync(
         byte[] bytes, Guid organisationId, Guid orderId, CancellationToken ct)
     {
         // No-egress orgs: never send PDF data to OpenAI. Use the deterministic parser,
@@ -789,9 +803,10 @@ internal sealed class OrderIngestionService
                 orderId, organisationId);
             var noEgressParser = _parserFactory.GetParser(".pdf");
             using var noEgressStream = new MemoryStream(bytes);
-            return (await noEgressParser.ParseAsync(noEgressStream, ct), Array.Empty<int>(), null);
+            return (await noEgressParser.ParseAsync(noEgressStream, ct), Array.Empty<int>(), null, null);
         }
 
+        string? extractionFailureReason = null;
         if (_structuredExtractor is { IsAvailable: true })
         {
             StructuredExtractionResult extraction;
@@ -804,9 +819,10 @@ internal sealed class OrderIngestionService
                 _logger.LogInformation(
                     "Order {OrderId}: PDF parsed via structured extractor — {Lines} lines, {Review} flagged for review.",
                     orderId, extractedOrder.Lines.Count, extraction.ReviewLineNumbers.Count);
-                return (MapExtractedToParsed(extractedOrder), extraction.ReviewLineNumbers, extraction.ReviewReasons);
+                return (MapExtractedToParsed(extractedOrder), extraction.ReviewLineNumbers, extraction.ReviewReasons, null);
             }
 
+            extractionFailureReason = extraction.FailureReason;
             _logger.LogInformation(
                 "Order {OrderId}: structured PDF extraction unavailable/failed ({Reason}); falling back to deterministic parser.",
                 orderId, extraction.FailureReason ?? "unknown");
@@ -815,7 +831,7 @@ internal sealed class OrderIngestionService
         var parser = _parserFactory.GetParser(".pdf");
         using var stream = new MemoryStream(bytes);
         var parsed = await parser.ParseAsync(stream, ct);
-        return (parsed, Array.Empty<int>(), null);
+        return (parsed, Array.Empty<int>(), null, extractionFailureReason);
     }
 
     /// <summary>

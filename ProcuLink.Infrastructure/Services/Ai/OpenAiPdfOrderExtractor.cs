@@ -228,7 +228,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             : _trackerFactory?.Invoke();
 
         if (await IsAtOrOverCapAsync(tracker, organisationId, ct))
-            return StructuredExtractionResult.Fail("Organisation AI usage cap reached.");
+            return StructuredExtractionResult.Fail(StructuredExtractionResult.UsageCapFailureReason);
 
         // ── Text layer (primary). PdfPig extracts the digital text; the LLM structures it. ──
         string sourceText;
@@ -706,7 +706,9 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         {
             if (await tracker.IsAtOrOverLimitAsync(orgId, ct))
             {
-                _logger.LogWarning(
+                // LogError (→ Sentry): a latched cap silently degrades every PDF upload
+                // for this org to the regex fallback, so ops must see it without grepping.
+                _logger.LogError(
                     "PDF extraction skipped — org {OrgId} reached monthly token limit {Limit}.",
                     orgId, tracker.MonthlyLimit);
                 return true;

@@ -21,6 +21,18 @@ public class ParseFailureExplainTests
         Assert.Contains(expectedFragment, msg, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── ForAiCapReached ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void ForAiCapReached_ExplainsCapHonestly_NotScannedPdf()
+    {
+        var msg = ParseFailureExplain.ForAiCapReached();
+        Assert.Equal(
+            "AI document extraction is paused for this workspace — the monthly AI usage limit was reached. Raise the limit or contact support, then re-upload.",
+            msg);
+        Assert.DoesNotContain("scanned", msg, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ── ForUnsupportedFormat ──────────────────────────────────────────────────
 
     [Theory]

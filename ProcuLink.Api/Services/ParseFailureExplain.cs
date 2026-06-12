@@ -14,6 +14,9 @@ public static class ParseFailureExplain
             _                         => "The document was read but contained zero line items.",
         };
 
+    public static string ForAiCapReached() =>
+        "AI document extraction is paused for this workspace — the monthly AI usage limit was reached. Raise the limit or contact support, then re-upload.";
+
     public static string ForUnsupportedFormat(string extension) =>
         $"Unsupported file format '{extension.ToLowerInvariant()}'. Supported: CSV, XLSX, PDF, XML (cXML/UBL/Peppol), EDI (EDIFACT).";
 

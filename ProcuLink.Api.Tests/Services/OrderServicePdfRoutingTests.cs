@@ -80,9 +80,10 @@ public class OrderServicePdfRoutingTests
 
         // Deliberately NOT a real PDF — if the deterministic parser ran it would
         // throw, so a clean structured result proves the LLM path was taken.
-        var (parsed, review, _) = await svc.ParsePdfAsync(
+        var (parsed, review, _, failureReason) = await svc.ParsePdfAsync(
             Encoding.UTF8.GetBytes("not a real pdf"), orgId, Guid.NewGuid(), CancellationToken.None);
 
+        failureReason.Should().BeNull("extraction succeeded");
         parsed.PoNumber.Should().Be("PO-PDF-1");
         parsed.Currency.Should().Be("EUR");
         parsed.Lines.Should().HaveCount(2);
@@ -104,10 +105,11 @@ public class OrderServicePdfRoutingTests
 
         var svc = BuildService(extractor.Object);
 
-        var (parsed, review, _) = await svc.ParsePdfAsync(
+        var (parsed, review, _, failureReason) = await svc.ParsePdfAsync(
             CreatePdf("PO Number: PO-DET-1", "1 DET-CODE Widget 4 PCS 12.50"),
             Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None);
 
+        failureReason.Should().BeNull("the extractor was never invoked");
         parsed.PoNumber.Should().Be("PO-DET-1");
         parsed.Lines.Should().ContainSingle();
         parsed.Lines[0].BuyerItemCode.Should().Be("DET-CODE");
@@ -129,13 +131,15 @@ public class OrderServicePdfRoutingTests
 
         var svc = BuildService(extractor.Object);
 
-        var (parsed, review, _) = await svc.ParsePdfAsync(
+        var (parsed, review, _, failureReason) = await svc.ParsePdfAsync(
             CreatePdf("PO Number: PO-DET-2", "1 DET-CODE Widget 4 PCS 12.50"),
             Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None);
 
         parsed.PoNumber.Should().Be("PO-DET-2");
         parsed.Lines.Should().ContainSingle();
         review.Should().BeEmpty();
+        failureReason.Should().Be("low confidence",
+            "the extractor's failure reason must be threaded out so the caller can explain an empty fallback honestly");
     }
 
     [Fact]
@@ -156,10 +160,11 @@ public class OrderServicePdfRoutingTests
 
         var svc = BuildService(db, extractor.Object);
 
-        var (parsed, review, _) = await svc.ParsePdfAsync(
+        var (parsed, review, _, failureReason) = await svc.ParsePdfAsync(
             CreatePdf("PO Number: PO-NOEGRESS", "1 DET-CODE Widget 4 PCS 12.50"),
             orgId, Guid.NewGuid(), CancellationToken.None);
 
+        failureReason.Should().BeNull("the extractor was never invoked");
         parsed.PoNumber.Should().Be("PO-NOEGRESS");
         parsed.Lines.Should().ContainSingle();
         parsed.Lines[0].BuyerItemCode.Should().Be("DET-CODE");
@@ -189,7 +194,7 @@ public class OrderServicePdfRoutingTests
 
         var svc = BuildService(extractor.Object);
 
-        var (parsed, _, _) = await svc.ParsePdfAsync(
+        var (parsed, _, _, _) = await svc.ParsePdfAsync(
             Encoding.UTF8.GetBytes("not a real pdf"), orgId, Guid.NewGuid(), CancellationToken.None);
 
         parsed.DocumentType.Should().Be("invoice");
@@ -234,7 +239,8 @@ public class OrderServicePdfRoutingTests
     }
 
     // Minimal valid text PDF (mirrors ProcuLink.Transform.Tests.PdfOrderParserTests).
-    private static byte[] CreatePdf(params string[] lines)
+    // Internal so OrderServiceParseAuditTests can build a parseable-but-empty PDF too.
+    internal static byte[] CreatePdf(params string[] lines)
     {
         var content = new StringBuilder();
         content.AppendLine("BT");

@@ -22,7 +22,8 @@ public class OrderServiceParseAuditTests
 
     private static OrderService BuildService(
         ProcuLinkDbContext db,
-        IFileStorageService fileStorage)
+        IFileStorageService fileStorage,
+        IStructuredOrderExtractor? extractor = null)
     {
         var parserFactory = new OrderParserFactory(new IPurchaseOrderParser[]
         {
@@ -80,7 +81,8 @@ public class OrderServiceParseAuditTests
             Array.Empty<ITransformService>(),
             NullLogger<OrderService>.Instance,
             integrationTrigger.Object,
-            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
+            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService(),
+            extractor);
     }
 
     private static async Task<(ProcuLinkDbContext db, Guid orgId, Guid orderId)> SeedParsingOrderAsync(
@@ -145,6 +147,77 @@ public class OrderServiceParseAuditTests
         var errorProp = auditEvent.Payload!.RootElement.GetProperty("error").GetString();
         Assert.NotNull(errorProp);
         Assert.Contains("No line-table columns", errorProp, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ParseStoredFileAsync_PdfBlockedByAiCap_WritesParseFailed_WithHonestCapMessage()
+    {
+        var (db, orgId, orderId) = await SeedParsingOrderAsync(".pdf");
+
+        // Valid text PDF whose content matches no line pattern → the deterministic
+        // fallback yields 0 lines, exactly like a real-world layout it can't read.
+        var pdfBytes = OrderServicePdfRoutingTests.CreatePdf("Quarterly procurement newsletter");
+        var fileStorage = new Mock<IFileStorageService>();
+        fileStorage
+            .Setup(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new MemoryStream(pdfBytes));
+
+        var extractor = new Mock<IStructuredOrderExtractor>();
+        extractor.SetupGet(e => e.IsAvailable).Returns(true);
+        extractor
+            .Setup(e => e.ExtractAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(StructuredExtractionResult.Fail(StructuredExtractionResult.UsageCapFailureReason));
+
+        var svc = BuildService(db, fileStorage.Object, extractor.Object);
+        var result = await svc.ParseStoredFileAsync(orgId, orderId, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ParseFailureExplain.ForAiCapReached(), result.Error);
+
+        var auditEvent = await db.AuditEvents
+            .AsNoTracking()
+            .Where(e => e.EntityId == orderId && e.Action == "ParseFailed")
+            .FirstOrDefaultAsync();
+
+        Assert.NotNull(auditEvent);
+        var errorProp = auditEvent!.Payload!.RootElement.GetProperty("error").GetString();
+        Assert.Equal(ParseFailureExplain.ForAiCapReached(), errorProp);
+        Assert.DoesNotContain("scanned or image-only", errorProp, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ParseStoredFileAsync_PdfNonCapExtractionFailure_KeepsScannedOrImageOnlyMessage()
+    {
+        var (db, orgId, orderId) = await SeedParsingOrderAsync(".pdf");
+
+        var pdfBytes = OrderServicePdfRoutingTests.CreatePdf("Quarterly procurement newsletter");
+        var fileStorage = new Mock<IFileStorageService>();
+        fileStorage
+            .Setup(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new MemoryStream(pdfBytes));
+
+        // Any non-cap failure (OpenAI error, timeout, low confidence) keeps existing copy.
+        var extractor = new Mock<IStructuredOrderExtractor>();
+        extractor.SetupGet(e => e.IsAvailable).Returns(true);
+        extractor
+            .Setup(e => e.ExtractAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(StructuredExtractionResult.Fail("low confidence"));
+
+        var svc = BuildService(db, fileStorage.Object, extractor.Object);
+        var result = await svc.ParseStoredFileAsync(orgId, orderId, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("File contains no line items.", result.Error);
+
+        var auditEvent = await db.AuditEvents
+            .AsNoTracking()
+            .Where(e => e.EntityId == orderId && e.Action == "ParseFailed")
+            .FirstOrDefaultAsync();
+
+        Assert.NotNull(auditEvent);
+        var errorProp = auditEvent!.Payload!.RootElement.GetProperty("error").GetString();
+        Assert.NotNull(errorProp);
+        Assert.Contains("scanned or image-only", errorProp, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

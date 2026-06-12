@@ -49,6 +49,14 @@ public sealed record StructuredExtractionResult(
     IReadOnlyCollection<int> ReviewLineNumbers,
     IReadOnlyDictionary<int, string>? ReviewReasons = null)
 {
+    /// <summary>
+    /// <see cref="FailureReason"/> emitted when the per-org monthly AI token cap blocks
+    /// extraction. A shared constant so the parse orchestrator can recognise the cap
+    /// case structurally (exact reference comparison, no fuzzy string matching) and
+    /// surface honest user-facing copy instead of the generic fallback explanation.
+    /// </summary>
+    public const string UsageCapFailureReason = "Organisation AI usage cap reached.";
+
     /// <summary>A failure result carrying a reason and no order.</summary>
     public static StructuredExtractionResult Fail(string reason) =>
         new(false, 0.0, null, reason, Array.Empty<int>());
