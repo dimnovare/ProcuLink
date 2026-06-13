@@ -101,3 +101,11 @@ credential/secret into `ConfigJson`. If a new delivery option needs a secret, ad
 it to the encrypted credential payload. There is no scale threshold here — this
 entry exists to record that the cleartext column was reviewed and is intentionally
 non-secret.
+
+## Security-review P3 residuals (2026-06-12, accepted — not fixed)
+
+Pre-launch security pass found NO P0/P1. Three notes; #1 corrected in the catalog plan doc, #2/#3 accepted-as-is (change-risk disproportionate to P3-informational reward):
+
+1. **M3 ApiKey rate-limit IP-partition — STILL OPEN, accepted.** The `sub=apikey:{id}` claim exists but the rate limiter runs before the ApiKey scheme authenticates, so key-authed ingress is still IP-partitioned. Bounded (every partition capped, idempotent sink). Real fix = deliberate global-middleware reorder, not a launch rider. Corrected the "resolved" wording in `2026-06-12-catalog-import-channels.md` M3 row.
+2. **Orphaned order stub on the email-dedupe race loser** (`EmailPollOrgJob.ProcessMessageAsync`): when the unique-index insert loses a concurrent-poll race, the already-created stub is detached but not deleted — a harmless `parsing`-status orphan. NOT fixed: reordering stub-vs-record creation risks reopening the duplicate-order window the dedupe just closed. Revisit with a periodic orphan sweep if it accumulates.
+3. **`FireIntegrationTriggerJob` loads subscription by Id only** (no org filter): internal Hangfire job, enqueued with a trusted already-org-scoped id. NOT fixed: threading orgId changes the Hangfire job signature → in-flight serialized jobs fail across deploy. Defense-in-depth only; revisit if the job signature changes for another reason.
