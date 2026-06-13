@@ -39,6 +39,7 @@ public class SuppliersController : ControllerBase
     private readonly ISourceColumnExtractor     _sourceColumns;
     private readonly IStarterTemplateService    _starterTemplates;
     private readonly ISupplierCatalogService     _catalog;
+    private readonly ISupplierConnectionService  _connections;
 
     public SuppliersController(
         ISupplierProfileRepository supplierProfileRepository,
@@ -53,7 +54,8 @@ public class SuppliersController : ControllerBase
         IFileStorageService        fileStorage,
         ISourceColumnExtractor     sourceColumns,
         IStarterTemplateService    starterTemplates,
-        ISupplierCatalogService    catalog)
+        ISupplierCatalogService    catalog,
+        ISupplierConnectionService connections)
     {
         _supplierProfileRepository = supplierProfileRepository;
         _mappingService            = mappingService;
@@ -68,6 +70,7 @@ public class SuppliersController : ControllerBase
         _sourceColumns             = sourceColumns;
         _starterTemplates          = starterTemplates;
         _catalog                   = catalog;
+        _connections               = connections;
     }
 
     // ── GET /api/suppliers ────────────────────────────────────────────────────
@@ -622,7 +625,7 @@ public class SuppliersController : ControllerBase
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
 
         var config = await _deliveryConfigService.GetAsync(orgId, id, ct);
-        return config is null ? NoContent() : Ok(config);
+        return config is null ? NoContent() : Ok(await WithGovernanceAsync(orgId, config, ct));
     }
 
     // ── PUT /api/suppliers/{id}/delivery-config ──────────────────────────────
@@ -642,12 +645,37 @@ public class SuppliersController : ControllerBase
         try
         {
             var saved = await _deliveryConfigService.UpsertAsync(orgId, id, request, ct);
-            return Ok(saved);
+
+            // Honest + route-to-versioned: when revision authority governs this supplier's
+            // delivery, the live row we just saved does NOT drive pinned orders on its own — so
+            // publish a new connection revision snapshotting the edit, making it actually take
+            // effect for future orders. No-op when the supplier is not revision-governed.
+            await _connections.RepublishLiveDeliveryAsync(orgId, id, _tenant.ClerkUserId, ct);
+
+            return Ok(await WithGovernanceAsync(orgId, saved, ct));
         }
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    /// <summary>
+    /// Annotates a delivery-config response with how delivery is GOVERNED: when revision authority
+    /// routes this supplier's delivery via a published connection revision, the editor must show the
+    /// operator that delivery follows that versioned snapshot (and whether the live row is in sync),
+    /// not the raw row alone.
+    /// </summary>
+    private async Task<DeliveryConfigResponse> WithGovernanceAsync(
+        Guid orgId, DeliveryConfigResponse config, CancellationToken ct)
+    {
+        var gov = await _connections.DescribeDeliveryGovernanceAsync(orgId, config.SupplierId, ct);
+        return config with
+        {
+            RevisionGoverned                  = gov.RevisionGoverned,
+            ActiveRevisionVersionNo           = gov.ActiveVersionNo,
+            LiveMatchesActiveRevisionDelivery = gov.LiveMatchesActiveDelivery,
+        };
     }
 
     // ── DELETE /api/suppliers/{id}/delivery-config ───────────────────────────

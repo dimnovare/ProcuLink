@@ -85,7 +85,8 @@ public class SuppliersControllerCatalogSourceTests
             new Mock<IFileStorageService>().Object,
             new SourceColumnExtractor(),
             new ProcuLink.Api.Services.StarterTemplates.StarterTemplateService(),
-            new SupplierCatalogService(db));
+            new SupplierCatalogService(db),
+            new Mock<ProcuLink.Core.Services.ISupplierConnectionService>().Object);
 
         var supplier = new Supplier { Id = Guid.NewGuid(), OrgId = orgId, Name = "Acme", CreatedAt = DateTime.UtcNow };
         db.Suppliers.Add(supplier);

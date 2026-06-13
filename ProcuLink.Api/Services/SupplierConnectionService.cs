@@ -1,9 +1,12 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Conformance;
 
 namespace ProcuLink.Api.Services;
@@ -33,13 +36,19 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
     private readonly ProcuLinkDbContext  _db;
     private readonly IReplayService      _replay;
     private readonly IConformanceService _conformance;
+    private readonly bool                _revisionAuthority;
 
     public SupplierConnectionService(
-        ProcuLinkDbContext db, IReplayService replay, IConformanceService conformance)
+        ProcuLinkDbContext db, IReplayService replay, IConformanceService conformance,
+        IConfiguration? configuration = null)
     {
         _db          = db;
         _replay      = replay;
         _conformance = conformance;
+        // Same flag the resolver gates delivery routing on — when OFF, the live config governs
+        // delivery directly, so there is nothing to route into a versioned revision.
+        _revisionAuthority =
+            bool.TryParse(configuration?[EffectiveConnectionConfigResolver.FlagKey], out var on) && on;
     }
 
     public async Task<IReadOnlyList<SupplierConnection>> ListAsync(Guid orgId, CancellationToken ct) =>
@@ -399,6 +408,166 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
 
         await _db.SaveChangesAsync(ct);
         return true;
+    }
+
+    // ── honest + route-to-versioned (live delivery edit → new published revision) ──
+
+    public async Task<DeliveryRepublishOutcome> RepublishLiveDeliveryAsync(
+        Guid orgId, Guid supplierId, string? publishedBy, CancellationToken ct)
+    {
+        // Flag off → the live config governs delivery directly; nothing to route.
+        if (!_revisionAuthority)
+            return new DeliveryRepublishOutcome(DeliveryRepublishStatus.NotGoverned, null);
+
+        var connection = await _db.SupplierConnections
+            .FirstOrDefaultAsync(c => c.OrgId == orgId && c.SupplierId == supplierId, ct);
+        // No connection / no published active revision → live config already governs (unpinned).
+        if (connection?.ActiveRevisionId is null)
+            return new DeliveryRepublishOutcome(DeliveryRepublishStatus.NotGoverned, null);
+
+        var active = await _db.SupplierConnectionRevisions
+            .Include(r => r.ItemMappings)
+            .FirstOrDefaultAsync(r => r.Id == connection.ActiveRevisionId
+                                   && r.OrgId == orgId && r.Status == "published", ct);
+        if (active is null)
+            return new DeliveryRepublishOutcome(DeliveryRepublishStatus.NotGoverned, null);
+
+        // Deterministic single read of the live delivery config (defensive OrderBy — there is a
+        // UNIQUE(org_id, supplier_id) index, so at most one row exists).
+        var live = await _db.SupplierDeliveryConfigs
+            .OrderByDescending(x => x.UpdatedAt)
+            .FirstOrDefaultAsync(x => x.OrgId == orgId && x.SupplierId == supplierId, ct);
+        if (live is null)
+            return new DeliveryRepublishOutcome(DeliveryRepublishStatus.NotGoverned, null);
+
+        // Idempotent: a no-op save must not spawn an identical version.
+        if (DeliverySnapshotMatches(active, live))
+            return new DeliveryRepublishOutcome(DeliveryRepublishStatus.Unchanged, null);
+
+        var maxVersion = await _db.SupplierConnectionRevisions
+            .Where(r => r.ConnectionId == connection.Id)
+            .Select(r => (int?)r.VersionNo)
+            .MaxAsync(ct);
+        var nextVersion = (maxVersion ?? 0) + 1;
+
+        var now   = DateTime.UtcNow;
+        var actor = $"live-delivery-edit:{(string.IsNullOrWhiteSpace(publishedBy) ? "api" : publishedBy)}";
+        var cloneId = Guid.NewGuid();
+        var clone = new SupplierConnectionRevision
+        {
+            Id            = cloneId,
+            ConnectionId  = connection.Id,
+            OrgId         = orgId,
+            SupplierId    = connection.SupplierId,
+            VersionNo     = nextVersion,
+            Status        = "published",
+            EffectiveFrom = now,
+            EffectiveTo   = null,
+            PublishedAt   = now,
+            CreatedAt     = now,
+            CreatedBy     = actor,
+            PublishedBy   = actor,
+            // Non-delivery bundle cloned from the active revision …
+            InputMappingJson    = active.InputMappingJson,
+            OutputMappingJson   = active.OutputMappingJson,
+            AcceptanceProfileId = active.AcceptanceProfileId,
+            AcceptanceVersionNo = active.AcceptanceVersionNo,
+            CatalogMode         = active.CatalogMode,
+            // … delivery channel taken from the operator's current live edit.
+            DeliveryProtocol    = live.Protocol,
+            DeliveryConfigJson  = live.ConfigJson,
+            DeliveryAutoDeliver = live.AutoDeliver,
+            CredentialsRef      = string.IsNullOrEmpty(live.EncryptedCredentials) ? null : live.EncryptedCredentials,
+            OutputFormat        = live.OutputFormat ?? active.OutputFormat,
+            ItemMappings        = active.ItemMappings.Select(m => CloneMapping(cloneId, m)).ToList(),
+        };
+
+        // Circular-FK lesson (connection.active_revision_id → revisions): the clone must EXIST
+        // before the pointer can reference it — save it FIRST, move the pointer second.
+        _db.SupplierConnectionRevisions.Add(clone);
+        await _db.SaveChangesAsync(ct);
+
+        var priorPublished = await _db.SupplierConnectionRevisions
+            .Where(r => r.ConnectionId == connection.Id && r.Status == "published" && r.Id != cloneId)
+            .ToListAsync(ct);
+        foreach (var r in priorPublished)
+        {
+            // Status + effective_to only — the immutability trigger allows archiving (no content
+            // column changes), exactly as PublishAsync/RollbackAsync do.
+            r.Status = "archived";
+            r.EffectiveTo = now;
+        }
+
+        connection.ActiveRevisionId = cloneId;
+        connection.UpdatedAt = now;
+        await _db.SaveChangesAsync(ct);
+
+        return new DeliveryRepublishOutcome(DeliveryRepublishStatus.Republished, nextVersion);
+    }
+
+    public async Task<DeliveryGovernanceInfo> DescribeDeliveryGovernanceAsync(
+        Guid orgId, Guid supplierId, CancellationToken ct)
+    {
+        var none = new DeliveryGovernanceInfo(false, null, null);
+        if (!_revisionAuthority)
+            return none;
+
+        var connection = await _db.SupplierConnections
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.OrgId == orgId && c.SupplierId == supplierId, ct);
+        if (connection?.ActiveRevisionId is null)
+            return none;
+
+        var active = await _db.SupplierConnectionRevisions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == connection.ActiveRevisionId
+                                   && r.OrgId == orgId && r.Status == "published", ct);
+        if (active is null)
+            return none;
+
+        var live = await _db.SupplierDeliveryConfigs
+            .AsNoTracking()
+            .OrderByDescending(x => x.UpdatedAt)
+            .FirstOrDefaultAsync(x => x.OrgId == orgId && x.SupplierId == supplierId, ct);
+
+        // Governed, but no live row to compare against (delivery configured only via the versioned
+        // path) → can't say in/out of sync.
+        bool? matches = live is null ? null : DeliverySnapshotMatches(active, live);
+
+        return new DeliveryGovernanceInfo(
+            RevisionGoverned:         true,
+            ActiveVersionNo:          active.VersionNo,
+            LiveMatchesActiveDelivery: matches);
+    }
+
+    /// <summary>True when the active revision's delivery snapshot already equals the live config —
+    /// the no-op guard that keeps a repeated save from spawning identical revisions.</summary>
+    private static bool DeliverySnapshotMatches(SupplierConnectionRevision active, SupplierDeliveryConfig live)
+    {
+        var liveCreds      = string.IsNullOrEmpty(live.EncryptedCredentials) ? null : live.EncryptedCredentials;
+        var effectiveFormat = live.OutputFormat ?? active.OutputFormat;
+        return string.Equals(active.DeliveryProtocol ?? "", live.Protocol ?? "", StringComparison.OrdinalIgnoreCase)
+            && active.DeliveryAutoDeliver == live.AutoDeliver
+            && string.Equals(active.CredentialsRef ?? "", liveCreds ?? "", StringComparison.Ordinal)
+            && string.Equals(active.OutputFormat ?? "", effectiveFormat ?? "", StringComparison.OrdinalIgnoreCase)
+            && JsonEquals(active.DeliveryConfigJson, live.ConfigJson);
+    }
+
+    /// <summary>Semantic jsonb equality (key order / whitespace insensitive); falls back to ordinal
+    /// string compare when either side is not parseable JSON.</summary>
+    private static bool JsonEquals(string? a, string? b)
+    {
+        if (a is null && b is null) return true;
+        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b))
+            return string.Equals(a, b, StringComparison.Ordinal);
+        try
+        {
+            return JsonNode.DeepEquals(JsonNode.Parse(a), JsonNode.Parse(b));
+        }
+        catch (JsonException)
+        {
+            return string.Equals(a, b, StringComparison.Ordinal);
+        }
     }
 
     // ── test pack internals ──────────────────────────────────────────────────

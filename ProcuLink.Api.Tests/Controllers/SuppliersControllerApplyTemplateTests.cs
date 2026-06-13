@@ -55,7 +55,8 @@ public class SuppliersControllerApplyTemplateTests
             new Mock<IFileStorageService>().Object,
             new SourceColumnExtractor(),
             new StarterTemplateService(),           // real — loads embedded fixtures
-            new Mock<ISupplierCatalogService>().Object);
+            new Mock<ISupplierCatalogService>().Object,
+            new Mock<ProcuLink.Core.Services.ISupplierConnectionService>().Object);
 
         return (controller, orgId, db);
     }

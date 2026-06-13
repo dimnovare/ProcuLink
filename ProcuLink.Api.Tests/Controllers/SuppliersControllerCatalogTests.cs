@@ -55,7 +55,8 @@ public class SuppliersControllerCatalogTests
             new Mock<IFileStorageService>().Object,
             new SourceColumnExtractor(),
             new ProcuLink.Api.Services.StarterTemplates.StarterTemplateService(),
-            new SupplierCatalogService(db)); // real — persists to in-memory DB
+            new SupplierCatalogService(db), // real — persists to in-memory DB
+            new Mock<ProcuLink.Core.Services.ISupplierConnectionService>().Object);
 
         return (controller, orgId, db);
     }

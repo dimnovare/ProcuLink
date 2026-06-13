@@ -60,7 +60,8 @@ public class SuppliersControllerSourceColumnsTests
             fileStorage.Object,
             new SourceColumnExtractor(),  // real extractor
             new ProcuLink.Api.Services.StarterTemplates.StarterTemplateService(),
-            new Mock<ISupplierCatalogService>().Object);
+            new Mock<ISupplierCatalogService>().Object,
+            new Mock<ProcuLink.Core.Services.ISupplierConnectionService>().Object);
 
         return (controller, orgId, db);
     }
