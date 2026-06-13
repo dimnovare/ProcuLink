@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Hangfire;
 using MailKit;
 using MailKit.Net.Imap;
@@ -7,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using MimeKit;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
@@ -149,6 +151,9 @@ public sealed class EmailPollOrgJob
         {
             var message = await folder.GetMessageAsync(uid, ct);
             var processed = await ProcessMessageAsync(orgId, config.DefaultSupplierId.Value, message, ct);
+            // Flag SEEN whenever the message was fully handled — including the case where every
+            // attachment was a duplicate already imported (processed == true via the dedupe path).
+            // Only an empty/unsupported message (processed == false) is left unseen for retry.
             if (processed)
             {
                 await folder.AddFlagsAsync(uid, MessageFlags.Seen, silent: true, ct);
@@ -165,9 +170,20 @@ public sealed class EmailPollOrgJob
         _logger.LogInformation("EmailPollOrgJob: IMAP poll complete for org {OrgId}. Unseen={Unseen}, ParseJobsQueued={Queued}.", orgId, unseen.Count, queued);
     }
 
-    private async Task<bool> ProcessMessageAsync(Guid orgId, Guid supplierId, MimeMessage message, CancellationToken ct)
+    /// <summary>
+    /// Imports each supported, non-duplicate attachment of one message into an order stub and
+    /// enqueues a parse job. Returns true when the message was fully handled (imported at least one
+    /// attachment OR found every attachment already imported) so the caller may flag it SEEN.
+    /// <c>public</c> for direct unit testing of the (OrgId, Message-Id, AttachmentHash) dedupe
+    /// without a live IMAP server (exposing it via InternalsVisibleTo would surface the Worker's
+    /// top-level <c>Program</c> and clash with the API's in WebApplicationFactory tests).
+    /// </summary>
+    public async Task<bool> ProcessMessageAsync(Guid orgId, Guid supplierId, MimeMessage message, CancellationToken ct)
     {
         var processedAny = false;
+
+        // The IMAP Message-Id header; "" when the server omits it (the content hash still dedupes).
+        var messageId = message.MessageId ?? string.Empty;
 
         foreach (var attachment in message.Attachments)
         {
@@ -197,6 +213,27 @@ public sealed class EmailPollOrgJob
                 continue;
             }
 
+            // ── Idempotency: dedupe on (OrgId, ImapMessageId, AttachmentHash) ─────────────────
+            // The message is flagged SEEN only after the whole loop succeeds, so a crash mid-poll
+            // re-presents this unseen message next time. Without this guard the same attachment is
+            // re-imported as a NEW order. Hash the decoded bytes and skip if we already imported it.
+            var attachmentHash = Convert.ToHexString(SHA256.HashData(stream.GetBuffer().AsSpan(0, (int)stream.Length)));
+
+            var alreadyImported = await _db.EmailImportRecords.AsNoTracking().AnyAsync(
+                r => r.OrgId == orgId
+                  && r.ImapMessageId == messageId
+                  && r.AttachmentHash == attachmentHash, ct);
+            if (alreadyImported)
+            {
+                _logger.LogInformation(
+                    "EmailPollOrgJob: attachment {FileName} for org {OrgId} already imported (message {MessageId}); skipping duplicate.",
+                    fileName, orgId, messageId);
+                // Count as processed so the message can still be flagged SEEN — there is nothing new
+                // to import, but leaving it unseen would re-trigger this dedupe check every poll.
+                processedAny = true;
+                continue;
+            }
+
             stream.Position = 0;
 
             var contentType = string.IsNullOrWhiteSpace(part.ContentType.MimeType)
@@ -209,6 +246,38 @@ public sealed class EmailPollOrgJob
                 _logger.LogWarning(
                     "EmailPollOrgJob: attachment {FileName} for org {OrgId} could not create order: {Error}",
                     fileName, orgId, result.Error);
+                continue;
+            }
+
+            // Record the import BEFORE enqueuing the parse job. The unique index on
+            // (OrgId, ImapMessageId, AttachmentHash) wins the race between two concurrent polls of
+            // the same mailbox: the loser's insert throws and we treat the attachment as already
+            // imported (its order stub from the winner is the canonical one).
+            var record = new EmailImportRecord
+            {
+                Id             = Guid.NewGuid(),
+                OrgId          = orgId,
+                ImapMessageId  = messageId,
+                AttachmentHash = attachmentHash,
+                OrderId        = result.Value!.Id,
+                FileName       = fileName,
+                ImportedAt     = DateTime.UtcNow,
+            };
+            _db.EmailImportRecords.Add(record);
+
+            try
+            {
+                await _db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException)
+            {
+                // A concurrent poll already imported this exact attachment (unique-index violation).
+                // The other poll owns the canonical order stub; do not enqueue a second parse job.
+                _logger.LogInformation(
+                    "EmailPollOrgJob: attachment {FileName} for org {OrgId} imported concurrently (message {MessageId}); skipping duplicate parse.",
+                    fileName, orgId, messageId);
+                _db.Entry(record).State = EntityState.Detached;
+                processedAny = true;
                 continue;
             }
 

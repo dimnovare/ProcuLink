@@ -179,6 +179,74 @@ public class OrderServiceCrossTenantSupplierTests
         Assert.Empty(await db.PurchaseOrders.AsNoTracking().ToListAsync());
     }
 
+    // ── Defer-list #3: soft-deleted suppliers must not receive new orders ──────
+
+    [Fact]
+    public async Task CreateStubAsync_SupplierIsSoftDeleted_ReturnsNotFound_AndCreatesNoOrder()
+    {
+        var db         = NewDb();
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        // A same-org supplier the operator has SOFT-DELETED (disappeared from every list/picker).
+        db.Suppliers.Add(new Supplier
+        {
+            Id        = supplierId,
+            OrgId     = orgId,
+            Name      = "Removed Supplier",
+            CreatedAt = DateTime.UtcNow.AddDays(-1),
+            DeletedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var svc = BuildService(db, FileStorageMock().Object);
+
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("item,qty\nA,1\n"));
+        var result = await svc.CreateStubAsync(
+            orgId, supplierId, stream, "order.csv", "text/csv", CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Supplier not found.", result.Error);
+        Assert.Empty(await db.PurchaseOrders.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task CreateStubFromParsedOrderAsync_SupplierIsSoftDeleted_ReturnsNotFound_AndCreatesNoOrder()
+    {
+        var db         = NewDb();
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.Suppliers.Add(new Supplier
+        {
+            Id        = supplierId,
+            OrgId     = orgId,
+            Name      = "Removed Supplier",
+            CreatedAt = DateTime.UtcNow.AddDays(-1),
+            DeletedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var svc = BuildService(db, FileStorageMock().Object);
+
+        var extracted = new ExtractedOrder(
+            PoNumber:  "PO-DELETED",
+            OrderDate: DateTime.UtcNow,
+            BuyerName: "Buyer",
+            Currency:  "EUR",
+            Lines: new[]
+            {
+                new ExtractedOrderLine(1, "BUYER-1", "Widget", 2m, "EA", 9.99m),
+            });
+
+        var result = await svc.CreateStubFromParsedOrderAsync(
+            orgId, supplierId, extracted, "email", CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Supplier not found.", result.Error);
+        Assert.Empty(await db.PurchaseOrders.AsNoTracking().ToListAsync());
+    }
+
     // ── Positive control: same-org supplier still works ───────────────────────
 
     [Fact]

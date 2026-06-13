@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using Hangfire;
+using Hangfire.Server;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
@@ -13,11 +14,26 @@ namespace ProcuLink.Infrastructure.Jobs;
 /// <summary>
 /// Hangfire job: delivers one integration event to one subscriber TargetUrl.
 /// Signs with HMAC-SHA256 (X-ProcuLink-Signature: sha256=hex).
-/// Deactivates subscription after 3 consecutive failures.
+/// Deactivates subscription after 3 consecutive logical failures.
 /// Idempotent: exits silently if subscription is inactive.
+///
+/// <para><b>Failure accounting (defer-list #5):</b> the persisted <c>FailureCount</c> tracks
+/// LOGICAL (consecutive) delivery failures, NOT Hangfire's per-job retry attempts. Hangfire
+/// re-runs the whole method on each <see cref="AutomaticRetryAttribute"/> retry; bumping
+/// <c>FailureCount</c> on every run counted one failed webhook up to <c>Attempts + 1</c> times
+/// and auto-deactivated the subscription after a SINGLE real failure. The count is now
+/// incremented (and deactivation decided) only on the FINAL Hangfire attempt — once Hangfire
+/// will no longer retry this delivery — so three genuinely separate failed deliveries are needed
+/// to deactivate, as documented.</para>
 /// </summary>
 public class FireIntegrationTriggerJob
 {
+    /// <summary>Mirrors the <see cref="AutomaticRetryAttribute"/> <c>Attempts</c> on <see cref="ExecuteAsync"/>.</summary>
+    internal const int MaxRetryAttempts = 3;
+
+    /// <summary>Consecutive logical failures after which the subscription auto-deactivates.</summary>
+    internal const int DeactivateAfterFailures = 3;
+
     private readonly ProcuLinkDbContext                     _db;
     private readonly IHttpClientFactory                     _http;
     private readonly DeliveryEncryptionService              _enc;
@@ -60,9 +76,26 @@ public class FireIntegrationTriggerJob
         return _guardedClient;
     }
 
+    // The trailing PerformContext is INJECTED by Hangfire at execution time (it is not part of the
+    // enqueued argument list — see Enqueue below). It carries the current "RetryCount" job
+    // parameter that AutomaticRetry maintains, which is how we tell whether Hangfire will retry
+    // this delivery again. Direct callers (tests) pass null → treated as the final attempt.
     [Queue("background")]
-    [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 30, 120, 600 })]
-    public async Task ExecuteAsync(Guid subscriptionId, string payloadJson, CancellationToken ct)
+    [AutomaticRetry(Attempts = MaxRetryAttempts, DelaysInSeconds = new[] { 30, 120, 600 })]
+    public Task ExecuteAsync(
+        Guid subscriptionId, string payloadJson, CancellationToken ct, PerformContext? context = null) =>
+        // Only the FINAL Hangfire attempt mutates the persisted consecutive-failure count, so a
+        // single failed webhook (retried up to MaxRetryAttempts times by Hangfire) bumps the count
+        // exactly once rather than once per retry.
+        ExecuteCoreAsync(subscriptionId, payloadJson, IsFinalHangfireAttempt(context), ct);
+
+    /// <summary>
+    /// Testable core: the <paramref name="isFinalAttempt"/> flag is resolved from the Hangfire
+    /// <see cref="PerformContext"/> by the public entrypoint; tests drive it directly to exercise
+    /// both the non-final (no count bump) and final (count bump / deactivate) failure paths.
+    /// </summary>
+    internal async Task ExecuteCoreAsync(
+        Guid subscriptionId, string payloadJson, bool isFinalAttempt, CancellationToken ct)
     {
         var sub = await _db.IntegrationSubscriptions
                            .Where(s => s.Id == subscriptionId)
@@ -97,7 +130,7 @@ public class FireIntegrationTriggerJob
                 "FireIntegrationTriggerJob: SSRF guard blocked webhook to '{Url}' for sub {SubId}: {Reason}",
                 sub.TargetUrl, subscriptionId, guardResult.Reason);
             // Treat as a delivery failure and apply the existing retry/deactivate flow.
-            await IncrementFailureAsync(sub, ct);
+            await RecordFailureAsync(sub, isFinalAttempt, ct);
             throw new InvalidOperationException(
                 $"Webhook delivery blocked: {guardResult.Reason}");
         }
@@ -125,35 +158,75 @@ public class FireIntegrationTriggerJob
             }
             else
             {
-                await IncrementFailureAsync(sub, ct);
+                await RecordFailureAsync(sub, isFinalAttempt, ct);
                 throw new InvalidOperationException(
                     $"Delivery failed: HTTP {(int)response.StatusCode} from {sub.TargetUrl}");
             }
         }
         catch (Exception ex) when (ex is not InvalidOperationException)
         {
-            await IncrementFailureAsync(sub, ct);
+            await RecordFailureAsync(sub, isFinalAttempt, ct);
             throw;
         }
     }
 
-    private async Task IncrementFailureAsync(IntegrationSubscription sub, CancellationToken ct)
+    /// <summary>
+    /// Records ONE logical failed delivery. On a non-final Hangfire attempt the persisted count is
+    /// left untouched (the failure throws and Hangfire retries); only the final attempt increments
+    /// the consecutive-failure count and, at the threshold, deactivates the subscription. This
+    /// decouples the persisted count from Hangfire's retry count so one failed webhook = one bump.
+    /// </summary>
+    private async Task RecordFailureAsync(IntegrationSubscription sub, bool isFinalAttempt, CancellationToken ct)
     {
+        if (!isFinalAttempt)
+        {
+            _logger.LogInformation(
+                "FireIntegrationTriggerJob: sub {SubId} delivery failed on a retried attempt — " +
+                "leaving FailureCount={Count} for Hangfire to retry.",
+                sub.Id, sub.FailureCount);
+            return;
+        }
+
         sub.FailureCount++;
         sub.UpdatedAt = DateTime.UtcNow;
-        if (sub.FailureCount >= 3)
+        if (sub.FailureCount >= DeactivateAfterFailures)
         {
             sub.IsActive = false;
             _logger.LogWarning(
-                "FireIntegrationTriggerJob: deactivated sub {SubId} after {Count} failures.",
+                "FireIntegrationTriggerJob: deactivated sub {SubId} after {Count} consecutive failures.",
                 sub.Id, sub.FailureCount);
         }
         await _db.SaveChangesAsync(ct);
     }
 
+    /// <summary>
+    /// True when Hangfire will NOT retry this delivery again (so the persisted failure count may be
+    /// advanced exactly once for the logical failure). Reads the "RetryCount" job parameter that
+    /// <see cref="AutomaticRetryAttribute"/> maintains: 0 on the first run, N on the Nth retry. The
+    /// last allowed run is when RetryCount has reached the configured attempt cap. A null context
+    /// (direct/test invocation, or a job recorded before this parameter existed) is treated as
+    /// final so the failure is still recorded once.
+    /// </summary>
+    private static bool IsFinalHangfireAttempt(PerformContext? context)
+    {
+        if (context is null) return true;
+        try
+        {
+            var retryCount = context.GetJobParameter<int>("RetryCount");
+            return retryCount >= MaxRetryAttempts;
+        }
+        catch
+        {
+            // Missing/unparseable parameter — fail safe by recording the failure (final).
+            return true;
+        }
+    }
+
     public static void Enqueue(IBackgroundJobClient jobs, Guid subscriptionId, string payloadJson)
     {
+        // NOTE: the PerformContext arg is omitted here on purpose — Hangfire substitutes it at
+        // execution time. Listing it would try to serialise a null into the job arguments.
         jobs.Enqueue<FireIntegrationTriggerJob>(
-            j => j.ExecuteAsync(subscriptionId, payloadJson, CancellationToken.None));
+            j => j.ExecuteAsync(subscriptionId, payloadJson, CancellationToken.None, null!));
     }
 }

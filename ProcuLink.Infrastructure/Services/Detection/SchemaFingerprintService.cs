@@ -59,9 +59,56 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
         }
 
         var now = DateTime.UtcNow;
+
+        // ── Relational path: count bump is ATOMIC, then the per-order idempotency guard ──────────
+        // The previous read-modify-write (`existing.ParseSuccessCount += 1`) silently LOST a bump
+        // whenever two parse jobs for DIFFERENT orders with the same column layout ran concurrently
+        // — both read the same starting count and the second SaveChanges clobbered the first.
+        // ExecuteUpdateAsync issues a single `SET parse_success_count = parse_success_count + 1`,
+        // so every concurrent bump lands. Ordering note: the atomic count commit happens before the
+        // order-hash guard, so a crash in the (tiny) gap re-enters and bumps again on retry — a rare
+        // over-count, which is the safe direction for a "seen N times" heuristic (vs. the prior bug
+        // that under-counted on EVERY concurrent parse).
+        if (_db.Database.IsRelational())
+        {
+            var bumped = await _db.SchemaFingerprints
+                .Where(f => f.OrganisationId == organisationId && f.ColumnNameHash == hash)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(f => f.ParseSuccessCount, f => f.ParseSuccessCount + 1)
+                    .SetProperty(f => f.LastSeenAt, now), ct);
+
+            if (bumped == 0)
+            {
+                // First sighting of this layout — insert it. A concurrent worker may win the
+                // (OrgId, ColumnNameHash) unique-insert race (Postgres 23505); fall back to the
+                // same atomic +1 against the winner's row.
+                _db.SchemaFingerprints.Add(NewFingerprint(organisationId, order, hash, detectedFormat, now));
+                try
+                {
+                    await _db.SaveChangesAsync(ct);
+                }
+                catch (DbUpdateException)
+                {
+                    await RecoverFromConcurrentInsertAsync(organisationId, orderId, hash, now, ct);
+                }
+            }
+
+            // Persist the per-order guard hash so a Hangfire retry of THIS order short-circuits.
+            order.SchemaFingerprintHash = hash;
+            await _db.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "Recorded schema fingerprint for order {OrderId} (org {OrgId}): hash {Hash} (atomic)",
+                orderId, organisationId, hash);
+            return;
+        }
+
+        // ── Non-relational (EF InMemory) test provider ───────────────────────────────────────────
+        // ExecuteUpdateAsync is not translatable and the tests are single-threaded, so a tracked
+        // read-modify-write paired with the order-hash guard in one SaveChanges is correct here.
+        // The concurrent-insert recovery is still exercised by the RaceSimulatingDbContext test.
         var existing = await _db.SchemaFingerprints
             .FirstOrDefaultAsync(f => f.OrganisationId == organisationId && f.ColumnNameHash == hash, ct);
-
         if (existing is not null)
         {
             existing.ParseSuccessCount += 1;
@@ -69,20 +116,9 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
         }
         else
         {
-            _db.SchemaFingerprints.Add(new SchemaFingerprint
-            {
-                Id = Guid.NewGuid(),
-                OrganisationId = organisationId,
-                ColumnNameHash = hash,
-                DetectedFormat = detectedFormat,
-                SampleSupplierName = order.Supplier?.Name,
-                ParseSuccessCount = 1,
-                LastSeenAt = now,
-                CreatedAt = now,
-            });
+            _db.SchemaFingerprints.Add(NewFingerprint(organisationId, order, hash, detectedFormat, now));
         }
 
-        // Persist the guard hash atomically with the increment so a retry cannot double-count.
         order.SchemaFingerprintHash = hash;
         try
         {
@@ -90,18 +126,29 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
         }
         catch (DbUpdateException)
         {
-            // A concurrent Hangfire worker for a different order with the same column layout
-            // won the INSERT race (Postgres 23505). Detach the stale Added entity, reload the
-            // winner's row, increment its count, and re-save. The order's SchemaFingerprintHash
-            // is still marked Modified in the tracker from before the failed save.
-            await RecoverFromConcurrentInsertAsync(organisationId, orderId, hash, now, ct);
-            return;
+            // A concurrent worker won the (OrgId, ColumnNameHash) insert race. Detach the stale
+            // Added entity, increment the winner's row, and re-save (order hash is still tracked).
+            await RecoverFromConcurrentInsertViaTrackerAsync(organisationId, orderId, hash, now, ct);
         }
 
         _logger.LogInformation(
             "Recorded schema fingerprint for order {OrderId} (org {OrgId}): hash {Hash} now seen {Count} time(s)",
             orderId, organisationId, hash, existing?.ParseSuccessCount ?? 1);
     }
+
+    private static SchemaFingerprint NewFingerprint(
+        Guid organisationId, PurchaseOrderEntity order, string hash, string detectedFormat, DateTime now) =>
+        new()
+        {
+            Id = Guid.NewGuid(),
+            OrganisationId = organisationId,
+            ColumnNameHash = hash,
+            DetectedFormat = detectedFormat,
+            SampleSupplierName = order.Supplier?.Name,
+            ParseSuccessCount = 1,
+            LastSeenAt = now,
+            CreatedAt = now,
+        };
 
     private async Task RecoverFromConcurrentInsertAsync(
         Guid organisationId, Guid orderId, string hash, DateTime now, CancellationToken ct)
@@ -110,9 +157,41 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
             .FirstOrDefault(e => e.State == EntityState.Added);
         if (stale is not null) stale.State = EntityState.Detached;
 
+        // Atomic +1 against the winner's row — a plain read-modify-write here could itself lose a
+        // third concurrent worker's increment.
+        var recovered = await _db.SchemaFingerprints
+            .Where(f => f.OrganisationId == organisationId && f.ColumnNameHash == hash)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(f => f.ParseSuccessCount, f => f.ParseSuccessCount + 1)
+                .SetProperty(f => f.LastSeenAt, now), ct);
+
+        if (recovered == 0)
+        {
+            _logger.LogWarning(
+                "Fingerprint race recovery aborted — no existing row found for org {OrgId} hash {Hash}",
+                organisationId, hash);
+            return;
+        }
+
+        _logger.LogInformation(
+            "Race recovery: schema fingerprint for order {OrderId} (org {OrgId}): hash {Hash} (atomic +1)",
+            orderId, organisationId, hash);
+    }
+
+    /// <summary>
+    /// InMemory-provider recovery for the simulated concurrent-insert race: ExecuteUpdateAsync is
+    /// not translatable there, so increment the winner's tracked row instead. Single-threaded tests
+    /// only — no lost-update concern.
+    /// </summary>
+    private async Task RecoverFromConcurrentInsertViaTrackerAsync(
+        Guid organisationId, Guid orderId, string hash, DateTime now, CancellationToken ct)
+    {
+        var stale = _db.ChangeTracker.Entries<SchemaFingerprint>()
+            .FirstOrDefault(e => e.State == EntityState.Added);
+        if (stale is not null) stale.State = EntityState.Detached;
+
         var winner = await _db.SchemaFingerprints
             .FirstOrDefaultAsync(f => f.OrganisationId == organisationId && f.ColumnNameHash == hash, ct);
-
         if (winner is null)
         {
             _logger.LogWarning(
@@ -126,7 +205,7 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
-            "Race recovery: schema fingerprint for order {OrderId} (org {OrgId}): hash {Hash} now seen {Count} time(s)",
+            "Race recovery (tracked): schema fingerprint for order {OrderId} (org {OrgId}): hash {Hash} now seen {Count} time(s)",
             orderId, organisationId, hash, winner.ParseSuccessCount);
     }
 
