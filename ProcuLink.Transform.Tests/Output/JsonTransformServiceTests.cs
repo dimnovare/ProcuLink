@@ -223,6 +223,53 @@ public class JsonTransformServiceTests
         result.Content.Position.Should().Be(0, "stream must be ready to read from the beginning");
     }
 
+    // ── Buyer name resolution (denormalisation split regression) ───────────────
+    // BuyerName lives in BOTH the purchase_orders.buyer_name COLUMN and CanonicalJson,
+    // written by different code paths: the async parse path updates the COLUMN only and
+    // leaves CanonicalJson without a buyerName. The fixed JSON transform must therefore
+    // read the column FIRST and only fall back to CanonicalJson — otherwise a correctly
+    // extracted buyer is delivered as "" (prod order 14c340a1, 2026-06-13).
+
+    [Fact]
+    public async Task TransformAsync_BuyerName_PrefersColumn_WhenCanonicalJsonLacksIt()
+    {
+        var order = BuildOrder();
+        order.BuyerName     = "REDACTED-PARTY";
+        order.CanonicalJson = JsonDocument.Parse("""{"poNumber":"PO-JSON-001"}"""); // no buyerName key
+
+        var result = await new JsonTransformService().TransformAsync(order, OutputFormat.Json, CancellationToken.None);
+        var doc    = await ReadJson(result);
+
+        doc.RootElement.GetProperty("buyerName").GetString()
+            .Should().Be("REDACTED-PARTY", "the buyer_name column is authoritative when CanonicalJson omits it");
+    }
+
+    [Fact]
+    public async Task TransformAsync_BuyerName_FallsBackToCanonicalJson_WhenColumnEmpty()
+    {
+        var order = BuildOrder();
+        order.BuyerName     = null;
+        order.CanonicalJson = JsonDocument.Parse("""{"buyerName":"Northwind Trading OÜ"}""");
+
+        var result = await new JsonTransformService().TransformAsync(order, OutputFormat.Json, CancellationToken.None);
+        var doc    = await ReadJson(result);
+
+        doc.RootElement.GetProperty("buyerName").GetString().Should().Be("Northwind Trading OÜ");
+    }
+
+    [Fact]
+    public async Task TransformAsync_BuyerName_ColumnWins_OverCanonicalJson()
+    {
+        var order = BuildOrder();
+        order.BuyerName     = "Column Buyer";
+        order.CanonicalJson = JsonDocument.Parse("""{"buyerName":"Stale Canonical Buyer"}""");
+
+        var result = await new JsonTransformService().TransformAsync(order, OutputFormat.Json, CancellationToken.None);
+        var doc    = await ReadJson(result);
+
+        doc.RootElement.GetProperty("buyerName").GetString().Should().Be("Column Buyer");
+    }
+
     // ── Validation errors ─────────────────────────────────────────────────────
 
     [Fact]
