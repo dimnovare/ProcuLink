@@ -34,6 +34,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<ImportedSftpFile> ImportedSftpFiles => Set<ImportedSftpFile>();
     public DbSet<S3IngressConfig> S3IngressConfigs => Set<S3IngressConfig>();
     public DbSet<ImportedS3Object> ImportedS3Objects => Set<ImportedS3Object>();
+    public DbSet<EmailImportRecord> EmailImportRecords => Set<EmailImportRecord>();
     public DbSet<Buyer> Buyers => Set<Buyer>();
     public DbSet<ValidationRule> ValidationRules => Set<ValidationRule>();
     public DbSet<OutputTemplate> OutputTemplates => Set<OutputTemplate>();
@@ -892,6 +893,28 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.ETag).HasColumnName("etag").IsRequired();
             b.Property(x => x.ImportedAt).HasColumnName("imported_at").HasColumnType("timestamptz");
             b.HasIndex(x => new { x.OrgId, x.BucketName, x.ObjectKey }).IsUnique();
+        });
+
+        // ── email_import_records ───────────────────────────────────────
+        // Idempotency ledger for IMAP attachment ingestion. The unique index on
+        // (OrgId, ImapMessageId, AttachmentHash) is the actual dedupe guarantee: a crash between
+        // creating the order stub and flagging the message SEEN re-presents the same unseen message
+        // on the next poll, and this index turns the re-import into a no-op rather than a duplicate
+        // order. The poller does a pre-insert existence check AND relies on this index to win the
+        // race between two concurrent polls of the same mailbox.
+        modelBuilder.Entity<EmailImportRecord>(b =>
+        {
+            b.ToTable("email_import_records");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.ImapMessageId).HasColumnName("imap_message_id").IsRequired();
+            b.Property(x => x.AttachmentHash).HasColumnName("attachment_hash").IsRequired();
+            b.Property(x => x.OrderId).HasColumnName("order_id");
+            b.Property(x => x.FileName).HasColumnName("file_name");
+            b.Property(x => x.ImportedAt).HasColumnName("imported_at").HasColumnType("timestamptz");
+            b.HasIndex(x => new { x.OrgId, x.ImapMessageId, x.AttachmentHash }).IsUnique()
+             .HasDatabaseName("IX_email_import_records_org_id_imap_message_id_attachment_hash");
         });
 
         // ── audit_events ───────────────────────────────────────────────

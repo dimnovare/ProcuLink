@@ -254,8 +254,11 @@ internal sealed class OrderIngestionService
         // Load supplier so navigation property is set for MapToDto.
         // Scope to the caller's org — FindAsync would resolve by PK alone and let
         // a user in org A reference org B's supplier (cross-tenant injection).
+        // DeletedAt == null: never route a NEW order to a soft-deleted supplier
+        // (it has disappeared from every list/picker; importing against it would
+        // silently revive a destination the operator removed).
         var supplier = await _db.Suppliers
-            .FirstOrDefaultAsync(s => s.Id == supplierId && s.OrgId == organisationId, ct);
+            .FirstOrDefaultAsync(s => s.Id == supplierId && s.OrgId == organisationId && s.DeletedAt == null, ct);
         if (supplier is null)
             return Result<PurchaseOrderEntity>.Fail("Supplier not found.");
 
@@ -331,8 +334,10 @@ internal sealed class OrderIngestionService
 
         // Scope to the caller's org — FindAsync would resolve by PK alone and let
         // a user in org A reference org B's supplier (cross-tenant injection).
+        // DeletedAt == null: a soft-deleted supplier must not receive new orders
+        // through the structured-extraction (PDF/AI) ingest path either.
         var supplier = await _db.Suppliers
-            .FirstOrDefaultAsync(s => s.Id == supplierId && s.OrgId == organisationId, ct);
+            .FirstOrDefaultAsync(s => s.Id == supplierId && s.OrgId == organisationId && s.DeletedAt == null, ct);
         if (supplier is null)
             return Result<PurchaseOrderEntity>.Fail("Supplier not found.");
 
