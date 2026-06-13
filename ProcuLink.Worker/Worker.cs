@@ -67,6 +67,14 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/5 * * * *");
 
+        // Liveness beat: a log line + Sentry breadcrumb every 2 min proving the recurring-job
+        // dispatcher is actually firing (not just the Hangfire server thread being alive).
+        // Grep the Worker logs for "WORKER-HEARTBEAT" to confirm end-to-end liveness.
+        _recurringJobs.AddOrUpdate<WorkerHeartbeatJob>(
+            "worker-heartbeat",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/2 * * * *");
+
         // Maintenance: prune append-only / ephemeral tables past their retention window so they do
         // not grow unbounded (daily at 03:30 UTC). Disabled by default — config-gated, bounded batches.
         _recurringJobs.AddOrUpdate<DataRetentionSweepJob>(
@@ -83,7 +91,7 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "15 4 * * *");
 
-        _logger.LogInformation("Registered recurring jobs: email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection (every 15 min), catalog-sync (hourly), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
+        _logger.LogInformation("Registered recurring jobs: worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection (every 15 min), catalog-sync (hourly), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

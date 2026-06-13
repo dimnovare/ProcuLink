@@ -670,7 +670,23 @@ builder.Services.AddHealthChecks()
     .AddCheck<ProcuLink.Api.Controllers.MigrationReadinessHealthCheck>(
         name: "migrations",
         failureStatus: HealthStatus.Unhealthy,
+        tags: new[] { "ready" })
+    // Worker (Hangfire server) heartbeat freshness — Degraded (keeps /health/ready
+    // at HTTP 200) when no worker is registered or its heartbeat is stale. Reads the
+    // SHARED Hangfire Postgres storage via IMonitoringApi (registered above) — no new
+    // table/job. The structured JSON body carries workerHealthy:false so the external
+    // uptime workflow + WorkerHealthAlertJob alert without the API self-evicting on a
+    // Worker blip. See WorkerHeartbeatHealthCheck remarks for the severity rationale.
+    .AddCheck<ProcuLink.Api.Controllers.WorkerHeartbeatHealthCheck>(
+        name: "worker",
+        failureStatus: HealthStatus.Degraded,
         tags: new[] { "ready" });
+
+// IMonitoringApi is registered scoped (factory wrapper) above for OpsHealthService.
+// The WorkerHeartbeatHealthCheck is resolved as a singleton by the health-check
+// system, so it cannot take a scoped IMonitoringApi via the constructor — instead
+// its ctor parameter is optional and it falls back to JobStorage.Current at probe
+// time (which is the same singleton storage). No extra registration needed.
 
 // ── OpenAPI — Swashbuckle for spec, Scalar for UI ──────────────────────────
 builder.Services.AddEndpointsApiExplorer();
@@ -816,11 +832,21 @@ app.MapControllers();
 // Liveness (/health) is served by HealthController (fast, dependency-free 200) so
 // Railway's container probe is never blocked by a slow dependency. Readiness
 // (/health/ready) runs ONLY the "ready"-tagged dependency checks (DB + storage +
-// migration flag) and reports the aggregate status so monitoring can see degraded
-// state without taking the process down.
+// migration flag + worker heartbeat) and reports the aggregate status so
+// monitoring can see degraded state without taking the process down.
+//
+// HTTP status: Healthy/Degraded → 200, Unhealthy → 503 (the default
+// MapHealthChecks status-code map). A stale Worker is Degraded → 200, but the JSON
+// body carries workerHealthy:false so the external uptime workflow alerts on it.
+//
+// BODY: a structured JSON payload (instead of the default plain "Healthy" string)
+// with per-check status/description/duration + a flattened workerHealthy flag the
+// uptime workflow + dashboards can read. ResponseWriter is the only customisation —
+// it NEVER includes secrets (each check's Data bag is counts/ages/booleans only).
 app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = ProcuLink.Api.Controllers.HealthResponseWriter.WriteReadinessJsonAsync,
 });
 
 // ── Auto-migrate after server starts ─────────────────────────────────────

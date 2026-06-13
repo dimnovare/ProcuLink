@@ -203,6 +203,9 @@ builder.Services.AddSingleton<IWorkerAlertSink, SentryWorkerAlertSink>();
 builder.Services.AddSingleton<WorkerHealthAlertState>(); // singleton: cross-run rate-limit state (no scoped DbContext captured)
 builder.Services.AddScoped<IWorkerHealthAlertService, WorkerHealthAlertService>();
 builder.Services.AddScoped<WorkerHealthAlertJob>();
+// Liveness beat: proves the recurring-job dispatcher is actually firing (a log
+// line + Sentry breadcrumb every 2 min), complementing Hangfire's server heartbeat.
+builder.Services.AddScoped<WorkerHeartbeatJob>();
 builder.Services.AddSingleton(_ =>
 {
     var opts = new WorkerHealthAlertOptions();

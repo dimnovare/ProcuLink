@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Text.Json;
 using Hangfire;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -268,5 +269,96 @@ public sealed class HealthEndpointTests : IClassFixture<HealthTestFactory>
         MigrationReadiness.MarkSucceeded();
         var succeededResponse = await client.GetAsync("/health/ready");
         Assert.Equal(HttpStatusCode.OK, succeededResponse.StatusCode);
+    }
+
+    // ── Structured JSON body + worker-heartbeat flattening ───────────────────
+
+    [Fact]
+    public async Task Readiness_EmitsStructuredJsonBody_WithPerCheckEntries()
+    {
+        MigrationReadiness.MarkSucceeded();
+
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/health/ready");
+
+        // Body is JSON (not the default plain "Healthy" string).
+        Assert.Equal("application/json",
+            response.Content.Headers.ContentType?.MediaType);
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = doc.RootElement;
+
+        // Top-level contract fields.
+        Assert.True(root.TryGetProperty("status", out _));
+        Assert.True(root.TryGetProperty("ready", out var ready));
+        Assert.True(root.TryGetProperty("workerHealthy", out _));
+        Assert.True(root.TryGetProperty("totalDurationMs", out _));
+        Assert.True(root.TryGetProperty("checks", out var checks));
+        Assert.Equal(JsonValueKind.Array, checks.ValueKind);
+
+        // Every dependency check is present and named.
+        var names = checks.EnumerateArray()
+            .Select(c => c.GetProperty("name").GetString())
+            .ToHashSet();
+        Assert.Contains("database", names);
+        Assert.Contains("storage", names);
+        Assert.Contains("migrations", names);
+        Assert.Contains("worker", names);
+
+        // ready mirrors the HTTP contract (not Unhealthy → ready:true).
+        Assert.True(ready.GetBoolean());
+    }
+
+    [Fact]
+    public async Task Readiness_NoWorkerRegistered_StaysHttp200_ButWorkerHealthyFalse()
+    {
+        // The in-memory Hangfire storage has NO server registered (no
+        // AddHangfireServer in the test host), so the worker check is Degraded.
+        // Degraded must keep /health/ready at HTTP 200 (a dead Worker must not
+        // evict the API), while the JSON flag reports the problem for alerting.
+        MigrationReadiness.MarkSucceeded();
+
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/health/ready");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = doc.RootElement;
+
+        Assert.False(root.GetProperty("workerHealthy").GetBoolean());
+        // Aggregate status is Degraded (worker check is the only non-Healthy one).
+        Assert.Equal("Degraded", root.GetProperty("status").GetString());
+
+        // The worker check carries machine-readable data (no secrets — counts only).
+        var worker = root.GetProperty("checks").EnumerateArray()
+            .Single(c => c.GetProperty("name").GetString() == "worker");
+        Assert.Equal("Degraded", worker.GetProperty("status").GetString());
+        Assert.Equal(0, worker.GetProperty("data").GetProperty("activeWorkers").GetInt32());
+    }
+
+    [Fact]
+    public async Task Readiness_Body_NeverLeaksSecretsOrStackTraces()
+    {
+        // Force an Unhealthy migration check (the path that would carry an
+        // exception). The JSON writer must surface only status/description —
+        // never a stack trace, connection string, or credential.
+        MigrationReadiness.MarkFailed();
+        try
+        {
+            var client = _factory.CreateClient();
+            var response = await client.GetAsync("/health/ready");
+            var body = await response.Content.ReadAsStringAsync();
+
+            Assert.DoesNotContain("stackTrace", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("StackTrace", body);
+            Assert.DoesNotContain("Password", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Host=", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("   at ", body); // .NET stack-frame prefix
+        }
+        finally
+        {
+            MigrationReadiness.MarkSucceeded();
+        }
     }
 }

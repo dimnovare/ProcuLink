@@ -37,13 +37,13 @@ Stripe. Hangfire dashboard is dev-only (not exposed in prod).
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" https://api.proculink.eu/health   # 200 = process alive (fast liveness)
-curl -s https://api.proculink.eu/health/ready                              # "Healthy" = DB + storage + migrations OK
+curl -s https://api.proculink.eu/health/ready | jq .                        # structured JSON: DB + storage + migrations + worker
 curl -s -o /dev/null -w "%{http_code}\n" https://proculink.eu             # 200 = frontend up
 ```
 
 - `/health` is a **fast liveness** probe (no dependencies). If this fails, the API process is down → check Railway `ProcuLink` service logs/restart.
-- `/health/ready` is **readiness**: it checks the DB, object storage, and that EF migrations applied. A failed migration **flips readiness to unhealthy and captures to Sentry but keeps the process up** (migrate-fail-loud), so `/health` can be 200 while `/health/ready` is unhealthy — that combination means "running on a bad/old schema; do not trust writes."
-- **Worker health is not on an HTTP endpoint** — it reports a Hangfire heartbeat. Check it via the operator UI `/operations/health` (worker banner + "last heartbeat") or:
+- `/health/ready` is **readiness**: it returns a **structured JSON body** checking the DB, object storage, EF migrations, **and the Worker heartbeat**. A failed migration / unreachable DB → `status:Unhealthy` → **HTTP 503** (and captures to Sentry) but keeps the process up (migrate-fail-loud), so `/health` can be 200 while `/health/ready` is 503 — "running on a bad/old schema; do not trust writes." Full alert wiring: [`monitoring-runbook.md`](monitoring-runbook.md).
+- **Worker health IS now on `/health/ready`** via the `workerHealthy` flag (reads the shared Hangfire heartbeat). Note a dead Worker is reported as `Degraded` → **still HTTP 200**, so always check `jq '.workerHealthy'`, not just the status code. You can also see it via the operator UI `/operations/health` (worker banner + "last heartbeat") or:
 
 ```bash
 railway variables --service ProcuLink --json | python .live-fixtures/workercheck.py   # hangfire heartbeat age

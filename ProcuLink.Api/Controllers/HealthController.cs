@@ -1,3 +1,4 @@
+using Hangfire.Storage;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -195,4 +196,126 @@ public sealed class StorageHealthCheck : IHealthCheck
                 "Storage reachability probe failed.", ex);
         }
     }
+}
+
+/// <summary>
+/// Readiness check that a background Worker is alive and recently beating.
+///
+/// The Worker is a SEPARATE Railway process ("aware-amazement") that runs the
+/// Hangfire server; the API only enqueues. The classic prod incident class is
+/// "Worker not consuming" — the API keeps 200ing while uploads silently never
+/// parse/transform/deliver because nothing drains the queue. This check makes
+/// that visible on /health/ready.
+///
+/// MECHANISM — NO new table / no new heartbeat job. Hangfire already writes a
+/// per-server heartbeat into the SHARED Postgres storage every ~30 s. The API
+/// shares that storage and has <see cref="IMonitoringApi"/> registered
+/// (Program.cs), so we read the most-recent server heartbeat directly. A
+/// heartbeat older than <see cref="HeartbeatDeadlineSeconds"/> (or no server at
+/// all) means the Worker is down/stale. This mirrors the freshness logic in
+/// <c>OpsHealthService.GetWorkerHealth()</c> (60 s deadline) so the two agree.
+///
+/// SEVERITY = Degraded, NOT Unhealthy. A dead Worker must NOT take the API out
+/// of rotation — the API still serves reads/billing/the dashboard, and flapping
+/// the API's own readiness on a Worker blip would be worse than the Worker
+/// outage. Degraded keeps /health/ready at HTTP 200; the structured JSON body
+/// carries <c>workerHealthy:false</c>, and the external uptime workflow (and the
+/// recurring <c>WorkerHealthAlertJob</c> → Sentry) alert on that flag. So the
+/// founder still gets paged, without the API self-evicting.
+///
+/// Tagged "ready" — never affects the liveness probe.
+/// </summary>
+public sealed class WorkerHeartbeatHealthCheck : IHealthCheck
+{
+    /// <summary>
+    /// A Hangfire server heartbeat older than this (seconds) marks the Worker
+    /// stale. Hangfire's default HeartbeatInterval is 30 s; 60 s allows one
+    /// missed beat of leeway. Kept in lock-step with
+    /// <c>OpsHealthService.WorkerHeartbeatDeadline</c>.
+    /// </summary>
+    public const int HeartbeatDeadlineSeconds = 60;
+
+    // Nullable: in test hosts (and before Hangfire storage is ready) no
+    // monitoring API is available. A null/throwing probe degrades gracefully.
+    private readonly IMonitoringApi? _monitoring;
+
+    public WorkerHeartbeatHealthCheck(IMonitoringApi? monitoring = null) =>
+        _monitoring = monitoring;
+
+    public Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        var probe = Probe(_monitoring);
+
+        // Surface the same machine-readable fields on the JSON body via the check's
+        // data bag (no secrets — just counts + ages).
+        var data = new Dictionary<string, object>
+        {
+            ["activeWorkers"] = probe.ActiveWorkers,
+            ["heartbeatDeadlineSeconds"] = HeartbeatDeadlineSeconds,
+        };
+        if (probe.SecondsSinceHeartbeat is { } secs)
+            data["secondsSinceWorkerHeartbeat"] = Math.Round(secs, 1);
+
+        if (probe.Healthy)
+        {
+            return Task.FromResult(HealthCheckResult.Healthy(
+                $"Worker beating ({probe.ActiveWorkers} registered, " +
+                $"{probe.SecondsSinceHeartbeat:F0}s since last heartbeat).",
+                data));
+        }
+
+        var reason = probe.ActiveWorkers == 0
+            ? "No Hangfire worker is registered — background jobs (parse/transform/deliver) are NOT being processed."
+            : $"Worker heartbeat is stale ({probe.SecondsSinceHeartbeat:F0}s > {HeartbeatDeadlineSeconds}s deadline) — the Worker may be hung or restarting.";
+
+        // Degraded (not Unhealthy): keep /health/ready at 200; the JSON flag +
+        // alert job carry the page. See the class remarks for the rationale.
+        return Task.FromResult(HealthCheckResult.Degraded(reason, data: data));
+    }
+
+    /// <summary>
+    /// Reads the most-recent Hangfire server heartbeat. Returns safe defaults
+    /// (0 workers, unhealthy) when the monitoring API is null/unavailable or
+    /// throws — the readiness endpoint must never fail because the Hangfire
+    /// storage is momentarily unreachable.
+    /// </summary>
+    internal static WorkerHeartbeatProbe Probe(IMonitoringApi? monitoring)
+    {
+        try
+        {
+            var api = monitoring ?? Hangfire.JobStorage.Current?.GetMonitoringApi();
+            if (api is null)
+                return new WorkerHeartbeatProbe(0, null, false);
+
+            var servers = api.Servers();
+            if (servers is null || servers.Count == 0)
+                return new WorkerHeartbeatProbe(0, null, false);
+
+            var lastHeartbeat = servers
+                .Select(s => s.Heartbeat)
+                .Where(h => h.HasValue)
+                .Select(h => h!.Value)
+                .DefaultIfEmpty()
+                .Max();
+
+            if (lastHeartbeat == default)
+                return new WorkerHeartbeatProbe(servers.Count, null, false);
+
+            var age = (DateTime.UtcNow - lastHeartbeat).TotalSeconds;
+            var healthy = age <= HeartbeatDeadlineSeconds;
+            return new WorkerHeartbeatProbe(servers.Count, age, healthy);
+        }
+        catch
+        {
+            // Storage unavailable / test env — degrade, never throw.
+            return new WorkerHeartbeatProbe(0, null, false);
+        }
+    }
+
+    /// <summary>Result of a single Hangfire-heartbeat probe.</summary>
+    internal readonly record struct WorkerHeartbeatProbe(
+        int ActiveWorkers,
+        double? SecondsSinceHeartbeat,
+        bool Healthy);
 }

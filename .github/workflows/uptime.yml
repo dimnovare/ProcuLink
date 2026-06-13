@@ -1,0 +1,82 @@
+name: Uptime monitor
+
+# Free external uptime + readiness monitoring (no paid SaaS).
+#
+# Runs on a schedule and curls the production surfaces. If the API readiness
+# endpoint is non-200, the marketing site is non-200, OR the API reports a dead
+# Worker (workerHealthy:false on an otherwise-200 readiness body), the job FAILS.
+# GitHub then notifies per the repo's "Actions" notification settings — see
+# docs/deployment/monitoring-runbook.md for wiring this to email / Slack.
+#
+# WHY this catches what HTTP-200 alone misses: a stale Worker keeps the API at
+# HTTP 200 (Degraded, by design — a dead Worker must not evict the API), so we
+# additionally parse the structured JSON `workerHealthy` flag.
+
+on:
+  schedule:
+    # Every 10 minutes. GitHub's minimum cron granularity is 5 min; 10 min keeps
+    # well inside the free Actions minute budget while still catching outages fast.
+    - cron: '*/10 * * * *'
+  # Allow a manual run from the Actions tab to test the wiring on demand.
+  workflow_dispatch:
+
+# Never run two probes at once (a slow run must not overlap the next schedule).
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe production endpoints
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Override via repo Variables (Settings → Secrets and variables → Actions →
+      # Variables) if the hostnames ever change. Defaults are the prod surfaces.
+      API_READY_URL: ${{ vars.API_READY_URL || 'https://api.proculink.eu/health/ready' }}
+      SITE_URL: ${{ vars.SITE_URL || 'https://proculink.eu' }}
+
+    steps:
+      - name: Probe API readiness (status + worker heartbeat)
+        run: |
+          echo "Probing $API_READY_URL"
+          # -sS quiet but show errors; -m 25 hard timeout; capture body + status.
+          body="$(curl -sS -m 25 -w '\n%{http_code}' "$API_READY_URL")" || {
+            echo "::error title=API unreachable::curl failed for $API_READY_URL"
+            exit 1
+          }
+          code="$(printf '%s' "$body" | tail -n1)"
+          json="$(printf '%s' "$body" | sed '$d')"
+          echo "HTTP $code"
+          echo "$json"
+
+          if [ "$code" != "200" ]; then
+            echo "::error title=API readiness not 200::Got HTTP $code from $API_READY_URL"
+            exit 1
+          fi
+
+          # A stale Worker is Degraded (HTTP 200) but workerHealthy:false — fail on it
+          # so "Worker not consuming" pages the team even while the API is up.
+          worker_healthy="$(printf '%s' "$json" | jq -r '.workerHealthy')"
+          echo "workerHealthy=$worker_healthy"
+          if [ "$worker_healthy" != "true" ]; then
+            echo "::error title=Worker unhealthy::API readiness reports workerHealthy=$worker_healthy (background jobs may not be processing). Check the Railway Worker logs + the hangfire.job table — see docs/deployment/monitoring-runbook.md."
+            exit 1
+          fi
+
+      - name: Probe marketing site
+        run: |
+          echo "Probing $SITE_URL"
+          code="$(curl -sS -m 25 -o /dev/null -w '%{http_code}' "$SITE_URL")" || {
+            echo "::error title=Site unreachable::curl failed for $SITE_URL"
+            exit 1
+          }
+          echo "HTTP $code"
+          # 2xx/3xx are acceptable (Vercel may 308 apex→www etc.); anything >=400 fails.
+          if [ "$code" -ge 400 ]; then
+            echo "::error title=Site not healthy::Got HTTP $code from $SITE_URL"
+            exit 1
+          fi
