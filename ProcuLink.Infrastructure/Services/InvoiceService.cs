@@ -96,6 +96,14 @@ public sealed class InvoiceService : IInvoiceService
                              .Where(i => i.OrganisationId == orgId && i.Id == invoiceId)
                              .FirstOrDefaultAsync(ct);
 
+    // SCALE-GATED CONSTRAINT: this returns the org's ENTIRE invoice list (no LIMIT /
+    // pagination) and there is no composite index on (organisation_id, created_at), so
+    // the OrderByDescending falls back to a sort over the org partition. Acceptable
+    // today — invoice ingestion is a low-volume, Integration+ secondary surface (the PO
+    // path is the primary one) — but REVISIT past ~1k invoices/org: add a
+    // (organisation_id, created_at DESC) index and page this the way GET /api/orders
+    // already does (limit/offset + totalCount). See
+    // docs/audit/2026-06-12-scale-gated-constraints.md.
     public async Task<IReadOnlyList<InvoiceEntity>> ListAsync(Guid orgId, CancellationToken ct)
         => await _db.Invoices
                     .Where(i => i.OrganisationId == orgId)

@@ -35,7 +35,7 @@ Status values used throughout:
 | **UBL Order** | 2.1 (OASIS) | planned (Horizon 2 — Group M) | planned (Horizon 2 — Group M) | HTTPS / Peppol Access Point / SMTP attachment | — | [UBL 2.1 Order](http://docs.oasis-open.org/ubl/os-UBL-2.1/UBL-2.1.html) |
 | **Peppol BIS Order** | 3.0 | planned (Horizon 2 — Group M, pairs with UBL) | planned (Horizon 2 — Group M) | Peppol Access Point (AS4) | — | [Peppol BIS Order 3.0 spec](https://docs.peppol.eu/poacc/upgrade-3/profiles/3-order/) |
 | **SAP IDoc ORDERS05** | ORDERS05 (basic type) | supported (`IDocOrders05Parser`) | n/a (inbound only) | HTTPS upload, email attachment, SFTP | Hand-rolled `System.Xml.Linq` parser (no commercial EDI library); root `<ORDERS05>` routed in `OrderParserFactory` ahead of UBL/cXML; maps E1EDK01/E1EDK02 header (BELNR, currency, order date), E1EDKA1 parties (AG buyer / LF supplier), E1EDP01 lines (E1EDP19 IDTNR + E1EDPT1 long text); 17 tests / 5 sanitized real fixtures; live-verified on prod 2026-06-08 | [SAP Help — IDoc](https://help.sap.com/docs/) |
-| **EDIFACT ORDERS** | UN D.96A (and D.01B by request) | stub today; planned real parser (Horizon 2 — Group M) | planned (Horizon 2 — Group M) | AS2 (partner-wrap), SFTP, VAN | EdiFabric vs open-source library decision pending — see `docs/superpowers/specs/2026-Q4-edifact-library-evaluation.md` (to be written) | [UN/EDIFACT ORDERS D.96A](https://service.unece.org/trade/untdid/d96a/trmd/orders_c.htm) |
+| **EDIFACT ORDERS** | UN D.96A (and D.01B by request) | supported (`EdifactOrderParser`) | supported (`EdifactParsedOrderTransform`, `OutputFormat.EdifactOrders`) | AS2 (partner-wrap), SFTP, VAN | Hand-rolled ORDERS segment parser/transformer (no commercial EDI library); UNA/UNB/UNH/BGM/DTM/NAD/CUX/LIN/IMD/QTY/PRI/UNS/UNT/UNZ; release-escaped free text; transform↔parse round-trip tested. Full ORDRSP/DESADV/INVOIC message-set breadth (and the EdiFabric-vs-open-source decision) is still Horizon 2 — Group M. | [UN/EDIFACT ORDERS D.96A](https://service.unece.org/trade/untdid/d96a/trmd/orders_c.htm) |
 | **ANSI X12** | 850 (versions 004010, 005010) | supported (`X12OrderParser`) | supported (`X12TransformService`) | AS2 (partner-wrap), VAN, SFTP | Hand-rolled flat-segment parser/transformer (no commercial EDI library); ISA/GS/ST/BEG/CUR/N1/PO1/PID/CTT envelope; positional delimiter discovery from fixed-width ISA; transform↔parse round-trip tested | [X12 850 Purchase Order](https://x12.org/codes/transaction-sets) |
 | **OpenPEPPOL transport (AS4)** | Peppol AS4 profile | n/a (transport, not document) | planned (Horizon 2 — Group N, partner-wrapped via Pagero / Tradeshift) | AS4 between Access Points | — | [Peppol AS4 profile](https://docs.peppol.eu/edelivery/as4/specification/) |
 | **AS2 / AS4 (drummond)** | RFC 4130 (AS2), AS4 profile | n/a (transport) | planned (Horizon 2 — Group N, partner-wrap via mendelson / DragonAS2 first) | AS2 / AS4 | — | [RFC 4130](https://datatracker.ietf.org/doc/html/rfc4130) |
@@ -51,9 +51,12 @@ Status values used throughout:
 ### Headline reading guide
 
 - "Supported" rows are the wedge today: cXML, the internal canonical model,
-  CSV/XLSX input, CSV/XML output, text-PDF input.
-- UBL / Peppol BIS Order / EDIFACT real parser / X12 850 are the Horizon 2
-  Group M deliverables that turn ProcuLink from "good cXML tool" into
+  CSV/XLSX input, CSV/XML output, text-PDF input, SAP IDoc ORDERS05 input,
+  ANSI X12 850 (input + output), and EDIFACT ORDERS D.96A (input + output —
+  hand-rolled, no commercial EDI library).
+- UBL / Peppol BIS Order remain Horizon 2 Group M deliverables, alongside the
+  broader EDIFACT message-set (ORDRSP/DESADV/INVOIC) and the EdiFabric-vs-open-source
+  library decision, that turn ProcuLink from "good cXML tool" into
   "international standard router".
 - AS2 / AS4 / PEPPOL transports are Horizon 2 Group N, partner-wrapped
   first.
@@ -74,8 +77,8 @@ name the class and the test fixture.
 | **cXML 1.2** | Output | `ProcuLink.Transform.Output.CxmlTransformService` | No unresolved lines; emits cXML 1.2.024 with payloadID + timestamp | `ProcuLink.Transform.Tests/Fixtures/expected-output.cxml` | Integration | Added Group K |
 | **UBL 2.1 / Peppol BIS Order 3** | Input | planned (`UblOrderParser` per `c395b6c` wires a real parser; coverage to be expanded in Horizon 2 Group M) | — | — | Integration | Namespace `urn:oasis:names:specification:ubl:schema:xsd:Order-2` |
 | **UBL 2.1 / Peppol BIS Order 3** | Output | planned (Horizon 2 — Group M) | — | — | Integration | Emit `Order` document; mandatory `ID`, `IssueDate`, `OrderLine/LineItem` |
-| **EDIFACT ORDERS D.96A** | Input | stub (`EdifactOrderParser` — real parsing per `2bd4ecd`; full ORDERS coverage in Horizon 2 Group M after library decision) | — | — | Integration | Library decision: EdiFabric (commercial) vs open-source. Segment delimiter `'`; `UNA`+`UNB`+`ORDERS`. |
-| **EDIFACT ORDERS D.96A** | Output | planned (Horizon 2 — Group M) | — | — | Integration | Same library decision as input |
+| **EDIFACT ORDERS D.96A** | Input | `ProcuLink.Transform.Parsing.EdifactOrderParser` (real parsing per `2bd4ecd`) | UNA/UNB/UNH validate ORDERS; BGM PO number; DTM date; NAD buyer; CUX currency; LIN/IMD/QTY/PRI lines; custom delimiters + release escapes; D01B-tolerant | inline in `ProcuLink.Transform.Tests/Parsing/EdifactOrderParserTests.cs` | Integration | Hand-rolled (no commercial EDI library). Full ORDRSP/DESADV/INVOIC breadth + EdiFabric-vs-open-source decision remain Horizon 2 Group M. |
+| **EDIFACT ORDERS D.96A** | Output | `ProcuLink.Transform.Output.EdifactParsedOrderTransform` (`OutputFormat.EdifactOrders`) | Emits UNB…UNZ ORDERS D.96A; computed UNT segment count; release-escaped free text; mirror of the parser | inline in `ProcuLink.Transform.Tests/Output/EdifactParsedOrderTransformTests.cs` | Integration | Round-trips through `EdifactOrderParser`; registered in DI alongside the X12/UBL/cXML transforms. |
 | **ANSI X12 850** | Input | `ProcuLink.Transform.Parsing.X12OrderParser` | Requires ISA envelope + `ST*850` + `BEG`; PO1 item-id qualifier pairs (`BP`/`IN` buyer, `VP`/`VN` vendor); optional/unknown segments skipped (never throws) | inline in `ProcuLink.Transform.Tests/Parsing/X12OrderParserTests.cs` | Integration | Hand-rolled; delimiters discovered positionally from fixed-width ISA, `*`/`>`/`~` fallback |
 | **ANSI X12 850** | Output | `ProcuLink.Transform.Output.X12TransformService` | No unresolved lines; emits 004010 ISA…IEA with balanced control numbers + computed SE/CTT counts | inline in `ProcuLink.Transform.Tests/Output/X12TransformServiceTests.cs` | Integration | ContentType `application/edi-x12`, extension `.x12`; round-trips through `X12OrderParser` |
 | **CSV (buyer template)** | Input | `ProcuLink.Transform.Parsing.CsvOrderParser` | Column alias matching; delimiter auto-detection (`,`/`;`) | inline in `ProcuLink.Transform.Tests/Parsing/` | Growth | Comma and semicolon delimited |
@@ -154,7 +157,7 @@ gated behind a user-mode toggle.
 | **Pilot** (internal/free, 14 days) | CSV input, XLSX input, Supplier CSV output |
 | **Growth** (€149/mo) | + PDF input, Supplier XML output, JSON/API output (when shipped) |
 | **Operations** (€399/mo) | All Growth formats |
-| **Integration** (€999/mo) | + cXML input/output, scanned PDF via AI vision (review-flagged), UBL/Peppol (when implemented), EDIFACT (when implemented), X12 850 (when implemented) |
+| **Integration** (€999/mo) | + cXML input/output, scanned PDF via AI vision (review-flagged), SAP IDoc ORDERS05 input, ANSI X12 850 (input/output), EDIFACT ORDERS D.96A (input/output), UBL/Peppol (when implemented) |
 | **Enterprise** | All formats + custom supplier rules and ERP connectors |
 
 Gate enforcement: `BillingFeature.Cxml` is defined in

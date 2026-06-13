@@ -132,6 +132,15 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // seed not yet run, or created before this feature) gets its OLD values
             // recorded at org creation, so the windows BEFORE this change still
             // resolve to the pre-change plan/override instead of falling back.
+            //
+            // STRUCTURAL INVARIANT (pinned by OrgPlanHistoryInvariantTests): when a
+            // baseline is healed in alongside a change, the baseline's EffectiveFrom is
+            // strictly BEFORE the change row's. The as-of metering reader
+            // (StripeBillingService.ComputePeriodOverageOrdersAsync) picks the latest
+            // row with EffectiveFrom ≤ windowStart; if a healed baseline tied the change
+            // row at the same instant, that pick would be ambiguous (plan/override could
+            // flip between meterings of the same window). The 1 ms guard below keeps the
+            // two strictly ordered even in the degenerate CreatedAt==default case.
             var hasHistory = OrgPlanHistories.Local.Any(h => h.OrgId == org.Id)
                 || (useAsync
                     ? await OrgPlanHistories.AsNoTracking().AnyAsync(h => h.OrgId == org.Id, ct)

@@ -180,6 +180,14 @@ public sealed class OpsHealthService : IOpsHealthService
         // Pull the latest delivery attempt per order in one org-scoped query, then reduce
         // in-memory (InMemory provider doesn't translate GroupBy→First reliably; this is a
         // small operator list, not a hot path).
+        //
+        // SCALE-GATED CONSTRAINT: the GroupBy→First reduction below runs in the app, over
+        // ALL delivery attempts for the dead-letter/failed orders on this page. That set is
+        // intentionally bounded (dead-letter is a rare terminal state an operator drains),
+        // so the in-memory reduction is cheap. If a future change widens this to a busy or
+        // unbounded set, push the "latest attempt per order" down into SQL (a window
+        // function / DISTINCT ON over (order_id, attempted_at DESC)) instead. See
+        // docs/audit/2026-06-12-scale-gated-constraints.md.
         var attempts = await _db.DeliveryAttempts
             .AsNoTracking()
             .Where(a => a.OrgId == organisationId

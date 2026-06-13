@@ -10,9 +10,12 @@ namespace ProcuLink.Transform.Parsing;
 // (EdiFabric ~€1,500/yr is explicitly off the table per founder policy; see
 // docs/.../memory). X12 850 shares EDIFACT's flat-segment shape: split on the
 // segment terminator, split each segment on the element separator, split each
-// element on the component separator. The 95% coverage set for a Purchase Order
-// (ISA, GS, ST, BEG, REF, DTM, CUR, N1, PO1, PID, CTT, SE, GE, IEA) maps
-// directly onto ParsedOrder / ParsedOrderLine.
+// element on the component separator. The segments this parser actually maps onto
+// ParsedOrder / ParsedOrderLine are ST (validate 850), BEG (PO number + order date),
+// CUR (currency), N1 (buyer name), PO1 (line qty/UOM/price/item codes) and PID
+// (line description); ISA/GS supply delimiters/context, and REF / DTM / CTT / the
+// SE / GE / IEA trailers are recognised-but-skipped (never mapped, never fatal).
+// See the per-segment "Coverage" list on the class below — keep the two in sync.
 //
 // Unlike EDIFACT, X12 has no release/escape character and the delimiters are
 // not advertised in a service-string segment — they are discovered positionally
@@ -34,6 +37,7 @@ namespace ProcuLink.Transform.Parsing;
 ///   GS  — functional group header (skipped)
 ///   ST  — transaction set header (validates 850)
 ///   BEG — beginning segment for PO (BEG03 = PO number, BEG05 = order date)
+///   REF — reference identification (optional; skipped — not mapped)
 ///   CUR — currency (CUR02 = ISO currency code)
 ///   DTM — date/time reference (optional; skipped — order date comes from BEG05)
 ///   N1  — name (N101 = BY → buyer name)

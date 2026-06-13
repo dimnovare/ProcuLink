@@ -662,6 +662,23 @@ internal sealed class OrderIngestionService
             // tracker entirely.  This avoids DbUpdateConcurrencyException (0 rows
             // affected) that occurs when the long-running parse leaves the tracked
             // entity stale on Neon serverless / Npgsql 8 connection multiplexing.
+            //
+            // ── INVARIANT (source-of-truth): typed columns, NOT canonical_json ──
+            // The async parse path writes the TYPED COLUMNS (BuyerName, PoNumber,
+            // OrderDate, Currency, SupplierName, SubTotal/TaxTotal/GrandTotal,
+            // PaymentTerms, DocumentType, RequestedDeliveryDate, …) and DELIBERATELY
+            // does NOT write canonical_json. The typed columns are the single source
+            // of truth for this order's header. canonical_json is only ever populated
+            // by the SYNC ingress paths (CreateStubFromParsedOrderAsync) and is treated
+            // strictly as a LEGACY FALLBACK by readers (e.g. OrdersController.ExtractBuyerName,
+            // which reads the column first and only consults canonical_json when the
+            // column is null). Any NEW reader of header data MUST read the typed column
+            // first and use canonical_json only as a null-fallback — never JSON-first —
+            // or it will silently disagree with every async-parsed order. A guard test
+            // (AsyncParseColumnFirstContractTests) pins this so a JSON-first reader
+            // breaks CI. If you ever start writing canonical_json here too, keep the two
+            // mutually consistent (see OrderResolutionService, which mirrors header edits
+            // into both) and update that test.
             var now = DateTime.UtcNow;
             var newPoNumber = string.IsNullOrWhiteSpace(parsedOrder.PoNumber)
                                 ? $"PO-{now:yyyyMMddHHmmss}"

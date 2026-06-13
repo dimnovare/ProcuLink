@@ -114,6 +114,13 @@ internal sealed class OrderQueryService
             baseQuery = baseQuery.Where(o => o.CreatedAt <= dateTo.Value);
 
         // ── Step 2 (new): SQL-native search predicate ────────────────────────────
+        // SCALE-GATED CONSTRAINT: the LEADING-wildcard ILIKE ('%term%') cannot use a
+        // B-tree index, so this search is a sequential scan over the org's orders.
+        // It is fine at the ICP scale (≤ a few thousand orders/org) and is already
+        // org-scoped + paginated, but it will get slow once an org accumulates large
+        // order history. REVISIT past ~50k orders/org: add a pg_trgm GIN index on
+        // (po_number, buyer_name) [+ supplier name], or a prefix index if we can drop
+        // the leading wildcard. See docs/audit/2026-06-12-scale-gated-constraints.md.
         if (!string.IsNullOrWhiteSpace(search))
         {
             var trimmedSearch = search.Trim();

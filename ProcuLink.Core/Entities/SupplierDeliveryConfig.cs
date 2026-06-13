@@ -12,7 +12,18 @@ public class SupplierDeliveryConfig
     /// <summary>When true, dispatch fires automatically after TransformAsync completes.</summary>
     public bool AutoDeliver { get; set; }
 
-    /// <summary>Non-secret JSONB: endpoint URL, host, remote path, extra headers, timeout, etc.</summary>
+    /// <summary>
+    /// Non-secret JSONB: endpoint URL, host, remote path, extra headers, timeout, etc.
+    ///
+    /// SCALE-GATED / SECURITY NOTE: this column is stored in CLEARTEXT (no encryption).
+    /// That is BY DESIGN and NOT a P2 secret-at-rest issue: every SECRET (passwords, API
+    /// keys, bearer tokens, basic-auth, OAuth2 client secrets, SFTP/FTP credentials) is
+    /// kept out of here and stored AES-GCM encrypted in <see cref="EncryptedCredentials"/>.
+    /// ConfigJson holds only non-secret connection metadata. INVARIANT to preserve: never
+    /// write a credential/secret into ConfigJson — if a new delivery option needs a secret,
+    /// add it to the encrypted credential payload instead. See
+    /// docs/audit/2026-06-12-scale-gated-constraints.md.
+    /// </summary>
     public string ConfigJson { get; set; } = "{}";
 
     /// <summary>Authenticated encrypted credential payload. Empty string means no credentials configured.</summary>

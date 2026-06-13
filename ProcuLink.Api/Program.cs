@@ -243,6 +243,15 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 // the global limiter applies to everything not otherwise rejected.
 builder.Services.AddRateLimiter(options =>
 {
+    // SCALE-GATED CONSTRAINT: these are PROCESS-LOCAL fixed-window limiters — each API
+    // replica holds its own in-memory counters. With one API replica (today's deploy)
+    // the published limits are exact. The moment we scale the API to N replicas the
+    // effective per-partition ceiling becomes ~N× the configured value (a partition can
+    // hit each replica's independent window). The limits below are tuned conservatively
+    // so this is acceptable headroom, not a correctness hole, but REVISIT before running
+    // multiple API replicas: back the limiters with a distributed store (e.g. Redis) so
+    // the window is shared. See docs/audit/2026-06-12-scale-gated-constraints.md.
+    //
     // sub → IP → "anonymous": authenticated callers are limited per-user; the
     // unauthenticated ingress/webhook surface is limited per source IP.
     static string PartitionKey(HttpContext ctx) =>

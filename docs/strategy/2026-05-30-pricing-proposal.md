@@ -26,7 +26,7 @@ The unit economics showed the ladder was mispriced at both ends:
 | Pilot | €0 / 14d | — | 20 | 1 |
 | Growth | €149 | — (self-serve) | 150 | 5 |
 | Operations | €399 | €500 ×3, then €150 | 500 | 10 |
-| Integration | €999 | €500 ×3, then €150 | 1,000 | 20 |
+| Integration | €999 | €500 ×3, then €150 | 1,500 | 20 |
 | **Distributor** ⭐ | **€1,499** | €500 ×3, then €150 | **2,500** | **30** |
 | Enterprise | from €2,500 | custom | custom | custom |
 
@@ -45,7 +45,9 @@ The unit economics showed the ladder was mispriced at both ends:
 - `BillingSection.tsx` — `PLAN_META.distributor`, `integration.next = "distributor"`, added to
   `CHECKOUT_PLANS` (in-app upgrade now chains …→ Integration → Distributor).
 - `pricing/page.tsx` — Distributor tier card; Enterprise "from €2,500/mo"; setup-fee footnote.
-- `ROICalculator.tsx` — Distributor band (1,000–2,500 orders → €1,499); subscription-only payback.
+- `ROICalculator.tsx` — Distributor band (1,500–2,500 orders → €1,499); subscription-only payback.
+  (The calculator no longer hard-codes these thresholds — it derives the recommended plan
+  from the shared `src/lib/plans.ts` ladder via `recommendPlanByOrders`.)
 
 The Distributor color is teal `#0E7490` (distinct from Integration's violet) across both UIs.
 

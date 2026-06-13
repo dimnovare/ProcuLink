@@ -1931,8 +1931,16 @@ public sealed class OrdersController : ControllerBase
     /// <summary>
     /// Extracts BuyerName from the denormalized column (set by the async parse job)
     /// or falls back to CanonicalJson for orders created via the sync path.
+    ///
+    /// COLUMN-FIRST CONTRACT: this is the canonical header reader for the order DTO.
+    /// The typed <see cref="PurchaseOrderEntity.BuyerName"/> column is the source of
+    /// truth (written by the async parse path, which never writes canonical_json);
+    /// canonical_json is consulted ONLY as a legacy fallback when the column is null.
+    /// Inverting this order would make every async-parsed order read a stale/absent
+    /// JSON value. Pinned by <c>AsyncParseColumnFirstContractTests</c>.
+    /// <c>internal</c> (not <c>private</c>) so that guard test can call it directly.
     /// </summary>
-    private static string? ExtractBuyerName(PurchaseOrderEntity e)
+    internal static string? ExtractBuyerName(PurchaseOrderEntity e)
     {
         // Prefer the denormalized column — always populated by ParseStoredFileAsync.
         if (!string.IsNullOrWhiteSpace(e.BuyerName)) return e.BuyerName;
