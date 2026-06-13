@@ -60,11 +60,31 @@ public record OrderLineDto(
     string?  ReviewReason = null
 );
 
+/// <summary>
+/// An AI mapping suggestion as surfaced to the resolve UI.
+///
+/// <para><see cref="Confidence"/> is the RAW model confidence — it is never mutated by the
+/// calibration layer (the durable decision history must keep recording the raw value so the
+/// empirical curve stays sound). The three <c>Calibrated*</c> fields are a V9 DISPLAY-ONLY
+/// overlay derived from this org's past accept/reject history:</para>
+/// <list type="bullet">
+///   <item><see cref="CalibratedConfidence"/> — the empirically-adjusted confidence. Equals
+///   <see cref="Confidence"/> exactly when <see cref="IsCalibrated"/> is false.</item>
+///   <item><see cref="IsCalibrated"/> — true only when a sufficiently-sampled empirical rate
+///   backed the number; false during cold-start / thin buckets / when the AI layer is off.</item>
+///   <item><see cref="CalibrationBasis"/> — a truthful explanation: "calibrated from N of your
+///   past decisions" vs "model estimate — not enough history yet".</item>
+/// </list>
+/// </summary>
 public record AiMappingSuggestionDto(
     string SupplierItemCode,
     float Confidence,
     string Reason,
-    string Provenance
+    string Provenance,
+    // ── V9 confidence calibration (display-only; never alters the raw Confidence above) ──
+    float CalibratedConfidence,
+    bool IsCalibrated,
+    string CalibrationBasis
 );
 
 /// <summary>Outbound artifact reference in the order response.</summary>

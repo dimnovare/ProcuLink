@@ -441,6 +441,11 @@ builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
 builder.Services.AddScoped<ICatalogRetrievalService, CatalogRetrievalService>();
 // Durable AI-suggestion accept/reject decision history (confidence calibration) — Scoped.
 builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
+// V9 — confidence calibration. Computes a per-org empirical reliability curve from the decision
+// history (display-only; never mutates the stored raw confidence). Needs IMemoryCache for the
+// short-TTL per-org curve cache; AddMemoryCache is idempotent if registered elsewhere.
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IConfidenceCalibrationService, ConfidenceCalibrationService>();
 // heart-piece-flex Phase 1: per-order mapping/override stored in canonical_json (no new table).
 builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService,
                            ProcuLink.Infrastructure.Services.OrderMappingOverrideService>();

@@ -47,6 +47,7 @@ public sealed class OrdersController : ControllerBase
     private readonly ProcuLink.Transform.Conformance.IConformanceService _conformance;
     private readonly IPoMappingService            _poMappings;
     private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
+    private readonly IConfidenceCalibrationService? _calibration;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -82,7 +83,8 @@ public sealed class OrdersController : ControllerBase
         IAiSuggestionDecisionService? aiDecisions = null,
         ProcuLink.Transform.Conformance.IConformanceService? conformance = null,
         IPoMappingService?           poMappings = null,
-        IEffectiveConnectionConfigResolver? effectiveConfig = null)
+        IEffectiveConnectionConfigResolver? effectiveConfig = null,
+        IConfidenceCalibrationService? calibration = null)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -117,6 +119,10 @@ public sealed class OrdersController : ControllerBase
         // produces. Null (older positional test constructions / unregistered hosts) behaves exactly
         // like flag-OFF: the live path drives everything, byte-identical.
         _effectiveConfig  = effectiveConfig;
+        // V9 confidence calibration — optional/display-only. When unsupplied (older positional test
+        // constructions / unregistered hosts) every suggestion reports its RAW confidence as the
+        // calibrated value with IsCalibrated=false, so behaviour is byte-identical to pre-V9.
+        _calibration      = calibration;
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -382,7 +388,42 @@ public sealed class OrdersController : ControllerBase
             }
         }
 
-        return Ok(MapToDto(entity, errorMessage));
+        // V9: derive a per-line confidence-calibration overlay for any line that still carries a raw
+        // AI confidence (the resolve UI surface). Display-only — it never mutates the stored raw
+        // confidence. No-op (empty map → raw passthrough) when calibration is unwired.
+        var calibrations = await BuildLineCalibrationsAsync(entity, ct);
+
+        return Ok(MapToDto(entity, errorMessage, calibrations));
+    }
+
+    /// <summary>
+    /// Builds the per-line confidence-calibration overlay for an order's AI suggestions, keyed by
+    /// line number. Org-scoped (the calibration service only ever reads the order's own org). Only
+    /// lines that carry a raw AI confidence are calibrated; everything else is omitted (the mapper
+    /// then falls back to raw passthrough). Returns an empty map when calibration is not wired, so
+    /// the read path is byte-identical to pre-V9 in that case.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<int, ProcuLink.Core.Services.CalibrationResult>>
+        BuildLineCalibrationsAsync(PurchaseOrderEntity entity, CancellationToken ct)
+    {
+        var empty = (IReadOnlyDictionary<int, ProcuLink.Core.Services.CalibrationResult>)
+            new Dictionary<int, ProcuLink.Core.Services.CalibrationResult>();
+
+        if (_calibration is null)
+            return empty;
+
+        var map = new Dictionary<int, ProcuLink.Core.Services.CalibrationResult>();
+        foreach (var line in entity.Lines)
+        {
+            // Only calibrate lines that actually have an AI suggestion WITH a raw confidence —
+            // calibration must never invent confidence for a suggestion that had none.
+            if (string.IsNullOrWhiteSpace(line.AiSuggestedSupplierItemCode)) continue;
+            if (line.AiSuggestionConfidence is not { } raw) continue;
+
+            map[line.LineNumber] = await _calibration.CalibrateAsync(entity.OrgId, raw, ct);
+        }
+
+        return map;
     }
 
     // ── GET /api/orders/{id}/status ───────────────────────────────────────────
@@ -1888,7 +1929,10 @@ public sealed class OrdersController : ControllerBase
 
     // ── Mapping helper ────────────────────────────────────────────────────────
 
-    private static OrderDto MapToDto(PurchaseOrderEntity e, string? errorMessage = null) => new(
+    private static OrderDto MapToDto(
+        PurchaseOrderEntity e,
+        string? errorMessage = null,
+        IReadOnlyDictionary<int, ProcuLink.Core.Services.CalibrationResult>? calibrations = null) => new(
         Id:            e.Id,
         PoNumber:      e.PoNumber,
         SupplierId:    e.SupplierId,
@@ -1904,7 +1948,7 @@ public sealed class OrdersController : ControllerBase
             .Select(l => new OrderLineDto(
                 l.Id, l.LineNumber, l.BuyerItemCode, l.SupplierItemCode,
                 l.Description, l.Quantity, l.Unit, l.UnitPrice,
-                l.Confidence, l.NeedsReview, MapAiSuggestion(l),
+                l.Confidence, l.NeedsReview, MapAiSuggestion(l, calibrations),
                 // Phase 4 per-line enrichment (null for parsers that don't emit it).
                 LineAmount:   l.LineAmount,
                 TaxRate:      l.TaxRate,
@@ -1958,15 +2002,37 @@ public sealed class OrdersController : ControllerBase
         return null;
     }
 
-    private static AiMappingSuggestionDto? MapAiSuggestion(PurchaseOrderLineEntity line)
+    private static AiMappingSuggestionDto? MapAiSuggestion(
+        PurchaseOrderLineEntity line,
+        IReadOnlyDictionary<int, ProcuLink.Core.Services.CalibrationResult>? calibrations = null)
     {
         if (string.IsNullOrWhiteSpace(line.AiSuggestedSupplierItemCode))
             return null;
 
+        var rawConfidence = line.AiSuggestionConfidence ?? 0f;
+
+        // V9 calibration overlay (display-only). When a calibration result was computed for this
+        // line, surface it; otherwise fall back to raw passthrough (calibrated == raw, off). The
+        // raw Confidence field below is ALWAYS the unmodified model confidence.
+        float calibratedConfidence = rawConfidence;
+        bool isCalibrated = false;
+        string calibrationBasis = ProcuLink.Core.Services.ConfidenceCalibration.UncalibratedBasis;
+
+        if (calibrations is not null
+            && calibrations.TryGetValue(line.LineNumber, out var calibration))
+        {
+            calibratedConfidence = (float)calibration.CalibratedConfidence;
+            isCalibrated = calibration.IsCalibrated;
+            calibrationBasis = calibration.Basis;
+        }
+
         return new AiMappingSuggestionDto(
             line.AiSuggestedSupplierItemCode,
-            line.AiSuggestionConfidence ?? 0f,
+            rawConfidence,
             line.AiSuggestionReason ?? string.Empty,
-            line.AiSuggestionProvenance ?? string.Empty);
+            line.AiSuggestionProvenance ?? string.Empty,
+            CalibratedConfidence: calibratedConfidence,
+            IsCalibrated: isCalibrated,
+            CalibrationBasis: calibrationBasis);
     }
 }
