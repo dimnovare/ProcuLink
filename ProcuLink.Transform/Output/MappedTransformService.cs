@@ -63,12 +63,23 @@ public sealed class MappedTransformService
     /// the output rules: effective canonical values are computed from the token list first, then
     /// the output rules read those effective values. Passing <c>null</c> or an empty list is
     /// equivalent to no SourceMap — the default (no remap) path is unchanged.
+    ///
+    /// <para><paramref name="catalogLookup"/> (Phase 2): an OPTIONAL, pre-loaded supplier-catalog
+    /// dictionary keyed by <c>Code</c> / <c>Barcode</c> / <c>ExternalId</c> (resolved ONCE by the
+    /// caller, org+supplier scoped — this service performs NO database access). When a line's
+    /// resolved <c>SupplierItemCode</c> / <c>ManufacturerPartNumber</c> matches a catalog row, the
+    /// row's price/code/unit/barcode are injected into the line value bag under the reserved keys
+    /// the <c>LoadCatalogProduct</c> manipulator reads (<c>__catalog_price</c> etc.) BEFORE the
+    /// manipulators run. Null/absent or no match = byte-identical to today (no reserved keys → the
+    /// manipulator returns "" exactly as before). Catalog values are SUGGESTIONS — they never
+    /// overwrite a PO field, only feed a manipulator the author explicitly selected.</para>
     /// </summary>
     public TransformResult Build(
         PurchaseOrderEntity        order,
         OrderMappingOverride       @override,
         OutputFormat               format,
-        IReadOnlyList<SourceToken>? sourceTokens = null)
+        IReadOnlyList<SourceToken>? sourceTokens = null,
+        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup = null)
     {
         ValidateOrder(order);
 
@@ -80,8 +91,8 @@ public sealed class MappedTransformService
 
         return format switch
         {
-            OutputFormat.Csv  => BuildCsv(order, @override, output, tokens),
-            OutputFormat.Json => BuildJson(order, @override, output, tokens),
+            OutputFormat.Csv  => BuildCsv(order, @override, output, tokens, catalogLookup),
+            OutputFormat.Json => BuildJson(order, @override, output, tokens, catalogLookup),
             _ => throw new ArgumentException(
                      $"MappedTransformService does not support format '{format}' (v1: CSV + JSON only).",
                      nameof(format)),
@@ -94,7 +105,8 @@ public sealed class MappedTransformService
         PurchaseOrderEntity        order,
         OrderMappingOverride       @override,
         OutputMappingConfig        output,
-        IReadOnlyList<SourceToken> tokens)
+        IReadOnlyList<SourceToken> tokens,
+        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup)
     {
         // Stable column order: header rules first (emitted once as a leading section is awkward for a
         // flat CSV, so header values are repeated on every line as leading columns), then line columns.
@@ -119,7 +131,7 @@ public sealed class MappedTransformService
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
             // SourceMap re-derive for each line row.
-            var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line), @override, tokens);
+            var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line, catalogLookup), @override, tokens);
 
             var lineValues = lineCols
                 .Select(c => ResolveRule(c.Value, lineRow, lineScope: true) ?? string.Empty)
@@ -138,7 +150,8 @@ public sealed class MappedTransformService
         PurchaseOrderEntity        order,
         OrderMappingOverride       @override,
         OutputMappingConfig        output,
-        IReadOnlyList<SourceToken> tokens)
+        IReadOnlyList<SourceToken> tokens,
+        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup)
     {
         // SourceMap re-derive for header row.
         var headerRow = SourceMapReDerive.ApplyToHeaderRow(BuildHeaderRow(order, @override), @override, tokens);
@@ -151,7 +164,7 @@ public sealed class MappedTransformService
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
             // SourceMap re-derive for each line row.
-            var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line), @override, tokens);
+            var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line, catalogLookup), @override, tokens);
             var obj = new Dictionary<string, string?>();
             foreach (var (_, rule) in output.Lines)
                 obj[rule.OutputPath] = ResolveRule(rule, lineRow, lineScope: true) ?? string.Empty;
@@ -297,9 +310,20 @@ public sealed class MappedTransformService
     /// Line-scope field bag for one line: the recognised canonical line fields, plus header fields
     /// (so a line rule can reference order-level values), plus any line-scoped custom field's value
     /// for this line number. Header custom fields are included too.
+    ///
+    /// <para>Phase 2 catalog wiring: when <paramref name="catalogLookup"/> is non-null and this line's
+    /// resolved <c>SupplierItemCode</c> / <c>ManufacturerPartNumber</c> matches a catalog row, the
+    /// row's price/code/unit/barcode are injected under the reserved keys the <c>LoadCatalogProduct</c>
+    /// manipulator reads (<c>__catalog_price</c> / <c>__catalog_code</c> / <c>__catalog_unit</c> /
+    /// <c>__catalog_barcode</c>). The match logic mirrors <c>ScribanOrderModel.BuildLine</c> (supplier
+    /// item code first, then manufacturer part number). Null/no-match → no reserved keys → the
+    /// manipulator returns "" exactly as it did before this wiring. The price is a typed decimal
+    /// column formatted with <see cref="CultureInfo.InvariantCulture"/> (a clean machine value, never
+    /// re-parsed from a locale string).</para>
     /// </summary>
     internal static Dictionary<string, string> BuildLineRow(
-        PurchaseOrderEntity order, OrderMappingOverride @override, PurchaseOrderLineEntity line)
+        PurchaseOrderEntity order, OrderMappingOverride @override, PurchaseOrderLineEntity line,
+        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup = null)
     {
         // Start from the header bag so line rules can reference order-level fields.
         var row = BuildHeaderRow(order, @override);
@@ -334,7 +358,44 @@ public sealed class MappedTransformService
             row[cf.Key] = val;
         }
 
+        InjectCatalogRow(row, line, catalogLookup);
+
         return row;
+    }
+
+    /// <summary>
+    /// Pre-injects the matched catalog row's fields into <paramref name="row"/> under the reserved
+    /// keys the <c>LoadCatalogProduct</c> manipulator reads, so that manipulator resolves REAL values
+    /// on the native CSV/JSON path. Resolution mirrors <c>ScribanOrderModel.BuildLine</c>: match by
+    /// the line's resolved supplier item code first, then its manufacturer part number, against the
+    /// pre-loaded (org+supplier-scoped) lookup. No match / null lookup → no keys added → the
+    /// manipulator returns "" exactly as before. Price is a typed <see cref="decimal"/> column
+    /// formatted with <see cref="CultureInfo.InvariantCulture"/> (a clean machine value — never
+    /// re-parsed from a locale string).
+    /// </summary>
+    private static void InjectCatalogRow(
+        Dictionary<string, string> row,
+        PurchaseOrderLineEntity line,
+        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup)
+    {
+        if (catalogLookup is null) return;
+
+        SupplierProduct? product = null;
+        if (!string.IsNullOrWhiteSpace(line.SupplierItemCode))
+            catalogLookup.TryGetValue(line.SupplierItemCode, out product);
+        if (product is null && !string.IsNullOrWhiteSpace(line.ManufacturerPartNumber))
+            catalogLookup.TryGetValue(line.ManufacturerPartNumber, out product);
+
+        if (product is null) return;
+
+        // Reserved keys consumed by LoadCatalogProductManipulator. Price is the only numeric field —
+        // format it invariantly (machine value), the rest are raw strings.
+        row["__catalog_price"]   = product.Price.HasValue
+                                       ? product.Price.Value.ToString(CultureInfo.InvariantCulture)
+                                       : string.Empty;
+        row["__catalog_code"]    = product.Code ?? string.Empty;
+        row["__catalog_unit"]    = product.Unit ?? string.Empty;
+        row["__catalog_barcode"] = product.Barcode ?? string.Empty;
     }
 
     // ── Shared with the fixed transforms ─────────────────────────────────────────

@@ -313,8 +313,8 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
             "currency"   => o.Currency,
             "buyerName"  => o.BuyerName,
             // Phase 2 (D slice): ship-to city/VAT resolve from the first shipTo party.
-            "shipToCity" => o.Parties.FirstOrDefault(p => p.Role == "shipTo")?.City,
-            "shipToVat"  => o.Parties.FirstOrDefault(p => p.Role == "shipTo")?.Vat,
+            "shipToCity" => o.Parties.FirstOrDefault(p => string.Equals(p.Role, "shipTo", StringComparison.OrdinalIgnoreCase))?.City,
+            "shipToVat"  => o.Parties.FirstOrDefault(p => string.Equals(p.Role, "shipTo", StringComparison.OrdinalIgnoreCase))?.Vat,
             "incoterms"  => o.Incoterms,
             // Phase 2 (D slice): the ORIGINAL printed date string lives in the lossless SourceCapture
             // raw-token bag — there is no typed raw-date column (DeliveryDate is a DateOnly that has
@@ -327,7 +327,7 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         // ExpectedValue slot when the author didn't set one (kept inside the pure evaluator).
         if (rule.Operator == "vat_format" && rule.FieldPath == "shipToVat")
         {
-            var country = o.Parties.FirstOrDefault(p => p.Role == "shipTo")?.Country;
+            var country = o.Parties.FirstOrDefault(p => string.Equals(p.Role, "shipTo", StringComparison.OrdinalIgnoreCase))?.Country;
             return (EvaluateVatFormat(v, country), v);
         }
 
@@ -455,14 +455,16 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
             }
             case "not_label":
             {
-                // Fail when the value IS (or starts with) a label word — catches a parser that swept
-                // a label cell into a data field (REDACTED-PARTY "UIDNr" landing in ShipToCity).
+                // Fail when the value IS a label word, or is a label word followed by a NON-LETTER
+                // boundary — catches a parser that swept a label cell into a data field (REDACTED-PARTY
+                // "UIDNr." / "UIDNr " landing in ShipToCity) WITHOUT false-positiving a legitimate
+                // value that merely starts with the same letters (e.g. city "Cityville" vs label
+                // "City"). A bare StartsWith would wrongly trip the latter.
                 if (string.IsNullOrWhiteSpace(actual)) return true;
+                var trimmed = actual.Trim();
                 var labels = (rule.ExpectedValue ?? "City,VAT,UID,UIDNr,Label,Tel,Fax")
                     .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-                return !labels.Any(label =>
-                    actual.StartsWith(label, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(actual, label, StringComparison.OrdinalIgnoreCase));
+                return !labels.Any(label => IsLabelMatch(trimmed, label));
             }
             case "vat_format":
                 // VAT shape is country-aware → resolved in EvaluateOrderField (it has the party country).
@@ -472,6 +474,25 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
             default:
                 return true; // unknown operator → non-blocking pass
         }
+    }
+
+    /// <summary>
+    /// True when <paramref name="actual"/> is a swept label cell for <paramref name="label"/>: it
+    /// EQUALS the label (case-insensitive), or it STARTS WITH the label immediately followed by a
+    /// non-letter character (".", " ", ":", a digit, …) — e.g. "UIDNr." / "UIDNr 12345" for label
+    /// "UIDNr". A legitimate value that merely begins with the same letters but continues with a
+    /// letter ("Cityville" for label "City") is NOT a match, so the advisory rule does not
+    /// false-positive a real value. A bare prefix check would wrongly trip "Cityville".
+    /// </summary>
+    private static bool IsLabelMatch(string actual, string label)
+    {
+        if (label.Length == 0) return false;
+        if (string.Equals(actual, label, StringComparison.OrdinalIgnoreCase)) return true;
+        if (actual.Length <= label.Length) return false;
+        if (!actual.StartsWith(label, StringComparison.OrdinalIgnoreCase)) return false;
+        // Boundary char immediately after the label must NOT be a letter, otherwise this is a longer
+        // word that merely shares a prefix (e.g. "Cityville") rather than a "label + punctuation" cell.
+        return !char.IsLetter(actual[label.Length]);
     }
 
     // ── Phase 2 (D slice) VAT-format helpers ─────────────────────────────────────

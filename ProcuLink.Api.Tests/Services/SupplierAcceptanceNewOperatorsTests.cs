@@ -96,6 +96,50 @@ public class SupplierAcceptanceNewOperatorsTests
     }
 
     [Fact]
+    public void Not_label_passes_a_value_that_merely_starts_with_a_label_word()
+    {
+        // "Cityville" starts with the label "City" but continues with a LETTER → it is a real city,
+        // not a swept label cell. The tightened boundary check must NOT false-positive it. A bare
+        // StartsWith (the old behaviour) would have wrongly failed this.
+        var order = new PurchaseOrderEntity { Currency = "EUR" };
+        order.Parties.Add(new OrderParty { Role = "shipTo", City = "Cityville" });
+        var rule = Rule("order", "shipToCity", "not_label", expected: "City,VAT,UID,UIDNr");
+        var results = SupplierAcceptanceService.EvaluateProfile(
+            Guid.NewGuid(), order.Id, Profile(rule), order, DateTime.UtcNow);
+        Assert.Contains(results, r => r.Status == "pass");
+    }
+
+    [Theory]
+    [InlineData("UIDNr.")]        // label + punctuation boundary
+    [InlineData("UIDNr ")]        // label + whitespace boundary
+    [InlineData("UIDNr 12345")]   // label + space + value
+    [InlineData("City:")]         // label + colon
+    public void Not_label_fails_a_label_followed_by_a_non_letter_boundary(string swept)
+    {
+        var order = new PurchaseOrderEntity { Currency = "EUR" };
+        order.Parties.Add(new OrderParty { Role = "shipTo", City = swept });
+        var rule = Rule("order", "shipToCity", "not_label", expected: "City,VAT,UID,UIDNr");
+        var results = SupplierAcceptanceService.EvaluateProfile(
+            Guid.NewGuid(), order.Id, Profile(rule), order, DateTime.UtcNow);
+        Assert.Contains(results, r => r.Status == "fail");
+    }
+
+    [Fact]
+    public void ShipTo_role_match_is_case_insensitive()
+    {
+        // A future/alternate parser emitting "ShipTo" (PascalCase) must still resolve the ship-to
+        // party — otherwise the value reads as null and a not_label / required rule would pass
+        // VACUOUSLY (a label cell would slip through). With the case-insensitive role match the swept
+        // "UIDNr." label IS seen and the rule correctly fails.
+        var order = new PurchaseOrderEntity { Currency = "EUR" };
+        order.Parties.Add(new OrderParty { Role = "ShipTo", City = "UIDNr." });
+        var rule = Rule("order", "shipToCity", "not_label", expected: "UIDNr,City,VAT,UID");
+        var results = SupplierAcceptanceService.EvaluateProfile(
+            Guid.NewGuid(), order.Id, Profile(rule), order, DateTime.UtcNow);
+        Assert.Contains(results, r => r.Status == "fail");
+    }
+
+    [Fact]
     public void Line_amount_reconcile_fails_when_qty_times_price_diverges()
     {
         var order = new PurchaseOrderEntity

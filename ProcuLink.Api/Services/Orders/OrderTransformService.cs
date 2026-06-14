@@ -278,7 +278,7 @@ internal sealed class OrderTransformService
             }
             else if (useNativeOverride)
             {
-                transformResult = new MappedTransformService().Build(entity, mappingOverride!, effectiveFormat, sourceTokens: sourceTokens);
+                transformResult = new MappedTransformService().Build(entity, mappingOverride!, effectiveFormat, sourceTokens: sourceTokens, catalogLookup: catalogLookup);
             }
             else if (hasUsableOverride)
             {
@@ -290,7 +290,7 @@ internal sealed class OrderTransformService
                 try
                 {
                     transformResult = useRevisionNative
-                        ? new MappedTransformService().Build(entity, revisionOverride!, effectiveFormat, sourceTokens: sourceTokens)
+                        ? new MappedTransformService().Build(entity, revisionOverride!, effectiveFormat, sourceTokens: sourceTokens, catalogLookup: catalogLookup)
                         : await transformer!.TransformAsync(
                               EffectiveEntityResolver.Resolve(entity, revisionOverride!), effectiveFormat, ct);
                 }
@@ -311,7 +311,7 @@ internal sealed class OrderTransformService
                 try
                 {
                     transformResult = useSupplierNative
-                        ? new MappedTransformService().Build(entity, supplierOverride!, effectiveFormat, sourceTokens: sourceTokens)
+                        ? new MappedTransformService().Build(entity, supplierOverride!, effectiveFormat, sourceTokens: sourceTokens, catalogLookup: catalogLookup)
                         : await transformer!.TransformAsync(
                               EffectiveEntityResolver.Resolve(entity, supplierOverride!), effectiveFormat, ct);
                 }

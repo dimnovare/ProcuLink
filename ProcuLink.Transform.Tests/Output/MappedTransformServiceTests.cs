@@ -276,6 +276,164 @@ public class MappedTransformServiceTests
         act.Should().Throw<ArgumentException>();
     }
 
+    // ── Phase 2: LoadCatalogProduct wired through the native CSV/JSON path ────────
+    //
+    // These prove the WIRING (offer⇔works): a CSV/JSON output rule using the user-selectable
+    // LoadCatalogProduct manipulator emits the REAL catalog value on the native path. The catalog
+    // row is supplied as a seeded lookup dict (the exact shape OrderServiceShared.BuildCatalogLookupAsync
+    // produces) — NOT by hand-injecting the reserved __catalog_* keys — so the test fails if Build →
+    // BuildLineRow → InjectCatalogRow → ManipulatorRegistry("LoadCatalogProduct") is not threaded.
+
+    private static IReadOnlyDictionary<string, SupplierProduct> CatalogByCode(
+        string code, decimal? price = null, string? unit = null, string? barcode = null) =>
+        new Dictionary<string, SupplierProduct>(StringComparer.OrdinalIgnoreCase)
+        {
+            [code] = new SupplierProduct
+            {
+                Id = Guid.NewGuid(), OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
+                Code = code, Price = price, Unit = unit, Barcode = barcode, IsActive = true,
+            },
+        };
+
+    [Fact]
+    public void Build_Csv_LoadCatalogProduct_EmitsRealCatalogPrice_ForMatchedLine()
+    {
+        // Line 1 (SUP-1) is in the catalog @ 12.50; line 2 (SUP-2) is NOT in the catalog.
+        var order   = BuildOrder();
+        var catalog = CatalogByCode("SUP-1", price: 12.50m, unit: "BOX", barcode: "4006381333931");
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Lines =
+                {
+                    ["code"]  = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" },
+                    // No source field needed — the manipulator reads the pre-injected catalog row.
+                    ["price"] = new OutputFieldRule
+                    {
+                        OutputPath = "CatalogPrice",
+                        FieldManipulators = { new ManipulatorEntry { Type = "LoadCatalogProduct", Params = { "price" } } },
+                    },
+                },
+            },
+        };
+
+        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, catalogLookup: catalog));
+        var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+        rows[0].Should().Be("Code,CatalogPrice");
+        rows[1].Should().Be("SUP-1,12.50");   // matched → REAL catalog price (invariant), not ""
+        rows[2].Should().Be("SUP-2,");          // unmatched → "" exactly as before the wiring
+    }
+
+    [Fact]
+    public void Build_Csv_LoadCatalogProduct_ReturnsEmpty_WhenNoCatalogLookupSupplied()
+    {
+        // No catalogLookup → no reserved keys injected → the manipulator returns "" (byte-identical
+        // to the pre-wiring behaviour). This is the regression guard the wiring must not break.
+        var order = BuildOrder();
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Lines =
+                {
+                    ["price"] = new OutputFieldRule
+                    {
+                        OutputPath = "CatalogPrice",
+                        FieldManipulators = { new ManipulatorEntry { Type = "LoadCatalogProduct", Params = { "price" } } },
+                    },
+                },
+            },
+        };
+
+        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv)); // no catalogLookup
+        var rows = csv.Replace("\r\n", "\n").Split('\n'); // keep trailing-empty rows (do NOT trim)
+
+        rows[0].Should().Be("CatalogPrice"); // header
+        rows[1].Should().Be("");             // line 1 → manipulator returns "" with no catalog
+        rows[2].Should().Be("");             // line 2 → ""
+    }
+
+    [Fact]
+    public void Build_Json_LoadCatalogProduct_EmitsRealCatalogCodeAndUnit_ForMatchedLine()
+    {
+        var order   = BuildOrder();
+        var catalog = CatalogByCode("SUP-1", price: 99m, unit: "PCS", barcode: "5012345678900");
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Lines =
+                {
+                    ["catCode"] = new OutputFieldRule
+                    {
+                        OutputPath = "catalogCode",
+                        FieldManipulators = { new ManipulatorEntry { Type = "LoadCatalogProduct", Params = { "code" } } },
+                    },
+                    ["catUnit"] = new OutputFieldRule
+                    {
+                        OutputPath = "catalogUnit",
+                        FieldManipulators = { new ManipulatorEntry { Type = "LoadCatalogProduct", Params = { "unit" } } },
+                    },
+                    ["catBarcode"] = new OutputFieldRule
+                    {
+                        OutputPath = "catalogBarcode",
+                        FieldManipulators = { new ManipulatorEntry { Type = "LoadCatalogProduct", Params = { "barcode" } } },
+                    },
+                },
+            },
+        };
+
+        using var doc = ReadJson(new MappedTransformService().Build(order, ov, OutputFormat.Json, catalogLookup: catalog));
+        var lines = doc.RootElement.GetProperty("lines");
+
+        lines[0].GetProperty("catalogCode").GetString().Should().Be("SUP-1");
+        lines[0].GetProperty("catalogUnit").GetString().Should().Be("PCS");
+        lines[0].GetProperty("catalogBarcode").GetString().Should().Be("5012345678900");
+        // Line 2 has no catalog row → all catalog fields render "".
+        lines[1].GetProperty("catalogCode").GetString().Should().Be("");
+        lines[1].GetProperty("catalogUnit").GetString().Should().Be("");
+    }
+
+    [Fact]
+    public void Build_Csv_LoadCatalogProduct_MatchesByManufacturerPartNumber_WhenCodeMisses()
+    {
+        // The line's SupplierItemCode is not in the catalog, but its ManufacturerPartNumber is —
+        // mirrors ScribanOrderModel.BuildLine's fallback resolution order.
+        var order = BuildOrder(new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                LineNumber = 1, BuyerItemCode = "B-1", SupplierItemCode = "SUP-1",
+                ManufacturerPartNumber = "MPN-42", Quantity = 1, UnitPrice = 1, NeedsReview = false,
+            },
+        });
+        var catalog = CatalogByCode("MPN-42", price: 7.77m);
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Lines =
+                {
+                    ["price"] = new OutputFieldRule
+                    {
+                        OutputPath = "CatalogPrice",
+                        FieldManipulators = { new ManipulatorEntry { Type = "LoadCatalogProduct", Params = { "price" } } },
+                    },
+                },
+            },
+        };
+
+        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, catalogLookup: catalog));
+        var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+        rows[1].Should().Be("7.77");
+    }
+
     [Fact]
     public void Build_Csv_EscapesValuesContainingCommas()
     {

@@ -862,7 +862,12 @@ public sealed class OrdersController : ControllerBase
                 // preview exactly as they will at delivery time (empty when there is no capture).
                 var previewTokens = ProcuLink.Transform.Output.SourceTokenSerialization
                     .FromTokensJson(order.SourceCapture?.TokensJson);
-                result = new MappedTransformService().Build(order, fieldOverride, fmt.Value, sourceTokens: previewTokens);
+                // Phase 2: load the same supplier catalog the transform uses so a LoadCatalogProduct
+                // rule previews the REAL catalog value, not "" — otherwise preview ≠ delivered bytes.
+                var previewCatalog = await ProcuLink.Api.Services.OrderServiceShared.BuildCatalogLookupAsync(
+                    _db, _tenant.OrganisationId, order.SupplierId, ct);
+                result = new MappedTransformService().Build(
+                    order, fieldOverride, fmt.Value, sourceTokens: previewTokens, catalogLookup: previewCatalog);
             }
             else
             {
