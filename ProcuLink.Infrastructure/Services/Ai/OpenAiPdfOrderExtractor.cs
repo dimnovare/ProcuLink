@@ -60,9 +60,54 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             "po_number":     { "type": "string" },
             "order_date":    { "type": "string" },
             "currency":      { "type": "string" },
-            "buyer_name":    { "type": "string", "description": "The organisation that ISSUED/PLACED the order (the originator on whose header it is raised). On an invoice instead the bill-to customer. Assign from document labels, never from which name is familiar." },
-            "supplier_name": { "type": "string", "description": "The party the order is ADDRESSED TO that will fulfil it (the recipient vendor/seller). On an invoice instead the issuing seller. Must differ from buyer_name." },
+            "buyer_name":    { "type": "string", "description": "The organisation that ISSUED/PLACED the order. On an invoice instead the bill-to customer. Assign from document labels, never from which name is familiar." },
+            "supplier_name": { "type": "string", "description": "The party the order is ADDRESSED TO that will fulfil it. On an invoice instead the issuing seller. Must differ from buyer_name." },
             "payment_terms": { "type": "string" },
+            "incoterms":     { "type": "string", "description": "Delivery/freight terms, e.g. DDP, EXW, DAP, FCA. Empty if none stated." },
+            "shipping_method": { "type": "string" },
+            "buyer_order_ref": { "type": "string", "description": "The buyer's own requisition / internal order reference, distinct from po_number. Empty if none." },
+            "contact": {
+              "type": "object",
+              "properties": {
+                "name":  { "type": "string" },
+                "email": { "type": "string" },
+                "phone": { "type": "string" }
+              },
+              "required": ["name", "email", "phone"],
+              "additionalProperties": false
+            },
+            "parties": {
+              "type": "array",
+              "description": "Every named party with an address or tax id: ship-to, bill-to, remit-to. Empty array if none. Do NOT duplicate buyer_name/supplier_name unless they carry an address/VAT here.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "role":        { "type": "string", "enum": ["shipTo", "billTo", "remitTo"] },
+                  "name":        { "type": "string" },
+                  "street":      { "type": "string" },
+                  "city":        { "type": "string" },
+                  "postal_code": { "type": "string" },
+                  "country":     { "type": "string" },
+                  "vat":         { "type": "string" },
+                  "reference":   { "type": "string" }
+                },
+                "required": ["role", "name", "street", "city", "postal_code", "country", "vat", "reference"],
+                "additionalProperties": false
+              }
+            },
+            "raw_fields": {
+              "type": "array",
+              "description": "Any other labelled field on the document NOT captured above (e.g. supplier number, EDI id, contract no, cost centre). Each is a label+value pair exactly as printed. Empty array if none.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "label": { "type": "string" },
+                  "value": { "type": "string" }
+                },
+                "required": ["label", "value"],
+                "additionalProperties": false
+              }
+            },
             "sub_total":     { "type": "number" },
             "tax_total":     { "type": "number" },
             "grand_total":   { "type": "number" },
@@ -71,22 +116,29 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
               "items": {
                 "type": "object",
                 "properties": {
-                  "line_number":     { "type": "integer" },
-                  "buyer_item_code": { "type": "string" },
-                  "description":     { "type": "string" },
-                  "quantity":        { "type": "number" },
-                  "unit":            { "type": "string" },
-                  "unit_price":      { "type": "number" },
-                  "line_amount":     { "type": "number" },
-                  "tax_rate":        { "type": "number" },
-                  "delivery_date":   { "type": "string" }
+                  "line_number":              { "type": "integer" },
+                  "buyer_item_code":          { "type": "string" },
+                  "manufacturer_part_number": { "type": "string", "description": "The manufacturer/vendor product number (e.g. 'Ihre Materialnr', ManufPN). Empty if none." },
+                  "customer_part_number":     { "type": "string" },
+                  "description":              { "type": "string" },
+                  "quantity":                 { "type": "number" },
+                  "unit":                     { "type": "string" },
+                  "unit_price":               { "type": "number" },
+                  "discount_percent":         { "type": "number" },
+                  "line_amount":              { "type": "number" },
+                  "net_amount":               { "type": "number" },
+                  "tax_rate":                 { "type": "number" },
+                  "unspsc":                   { "type": "string" },
+                  "recipient":                { "type": "string" },
+                  "contract_number":          { "type": "string" },
+                  "delivery_date":            { "type": "string" }
                 },
-                "required": ["line_number", "buyer_item_code", "description", "quantity", "unit", "unit_price", "line_amount", "tax_rate", "delivery_date"],
+                "required": ["line_number", "buyer_item_code", "manufacturer_part_number", "customer_part_number", "description", "quantity", "unit", "unit_price", "discount_percent", "line_amount", "net_amount", "tax_rate", "unspsc", "recipient", "contract_number", "delivery_date"],
                 "additionalProperties": false
               }
             }
           },
-          "required": ["confidence", "document_type", "po_number", "order_date", "currency", "buyer_name", "supplier_name", "payment_terms", "sub_total", "tax_total", "grand_total", "lines"],
+          "required": ["confidence", "document_type", "po_number", "order_date", "currency", "buyer_name", "supplier_name", "payment_terms", "incoterms", "shipping_method", "buyer_order_ref", "contact", "parties", "raw_fields", "sub_total", "tax_total", "grand_total", "lines"],
           "additionalProperties": false
         }
         """u8.ToArray());
@@ -117,6 +169,15 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         "delivery_date = the line's requested/printed delivery date as YYYY-MM-DD, else empty. " +
         "Classify document_type: 'invoice' if it is a bill/invoice (e.g. titled Invoice, has an " +
         "invoice number / amount due), 'purchase_order' if it is an order being placed, else 'other'. " +
+        // ── Phase 1 lossless capture (parties / contact / line enrichment / raw_fields) ──
+        "Capture every named address as a party in 'parties' with its role (shipTo / billTo / " +
+        "remitTo), street, city, postal_code, country and VAT/tax id when printed. Capture the " +
+        "ordering contact (name/email/phone) in 'contact'. Capture incoterms / delivery terms, " +
+        "shipping_method and the buyer's own order reference when stated. For each line capture the " +
+        "manufacturer/vendor part number, any customer part number, discount %, UNSPSC, per-line " +
+        "recipient, contract number and net amount when printed. Put ANY other labelled value you see " +
+        "but cannot place into a field into 'raw_fields' as a label+value pair, copied verbatim — " +
+        "never invent or omit. Leave a string empty and a number 0 when the document does not state it. " +
         "Set confidence 0.0-1.0 based on how clearly the text is a real purchase order or invoice.";
 
     private readonly ChatClient? _client;
@@ -507,7 +568,15 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 UnitPrice: unitPrice,
                 LineAmount: lineAmount,
                 TaxRate: taxRate,
-                DeliveryDate: deliveryDate));
+                DeliveryDate: deliveryDate,
+                // Phase 1 lossless capture (advisory — not gated by anti-hallucination).
+                ManufacturerPartNumber: NullIfBlank(l.ManufacturerPartNumber),
+                CustomerPartNumber: NullIfBlank(l.CustomerPartNumber),
+                DiscountPercent: TryToDecimal(l.DiscountPercent, out var disc) ? disc : null,
+                Unspsc: NullIfBlank(l.Unspsc),
+                Recipient: NullIfBlank(l.Recipient),
+                ContractNumber: NullIfBlank(l.ContractNumber),
+                NetAmount: TryToDecimal(l.NetAmount, out var net) ? net : null));
         }
 
         DateTime? orderDate = null;
@@ -528,7 +597,20 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             TaxTotal: TryToDecimal(dto.TaxTotal, out var tax) ? tax : null,
             GrandTotal: TryToDecimal(dto.GrandTotal, out var grand) ? grand : null,
             PaymentTerms: string.IsNullOrWhiteSpace(dto.PaymentTerms) ? null : dto.PaymentTerms.Trim(),
-            DocumentType: NormalizeDocumentType(dto.DocumentType));
+            DocumentType: NormalizeDocumentType(dto.DocumentType),
+            // Phase 1 lossless capture (advisory — unverifiable; rides through as-is).
+            Parties: dto.Parties?.Select(p => new ExtractedParty(
+                p.Role, NullIfBlank(p.Name), NullIfBlank(p.Street), NullIfBlank(p.City),
+                NullIfBlank(p.PostalCode), NullIfBlank(p.Country), NullIfBlank(p.Vat),
+                Reference: NullIfBlank(p.Reference))).Where(p => HasAnyValue(p)).ToList(),
+            ContactName: NullIfBlank(dto.Contact?.Name),
+            ContactEmail: NullIfBlank(dto.Contact?.Email),
+            ContactPhone: NullIfBlank(dto.Contact?.Phone),
+            Incoterms: NullIfBlank(dto.Incoterms),
+            ShippingMethod: NullIfBlank(dto.ShippingMethod),
+            BuyerOrderRef: NullIfBlank(dto.BuyerOrderRef),
+            RawFields: dto.RawFields?.Where(f => !string.IsNullOrWhiteSpace(f.Value))
+                .Select(f => new ExtractedRawField(f.Label?.Trim() ?? "", f.Value.Trim())).ToList());
 
         return new StructuredExtractionResult(
             true, confidence, order, null, reviewLineNumbers,
@@ -540,6 +622,13 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         && DateOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
             ? d
             : null;
+
+    // Phase 1 lossless capture helpers.
+    private static string? NullIfBlank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    // A doc with no addresses yields an empty parties list, not a noise row of all-nulls.
+    private static bool HasAnyValue(ExtractedParty p) =>
+        p.Name is not null || p.Street is not null || p.City is not null || p.Vat is not null;
 
     /// <summary>Normalises the model's doc-type to one of "purchase_order" | "invoice" | "other" (null if absent).</summary>
     private static string? NormalizeDocumentType(string? value)
@@ -751,6 +840,25 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     // Snake_case [JsonPropertyName] required: the schema uses snake_case keys and
     // JsonSerializerDefaults.Web would otherwise map to camelCase and bind null.
 
+    internal sealed record ExtractionPartyDto(
+        [property: JsonPropertyName("role")] string Role,
+        [property: JsonPropertyName("name")] string? Name = null,
+        [property: JsonPropertyName("street")] string? Street = null,
+        [property: JsonPropertyName("city")] string? City = null,
+        [property: JsonPropertyName("postal_code")] string? PostalCode = null,
+        [property: JsonPropertyName("country")] string? Country = null,
+        [property: JsonPropertyName("vat")] string? Vat = null,
+        [property: JsonPropertyName("reference")] string? Reference = null);
+
+    internal sealed record RawFieldDto(
+        [property: JsonPropertyName("label")] string Label,
+        [property: JsonPropertyName("value")] string Value);
+
+    internal sealed record ContactDto(
+        [property: JsonPropertyName("name")] string? Name = null,
+        [property: JsonPropertyName("email")] string? Email = null,
+        [property: JsonPropertyName("phone")] string? Phone = null);
+
     internal sealed record ExtractionDto(
         [property: JsonPropertyName("confidence")] double Confidence,
         [property: JsonPropertyName("po_number")] string? PoNumber,
@@ -763,7 +871,13 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         [property: JsonPropertyName("payment_terms")] string? PaymentTerms = null,
         [property: JsonPropertyName("sub_total")] double? SubTotal = null,
         [property: JsonPropertyName("tax_total")] double? TaxTotal = null,
-        [property: JsonPropertyName("grand_total")] double? GrandTotal = null);
+        [property: JsonPropertyName("grand_total")] double? GrandTotal = null,
+        [property: JsonPropertyName("incoterms")] string? Incoterms = null,
+        [property: JsonPropertyName("shipping_method")] string? ShippingMethod = null,
+        [property: JsonPropertyName("buyer_order_ref")] string? BuyerOrderRef = null,
+        [property: JsonPropertyName("contact")] ContactDto? Contact = null,
+        [property: JsonPropertyName("parties")] IReadOnlyList<ExtractionPartyDto>? Parties = null,
+        [property: JsonPropertyName("raw_fields")] IReadOnlyList<RawFieldDto>? RawFields = null);
 
     internal sealed record ExtractionLineDto(
         [property: JsonPropertyName("line_number")] int LineNumber,
@@ -774,5 +888,12 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         [property: JsonPropertyName("unit_price")] double? UnitPrice,
         [property: JsonPropertyName("line_amount")] double? LineAmount,
         [property: JsonPropertyName("tax_rate")] double? TaxRate = null,
-        [property: JsonPropertyName("delivery_date")] string? DeliveryDate = null);
+        [property: JsonPropertyName("delivery_date")] string? DeliveryDate = null,
+        [property: JsonPropertyName("manufacturer_part_number")] string? ManufacturerPartNumber = null,
+        [property: JsonPropertyName("customer_part_number")] string? CustomerPartNumber = null,
+        [property: JsonPropertyName("discount_percent")] double? DiscountPercent = null,
+        [property: JsonPropertyName("unspsc")] string? Unspsc = null,
+        [property: JsonPropertyName("recipient")] string? Recipient = null,
+        [property: JsonPropertyName("contract_number")] string? ContractNumber = null,
+        [property: JsonPropertyName("net_amount")] double? NetAmount = null);
 }
