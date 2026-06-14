@@ -748,6 +748,23 @@ internal sealed class OrderIngestionService
             var newShippingMethod = parsedOrder.ShippingMethod;
             var newBuyerOrderRef  = parsedOrder.BuyerOrderRef;
 
+            // ── Atomic persist (all-or-nothing) ───────────────────────────────
+            // The status flip below is an ExecuteUpdateAsync — it auto-commits its own SQL the
+            // instant it runs, independently of the SaveChangesAsync that writes the child rows
+            // (lines, parties, SourceCapture). The two child-row ExecuteDeleteAsync calls
+            // (parties + capture, the latter inside UpsertSourceCaptureAsync) auto-commit too.
+            // Without a wrapping transaction a crash anywhere between the status flip and the
+            // final SaveChanges would leave a "ready"/"pending_review" order with NO
+            // lines/parties/capture — and the status != "parsing" re-entry guard at the top of
+            // this method would then block any Hangfire retry from backfilling them (a
+            // permanently half-written order). One explicit transaction makes the whole block
+            // all-or-nothing: ExecuteUpdate/ExecuteDelete enlist in the current transaction on
+            // Npgsql, so on failure they roll back WITH the SaveChanges and the order is left
+            // exactly "parsing" — cleanly re-parseable. (Npgsql-only, like the bulk ops
+            // themselves; EF InMemory can translate none of this and throws here, which the
+            // InMemory-tolerant parse tests already swallow.)
+            await using var persistTx = await _db.Database.BeginTransactionAsync(ct);
+
             var updated = await _db.PurchaseOrders
                 .Where(o => o.Id == orderId && o.OrgId == organisationId)
                 .ExecuteUpdateAsync(s => s
@@ -848,6 +865,9 @@ internal sealed class OrderIngestionService
                 tokens: sourceTokens, parsedOrder, rawText: null, now, ct);
 
             await _db.SaveChangesAsync(ct);
+            // Commit the status flip + lines + parties + SourceCapture as one unit. Everything
+            // below (passport emit, in-memory entity reflection) is a post-persist side effect.
+            await persistTx.CommitAsync(ct);
 
             await _shared.EmitPassportEventAsync(organisationId, orderId, "Parse", "Succeeded",
                 payload: new { lineCount = lineEntities.Count }, ct: ct);
