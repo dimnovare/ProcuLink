@@ -136,6 +136,7 @@ public class SuppliersControllerEmitsFirstSupplierAddedTests
             modelBuilder.Ignore<PurchaseOrderLineEntity>();
             modelBuilder.Ignore<OrderParty>();
             modelBuilder.Ignore<SourceCapture>();
+            modelBuilder.Ignore<CanonicalFieldDef>();
             modelBuilder.Ignore<ItemMapping>();
             modelBuilder.Ignore<OutboundArtifact>();
             modelBuilder.Ignore<DeliveryAttempt>();

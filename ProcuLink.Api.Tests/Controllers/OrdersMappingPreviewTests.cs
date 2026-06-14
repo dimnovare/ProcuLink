@@ -318,6 +318,7 @@ public class OrdersMappingPreviewTests
             modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<OrderParty>();
             modelBuilder.Ignore<SourceCapture>();
+            modelBuilder.Ignore<CanonicalFieldDef>();
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {

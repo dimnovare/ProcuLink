@@ -267,6 +267,7 @@ public class DeliveryProvenanceTests
             modelBuilder.Ignore<AsnPackageLineEntity>();
             modelBuilder.Ignore<OrderParty>();
             modelBuilder.Ignore<SourceCapture>();
+            modelBuilder.Ignore<CanonicalFieldDef>();
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {

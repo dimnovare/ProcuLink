@@ -97,6 +97,7 @@ internal sealed class SampleOrderTestDbContext : ProcuLinkDbContext
         modelBuilder.Ignore<PurchaseOrderLineEntity>();
         modelBuilder.Ignore<OrderParty>();
         modelBuilder.Ignore<SourceCapture>();
+        modelBuilder.Ignore<CanonicalFieldDef>();
         modelBuilder.Ignore<OutboundArtifact>();
         modelBuilder.Ignore<DeliveryAttempt>();
         modelBuilder.Ignore<AuditEvent>();

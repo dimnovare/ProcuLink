@@ -63,6 +63,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<SupplierConnectionRevision>     SupplierConnectionRevisions   { get; set; } = null!;
     public DbSet<ConnectionRevisionItemMapping>  ConnectionRevisionItemMappings { get; set; } = null!;
     public DbSet<ConnectionRevisionTestCase>     ConnectionRevisionTestCases   { get; set; } = null!;
+    // ── Phase 2: extensible canonical — user-defined spine fields (Tier-2) ───
+    public DbSet<CanonicalFieldDef>              CanonicalFieldDefs            { get; set; } = null!;
     // ── Billing: append-only plan/override history (as-of overage metering) ──
     public DbSet<OrgPlanHistory>                 OrgPlanHistories              { get; set; } = null!;
     // ── Data retention: append-only evidence trail of the blob-retention sweep ─
@@ -1136,6 +1138,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.CreatedBy).HasColumnName("created_by");
             b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            // ── Phase 2 connection-level price-variance guard (additive, defaulted OFF) ──
+            b.Property(x => x.PriceVarianceGuardEnabled).HasColumnName("price_variance_guard_enabled").HasDefaultValue(false);
+            b.Property(x => x.PriceVarianceThresholdPercent).HasColumnName("price_variance_threshold_percent").HasColumnType("numeric(7,4)").HasDefaultValue(0m);
             b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
             b.HasOne(x => x.Supplier).WithMany().HasForeignKey(x => x.SupplierId);
             // One connection per supplier (matches every existing loose-config surface).
@@ -1151,6 +1156,28 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .WithMany()
              .HasForeignKey(x => x.ActiveRevisionId)
              .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ── canonical_field_defs (Phase 2 extensible canonical — Tier-2 user fields) ──
+        modelBuilder.Entity<CanonicalFieldDef>(b =>
+        {
+            b.ToTable("canonical_field_defs");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.ConnectionId).HasColumnName("connection_id");
+            b.Property(x => x.Key).HasColumnName("key").IsRequired();
+            b.Property(x => x.Label).HasColumnName("label").IsRequired();
+            b.Property(x => x.Scope).HasColumnName("scope").IsRequired();
+            b.Property(x => x.Type).HasColumnName("type").IsRequired();
+            b.Property(x => x.StandardsRef).HasColumnName("standards_ref");
+            b.Property(x => x.Order).HasColumnName("display_order");
+            b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            // Org-scoped lookup; the unique active key per (org, connection, scope) is enforced in app
+            // logic (soft-delete means a partial unique index would need a filtered index — kept simple).
+            b.HasIndex(x => new { x.OrgId, x.ConnectionId }).HasDatabaseName("IX_canonical_field_defs_org_id_connection_id");
         });
 
         // ── supplier_connection_revisions (the immutable versioned bundle) ──

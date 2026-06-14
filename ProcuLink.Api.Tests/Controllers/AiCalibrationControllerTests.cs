@@ -151,6 +151,7 @@ public class AiCalibrationControllerTests
             modelBuilder.Ignore<PurchaseOrderLineEntity>();
             modelBuilder.Ignore<OrderParty>();
             modelBuilder.Ignore<SourceCapture>();
+            modelBuilder.Ignore<CanonicalFieldDef>();
 
             modelBuilder.Entity<AiSuggestionDecision>(b =>
             {

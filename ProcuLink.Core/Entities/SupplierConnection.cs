@@ -37,6 +37,17 @@ public class SupplierConnection
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    // ── Phase 2 connection-level price-variance guard (additive, defaulted OFF) ──
+    /// <summary>When true, lines whose PO unit price drifts from the catalog price by
+    /// more than <see cref="PriceVarianceThresholdPercent"/> are flagged NeedsReview and
+    /// the order is HELD (pending_review). Catalog price is a SUGGESTION, never a silent
+    /// overwrite. Default false = byte-identical to today.</summary>
+    public bool PriceVarianceGuardEnabled { get; set; }
+
+    /// <summary>Variance threshold in percent (e.g. 20 = ±20%). Only used when the guard
+    /// is enabled. Default 0 (unused while disabled).</summary>
+    public decimal PriceVarianceThresholdPercent { get; set; }
+
     // Navigation
     public Organisation Organisation { get; set; } = null!;
     public Supplier Supplier { get; set; } = null!;
