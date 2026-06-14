@@ -180,6 +180,8 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
     {
         var order = await _db.PurchaseOrders
             .Include(o => o.Lines)
+            .Include(o => o.Parties)        // Phase 2 (D slice): not_label / vat_format read ship-to party
+            .Include(o => o.SourceCapture)  // Phase 2 (D slice): date_sanity reads the raw printed date string
             .Where(o => o.Id == orderId && o.OrgId == orgId)
             .FirstOrDefaultAsync(ct);
         if (order is null) return null;
@@ -308,25 +310,97 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
     {
         string? v = rule.FieldPath switch
         {
-            "currency"  => o.Currency,
-            "buyerName" => o.BuyerName,
-            _           => null,
+            "currency"   => o.Currency,
+            "buyerName"  => o.BuyerName,
+            // Phase 2 (D slice): ship-to city/VAT resolve from the first shipTo party.
+            "shipToCity" => o.Parties.FirstOrDefault(p => p.Role == "shipTo")?.City,
+            "shipToVat"  => o.Parties.FirstOrDefault(p => p.Role == "shipTo")?.Vat,
+            "incoterms"  => o.Incoterms,
+            // Phase 2 (D slice): the ORIGINAL printed date string lives in the lossless SourceCapture
+            // raw-token bag — there is no typed raw-date column (DeliveryDate is a DateOnly that has
+            // already lost MM/DD vs DD/MM ambiguity). date_sanity inspects the raw printed string.
+            "sourceDate" => FirstDateLikeRawToken(o.SourceCapture),
+            _            => null,
         };
+
+        // vat_format needs the party's COUNTRY to cross-check the VAT prefix; pass it via the rule's
+        // ExpectedValue slot when the author didn't set one (kept inside the pure evaluator).
+        if (rule.Operator == "vat_format" && rule.FieldPath == "shipToVat")
+        {
+            var country = o.Parties.FirstOrDefault(p => p.Role == "shipTo")?.Country;
+            return (EvaluateVatFormat(v, country), v);
+        }
+
         return (Evaluate(rule, v), v);
     }
 
     private static (bool pass, string? value) EvaluateLineField(PurchaseOrderLineEntity l, SupplierAcceptanceRule rule)
     {
+        // line_amount_reconcile needs qty AND price, not just one value. Handle it here (inside the
+        // pure evaluator) so Evaluate() — which only sees a single value — stays unchanged.
+        if (rule.Operator == "line_amount_reconcile")
+        {
+            var computed = l.Quantity * l.UnitPrice;
+            var stated   = l.LineAmount ?? computed; // no stated amount → vacuously reconciled
+            var tol      = decimal.TryParse(rule.ExpectedValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var t)
+                ? Math.Abs(t)
+                : 0.01m;
+            var pass     = Math.Abs(stated - computed) <= tol;
+            return (pass, stated.ToString(CultureInfo.InvariantCulture));
+        }
+
         string? v = rule.FieldPath switch
         {
-            "supplierItemCode" => l.SupplierItemCode,
-            "buyerItemCode"    => l.BuyerItemCode,
-            "description"      => l.Description,
-            "quantity"         => l.Quantity.ToString(CultureInfo.InvariantCulture),
-            "unitPrice"        => l.UnitPrice.ToString(CultureInfo.InvariantCulture),
-            _                  => null,
+            "supplierItemCode"       => l.SupplierItemCode,
+            "buyerItemCode"          => l.BuyerItemCode,
+            "description"            => l.Description,
+            "quantity"               => l.Quantity.ToString(CultureInfo.InvariantCulture),
+            "unitPrice"              => l.UnitPrice.ToString(CultureInfo.InvariantCulture),
+            "manufacturerPartNumber" => l.ManufacturerPartNumber,
+            "lineAmount"             => (l.LineAmount ?? (l.Quantity * l.UnitPrice)).ToString(CultureInfo.InvariantCulture),
+            _                        => null,
         };
         return (Evaluate(rule, v), v);
+    }
+
+    /// <summary>
+    /// Resolve the raw printed date string from the lossless <see cref="SourceCapture"/> token bag:
+    /// the first token whose label mentions "date" with a date-shaped value, else the first token
+    /// with a date-shaped value. Returns null when nothing date-like is present (date_sanity then
+    /// passes — absence is governed by 'required', not date_sanity). No new column is invented; the
+    /// original printed string is the only place the MM/DD vs DD/MM ambiguity survives.
+    /// </summary>
+    private static string? FirstDateLikeRawToken(SourceCapture? capture)
+    {
+        if (capture?.TokensJson is null) return null;
+        var root = capture.TokensJson.RootElement;
+        if (root.ValueKind != System.Text.Json.JsonValueKind.Array) return null;
+
+        string? firstDateShaped = null;
+        foreach (var el in root.EnumerateArray())
+        {
+            if (el.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+            var value = el.TryGetProperty("value", out var ve) && ve.ValueKind == System.Text.Json.JsonValueKind.String
+                ? ve.GetString()
+                : null;
+            if (string.IsNullOrWhiteSpace(value) || !LooksLikeDate(value)) continue;
+
+            var label = el.TryGetProperty("label", out var le) && le.ValueKind == System.Text.Json.JsonValueKind.String
+                ? le.GetString()
+                : null;
+            if (label is not null && label.Contains("date", StringComparison.OrdinalIgnoreCase))
+                return value; // a date-labelled token is the strongest signal
+            firstDateShaped ??= value;
+        }
+        return firstDateShaped;
+    }
+
+    /// <summary>A value "looks like a date" if it has 2+ numeric components separated by / - or .</summary>
+    private static bool LooksLikeDate(string value)
+    {
+        var parts = value.Split('/', '-', '.');
+        var numeric = parts.Count(p => int.TryParse(p.Trim(), out _));
+        return numeric >= 2;
     }
 
     private static bool Evaluate(SupplierAcceptanceRule rule, string? actual)
@@ -365,8 +439,102 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
                 return actual is not null
                     && int.TryParse(rule.ExpectedValue, NumberStyles.None, CultureInfo.InvariantCulture, out var maxLen)
                     && actual.Length <= maxLen;
+
+            // ── Phase 2 (D slice) lossless-mapping validation operators ───────────────
+            case "date_sanity":
+            {
+                // A printed date string is "sane" only if it is UNAMBIGUOUS. With the first two
+                // numeric components both ≤ 12 (e.g. "06/12") MM/DD and DD/MM are both valid → fail
+                // and review-flag the flip risk. A component > 12 (a day or month) disambiguates →
+                // pass. Absence is handled by 'required', not here → pass on empty / non-date input.
+                if (string.IsNullOrWhiteSpace(actual)) return true;
+                var parts   = actual.Split('/', '-', '.');
+                var numeric = parts.Where(p => int.TryParse(p.Trim(), out _)).Select(p => int.Parse(p.Trim())).ToArray();
+                if (numeric.Length < 2) return true;        // not a numeric date → don't second-guess
+                return numeric.Take(2).Any(n => n > 12);    // > 12 disambiguates → pass; else ambiguous → fail
+            }
+            case "not_label":
+            {
+                // Fail when the value IS (or starts with) a label word — catches a parser that swept
+                // a label cell into a data field (REDACTED-PARTY "UIDNr" landing in ShipToCity).
+                if (string.IsNullOrWhiteSpace(actual)) return true;
+                var labels = (rule.ExpectedValue ?? "City,VAT,UID,UIDNr,Label,Tel,Fax")
+                    .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                return !labels.Any(label =>
+                    actual.StartsWith(label, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(actual, label, StringComparison.OrdinalIgnoreCase));
+            }
+            case "vat_format":
+                // VAT shape is country-aware → resolved in EvaluateOrderField (it has the party country).
+                // Reaching here means no country context was available; fall back to the bare shape check.
+                return EvaluateVatFormat(actual, country: null);
+
             default:
                 return true; // unknown operator → non-blocking pass
         }
+    }
+
+    // ── Phase 2 (D slice) VAT-format helpers ─────────────────────────────────────
+
+    /// <summary>
+    /// Per-country VAT shape check (length + country-prefix + charset) — ADVISORY, not a VIES
+    /// checksum (formats evolve; we flag, never hard-block). Empty → pass (use 'required' to mandate).
+    /// When <paramref name="country"/> is known and the VAT carries an explicit 2-letter prefix, the
+    /// prefix must match the country. The per-country length set covers the corpus countries
+    /// (AT/DE/FR/PL/DK/NO/FI/…); unknown countries fall back to a generic 8–12 alnum body check.
+    /// </summary>
+    internal static bool EvaluateVatFormat(string? vat, string? country)
+    {
+        if (string.IsNullOrWhiteSpace(vat)) return true; // absence handled by 'required'
+        return IsPlausibleVat(vat, country);
+    }
+
+    private static readonly Dictionary<string, (string prefix, int min, int max)> VatRules =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            // (expected 2-letter prefix, min body length, max body length) — body = digits/alnum after the prefix.
+            ["AT"] = ("AT", 9, 9),   // ATU + 8 digits → body "U########" = 9
+            ["DE"] = ("DE", 9, 9),   // DE + 9 digits
+            ["FR"] = ("FR", 11, 11), // FR + 2 alnum + 9 digits = 11
+            ["PL"] = ("PL", 10, 10), // PL + 10 digits
+            ["DK"] = ("DK", 8, 8),   // DK + 8 digits
+            ["FI"] = ("FI", 8, 8),   // FI + 8 digits
+            ["NO"] = ("NO", 9, 9),   // NO + 9 digits (organisation number; MVA suffix stripped)
+            ["SE"] = ("SE", 12, 12), // SE + 12 digits
+            ["EE"] = ("EE", 9, 9),   // EE + 9 digits
+            ["LV"] = ("LV", 11, 11), // LV + 11 digits
+            ["LT"] = ("LT", 9, 12),  // LT + 9 or 12 digits
+            ["NL"] = ("NL", 12, 12), // NL + 9 alnum + B + 2 digits = 12
+            ["BE"] = ("BE", 10, 10), // BE + 10 digits
+            ["IT"] = ("IT", 11, 11), // IT + 11 digits
+            ["ES"] = ("ES", 9, 9),   // ES + 9 alnum
+        };
+
+    /// <summary>
+    /// Plausible-VAT shape: optional 2-letter country prefix then an alphanumeric body. When a
+    /// <paramref name="country"/> rule is known we enforce its prefix + body length; otherwise a
+    /// generic 2-letter prefix + 8–12 alnum (or a bare 8–12 alnum) body is accepted. Charset only —
+    /// not a checksum.
+    /// </summary>
+    private static bool IsPlausibleVat(string vat, string? country)
+    {
+        var v = new string(vat.Where(c => !char.IsWhiteSpace(c) && c != '-' && c != '.').ToArray()).ToUpperInvariant();
+        if (v.Length is < 8 or > 16) return false;
+
+        var hasPrefix = v.Length >= 2 && char.IsLetter(v[0]) && char.IsLetter(v[1]);
+        var prefix    = hasPrefix ? v[..2] : null;
+        var body      = hasPrefix ? v[2..] : v;
+        if (body.Length == 0 || !body.All(char.IsLetterOrDigit)) return false;
+
+        if (!string.IsNullOrWhiteSpace(country) && VatRules.TryGetValue(country.Trim(), out var rule))
+        {
+            // If the VAT carries an explicit prefix, it must match the declared country.
+            if (prefix is not null && !string.Equals(prefix, rule.prefix, StringComparison.OrdinalIgnoreCase))
+                return false;
+            return body.Length >= rule.min && body.Length <= rule.max;
+        }
+
+        // No country rule → generic permissive shape.
+        return body.Length is >= 6 and <= 14;
     }
 }

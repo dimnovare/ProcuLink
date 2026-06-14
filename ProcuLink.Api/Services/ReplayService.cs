@@ -206,6 +206,8 @@ public sealed class ReplayService : IReplayService
                 .AsNoTracking()
                 .Include(o => o.Lines)
                 .Include(o => o.Supplier)
+                .Include(o => o.Parties)        // Phase 2 (D slice): not_label / vat_format
+                .Include(o => o.SourceCapture)  // Phase 2 (D slice): date_sanity raw printed date
                 .Where(o => o.OrgId == orgId && capped.Contains(o.Id))
                 .ToListAsync(ct);
             // Preserve the caller's id order for a stable diff list.
@@ -219,6 +221,8 @@ public sealed class ReplayService : IReplayService
             .AsNoTracking()
             .Include(o => o.Lines)
             .Include(o => o.Supplier)
+            .Include(o => o.Parties)        // Phase 2 (D slice): not_label / vat_format
+            .Include(o => o.SourceCapture)  // Phase 2 (D slice): date_sanity raw printed date
             .Where(o => o.OrgId == orgId && o.SupplierId == supplierId)
             .OrderByDescending(o => o.CreatedAt)
             .Take(limit)

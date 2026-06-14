@@ -125,5 +125,40 @@ public static class RuleCatalog
             defaultSeverity: "warning",
             ubl: "cac:BuyerCustomerParty/cac:Party/cac:PartyName/cbc:Name",
             edifact: "NAD BY", x12: "N1*BY", cxml: "Contact[@role='buyer']/Name"),
+
+        // ── Phase 2 (D slice) lossless-mapping validation seeds ─────────────────
+        // All advisory (warning): printed-date / label / VAT formats evolve — flag for review, never
+        // hard-block. date_sanity reads the ORIGINAL printed string from the lossless SourceCapture
+        // raw bag (resolved via the order-scope field path "sourceDate"); there is no typed raw-date
+        // column. not_label / vat_format resolve from the first shipTo party.
+        Entry("order", "sourceDate", "date_sanity",
+            "Delivery date is unambiguous",
+            "Flag printed dates where day and month are both ≤ 12 (MM/DD vs DD/MM flip risk, e.g. 06/12). Reads the original printed string from the lossless source capture.",
+            defaultSeverity: "warning",
+            ubl: "cbc:RequestedDeliveryPeriod/cbc:StartDate", edifact: "DTM C507/2380",
+            x12: "DTM02", cxml: "DeliveryDate"),
+
+        Entry("order", "shipToCity", "not_label",
+            "Ship-to city is not a label",
+            "Catch a parser that swept a label cell (e.g. 'UIDNr', 'City') into the ship-to city.",
+            defaultSeverity: "warning", defaultExpectedValue: "City,VAT,UID,UIDNr,Label,Tel,Fax",
+            paramHint: "Comma-separated label words to reject",
+            ubl: "cac:Delivery/cac:DeliveryLocation/cac:Address/cbc:CityName",
+            edifact: "NAD DP C059/3164", x12: "N4*01", cxml: "ShipTo/Address/City"),
+
+        Entry("line", "lineAmount", "line_amount_reconcile",
+            "Line amount reconciles with qty × price",
+            "Reject lines where the printed line amount diverges from quantity × unit price beyond tolerance.",
+            defaultSeverity: "warning", defaultExpectedValue: "0.01",
+            paramHint: "Absolute tolerance, e.g. 0.01",
+            ubl: "cbc:LineExtensionAmount", edifact: "MOA C516/5004",
+            x12: "PO103", cxml: "ItemOut/@lineNumber"),
+
+        Entry("order", "shipToVat", "vat_format",
+            "Ship-to VAT id is well-formed",
+            "Check the ship-to VAT id has a plausible country prefix + length (advisory shape check, not a checksum).",
+            defaultSeverity: "warning",
+            ubl: "cac:PartyTaxScheme/cbc:CompanyID", edifact: "RFF VA",
+            x12: "REF*VX", cxml: "Party/IdReference[@domain='vat']"),
     };
 }
