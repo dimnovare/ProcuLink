@@ -179,9 +179,11 @@ public class OutCoverageMatrixTests
         var text = ReadStream(r);
 
         var rows = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-        rows[0].Should().StartWith("SupplierItemCode,");
+        rows[0].Should().StartWith("PoNumber,OrderDate,Currency,BuyerName,SupplierItemCode,");
         rows.Should().HaveCount(3); // header + 2 lines
-        rows[1].Should().StartWith("SUP-1,");
+        // Lossless: every data row repeats the PO header (PoNumber/Currency) AND carries the resolved code.
+        rows[1].Should().StartWith("PO-OUT-1,");
+        rows[1].Should().Contain("EUR").And.Contain("SUP-1");
     }
 
     [Fact]

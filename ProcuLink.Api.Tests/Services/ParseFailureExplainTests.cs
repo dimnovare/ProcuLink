@@ -64,4 +64,23 @@ public class ParseFailureExplainTests
         Assert.Contains(expectedFragment, msg, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("test detail message", msg);
     }
+
+    [Theory]
+    [InlineData(".xlsx")]
+    [InlineData(".XLSX")]
+    [InlineData(".xls")]
+    public void ForException_UnsupportedZipCompression_GivesActionableMessage_NotRawBclString(string ext)
+    {
+        // The .NET BCL ZipArchive throws this verbatim for Deflate64 etc. (some xlsx writers).
+        var ex = new System.IO.InvalidDataException(
+            "The archive entry was compressed using an unsupported compression method.");
+
+        var msg = ParseFailureExplain.ForException(ext, ex);
+
+        Assert.Contains("Re-save it in Excel", msg);
+        Assert.Contains("CSV", msg);
+        // Must NOT leak the raw BCL exception text to the operator.
+        Assert.DoesNotContain("unsupported compression method", msg);
+        Assert.DoesNotContain("Could not parse file", msg);
+    }
 }

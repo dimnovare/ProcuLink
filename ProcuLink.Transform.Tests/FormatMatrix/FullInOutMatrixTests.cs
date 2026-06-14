@@ -247,7 +247,7 @@ public class FullInOutMatrixTests
             {
                 var rows = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
                 rows.Should().HaveCountGreaterThanOrEqualTo(2, "CSV must have a header row + ≥1 data row");
-                rows[0].Should().StartWith("SupplierItemCode,", "fixed CSV header is SupplierItemCode,…");
+                rows[0].Should().StartWith("PoNumber,OrderDate,Currency,BuyerName,SupplierItemCode,", "fixed CSV header carries the PO header fields then the line columns");
                 break;
             }
             case "MappedCsv":

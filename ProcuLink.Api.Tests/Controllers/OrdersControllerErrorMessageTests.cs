@@ -157,6 +157,75 @@ public class OrdersControllerErrorMessageTests
     }
 
     [Fact]
+    public async Task Get_DeadLetteredOrderWithDeliveryDeadLetteredAudit_ReturnsLastError()
+    {
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        const string lastError =
+            "Supplier delivery config is missing. Add a delivery endpoint before sending this order.";
+
+        await using var db = NewDb();
+        // DeadLetterAsync writes Action="DeliveryDeadLettered" with payload key "lastError".
+        db.AuditEvents.Add(new AuditEvent
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            EntityType = "Order",
+            EntityId   = orderId,
+            Action     = "DeliveryDeadLettered",
+            Payload    = JsonDocument.Parse(
+                $$$"""{"lastError":"{{{lastError}}}","attemptCount":3}"""),
+            CreatedAt  = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var deadEntity = new PurchaseOrderEntity
+        {
+            Id                = orderId,
+            OrgId             = orgId,
+            SupplierId        = Guid.NewGuid(),
+            PoNumber          = "PO-DEAD",
+            OrderDate         = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency          = "EUR",
+            Status            = "delivery_dead_letter",
+            CreatedAt         = DateTime.UtcNow,
+            UpdatedAt         = DateTime.UtcNow,
+            Lines             = new List<PurchaseOrderLineEntity>(),
+            OutboundArtifacts = new List<OutboundArtifact>(),
+        };
+
+        var ordersSvc = new Mock<IOrderService>();
+        ordersSvc
+            .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(deadEntity));
+
+        var tenant = new Mock<ICurrentTenantService>();
+        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
+
+        var controller = new OrdersController(
+            ordersSvc.Object,
+            tenant.Object,
+            new Mock<IBackgroundJobClient>().Object,
+            db,
+            NullLogger<OrdersController>.Instance,
+            new Mock<IBillingService>().Object,
+            new Mock<IIdempotencyService>().Object,
+            new Mock<IOrderExceptionService>().Object,
+            new Mock<ISupplierAcceptanceService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
+            new Mock<IFileStorageService>().Object,
+            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
+            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+
+        var result = await controller.Get(orderId, CancellationToken.None);
+
+        var ok  = Assert.IsType<OkObjectResult>(result);
+        var dto = Assert.IsType<OrderDto>(ok.Value);
+        Assert.Equal(lastError, dto.ErrorMessage);
+    }
+
+    [Fact]
     public async Task Get_ReadyOrder_ReturnsNullErrorMessage()
     {
         var orgId   = Guid.NewGuid();

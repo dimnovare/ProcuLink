@@ -23,6 +23,16 @@ public static class ParseFailureExplain
     public static string ForException(string extension, Exception ex)
     {
         var ext = extension.ToLowerInvariant();
+
+        // A .xlsx is a ZIP; the .NET BCL ZipArchive only supports Stored/Deflate, so a workbook
+        // whose parts were written with another method (e.g. Deflate64, emitted by some export
+        // tools) throws the raw "The archive entry was compressed using an unsupported compression
+        // method." Surface an actionable message instead of the BCL string, mirroring the
+        // scanned-PDF honest-rejection pattern. (A SharpCompress repack fallback that actually
+        // opens these files is tracked as a follow-up.)
+        if (ex.Message.Contains("unsupported compression method", StringComparison.OrdinalIgnoreCase))
+            return "This spreadsheet uses a zip compression format we can't open yet (some export tools produce it). Re-save it in Excel (File → Save As → .xlsx), or upload a CSV instead.";
+
         if (ext is ".edi" or ".txt" or ".x12")
             return $"We couldn't read this EDI file: {ex.Message}";
         if (ext is ".xml" or ".cxml")

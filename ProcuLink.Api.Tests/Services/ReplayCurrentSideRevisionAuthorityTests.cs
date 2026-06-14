@@ -284,6 +284,6 @@ public class ReplayCurrentSideRevisionAuthorityTests
         Assert.NotNull(diff.CurrentOutput);
         Assert.DoesNotContain("OrderRef,ItemCode", diff.CurrentOutput!); // promoted NOT consulted
         // The FIXED CSV transformer's layout drives the current side (backfilled rev-1 contract).
-        Assert.StartsWith("SupplierItemCode,Description,Quantity,Unit,UnitPrice,LineTotal", diff.CurrentOutput!);
+        Assert.StartsWith("PoNumber,OrderDate,Currency,BuyerName,SupplierItemCode,Description,Quantity,Unit,UnitPrice,LineTotal", diff.CurrentOutput!);
     }
 }

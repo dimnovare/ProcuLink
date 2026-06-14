@@ -340,7 +340,7 @@ public sealed class OrdersController : ControllerBase
         var entity = result.Value!;
         string? errorMessage = null;
 
-        if (entity.Status is "failed" or "transform_failed" or "delivery_failed" or "rejected_by_supplier")
+        if (entity.Status is "failed" or "transform_failed" or "delivery_failed" or "rejected_by_supplier" or "delivery_dead_letter")
         {
             var payload = await _db.AuditEvents
                 .AsNoTracking()
@@ -349,7 +349,8 @@ public sealed class OrdersController : ControllerBase
                          && e.EntityType == "Order"
                          && (e.Action == "ParseFailed"
                           || e.Action == "TransformFailed"
-                          || e.Action == "DeliveryFailed"))
+                          || e.Action == "DeliveryFailed"
+                          || e.Action == "DeliveryDeadLettered"))
                 .OrderByDescending(e => e.CreatedAt)
                 .Select(e => e.Payload)
                 .FirstOrDefaultAsync(ct);
@@ -358,13 +359,17 @@ public sealed class OrdersController : ControllerBase
             {
                 try
                 {
+                    // Parse/Transform/DeliveryFailed audit payloads use key "error"; the
+                    // DeliveryDeadLettered payload uses "lastError" (DeliveryService.DeadLetterAsync).
                     if (payload.RootElement.TryGetProperty("error", out var el))
                         errorMessage = el.GetString();
+                    if (errorMessage is null && payload.RootElement.TryGetProperty("lastError", out var le))
+                        errorMessage = le.GetString();
                 }
                 catch { /* malformed payload — ignore */ }
             }
 
-            if (errorMessage is null && entity.Status == "delivery_failed")
+            if (errorMessage is null && entity.Status is "delivery_failed" or "delivery_dead_letter")
             {
                 errorMessage = await _db.DeliveryAttempts
                     .AsNoTracking()
