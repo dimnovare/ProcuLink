@@ -352,7 +352,15 @@ internal sealed class OrderIngestionService
             UnitPrice:     l.UnitPrice,
             LineAmount:    l.LineAmount,
             TaxRate:       l.TaxRate,
-            DeliveryDate:  l.DeliveryDate
+            DeliveryDate:  l.DeliveryDate,
+            // Phase 1 lossless capture — carry the new line fields so BuildLineEntitiesAsync persists them.
+            ManufacturerPartNumber: l.ManufacturerPartNumber,
+            CustomerPartNumber:     l.CustomerPartNumber,
+            DiscountPercent:        l.DiscountPercent,
+            Unspsc:                 l.Unspsc,
+            Recipient:              l.Recipient,
+            ContractNumber:         l.ContractNumber,
+            NetAmount:              l.NetAmount
         )).ToList();
 
         var aiCandidates  = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
@@ -428,6 +436,22 @@ internal sealed class OrderIngestionService
             DocumentType  = documentType,
             // V5: header-level requested delivery date — real persisted column (requested_delivery_date).
             RequestedDeliveryDate = order.RequestedDeliveryDate,
+            // Phase 1 lossless capture — header terms/contact, parties, and the raw bag are nav rows
+            // attached inline so a single SaveChanges below persists them (no separate insert).
+            ContactName    = order.ContactName,
+            ContactEmail   = order.ContactEmail,
+            ContactPhone   = order.ContactPhone,
+            Incoterms      = order.Incoterms,
+            ShippingMethod = order.ShippingMethod,
+            BuyerOrderRef  = order.BuyerOrderRef,
+            Parties        = (order.Parties ?? Array.Empty<ExtractedParty>()).Select(p => new OrderParty
+            {
+                Id = Guid.NewGuid(), OrgId = organisationId, Role = p.Role,
+                Name = p.Name, Street = p.Street, City = p.City, PostalCode = p.PostalCode,
+                Country = p.Country, Vat = p.Vat, RegNr = p.RegNr, EdiCode = p.EdiCode,
+                Reference = p.Reference, ContactName = p.ContactName, Email = p.Email, Phone = p.Phone,
+            }).ToList(),
+            SourceCapture  = BuildSourceCapture(order.RawFields, organisationId, "pdf", now),
         };
 
         _db.PurchaseOrders.Add(entity);
@@ -713,6 +737,13 @@ internal sealed class OrderIngestionService
             var newGrandTotal = parsedOrder.GrandTotal;
             // V5: header-level requested delivery date — real persisted column (requested_delivery_date).
             var newRequestedDeliveryDate = parsedOrder.RequestedDeliveryDate;
+            // Phase 1 lossless capture header fields (nullable; only the LLM/email path populates these).
+            var newContactName    = parsedOrder.ContactName;
+            var newContactEmail   = parsedOrder.ContactEmail;
+            var newContactPhone   = parsedOrder.ContactPhone;
+            var newIncoterms      = parsedOrder.Incoterms;
+            var newShippingMethod = parsedOrder.ShippingMethod;
+            var newBuyerOrderRef  = parsedOrder.BuyerOrderRef;
 
             var updated = await _db.PurchaseOrders
                 .Where(o => o.Id == orderId && o.OrgId == organisationId)
@@ -729,6 +760,13 @@ internal sealed class OrderIngestionService
                     .SetProperty(o => o.PaymentTerms, newPaymentTerms)
                     .SetProperty(o => o.DocumentType, newDocumentType)
                     .SetProperty(o => o.RequestedDeliveryDate, newRequestedDeliveryDate)
+                    // Phase 1 lossless capture header columns.
+                    .SetProperty(o => o.ContactName,    newContactName)
+                    .SetProperty(o => o.ContactEmail,   newContactEmail)
+                    .SetProperty(o => o.ContactPhone,   newContactPhone)
+                    .SetProperty(o => o.Incoterms,      newIncoterms)
+                    .SetProperty(o => o.ShippingMethod, newShippingMethod)
+                    .SetProperty(o => o.BuyerOrderRef,  newBuyerOrderRef)
                     .SetProperty(o => o.UpdatedAt,    now), ct);
 
             if (updated == 0)
@@ -759,6 +797,34 @@ internal sealed class OrderIngestionService
                     grandTotal = newGrandTotal,
                 }));
             }
+
+            // ── Phase 1 lossless capture: child rows ──────────────────────────
+            // Parties + SourceCapture are child rows (not SetProperty-able). Replace
+            // any existing rows for this order first so a Hangfire retry of this job is
+            // idempotent (delete-then-insert) rather than duplicating. ExecuteDeleteAsync
+            // is Npgsql-only — this whole async path already uses it (ExecuteUpdateAsync
+            // above), so it is Postgres-only by design.
+            await _db.OrderParties
+                .Where(p => p.OrderId == orderId && p.OrgId == organisationId)
+                .ExecuteDeleteAsync(ct);
+            if (parsedOrder.Parties is { Count: > 0 })
+            {
+                _db.OrderParties.AddRange(parsedOrder.Parties.Select(p => new OrderParty
+                {
+                    Id = Guid.NewGuid(), OrderId = orderId, OrgId = organisationId, Role = p.Role,
+                    Name = p.Name, Street = p.Street, City = p.City, PostalCode = p.PostalCode,
+                    Country = p.Country, Vat = p.Vat, RegNr = p.RegNr, EdiCode = p.EdiCode,
+                    Reference = p.Reference, ContactName = p.ContactName, Email = p.Email, Phone = p.Phone,
+                }));
+            }
+            // Raw bag: structured-format tokens are Task 8 (not threaded here), so this path
+            // captures only the LLM/email raw_fields (tokens: null). Format derived from the
+            // detected format, falling back to the source file extension.
+            var capturedFormat = detected?.Format
+                ?? Path.GetExtension(entity.SourceFileKey).TrimStart('.');
+            await UpsertSourceCaptureAsync(
+                orderId, organisationId, capturedFormat,
+                tokens: null, parsedOrder, rawText: null, now, ct);
 
             await _db.SaveChangesAsync(ct);
 
@@ -1048,11 +1114,82 @@ internal sealed class OrderIngestionService
                 // Phase 4 enrichment (carried from the parsed line; null for parsers that don't emit it).
                 LineAmount = line.LineAmount,
                 TaxRate = line.TaxRate,
-                DeliveryDate = line.DeliveryDate
+                DeliveryDate = line.DeliveryDate,
+                // Phase 1 lossless capture (carried from the parsed line; null for parsers that don't emit it).
+                ManufacturerPartNumber = line.ManufacturerPartNumber,
+                CustomerPartNumber     = line.CustomerPartNumber,
+                DiscountPercent        = line.DiscountPercent,
+                Unspsc                 = line.Unspsc,
+                Recipient              = line.Recipient,
+                ContractNumber         = line.ContractNumber,
+                NetAmount              = line.NetAmount,
             });
         }
 
         return entities;
+    }
+
+    // ── Phase 1 lossless capture — SourceCapture helpers ───────────────────────
+
+    /// <summary>
+    /// Builds an inline <see cref="SourceCapture"/> nav row from an LLM/email raw-fields bag
+    /// (label+value pairs the canonical model had no slot for), or null when there are none.
+    /// Used on the SYNC ingest path where the parent is attached fresh and a single
+    /// SaveChanges persists the nav. Pure — no DB access.
+    /// </summary>
+    private static SourceCapture? BuildSourceCapture(
+        IEnumerable<ExtractedRawField>? rawFields, Guid orgId, string format, DateTime now)
+    {
+        var bag = rawFields?
+            .Where(f => !string.IsNullOrWhiteSpace(f.Value))
+            .Select(f => new { label = f.Label, value = f.Value })
+            .ToList();
+        if (bag is not { Count: > 0 }) return null;
+
+        return new SourceCapture
+        {
+            Id = Guid.NewGuid(),
+            OrgId = orgId,
+            Format = string.IsNullOrWhiteSpace(format) ? "unknown" : format.ToLowerInvariant(),
+            CapturedAt = now,
+            TokensJson = JsonDocument.Parse(JsonSerializer.Serialize(bag)),
+        };
+    }
+
+    /// <summary>
+    /// Idempotently replaces the one-per-order <see cref="SourceCapture"/> raw bag on the ASYNC
+    /// ingest path (delete-then-insert so a Hangfire retry doesn't duplicate). Prefers the full
+    /// structured token set; else falls back to the LLM/email <c>RawFields</c> bag. Writes nothing
+    /// when there is neither a bag nor raw text. ExecuteDeleteAsync is Npgsql-only — fine, this
+    /// whole async path is already Postgres-only.
+    /// </summary>
+    private async Task UpsertSourceCaptureAsync(
+        Guid orderId, Guid organisationId, string? format,
+        IReadOnlyList<ProcuLink.Transform.Tokenizing.SourceToken>? tokens,
+        ParsedOrder parsedOrder, string? rawText, DateTime now, CancellationToken ct)
+    {
+        await _db.SourceCaptures
+            .Where(s => s.OrderId == orderId && s.OrgId == organisationId)
+            .ExecuteDeleteAsync(ct);
+
+        object? bag = tokens is { Count: > 0 }
+            ? tokens.Select(t => new { id = t.Id, label = t.Label, value = t.Value, group = t.Group })
+            : (parsedOrder.RawFields is { Count: > 0 }
+                ? parsedOrder.RawFields.Select(f => new { label = f.Label, value = f.Value })
+                : null);
+
+        if (bag is null && string.IsNullOrWhiteSpace(rawText)) return;
+
+        _db.SourceCaptures.Add(new SourceCapture
+        {
+            Id = Guid.NewGuid(),
+            OrderId = orderId,
+            OrgId = organisationId,
+            Format = string.IsNullOrWhiteSpace(format) ? "unknown" : format.ToLowerInvariant(),
+            CapturedAt = now,
+            RawText = rawText,
+            TokensJson = bag is null ? null : JsonDocument.Parse(JsonSerializer.Serialize(bag)),
+        });
     }
 
     /// <summary>

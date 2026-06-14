@@ -1,0 +1,180 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using ProcuLink.Api.Services;
+using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ai;
+using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Infrastructure;
+using ProcuLink.Transform.Output;
+using ProcuLink.Transform.Parsing;
+using Xunit;
+
+namespace ProcuLink.Api.Tests.Services;
+
+/// <summary>
+/// Phase 1 ingest wiring: the SYNC ingest path (<c>CreateStubFromParsedOrderAsync</c>, used by the
+/// email/REST/PDF-AI ingress) must carry the widened lossless fields from the
+/// <see cref="ExtractedOrder"/> onto the persisted entity — the header terms/contact columns, an
+/// <see cref="OrderParty"/> child row per address, the per-line manufacturer part number etc., and a
+/// one-per-order <see cref="SourceCapture"/> raw bag built from the LLM <c>raw_fields</c>. Runs on the
+/// real (non-Ignored) DbContext via InMemory: the sync path attaches the navs inline and persists
+/// them in a single SaveChanges, so no Npgsql-only bulk op is exercised here (the Postgres
+/// delete-then-insert async path is covered by the Postgres integration test).
+/// </summary>
+public class OrderIngestionLosslessCaptureTests
+{
+    private static ProcuLinkDbContext NewDb() =>
+        new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options);
+
+    private static OrderService BuildService(ProcuLinkDbContext db)
+    {
+        var fileStorage = new Mock<IFileStorageService>();
+
+        var parserFactory = new OrderParserFactory(new IPurchaseOrderParser[]
+        {
+            new CsvOrderParser(),
+            new XlsxOrderParser(),
+            new PdfOrderParser(),
+        });
+
+        var itemMappings = new Mock<IItemMappingService>();
+        itemMappings
+            .Setup(s => s.ResolveManyAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyDictionary<string, string?>)new Dictionary<string, string?>());
+
+        var poMappings = new Mock<IPoMappingService>();
+        var aiMappings = new Mock<IAiMappingService>();
+        aiMappings
+            .Setup(s => s.SuggestSupplierItemCodesAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<AiMappingLineContext>>(),
+                It.IsAny<IReadOnlyList<AiMappingCandidate>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyDictionary<int, AiMappingSuggestion>)new Dictionary<int, AiMappingSuggestion>());
+
+        var integrationTrigger = new Mock<IIntegrationTriggerService>();
+        integrationTrigger
+            .Setup(s => s.EnqueueAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        return new OrderService(
+            db,
+            fileStorage.Object,
+            parserFactory,
+            itemMappings.Object,
+            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
+            poMappings.Object,
+            aiMappings.Object,
+            Array.Empty<ITransformService>(),
+            NullLogger<OrderService>.Instance,
+            integrationTrigger.Object,
+            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
+    }
+
+    private static async Task<(Guid orgId, Guid supplierId)> SeedSupplier(ProcuLinkDbContext db)
+    {
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "LosslessCo", CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        return (orgId, supplierId);
+    }
+
+    [Fact]
+    public async Task SyncIngest_attaches_parties_sourceCapture_and_line_lossless_columns()
+    {
+        var db = NewDb();
+        var (orgId, supplierId) = await SeedSupplier(db);
+
+        var extracted = new ExtractedOrder(
+            PoNumber: "4730154181",
+            OrderDate: new DateTime(2026, 6, 12),
+            BuyerName: "REDACTED-PARTY",
+            Currency: "EUR",
+            Lines: new[]
+            {
+                new ExtractedOrderLine(
+                    LineNumber: 1, BuyerItemCode: "00010", Description: "Panasonic",
+                    Quantity: 1, Unit: "ST", UnitPrice: 306.28m,
+                    ManufacturerPartNumber: "SCPMX94EGK",
+                    Recipient: "redacted@example.invalid"),
+            },
+            ContactEmail: "redacted@example.invalid",
+            Incoterms: "DDP",
+            Parties: new[]
+            {
+                new ExtractedParty("shipTo", Name: "REDACTED-PARTY", City: "Linz", Vat: "REDACTED-TAXID"),
+            },
+            RawFields: new[] { new ExtractedRawField("EDI id", "REDACTED-TAXID") });
+
+        var svc = BuildService(db);
+        var result = await svc.CreateStubFromParsedOrderAsync(orgId, supplierId, extracted, "email", CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var orderId = result.Value!.Id;
+
+        // Reload from the context — proves the navs were persisted, not just held in memory.
+        var order = await db.PurchaseOrders
+            .Include(o => o.Parties)
+            .Include(o => o.Lines)
+            .Include(o => o.SourceCapture)
+            .SingleAsync(o => o.Id == orderId);
+
+        // Header lossless columns.
+        Assert.Equal("DDP", order.Incoterms);
+        Assert.Equal("redacted@example.invalid", order.ContactEmail);
+
+        // Party child row.
+        var party = Assert.Single(order.Parties);
+        Assert.Equal("shipTo", party.Role);
+        Assert.Equal("REDACTED-TAXID", party.Vat);
+        Assert.Equal(orgId, party.OrgId);
+
+        // Per-line lossless columns.
+        var line = Assert.Single(order.Lines);
+        Assert.Equal("SCPMX94EGK", line.ManufacturerPartNumber);
+        Assert.Equal("redacted@example.invalid", line.Recipient);
+
+        // SourceCapture raw bag built from raw_fields.
+        Assert.NotNull(order.SourceCapture);
+        Assert.Equal(orgId, order.SourceCapture!.OrgId);
+        Assert.Equal("pdf", order.SourceCapture.Format);
+        Assert.NotNull(order.SourceCapture.TokensJson);
+        Assert.Contains("REDACTED-TAXID", order.SourceCapture.TokensJson!.RootElement.GetRawText());
+        Assert.Contains("EDI id", order.SourceCapture.TokensJson.RootElement.GetRawText());
+    }
+
+    [Fact]
+    public async Task SyncIngest_with_no_raw_fields_attaches_no_sourceCapture()
+    {
+        var db = NewDb();
+        var (orgId, supplierId) = await SeedSupplier(db);
+
+        var extracted = new ExtractedOrder(
+            PoNumber: "PO-NOEXTRA",
+            OrderDate: new DateTime(2026, 6, 12),
+            BuyerName: "Acme",
+            Currency: "EUR",
+            Lines: new[]
+            {
+                new ExtractedOrderLine(1, "B1", "Widget", 2m, "PC", 5m),
+            });
+
+        var svc = BuildService(db);
+        var result = await svc.CreateStubFromParsedOrderAsync(orgId, supplierId, extracted, "rest", CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var order = await db.PurchaseOrders
+            .Include(o => o.Parties)
+            .Include(o => o.SourceCapture)
+            .SingleAsync(o => o.Id == result.Value!.Id);
+
+        Assert.Empty(order.Parties);
+        Assert.Null(order.SourceCapture); // no raw_fields → no raw bag row (don't write empty captures)
+    }
+}
