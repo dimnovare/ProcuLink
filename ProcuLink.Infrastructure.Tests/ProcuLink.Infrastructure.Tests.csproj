@@ -27,7 +27,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ProcuLink.Api\ProcuLink.Api.csproj" />
     <ProjectReference Include="..\ProcuLink.Infrastructure\ProcuLink.Infrastructure.csproj" />
     <ProjectReference Include="..\ProcuLink.Core\ProcuLink.Core.csproj" />
   </ItemGroup>

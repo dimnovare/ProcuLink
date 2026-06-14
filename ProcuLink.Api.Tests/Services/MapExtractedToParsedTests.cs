@@ -3,7 +3,7 @@ using ProcuLink.Core.Services.Ai;          // ExtractedOrder / ExtractedOrderLin
 using ProcuLink.Api.Services;               // OrderIngestionService.MapExtractedToParsedForTest
 using Xunit;
 
-namespace ProcuLink.Infrastructure.Tests.Ai;
+namespace ProcuLink.Api.Tests.Services;
 
 public class MapExtractedToParsedTests
 {
