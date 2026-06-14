@@ -263,12 +263,18 @@ internal sealed class OrderTransformService
         var sourceTokens = ProcuLink.Transform.Output.SourceTokenSerialization
             .FromTokensJson(entity.SourceCapture?.TokensJson);
 
+        // Phase 2: batch-load this supplier's catalog ONCE (org+supplier scoped, never cross-tenant)
+        // so the {{ catalog.* }} template accessor resolves without an N+1. Empty dict when the
+        // supplier has no catalog → byte-identical to the no-catalog path (empty catalog object).
+        var catalogLookup = await OrderServiceShared.BuildCatalogLookupAsync(
+            _db, organisationId, entity.SupplierId, ct);
+
         TransformResult transformResult;
         try
         {
             if (useTemplate)
             {
-                transformResult = new ScribanTemplateTransformService().Build(entity, mappingOverride!);
+                transformResult = new ScribanTemplateTransformService().Build(entity, mappingOverride!, catalogLookup);
             }
             else if (useNativeOverride)
             {

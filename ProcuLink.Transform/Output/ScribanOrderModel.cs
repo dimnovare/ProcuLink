@@ -49,8 +49,19 @@ internal static class ScribanOrderModel
     /// per-order <paramref name="override"/> for custom fields. The override may be null (no custom
     /// fields / no shipping overrides) — the model is still fully populated from the canonical entity
     /// and its <c>CanonicalJson</c>.
+    ///
+    /// <para><paramref name="catalogLookup"/> (Phase 2): an OPTIONAL, pre-loaded supplier-catalog
+    /// dictionary keyed by <c>SupplierItemCode</c> / <c>Barcode</c> / <c>ManufacturerPartNumber</c>.
+    /// The lookup is resolved ONCE by the caller (batch-loaded, org+supplier scoped) — this method
+    /// performs NO database access, so the Scriban context stays sandboxed. Each line exposes a
+    /// read-only <c>catalog</c> object (<c>{{ line.catalog.price }}</c> etc.); when null or unmatched
+    /// the object is empty (relaxed template access renders ""). Catalog is a SUGGESTION — it NEVER
+    /// overwrites the PO value. Defaulted to keep every existing caller compiling byte-identically.</para>
     /// </summary>
-    internal static ScriptObject Build(PurchaseOrderEntity order, OrderMappingOverride? @override)
+    internal static ScriptObject Build(
+        PurchaseOrderEntity order,
+        OrderMappingOverride? @override,
+        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup = null)
     {
         var root = new ScriptObject();
 
@@ -101,13 +112,16 @@ internal static class ScribanOrderModel
         // ── Lines ──
         var lines = new List<ScriptObject>();
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
-            lines.Add(BuildLine(line, @override));
+            lines.Add(BuildLine(line, @override, catalogLookup));
         root["Lines"] = lines;
 
         return root;
     }
 
-    private static ScriptObject BuildLine(PurchaseOrderLineEntity line, OrderMappingOverride? @override)
+    private static ScriptObject BuildLine(
+        PurchaseOrderLineEntity line,
+        OrderMappingOverride? @override,
+        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup)
     {
         var obj = new ScriptObject();
 
@@ -136,6 +150,31 @@ internal static class ScribanOrderModel
         obj["DeliveryDate"]     = line.DeliveryDate.HasValue
             ? line.DeliveryDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
             : string.Empty;
+
+        // ── Phase 2 catalog accessor (read-only suggestion; NEVER overwrites the PO value) ──
+        // The catalog row is pre-resolved by the caller (no DB access here → sandbox preserved).
+        // Resolve by supplier item code first, then manufacturer part number — both keys are
+        // indexed into the same lookup by the caller (OrderServiceShared.BuildCatalogLookupAsync).
+        var catalogObj = new ScriptObject();
+        SupplierProduct? product = null;
+        if (catalogLookup is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(line.SupplierItemCode))
+                catalogLookup.TryGetValue(line.SupplierItemCode, out product);
+            if (product is null && !string.IsNullOrWhiteSpace(line.ManufacturerPartNumber))
+                catalogLookup.TryGetValue(line.ManufacturerPartNumber, out product);
+        }
+        if (product is not null)
+        {
+            catalogObj["code"]     = product.Code ?? string.Empty;
+            catalogObj["name"]     = product.Name ?? string.Empty;
+            catalogObj["unit"]     = product.Unit ?? string.Empty;
+            // price stays a REAL number when present so a template can do arithmetic / variance.
+            catalogObj["price"]    = product.Price.HasValue ? (object)product.Price.Value : string.Empty;
+            catalogObj["currency"] = product.Currency ?? string.Empty;
+            catalogObj["barcode"]  = product.Barcode ?? string.Empty;
+        }
+        obj["catalog"] = catalogObj; // empty object when no match → relaxed access renders ""
 
         // Line-scoped custom fields for THIS line number.
         var lineCustom = new ScriptObject();

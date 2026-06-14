@@ -15,6 +15,7 @@ public static class ManipulatorRegistry
             "Split"      => new SplitManipulator(@params),
             "Multiply"   => new MultiplyManipulator(@params),
             "Divide"     => new DivideManipulator(@params),
+            "LoadCatalogProduct" => new LoadCatalogProductManipulator(@params),
             _            => throw new InvalidOperationException($"Unknown manipulator type: {type}")
         };
 }

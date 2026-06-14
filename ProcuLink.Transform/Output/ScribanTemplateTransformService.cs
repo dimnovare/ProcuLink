@@ -57,15 +57,22 @@ public sealed class ScribanTemplateTransformService
     /// transforms), <see cref="ArgumentException"/> if the override carries no template, and
     /// <see cref="TransformTemplateException"/> (with a clear message) if the template fails to
     /// compile or render — the order is never delivered from a broken template.
+    ///
+    /// <para><paramref name="catalogLookup"/> (Phase 2): optional pre-loaded supplier catalog so the
+    /// template's <c>{{ line.catalog.* }}</c> accessor resolves. Null/absent = byte-identical to
+    /// today (empty catalog object per line).</para>
     /// </summary>
-    public TransformResult Build(PurchaseOrderEntity order, OrderMappingOverride @override)
+    public TransformResult Build(
+        PurchaseOrderEntity order,
+        OrderMappingOverride @override,
+        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup = null)
     {
         ValidateOrder(order);
 
         if (string.IsNullOrWhiteSpace(@override.OutputTemplate))
             throw new ArgumentException("Override has no output template.", nameof(@override));
 
-        var outcome = Render(@override.OutputTemplate!, order, @override);
+        var outcome = Render(@override.OutputTemplate!, order, @override, catalogLookup);
         if (!outcome.Ok)
             throw new TransformTemplateException(outcome.Error!);
 
@@ -83,7 +90,11 @@ public sealed class ScribanTemplateTransformService
     /// error returns <see cref="RenderOutcome.Failure"/> with a clear message. Does NOT enforce the
     /// review guard (callers that persist use <see cref="Build"/>); this overload is for previews/tests.
     /// </summary>
-    public RenderOutcome Render(string template, PurchaseOrderEntity order, OrderMappingOverride? @override)
+    public RenderOutcome Render(
+        string template,
+        PurchaseOrderEntity order,
+        OrderMappingOverride? @override,
+        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup = null)
     {
         if (template is null)
             return RenderOutcome.Failure("Template is null.");
@@ -106,7 +117,7 @@ public sealed class ScribanTemplateTransformService
 
         try
         {
-            var model   = ScribanOrderModel.Build(order, @override);
+            var model   = ScribanOrderModel.Build(order, @override, catalogLookup);
             var context = ScribanFieldEvaluator.BuildSafeTemplateContext(model, enableSafeBuiltins: true);
 
             var rendered = parsed.Render(context) ?? string.Empty;

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -81,6 +82,32 @@ internal sealed class OrderServiceShared
             Payload    = JsonDocument.Parse(JsonSerializer.Serialize(payload)),
             CreatedAt  = DateTime.UtcNow
         };
+
+    /// <summary>
+    /// Phase 2: batch-load one supplier's ACTIVE catalog ONCE, keyed for the
+    /// <c>{{ catalog.* }}</c> Scriban accessor / <c>LoadCatalogProduct</c> manipulator and the
+    /// connection price-variance guard. Keyed by <c>Code</c> AND <c>Barcode</c> AND
+    /// <c>ExternalId</c> (the manufacturer-part fallback) so a line resolves by supplier item code
+    /// or manufacturer part number without an N+1. ALWAYS org+supplier scoped — never cross-tenant.
+    /// Shared by <see cref="OrderTransformService"/> (template catalog accessor) and
+    /// <see cref="OrderResolutionService"/> (variance guard) so the query lives in exactly one place.
+    /// </summary>
+    public static async Task<IReadOnlyDictionary<string, SupplierProduct>> BuildCatalogLookupAsync(
+        ProcuLinkDbContext db, Guid organisationId, Guid supplierId, CancellationToken ct)
+    {
+        var products = await db.SupplierProducts.AsNoTracking()
+            .Where(p => p.OrgId == organisationId && p.SupplierId == supplierId && p.IsActive)
+            .ToListAsync(ct);
+
+        var dict = new Dictionary<string, SupplierProduct>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in products)
+        {
+            if (!string.IsNullOrWhiteSpace(p.Code))       dict.TryAdd(p.Code, p);
+            if (!string.IsNullOrWhiteSpace(p.Barcode))    dict.TryAdd(p.Barcode!, p);
+            if (!string.IsNullOrWhiteSpace(p.ExternalId)) dict.TryAdd(p.ExternalId!, p);
+        }
+        return dict;
+    }
 
     /// <summary>
     /// Forces every line the structured extractor flagged (a number that did not

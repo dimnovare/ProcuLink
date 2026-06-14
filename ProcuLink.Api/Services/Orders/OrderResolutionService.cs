@@ -165,7 +165,42 @@ internal sealed class OrderResolutionService
                 entity.CanonicalJson = CanonicalJsonMerge.MergeStrings(entity.CanonicalJson, canonicalUpdates);
         }
 
-        // Recompute order status
+        // ── Phase 2: connection-level price-variance guard ──────────────────────────
+        // Catalog price is a SUGGESTION; on a breach we HOLD the line (NeedsReview + reason) so the
+        // order stays pending_review — we NEVER mutate the PO UnitPrice. Evaluated here on the
+        // RESOLUTION path so a re-resolve re-checks against the current catalog (idempotent: the
+        // same divergent price always re-produces the same hold; a corrected price clears it).
+        // Org+supplier scoped; the catalog/connection reads are AsNoTracking so they never thrash
+        // the tracked order graph.
+        var guardConnection = await _db.SupplierConnections.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.OrgId == organisationId && c.SupplierId == entity.SupplierId, ct);
+        if (guardConnection is { PriceVarianceGuardEnabled: true })
+        {
+            var guard   = new PriceVarianceGuard(true, guardConnection.PriceVarianceThresholdPercent);
+            var catalog = await OrderServiceShared.BuildCatalogLookupAsync(_db, organisationId, entity.SupplierId, ct);
+            foreach (var line in entity.Lines)
+            {
+                var product =
+                    (!string.IsNullOrWhiteSpace(line.SupplierItemCode) && catalog.TryGetValue(line.SupplierItemCode!, out var byCode)) ? byCode
+                    : (!string.IsNullOrWhiteSpace(line.ManufacturerPartNumber) && catalog.TryGetValue(line.ManufacturerPartNumber!, out var byMpn)) ? byMpn
+                    : null;
+                if (product?.Price is null) continue;
+
+                // The catalog price comes from a TYPED decimal? column → InvariantCulture is correct
+                // here (it is NOT a raw locale string; the EU-aware parse only applies to raw input).
+                var r = guard.Breaches(line.UnitPrice, product.Price.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                if (r.Breached)
+                {
+                    line.NeedsReview  = true;
+                    line.ReviewReason =
+                        $"Unit price {line.UnitPrice.ToString(System.Globalization.CultureInfo.InvariantCulture)} differs from catalog " +
+                        $"{product.Price.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)} by " +
+                        $"{decimal.Round(r.VariancePercent, 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}% — review before delivery.";
+                }
+            }
+        }
+
+        // Recompute order status (the guard above may have re-set NeedsReview → HOLD).
         entity.Status    = entity.Lines.Any(l => l.NeedsReview) ? "pending_review" : "ready";
         entity.UpdatedAt = DateTime.UtcNow;
 
