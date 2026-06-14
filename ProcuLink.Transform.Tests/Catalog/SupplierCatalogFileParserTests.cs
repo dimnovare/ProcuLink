@@ -3,6 +3,8 @@ using System.Text;
 using ClosedXML.Excel;
 using FluentAssertions;
 using ProcuLink.Transform.Catalog;
+using SharpCompress.Common;
+using SharpCompress.Writers;
 
 namespace ProcuLink.Transform.Tests.Catalog;
 
@@ -229,6 +231,53 @@ public class SupplierCatalogFileParserTests
         var result = SupplierCatalogFileParser.ParseXlsx(xlsx);
 
         result.Drafts.Should().HaveCount(50);
+    }
+
+    // ── Unsupported zip compression (Deflate64) — SharpCompress repack fallback ─
+    // The catalog zip-bomb pre-guard itself opens worksheet parts, so an exotic-compression
+    // workbook fails there before XLWorkbook. The repack must run and the FULL guard must
+    // re-apply on the repacked stream. BZip2 stands in for Deflate64 (identical BCL rejection;
+    // SharpCompress can write BZip2 but not Deflate64). See XlsxOrderParserTests for detail.
+
+    [Fact]
+    public void ParseXlsx_WorkbookWithUnsupportedZipCompression_RepacksAndParses()
+    {
+        using var standard = BuildXlsx(
+            new[] { "code", "name", "unit_price" },
+            new[] { new string?[] { "RES-220", "Resistor 220 Ohm", "0.04" } });
+        using var exotic = RepackWithBZip2(standard);
+
+        var result = SupplierCatalogFileParser.ParseXlsx(exotic);
+
+        result.Format.Should().Be("xlsx");
+        var d = result.Drafts.Should().ContainSingle().Subject;
+        d.Code.Should().Be("RES-220");
+        d.Name.Should().Be("Resistor 220 Ohm");
+        d.Price.Should().Be(0.04m);
+    }
+
+    /// <summary>
+    /// Re-packs every part of <paramref name="standardXlsx"/> into a zip whose entries use BZip2 —
+    /// a compression method the .NET BCL <c>ZipArchive</c> cannot read.
+    /// </summary>
+    private static MemoryStream RepackWithBZip2(Stream standardXlsx)
+    {
+        standardXlsx.Position = 0;
+        var exotic = new MemoryStream();
+        using (var src = new ZipArchive(standardXlsx, ZipArchiveMode.Read, leaveOpen: true))
+        using (var writer = WriterFactory.OpenWriter(exotic, ArchiveType.Zip, new WriterOptions(CompressionType.BZip2) { LeaveStreamOpen = true }))
+        {
+            foreach (var entry in src.Entries)
+            {
+                using var es = entry.Open();
+                using var buf = new MemoryStream();
+                es.CopyTo(buf);
+                buf.Position = 0;
+                writer.Write(entry.FullName, buf, entry.LastWriteTime.DateTime);
+            }
+        }
+        exotic.Position = 0;
+        return exotic;
     }
 
     // ── Mapping-report helpers (consumed by test-fetch) ───────────────────────

@@ -24,14 +24,16 @@ public static class ParseFailureExplain
     {
         var ext = extension.ToLowerInvariant();
 
-        // A .xlsx is a ZIP; the .NET BCL ZipArchive only supports Stored/Deflate, so a workbook
-        // whose parts were written with another method (e.g. Deflate64, emitted by some export
-        // tools) throws the raw "The archive entry was compressed using an unsupported compression
-        // method." Surface an actionable message instead of the BCL string, mirroring the
-        // scanned-PDF honest-rejection pattern. (A SharpCompress repack fallback that actually
-        // opens these files is tracked as a follow-up.)
-        if (ex.Message.Contains("unsupported compression method", StringComparison.OrdinalIgnoreCase))
-            return "This spreadsheet uses a zip compression format we can't open yet (some export tools produce it). Re-save it in Excel (File → Save As → .xlsx), or upload a CSV instead.";
+        // A .xlsx is a ZIP. When a part uses a compression method the .NET BCL ZipArchive can't
+        // read, it throws either "The archive entry was compressed using an unsupported compression
+        // method." (generic — e.g. PPMd, what live prod order ba89b09c hit) or "...using {Method}
+        // and is not supported." (named — BZip2/LZMA); both share this stem. The parsers now repack
+        // such workbooks via SharpCompress (XlsxCompressionFallback) and parse them transparently,
+        // so this branch fires only as a last resort — the file is still unreadable after the repack
+        // attempt (truly corrupt, or a method SharpCompress can't read either). Surface an actionable
+        // message, not the BCL string, mirroring the scanned-PDF honest-rejection pattern.
+        if (ex.Message.Contains("archive entry was compressed using", StringComparison.OrdinalIgnoreCase))
+            return "This spreadsheet uses a zip compression format we can't open (some export tools produce it). Re-save it in Excel (File → Save As → .xlsx), or upload a CSV instead.";
 
         if (ext is ".edi" or ".txt" or ".x12")
             return $"We couldn't read this EDI file: {ex.Message}";

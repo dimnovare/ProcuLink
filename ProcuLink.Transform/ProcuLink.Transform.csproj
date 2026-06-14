@@ -24,6 +24,7 @@
          (ScribanFieldEvaluator). Scriban is MIT-licensed (no commercial-licence concern) and is a
          pure string-template engine with no file/network/process surface. -->
     <PackageReference Include="Scriban" Version="7.2.4" />
+    <PackageReference Include="SharpCompress" Version="0.49.1" />
   </ItemGroup>
 
 </Project>

@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ProcuLink.Core.Entities;
+using ProcuLink.Transform.Parsing;
 
 namespace ProcuLink.Transform.Catalog;
 
@@ -194,6 +195,29 @@ public static class SupplierCatalogFileParser
             stream = buffered;
         }
 
+        try
+        {
+            return ParseXlsxCore(stream);
+        }
+        catch (Exception ex) when (XlsxCompressionFallback.ShouldAttemptRepack(ex))
+        {
+            // The workbook parts use a compression method the BCL can't read; even the
+            // zip-bomb pre-guard fails on entry.Open(). Best-effort repack to a standard
+            // Stored/Deflate zip, then re-run the FULL guard + parse on the repacked stream so
+            // the zip-bomb protections still apply. If the file is not a repackable zip
+            // (truly corrupt), surface the original failure unchanged. CatalogTooLargeException
+            // is a distinct type and never reaches this filter, so size guards still throw.
+            if (XlsxCompressionFallback.TryRepackToStandardZip(stream, out var repacked))
+            {
+                using (repacked)
+                    return ParseXlsxCore(repacked);
+            }
+            throw;
+        }
+    }
+
+    private static CatalogFileParseResult ParseXlsxCore(Stream stream)
+    {
         // ── H4 zip-bomb pre-guard — runs BEFORE XLWorkbook touches the stream ────
         GuardXlsxZipArchive(stream);
         stream.Position = 0;

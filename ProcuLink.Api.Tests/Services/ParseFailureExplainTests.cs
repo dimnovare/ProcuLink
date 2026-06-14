@@ -83,4 +83,19 @@ public class ParseFailureExplainTests
         Assert.DoesNotContain("unsupported compression method", msg);
         Assert.DoesNotContain("Could not parse file", msg);
     }
+
+    [Fact]
+    public void ForException_NamedUnsupportedCompression_AlsoGivesActionableMessage()
+    {
+        // .NET 8 names some unreadable methods instead of the generic string, e.g. BZip2/LZMA:
+        // "The archive entry was compressed using BZip2 and is not supported." The shared stem
+        // "archive entry was compressed using" must be matched for the named variant too.
+        var ex = new System.IO.InvalidDataException(
+            "The archive entry was compressed using BZip2 and is not supported.");
+
+        var msg = ParseFailureExplain.ForException(".xlsx", ex);
+
+        Assert.Contains("Re-save it in Excel", msg);
+        Assert.DoesNotContain("Could not parse file", msg);
+    }
 }
