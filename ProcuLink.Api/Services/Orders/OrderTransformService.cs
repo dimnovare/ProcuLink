@@ -82,6 +82,7 @@ internal sealed class OrderTransformService
         var entity = await _db.PurchaseOrders
             .Include(x => x.Lines)
             .Include(x => x.Supplier)
+            .Include(x => x.SourceCapture)   // Phase 2: persisted token universe for SourceMap re-derive
             .Where(x => x.Id == orderId && x.OrgId == organisationId)
             .FirstOrDefaultAsync(ct);
 
@@ -255,6 +256,13 @@ internal sealed class OrderTransformService
         //  • Supplier-promoted output (no per-order override) → same two mechanisms, driven by the
         //    synthetic supplier override; any unexpected failure falls back to the fixed transform.
         //  • No override → the fixed transform on the original entity, byte-for-byte unchanged.
+        //
+        // Phase 2: rebuild the addressable source-token universe from the persisted capture so
+        // SourceMap rules resolve at delivery time even after the source blob is purged
+        // (SourceFilePurgedAt). Empty when there is no capture → byte-identical to the no-token path.
+        var sourceTokens = ProcuLink.Transform.Output.SourceTokenSerialization
+            .FromTokensJson(entity.SourceCapture?.TokensJson);
+
         TransformResult transformResult;
         try
         {
@@ -264,7 +272,7 @@ internal sealed class OrderTransformService
             }
             else if (useNativeOverride)
             {
-                transformResult = new MappedTransformService().Build(entity, mappingOverride!, effectiveFormat);
+                transformResult = new MappedTransformService().Build(entity, mappingOverride!, effectiveFormat, sourceTokens: sourceTokens);
             }
             else if (hasUsableOverride)
             {
@@ -276,7 +284,7 @@ internal sealed class OrderTransformService
                 try
                 {
                     transformResult = useRevisionNative
-                        ? new MappedTransformService().Build(entity, revisionOverride!, effectiveFormat)
+                        ? new MappedTransformService().Build(entity, revisionOverride!, effectiveFormat, sourceTokens: sourceTokens)
                         : await transformer!.TransformAsync(
                               EffectiveEntityResolver.Resolve(entity, revisionOverride!), effectiveFormat, ct);
                 }
@@ -297,7 +305,7 @@ internal sealed class OrderTransformService
                 try
                 {
                     transformResult = useSupplierNative
-                        ? new MappedTransformService().Build(entity, supplierOverride!, effectiveFormat)
+                        ? new MappedTransformService().Build(entity, supplierOverride!, effectiveFormat, sourceTokens: sourceTokens)
                         : await transformer!.TransformAsync(
                               EffectiveEntityResolver.Resolve(entity, supplierOverride!), effectiveFormat, ct);
                 }

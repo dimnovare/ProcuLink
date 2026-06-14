@@ -317,7 +317,8 @@ public class OrdersMappingPreviewTests
             modelBuilder.Ignore<TenantApiKey>();
             modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<OrderParty>();
-            modelBuilder.Ignore<SourceCapture>();
+            // SourceCapture is MAPPED here (not Ignored): the mapping-override preview now
+            // Includes it to re-derive SourceMap rules from the persisted token universe.
             modelBuilder.Ignore<CanonicalFieldDef>();
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
@@ -336,6 +337,15 @@ public class OrdersMappingPreviewTests
                 b.HasKey(x => x.Id);
                 b.Ignore(x => x.Order);
                 b.Property(x => x.OrderId).IsRequired();
+            });
+
+            // SourceCapture is a valid Include target for the preview seam, but its TokensJson is a
+            // jsonb/JsonDocument column the in-memory provider can't store — ignore it like CanonicalJson.
+            modelBuilder.Entity<SourceCapture>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.Ignore(x => x.TokensJson);
+                b.Ignore(x => x.Order);
             });
         }
     }

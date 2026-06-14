@@ -730,8 +730,11 @@ public sealed class OrdersController : ControllerBase
             ?? await _mappingOverrides.GetAsync(_tenant.OrganisationId, id, ct);
 
         // Load the order WITH lines, org-scoped, read-only (needed by BOTH preview modes).
+        // Phase 2: also include the persisted SourceCapture so the native-override preview re-derives
+        // SourceMap rules from the token universe — matching the actual delivered transform output.
         var order = await _db.PurchaseOrders
             .Include(o => o.Lines)
+            .Include(o => o.SourceCapture)
             .AsNoTracking()
             .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == _tenant.OrganisationId, ct);
         if (order is null)
@@ -855,7 +858,11 @@ public sealed class OrdersController : ControllerBase
             if (useNativeOverride)
             {
                 // CSV/JSON WITH a usable output mapping — the override builder emits the document natively.
-                result = new MappedTransformService().Build(order, fieldOverride, fmt.Value);
+                // Phase 2: rebuild the persisted token universe so SourceMap rules re-derive in the
+                // preview exactly as they will at delivery time (empty when there is no capture).
+                var previewTokens = ProcuLink.Transform.Output.SourceTokenSerialization
+                    .FromTokensJson(order.SourceCapture?.TokensJson);
+                result = new MappedTransformService().Build(order, fieldOverride, fmt.Value, sourceTokens: previewTokens);
             }
             else
             {
