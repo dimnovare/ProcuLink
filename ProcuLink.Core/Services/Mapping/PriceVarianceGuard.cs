@@ -48,7 +48,7 @@ public sealed record PriceVarianceGuard(bool Enabled, decimal ThresholdPercent)
     /// non-numeric character other than separators / whitespace / a currency symbol is refused
     /// (returns null) rather than silently corrupted (e.g. "1.5e2" must NOT become 1.52).
     /// </summary>
-    internal static decimal? ParseEuAware(string? raw)
+    public static decimal? ParseEuAware(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
 
