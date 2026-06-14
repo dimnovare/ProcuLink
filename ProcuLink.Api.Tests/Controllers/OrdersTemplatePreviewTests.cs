@@ -378,6 +378,8 @@ public class OrdersTemplatePreviewTests
             modelBuilder.Ignore<AsnPackageLineEntity>();
             modelBuilder.Ignore<TenantApiKey>();
             modelBuilder.Ignore<IntegrationSubscription>();
+            modelBuilder.Ignore<OrderParty>();
+            modelBuilder.Ignore<SourceCapture>();
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {

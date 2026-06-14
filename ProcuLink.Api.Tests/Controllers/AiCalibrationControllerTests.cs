@@ -149,6 +149,8 @@ public class AiCalibrationControllerTests
             modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<PurchaseOrderEntity>();
             modelBuilder.Ignore<PurchaseOrderLineEntity>();
+            modelBuilder.Ignore<OrderParty>();
+            modelBuilder.Ignore<SourceCapture>();
 
             modelBuilder.Entity<AiSuggestionDecision>(b =>
             {

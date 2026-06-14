@@ -108,6 +108,8 @@ public class PullIngressSettingsServiceTests
             modelBuilder.Ignore<SupplierDeliveryConfig>();
             modelBuilder.Ignore<PurchaseOrderEntity>();
             modelBuilder.Ignore<PurchaseOrderLineEntity>();
+            modelBuilder.Ignore<OrderParty>();
+            modelBuilder.Ignore<SourceCapture>();
             modelBuilder.Ignore<ItemMapping>();
             modelBuilder.Ignore<OutboundArtifact>();
             modelBuilder.Ignore<DeliveryAttempt>();

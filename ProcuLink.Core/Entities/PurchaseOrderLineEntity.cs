@@ -36,6 +36,15 @@ public class PurchaseOrderLineEntity
     public decimal? TaxRate { get; set; }
     public DateOnly? DeliveryDate { get; set; }
 
+    // ── Phase 1 lossless capture (nullable). ManufacturerPartNumber = the catalog key (Phase 2). ──
+    public string? ManufacturerPartNumber { get; set; }
+    public string? CustomerPartNumber { get; set; }
+    public decimal? DiscountPercent { get; set; }
+    public string? Unspsc { get; set; }
+    public string? Recipient { get; set; }
+    public string? ContractNumber { get; set; }
+    public decimal? NetAmount { get; set; }
+
     // Navigation
     public PurchaseOrderEntity Order { get; set; } = null!;
 }

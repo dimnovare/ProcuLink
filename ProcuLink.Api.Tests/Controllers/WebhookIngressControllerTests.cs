@@ -265,6 +265,8 @@ public class WebhookIngressControllerTests
             modelBuilder.Ignore<Supplier>();
             modelBuilder.Ignore<SupplierProfileEntity>();
             modelBuilder.Ignore<PurchaseOrderLineEntity>();
+            modelBuilder.Ignore<OrderParty>();
+            modelBuilder.Ignore<SourceCapture>();
             modelBuilder.Ignore<ItemMapping>();
             modelBuilder.Ignore<OutboundArtifact>();
             modelBuilder.Ignore<DeliveryAttempt>();

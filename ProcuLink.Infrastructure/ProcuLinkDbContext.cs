@@ -18,6 +18,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<SupplierProfileEntity> SupplierProfiles => Set<SupplierProfileEntity>();
     public DbSet<PurchaseOrderEntity> PurchaseOrders => Set<PurchaseOrderEntity>();
     public DbSet<PurchaseOrderLineEntity> PurchaseOrderLines => Set<PurchaseOrderLineEntity>();
+    public DbSet<OrderParty> OrderParties => Set<OrderParty>();
+    public DbSet<SourceCapture> SourceCaptures => Set<SourceCapture>();
     public DbSet<ItemMapping> ItemMappings => Set<ItemMapping>();
     public DbSet<SupplierProduct> SupplierProducts => Set<SupplierProduct>();
     public DbSet<SupplierCatalogSource> SupplierCatalogSources => Set<SupplierCatalogSource>();
@@ -447,6 +449,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // V5 deepen-canonical: real persisted nullable date column (mirrors per-line delivery_date).
             // Migration AddRequestedDeliveryDate. Null for formats with no header-level delivery date.
             b.Property(x => x.RequestedDeliveryDate).HasColumnName("requested_delivery_date");
+            // Phase 1 lossless capture (nullable additive columns).
+            b.Property(x => x.ContactName).HasColumnName("contact_name");
+            b.Property(x => x.ContactEmail).HasColumnName("contact_email");
+            b.Property(x => x.ContactPhone).HasColumnName("contact_phone");
+            b.Property(x => x.Incoterms).HasColumnName("incoterms");
+            b.Property(x => x.ShippingMethod).HasColumnName("shipping_method");
+            b.Property(x => x.BuyerOrderRef).HasColumnName("buyer_order_ref");
             // Blob retention: when the source-file blob was purged from R2 (row + key stay).
             b.Property(x => x.SourceFilePurgedAt)
              .HasColumnName("source_file_purged_at")
@@ -504,11 +513,61 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.LineAmount).HasColumnName("line_amount").HasColumnType("numeric(18,4)");
             b.Property(x => x.TaxRate).HasColumnName("tax_rate").HasColumnType("numeric(7,4)");
             b.Property(x => x.DeliveryDate).HasColumnName("delivery_date");
+            // Phase 1 lossless capture (nullable additive columns).
+            b.Property(x => x.ManufacturerPartNumber).HasColumnName("manufacturer_part_number");
+            b.Property(x => x.CustomerPartNumber).HasColumnName("customer_part_number");
+            b.Property(x => x.DiscountPercent).HasColumnName("discount_percent").HasColumnType("numeric(7,4)");
+            b.Property(x => x.Unspsc).HasColumnName("unspsc");
+            b.Property(x => x.Recipient).HasColumnName("recipient");
+            b.Property(x => x.ContractNumber).HasColumnName("contract_number");
+            b.Property(x => x.NetAmount).HasColumnName("net_amount").HasColumnType("numeric(18,4)");
             b.HasOne(x => x.Order)
              .WithMany(x => x.Lines)
              .HasForeignKey(x => x.OrderId);
             b.HasIndex(x => new { x.OrderId, x.NeedsReview })
              .HasDatabaseName("IX_purchase_order_lines_order_id_needs_review");
+        });
+
+        // ── order_parties (Phase 1 lossless capture) ───────────────────
+        modelBuilder.Entity<OrderParty>(b =>
+        {
+            b.ToTable("order_parties");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrderId).HasColumnName("order_id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.Role).HasColumnName("role").IsRequired();
+            b.Property(x => x.Name).HasColumnName("name");
+            b.Property(x => x.Street).HasColumnName("street");
+            b.Property(x => x.City).HasColumnName("city");
+            b.Property(x => x.PostalCode).HasColumnName("postal_code");
+            b.Property(x => x.Country).HasColumnName("country");
+            b.Property(x => x.Vat).HasColumnName("vat");
+            b.Property(x => x.RegNr).HasColumnName("reg_nr");
+            b.Property(x => x.EdiCode).HasColumnName("edi_code");
+            b.Property(x => x.Reference).HasColumnName("reference");
+            b.Property(x => x.ContactName).HasColumnName("contact_name");
+            b.Property(x => x.Email).HasColumnName("email");
+            b.Property(x => x.Phone).HasColumnName("phone");
+            b.HasOne(x => x.Order).WithMany(x => x.Parties).HasForeignKey(x => x.OrderId);
+            b.HasIndex(x => new { x.OrgId, x.OrderId }).HasDatabaseName("IX_order_parties_org_id_order_id");
+        });
+
+        // ── source_captures (Phase 1 lossless raw bag) ─────────────────
+        modelBuilder.Entity<SourceCapture>(b =>
+        {
+            b.ToTable("source_captures");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrderId).HasColumnName("order_id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.Format).HasColumnName("format").IsRequired();
+            b.Property(x => x.CapturedAt).HasColumnName("captured_at").HasColumnType("timestamptz");
+            b.Property(x => x.TokensJson).HasColumnName("tokens_json").HasColumnType("jsonb").HasConversion(jsonDocConverter);
+            b.Property(x => x.RawText).HasColumnName("raw_text");
+            b.Property(x => x.PageRefs).HasColumnName("page_refs");
+            b.HasOne(x => x.Order).WithOne(x => x.SourceCapture).HasForeignKey<SourceCapture>(x => x.OrderId);
+            b.HasIndex(x => x.OrderId).IsUnique().HasDatabaseName("IX_source_captures_order_id");
         });
 
         // ── item_mappings ──────────────────────────────────────────────

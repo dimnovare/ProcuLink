@@ -117,10 +117,20 @@ public class PurchaseOrderEntity
     /// </summary>
     public Guid? ConnectionRevisionId { get; set; }
 
+    // ── Phase 1 lossless capture (nullable; copy the RequestedDeliveryDate column pattern) ──
+    public string? ContactName { get; set; }
+    public string? ContactEmail { get; set; }
+    public string? ContactPhone { get; set; }
+    public string? Incoterms { get; set; }
+    public string? ShippingMethod { get; set; }
+    public string? BuyerOrderRef { get; set; }
+
     // Navigation
     public Organisation Organisation { get; set; } = null!;
     public Supplier Supplier { get; set; } = null!;
     public List<PurchaseOrderLineEntity> Lines { get; set; } = new();
     public List<OutboundArtifact> OutboundArtifacts { get; set; } = new();
     public List<DeliveryAttempt> DeliveryAttempts { get; set; } = new();
+    public List<OrderParty> Parties { get; set; } = new();
+    public SourceCapture? SourceCapture { get; set; }
 }

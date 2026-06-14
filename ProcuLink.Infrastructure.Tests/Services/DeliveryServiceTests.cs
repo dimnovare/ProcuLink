@@ -323,6 +323,8 @@ public class DeliveryServiceTests
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
             modelBuilder.Ignore<AsnPackageEntity>();
             modelBuilder.Ignore<AsnPackageLineEntity>();
+            modelBuilder.Ignore<OrderParty>();
+            modelBuilder.Ignore<SourceCapture>();
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {
