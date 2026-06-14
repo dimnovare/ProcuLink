@@ -58,3 +58,22 @@ public record ConnectionRevisionBundleDto(
     int? AcceptanceVersionNo,
     string CatalogMode,
     IReadOnlyList<ConnectionItemMappingDto>? ItemMappings);
+
+// ── Phase 2 (extensible canonical) — user-defined spine fields ──────────────
+
+/// <summary>
+/// A user-defined canonical field DEFINITION for the mapper "+ Add field" affordance.
+/// Mirrors <see cref="ProcuLink.Core.Entities.CanonicalFieldDef"/> minus the soft-delete /
+/// audit columns (an active def is always non-deleted). <paramref name="Order"/> maps to the
+/// <c>display_order</c> column and drives the canonical-pane ordering.
+/// </summary>
+public record CanonicalFieldDto(
+    Guid Id, string Key, string Label, string Scope, string Type,
+    string? StandardsRef, int Order);
+
+/// <summary>
+/// Body for POST .../canonical-fields. <paramref name="Order"/> is optional — when omitted the
+/// new field is appended after the current max display_order for the (org, connection) scope.
+/// </summary>
+public record CreateCanonicalFieldRequest(
+    string Key, string Label, string? Scope, string? Type, string? StandardsRef, int? Order);

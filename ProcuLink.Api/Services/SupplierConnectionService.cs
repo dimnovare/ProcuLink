@@ -705,7 +705,13 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         rev.DeliveryProtocol    = input.DeliveryProtocol;
         rev.DeliveryConfigJson  = input.DeliveryConfigJson;
         rev.DeliveryAutoDeliver = input.DeliveryAutoDeliver;
-        rev.CredentialsRef      = input.CredentialsRef;
+        // CredentialsRef is a write-once-ish reference to encrypted delivery credentials. The
+        // positional DTO cannot distinguish "omitted" from "explicit null", so a mapping-only
+        // partial update (which omits credentialsRef → deserializes to null) must NOT wipe an
+        // existing reference — that would silently lose the supplier's delivery credentials on the
+        // next publish. Null therefore means "no change"; a non-null value still overwrites.
+        if (input.CredentialsRef is not null)
+            rev.CredentialsRef = input.CredentialsRef;
         rev.AcceptanceProfileId = input.AcceptanceProfileId;
         rev.AcceptanceVersionNo = input.AcceptanceVersionNo;
         rev.CatalogMode         = string.IsNullOrWhiteSpace(input.CatalogMode) ? "live" : input.CatalogMode;

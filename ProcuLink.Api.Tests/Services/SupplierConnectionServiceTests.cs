@@ -317,6 +317,56 @@ public class SupplierConnectionServiceTests
         Assert.Equal("S-200", map["B-100"]);
     }
 
+    // ── Fix A (data-loss): partial draft update must NOT wipe CredentialsRef ──
+    // "Create draft from live" copies CredentialsRef into the draft. The positional DTO can't
+    // distinguish omitted-vs-explicit-null, so a mapping-only save (credentialsRef omitted →
+    // deserializes to null) used to FULL-replace it to null, losing the delivery credential
+    // reference. Null now means "no change"; a non-null value still overwrites.
+
+    [Fact]
+    public async Task UpdateDraft_OmittedCredentialsRef_KeepsExistingReference()
+    {
+        var db = MakeDb();
+        var svc = MakeSvc(db);
+        var (orgId, supplierId) = await SeedSupplier(db);
+        var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
+
+        // Draft created WITH a credential reference (mirrors clone-from-live carrying it forward).
+        var withCreds = Bundle("xml") with { CredentialsRef = "cred-abc-123" };
+        var draft = await svc.CreateDraftAsync(orgId, conn!.Id, withCreds, cloneFromActive: false, "user", CancellationToken.None);
+        Assert.Equal("cred-abc-123", draft!.CredentialsRef);
+
+        // A later mapping-only update OMITS credentialsRef (null). It must be left intact.
+        var mappingOnly = Bundle("csv") with { CredentialsRef = null };
+        var updated = await svc.UpdateDraftAsync(orgId, conn.Id, draft.Id, mappingOnly, CancellationToken.None);
+        Assert.True(updated);
+
+        var rev = await svc.GetRevisionAsync(orgId, conn.Id, draft.Id, CancellationToken.None);
+        Assert.Equal("cred-abc-123", rev!.CredentialsRef); // preserved, not wiped
+        Assert.Equal("csv", rev.OutputFormat);             // the rest of the bundle still updated
+    }
+
+    [Fact]
+    public async Task UpdateDraft_NonNullCredentialsRef_OverwritesExistingReference()
+    {
+        var db = MakeDb();
+        var svc = MakeSvc(db);
+        var (orgId, supplierId) = await SeedSupplier(db);
+        var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);
+
+        var withCreds = Bundle("xml") with { CredentialsRef = "cred-old" };
+        var draft = await svc.CreateDraftAsync(orgId, conn!.Id, withCreds, cloneFromActive: false, "user", CancellationToken.None);
+        Assert.Equal("cred-old", draft!.CredentialsRef);
+
+        // Supplying a NON-null value still updates the reference (write semantics preserved).
+        var rotate = Bundle("xml") with { CredentialsRef = "cred-new" };
+        var updated = await svc.UpdateDraftAsync(orgId, conn.Id, draft.Id, rotate, CancellationToken.None);
+        Assert.True(updated);
+
+        var rev = await svc.GetRevisionAsync(orgId, conn.Id, draft.Id, CancellationToken.None);
+        Assert.Equal("cred-new", rev!.CredentialsRef);
+    }
+
     [Fact]
     public async Task UpdateDraft_PaddedItemCodes_AreTrimmed()
     {
