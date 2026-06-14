@@ -80,6 +80,60 @@ public class CxmlOrderParserTests
         parser.CanParse(".pdf").Should().BeFalse();
     }
 
+    // ── Real-world cXML (Coupa / Nasdaq) — regression for the live failures ──────
+
+    [Fact]
+    public async Task ParseAsync_RealCoupaCxml_WithDoctypeAndNoDeploymentMode_ParsesAndKeepsRealCodes()
+    {
+        // A genuine Coupa OrderRequest (Nasdaq → Markit) that failed on prod 2026-06-14:
+        // it carries a <!DOCTYPE cXML SYSTEM "…dtd"> header and its <Request> has NO
+        // deploymentMode attribute. Both used to throw. It also carries the real codes
+        // (SupplierPartID 39424093, ManufacturerPartID REDACTED-ORDER-DATA) that must survive.
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "cxml-coupa-orderrequest-sek.cxml");
+        await using var stream = File.OpenRead(path);
+
+        var result = await new CxmlOrderParser().ParseAsync(stream, CancellationToken.None);
+
+        result.PoNumber.Should().Be("152400");
+        result.Currency.Should().Be("SEK");
+        result.Lines.Should().HaveCount(1);
+        var line = result.Lines[0];
+        line.BuyerItemCode.Should().Be("39424093");                 // SupplierPartID
+        line.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");        // real Apple MPN — was dropped
+        line.CustomerPartNumber.Should().Be("180743323");           // SupplierPartAuxiliaryID
+        line.Quantity.Should().Be(1m);
+        line.UnitPrice.Should().Be(3179.15m);
+        line.Unit.Should().Be("EA");
+        line.Description.Should().Contain("Apple Magic Keyboard");
+        line.Unspsc.Should().BeNull();                              // "unknown" placeholder → null
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithDoctypeDeclaration_DoesNotThrow()
+    {
+        // DtdProcessing.Prohibit (the XDocument default) threw "DTD is prohibited" on every
+        // real cXML, all of which carry a DOCTYPE. We now read with DtdProcessing.Ignore.
+        var withDoctype = SampleCxml(orderID: "PO-DTD-1").Replace(
+            "<cXML ",
+            "<!DOCTYPE cXML SYSTEM \"http://xml.cxml.org/schemas/cXML/1.2.014/cXML.dtd\">\n<cXML ");
+
+        var result = await new CxmlOrderParser().ParseAsync(ToStream(withDoctype), CancellationToken.None);
+
+        result.PoNumber.Should().Be("PO-DTD-1");
+    }
+
+    [Fact]
+    public async Task ParseAsync_RequestWithoutDeploymentMode_DefaultsToProductionAndParses()
+    {
+        var noDeployMode = SampleCxml(orderID: "PO-NODEP-1")
+            .Replace("<Request deploymentMode=\"production\">", "<Request>");
+
+        var result = await new CxmlOrderParser().ParseAsync(ToStream(noDeployMode), CancellationToken.None);
+
+        result.PoNumber.Should().Be("PO-NODEP-1");
+        result.Lines.Should().HaveCount(1);
+    }
+
     // ── Happy path ────────────────────────────────────────────────────────────
 
     [Fact]
@@ -253,7 +307,7 @@ public class CxmlOrderParserTests
     }
 
     [Fact]
-    public async Task ParseAsync_MissingDeploymentMode_ThrowsCxmlParseException()
+    public async Task ParseAsync_MissingDeploymentMode_DefaultsToProductionAndParses()
     {
         const string xml = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -281,10 +335,12 @@ public class CxmlOrderParserTests
             </cXML>
             """;
 
+        // deploymentMode is optional in cXML (defaults to "production"); Coupa omits it.
         var parser = new CxmlOrderParser();
-        var act = async () => await parser.ParseAsync(ToStream(xml), CancellationToken.None);
-        await act.Should().ThrowAsync<CxmlParseException>()
-                 .WithMessage("*deploymentMode*");
+        var result = await parser.ParseAsync(ToStream(xml), CancellationToken.None);
+
+        result.PoNumber.Should().Be("PO-123");
+        result.Lines.Should().HaveCount(1);
     }
 
     [Fact]

@@ -63,7 +63,8 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
         XDocument doc;
         try
         {
-            doc = await XDocument.LoadAsync(fileStream, LoadOptions.None, ct);
+            doc = DtdSafeXmlLoader.Load(fileStream);   // DOCTYPE-tolerant, XXE-safe
+            ct.ThrowIfCancellationRequested();
         }
         catch (Exception ex)
         {

@@ -200,22 +200,23 @@ public class RealWorldFixtureTests
     }
 
     [Fact]
-    public async Task RealWorld_cXML_Nasdaq_NoDeploymentMode_ThrowsCxmlParseException()
+    public async Task REDACTED_TEST_NAME()
     {
-        // The real Nasdaq file had <Request> with no deploymentMode attribute.
-        // Our parser requires it (per the cXML 1.2 spec). This test documents and pins
-        // that gap. Production note: if you see this in prod, the cXML sender omits the
-        // attribute (common in some Coupa tenants). Fix would be to make deploymentMode
-        // optional in CxmlOrderParser.
+        // The real Nasdaq file has <Request> with no deploymentMode attribute (common in
+        // Coupa tenants) and a <!DOCTYPE> header. Both used to make CxmlOrderParser throw —
+        // this fixture documented that gap. It is now CLOSED: deploymentMode defaults to
+        // "production" and the DOCTYPE is tolerated (XXE-safe), so a genuine Nasdaq/Coupa
+        // OrderRequest parses end to end.
         using var stream = LoadFixture("rw_cxml_es_coupa_no_deploymentmode.xml");
         var factory = Factory();
         var parser = factory.GetParser(".xml", stream);
         parser.Should().BeOfType<CxmlOrderParser>("file has a cXML root element");
 
         stream.Position = 0;
-        var act = async () => await parser.ParseAsync(stream, CancellationToken.None);
-        await act.Should().ThrowAsync<CxmlParseException>(
-            "our parser requires deploymentMode; the real Nasdaq file omits it (known sender gap)");
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.PoNumber.Should().NotBeNullOrWhiteSpace();
+        result.Lines.Should().NotBeEmpty();
     }
 
     // ════════════════════════════════════════════════════════════════════════

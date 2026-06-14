@@ -1132,7 +1132,27 @@ internal sealed class OrderIngestionService
 
             AiMappingSuggestion? suggestion = null;
             if (!resolved)
-                suggestions.TryGetValue(line.LineNumber, out suggestion);
+            {
+                // Prefer a REAL code the source document already states — e.g. a cXML
+                // <ManufacturerPartID> like "REDACTED-ORDER-DATA" (a genuine Apple part number) — over a
+                // fuzzy catalog guess. The founder's complaint was that the resolver surfaced a
+                // random catalog code (e.g. "ACME-JSON-2 @ 90%") for a clearly-identified product
+                // while the manufacturer part number sat unused in the source. This is a suggestion
+                // only (the line still needs review / a one-click accept); it never auto-resolves,
+                // and it is byte-identical for sources that carry no manufacturer part number.
+                if (!string.IsNullOrWhiteSpace(line.ManufacturerPartNumber))
+                {
+                    suggestion = new AiMappingSuggestion(
+                        SupplierItemCode: line.ManufacturerPartNumber!.Trim(),
+                        Confidence:       0.95f,
+                        Reason:           "Manufacturer part number is stated in the source document.",
+                        Provenance:       "source document: manufacturer part number");
+                }
+                else
+                {
+                    suggestions.TryGetValue(line.LineNumber, out suggestion);
+                }
+            }
 
             entities.Add(new PurchaseOrderLineEntity
             {

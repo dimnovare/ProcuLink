@@ -1,0 +1,99 @@
+<!DOCTYPE cXML SYSTEM "http://xml.cxml.org/schemas/cXML/1.2.014/cXML.dtd"[]>
+<cXML xml:lang="en-US" payloadID="REDACTED" timestamp="2026-06-14T01:42:54-04:00">
+  <Header>
+    <From>
+      <Credential domain="Networkid">
+        <Identity>REDACTED-NETWORK-ID</Identity>
+      </Credential>
+    </From>
+    <To>
+      <Credential domain="Networkid">
+        <Identity>REDACTED-NETWORK-ID</Identity>
+      </Credential>
+    </To>
+    <Sender>
+      <Credential domain="Networkid">
+        <Identity>REDACTED-NETWORK-ID</Identity>
+        <SharedSecret>eatap2ple</SharedSecret>
+      </Credential>
+      <UserAgent>Coupa Procurement 1.0</UserAgent>
+    </Sender>
+  </Header>
+  <Request>
+    <OrderRequest>
+      <OrderRequestHeader orderID="152400" orderDate="2026-06-14T01:42:54-04:00" type="new">
+        <Total>
+          <Money currency="SEK">3179.15</Money>
+        </Total>
+        <ShipTo>
+          <Address isoCountryCode="SE" addressID="SWZ">
+            <Name xml:lang="en">REDACTED</Name>
+            <PostalAddress name="default">
+              <DeliverTo>REDACTED</DeliverTo>
+              <Street>REDACTED</Street>
+              <City>Stockholm</City>
+              <State>Stockholm</State>
+              <PostalCode>REDACTED</PostalCode>
+              <Country isoCountryCode="SE">Sweden</Country>
+            </PostalAddress>
+            <Email name="default">REDACTED</Email>
+          </Address>
+        </ShipTo>
+        <BillTo>
+          <Address isoCountryCode="SE" addressID="57463">
+            <Name xml:lang="en">REDACTED</Name>
+            <PostalAddress name="default">
+              <DeliverTo>REDACTED</DeliverTo>
+              <Street>REDACTED</Street>
+              <City>Stockholm</City>
+              <State></State>
+              <PostalCode>REDACTED</PostalCode>
+              <Country isoCountryCode="SE">Sweden</Country>
+            </PostalAddress>
+            <Email name="default">REDACTED</Email>
+          </Address>
+        </BillTo>
+        <Shipping>
+          <Money currency="SEK">0.0</Money>
+          <Description xml:lang="en-US" />
+        </Shipping>
+        <PaymentTerm payInNumberOfDays="30" />
+        <Contact role="endUser">
+          <Name xml:lang="en">REDACTED</Name>
+          <Email name="default">REDACTED</Email>
+        </Contact>
+        <Extrinsic name="REDACTED" />
+      </OrderRequestHeader>
+      <ItemOut quantity="1" lineNumber="1">
+        <ItemID>
+          <SupplierPartID>39424093</SupplierPartID>
+          <SupplierPartAuxiliaryID>180743323</SupplierPartAuxiliaryID>
+        </ItemID>
+        <ItemDetail>
+          <UnitPrice>
+            <Money currency="SEK">3179.15</Money>
+          </UnitPrice>
+          <Description xml:lang="en">Apple Magic Keyboard - Keyboard and folio case - with trackpad - backlit - Apple Smart connector - Swedish - black - for 11-inch iPad Pro (M4)</Description>
+          <UnitOfMeasure>EA</UnitOfMeasure>
+          <Classification domain="UNSPSC">unknown</Classification>
+          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
+          <ManufacturerName xml:lang="en">Apple</ManufacturerName>
+          <Extrinsic name="sales_quote_number" />
+          <Extrinsic name="LineType">Quantity</Extrinsic>
+        </ItemDetail>
+        <Distribution>
+          <Accounting name="Operations GCCG (146) | SFAB | 34411-Computer Equip &lt; $5000 | 6440100-Select if Applicable | 000000-Tax Location Not Needed">
+            <Segment type="Cost Center" id="SFAB / 34411" description="Dept" />
+            <Segment type="Spend Category / Commodity" id="6440100" description="GL_Acct" />
+            <Segment type="Project Code" id="000000" description="Project" />
+            <Segment type="Tax Location Code" id="ZZZ" description="Tax Loc" />
+          </Accounting>
+          <Charge>
+            <Money currency="SEK">3179.15</Money>
+          </Charge>
+        </Distribution>
+      </ItemOut>
+    </OrderRequest>
+  </Request>
+  <EDICustomerID>00000000-0000-0000-0000-000000000000</EDICustomerID>
+</cXML>

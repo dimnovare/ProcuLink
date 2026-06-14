@@ -46,7 +46,17 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
         XDocument doc;
         try
         {
-            doc = await XDocument.LoadAsync(fileStream, LoadOptions.None, ct);
+            // Real-world cXML (Coupa, Ariba, Jaggaer, …) ALWAYS carries a
+            // <!DOCTYPE cXML SYSTEM "http://xml.cxml.org/schemas/cXML/.../cXML.dtd"> header.
+            // XDocument's default reader uses DtdProcessing.Prohibit and throws
+            // "For security reasons DTD is prohibited" on it — which rejected every
+            // genuine cXML PO. Read with DtdProcessing.Ignore (skip the DOCTYPE; do NOT
+            // fetch or expand it) and XmlResolver = null (no external entity resolution),
+            // which keeps us safe from XXE while accepting the DOCTYPE these documents require.
+            // Real-world cXML (Coupa/Ariba/Jaggaer) always carries a <!DOCTYPE>; load it
+            // DOCTYPE-tolerantly but XXE-safe. See DtdSafeXmlLoader.
+            doc = DtdSafeXmlLoader.Load(fileStream);
+            ct.ThrowIfCancellationRequested();
         }
         catch (Exception ex)
         {
@@ -58,13 +68,16 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
         if (root is null || !string.Equals(root.Name.LocalName, "cXML", StringComparison.OrdinalIgnoreCase))
             throw new CxmlParseException("Document root element is not <cXML>.");
 
-        // ── deploymentMode (required) ──────────────────────────────────────
+        // ── Request (required) ─────────────────────────────────────────────
         var requestEl = GetDescendant(root, "Request")
             ?? throw new CxmlParseException("Required element <Request> is missing.");
 
+        // deploymentMode is OPTIONAL in cXML and defaults to "production" — Coupa and
+        // several other systems omit it on OrderRequest. Requiring it rejected valid
+        // real-world POs, so treat an absent attribute as "production" rather than failing.
         var deploymentMode = requestEl.Attribute("deploymentMode")?.Value;
         if (string.IsNullOrWhiteSpace(deploymentMode))
-            throw new CxmlParseException("Required attribute deploymentMode is missing on <Request>.");
+            deploymentMode = "production";
 
         // ── OrderRequestHeader (required) ──────────────────────────────────
         var orderRequestEl = GetDescendant(root, "OrderRequest")
@@ -141,13 +154,26 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
             var description = GetDescendant(itemDetailEl, "Description")?.Value?.Trim();
             var unit        = GetDescendant(itemDetailEl, "UnitOfMeasure")?.Value?.Trim();
 
+            // Lossless capture of the real identifiers cXML carries — these are the
+            // genuine codes (e.g. ManufacturerPartID "REDACTED-ORDER-DATA"), NOT something to be
+            // guessed downstream. ManufacturerPartNumber is the catalog/enrichment key
+            // and the high-confidence source for a supplier-code suggestion.
+            var mpn = GetDescendant(itemDetailEl, "ManufacturerPartID")?.Value?.Trim();
+            var auxId = GetDescendant(itemIdEl, "SupplierPartAuxiliaryID")?.Value?.Trim();
+            var unspsc = GetDescendant(itemDetailEl, "Classification")?.Value?.Trim();
+            if (string.Equals(unspsc, "unknown", StringComparison.OrdinalIgnoreCase))
+                unspsc = null;   // cXML's literal placeholder, not a real classification
+
             lines.Add(new ParsedOrderLine(
                 LineNumber:    lineNumber,
                 BuyerItemCode: supplierPartId,   // cXML supplier-side: SupplierPartID used as the item code
                 Description:   NullIfEmpty(description),
                 Quantity:      quantity,
                 Unit:          NullIfEmpty(unit),
-                UnitPrice:     unitPrice));
+                UnitPrice:     unitPrice,
+                ManufacturerPartNumber: NullIfEmpty(mpn),
+                CustomerPartNumber:     NullIfEmpty(auxId),
+                Unspsc:                 NullIfEmpty(unspsc)));
 
             autoLine++;
         }
