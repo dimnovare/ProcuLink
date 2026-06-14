@@ -40,6 +40,38 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
             "order_date": { "type": "string" },
             "currency":   { "type": "string" },
             "buyer_name": { "type": "string" },
+            "parties": {
+              "type": "array",
+              "description": "Every named party with an address or tax id: ship-to, bill-to, remit-to. Empty array if none. Do NOT duplicate buyer_name unless it carries an address/VAT here.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "role":        { "type": "string", "enum": ["shipTo", "billTo", "remitTo"] },
+                  "name":        { "type": "string" },
+                  "street":      { "type": "string" },
+                  "city":        { "type": "string" },
+                  "postal_code": { "type": "string" },
+                  "country":     { "type": "string" },
+                  "vat":         { "type": "string" },
+                  "reference":   { "type": "string" }
+                },
+                "required": ["role", "name", "street", "city", "postal_code", "country", "vat", "reference"],
+                "additionalProperties": false
+              }
+            },
+            "raw_fields": {
+              "type": "array",
+              "description": "Any other labelled field in the email NOT captured above (e.g. supplier number, EDI id, contract no, cost centre). Each is a label+value pair exactly as written. Empty array if none.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "label": { "type": "string" },
+                  "value": { "type": "string" }
+                },
+                "required": ["label", "value"],
+                "additionalProperties": false
+              }
+            },
             "lines": {
               "type": "array",
               "items": {
@@ -57,7 +89,7 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
               }
             }
           },
-          "required": ["confidence", "po_number", "order_date", "currency", "buyer_name", "lines"],
+          "required": ["confidence", "po_number", "order_date", "currency", "buyer_name", "parties", "raw_fields", "lines"],
           "additionalProperties": false
         }
         """u8.ToArray());
@@ -287,6 +319,8 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
 
     // ─── Mapping DTO → ExtractedOrder ───────────────────────────────────────
 
+    internal static ExtractedOrder MapToOrderForTest(ExtractionDto dto) => MapToOrder(dto);
+
     private static ExtractedOrder MapToOrder(ExtractionDto dto)
     {
         DateTime? orderDate = null;
@@ -311,12 +345,41 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
             OrderDate: orderDate,
             BuyerName: dto.BuyerName,
             Currency:  dto.Currency,
-            Lines:     lines);
+            Lines:     lines,
+            // Phase 1 lossless capture — email parity (parties + raw_fields).
+            // Email stays a subset of the PDF path: no contact object / incoterms.
+            Parties: dto.Parties?.Select(p => new ExtractedParty(
+                p.Role, NullIfBlank(p.Name), NullIfBlank(p.Street), NullIfBlank(p.City),
+                NullIfBlank(p.PostalCode), NullIfBlank(p.Country), NullIfBlank(p.Vat),
+                Reference: NullIfBlank(p.Reference))).Where(p => HasAnyValue(p)).ToList(),
+            RawFields: dto.RawFields?.Where(f => !string.IsNullOrWhiteSpace(f.Value))
+                .Select(f => new ExtractedRawField(f.Label?.Trim() ?? "", f.Value.Trim())).ToList());
     }
+
+    // Phase 1 lossless capture helpers (mirror OpenAiPdfOrderExtractor).
+    private static string? NullIfBlank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    // A body with no addresses yields an empty parties list, not a noise row of all-nulls.
+    private static bool HasAnyValue(ExtractedParty p) =>
+        p.Name is not null || p.Street is not null || p.City is not null || p.Vat is not null;
 
     // ─── DTOs for OpenAI structured outputs ─────────────────────────────────
     // Snake_case [JsonPropertyName] required: the schema uses snake_case keys and
     // JsonSerializerDefaults.Web would otherwise map to camelCase and bind null.
+
+    internal sealed record ExtractionPartyDto(
+        [property: JsonPropertyName("role")] string Role,
+        [property: JsonPropertyName("name")] string? Name = null,
+        [property: JsonPropertyName("street")] string? Street = null,
+        [property: JsonPropertyName("city")] string? City = null,
+        [property: JsonPropertyName("postal_code")] string? PostalCode = null,
+        [property: JsonPropertyName("country")] string? Country = null,
+        [property: JsonPropertyName("vat")] string? Vat = null,
+        [property: JsonPropertyName("reference")] string? Reference = null);
+
+    internal sealed record RawFieldDto(
+        [property: JsonPropertyName("label")] string Label,
+        [property: JsonPropertyName("value")] string Value);
 
     internal sealed record ExtractionDto(
         [property: JsonPropertyName("confidence")] double                            Confidence,
@@ -324,7 +387,9 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
         [property: JsonPropertyName("order_date")] string?                           OrderDate,
         [property: JsonPropertyName("currency")]   string?                           Currency,
         [property: JsonPropertyName("buyer_name")] string?                           BuyerName,
-        [property: JsonPropertyName("lines")]      IReadOnlyList<ExtractionLineDto>? Lines);
+        [property: JsonPropertyName("lines")]      IReadOnlyList<ExtractionLineDto>? Lines,
+        [property: JsonPropertyName("parties")]    IReadOnlyList<ExtractionPartyDto>? Parties = null,
+        [property: JsonPropertyName("raw_fields")] IReadOnlyList<RawFieldDto>?       RawFields = null);
 
     internal sealed record ExtractionLineDto(
         [property: JsonPropertyName("line_number")]     int     LineNumber,

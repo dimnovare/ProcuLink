@@ -51,3 +51,29 @@ public class ValidateAndMapWideningTests
         Assert.Contains(result.Order.RawFields!, f => f.Label == "EDI id" && f.Value == "REDACTED-TAXID");
     }
 }
+
+/// <summary>
+/// Phase 1 parity: the email-body extractor's <c>MapToOrder</c> now carries the
+/// same lossless additions as the PDF path — header-level parties (address/VAT)
+/// and a raw_fields bag — so an inbound PO arriving as an email body is no longer
+/// stripped of every field the fixed canonical header had no slot for. Email
+/// stays a subset (no contact object / incoterms) — parties + raw_fields are the
+/// high-value additions.
+/// </summary>
+public class EmailExtractorWideningTests
+{
+    [Fact]
+    public void Email_MapToOrder_carries_parties_and_raw_fields()
+    {
+        var dto = new OpenAiEmailBodyOrderExtractor.ExtractionDto(
+            0.9, "PO-9", "2026-06-12", "EUR", "Acme",
+            new[] { new OpenAiEmailBodyOrderExtractor.ExtractionLineDto(1, "B1", "Item", 1, "PC", 9.0) },
+            Parties: new[] { new OpenAiEmailBodyOrderExtractor.ExtractionPartyDto("shipTo", Name: "DC", Vat: "ATU2") },
+            RawFields: new[] { new OpenAiEmailBodyOrderExtractor.RawFieldDto("PR", "PR-1") });
+
+        var order = OpenAiEmailBodyOrderExtractor.MapToOrderForTest(dto);
+
+        Assert.Equal("ATU2", order.Parties!.Single().Vat);
+        Assert.Contains(order.RawFields!, f => f.Label == "PR");
+    }
+}
