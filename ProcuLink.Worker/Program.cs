@@ -251,6 +251,10 @@ builder.Services.AddSingleton<IPurchaseOrderParser, IDocOrders05Parser>(); // SA
 builder.Services.AddSingleton<IPurchaseOrderParser, EdifactOrderParser>();
 builder.Services.AddSingleton<IPurchaseOrderParser, X12OrderParser>(); // Group M — ANSI X12 850
 builder.Services.AddSingleton<OrderParserFactory>();
+// SourceMap engine tokenizer: the Worker's parse job (ParseOrderJob → OrderService →
+// OrderIngestionService.ParseStoredFileAsync) needs this to capture the FULL source-token set
+// for structured formats into source_captures. Singleton — stateless, mirrors the Api registration.
+builder.Services.AddSingleton<ProcuLink.Transform.Tokenizing.ISourceTokenizer, ProcuLink.Transform.Tokenizing.SourceTokenizer>();
 builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 builder.Services.AddSingleton<ITransformService, CxmlTransformService>();

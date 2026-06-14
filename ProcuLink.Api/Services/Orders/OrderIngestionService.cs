@@ -32,6 +32,7 @@ internal sealed class OrderIngestionService
     private readonly ILogger<OrderService>      _logger;
     private readonly IIntegrationTriggerService _integrationTrigger;
     private readonly IFormatDetector            _formatDetector;
+    private readonly ProcuLink.Transform.Tokenizing.ISourceTokenizer _tokenizer;
     private readonly IStructuredOrderExtractor? _structuredExtractor;
     private readonly OrderServiceShared         _shared;
     private readonly IConnectionResolver        _connectionResolver;
@@ -48,6 +49,7 @@ internal sealed class OrderIngestionService
         ILogger<OrderService>      logger,
         IIntegrationTriggerService integrationTrigger,
         IFormatDetector            formatDetector,
+        ProcuLink.Transform.Tokenizing.ISourceTokenizer tokenizer,
         IStructuredOrderExtractor? structuredExtractor,
         OrderServiceShared         shared,
         ICatalogRetrievalService?  catalogRetrieval = null,
@@ -62,6 +64,7 @@ internal sealed class OrderIngestionService
         _logger              = logger;
         _integrationTrigger  = integrationTrigger;
         _formatDetector      = formatDetector;
+        _tokenizer           = tokenizer;
         _structuredExtractor = structuredExtractor;
         _shared              = shared;
         _connectionResolver  = new ConnectionResolver(db);
@@ -817,14 +820,32 @@ internal sealed class OrderIngestionService
                     Reference = p.Reference, ContactName = p.ContactName, Email = p.Email, Phone = p.Phone,
                 }));
             }
-            // Raw bag: structured-format tokens are Task 8 (not threaded here), so this path
-            // captures only the LLM/email raw_fields (tokens: null). Format derived from the
-            // detected format, falling back to the source file extension.
+            // Raw bag: for structured formats (CSV/XLSX/XML/cXML/EDI/X12) capture the FULL
+            // source-token set so unmapped source columns/elements survive into source_captures
+            // (UpsertSourceCaptureAsync prefers a non-empty token list over parsedOrder.RawFields).
+            // The PDF/email path supplies no tokens here and falls through to raw_fields as before.
+            // Tokenisation is best-effort: a tokenizer failure must NOT fail the parse — log and
+            // continue, leaving SourceCapture to fall back to raw_fields/null.
+            IReadOnlyList<ProcuLink.Transform.Tokenizing.SourceToken>? sourceTokens = null;
+            if (extension is ".csv" or ".xlsx" or ".xml" or ".cxml" or ".edi" or ".x12")
+            {
+                try
+                {
+                    buffer.Position = 0;
+                    sourceTokens = await _tokenizer.TokenizeAsync(buffer.ToArray(), extension, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Source tokenization failed for order {OrderId} (non-fatal)", orderId);
+                }
+            }
+            // Format derived from the detected format, falling back to the source file extension.
             var capturedFormat = detected?.Format
                 ?? Path.GetExtension(entity.SourceFileKey).TrimStart('.');
             await UpsertSourceCaptureAsync(
                 orderId, organisationId, capturedFormat,
-                tokens: null, parsedOrder, rawText: null, now, ct);
+                tokens: sourceTokens, parsedOrder, rawText: null, now, ct);
 
             await _db.SaveChangesAsync(ct);
 

@@ -1122,4 +1122,110 @@ public sealed class EndToEndPipelineTests : IAsyncLifetime
             Assert.Equal(new DateOnly(2026, 5, 25), reloaded.RequestedDeliveryDate);
         }
     }
+
+    /// <summary>
+    /// Phase 1 Task 8 — for structured formats (here CSV) the async parse path must persist the
+    /// FULL source-token set into <c>source_captures.tokens_json</c>, not just the canonically
+    /// mapped fields. Before the fix, <c>ParseStoredFileAsync</c> called
+    /// <c>UpsertSourceCaptureAsync(..., tokens: null, ...)</c> for non-PDF formats, so a source
+    /// column that maps to NO canonical field (here <c>internal_note</c>) was simply discarded.
+    ///
+    /// This drives the REAL ingest path (<c>CreateStubAsync</c> → <c>ParseStoredFileAsync</c>,
+    /// which uses <c>ExecuteUpdateAsync</c>/<c>ExecuteDeleteAsync</c> — hence real Postgres). No
+    /// PO mapping template is seeded, so the default <c>CsvOrderParser</c> runs: it maps
+    /// po/sku/description/qty/price but knows nothing about <c>internal_note</c>. We then RELOAD
+    /// the order's <see cref="SourceCapture"/> from a fresh DbContext scope and assert the
+    /// unmapped cell's verbatim value survived in the persisted jsonb token bag.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task ParseStoredFileAsync_Csv_PersistsFullSourceTokens_IncludingUnmappedColumn()
+    {
+        var factory = _factory!;
+        var ct = CancellationToken.None;
+        var orgGuid = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        using (var scope = factory.NewScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var now = DateTime.UtcNow;
+
+            db.Organisations.Add(new Organisation
+            {
+                Id = orgGuid,
+                ClerkOrgId = "org_FULL_TOKENS",
+                Name = "Full Tokens Test Org",
+                Slug = "full-tokens-test-org",
+                Plan = "operations",
+                AccountStatus = "active",
+                CreatedAt = now,
+            });
+
+            db.Suppliers.Add(new Supplier
+            {
+                Id = supplierId,
+                OrgId = orgGuid,
+                Name = "Token Supplier",
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        // The last column — internal_note — maps to NO canonical field, so the parsed order
+        // never carries it. Only the full-token capture preserves "TOP-SECRET-NOTE-9001".
+        const string unmappedValue = "TOP-SECRET-NOTE-9001";
+        const string csv =
+            "po_number,sku,description,qty,price,internal_note\r\n" +
+            $"PO-TOKENS-1,BUY-1,Widget,3,4.25,{unmappedValue}\r\n";
+
+        Guid orderId;
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(csv));
+            var stub = await orders.CreateStubAsync(
+                orgGuid, supplierId, stream, "tokens.csv", "text/csv", ct);
+
+            Assert.True(stub.IsSuccess, $"CreateStubAsync failed: {stub.Error}");
+            orderId = stub.Value!.Id;
+        }
+
+        // Drive the real async parse path (ExecuteUpdateAsync + the new tokeniser wiring).
+        using (var scope = factory.NewScope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            var parsed = await orders.ParseStoredFileAsync(orgGuid, orderId, ct);
+            Assert.True(parsed.IsSuccess, $"ParseStoredFileAsync failed: {parsed.Error}");
+        }
+
+        // Reload the SourceCapture from a FRESH context: the unmapped cell value must be present
+        // in the persisted jsonb token bag (and the header label too), proving the full token set
+        // — not just the canonically mapped fields — was captured.
+        using (var scope = factory.NewScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var capture = await db.SourceCaptures.AsNoTracking()
+                .SingleAsync(s => s.OrderId == orderId && s.OrgId == orgGuid, ct);
+
+            Assert.NotNull(capture.TokensJson);
+            var raw = capture.TokensJson!.RootElement.GetRawText();
+
+            // The unmapped column's VALUE survived (this is the whole point — pre-fix it was dropped).
+            Assert.Contains(unmappedValue, raw);
+            // The unmapped column's header label survived too (full token set, not just mapped fields).
+            Assert.Contains("internal_note", raw);
+
+            // Sanity: this really is the token bag (cell ids), not a raw_fields fallback bag.
+            using var bag = System.Text.Json.JsonDocument.Parse(raw);
+            Assert.Contains(
+                bag.RootElement.EnumerateArray(),
+                t => t.TryGetProperty("value", out var v)
+                     && v.GetString() == unmappedValue);
+            Assert.Contains(
+                bag.RootElement.EnumerateArray(),
+                t => t.TryGetProperty("id", out var id)
+                     && id.GetString() is { } s && s.StartsWith("cell:"));
+        }
+    }
 }

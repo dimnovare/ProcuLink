@@ -40,15 +40,21 @@ public sealed class OrderService : IOrderService
         IStructuredOrderExtractor?     structuredExtractor = null,
         IAiSuggestionDecisionService?  aiDecisions = null,
         ICatalogRetrievalService?      catalogRetrieval = null,
-        IEffectiveConnectionConfigResolver? effectiveConfig = null)
+        IEffectiveConnectionConfigResolver? effectiveConfig = null,
+        ProcuLink.Transform.Tokenizing.ISourceTokenizer? sourceTokenizer = null)
     {
         // Shared helpers (best-effort exception reconcile, passport events, audit-event
         // builder, extraction-review flagging) used by more than one sub-service.
         var shared = new OrderServiceShared(db, exceptions, logger);
 
+        // Source tokenizer for structured-format full-token capture. Optional so the existing
+        // 12-positional test ctors stay green; the DI container supplies the registered singleton
+        // when present, otherwise we build the stateless concrete tokenizer here.
+        var tokenizer = sourceTokenizer ?? new ProcuLink.Transform.Tokenizing.SourceTokenizer();
+
         _ingestion = new OrderIngestionService(
             db, fileStorage, parserFactory, mappings, poMappingService, aiMappings,
-            logger, integrationTrigger, formatDetector, structuredExtractor, shared,
+            logger, integrationTrigger, formatDetector, tokenizer, structuredExtractor, shared,
             catalogRetrieval, effectiveConfig);
 
         _query = new OrderQueryService(db, fileStorage);
