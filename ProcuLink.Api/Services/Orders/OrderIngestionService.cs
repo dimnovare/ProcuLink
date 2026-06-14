@@ -892,6 +892,9 @@ internal sealed class OrderIngestionService
         };
     }
 
+    /// <summary>Test-only seam onto <see cref="MapExtractedToParsed"/> (which is private static).</summary>
+    internal static ParsedOrder MapExtractedToParsedForTest(ExtractedOrder o) => MapExtractedToParsed(o);
+
     private static ParsedOrder MapExtractedToParsed(ExtractedOrder o) =>
         new(
             o.PoNumber,
@@ -907,7 +910,15 @@ internal sealed class OrderIngestionService
                 l.UnitPrice,
                 LineAmount: l.LineAmount,
                 TaxRate: l.TaxRate,
-                DeliveryDate: l.DeliveryDate)).ToList(),
+                DeliveryDate: l.DeliveryDate,
+                // Phase 1 lossless capture (additive).
+                ManufacturerPartNumber: l.ManufacturerPartNumber,
+                CustomerPartNumber: l.CustomerPartNumber,
+                DiscountPercent: l.DiscountPercent,
+                Unspsc: l.Unspsc,
+                Recipient: l.Recipient,
+                ContractNumber: l.ContractNumber,
+                NetAmount: l.NetAmount)).ToList(),
             SupplierName: o.SupplierName,
             SubTotal: o.SubTotal,
             TaxTotal: o.TaxTotal,
@@ -915,7 +926,18 @@ internal sealed class OrderIngestionService
             PaymentTerms: o.PaymentTerms,
             DocumentType: o.DocumentType,
             // V5: propagate header-level requested delivery date.
-            RequestedDeliveryDate: o.RequestedDeliveryDate);
+            RequestedDeliveryDate: o.RequestedDeliveryDate,
+            // Phase 1 lossless capture: parties, contact, incoterms, shipping, buyer ref, raw bag.
+            Parties: o.Parties?.Select(p => new ParsedParty(
+                p.Role, p.Name, p.Street, p.City, p.PostalCode, p.Country, p.Vat,
+                p.RegNr, p.EdiCode, p.Reference, p.ContactName, p.Email, p.Phone)).ToList(),
+            ContactName: o.ContactName,
+            ContactEmail: o.ContactEmail,
+            ContactPhone: o.ContactPhone,
+            Incoterms: o.Incoterms,
+            ShippingMethod: o.ShippingMethod,
+            BuyerOrderRef: o.BuyerOrderRef,
+            RawFields: o.RawFields?.Select(f => new ParsedRawField(f.Label, f.Value)).ToList());
 
     internal async Task<List<PurchaseOrderLineEntity>> BuildLineEntitiesAsync(
         Guid organisationId,

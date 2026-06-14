@@ -42,6 +42,7 @@
   <ItemGroup>
     <!-- Allow internal test-only methods (e.g. OrderService PDF routing) to be reachable from Api.Tests. -->
     <InternalsVisibleTo Include="ProcuLink.Api.Tests" />
+    <InternalsVisibleTo Include="ProcuLink.Infrastructure.Tests" />
   </ItemGroup>
 
   <ItemGroup>
