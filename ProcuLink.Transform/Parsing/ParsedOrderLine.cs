@@ -27,5 +27,13 @@ public record ParsedOrderLine(
     // line (set alongside NeedsReview = true; null otherwise). Carried onto the
     // persisted line entity's review_reason so the review UI can say "why flagged".
     // Additive + defaulted: parsers that never flag leave it null.
-    string? ReviewReason = null
+    string? ReviewReason = null,
+    // Phase 1 lossless capture (additive, defaulted). ManufacturerPartNumber = the catalog key (Phase 2).
+    string? ManufacturerPartNumber = null,
+    string? CustomerPartNumber = null,
+    decimal? DiscountPercent = null,
+    string? Unspsc = null,
+    string? Recipient = null,
+    string? ContractNumber = null,
+    decimal? NetAmount = null
 );

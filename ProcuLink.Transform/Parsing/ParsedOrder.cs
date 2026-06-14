@@ -20,5 +20,14 @@ public record ParsedOrder(
     // V5 deepen-canonical: requested delivery date (header-level).
     // Peppol BIS 3.0 mandatory; UBL cbc:RequestedDeliveryDate; EDIFACT DTM+2;
     // X12 DTM*002; IDoc E1EDK03 IDDAT=012. Null when the format does not carry it.
-    DateOnly? RequestedDeliveryDate = null
+    DateOnly? RequestedDeliveryDate = null,
+    // Phase 1 lossless capture (additive, defaulted).
+    IReadOnlyList<ParsedParty>? Parties = null,
+    string? ContactName = null,
+    string? ContactEmail = null,
+    string? ContactPhone = null,
+    string? Incoterms = null,
+    string? ShippingMethod = null,
+    string? BuyerOrderRef = null,
+    IReadOnlyList<ParsedRawField>? RawFields = null
 );

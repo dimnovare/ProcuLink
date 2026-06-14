@@ -15,8 +15,35 @@ public sealed record ExtractedOrderLine(
     // Phase 4 enrichment (optional — additive, defaulted so existing callers are unaffected).
     decimal? LineAmount = null,
     decimal? TaxRate = null,
-    DateOnly? DeliveryDate = null
+    DateOnly? DeliveryDate = null,
+    string? ManufacturerPartNumber = null,
+    string? CustomerPartNumber = null,
+    decimal? DiscountPercent = null,
+    string? Unspsc = null,
+    string? Recipient = null,
+    string? ContractNumber = null,
+    decimal? NetAmount = null
 );
+
+/// <summary>Phase 1: a named party (address/role) on an LLM-extracted order. Mirrors
+/// ParsedParty in the Transform layer (Core cannot reference Transform).</summary>
+public sealed record ExtractedParty(
+    string Role,
+    string? Name = null,
+    string? Street = null,
+    string? City = null,
+    string? PostalCode = null,
+    string? Country = null,
+    string? Vat = null,
+    string? RegNr = null,
+    string? EdiCode = null,
+    string? Reference = null,
+    string? ContactName = null,
+    string? Email = null,
+    string? Phone = null);
+
+/// <summary>Phase 1: a labelled value with no canonical slot (raw bag entry).</summary>
+public sealed record ExtractedRawField(string Label, string Value);
 
 /// <summary>
 /// A purchase order as extracted from an email body.
@@ -38,7 +65,16 @@ public sealed record ExtractedOrder(
     string? DocumentType = null,
     // V5 deepen-canonical: requested delivery date (header-level).
     // Mirrors ParsedOrder.RequestedDeliveryDate — null when absent.
-    DateOnly? RequestedDeliveryDate = null
+    DateOnly? RequestedDeliveryDate = null,
+    // Phase 1 lossless capture (additive, defaulted).
+    IReadOnlyList<ExtractedParty>? Parties = null,
+    string? ContactName = null,
+    string? ContactEmail = null,
+    string? ContactPhone = null,
+    string? Incoterms = null,
+    string? ShippingMethod = null,
+    string? BuyerOrderRef = null,
+    IReadOnlyList<ExtractedRawField>? RawFields = null
 );
 
 /// <summary>
