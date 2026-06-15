@@ -772,6 +772,40 @@ public sealed class OrdersController : ControllerBase
                 order.Supplier = supplier;
         }
 
+        // ── Mode 0: STRUCTURED OUTPUT TREE (Phase B — HIGHEST precedence) ─────────
+        // When the effective override carries an OutputNode tree, render the whole document from it via
+        // the SAME emitter the delivery path uses (same value machinery, source tokens, and catalog), so
+        // the preview equals the delivered bytes. Errors surface as { ok:false, error } at HTTP 200.
+        if (effectiveOverride?.OutputTree is not null)
+        {
+            try
+            {
+                var treeTokens = ProcuLink.Transform.Output.SourceTokenSerialization
+                    .FromTokensJson(order.SourceCapture?.TokensJson);
+                var treeCatalog = await ProcuLink.Api.Services.OrderServiceShared.BuildCatalogLookupAsync(
+                    _db, _tenant.OrganisationId, order.SupplierId, ct);
+                var treeResult = new OutputTemplateEmitter().Emit(
+                    effectiveOverride.OutputTree, order, effectiveOverride, treeTokens, treeCatalog);
+                using var treeReader = new StreamReader(treeResult.Content);
+                var treeContent = await treeReader.ReadToEndAsync(ct);
+                return Ok(new
+                {
+                    format      = effectiveOverride.OutputTree.Format.ToString(),
+                    contentType = treeResult.ContentType,
+                    content     = treeContent,
+                });
+            }
+            catch (TransformValidationException ex)
+            {
+                return Ok(new { ok = false, error = ex.Message }); // unresolved order — show inline
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Order {OrderId}: OutputTree preview failed.", id);
+                return Ok(new { ok = false, error = $"Output preview failed: {ex.Message}" });
+            }
+        }
+
         // ── Mode 1: WHOLE-DOCUMENT TEMPLATE (takes precedence) ────────────────────
         // When the effective override carries a usable template, render it. A compile/render error is
         // returned as { ok:false, error } at HTTP 200 (never 400/500) so the editor shows it inline.
