@@ -80,6 +80,19 @@ public record OrderMappingOverride
     /// produces that shape. Ignored when <see cref="OutputTemplate"/> is null/blank.
     /// </summary>
     public string? OutputTemplateContentType { get; init; }
+
+    /// <summary>
+    /// Optional STRUCTURED output template (Phase B — the OutputNode AST). When present, the transform
+    /// renders the entire document from this recursive tree via <c>OutputTemplateEmitter</c>, letting a
+    /// supplier's exact required STRUCTURE (nesting, repeating groups, attributes, custom names) be
+    /// expressed VISUALLY — not just leaf-value remapping (<see cref="Output"/>) or a hand-written
+    /// Scriban string (<see cref="OutputTemplate"/>). It is the HIGHEST-precedence output mode.
+    ///
+    /// <para><b>Opt-in &amp; safe.</b> Null (the default) → this mode is OFF and behaviour is byte-for-byte
+    /// identical to today. Leaf values resolve through the SAME machinery as <see cref="Output"/>, so
+    /// only the surrounding structure is new. An unresolved order fails the same review guard.</para>
+    /// </summary>
+    public OutputNodeTemplate? OutputTree { get; init; }
 }
 
 /// <summary>

@@ -160,9 +160,15 @@ internal sealed class OrderTransformService
         //   6. FIXED TRANSFORMER — the default; byte-for-byte identical to today when nothing above applies.
         // An override with only custom fields or an empty output config never diverts the transform.
         var mappingOverride = OrderMappingOverrideReader.Read(entity.CanonicalJson);
-        var useTemplate     = OrderMappingOverrideReader.HasUsableTemplate(mappingOverride);
+        // HIGHEST-precedence (Phase B): a structured OutputNode tree renders the WHOLE document via
+        // OutputTemplateEmitter (arbitrary nesting/arrays/attributes). Everything below gates on
+        // !useOutputNode (as they already gate on !useTemplate), so a null OutputTree is byte-for-byte
+        // identical to today.
+        var useOutputNode   = mappingOverride?.OutputTree is not null;
+        var useTemplate     = !useOutputNode && OrderMappingOverrideReader.HasUsableTemplate(mappingOverride);
         var hasUsableOverride =
-            !useTemplate
+            !useOutputNode
+            && !useTemplate
             && OrderMappingOverrideReader.HasUsableOutput(mappingOverride)
             && MappedTransformService.SupportsOverrideFormat(effectiveFormat);
         var useNativeOverride = hasUsableOverride && MappedTransformService.SupportsOverride(effectiveFormat);
@@ -176,7 +182,7 @@ internal sealed class OrderTransformService
         OrderMappingOverride? revisionOverride   = null;
         OrderMappingOverride? supplierOverride   = null;
         string?               supplierOutputJson = null;
-        if (!useTemplate && !hasUsableOverride && MappedTransformService.SupportsOverrideFormat(effectiveFormat))
+        if (!useOutputNode && !useTemplate && !hasUsableOverride && MappedTransformService.SupportsOverrideFormat(effectiveFormat))
         {
             if (effective.IsRevision)
                 revisionOverride = TryBuildRevisionOutputOverride(effective, mappingOverride, orderId);
@@ -195,7 +201,7 @@ internal sealed class OrderTransformService
         // this requirement — the fixed transformer must exist so the defensive fallback below is
         // always possible.
         var transformer = _transformers.FirstOrDefault(t => t.CanTransform(effectiveFormat));
-        if (!useTemplate && !useNativeOverride && transformer is null)
+        if (!useOutputNode && !useTemplate && !useNativeOverride && transformer is null)
             return Result<TransformResponse>.Fail($"No transform service registered for format '{effectiveFormat}'.");
 
         // ── Idempotency / concurrency guard ────────────────────────────────────
@@ -287,7 +293,15 @@ internal sealed class OrderTransformService
         TransformResult transformResult;
         try
         {
-            if (useTemplate)
+            if (useOutputNode)
+            {
+                // Phase B: render the supplier's exact required STRUCTURE from the OutputNode tree.
+                // The emitter reuses the same value machinery + the same unresolved-lines guard, so a
+                // broken/unresolved order fails the same way (TransformValidationException → revert).
+                transformResult = new OutputTemplateEmitter().Emit(
+                    mappingOverride!.OutputTree!, entity, mappingOverride, sourceTokens, catalogLookup);
+            }
+            else if (useTemplate)
             {
                 transformResult = new ScribanTemplateTransformService().Build(entity, mappingOverride!, catalogLookup);
             }
@@ -400,7 +414,7 @@ internal sealed class OrderTransformService
         try
         {
             artifactSha = ProvenanceHash.TrySha256Hex(artifactBytes);
-            var configDescriptor = (useTemplate || useNativeOverride || hasUsableOverride)
+            var configDescriptor = (useOutputNode || useTemplate || useNativeOverride || hasUsableOverride)
                 ? OrderMappingOverrideReader.ReadRawJson(entity.CanonicalJson)
                 : useRevisionOutput
                     ? $"revision:{effective.RevisionId}:{effective.OutputMappingJson}"

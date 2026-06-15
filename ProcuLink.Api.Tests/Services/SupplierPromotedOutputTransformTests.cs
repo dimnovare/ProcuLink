@@ -458,4 +458,42 @@ public class SupplierPromotedOutputTransformTests
         order.Status = "ready";
         await db.SaveChangesAsync();
     }
+
+    // ── Phase B: a structured OutputNode tree delivers ARBITRARY structure end-to-end ─────────────
+
+    [Fact]
+    public async Task Transform_OutputTreeOverride_DeliversArbitraryNestedStructure_EndToEnd()
+    {
+        // The capability that is IMPOSSIBLE with the flat builder: a nested JSON with a renamed root
+        // key and an "items" array of objects — designed as an OutputNode tree, persisted on the order
+        // override (round-tripped through the override JSON), and DELIVERED by the live transform path.
+        await using var db = NewDb();
+        var (orgId, orderId) = (Guid.Empty, Guid.Empty);
+        (orgId, _, orderId) = await SeedResolvedOrderAsync(db);
+
+        var tree = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Json,
+            Root = OutputNode.Obj("root",
+                OutputNode.FieldOf("orderNumber",
+                    new OutputFieldRule { OutputPath = "orderNumber", CanonicalField = "PoNumber" }),
+                OutputNode.Arr("items",
+                    OutputNode.Obj("item",
+                        OutputNode.FieldOf("code",
+                            new OutputFieldRule { OutputPath = "code", CanonicalField = "SupplierItemCode" })))),
+        };
+        await new OrderMappingOverrideService(db).UpsertAsync(
+            orgId, orderId, new OrderMappingOverride { OutputTree = tree }, CancellationToken.None);
+
+        var (svc, captured) = Build(db);
+        var result = await svc.TransformAsync(orgId, orderId, OutputFormat.Json, CancellationToken.None);
+
+        Assert.True(result.IsSuccess, result.Error);
+        using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(captured()!));
+        Assert.Equal("PO-4A-1", doc.RootElement.GetProperty("orderNumber").GetString());  // renamed root key
+        var items = doc.RootElement.GetProperty("items");
+        Assert.Equal(2, items.GetArrayLength());                                            // repeating array
+        Assert.Equal("SUP-1", items[0].GetProperty("code").GetString());                   // nested object
+        Assert.Equal("SUP-2", items[1].GetProperty("code").GetString());
+    }
 }
