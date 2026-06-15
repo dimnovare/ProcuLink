@@ -61,8 +61,25 @@ P0. Must land before any output-layer feature. Status legend: ☐ todo · ◐ in
 >
 > **Next in Phase A:** WS-0h (cXML preview credential parity), WS-13b/c/d (live-PO-loop CI gate, retry-disable-when-config-missing, 5-vs-6 stages copy). Then Phase B (the `OutputNode` AST). **Branch NOT yet merged to `main`/deployed** — these change delivery behaviour (fail-loud), so merge + prod verification is a deliberate gate.
 
-### Phases B–E — NOT STARTED
-- **B (output contract):** WS-1 `OutputNode` AST · WS-2 format-aware emitters · WS-12 `EnvelopeConfig`. Backfill live suppliers → AST, byte-parity gate before cutover.
+### Phase B — output contract — IN PROGRESS (foundation shipped + byte-parity proven)
+Branch `feat/trust-layer-ws0`, commits `3d5a8a4` + `e041922`. All additive + UNWIRED (no live-path change yet) — Transform.Tests 939 green.
+
+| Step | What | Status |
+|---|---|---|
+| B1 | `OutputNode` AST (`Object`/`Array`/`Field`/`Attribute`) + `OutputNodeTemplate` + `EnvelopeConfig` in `ProcuLink.Core/Services/Mapping/OutputNode.cs` (renamed to avoid the existing `Entities.OutputTemplate` persistence entity) | ☑ |
+| B3 | `OutputTemplateEmitter` (`ProcuLink.Transform/Output/`) — JSON + XML. Renders arbitrary nesting / arrays / attributes / renamed keys. Reuses `MappedTransformService.{BuildHeaderRow,BuildLineRow,ResolveRule}` + SourceMap re-derive verbatim. Same unresolved-lines guard. | ☑ tests prove the impossible-today capability |
+| B-CSV | Delimited emitter (CSV) mirroring `BuildCsv` exactly | ☑ |
+| B5 | `OutputNodeTemplateConverter.FromFlat` — lifts the existing flat `OutputMappingConfig` → tree | ☑ |
+| **Byte-parity gate** | converted flat config → emitter CSV == `MappedTransformService` flat CSV, **byte-identical** | ☑ **PROVEN** — cutover de-risked |
+| B4 | Default `OutputNodeTemplate` per STRUCTURED format = today's hardcoded tree; byte-parity vs `Xml/Cxml/Ubl/X12TransformService` | ◐ NEXT (needs the exact current trees — grounding `w0yzc4w12` `ground:structured`) |
+| B6 | Wire the new render mode into `OrderTransformService` (opt-in, preview==delivery), behind byte-parity | ◐ NEXT (delivery-path — careful) |
+| B7 | Delete the dead `IParsedOrderTransform` stack (WS-11) | ◐ NEXT |
+| B12 | `EnvelopeConfig` per-connection persistence + X12/cXML identity wiring | ◐ NEXT |
+
+> **Phase B foundation is solid:** the model + a 3-family emitter + the converter, with **byte-parity proven** for CSV. The new engine can already produce arbitrary structure (the founder's core "design the output" gap) AND reproduce existing output exactly. Remaining: structured-format default templates + parity (B4), the delivery-path wiring (B6), dead-stack delete (B7), EnvelopeConfig persistence (B12) — then **Phase C (the 3-pane visual⇄AST designer UI)** and **Phase D (paste-sample→infer)**.
+
+### Phases C–E — NOT STARTED
+- **B (remaining):** see table above.
 - **C (designer):** WS-3 (3-pane visual⇄AST, inline Expression, `src/lib/mapping` extraction, characterization tests) · WS-6 canonical invisible · WS-7 6-modes→resolver+2 · WS-11 delete dead `IParsedOrderTransform` stack.
 - **D (inference):** WS-4 paste-sample→infer AST · WS-14 template test fixtures.
 - **E (consolidation):** WS-5 (5 areas: Orders/Supplier flows/Templates/Activity/Settings; named template scopes) · WS-8 hide versioning behind Save · WS-9 vocabulary purge + rename table · WS-13e dashboard funnel + topology→secondary.
