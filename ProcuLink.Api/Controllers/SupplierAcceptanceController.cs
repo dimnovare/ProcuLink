@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 
@@ -45,6 +46,17 @@ public sealed class SupplierAcceptanceController : ControllerBase
         var rules = (request.Rules ?? new List<AcceptanceRuleDto>())
             .Select(r => new AcceptanceRuleInput(r.Scope, r.FieldPath, r.Operator, r.ExpectedValue, r.Severity, r.BlockOnFail))
             .ToList();
+
+        // Fail closed: reject unknown/typo'd operators at create time so a misconfigured rule can
+        // never be persisted (the runtime evaluator now also fails closed on an unknown operator).
+        var unknownOperators = rules
+            .Where(r => !SupplierAcceptanceService.KnownOperators.Contains(r.Operator ?? string.Empty))
+            .Select(r => r.Operator)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (unknownOperators.Count > 0)
+            return BadRequest(new { error = $"Unsupported acceptance rule operator(s): {string.Join(", ", unknownOperators)}." });
+
         var created = await _service.CreateVersionAsync(
             _tenant.OrganisationId, supplierId, request.Protocol, request.OutputFormat,
             rules, User?.FindFirst("sub")?.Value, ct);

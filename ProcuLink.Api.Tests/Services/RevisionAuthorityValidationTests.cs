@@ -32,6 +32,11 @@ public class RevisionAuthorityValidationTests
             })
             .Build()));
 
+    // The mandatory safety invariants (ProfileId null, code "invariant.*") ALWAYS run now and are
+    // not what these revision-authority tests assert — filter to the supplier-rule rows.
+    private static IReadOnlyList<OrderValidationResult> SupplierRows(IReadOnlyList<OrderValidationResult> all) =>
+        all.Where(r => !InvariantValidator.IsInvariantCode(r.Code)).ToList();
+
     private sealed record Seeded(
         Guid OrgId, Guid SupplierId, Guid OrderId,
         SupplierAcceptanceProfile BoundV1, SupplierAcceptanceProfile LiveActiveV2);
@@ -138,7 +143,7 @@ public class RevisionAuthorityValidationTests
             .ValidateOrderAsync(seeded.OrgId, seeded.OrderId, CancellationToken.None);
 
         Assert.NotNull(results);
-        var result = Assert.Single(results!);
+        var result = Assert.Single(SupplierRows(results!));
         Assert.Equal(seeded.BoundV1.Id, result.ProfileId); // the BOUND v1, not the live-active v2
         Assert.Equal("pass", result.Status);               // EUR rule passes the EUR order
     }
@@ -154,7 +159,7 @@ public class RevisionAuthorityValidationTests
             .ValidateOrderAsync(seeded.OrgId, seeded.OrderId, CancellationToken.None);
 
         Assert.NotNull(results);
-        var result = Assert.Single(results!);
+        var result = Assert.Single(SupplierRows(results!));
         Assert.Equal(seeded.LiveActiveV2.Id, result.ProfileId); // pre-batch-7 behaviour
         Assert.Equal("fail", result.Status);                    // USD rule fails the EUR order
     }
@@ -170,7 +175,7 @@ public class RevisionAuthorityValidationTests
             .ValidateOrderAsync(seeded.OrgId, seeded.OrderId, CancellationToken.None);
 
         Assert.NotNull(results);
-        Assert.Equal(seeded.LiveActiveV2.Id, Assert.Single(results!).ProfileId);
+        Assert.Equal(seeded.LiveActiveV2.Id, Assert.Single(SupplierRows(results!)).ProfileId);
     }
 
     [Fact]
@@ -186,7 +191,7 @@ public class RevisionAuthorityValidationTests
             .ValidateOrderAsync(seeded.OrgId, seeded.OrderId, CancellationToken.None);
 
         Assert.NotNull(results);
-        Assert.Empty(results!);
+        Assert.Empty(SupplierRows(results!));   // no supplier rules bound; invariants still ran
     }
 
     [Fact]
@@ -202,7 +207,7 @@ public class RevisionAuthorityValidationTests
             .ValidateOrderAsync(seeded.OrgId, seeded.OrderId, CancellationToken.None);
 
         Assert.NotNull(results);
-        Assert.Equal(seeded.LiveActiveV2.Id, Assert.Single(results!).ProfileId);
+        Assert.Equal(seeded.LiveActiveV2.Id, Assert.Single(SupplierRows(results!)).ProfileId);
     }
 
     [Fact]
@@ -217,7 +222,7 @@ public class RevisionAuthorityValidationTests
             .ValidateOrderAsync(seeded.OrgId, seeded.OrderId, CancellationToken.None);
 
         Assert.NotNull(results);
-        Assert.Equal(seeded.LiveActiveV2.Id, Assert.Single(results!).ProfileId);
+        Assert.Equal(seeded.LiveActiveV2.Id, Assert.Single(SupplierRows(results!)).ProfileId);
     }
 
     [Fact]
@@ -229,14 +234,15 @@ public class RevisionAuthorityValidationTests
         // First validation runs flag-OFF (live v2, fail) — e.g. before the cutover.
         var before = await Service(db, flagEnabled: false)
             .ValidateOrderAsync(seeded.OrgId, seeded.OrderId, CancellationToken.None);
-        Assert.Equal("fail", Assert.Single(before!).Status);
+        Assert.Equal("fail", Assert.Single(SupplierRows(before!)).Status);
 
         // After the flag flips, re-validation must replace the rows with the revision-bound result.
         await SeedRevisionAsync(db, seeded, seeded.BoundV1.Id, seeded.BoundV1.VersionNo);
         var after = await Service(db, flagEnabled: true)
             .ValidateOrderAsync(seeded.OrgId, seeded.OrderId, CancellationToken.None);
 
-        Assert.Equal("pass", Assert.Single(after!).Status);
-        Assert.Equal(1, await db.OrderValidationResults.CountAsync()); // prior rows removed
+        Assert.Equal("pass", Assert.Single(SupplierRows(after!)).Status);
+        // prior supplier rows removed (invariant rows have ProfileId null; supplier rows carry it).
+        Assert.Equal(1, await db.OrderValidationResults.CountAsync(r => r.ProfileId != null));
     }
 }

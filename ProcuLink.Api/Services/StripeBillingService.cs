@@ -760,7 +760,9 @@ public sealed class StripeBillingService : IBillingService
             : orders;
 
     private Task<int> CountSuppliersAsync(Guid orgId, CancellationToken ct) =>
-        _db.Suppliers.CountAsync(s => s.OrgId == orgId && s.DeletedAt == null, ct);
+        // Sample suppliers (the onboarding "__sample__" record) must never consume the plan's
+        // supplier quota — otherwise a Pilot org that ran the practice flow shows "2 / 1 suppliers".
+        _db.Suppliers.CountAsync(s => s.OrgId == orgId && s.DeletedAt == null && !s.IsSample, ct);
 
     /// <summary>
     /// Computes how many BILLABLE overage orders an org processed ABOVE its effective

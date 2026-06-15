@@ -193,7 +193,12 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         var prior = _db.OrderValidationResults.Where(r => r.OrgId == orgId && r.OrderId == orderId);
         _db.OrderValidationResults.RemoveRange(prior);
 
-        var results = EvaluateProfile(orgId, orderId, profile, order, now);
+        // Mandatory, supplier-INDEPENDENT invariants ALWAYS run first (qty/price/currency/identifier),
+        // so an order with no acceptance profile — or with a nonsense value — can never surface as a
+        // clean "Passed". The supplier profile's rules (if any) are layered on top.
+        var results = new List<OrderValidationResult>();
+        results.AddRange(InvariantValidator.Evaluate(orgId, orderId, order, now));
+        results.AddRange(EvaluateProfile(orgId, orderId, profile, order, now));
 
         _db.OrderValidationResults.AddRange(results);
         await _db.SaveChangesAsync(ct);
@@ -472,9 +477,25 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
                 return EvaluateVatFormat(actual, country: null);
 
             default:
-                return true; // unknown operator → non-blocking pass
+                // FAIL CLOSED. An unknown/typo'd operator must never silently pass — that would let a
+                // misconfigured rule report green. Unknown operators are also rejected at rule-create
+                // time (CreateVersionAsync), so reaching here means a legacy/dangling operator; flag it.
+                return false;
         }
     }
+
+    /// <summary>
+    /// The acceptance-rule operators the evaluator understands. Used to reject unknown operators at
+    /// rule-create time so a misconfigured rule can never be persisted and then silently pass/fail.
+    /// (<c>line_amount_reconcile</c> and order-scope <c>vat_format</c> are handled before
+    /// <see cref="Evaluate"/> but are valid operators, so they belong in this set.)
+    /// </summary>
+    public static readonly IReadOnlySet<string> KnownOperators = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "required", "equals", "in", "min", "max", "not_equals", "contains",
+        "greater_than", "less_than", "max_length", "date_sanity", "not_label",
+        "vat_format", "line_amount_reconcile",
+    };
 
     /// <summary>
     /// True when <paramref name="actual"/> is a swept label cell for <paramref name="label"/>: it

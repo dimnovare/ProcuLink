@@ -97,14 +97,20 @@ public class SupplierAcceptanceServiceTests
         var results = await svc.ValidateOrderAsync(orgId, orderId, CancellationToken.None);
 
         Assert.NotNull(results);
-        var fail = Assert.Single(results);
+        // The supplier rule fails for the unresolved line. (Mandatory invariants also run and pass
+        // for this order — qty/price/currency/identifier are all valid — so filter to the rule row.)
+        var fail = Assert.Single(results, r => r.Code == "supplierItemCode.required");
         Assert.Equal("fail", fail.Status);
         Assert.Equal(1, fail.LineNumber);
+        Assert.All(results.Where(r => InvariantValidator.IsInvariantCode(r.Code)), r => Assert.Equal("pass", r.Status));
     }
 
     [Fact]
-    public async Task ValidateOrder_NoActiveProfile_ReturnsEmpty()
+    public async Task ValidateOrder_NoActiveProfile_RunsInvariantsOnly_NeverVacuouslyEmpty()
     {
+        // Trust regression guard: an order with NO acceptance profile must NOT yield an empty result
+        // set (which the UI rendered as a vacuous green "Passed — meets all acceptance rules").
+        // Mandatory invariants ALWAYS run; there are simply no supplier-rule rows.
         var db = MakeDb();
         var svc = new SupplierAcceptanceService(db);
         var orgId = Guid.NewGuid(); var supplierId = Guid.NewGuid(); var orderId = Guid.NewGuid();
@@ -118,7 +124,8 @@ public class SupplierAcceptanceServiceTests
 
         var results = await svc.ValidateOrderAsync(orgId, orderId, CancellationToken.None);
         Assert.NotNull(results);
-        Assert.Empty(results);
+        Assert.NotEmpty(results);                                                  // invariants ran
+        Assert.All(results!, r => Assert.True(InvariantValidator.IsInvariantCode(r.Code))); // only invariants, no supplier rules
     }
 
     [Fact]
