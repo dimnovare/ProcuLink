@@ -42,7 +42,9 @@ public sealed class OrderService : IOrderService
         ICatalogRetrievalService?      catalogRetrieval = null,
         IEffectiveConnectionConfigResolver? effectiveConfig = null,
         ProcuLink.Transform.Tokenizing.ISourceTokenizer? sourceTokenizer = null,
-        ICxmlCredentialResolver?       cxmlResolver = null)
+        ICxmlCredentialResolver?       cxmlResolver = null,
+        IProductCodeSearch?            productCodeSearch = null,
+        IAiUsageTracker?               aiUsage = null)
     {
         // Shared helpers (best-effort exception reconcile, passport events, audit-event
         // builder, extraction-review flagging) used by more than one sub-service.
@@ -56,7 +58,7 @@ public sealed class OrderService : IOrderService
         _ingestion = new OrderIngestionService(
             db, fileStorage, parserFactory, mappings, poMappingService, aiMappings,
             logger, integrationTrigger, formatDetector, tokenizer, structuredExtractor, shared,
-            catalogRetrieval, effectiveConfig);
+            catalogRetrieval, effectiveConfig, productCodeSearch, aiUsage);
 
         _query = new OrderQueryService(db, fileStorage);
 

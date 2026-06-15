@@ -175,6 +175,8 @@ builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionSer
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
+// T4 — external web/product-code grounding (no-op unless Ai:OpenAI:ProductSearch:Enabled=true).
+builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();

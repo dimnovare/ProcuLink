@@ -38,6 +38,11 @@ internal sealed class OrderIngestionService
     private readonly IConnectionResolver        _connectionResolver;
     private readonly ICatalogRetrievalService   _catalogRetrieval;
     private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
+    // T4 — optional external web/product-code grounding for residual unresolved lines, plus the
+    // per-org AI usage cap used to pre-flight-gate it. Both null on the older positional test
+    // ctors / hosts that don't register them → web grounding is simply off (today's behaviour).
+    private readonly IProductCodeSearch?         _productCodeSearch;
+    private readonly IAiUsageTracker?            _aiUsage;
 
     public OrderIngestionService(
         ProcuLinkDbContext         db,
@@ -53,7 +58,9 @@ internal sealed class OrderIngestionService
         IStructuredOrderExtractor? structuredExtractor,
         OrderServiceShared         shared,
         ICatalogRetrievalService?  catalogRetrieval = null,
-        IEffectiveConnectionConfigResolver? effectiveConfig = null)
+        IEffectiveConnectionConfigResolver? effectiveConfig = null,
+        IProductCodeSearch?        productCodeSearch = null,
+        IAiUsageTracker?           aiUsage = null)
     {
         _db                  = db;
         _fileStorage         = fileStorage;
@@ -74,6 +81,8 @@ internal sealed class OrderIngestionService
         // Launch batch 7 — revision authority. Null (older positional test ctors / hosts that
         // don't register it) behaves exactly like flag-OFF: the live tables drive everything.
         _effectiveConfig     = effectiveConfig;
+        _productCodeSearch   = productCodeSearch;
+        _aiUsage             = aiUsage;
     }
 
     /// <summary>
@@ -1105,8 +1114,15 @@ internal sealed class OrderIngestionService
             // real codes and rejects any code outside them — a hallucinated code can never
             // surface. With no catalog this returns the original mapping candidates unchanged
             // (offer ⇔ works — today's free suggestion).
+            // T4 — lines that already state a source manufacturer part number get the 0.95
+            // source suggestion below; exclude them from the (last-resort) web product search.
+            var sourceMpnLineNumbers = lines
+                .Where(l => !string.IsNullOrWhiteSpace(l.ManufacturerPartNumber))
+                .Select(l => l.LineNumber)
+                .ToHashSet();
+
             var groundedCandidates = await BuildCatalogGroundedCandidatesAsync(
-                organisationId, supplierId, unresolvedContexts, aiCandidates, ct);
+                organisationId, supplierId, unresolvedContexts, aiCandidates, sourceMpnLineNumbers, ct);
 
             suggestions = await _aiMappings.SuggestSupplierItemCodesAsync(
                 organisationId,
@@ -1435,11 +1451,18 @@ internal sealed class OrderIngestionService
     /// <summary>Overall cap on the candidate set sent to the model (mirrors the AI service's own Take(40)).</summary>
     private const int MaxCandidates = 40;
 
+    /// <summary>
+    /// T4 — hard cap on how many residual lines trigger a (billable, seconds-long) external web
+    /// product search per order, so a large catalog-less PO can't fan out into dozens of calls.
+    /// </summary>
+    private const int WebSearchLineCap = 5;
+
     private async Task<IReadOnlyList<AiMappingCandidate>> BuildCatalogGroundedCandidatesAsync(
         Guid organisationId,
         Guid supplierId,
         IReadOnlyList<AiMappingLineContext> unresolvedContexts,
         IReadOnlyList<AiMappingCandidate> mappingCandidates,
+        IReadOnlySet<int> sourceMpnLineNumbers,
         CancellationToken ct)
     {
         // V10 — INDEXED retrieval for large catalogs. Baltic IT distributors carry tens of
@@ -1483,9 +1506,18 @@ internal sealed class OrderIngestionService
             })
             .ToListAsync(ct);
 
-        // No catalog → unchanged behaviour: the original mapping candidates, free suggestion.
+        // No catalog → today's free suggestion, PLUS (T4) optional last-resort web product-code
+        // grounding for residual lines (a description, no source MPN). Web grounding is additive
+        // ONLY when there is no authoritative catalog — matching founder intent. (With a catalog
+        // the allow-list would reject any non-catalog code anyway, so we don't even spend a call.)
         if (catalog.Count == 0)
-            return mappingCandidates;
+        {
+            var webCandidates = await BuildWebSearchCandidatesAsync(
+                organisationId, unresolvedContexts, sourceMpnLineNumbers, ct);
+            return webCandidates.Count == 0
+                ? mappingCandidates
+                : mappingCandidates.Concat(webCandidates).ToList();
+        }
 
         // Per-line lexical retrieval → deduped union of the closest real products (catalog-first).
         var union = new List<SupplierProduct>();
@@ -1501,6 +1533,85 @@ internal sealed class OrderIngestionService
         }
 
         return BuildGroundedFromProducts(union, mappingCandidates);
+    }
+
+    // ── T4: external web/product-code grounding (last resort, no catalog) ──────────
+    // Runs ONLY from the no-catalog branch above, for residual lines that carry a human
+    // description but no source manufacturer part number, capped at WebSearchLineCap. A hit is
+    // folded in as a non-catalog candidate (IsCatalogProduct=false) labelled "web product search
+    // (unverified)" — so the line stays NeedsReview and the catalog allow-list still rejects web
+    // codes for any supplier that DOES have a catalog. Default deploy is unaffected: the searcher
+    // no-ops unless its feature flag + key are set, and it is null on the older positional ctors.
+
+    /// <summary>
+    /// Pure selection of which residual lines are eligible for an external web product search:
+    /// those with a non-blank <see cref="AiMappingLineContext.Description"/> that do NOT already
+    /// carry a source manufacturer part number (their line number is absent from
+    /// <paramref name="sourceMpnLineNumbers"/>), taking at most <paramref name="cap"/> in order.
+    /// Side-effect free so the gating is unit-testable without a network call.
+    /// </summary>
+    internal static IReadOnlyList<AiMappingLineContext> SelectWebSearchResidualLines(
+        IReadOnlyList<AiMappingLineContext> unresolvedContexts,
+        IReadOnlySet<int> sourceMpnLineNumbers,
+        int cap) =>
+        unresolvedContexts
+            .Where(l => !string.IsNullOrWhiteSpace(l.Description))
+            .Where(l => !sourceMpnLineNumbers.Contains(l.LineNumber))
+            .Take(cap)
+            .ToList();
+
+    private async Task<IReadOnlyList<AiMappingCandidate>> BuildWebSearchCandidatesAsync(
+        Guid organisationId,
+        IReadOnlyList<AiMappingLineContext> unresolvedContexts,
+        IReadOnlySet<int> sourceMpnLineNumbers,
+        CancellationToken ct)
+    {
+        // Off unless a searcher is wired (it self-no-ops unless its flag + key are configured).
+        if (_productCodeSearch is null) return Array.Empty<AiMappingCandidate>();
+
+        var residual = SelectWebSearchResidualLines(unresolvedContexts, sourceMpnLineNumbers, WebSearchLineCap);
+        if (residual.Count == 0) return Array.Empty<AiMappingCandidate>();
+
+        // Pre-flight per-org monthly AI cap: never start a billable web search for an org that has
+        // already exhausted its budget. The IProductCodeSearch contract carries no org id, so the
+        // cap is enforced here (where the org is known). Fail SAFE on a cap-check error — skip
+        // rather than silently bypass. With no tracker wired (older ctors) there is no cap to read,
+        // but those code paths also pass a null searcher, so web search never runs there anyway.
+        if (_aiUsage is not null)
+        {
+            try
+            {
+                if (await _aiUsage.IsAtOrOverLimitAsync(organisationId, ct))
+                {
+                    _logger.LogInformation(
+                        "Web product search skipped — org {OrgId} reached its monthly AI token limit.", organisationId);
+                    return Array.Empty<AiMappingCandidate>();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "AI cap check failed for org {OrgId}; skipping web product search to be safe.", organisationId);
+                return Array.Empty<AiMappingCandidate>();
+            }
+        }
+
+        var candidates = new List<AiMappingCandidate>(residual.Count);
+        foreach (var line in residual)
+        {
+            ct.ThrowIfCancellationRequested();
+            var match = await _productCodeSearch.FindPartNumberAsync(line.Description!, brandHint: null, ct);
+            if (match is null || string.IsNullOrWhiteSpace(match.PartNumber)) continue;
+
+            var url = string.IsNullOrWhiteSpace(match.SourceUrl) ? "unverified" : match.SourceUrl!.Trim();
+            candidates.Add(new AiMappingCandidate(
+                BuyerItemCode:    line.BuyerItemCode ?? string.Empty,
+                SupplierItemCode: match.PartNumber.Trim(),
+                Provenance:       $"web product search (unverified): {url}",
+                IsCatalogProduct: false,
+                Name:             match.Title));
+        }
+        return candidates;
     }
 
     /// <summary>

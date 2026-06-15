@@ -495,6 +495,9 @@ builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Organisation.IOrganisationSettingsService, ProcuLink.Infrastructure.Services.OrganisationSettingsService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Ingress.IPullIngressSettingsService, ProcuLink.Infrastructure.Services.PullIngressSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
+// T4 — external web/product-code grounding. No-op unless Ai:OpenAI:ProductSearch:Enabled=true
+// (default off → byte-identical deploy). Reuses Ai:OpenAI:ApiKey via the Responses web_search tool.
+builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddScoped<IIdempotencyService, IdempotencyService>();
 builder.Services.AddScoped<ISchemaInferencer, OpenAiSchemaInferencer>();
