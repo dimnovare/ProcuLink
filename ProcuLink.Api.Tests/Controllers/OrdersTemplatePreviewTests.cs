@@ -125,7 +125,7 @@ public class OrdersTemplatePreviewTests
 
         var draft = new OrderMappingOverride { OutputTemplate = IngramTemplate };
 
-        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", ct: CancellationToken.None);
 
         var ok    = result.Should().BeOfType<OkObjectResult>().Subject;
         var value = ok.Value!;
@@ -159,7 +159,7 @@ public class OrdersTemplatePreviewTests
             OutputTemplateContentType = "text/csv",
         };
 
-        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", ct: CancellationToken.None);
 
         var value = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
         Prop(value, "ok").Should().Be(true);
@@ -178,7 +178,7 @@ public class OrdersTemplatePreviewTests
         // Unclosed `for` loop — a compile error (mirrors the Transform unit test's invalid template).
         var draft = new OrderMappingOverride { OutputTemplate = "{{ for x in Lines }}oops" };
 
-        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", ct: CancellationToken.None);
 
         // HTTP 200 (OkObjectResult) — NOT a 400/500 — so the editor shows the error inline.
         var ok    = result.Should().BeOfType<OkObjectResult>().Subject;
@@ -212,7 +212,7 @@ public class OrdersTemplatePreviewTests
 
         var draft = new OrderMappingOverride { OutputTemplate = "{{ OrderNr }}" };
 
-        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", ct: CancellationToken.None);
 
         var value = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
         Prop(value, "ok").Should().Be(true);
@@ -231,7 +231,7 @@ public class OrdersTemplatePreviewTests
             .Setup(o => o.GetAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderMappingOverride { OutputTemplate = "stored:{{ OrderNr }}" });
 
-        var result = await controller.PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
 
         var value = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
         Prop(value, "ok").Should().Be(true);
@@ -252,7 +252,7 @@ public class OrdersTemplatePreviewTests
 
         var draft = new OrderMappingOverride { OutputTemplate = "draft:{{ OrderNr }}" };
 
-        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", ct: CancellationToken.None);
 
         var value = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
         Prop(value, "ok").Should().Be(true);
@@ -286,7 +286,7 @@ public class OrdersTemplatePreviewTests
             },
         };
 
-        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", ct: CancellationToken.None);
 
         var value = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
         // The legacy shape — { format, contentType, content } — must be preserved (no ok/output keys).
@@ -316,7 +316,7 @@ public class OrdersTemplatePreviewTests
             },
         };
 
-        var result = await controller.PreviewMappingOverride(orderId, draft, "edifact", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, draft, "edifact", ct: CancellationToken.None);
 
         result.Should().BeOfType<BadRequestObjectResult>();
     }
@@ -334,10 +334,10 @@ public class OrdersTemplatePreviewTests
 
         var draft = new OrderMappingOverride { OutputTemplate = "{{ OrderNr }}" };
 
-        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, draft, "csv", ct: CancellationToken.None);
         result.Should().BeOfType<NotFoundResult>();
 
-        var result2 = await controller.PreviewMappingOverride(Guid.NewGuid(), draft, "csv", CancellationToken.None);
+        var result2 = await controller.PreviewMappingOverride(Guid.NewGuid(), draft, "csv", ct: CancellationToken.None);
         result2.Should().BeOfType<NotFoundResult>();
     }
 

@@ -714,6 +714,13 @@ public sealed class OrdersController : ControllerBase
     /// <c>format</c> query — so the preview equals the delivered bytes. Flag off / unpinned is
     /// byte-identical to before.</para>
     ///
+    /// <para><b>Exploratory format (<c>honorFormat=true</c>).</b> The pinned-revision swap above is the
+    /// DEFAULT so the operator sees exactly what is delivered. Passing <c>honorFormat=true</c> opts into a
+    /// "what would this order look like as X" preview: the swap is skipped and the <c>format</c> query is
+    /// rendered from the canonical/effective order. This is read-only — it NEVER changes delivery, which
+    /// stays governed by the pinned revision — and the frontend labels it clearly as not the delivered
+    /// format. The default (<c>honorFormat=false</c>) is byte-for-byte the delivered-bytes preview.</para>
+    ///
     /// An unknown <c>format</c> (field-by-field mode only) returns 400. A bad manipulator returns 400.
     /// Org-scoped: a cross-tenant or unknown order id returns 404.
     /// </summary>
@@ -730,6 +737,7 @@ public sealed class OrdersController : ControllerBase
         [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)]
         OrderMappingOverride? request,
         [FromQuery] string format = "csv",
+        [FromQuery] bool honorFormat = false,
         CancellationToken ct = default)
     {
         // Resolve the effective override: a supplied DRAFT body wins; otherwise the STORED override.
@@ -826,7 +834,13 @@ public sealed class OrdersController : ControllerBase
         // requested one (OrderTransformService swaps it the same way), so the preview must too —
         // otherwise preview ≠ delivered bytes. Null/unparseable/unsupported snapshot → the requested
         // format stands (granular fallback, logged), exactly like the transform.
-        if (effectiveConfig.IsRevision && !string.IsNullOrWhiteSpace(effectiveConfig.OutputFormat))
+        //
+        // EXPLORATORY OPT-OUT (honorFormat=true): the founder asked for a "what would this order look
+        // like as X" preview. When the caller explicitly opts in, the swap is SKIPPED and the requested
+        // format is rendered from the canonical/effective order — this NEVER touches delivery (still
+        // governed by the pinned revision), it only changes what this read-only preview renders. The
+        // default (honorFormat=false) is byte-for-byte identical to before.
+        if (!honorFormat && effectiveConfig.IsRevision && !string.IsNullOrWhiteSpace(effectiveConfig.OutputFormat))
         {
             if (Enum.TryParse<OutputFormat>(effectiveConfig.OutputFormat, ignoreCase: true, out var revisionFormat)
                 && MappedTransformService.SupportsOverrideFormat(revisionFormat))

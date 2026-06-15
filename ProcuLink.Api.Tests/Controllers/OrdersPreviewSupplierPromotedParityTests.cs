@@ -159,7 +159,7 @@ public class OrdersPreviewSupplierPromotedParityTests
         // PREVIEW side — no body, no stored override: pre-4A this 400'd; now the promoted
         // supplier mapping drives it.
         var controller = BuildController(db, orgId);
-        var preview = await controller.PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+        var preview = await controller.PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
         var previewContent = PreviewContent(preview);
         Assert.StartsWith("OrderRef,ItemCode", previewContent);
 
@@ -193,7 +193,7 @@ public class OrdersPreviewSupplierPromotedParityTests
         }, CancellationToken.None);
 
         var controller = BuildController(db, orgId);
-        var preview = await controller.PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+        var preview = await controller.PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
         var previewContent = PreviewContent(preview);
         Assert.StartsWith("PerOrderRef,PerOrderCode", previewContent); // override layout, not promoted
 
@@ -214,7 +214,7 @@ public class OrdersPreviewSupplierPromotedParityTests
         var (orgId, _, orderId) = await SeedResolvedOrderAsync(db);
 
         var controller = BuildController(db, orgId);
-        var result = await controller.PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
 
         Assert.IsType<BadRequestObjectResult>(result); // the pre-4A contract is unchanged
     }
@@ -239,7 +239,7 @@ public class OrdersPreviewSupplierPromotedParityTests
         };
 
         var controller = BuildController(db, orgId);
-        var preview = await controller.PreviewMappingOverride(orderId, draft, "csv", CancellationToken.None);
+        var preview = await controller.PreviewMappingOverride(orderId, draft, "csv", ct: CancellationToken.None);
         var previewContent = PreviewContent(preview);
 
         Assert.StartsWith("DraftRef", previewContent);          // the user's draft drives the preview

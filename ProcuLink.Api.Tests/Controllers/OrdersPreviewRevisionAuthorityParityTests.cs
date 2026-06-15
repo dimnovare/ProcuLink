@@ -229,7 +229,7 @@ public class OrdersPreviewRevisionAuthorityParityTests
             new PoMappingConfig { Output = PromotedOutput() }, CancellationToken.None);
 
         var controller = BuildController(db, orgId, Resolver(db, enabled: true));
-        var preview = await controller.PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+        var preview = await controller.PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
         var previewContent = PreviewContent(preview);
         Assert.StartsWith("RevRef,RevCode", previewContent);       // the pinned revision's layout
         Assert.DoesNotContain("OrderRef,ItemCode", previewContent); // live promoted layout NOT used
@@ -252,7 +252,7 @@ public class OrdersPreviewRevisionAuthorityParityTests
         await SeedPinnedRevisionAsync(db, orgId, supplierId, orderId, RevisionOutputJson(), outputFormat: "json");
 
         var controller = BuildController(db, orgId, Resolver(db, enabled: true));
-        var preview = await controller.PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+        var preview = await controller.PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
 
         Assert.Equal("Json", PreviewFormat(preview)); // the revision's format governs, not ?format=csv
         var previewContent = PreviewContent(preview);
@@ -294,7 +294,7 @@ public class OrdersPreviewRevisionAuthorityParityTests
         }, CancellationToken.None);
 
         var controller = BuildController(db, orgId, Resolver(db, enabled: true));
-        var preview = await controller.PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+        var preview = await controller.PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
         var previewContent = PreviewContent(preview);
         Assert.StartsWith("PerOrderRef,PerOrderCode", previewContent); // override wins
         Assert.DoesNotContain("RevRef", previewContent);               // revision layout NOT used
@@ -319,10 +319,10 @@ public class OrdersPreviewRevisionAuthorityParityTests
 
         // Flag OFF — the divergent pinned revision (output AND format) must be invisible.
         var flagOff = await BuildController(db, orgId, Resolver(db, enabled: false))
-            .PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+            .PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
         // No resolver at all (pre-read-parity construction) — the golden baseline.
         var noResolver = await BuildController(db, orgId, resolver: null)
-            .PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+            .PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
 
         var flagOffContent = PreviewContent(flagOff);
         Assert.Equal("Csv", PreviewFormat(flagOff));                  // revision "json" NOT applied
@@ -341,9 +341,9 @@ public class OrdersPreviewRevisionAuthorityParityTests
             new PoMappingConfig { Output = PromotedOutput() }, CancellationToken.None);
 
         var flagOn = await BuildController(db, orgId, Resolver(db, enabled: true))
-            .PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+            .PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
         var noResolver = await BuildController(db, orgId, resolver: null)
-            .PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+            .PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
 
         Assert.StartsWith("OrderRef,ItemCode", PreviewContent(flagOn));
         Assert.Equal(PreviewContent(noResolver), PreviewContent(flagOn));
@@ -365,7 +365,7 @@ public class OrdersPreviewRevisionAuthorityParityTests
             new PoMappingConfig { Output = PromotedOutput() }, CancellationToken.None);
 
         var controller = BuildController(db, orgId, Resolver(db, enabled: true));
-        var result = await controller.PreviewMappingOverride(orderId, request: null, "csv", CancellationToken.None);
+        var result = await controller.PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
 
         Assert.IsType<BadRequestObjectResult>(result);
     }

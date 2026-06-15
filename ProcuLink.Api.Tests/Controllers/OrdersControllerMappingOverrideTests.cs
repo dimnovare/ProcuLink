@@ -231,7 +231,7 @@ public class OrdersControllerMappingOverrideTests
         var ctrl    = Build(db, orgId);
 
         // "edifact" is a real format but NOT an entity-based override format — must 400.
-        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "edifact", CancellationToken.None);
+        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "edifact", ct: CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(result);
     }
 
@@ -277,7 +277,7 @@ public class OrdersControllerMappingOverrideTests
         await SeedResolvedLineAndSupplierAsync(db, orgId, orderId);
         var ctrl = Build(db, orgId);
 
-        var result = await ctrl.PreviewMappingOverride(orderId, PoNumberFixedValueOverride(), format, CancellationToken.None);
+        var result = await ctrl.PreviewMappingOverride(orderId, PoNumberFixedValueOverride(), format, ct: CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result);
         // The preview content carries the overridden PO number and never the original.
@@ -305,7 +305,7 @@ public class OrdersControllerMappingOverrideTests
         await SeedResolvedLineAndSupplierAsync(db, orgId, orderId);
         var ctrl = Build(db, orgId);
 
-        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), format, CancellationToken.None);
+        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), format, ct: CancellationToken.None);
         var ok = Assert.IsType<OkObjectResult>(result);
         Assert.NotNull(ok.Value);
     }
@@ -317,7 +317,7 @@ public class OrdersControllerMappingOverrideTests
         var orderId = await SeedOrderAsync(db, Guid.NewGuid());
         var ctrl    = Build(db, Guid.NewGuid()); // different org
 
-        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "csv", CancellationToken.None);
+        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "csv", ct: CancellationToken.None);
         Assert.IsType<NotFoundResult>(result);
     }
 
@@ -337,7 +337,7 @@ public class OrdersControllerMappingOverrideTests
         var ctrl = Build(db, orgId);
 
         // Dry-run: returns 200 with content (or a warning) — never writes, never 500s.
-        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "csv", CancellationToken.None);
+        var result = await ctrl.PreviewMappingOverride(orderId, ValidOverride(), "csv", ct: CancellationToken.None);
         var ok = Assert.IsType<OkObjectResult>(result);
         Assert.NotNull(ok.Value);
 
@@ -397,7 +397,7 @@ public class OrdersControllerMappingOverrideTests
         // Mirrors the live harness body '{}' — an override with a null Output config.
         var emptyOverride = new OrderMappingOverride();
 
-        var result = await ctrl.PreviewMappingOverride(orderId, emptyOverride, format, CancellationToken.None);
+        var result = await ctrl.PreviewMappingOverride(orderId, emptyOverride, format, ct: CancellationToken.None);
 
         // Must be a 200 with non-null content (the fixed-transform fallback), never an unhandled throw.
         var ok = Assert.IsType<OkObjectResult>(result);
@@ -428,7 +428,7 @@ public class OrdersControllerMappingOverrideTests
             Output = new OutputMappingConfig(), // present but EMPTY (Header.Count == 0 && Lines.Count == 0)
         };
 
-        var result = await ctrl.PreviewMappingOverride(orderId, customOnly, format, CancellationToken.None);
+        var result = await ctrl.PreviewMappingOverride(orderId, customOnly, format, ct: CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result);
         var content = ok.Value!.GetType().GetProperty("content")!.GetValue(ok.Value) as string;
@@ -460,7 +460,7 @@ public class OrdersControllerMappingOverrideTests
             },
         };
 
-        var result = await ctrl.PreviewMappingOverride(orderId, ov, format, CancellationToken.None);
+        var result = await ctrl.PreviewMappingOverride(orderId, ov, format, ct: CancellationToken.None);
         var ok = Assert.IsType<OkObjectResult>(result);
         var content = ok.Value!.GetType().GetProperty("content")!.GetValue(ok.Value) as string;
         Assert.NotNull(content);
