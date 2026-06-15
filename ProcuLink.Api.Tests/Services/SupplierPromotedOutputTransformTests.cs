@@ -256,6 +256,61 @@ public class SupplierPromotedOutputTransformTests
         Assert.DoesNotContain("PO-4A-1", xml);
     }
 
+    // ── TRUST: a configured output mapping that THROWS must fail loudly, never deliver default ──
+
+    private sealed class ThrowingXmlTransformService : ITransformService
+    {
+        public bool CanTransform(OutputFormat format) => format == OutputFormat.Xml;
+        public Task<TransformResult> TransformAsync(
+            PurchaseOrderEntity order, OutputFormat format, CancellationToken ct,
+            CxmlCredentialConfig? cxmlCredentials = null) =>
+            throw new InvalidOperationException("simulated transformer failure");
+    }
+
+    [Fact]
+    public async Task Transform_PromotedOutput_TransformerThrows_FailsLoudly_NoSilentDefaultDelivery()
+    {
+        await using var db = NewDb();
+        var (orgId, supplierId, orderId) = await SeedResolvedOrderAsync(db);
+
+        // A promoted XML output mapping routes through the (throwing) XML transformer.
+        await new PoMappingService(db).UpsertAsync(orgId, supplierId, new PoMappingConfig
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = { ["po"] = new OutputFieldRule { OutputPath = "PoNumber", FixedValue = "X" } },
+            },
+        }, CancellationToken.None);
+
+        byte[]? captured = null;
+        var fileStorage = new Mock<IFileStorageService>();
+        fileStorage
+            .Setup(s => s.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<Stream, string, string, CancellationToken>((stream, _, _, _) =>
+            { using var ms = new MemoryStream(); stream.Position = 0; stream.CopyTo(ms); captured = ms.ToArray(); })
+            .ReturnsAsync("artifact-key");
+
+        var svc = new OrderService(
+            db, fileStorage.Object,
+            new OrderParserFactory(new IPurchaseOrderParser[] { new CsvOrderParser() }),
+            new Mock<IItemMappingService>().Object,
+            new OrderExceptionService(db),
+            new PoMappingService(db),
+            new Mock<IAiMappingService>().Object,
+            new ITransformService[] { new CsvTransformService(), new JsonTransformService(), new ThrowingXmlTransformService() },
+            NullLogger<OrderService>.Instance,
+            new Mock<IIntegrationTriggerService>().Object,
+            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
+
+        var result = await svc.TransformAsync(orgId, orderId, OutputFormat.Xml, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);                           // failed loudly — no success-on-default
+        Assert.Contains("could not be applied", result.Error ?? ""); // honest reason
+        Assert.Null(captured);                                    // nothing uploaded → NOT delivered
+        var order = await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId);
+        Assert.Equal("ready", order.Status);                      // reverted to retryable, not stranded
+    }
+
     // ── (c) both present → the per-order override wins ────────────────────────────────────────
 
     [Fact]

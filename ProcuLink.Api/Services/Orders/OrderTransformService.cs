@@ -311,14 +311,16 @@ internal sealed class OrderTransformService
                 }
                 catch (Exception ex) when (ex is not TransformValidationException and not TransformTemplateException)
                 {
-                    // Defensive: a pinned revision's output snapshot must never break delivery. Fall
-                    // back to the fixed transformer and log — the provenance digest below then
-                    // records the fixed marker, not the revision one.
-                    _logger.LogWarning(ex,
-                        "Pinned revision output mapping failed for order {OrderId} ({Source}); falling back to the fixed transformer.",
+                    // TRUST: a CONFIGURED output mapping that throws at transform time must FAIL LOUDLY,
+                    // never silently deliver the default document. Surface it like a validation failure
+                    // (revert to a retryable state, return Fail) so the order is held for review and the
+                    // mapping can be fixed — instead of shipping a document the published mapping did
+                    // not produce.
+                    _logger.LogError(ex,
+                        "Pinned revision output mapping failed for order {OrderId} ({Source}); failing the transform (no silent fallback to the default document).",
                         orderId, effective.Source);
-                    useRevisionOutput = false;
-                    transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct, cxmlCredentials);
+                    throw new TransformValidationException(
+                        $"The published output mapping for this connection could not be applied, so the order was not delivered: {ex.Message}");
                 }
             }
             else if (useSupplierMapping)
@@ -332,14 +334,14 @@ internal sealed class OrderTransformService
                 }
                 catch (Exception ex) when (ex is not TransformValidationException and not TransformTemplateException)
                 {
-                    // Defensive: a promoted supplier mapping must never break delivery. Fall back to
-                    // the fixed transformer (byte-identical to the pre-promotion behaviour) and log —
-                    // the provenance digest below then records the fixed marker, not the supplier one.
-                    _logger.LogWarning(ex,
-                        "Supplier-promoted output mapping failed for order {OrderId} (supplier {SupplierId}); falling back to the fixed transformer.",
+                    // TRUST: a promoted supplier output mapping that throws at transform time must FAIL
+                    // LOUDLY, never silently deliver the default document. Surface it like a validation
+                    // failure (revert to a retryable state, return Fail) so the order is held for review.
+                    _logger.LogError(ex,
+                        "Supplier-promoted output mapping failed for order {OrderId} (supplier {SupplierId}); failing the transform (no silent fallback to the default document).",
                         orderId, entity.SupplierId);
-                    useSupplierMapping = false;
-                    transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct, cxmlCredentials);
+                    throw new TransformValidationException(
+                        $"The supplier's saved output mapping could not be applied, so the order was not delivered: {ex.Message}");
                 }
             }
             else

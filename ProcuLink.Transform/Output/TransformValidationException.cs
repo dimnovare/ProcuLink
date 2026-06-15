@@ -30,6 +30,20 @@ public sealed class TransformValidationException : Exception
     }
 
     /// <summary>
+    /// Raised when a CONFIGURED output mapping (per-order override, pinned-revision snapshot, or
+    /// supplier-promoted output) could not be applied at transform time. This makes the order fail
+    /// LOUDLY and revert to a retryable state instead of silently delivering the default document —
+    /// "preview ≠ delivery" and "HTTP 200 ≠ supplier acceptance" both depend on never shipping a
+    /// document the configured mapping did not actually produce.
+    /// </summary>
+    public TransformValidationException(string message)
+        : base(message)
+    {
+        UnresolvedLineNumbers = Array.Empty<int>();
+        Problems = Array.Empty<LineProblem>();
+    }
+
+    /// <summary>
     /// Additive constructor that carries the detailed per-line problems alongside the
     /// line numbers. The message lists each problem so an operator sees <em>why</em> a
     /// line was held, not just which lines.
