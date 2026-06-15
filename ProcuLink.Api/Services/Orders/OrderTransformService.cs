@@ -298,8 +298,23 @@ internal sealed class OrderTransformService
                 // Phase B: render the supplier's exact required STRUCTURE from the OutputNode tree.
                 // The emitter reuses the same value machinery + the same unresolved-lines guard, so a
                 // broken/unresolved order fails the same way (TransformValidationException → revert).
-                transformResult = new OutputTemplateEmitter().Emit(
-                    mappingOverride!.OutputTree!, entity, mappingOverride, sourceTokens, catalogLookup);
+                try
+                {
+                    transformResult = new OutputTemplateEmitter().Emit(
+                        mappingOverride!.OutputTree!, entity, mappingOverride, sourceTokens, catalogLookup);
+                }
+                catch (Exception ex) when (ex is not TransformValidationException and not TransformTemplateException)
+                {
+                    // TRUST: a CONFIGURED output tree that throws at emit time (malformed node name/prefix,
+                    // an unsupported tree format like cXML/UBL) must FAIL LOUDLY — revert to a retryable
+                    // state and return Fail — never strand the order in `transforming` through Hangfire
+                    // retries or silently deliver. Mirrors the revision/supplier mapping branches below.
+                    _logger.LogError(ex,
+                        "Output tree emit failed for order {OrderId}; failing the transform (no silent fallback, no stuck order).",
+                        orderId);
+                    throw new TransformValidationException(
+                        $"The output structure for this connection could not be rendered, so the order was not delivered: {ex.Message}");
+                }
             }
             else if (useTemplate)
             {

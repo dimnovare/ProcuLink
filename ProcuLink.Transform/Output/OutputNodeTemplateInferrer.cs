@@ -77,18 +77,38 @@ public static class OutputNodeTemplateInferrer
             };
         }
 
-        // Object: attributes first, then one child per distinct name. A repeated child is UNWRAPPED
-        // (empty array name) — the element itself repeats directly under this object, e.g. UBL
-        // <Order><cac:OrderLine/>..</Order>. The item node carries the namespace, not the empty wrapper.
+        // Object: attributes first, then the children. CRITICAL: only ONE repeated group is the
+        // per-line array (its item repeats once per ORDER LINE). Every OTHER repeated sibling (e.g.
+        // multiple header <cbc:Note>, <cac:AdditionalDocumentReference>) must be preserved as its OWN
+        // occurrences — NOT collapsed into a second "lines" array, which would fan it out per order
+        // line and drop the header content. Pick the line group by name heuristic, else the
+        // last-positioned repeat (UBL emits cac:OrderLine after the header repeats).
+        var repeated = groups.Where(g => g.Count() > 1).ToList();
+        var lineGroup = repeated.Count == 0 ? null
+            : repeated.FirstOrDefault(g => IsLikelyLineName(g.Key.LocalName)) ?? repeated[^1];
+
         var children = new List<OutputNode>(attrs);
         foreach (var g in groups)
         {
-            children.Add(g.Count() > 1
-                ? new OutputNode { Name = "", NodeType = OutputNodeType.Array, Collection = "lines",
-                    Children = new() { NodeFromXml(g.First(), lineScope: true) } }
-                : NodeFromXml(g.First(), lineScope));
+            if (ReferenceEquals(g, lineGroup))
+                // The single per-line group → UNWRAPPED array (empty name); item carries the namespace.
+                children.Add(new OutputNode { Name = "", NodeType = OutputNodeType.Array, Collection = "lines",
+                    Children = new() { NodeFromXml(g.First(), lineScope: true) } });
+            else if (g.Count() > 1)
+                // Other repeated siblings → one node PER occurrence (header repeats, emitted as-is).
+                children.AddRange(g.Select(occ => NodeFromXml(occ, lineScope)));
+            else
+                children.Add(NodeFromXml(g.First(), lineScope));
         }
         return new OutputNode { Name = el.Name.LocalName, NodeType = OutputNodeType.Object, Namespace = ns, Prefix = prefix, Children = children };
+    }
+
+    /// <summary>True if a repeated element's local name reads like the per-line group (UBL OrderLine, cXML ItemOut, generic line/item/detail).</summary>
+    private static bool IsLikelyLineName(string localName)
+    {
+        var n = localName.ToLowerInvariant();
+        return n.Contains("line") || n.Contains("item") || n.Contains("detail")
+            || n.Contains("orderline") || n.Contains("lineitem");
     }
 
     /// <summary>The (namespace URI, prefix) of an XML name. Null/null for the no-namespace case (legacy byte-identical). Prefix null = a default namespace.</summary>

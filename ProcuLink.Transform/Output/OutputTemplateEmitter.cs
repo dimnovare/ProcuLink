@@ -55,12 +55,23 @@ public sealed class OutputTemplateEmitter
         {
             OutputFormat.Json =>
                 Result(EmitJson(template, headerRow, LineRowFor, orderedLines), "application/json", ".json"),
-            OutputFormat.Xml or OutputFormat.CXml or OutputFormat.Ubl =>
+            OutputFormat.Xml =>
                 Result(EmitXml(template, headerRow, LineRowFor, orderedLines), "application/xml", ".xml"),
             OutputFormat.Csv =>
                 Result(EmitCsv(template, headerRow, LineRowFor, orderedLines), "text/csv", ".csv"),
+            // cXML / UBL are NOT tree-emittable validly: a real cXML needs the DOCTYPE + From/To/Sender
+            // Header envelope, and Peppol UBL needs the mandatory UBLVersionID/CustomizationID/ProfileID
+            // — none of which a generic node tree carries. Producing them here would deliver a
+            // well-formed-but-receiver-REJECTED document (offer⇔works). They deliver through the
+            // dedicated CxmlTransformService / UblOrderTransformService instead. Fail loud.
+            OutputFormat.CXml or OutputFormat.Ubl =>
+                throw new ArgumentException(
+                    $"The output-structure editor cannot produce valid {template.Format} (it needs the format's " +
+                    "envelope/DOCTYPE, not a generic element tree). This supplier delivers via the dedicated " +
+                    $"{template.Format} transform — design the output as generic XML, or remove the output tree.",
+                    nameof(template)),
             _ => throw new ArgumentException(
-                     $"OutputTemplateEmitter does not yet support format '{template.Format}' (B3: JSON + XML + CSV).",
+                     $"OutputTemplateEmitter does not support format '{template.Format}' (tree formats: JSON, XML, CSV).",
                      nameof(template)),
         };
     }
@@ -133,6 +144,10 @@ public sealed class OutputTemplateEmitter
         if (hasRootMap && hasPerNode)
             throw new ArgumentException(
                 "Use either root-level Namespaces OR per-node Prefix/Namespace, not both.", nameof(template));
+        if (AnyPrefixWithoutNamespace(template.Root))
+            throw new ArgumentException(
+                "A node has a Prefix set without a Namespace URI; a prefix must be bound to a namespace " +
+                "(set the node's Namespace, or use a root-level Namespaces map).", nameof(template));
 
         // The xmlns declarations to write on the root element. Legacy → the template map verbatim
         // (byte-identical). Per-node → the distinct prefixed namespaces collected from the tree (the
@@ -152,7 +167,7 @@ public sealed class OutputTemplateEmitter
         return buffer.ToArray();
     }
 
-    /// <summary>Start <paramref name="node"/>'s element: prefix-bound, default-namespaced, or the legacy single-arg (byte-identical when null).</summary>
+    /// <summary>Start <paramref name="node"/>'s element: prefix-bound, default-namespaced, or explicit NO-namespace (byte-identical when no ancestor default is in scope).</summary>
     private static void StartElement(XmlWriter w, OutputNode node)
     {
         if (node.Prefix is { Length: > 0 } p && node.Namespace is { Length: > 0 } pns)
@@ -160,8 +175,16 @@ public sealed class OutputTemplateEmitter
         else if (node.Namespace is { Length: > 0 } dns)
             w.WriteStartElement(null, node.Name, dns);     // default namespace (no prefix)
         else
-            w.WriteStartElement(node.Name);                // LEGACY single-arg → byte-identical
+            // Explicit empty namespace so a no-namespace node NEVER silently inherits an ancestor's
+            // default xmlns. XmlWriter omits a redundant xmlns="" when no default is in scope, so this
+            // stays byte-identical to the legacy single-arg call for non-namespaced trees.
+            w.WriteStartElement(null, node.Name, string.Empty);
     }
+
+    /// <summary>A Prefix with no Namespace URI is an unrenderable half-state (the prefix would be silently dropped). Fail loud.</summary>
+    private static bool AnyPrefixWithoutNamespace(OutputNode node) =>
+        (node.Prefix is { Length: > 0 } && node.Namespace is not { Length: > 0 })
+        || node.Children.Any(AnyPrefixWithoutNamespace);
 
     private static bool AnyNamespacedNode(OutputNode node) =>
         node.Namespace is { Length: > 0 } || node.Prefix is { Length: > 0 }

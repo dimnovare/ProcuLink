@@ -44,10 +44,11 @@ public class OutputTemplateEmitterNamespaceTests
         return sr.ReadToEnd();
     }
 
-    // A minimal but real UBL shape: default-ns root + cbc leaf + cac line container + cbc line leaf.
+    // A minimal but real UBL shape rendered as generic namespaced XML (the emitter produces namespaced
+    // XML under Format=Xml; cXML/UBL formats are refused — they need their envelope, see Emit).
     private static OutputNodeTemplate UblTree() => new()
     {
-        Format = OutputFormat.Ubl,
+        Format = OutputFormat.Xml,
         Root = new OutputNode
         {
             Name = "Order", NodeType = OutputNodeType.Object, Namespace = ORDER2,

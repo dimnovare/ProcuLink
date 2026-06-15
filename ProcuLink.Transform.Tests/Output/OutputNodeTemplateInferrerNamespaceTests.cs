@@ -53,7 +53,8 @@ public class OutputNodeTemplateInferrerNamespaceTests
     [Fact]
     public void Infer_Ubl_Captures_Default_And_cac_cbc_Prefixes()
     {
-        var t = OutputNodeTemplateInferrer.FromSample(UblSample, OutputFormat.Ubl);
+        // Inferred as generic XML (the emitter renders namespaced XML; cXML/UBL formats are refused).
+        var t = OutputNodeTemplateInferrer.FromSample(UblSample, OutputFormat.Xml);
 
         Assert.Equal(ORDER2, t.Root.Namespace);     // root default namespace
         Assert.Null(t.Root.Prefix);
@@ -73,7 +74,7 @@ public class OutputNodeTemplateInferrerNamespaceTests
     [Fact]
     public void Infer_Then_Emit_Ubl_RoundTrips_Valid_Namespaced_Xml()
     {
-        var t = OutputNodeTemplateInferrer.FromSample(UblSample, OutputFormat.Ubl);
+        var t = OutputNodeTemplateInferrer.FromSample(UblSample, OutputFormat.Xml);
         var xml = Emit(t, OrderWith(3m, 5m));     // two real lines
 
         var doc = XDocument.Parse(xml);           // must be valid namespaced XML
