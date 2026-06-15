@@ -109,7 +109,30 @@ Branch `feat/trust-layer-ws0`, commits `3d5a8a4` + `e041922`. All additive + UNW
 | X12 offer⇔works | Designer offered **X12** but the emitter throws for it (positional segment format, no tree emitter) → removed X12 from the designer format list. JSON/XML/CSV/cXML/UBL all emit. | ✅ FE `3635625` |
 | FE tsc hygiene | Fixed 2 stale `OutputFieldRule.fieldManipulators` test-type errors (tsc `--noEmit` now 0; vitest 30/30 on both). | ✅ FE `3635625` |
 
-> **NEXT BUILD — B12 (EnvelopeConfig + structured-EDI standards-validity).** Concrete, grounded gaps found this turn:
+### B12 — structured-EDI standards-validity (2026-06-16) — CORE SHIPPED (T1–T4), remainder deferred
+Grounded via a 7-agent workflow + a 4-dimension adversarial review. **Net core (T1–T4) shipped to `main` `9bda512..3fb81b1`; full backend suite green (Transform 962 · Infra 706 · Api 1078 · 0 fail).**
+
+| Task | What | Status |
+|---|---|---|
+| T1 | Byte-parity characterization lock (JSON/XML/root-ns-XML/CSV exact bytes, LE-normalized) | ✅ `fc01221` |
+| T2 | Additive `Namespace?`/`Prefix?` on `OutputNode` (default null → byte-identical; camelCase round-trip) | ✅ `fb43fe8` |
+| T3 | Prefix-aware **null-gated** XML emit: 3-arg `WriteStartElement` for `cbc:`/`cac:`, single-arg legacy when null (byte-identical), root-hoisted namespaces (no `p1:`), 4-arg qualified attrs, mixed-mode guard | ✅ `96f344d` |
+| T4 | Inferrer captures per-node namespace/prefix + qualified-XName grouping + **unwrapped arrays** (real UBL `<Order><cac:OrderLine/>..` round-trips to schema-valid namespaced XML, no double-nest) | ✅ `3fb81b1` |
+| T5 | EnvelopeConfig.X12 into the live X12 transform | ◐ **DEFERRED** — grounding showed a 12-file thread through the **common delivery dispatch** for a rare, UI-deferred format (delimiter config also adds sanitizer-lockstep corruption risk). When built: identity-only, no delimiter config. |
+| T6 | Delete dead X12 twin (WS-11) | ◐ **DEFERRED** — NOT an X12-only delete: it is the whole `IParsedOrderTransform` stack (3 transforms + factory + interface + FormatMatrix coverage tests). Partial deletion breaks matrix tests. Proper WS-11 pass. |
+| T7 | Generic-tree cXML + DOCTYPE | ◐ **DEFERRED** (spec) — live `CxmlTransformService` already correct; DTD version needs founder input; half-built tree cXML = offer⇔works violation. |
+| T8 | FE authoring of namespaces/envelope; X12 stays out of designer | ◐ **DEFERRED** (spec) — backend round-trips today; additive UX. |
+
+> **B12 core delivers the founder's "design the output" pain for the structured XML formats:** paste a real UBL/XML sample → infer → emit produces **schema-valid namespaced** output, and any existing non-namespaced OutputTree is **byte-identical**. The deferred remainder (T5–T8) is rare-format EDI identity + DTD + FE authoring — all honestly scoped, none blocking a customer.
+
+**Adversarial review pass (2026-06-16, `12ae726` BE + `28f589e` FE).** A 4-dimension review (21 agents, 9 confirmed / 8 correctly dismissed) of the T1–T4 live diff found + fixed:
+- **A (HIGH, T4 bug):** the inferrer fanned EVERY repeated XML sibling into a per-line "lines" array → repeated header elements (`cbc:Note`) emitted empty, once per order line. Now one line group only (name heuristic / last-positioned); other repeats preserved as siblings.
+- **B (HIGH, offer⇔works):** the designer offered cXML/UBL but the tree emitter can't produce a valid envelope (no cXML DOCTYPE/From-To-Sender; no Peppol UBLVersionID/CustomizationID/ProfileID). Emitter now **refuses** cXML/UBL (fail loud); designer offers **JSON/XML/CSV** only; cXML/UBL deliver via their dedicated valid transforms; namespaced XML stays under "XML".
+- **C (MEDIUM, trust):** the `useOutputNode` delivery branch lacked the inner exception-translation catch its siblings have → a malformed tree stranded the order in `transforming` through 3 Hangfire retries. Now reverts to ready + Fail.
+- **D (MEDIUM+LOW, ns):** no-namespace node no longer inherits an ancestor default (explicit empty-ns, byte-identical); prefix-without-namespace fails loud.
+- Tests: 6 new. Transform 968 · Api 1078 · byte-parity intact. Dismissed (false positives): unwrapped-array-by-design, same-prefix-two-URI (unreachable), prefix-conflict probes, inferrer-empty-FixedValue (intended human-in-loop).
+
+> **(historical NEXT-BUILD note, now superseded by the table above) — EnvelopeConfig + structured-EDI standards-validity gaps:**
 > 1. **X12 segment emitter** in `OutputTemplateEmitter` (today: throws for X12 — gated out of the designer). Hand-rolled ISA/GS/ST + BEG/REF/N1/PO1/CTT (no commercial EDI licence).
 > 2. **cXML DOCTYPE** on emit (`<!DOCTYPE cXML SYSTEM "…/cXML.dtd">`) + **From/To/Sender** Header from `EnvelopeConfig.Cxml` (today: hardcoded identity in `CxmlTransformService`).
 > 3. **UBL namespaces** — `OutputNodeTemplateInferrer.FromXml` drops xmlns decls + prefixes (reads `LocalName` only, never sets `template.Namespaces`); the emitter already emits `template.Namespaces` but the infer side must capture them, and prefixed element names (`cbc:ID`) need namespace-bound XmlWriter handling (verify empirically — XmlWriter throws on an unbound prefix).
