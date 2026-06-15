@@ -123,15 +123,61 @@ public sealed class OutputTemplateEmitter
         Func<PurchaseOrderLineEntity, IReadOnlyDictionary<string, string>> lineRowFor,
         IReadOnlyList<PurchaseOrderLineEntity> orderedLines)
     {
+        // Two MUTUALLY-EXCLUSIVE namespace modes (mixing them double-declares / corrupts scope):
+        //  • LEGACY root-map: template.Namespaces declares xmlns:* on the root; nodes are unprefixed.
+        //    Kept byte-identical (the only mode the byte-parity oracle pins).
+        //  • PER-NODE: nodes carry Namespace/Prefix; the prefixed namespaces are hoisted to the root
+        //    once (so siblings don't each redeclare) and the writer binds each prefixed element.
+        var hasRootMap = template.Namespaces is { Count: > 0 };
+        var hasPerNode = AnyNamespacedNode(template.Root);
+        if (hasRootMap && hasPerNode)
+            throw new ArgumentException(
+                "Use either root-level Namespaces OR per-node Prefix/Namespace, not both.", nameof(template));
+
+        // The xmlns declarations to write on the root element. Legacy → the template map verbatim
+        // (byte-identical). Per-node → the distinct prefixed namespaces collected from the tree (the
+        // root's own default namespace is declared by the element itself, so it is excluded here).
+        IReadOnlyDictionary<string, string>? rootDecls = hasRootMap
+            ? template.Namespaces
+            : hasPerNode ? CollectPrefixedNamespaces(template.Root) : null;
+
         using var buffer = new MemoryStream();
         var settings = new XmlWriterSettings { Indent = true, Encoding = new UTF8Encoding(false) };
         using (var w = XmlWriter.Create(buffer, settings))
         {
             w.WriteStartDocument();
-            WriteXmlNode(w, template.Root, headerRow, lineScope: false, lineRowFor, orderedLines, template.Namespaces);
+            WriteXmlNode(w, template.Root, headerRow, lineScope: false, lineRowFor, orderedLines, rootDecls);
             w.WriteEndDocument();
         }
         return buffer.ToArray();
+    }
+
+    /// <summary>Start <paramref name="node"/>'s element: prefix-bound, default-namespaced, or the legacy single-arg (byte-identical when null).</summary>
+    private static void StartElement(XmlWriter w, OutputNode node)
+    {
+        if (node.Prefix is { Length: > 0 } p && node.Namespace is { Length: > 0 } pns)
+            w.WriteStartElement(p, node.Name, pns);        // bound prefix; writer reuses the root-hoisted xmlns
+        else if (node.Namespace is { Length: > 0 } dns)
+            w.WriteStartElement(null, node.Name, dns);     // default namespace (no prefix)
+        else
+            w.WriteStartElement(node.Name);                // LEGACY single-arg → byte-identical
+    }
+
+    private static bool AnyNamespacedNode(OutputNode node) =>
+        node.Namespace is { Length: > 0 } || node.Prefix is { Length: > 0 }
+        || node.Children.Any(AnyNamespacedNode);
+
+    private static IReadOnlyDictionary<string, string> CollectPrefixedNamespaces(OutputNode root)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        void Walk(OutputNode n)
+        {
+            if (n.Prefix is { Length: > 0 } p && n.Namespace is { Length: > 0 } ns)
+                map[p] = ns;   // last write wins; a prefix maps to one URI per document (XML rule)
+            foreach (var c in n.Children) Walk(c);
+        }
+        Walk(root);
+        return map;
     }
 
     private static void WriteXmlNode(
@@ -144,13 +190,13 @@ public sealed class OutputTemplateEmitter
         switch (node.NodeType)
         {
             case OutputNodeType.Object:
-                w.WriteStartElement(node.Name);
+                StartElement(w, node);
                 if (rootNamespaces is not null)
                     foreach (var (prefix, uri) in rootNamespaces)
                         w.WriteAttributeString("xmlns", prefix, null, uri);
                 // Attributes first, then element children.
                 foreach (var attr in node.Children.Where(c => c.NodeType == OutputNodeType.Attribute))
-                    w.WriteAttributeString(attr.Name, MappedTransformService.ResolveRule(attr.Rule ?? Empty, row, lineScope) ?? string.Empty);
+                    WriteXmlAttribute(w, attr, row, lineScope);
                 foreach (var child in node.Children.Where(c => c.NodeType != OutputNodeType.Attribute))
                     WriteXmlNode(w, child, row, lineScope, lineRowFor, orderedLines);
                 w.WriteEndElement();
@@ -158,7 +204,7 @@ public sealed class OutputTemplateEmitter
 
             case OutputNodeType.Array:
                 // The Array node is a wrapper element; each line renders the item template inside it.
-                w.WriteStartElement(node.Name);
+                StartElement(w, node);
                 var item = node.Children.FirstOrDefault();
                 if (item is not null)
                     foreach (var line in orderedLines)
@@ -167,11 +213,20 @@ public sealed class OutputTemplateEmitter
                 break;
 
             default: // Field → <Name>value</Name>  (Attribute is handled by the parent Object)
-                w.WriteStartElement(node.Name);
+                StartElement(w, node);
                 w.WriteString(MappedTransformService.ResolveRule(node.Rule ?? Empty, row, lineScope) ?? string.Empty);
                 w.WriteEndElement();
                 break;
         }
+    }
+
+    private static void WriteXmlAttribute(XmlWriter w, OutputNode attr, IReadOnlyDictionary<string, string> row, bool lineScope)
+    {
+        var value = MappedTransformService.ResolveRule(attr.Rule ?? Empty, row, lineScope) ?? string.Empty;
+        if (attr.Prefix is { Length: > 0 } p && attr.Namespace is { Length: > 0 } ns)
+            w.WriteAttributeString(p, attr.Name, ns, value);   // qualified attribute (e.g. xml:lang)
+        else
+            w.WriteAttributeString(attr.Name, value);          // LEGACY unqualified → byte-identical
     }
 
     // ── CSV (delimited) ────────────────────────────────────────────────────────────
