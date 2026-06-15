@@ -71,8 +71,9 @@ Branch `feat/trust-layer-ws0`, commits `3d5a8a4` + `e041922`. All additive + UNW
 | B-CSV | Delimited emitter (CSV) mirroring `BuildCsv` exactly | ☑ |
 | B5 | `OutputNodeTemplateConverter.FromFlat` — lifts the existing flat `OutputMappingConfig` → tree | ☑ |
 | **Byte-parity gate** | converted flat config → emitter CSV == `MappedTransformService` flat CSV, **byte-identical** | ☑ **PROVEN** — cutover de-risked |
-| B4 | Default `OutputNodeTemplate` per STRUCTURED format = today's hardcoded tree; byte-parity vs `Xml/Cxml/Ubl/X12TransformService` | ◐ NEXT (needs the exact current trees — grounding `w0yzc4w12` `ground:structured`) |
-| B6 | Wire the new render mode into `OrderTransformService` (opt-in, preview==delivery), behind byte-parity | ◐ NEXT (delivery-path — careful) |
+| **B6** | Wire OutputNode as the highest-precedence output mode in `OrderTransformService` (opt-in `OrderMappingOverride.OutputTree`; all other modes gate on `!useOutputNode`; round-trips via the override JSON, no migration) | ☑ **LIVE** `ffab220` — end-to-end test delivers arbitrary nested structure; full Api.Tests 1075 green, zero regression. **Design-the-output works on the backend.** |
+| B4 | Default `OutputNodeTemplate` per STRUCTURED format = today's hardcoded tree; byte-parity vs `Xml/Cxml/Ubl/X12TransformService` | ◐ OPTIONAL — existing transformers stay as the default; only needed to MIGRATE existing suppliers' flat configs to trees |
+| B6-preview | Preview path (`OrdersController.PreviewMappingOverride`) honors `OutputTree` so preview == delivery for the new mode | ◐ NEXT (WS-0b parity) |
 | B7 | Delete the dead `IParsedOrderTransform` stack (WS-11) | ◐ NEXT |
 | B12 | `EnvelopeConfig` per-connection persistence + X12/cXML identity wiring | ◐ NEXT |
 
