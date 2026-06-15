@@ -1,5 +1,14 @@
 # ProcuLink — Claude Code Project Memory
 
+> **★ ACTIVE PLAN (2026-06-15) — READ THIS FIRST, IT OVERRIDES STALE PLAN TEXT BELOW.**
+> The current work is the **output-layer restructuring**. Single entry point:
+> [`docs/strategy/2026-06-15-MASTER-BUILD-STATUS.md`](docs/strategy/2026-06-15-MASTER-BUILD-STATUS.md)
+> (live build status + how to resume) → which points to the combined masterplan
+> [`docs/strategy/2026-06-15-output-layer-restructuring-masterplan.md`](docs/strategy/2026-06-15-output-layer-restructuring-masterplan.md)
+> (Parts 1–4 reconciled + verified; WS-0…WS-14, phases A→E). Build from there.
+> Phase A (the two P0 trust bombs) is in progress on branch `feat/trust-layer-ws0`.
+> Older strategy/plan docs are historical context, superseded by the masterplan where they conflict.
+
 ## What this project is
 
 ProcuLink is a **B2B outbound procurement bridge** for buyer/procurement teams
