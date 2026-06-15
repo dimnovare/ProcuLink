@@ -48,6 +48,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IPoMappingService            _poMappings;
     private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
     private readonly IConfidenceCalibrationService? _calibration;
+    private readonly ICxmlCredentialResolver?      _cxmlResolver;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -84,7 +85,8 @@ public sealed class OrdersController : ControllerBase
         ProcuLink.Transform.Conformance.IConformanceService? conformance = null,
         IPoMappingService?           poMappings = null,
         IEffectiveConnectionConfigResolver? effectiveConfig = null,
-        IConfidenceCalibrationService? calibration = null)
+        IConfidenceCalibrationService? calibration = null,
+        ICxmlCredentialResolver?       cxmlResolver = null)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -100,6 +102,7 @@ public sealed class OrdersController : ControllerBase
         _fileStorage      = fileStorage;
         _tokenizer        = tokenizer;
         _transformers     = transformers;
+        _cxmlResolver     = cxmlResolver;
         // Optional in the ctor so existing positional test constructions stay valid; when DI does
         // not supply one we build the concrete recorder against the injected DbContext.
         _aiDecisions      = aiDecisions
@@ -903,7 +906,13 @@ public sealed class OrdersController : ControllerBase
                     return BadRequest(new { error = $"No transform service registered for format '{fmt.Value}'." });
 
                 var effective = EffectiveEntityResolver.Resolve(order, fieldOverride);
-                result = await transformer.TransformAsync(effective, fmt.Value, ct);
+                // cXML preview parity: resolve the SAME network credentials the delivery transform
+                // uses, so the previewed <Credential> identities equal what is actually sent — not the
+                // legacy OrgId/SupplierId GUIDs the preview showed before.
+                CxmlCredentialConfig? previewCxmlCreds = null;
+                if (fmt.Value == OutputFormat.CXml && _cxmlResolver is not null)
+                    previewCxmlCreds = await _cxmlResolver.ResolveAsync(_tenant.OrganisationId, order.SupplierId, ct);
+                result = await transformer.TransformAsync(effective, fmt.Value, ct, previewCxmlCreds);
             }
 
             using var sr = new StreamReader(result.Content);
