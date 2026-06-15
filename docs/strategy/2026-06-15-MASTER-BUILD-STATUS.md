@@ -95,9 +95,27 @@ Branch `feat/trust-layer-ws0`, commits `3d5a8a4` + `e041922`. All additive + UNW
 | D-infer | `OutputNodeTemplateInferrer` (deterministic, no AI/network — works for no-egress): JSON + CSV sample → node tree (nesting, repeating groups, columns), leaves pre-bound to canonical fields by name | ☑ `ebef7f1` |
 | D-endpoint | `POST /api/orders/{id}/infer-output-structure` → tree serialized with string enums (FE contract) | ☑ `ebef7f1` |
 | D-fe | Designer "⧉ Paste a supplier sample to start" → auto-detect JSON/CSV → infer → tree opens shaped to match | ☑ `f710acf` |
-| D-xml | XML/cXML/UBL sample inference | ◐ follow-up (JSON+CSV cover the common paste cases) |
+| D-xml | XML/cXML/UBL **structural** sample inference (elements / attributes / wrapped repeating group) | ☑ DONE — `FromXml` + `Xml_InfersElements_Attributes_AndWrappedRepeatingGroup` test |
+| D-xml-ns | XML **namespace + DOCTYPE** standards-validity on infer/emit (cXML DOCTYPE, UBL cbc:/cac: namespaces) | ◐ part of B12 (see below) |
 
 > **The complaint-killer flow is LIVE:** paste the file the supplier requires → infer → adjust → live preview (== delivery) → save → deliver. Tests: JSON nesting, CSV columns, infer→emit round-trip, response string-enum serialization. Transform 942 + Api 1077 green.
+
+### Post-deploy hardening (2026-06-16) — live-walkthrough findings
+| Item | What | Status |
+|---|---|---|
+| Preview 400 | Designer live preview returned HTTP 400: `[FromBody] OrderMappingOverride` MVC binding used the global web JSON options (no string-enum converter). Fixed with `CamelCaseJsonStringEnumConverter` `[JsonConverter]` attribute on `OutputNodeType` + `OutputNodeTemplate.Format`; added the missing `JsonSerializerDefaults.Web` binding test. | ✅ `06656d6` — **VERIFIED LIVE on prod** (authenticated preview = 200, renders `{orderNumber:152400,…itemCode:REDACTED-ORDER-DATA}`) |
+| Infer endpoint | `infer-output-structure` verified LIVE = 200 on prod (sample `poRef/orderItems/partNumber/qtyOrdered/netPrice` → correct tree, camelCase string enums). | ✅ verified live |
+| Infer aliases | Pre-bind common PO-number aliases (`poRef`/`PO No`/`PONr`/`orderNo`) to PoNumber so paste-sample lands closer. | ✅ `1201190` |
+| X12 offer⇔works | Designer offered **X12** but the emitter throws for it (positional segment format, no tree emitter) → removed X12 from the designer format list. JSON/XML/CSV/cXML/UBL all emit. | ✅ FE `3635625` |
+| FE tsc hygiene | Fixed 2 stale `OutputFieldRule.fieldManipulators` test-type errors (tsc `--noEmit` now 0; vitest 30/30 on both). | ✅ FE `3635625` |
+
+> **NEXT BUILD — B12 (EnvelopeConfig + structured-EDI standards-validity).** Concrete, grounded gaps found this turn:
+> 1. **X12 segment emitter** in `OutputTemplateEmitter` (today: throws for X12 — gated out of the designer). Hand-rolled ISA/GS/ST + BEG/REF/N1/PO1/CTT (no commercial EDI licence).
+> 2. **cXML DOCTYPE** on emit (`<!DOCTYPE cXML SYSTEM "…/cXML.dtd">`) + **From/To/Sender** Header from `EnvelopeConfig.Cxml` (today: hardcoded identity in `CxmlTransformService`).
+> 3. **UBL namespaces** — `OutputNodeTemplateInferrer.FromXml` drops xmlns decls + prefixes (reads `LocalName` only, never sets `template.Namespaces`); the emitter already emits `template.Namespaces` but the infer side must capture them, and prefixed element names (`cbc:ID`) need namespace-bound XmlWriter handling (verify empirically — XmlWriter throws on an unbound prefix).
+> 4. `EnvelopeConfig` persistence (rides the override JSON / `OutputNodeTemplate.Envelope` — additive, no migration) + the connection-level UI.
+>
+> This is EDI/standards-correctness work (Opus-tier, careful) — ground the XmlWriter prefix behavior with a characterization test FIRST, then build with a byte/shape-validity gate. Self-contained backend; fully unit-testable locally (no prod-data risk).
 | B7 | Delete the dead `IParsedOrderTransform` stack (WS-11) | ◐ NEXT |
 | B12 | `EnvelopeConfig` per-connection persistence + X12/cXML identity wiring | ◐ NEXT |
 
