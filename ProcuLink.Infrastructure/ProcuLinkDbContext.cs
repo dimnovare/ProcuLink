@@ -366,6 +366,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.ConfigJson).HasColumnName("config_json").HasColumnType("jsonb");
             b.Property(x => x.EncryptedCredentials).HasColumnName("encrypted_credentials").IsRequired();
             b.Property(x => x.OutputFormat).HasColumnName("output_format");
+            b.Property(x => x.CxmlConfigJson).HasColumnName("cxml_config_json").HasColumnType("jsonb");
+            b.Property(x => x.EncryptedCxmlSharedSecret).HasColumnName("encrypted_cxml_shared_secret");
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
 

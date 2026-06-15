@@ -54,7 +54,8 @@ public sealed class X12TransformService : ITransformService
     public Task<TransformResult> TransformAsync(
         PurchaseOrderEntity order,
         OutputFormat format,
-        CancellationToken ct)
+        CancellationToken ct,
+        CxmlCredentialConfig? cxmlCredentials = null) // not used: X12 has no cXML Header
     {
         // Existing review guard + format-required-field checks (empty BP buyer code,
         // missing / zero unit price). Throws TransformValidationException so the lines

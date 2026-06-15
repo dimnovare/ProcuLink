@@ -5,7 +5,38 @@ public sealed record UpsertDeliveryConfigRequest(
     bool AutoDeliver,
     string ConfigJson,
     string? CredentialsJson,
-    string? OutputFormat = null);
+    string? OutputFormat = null,
+    // Optional cXML network credentials (only meaningful when OutputFormat is cxml). Null/omitted
+    // leaves any saved cXML credentials untouched (mirrors CredentialsJson = null = keep).
+    CxmlCredentialsInput? CxmlCredentials = null);
+
+/// <summary>
+/// cXML network credentials sent to the supplier delivery-config upsert. Identities are cleartext;
+/// <see cref="SenderSharedSecret"/> is WRITE-ONLY (never returned): null/omitted = keep the saved
+/// secret, blank = clear it, non-blank = replace it — the same leave-blank-to-keep pattern as the
+/// delivery transport credentials.
+/// </summary>
+public sealed record CxmlCredentialsInput(
+    string? FromDomain,
+    string? FromIdentity,
+    string? ToDomain,
+    string? ToIdentity,
+    string? SenderDomain,
+    string? SenderIdentity,
+    string? SenderSharedSecret = null);
+
+/// <summary>
+/// The non-secret cXML identity fields persisted as cleartext JSON in
+/// <c>SupplierDeliveryConfig.CxmlConfigJson</c>. Serialized by the delivery-config service (write)
+/// and the cXML credential resolver (read) — kept in one place so both sides agree on the keys.
+/// </summary>
+public sealed record CxmlIdentityFields(
+    string? FromDomain,
+    string? FromIdentity,
+    string? ToDomain,
+    string? ToIdentity,
+    string? SenderDomain,
+    string? SenderIdentity);
 
 public sealed record DeliveryConfigResponse(
     Guid SupplierId,
@@ -24,7 +55,24 @@ public sealed record DeliveryConfigResponse(
     int? ActiveRevisionVersionNo = null,
     // Null unless RevisionGoverned. False ⇒ the live row below differs from the version that
     // currently governs delivery (save to publish a new revision and bring them in sync).
-    bool? LiveMatchesActiveRevisionDelivery = null);
+    bool? LiveMatchesActiveRevisionDelivery = null,
+    // Configured cXML network identities (cleartext) + whether a Sender SharedSecret is stored.
+    // Null when the supplier has no cXML credentials configured. The secret itself is never returned.
+    CxmlCredentialsResponse? CxmlCredentials = null);
+
+/// <summary>
+/// cXML credentials returned to the editor: the cleartext identities plus a boolean flag for the
+/// write-only Sender SharedSecret (so the UI can render "leave blank to keep"). The secret value
+/// is NEVER returned.
+/// </summary>
+public sealed record CxmlCredentialsResponse(
+    string? FromDomain,
+    string? FromIdentity,
+    string? ToDomain,
+    string? ToIdentity,
+    string? SenderDomain,
+    string? SenderIdentity,
+    bool HasSharedSecret);
 
 public sealed record DeliveryTestResult(
     bool Success,

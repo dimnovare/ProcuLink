@@ -247,6 +247,139 @@ public class DeliveryConfigServiceTests
             .WithMessage("Output format must be one of: xml, csv, cxml, json, ubl, x12.*");
     }
 
+    // ── cXML network credentials ───────────────────────────────────────────────
+
+    private static UpsertDeliveryConfigRequest CxmlReq(CxmlCredentialsInput cxml) =>
+        new("http", false, "{\"url\":\"https://a.example\"}", null, "cxml", cxml);
+
+    [Fact]
+    public async Task UpsertAsync_PersistsCxmlIdentities_AndEncryptsSharedSecret()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var service = new DeliveryConfigService(db, encryption);
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        var saved = await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
+            FromDomain: "NetworkId", FromIdentity: "REDACTED-NETWORK-ID",
+            ToDomain: "NetworkId", ToIdentity: "REDACTED-NETWORK-ID",
+            SenderDomain: "NetworkId", SenderIdentity: "REDACTED-NETWORK-ID",
+            SenderSharedSecret: "top-secret")), default);
+
+        saved.CxmlCredentials.Should().NotBeNull();
+        saved.CxmlCredentials!.FromIdentity.Should().Be("REDACTED-NETWORK-ID");
+        saved.CxmlCredentials.ToIdentity.Should().Be("REDACTED-NETWORK-ID");
+        saved.CxmlCredentials.SenderDomain.Should().Be("NetworkId");
+        saved.CxmlCredentials.HasSharedSecret.Should().BeTrue();
+
+        // The secret is encrypted at rest and never echoed back in the response.
+        var row = await db.SupplierDeliveryConfigs.SingleAsync();
+        row.EncryptedCxmlSharedSecret.Should().NotBeNullOrEmpty().And.NotBe("top-secret");
+        encryption.Decrypt(row.EncryptedCxmlSharedSecret!).Should().Be("top-secret");
+        saved.ToString().Should().NotContain("top-secret");
+        row.CxmlConfigJson.Should().Contain("REDACTED-NETWORK-ID").And.NotContain("top-secret");
+    }
+
+    [Fact]
+    public async Task GetAsync_ReturnsCxmlIdentitiesAndHasSecretFlag_NeverTheSecret()
+    {
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
+            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "shh")), default);
+
+        var fetched = await service.GetAsync(orgId, supplierId, default);
+
+        fetched!.CxmlCredentials.Should().NotBeNull();
+        fetched.CxmlCredentials!.FromIdentity.Should().Be("REDACTED-NETWORK-ID");
+        fetched.CxmlCredentials.HasSharedSecret.Should().BeTrue();
+        fetched.ToString().Should().NotContain("shh");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_NullSharedSecret_KeepsExistingSecret_ButUpdatesIdentities()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var service = new DeliveryConfigService(db, encryption);
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
+            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "first-secret")), default);
+        var before = (await db.SupplierDeliveryConfigs.SingleAsync()).EncryptedCxmlSharedSecret;
+
+        // Re-save with identities edited but NO secret (write-only leave-blank-to-keep).
+        await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
+            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID",
+            SenderSharedSecret: null)), default);
+
+        var after = await db.SupplierDeliveryConfigs.SingleAsync();
+        after.EncryptedCxmlSharedSecret.Should().Be(before, "a null secret must keep the saved one");
+        encryption.Decrypt(after.EncryptedCxmlSharedSecret!).Should().Be("first-secret");
+        after.CxmlConfigJson.Should().Contain("REDACTED-NETWORK-ID"); // identities still updated
+    }
+
+    [Fact]
+    public async Task UpsertAsync_BlankSharedSecret_ClearsSecret_ButKeepsIdentities()
+    {
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
+            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "secret")), default);
+
+        await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
+            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID",
+            SenderSharedSecret: "")), default);
+
+        var fetched = await service.GetAsync(orgId, supplierId, default);
+        fetched!.CxmlCredentials!.HasSharedSecret.Should().BeFalse();
+        fetched.CxmlCredentials.FromIdentity.Should().Be("REDACTED-NETWORK-ID");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_NullCxmlBlock_LeavesSavedCxmlCredentialsUntouched()
+    {
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
+            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "secret")), default);
+
+        // A normal save WITHOUT a cXML block (e.g. editing the URL) must not wipe cXML credentials.
+        await service.UpsertAsync(orgId, supplierId,
+            new UpsertDeliveryConfigRequest("http", true, "{\"url\":\"https://b.example\"}", null, "cxml"), default);
+
+        var fetched = await service.GetAsync(orgId, supplierId, default);
+        fetched!.CxmlCredentials.Should().NotBeNull();
+        fetched.CxmlCredentials!.FromIdentity.Should().Be("REDACTED-NETWORK-ID");
+        fetched.CxmlCredentials.HasSharedSecret.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetAsync_NoCxmlConfigured_ReturnsNullCxmlBlock()
+    {
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(orgId, supplierId,
+            new UpsertDeliveryConfigRequest("http", false, "{\"url\":\"https://a.example\"}", null, "cxml"), default);
+
+        var fetched = await service.GetAsync(orgId, supplierId, default);
+        fetched!.CxmlCredentials.Should().BeNull();
+    }
+
     private sealed class DeliveryConfigTestDbContext : ProcuLinkDbContext
     {
         public DeliveryConfigTestDbContext(DbContextOptions<ProcuLinkDbContext> options)

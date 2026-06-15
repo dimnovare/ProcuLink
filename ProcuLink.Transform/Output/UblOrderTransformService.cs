@@ -63,7 +63,8 @@ public sealed class UblOrderTransformService : ITransformService
     public Task<TransformResult> TransformAsync(
         PurchaseOrderEntity order,
         OutputFormat format,
-        CancellationToken ct)
+        CancellationToken ct,
+        CxmlCredentialConfig? cxmlCredentials = null) // not used: UBL has no cXML Header
     {
         // Existing review guard + format-required-field checks. UBL carries the line
         // code in an OPTIONAL identification element, so a missing code is not a hard

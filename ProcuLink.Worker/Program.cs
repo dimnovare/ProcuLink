@@ -192,6 +192,9 @@ builder.Services.AddSingleton(sp =>
 // jobs. Flag-gated by Connections:RevisionAuthority (default OFF = live tables, byte-identical).
 builder.Services.AddScoped<IEffectiveConnectionConfigResolver, EffectiveConnectionConfigResolver>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
+// cXML network credentials resolver — consumed by the Worker's TransformOrderJob (OrderService →
+// OrderTransformService) so cXML generated on the Worker carries the supplier's real identities.
+builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 

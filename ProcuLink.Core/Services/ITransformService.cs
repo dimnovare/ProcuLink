@@ -37,10 +37,18 @@ public interface ITransformService
     /// Generate the outbound document. The returned <see cref="TransformResult.Content"/>
     /// stream is positioned at the beginning and ready to upload.
     /// </summary>
+    /// <param name="cxmlCredentials">
+    /// Optional, cXML-only: the supplier's resolved cXML network credentials. When present the
+    /// cXML transform writes them into the document <c>&lt;Header&gt;</c>; null (the default, and
+    /// the value every non-cXML transformer ignores) keeps the legacy <c>OrgId</c>/<c>SupplierId</c>
+    /// GUID identities. Threaded as an optional trailing parameter so every existing 3-argument
+    /// call site stays source-compatible.
+    /// </param>
     Task<TransformResult> TransformAsync(
         PurchaseOrderEntity order,
         OutputFormat format,
-        CancellationToken ct);
+        CancellationToken ct,
+        CxmlCredentialConfig? cxmlCredentials = null);
 }
 
 /// <summary>The generated document plus the metadata needed to persist it.</summary>

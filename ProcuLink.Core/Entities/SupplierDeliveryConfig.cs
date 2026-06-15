@@ -36,6 +36,23 @@ public class SupplierDeliveryConfig
     /// </summary>
     public string? OutputFormat { get; set; }
 
+    /// <summary>
+    /// Non-secret cXML network identities (From/To/Sender domain + identity) as cleartext JSON, or null.
+    /// Drives the <c>&lt;Header&gt;</c> credentials of generated cXML so the wire carries the supplier's
+    /// REAL cXML network identity (e.g. Coupa <c>NetworkId</c>) instead of ProcuLink's internal
+    /// OrgId / SupplierId GUIDs. Only consulted when <see cref="OutputFormat"/> is <c>cxml</c>; null =
+    /// legacy GUID identities. The Sender SharedSecret is a SECRET and lives encrypted in
+    /// <see cref="EncryptedCxmlSharedSecret"/>, NOT here (same cleartext invariant as
+    /// <see cref="ConfigJson"/>).
+    /// </summary>
+    public string? CxmlConfigJson { get; set; }
+
+    /// <summary>
+    /// AES-GCM encrypted cXML Sender <c>SharedSecret</c> (same encryption as
+    /// <see cref="EncryptedCredentials"/>), or null/empty when no shared secret is configured.
+    /// </summary>
+    public string? EncryptedCxmlSharedSecret { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

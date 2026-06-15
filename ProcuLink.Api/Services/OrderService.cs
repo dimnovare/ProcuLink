@@ -41,7 +41,8 @@ public sealed class OrderService : IOrderService
         IAiSuggestionDecisionService?  aiDecisions = null,
         ICatalogRetrievalService?      catalogRetrieval = null,
         IEffectiveConnectionConfigResolver? effectiveConfig = null,
-        ProcuLink.Transform.Tokenizing.ISourceTokenizer? sourceTokenizer = null)
+        ProcuLink.Transform.Tokenizing.ISourceTokenizer? sourceTokenizer = null,
+        ICxmlCredentialResolver?       cxmlResolver = null)
     {
         // Shared helpers (best-effort exception reconcile, passport events, audit-event
         // builder, extraction-review flagging) used by more than one sub-service.
@@ -67,7 +68,7 @@ public sealed class OrderService : IOrderService
 
         _resolution = new OrderResolutionService(db, mappings, logger, shared, decisions);
 
-        _transform = new OrderTransformService(db, fileStorage, transformers, logger, poMappingService, effectiveConfig);
+        _transform = new OrderTransformService(db, fileStorage, transformers, logger, poMappingService, effectiveConfig, cxmlResolver);
     }
 
     // ── Ingestion ─────────────────────────────────────────────────────────────

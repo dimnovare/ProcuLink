@@ -550,6 +550,10 @@ builder.Services.AddSingleton(sp =>
     return opts;
 });
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
+// cXML network credentials: resolves a supplier's configured From/To/Sender identities + decrypts
+// the Sender SharedSecret for the cXML transform (OrderService → OrderTransformService). Unregistered
+// → legacy GUID identities.
+builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();

@@ -22,7 +22,8 @@ public sealed class JsonTransformService : ITransformService
     public Task<TransformResult> TransformAsync(
         PurchaseOrderEntity order,
         OutputFormat format,
-        CancellationToken ct)
+        CancellationToken ct,
+        CxmlCredentialConfig? cxmlCredentials = null) // not used: JSON has no cXML Header
     {
         ValidateOrder(order);
 

@@ -24,7 +24,8 @@ public sealed class CsvTransformService : ITransformService
     public Task<TransformResult> TransformAsync(
         PurchaseOrderEntity order,
         OutputFormat format,
-        CancellationToken ct)
+        CancellationToken ct,
+        CxmlCredentialConfig? cxmlCredentials = null) // not used: CSV has no cXML Header
     {
         ValidateOrder(order);
 

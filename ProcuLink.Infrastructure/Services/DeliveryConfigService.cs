@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
@@ -8,6 +9,12 @@ namespace ProcuLink.Infrastructure.Services;
 public sealed class DeliveryConfigService : IDeliveryConfigService
 {
     private const string CredentialsMask = "********";
+
+    private static readonly JsonSerializerOptions CxmlJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
 
     private static readonly HashSet<string> AllowedProtocols = new(
         DeliveryProtocolConstants.All,
@@ -80,10 +87,39 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
                 : _encryption.Encrypt(request.CredentialsJson);
         }
 
+        ApplyCxmlCredentials(existing, request.CxmlCredentials);
+
         await _db.SaveChangesAsync(ct);
 
         return ToResponse(existing);
     }
+
+    /// <summary>
+    /// Applies the optional cXML credential block. Null/omitted leaves the saved cXML credentials
+    /// untouched. When present, the non-secret identities are persisted as cleartext JSON and the
+    /// Sender SharedSecret follows leave-blank-to-keep semantics: null = keep, blank = clear,
+    /// non-blank = (re)encrypt with the SAME AES-GCM service as the delivery transport credentials.
+    /// </summary>
+    private void ApplyCxmlCredentials(SupplierDeliveryConfig existing, CxmlCredentialsInput? cxml)
+    {
+        if (cxml is null) return;
+
+        existing.CxmlConfigJson = JsonSerializer.Serialize(
+            new CxmlIdentityFields(
+                Trimmed(cxml.FromDomain), Trimmed(cxml.FromIdentity),
+                Trimmed(cxml.ToDomain), Trimmed(cxml.ToIdentity),
+                Trimmed(cxml.SenderDomain), Trimmed(cxml.SenderIdentity)),
+            CxmlJsonOptions);
+
+        if (cxml.SenderSharedSecret is not null)
+        {
+            existing.EncryptedCxmlSharedSecret = string.IsNullOrWhiteSpace(cxml.SenderSharedSecret)
+                ? null
+                : _encryption.Encrypt(cxml.SenderSharedSecret);
+        }
+    }
+
+    private static string? Trimmed(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
     public async Task DeleteAsync(Guid orgId, Guid supplierId, CancellationToken ct)
     {
@@ -109,7 +145,32 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             hasCredentials ? CredentialsMask : null,
             config.CreatedAt,
             config.UpdatedAt,
-            config.OutputFormat);
+            config.OutputFormat,
+            CxmlCredentials: BuildCxmlResponse(config));
+    }
+
+    /// <summary>
+    /// Surfaces the cleartext cXML identities + a HasSharedSecret flag (never the secret itself).
+    /// Returns null when the supplier has neither cXML identities nor a stored shared secret.
+    /// </summary>
+    private static CxmlCredentialsResponse? BuildCxmlResponse(SupplierDeliveryConfig config)
+    {
+        var hasSecret = !string.IsNullOrWhiteSpace(config.EncryptedCxmlSharedSecret);
+        if (string.IsNullOrWhiteSpace(config.CxmlConfigJson) && !hasSecret)
+            return null;
+
+        CxmlIdentityFields? ids = null;
+        if (!string.IsNullOrWhiteSpace(config.CxmlConfigJson))
+        {
+            try { ids = JsonSerializer.Deserialize<CxmlIdentityFields>(config.CxmlConfigJson, CxmlJsonOptions); }
+            catch (JsonException) { ids = null; }
+        }
+
+        return new CxmlCredentialsResponse(
+            ids?.FromDomain, ids?.FromIdentity,
+            ids?.ToDomain, ids?.ToIdentity,
+            ids?.SenderDomain, ids?.SenderIdentity,
+            HasSharedSecret: hasSecret);
     }
 
     private static string? NormalizeOutputFormat(string? format)

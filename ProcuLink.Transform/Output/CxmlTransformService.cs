@@ -37,17 +37,30 @@ namespace ProcuLink.Transform.Output;
 /// </code>
 ///
 /// Requires <see cref="BillingFeature.Cxml"/>; enforcement is at the controller/service level.
+///
+/// <para><b>Network credentials:</b> the <c>From</c> / <c>To</c> / <c>Sender</c> credentials are
+/// configurable per supplier connection via <paramref name="cxmlCredentials"/>. When a credential
+/// is configured the Header carries the supplier's REAL cXML network identity (e.g. a Coupa
+/// <c>NetworkId</c> such as <c>REDACTED-NETWORK-ID</c> / <c>REDACTED-NETWORK-ID</c>) plus, for the Sender, a
+/// <c>&lt;SharedSecret&gt;</c>. When it is not configured (null config or a blank identity) the
+/// credential falls back to the legacy GUID identity shown above, so an unconfigured supplier is
+/// byte-identical to the pre-feature output.</para>
 /// </summary>
 public sealed class CxmlTransformService : ITransformService
 {
     private static readonly XNamespace Xml = "http://www.w3.org/XML/1998/namespace";
+
+    /// <summary>Default cXML credential domain used when an operator configures an identity but
+    /// leaves the domain blank — <c>NetworkId</c> is the most common real-world cXML domain.</summary>
+    private const string DefaultConfiguredDomain = "NetworkId";
 
     public bool CanTransform(OutputFormat format) => format == OutputFormat.CXml;
 
     public Task<TransformResult> TransformAsync(
         PurchaseOrderEntity order,
         OutputFormat format,
-        CancellationToken ct)
+        CancellationToken ct,
+        CxmlCredentialConfig? cxmlCredentials = null)
     {
         // Existing review guard + format-required-field checks. cXML carries the line
         // code in an OPTIONAL SupplierPartID element, so a missing code is not a hard
@@ -70,20 +83,17 @@ public sealed class CxmlTransformService : ITransformService
                 new XAttribute(Xml + "lang", "en-US"),
 
                 // ── Header ────────────────────────────────────────────────
+                // From / To / Sender credentials come from the supplier's configured cXML
+                // network credentials when present, falling back per-credential to the legacy
+                // OrgId / SupplierId / NetworkUserId GUID identities (byte-identical when unset).
                 new XElement("Header",
-                    new XElement("From",
-                        new XElement("Credential",
-                            new XAttribute("domain", "OrgId"),
-                            new XElement("Identity", order.OrgId.ToString()))),
-                    new XElement("To",
-                        new XElement("Credential",
-                            new XAttribute("domain", "SupplierId"),
-                            new XElement("Identity", order.SupplierId.ToString()))),
-                    new XElement("Sender",
-                        new XElement("Credential",
-                            new XAttribute("domain", "NetworkUserId"),
-                            new XElement("Identity", "proculink")),
-                        new XElement("UserAgent", "ProcuLink/1.0"))
+                    BuildCredentialBlock("From",
+                        cxmlCredentials?.FromDomain, cxmlCredentials?.FromIdentity,
+                        legacyDomain: "OrgId", legacyIdentity: order.OrgId.ToString()),
+                    BuildCredentialBlock("To",
+                        cxmlCredentials?.ToDomain, cxmlCredentials?.ToIdentity,
+                        legacyDomain: "SupplierId", legacyIdentity: order.SupplierId.ToString()),
+                    BuildSender(cxmlCredentials)
                 ),
 
                 // ── Request ───────────────────────────────────────────────
@@ -119,6 +129,62 @@ public sealed class CxmlTransformService : ITransformService
             ContentType:   "application/xml",
             FileExtension: ".cxml"
         ));
+    }
+
+    // ── Header credential helpers ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds a <c>&lt;From&gt;</c> / <c>&lt;To&gt;</c> block wrapping a single
+    /// <c>&lt;Credential domain="…"&gt;&lt;Identity&gt;…&lt;/Identity&gt;&lt;/Credential&gt;</c>,
+    /// using the configured domain/identity when an identity is set and the legacy default otherwise.
+    /// </summary>
+    private static XElement BuildCredentialBlock(
+        string wrapper, string? configDomain, string? configIdentity,
+        string legacyDomain, string legacyIdentity)
+    {
+        var (domain, identity) = ResolveCredential(configDomain, configIdentity, legacyDomain, legacyIdentity);
+        return new XElement(wrapper,
+            new XElement("Credential",
+                new XAttribute("domain", domain),
+                new XElement("Identity", identity)));
+    }
+
+    /// <summary>
+    /// Builds the <c>&lt;Sender&gt;</c> block. Beyond the domain/identity resolution shared with
+    /// From/To, the Sender carries an optional <c>&lt;SharedSecret&gt;</c> — emitted ONLY when a
+    /// secret is configured, so the legacy default sender (no secret) stays byte-identical.
+    /// </summary>
+    private static XElement BuildSender(CxmlCredentialConfig? cfg)
+    {
+        var (domain, identity) = ResolveCredential(
+            cfg?.SenderDomain, cfg?.SenderIdentity, legacyDomain: "NetworkUserId", legacyIdentity: "proculink");
+
+        var credential = new XElement("Credential",
+            new XAttribute("domain", domain),
+            new XElement("Identity", identity));
+
+        if (!string.IsNullOrWhiteSpace(cfg?.SenderSharedSecret))
+            credential.Add(new XElement("SharedSecret", cfg!.SenderSharedSecret));
+
+        return new XElement("Sender",
+            credential,
+            new XElement("UserAgent", "ProcuLink/1.0"));
+    }
+
+    /// <summary>
+    /// Per-credential fallback rule: a CONFIGURED non-blank identity switches the whole credential
+    /// to the configured domain + identity (domain defaults to <see cref="DefaultConfiguredDomain"/>
+    /// when the operator left it blank). A null/blank configured identity keeps the legacy default
+    /// entirely, which is what makes an unconfigured supplier byte-identical to the pre-feature output.
+    /// </summary>
+    private static (string Domain, string Identity) ResolveCredential(
+        string? configDomain, string? configIdentity, string legacyDomain, string legacyIdentity)
+    {
+        if (string.IsNullOrWhiteSpace(configIdentity))
+            return (legacyDomain, legacyIdentity);
+
+        var domain = string.IsNullOrWhiteSpace(configDomain) ? DefaultConfiguredDomain : configDomain.Trim();
+        return (domain, configIdentity.Trim());
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

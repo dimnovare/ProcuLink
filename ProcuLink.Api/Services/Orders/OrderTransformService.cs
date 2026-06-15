@@ -51,6 +51,7 @@ internal sealed class OrderTransformService
     private readonly ILogger<OrderService>           _logger;
     private readonly IPoMappingService               _poMappings;
     private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
+    private readonly ICxmlCredentialResolver?        _cxmlResolver;
 
     public OrderTransformService(
         ProcuLinkDbContext             db,
@@ -58,7 +59,8 @@ internal sealed class OrderTransformService
         IEnumerable<ITransformService> transformers,
         ILogger<OrderService>          logger,
         IPoMappingService              poMappings,
-        IEffectiveConnectionConfigResolver? effectiveConfig = null)
+        IEffectiveConnectionConfigResolver? effectiveConfig = null,
+        ICxmlCredentialResolver?       cxmlResolver = null)
     {
         _db           = db;
         _fileStorage  = fileStorage;
@@ -68,6 +70,9 @@ internal sealed class OrderTransformService
         // Launch batch 7 — revision authority. Null (older positional ctors / unregistered
         // hosts) behaves exactly like flag-OFF: the live path drives everything.
         _effectiveConfig = effectiveConfig;
+        // cXML network credentials. Null (older positional ctors / unregistered hosts) → the cXML
+        // transform falls back to the legacy OrgId/SupplierId GUID identities.
+        _cxmlResolver = cxmlResolver;
     }
 
     // ── TransformAsync ────────────────────────────────────────────────────────
@@ -124,6 +129,16 @@ internal sealed class OrderTransformService
                     orderId, effective.Source, effective.OutputFormat, format);
             }
         }
+
+        // ── cXML network credentials ────────────────────────────────────────────
+        // Resolve the supplier's configured cXML From/To/Sender credentials ONLY when the effective
+        // format is cXML (every other transformer ignores this argument). Null — no resolver, no
+        // delivery-config row, or no cXML credentials — makes the cXML Header fall back to the legacy
+        // OrgId/SupplierId GUID identities, byte-identical to the pre-feature output. Read from the
+        // LIVE delivery-config row, the same source the controller used to pick the cXML format.
+        CxmlCredentialConfig? cxmlCredentials = null;
+        if (effectiveFormat == OutputFormat.CXml && _cxmlResolver is not null)
+            cxmlCredentials = await _cxmlResolver.ResolveAsync(organisationId, entity.SupplierId, ct);
 
         // heart-piece-flex flexible mapping: SIX transform modes, in precedence order.
         //   1. TEMPLATE MODE — order carries a non-blank whole-document OutputTemplate → render the
@@ -283,7 +298,7 @@ internal sealed class OrderTransformService
             else if (hasUsableOverride)
             {
                 var effectiveEntity = EffectiveEntityResolver.Resolve(entity, mappingOverride!);
-                transformResult = await transformer!.TransformAsync(effectiveEntity, effectiveFormat, ct);
+                transformResult = await transformer!.TransformAsync(effectiveEntity, effectiveFormat, ct, cxmlCredentials);
             }
             else if (useRevisionOutput)
             {
@@ -292,7 +307,7 @@ internal sealed class OrderTransformService
                     transformResult = useRevisionNative
                         ? new MappedTransformService().Build(entity, revisionOverride!, effectiveFormat, sourceTokens: sourceTokens, catalogLookup: catalogLookup)
                         : await transformer!.TransformAsync(
-                              EffectiveEntityResolver.Resolve(entity, revisionOverride!), effectiveFormat, ct);
+                              EffectiveEntityResolver.Resolve(entity, revisionOverride!), effectiveFormat, ct, cxmlCredentials);
                 }
                 catch (Exception ex) when (ex is not TransformValidationException and not TransformTemplateException)
                 {
@@ -303,7 +318,7 @@ internal sealed class OrderTransformService
                         "Pinned revision output mapping failed for order {OrderId} ({Source}); falling back to the fixed transformer.",
                         orderId, effective.Source);
                     useRevisionOutput = false;
-                    transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct);
+                    transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct, cxmlCredentials);
                 }
             }
             else if (useSupplierMapping)
@@ -313,7 +328,7 @@ internal sealed class OrderTransformService
                     transformResult = useSupplierNative
                         ? new MappedTransformService().Build(entity, supplierOverride!, effectiveFormat, sourceTokens: sourceTokens, catalogLookup: catalogLookup)
                         : await transformer!.TransformAsync(
-                              EffectiveEntityResolver.Resolve(entity, supplierOverride!), effectiveFormat, ct);
+                              EffectiveEntityResolver.Resolve(entity, supplierOverride!), effectiveFormat, ct, cxmlCredentials);
                 }
                 catch (Exception ex) when (ex is not TransformValidationException and not TransformTemplateException)
                 {
@@ -324,12 +339,12 @@ internal sealed class OrderTransformService
                         "Supplier-promoted output mapping failed for order {OrderId} (supplier {SupplierId}); falling back to the fixed transformer.",
                         orderId, entity.SupplierId);
                     useSupplierMapping = false;
-                    transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct);
+                    transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct, cxmlCredentials);
                 }
             }
             else
             {
-                transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct);
+                transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct, cxmlCredentials);
             }
         }
         catch (TransformTemplateException ex)
