@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Xml.Linq;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 
@@ -25,9 +26,59 @@ public static class OutputNodeTemplateInferrer
         {
             OutputFormat.Json => FromJson(sample),
             OutputFormat.Csv  => FromCsv(sample),
+            OutputFormat.Xml or OutputFormat.CXml or OutputFormat.Ubl => FromXml(sample, format),
             _ => throw new ArgumentException(
-                     $"Sample inference supports JSON and CSV in v1 (got '{format}').", nameof(format)),
+                     $"Sample inference supports JSON, CSV, and XML (got '{format}').", nameof(format)),
         };
+    }
+
+    // ── XML (cXML / UBL share the parser) ────────────────────────────────────────
+
+    private static OutputNodeTemplate FromXml(string sample, OutputFormat format)
+    {
+        var doc = XDocument.Parse(sample);
+        var root = NodeFromXml(doc.Root ?? throw new ArgumentException("XML sample has no root element.", nameof(sample)), lineScope: false);
+        return new OutputNodeTemplate { Format = format, Root = root };
+    }
+
+    private static OutputNode NodeFromXml(XElement el, bool lineScope)
+    {
+        var attrs = el.Attributes()
+            .Where(a => !a.IsNamespaceDeclaration)
+            .Select(a => OutputNode.Attr(a.Name.LocalName, RuleFor(a.Name.LocalName, lineScope)))
+            .ToList();
+
+        var childElements = el.Elements().ToList();
+        if (childElements.Count == 0)
+        {
+            // A leaf element with attributes is modelled as an object carrying them; a pure leaf is a field.
+            return attrs.Count > 0
+                ? new OutputNode { Name = el.Name.LocalName, NodeType = OutputNodeType.Object, Children = attrs }
+                : OutputNode.FieldOf(el.Name.LocalName, RuleFor(el.Name.LocalName, lineScope));
+        }
+
+        var groups = childElements.GroupBy(c => c.Name.LocalName).ToList();
+
+        // Wrapped repeating group (e.g. <Lines><Line/><Line/></Lines>) → the line list.
+        if (attrs.Count == 0 && groups.Count == 1 && groups[0].Count() > 1)
+        {
+            return new OutputNode
+            {
+                Name = el.Name.LocalName, NodeType = OutputNodeType.Array, Collection = "lines",
+                Children = new() { NodeFromXml(groups[0].First(), lineScope: true) },
+            };
+        }
+
+        // Object: attributes first, then one child per distinct name (a repeated child → nested list).
+        var children = new List<OutputNode>(attrs);
+        foreach (var g in groups)
+        {
+            children.Add(g.Count() > 1
+                ? new OutputNode { Name = g.Key, NodeType = OutputNodeType.Array, Collection = "lines",
+                    Children = new() { NodeFromXml(g.First(), lineScope: true) } }
+                : NodeFromXml(g.First(), lineScope));
+        }
+        return new OutputNode { Name = el.Name.LocalName, NodeType = OutputNodeType.Object, Children = children };
     }
 
     // ── JSON ─────────────────────────────────────────────────────────────────────

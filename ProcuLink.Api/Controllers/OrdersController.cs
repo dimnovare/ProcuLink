@@ -1323,10 +1323,13 @@ public sealed class OrdersController : ControllerBase
         {
             "json" => OutputFormat.Json,
             "csv"  => OutputFormat.Csv,
+            "xml"  => OutputFormat.Xml,
+            "cxml" => OutputFormat.CXml,
+            "ubl"  => OutputFormat.Ubl,
             _      => (OutputFormat?)null,
         };
         if (fmt is null)
-            return BadRequest(new { error = "Sample inference supports json and csv." });
+            return BadRequest(new { error = "Sample inference supports json, csv, and xml." });
 
         try
         {

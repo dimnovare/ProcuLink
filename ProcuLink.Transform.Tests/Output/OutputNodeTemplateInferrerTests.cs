@@ -56,6 +56,37 @@ public class OutputNodeTemplateInferrerTests
     }
 
     [Fact]
+    public void Xml_InfersElements_Attributes_AndWrappedRepeatingGroup()
+    {
+        const string sample = """
+        <Order orderRef="PO-1"><Header><Currency>EUR</Currency></Header><Lines><Line sku="S-1"><Qty>3</Qty></Line><Line sku="S-2"><Qty>2</Qty></Line></Lines></Order>
+        """;
+        var t = OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Xml);
+
+        Assert.Equal(OutputFormat.Xml, t.Format);
+        Assert.Equal("Order", t.Root.Name);
+        Assert.Equal(OutputNodeType.Object, t.Root.NodeType);
+
+        // orderRef attribute → Attribute node bound to PoNumber by name
+        var refAttr = Assert.Single(t.Root.Children.Where(c => c.NodeType == OutputNodeType.Attribute));
+        Assert.Equal("orderRef", refAttr.Name);
+        Assert.Equal("PoNumber", refAttr.Rule!.CanonicalField);
+
+        // Header object with a Currency field
+        var header = Assert.Single(t.Root.Children.Where(c => c.Name == "Header"));
+        Assert.Equal("Currency", header.Children[0].Name);
+
+        // Lines wrapper → Array of Line items
+        var lines = Assert.Single(t.Root.Children.Where(c => c.Name == "Lines"));
+        Assert.Equal(OutputNodeType.Array, lines.NodeType);
+        var lineItem = lines.Children[0];
+        Assert.Equal("Line", lineItem.Name);
+        Assert.Equal(OutputNodeType.Attribute, lineItem.Children.Single(c => c.Name == "sku").NodeType);
+        Assert.Equal("SupplierItemCode", lineItem.Children.Single(c => c.Name == "sku").Rule!.CanonicalField);
+        Assert.Equal("Quantity", lineItem.Children.Single(c => c.Name == "Qty").Rule!.CanonicalField);
+    }
+
+    [Fact]
     public void Inferred_Json_RoundTrips_ThroughEmitter_WithSameShape()
     {
         // Infer a tree from a supplier sample, then render a real order through it: the OUTPUT keys
