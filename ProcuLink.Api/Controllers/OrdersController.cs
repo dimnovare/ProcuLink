@@ -1303,6 +1303,52 @@ public sealed class OrdersController : ControllerBase
         return Accepted(new { status = "transforming" });
     }
 
+    // ── POST /api/orders/{id}/infer-output-structure ──────────────────────────
+
+    /// <summary>
+    /// Phase D: infer an output-structure template from a SAMPLE of the file a supplier requires
+    /// (paste/upload). Deterministic — JSON + CSV in v1; leaves are pre-bound to canonical fields by
+    /// name. Returned with camelCase string enum node types (the frontend wire contract). The order id
+    /// scopes the request to the tenant; the sample alone drives the shape.
+    /// </summary>
+    [HttpPost("{id:guid}/infer-output-structure")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public IActionResult InferOutputStructure(Guid id, [FromBody] InferOutputStructureRequest? request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Sample))
+            return BadRequest(new { error = "Paste a sample of the file your supplier requires." });
+
+        var fmt = (request.Format?.Trim().ToLowerInvariant()) switch
+        {
+            "json" => OutputFormat.Json,
+            "csv"  => OutputFormat.Csv,
+            _      => (OutputFormat?)null,
+        };
+        if (fmt is null)
+            return BadRequest(new { error = "Sample inference supports json and csv." });
+
+        try
+        {
+            var tree = OutputNodeTemplateInferrer.FromSample(request.Sample!, fmt.Value);
+            var json = System.Text.Json.JsonSerializer.Serialize(tree, OutputTreeJsonOptions);
+            return Content(json, "application/json");
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = $"Could not read that sample as {fmt.Value.ToString().ToLowerInvariant()}: {ex.Message}" });
+        }
+    }
+
+    public sealed record InferOutputStructureRequest(string? Sample, string? Format);
+
+    private static readonly System.Text.Json.JsonSerializerOptions OutputTreeJsonOptions = new()
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase) },
+    };
+
     // ── POST /api/orders/{id}/validate ────────────────────────────────────────
 
     /// <summary>Validate the order against the supplier's active acceptance profile.</summary>

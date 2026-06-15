@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using Xunit;
@@ -51,5 +52,33 @@ public class OutputTreeWireContractTests
         Assert.Equal(OutputNodeType.Array, children[1].NodeType);
         Assert.Equal(OutputNodeType.Object, children[1].Children[0].NodeType);
         Assert.Equal(OutputNodeType.Field, children[1].Children[0].Children[0].NodeType);
+    }
+
+    [Fact]
+    public void Serialize_OutputTree_EmitsCamelCaseStringEnums_ForFrontend()
+    {
+        // The infer endpoint serializes its response with these options — the FE must receive STRING
+        // node types ("object"/"array"/"field") + "json" format, not numbers.
+        var tree = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Json,
+            Root = OutputNode.Obj("root",
+                OutputNode.FieldOf("po", new OutputFieldRule { OutputPath = "po", CanonicalField = "PoNumber" }),
+                OutputNode.Arr("lines", OutputNode.Obj("line",
+                    OutputNode.FieldOf("sku", new OutputFieldRule { OutputPath = "sku", CanonicalField = "SupplierItemCode" })))),
+        };
+        var opts = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        };
+
+        var json = JsonSerializer.Serialize(tree, opts);
+
+        Assert.Contains("\"nodeType\":\"object\"", json);
+        Assert.Contains("\"nodeType\":\"array\"", json);
+        Assert.Contains("\"nodeType\":\"field\"", json);
+        Assert.Contains("\"format\":\"json\"", json);
+        Assert.DoesNotContain("\"nodeType\":0", json);   // never raw enum numbers
     }
 }
