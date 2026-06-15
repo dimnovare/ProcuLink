@@ -73,7 +73,16 @@ Branch `feat/trust-layer-ws0`, commits `3d5a8a4` + `e041922`. All additive + UNW
 | **Byte-parity gate** | converted flat config → emitter CSV == `MappedTransformService` flat CSV, **byte-identical** | ☑ **PROVEN** — cutover de-risked |
 | **B6** | Wire OutputNode as the highest-precedence output mode in `OrderTransformService` (opt-in `OrderMappingOverride.OutputTree`; all other modes gate on `!useOutputNode`; round-trips via the override JSON, no migration) | ☑ **LIVE** `ffab220` — end-to-end test delivers arbitrary nested structure; full Api.Tests 1075 green, zero regression. **Design-the-output works on the backend.** |
 | B4 | Default `OutputNodeTemplate` per STRUCTURED format = today's hardcoded tree; byte-parity vs `Xml/Cxml/Ubl/X12TransformService` | ◐ OPTIONAL — existing transformers stay as the default; only needed to MIGRATE existing suppliers' flat configs to trees |
-| B6-preview | Preview path (`OrdersController.PreviewMappingOverride`) honors `OutputTree` so preview == delivery for the new mode | ◐ NEXT (WS-0b parity) |
+| B6-preview | Preview path honors `OutputTree` so preview == delivery | ☑ `bc87e19` — highest-precedence Mode-0 renders via the same emitter |
+| Wire contract | Override read+write serializers gain `JsonStringEnumConverter` so the tree's node types round-trip as FE strings | ☑ `be68f57` |
+
+### Phase C — the visual designer — STARTED (functional first version)
+| Step | What | Status |
+|---|---|---|
+| C-types | FE `OutputNode`/`OutputNodeTemplate`/`EnvelopeConfig` types + `outputTree` on the override; `buildOverrideDraft` + both save paths carry it through (data-loss guard) | ☑ `d97b227` + `105258d` |
+| C-designer | `OutputStructureDesigner` modal — tree editor (object/list/value/attribute) bound to incoming fields, LIVE preview (== delivery), Save. Launched from the output editor's "⚄ Design structure" button | ☑ `105258d` (functional first version) |
+| C-polish | drag-reorder, design-system polish, interactive + visual QA (worktree+Playwright recipe), responsive | ◐ NEXT — the founder's UX bar warrants a dedicated visual pass |
+| C-consolidation | WS-5 (5 areas / one designer / order-review as instance), WS-8 (hide versioning), WS-9 (vocab purge) | ◐ later |
 | B7 | Delete the dead `IParsedOrderTransform` stack (WS-11) | ◐ NEXT |
 | B12 | `EnvelopeConfig` per-connection persistence + X12/cXML identity wiring | ◐ NEXT |
 
