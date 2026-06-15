@@ -132,6 +132,8 @@ Grounded via a 7-agent workflow + a 4-dimension adversarial review. **Net core (
 - **D (MEDIUM+LOW, ns):** no-namespace node no longer inherits an ancestor default (explicit empty-ns, byte-identical); prefix-without-namespace fails loud.
 - Tests: 6 new. Transform 968 · Api 1078 · byte-parity intact. Dismissed (false positives): unwrapped-array-by-design, same-prefix-two-URI (unreachable), prefix-conflict probes, inferrer-empty-FixedValue (intended human-in-loop).
 
+**DEPLOYED + LIVE-VERIFIED ON PROD (2026-06-16).** BE Railway build `e72e0396` SUCCESS (after the `dotnet/sdk:8.0` MCR base-image 429/401 throttle cleared — an external builder-side outage, not our code; auto-retried until it built), FE Vercel `28f589e` Ready. Live authenticated checks: infer a UBL sample with 2 header `cbc:Note` + 2 `cac:OrderLine` → **1** lines array (not 2), **2** Note siblings (Fix A), `rootNamespace`/`cbc` prefix captured (T4); a cXML-format OutputTree preview returns `{ok:false, "...cannot produce valid CXml..."}` (Fix B). **B12 core is live and correct.**
+
 > **(historical NEXT-BUILD note, now superseded by the table above) — EnvelopeConfig + structured-EDI standards-validity gaps:**
 > 1. **X12 segment emitter** in `OutputTemplateEmitter` (today: throws for X12 — gated out of the designer). Hand-rolled ISA/GS/ST + BEG/REF/N1/PO1/CTT (no commercial EDI licence).
 > 2. **cXML DOCTYPE** on emit (`<!DOCTYPE cXML SYSTEM "…/cXML.dtd">`) + **From/To/Sender** Header from `EnvelopeConfig.Cxml` (today: hardcoded identity in `CxmlTransformService`).
