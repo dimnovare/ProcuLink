@@ -45,11 +45,13 @@ P0. Must land before any output-layer feature. Status legend: ☐ todo · ◐ in
 | WS-0f | Negative/zero quantity flagged at parse (`CsvOrderParser.cs:119 ?? 0m`, no sign check) + covered by invariant | ☑ covered by `invariant.quantity_positive` (all formats, parser-agnostic) |
 | WS-0a | Kill silent output fallback in `OrderTransformService.cs:312-322,333-343` → fail loud for a configured-but-broken override; legit no-override default stays | ☑ inner catches now throw → reuse the validation-fail path (revert to `ready`, return reason); throwing-transformer characterization test added |
 | WS-0g | `OutputMappingFellBack`(+reason) provenance on artifact + order DTO + UI | ◐ LARGELY MOOT — with WS-0a there is no silent fallback left; the only remaining "default" is the genuine no-override case (not a fallback). A "used default because no override" provenance flag is optional polish; deferred (would need the migration). |
-| WS-0h | cXML preview credential parity — preview resolves From/To/Sender via same resolver as delivery (`OrdersController.PreviewMappingOverride`) | ◐ NEXT |
-| WS-13a | Sample SUPPLIER excluded from quota + normal lists (`StripeBillingService.cs:763` add `&& !s.IsSample`; filter list) | ☑ quota fix done (list-filter follow-up) |
-| WS-13b | Live PO-loop E2E heading fixed + made a CI gate (`live-po-loop.spec.ts:48`) | ◐ NEXT |
-| WS-13c | Retry disabled when delivery config missing (`FailedPanels.tsx`) | ◐ NEXT |
-| WS-13d | 5-vs-6 stages copy reconciled | ◐ NEXT |
+| WS-0h | cXML preview credential parity — preview resolves From/To/Sender via same resolver as delivery (`OrdersController.PreviewMappingOverride`) | ☑ `e47e9cf` — resolver wired into controller; preview passes cxmlCreds |
+| WS-13a | Sample SUPPLIER excluded from quota + normal lists (`StripeBillingService.cs:763` add `&& !s.IsSample`; filter list) | ☑ quota fix done (list-filter is a small follow-up) |
+| WS-13b | Live PO-loop E2E heading fixed + made a CI gate (`live-po-loop.spec.ts:48`) | ◐ DEFERRED — CI-skipped live-only test (`PLAYWRIGHT_LIVE`); fixing the assertion needs a live-env heading check + a CI live-gate decision. Low risk, no prod impact. |
+| WS-13c | Retry disabled when delivery config missing (`FailedPanels.tsx`) | ☑ `35fdd30` — retry disabled (not just demoted) in the config-missing panel |
+| WS-13d | 5-vs-6 stages copy reconciled | ☑ `35fdd30` — how-it-works "Five"→"Six" stages to match its panel |
+
+> **PHASE A COMPLETE** (both P0 trust bombs + hygiene). Branch `feat/trust-layer-ws0` — BE `e47e9cf`, FE `35fdd30`. Full Api.Tests 1074 green; Infra 706; Transform 935; FE build clean. Only WS-13b deferred (a CI-skipped live test). **Not merged/deployed** (founder gate). **Next: Phase B — the `OutputNode` AST (WS-1) + format-aware emitters (WS-2) + `EnvelopeConfig` (WS-12).** This is the large structural cut and the actual "design the output" fix; start with the OutputNode model design + a Phase B implementation plan (Superpowers brainstorm/write-plan), then build behind the parser/transform seams with a byte-parity gate before cutover.
 
 > **BOTH P0 trust bombs committed** on `feat/trust-layer-ws0`:
 > - input-trust (WS-0c/d/e/f) + sample quota (WS-13a) — backend `0d7160b`, frontend `78f781a`.
