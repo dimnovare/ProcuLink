@@ -57,8 +57,10 @@ public sealed class OutputTemplateEmitter
                 Result(EmitJson(template, headerRow, LineRowFor, orderedLines), "application/json", ".json"),
             OutputFormat.Xml or OutputFormat.CXml or OutputFormat.Ubl =>
                 Result(EmitXml(template, headerRow, LineRowFor, orderedLines), "application/xml", ".xml"),
+            OutputFormat.Csv =>
+                Result(EmitCsv(template, headerRow, LineRowFor, orderedLines), "text/csv", ".csv"),
             _ => throw new ArgumentException(
-                     $"OutputTemplateEmitter does not yet support format '{template.Format}' (B3: JSON + XML).",
+                     $"OutputTemplateEmitter does not yet support format '{template.Format}' (B3: JSON + XML + CSV).",
                      nameof(template)),
         };
     }
@@ -170,6 +172,48 @@ public sealed class OutputTemplateEmitter
                 w.WriteEndElement();
                 break;
         }
+    }
+
+    // ── CSV (delimited) ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Flatten the tree to a delimited grid, mirroring <see cref="MappedTransformService"/>'s flat CSV
+    /// EXACTLY (same column order, escaping, line ordering, and AppendLine), so a converted flat config
+    /// renders byte-identically. The root Object's Field children are the leading (header) columns,
+    /// repeated on every row; the first Array child's item Object's Field children are the per-line
+    /// columns. Column header = the node's Name; values resolve through the same machinery.
+    /// </summary>
+    private static byte[] EmitCsv(
+        OutputNodeTemplate template,
+        IReadOnlyDictionary<string, string> headerRow,
+        Func<PurchaseOrderLineEntity, IReadOnlyDictionary<string, string>> lineRowFor,
+        IReadOnlyList<PurchaseOrderLineEntity> orderedLines)
+    {
+        var root = template.Root;
+        var headerFields = root.Children.Where(c => c.NodeType == OutputNodeType.Field).ToList();
+        var arrayNode    = root.Children.FirstOrDefault(c => c.NodeType == OutputNodeType.Array);
+        var lineItem     = arrayNode?.Children.FirstOrDefault();
+        var lineFields   = lineItem?.Children.Where(c => c.NodeType == OutputNodeType.Field).ToList()
+                           ?? new List<OutputNode>();
+
+        var sb = new StringBuilder();
+
+        var headerNames = headerFields.Select(f => f.Name).Concat(lineFields.Select(f => f.Name));
+        sb.AppendLine(string.Join(",", headerNames.Select(MappedTransformService.Escape)));
+
+        var headerValues = headerFields
+            .Select(f => MappedTransformService.ResolveRule(f.Rule ?? Empty, headerRow, lineScope: false) ?? string.Empty)
+            .ToList();
+
+        foreach (var line in orderedLines)
+        {
+            var lineRow = lineRowFor(line);
+            var lineValues = lineFields
+                .Select(f => MappedTransformService.ResolveRule(f.Rule ?? Empty, lineRow, lineScope: true) ?? string.Empty);
+            sb.AppendLine(string.Join(",", headerValues.Concat(lineValues).Select(MappedTransformService.Escape)));
+        }
+
+        return Encoding.UTF8.GetBytes(sb.ToString());
     }
 
     // ── Shared ─────────────────────────────────────────────────────────────────────

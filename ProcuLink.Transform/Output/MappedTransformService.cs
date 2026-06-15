@@ -442,8 +442,8 @@ public sealed class MappedTransformService
         catch (OverflowException) { return 0m; }
     }
 
-    /// <summary>RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline.</summary>
-    private static string Escape(string value)
+    /// <summary>RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline. Internal so the OutputNode CSV emitter escapes byte-identically.</summary>
+    internal static string Escape(string value)
     {
         if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
             return $"\"{value.Replace("\"", "\"\"")}\"";

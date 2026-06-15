@@ -117,10 +117,48 @@ public class OutputTemplateEmitterTests
             () => new OutputTemplateEmitter().Emit(template, order, new OrderMappingOverride()));
     }
 
+    [Fact]
+    public void Csv_ConvertedFromFlatConfig_IsByteIdenticalToFlatBuilder()
+    {
+        // BYTE-PARITY GATE: a flat OutputMappingConfig, lifted into an OutputNodeTemplate by the
+        // converter and rendered by the new emitter, must produce the EXACT bytes the existing flat
+        // CSV builder produces. This is what makes cutting existing suppliers over to the new engine
+        // safe — same input → identical output.
+        var order = ResolvedOrder();
+        var config = new OutputMappingConfig
+        {
+            Header =
+            {
+                ["po"]  = new OutputFieldRule { OutputPath = "OrderRef", CanonicalField = "PoNumber" },
+                ["cur"] = new OutputFieldRule { OutputPath = "Currency", CanonicalField = "Currency" },
+            },
+            Lines =
+            {
+                ["sku"] = new OutputFieldRule { OutputPath = "ItemCode", CanonicalField = "SupplierItemCode" },
+                ["qty"] = new OutputFieldRule { OutputPath = "Qty",      CanonicalField = "Quantity" },
+            },
+        };
+        var ov = new OrderMappingOverride { Output = config };
+
+        var flatBytes = ReadBytes(new MappedTransformService().Build(order, ov, OutputFormat.Csv));
+        var template  = OutputNodeTemplateConverter.FromFlat(config, OutputFormat.Csv);
+        var treeBytes = ReadBytes(new OutputTemplateEmitter().Emit(template, order, ov));
+
+        Assert.Equal(flatBytes, treeBytes);
+    }
+
     private static string ReadAll(TransformResult result)
     {
         result.Content.Position = 0;
         using var sr = new StreamReader(result.Content, Encoding.UTF8);
         return sr.ReadToEnd();
+    }
+
+    private static byte[] ReadBytes(TransformResult result)
+    {
+        result.Content.Position = 0;
+        using var ms = new MemoryStream();
+        result.Content.CopyTo(ms);
+        return ms.ToArray();
     }
 }
