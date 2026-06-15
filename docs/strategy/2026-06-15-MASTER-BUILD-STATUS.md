@@ -81,7 +81,8 @@ Branch `feat/trust-layer-ws0`, commits `3d5a8a4` + `e041922`. All additive + UNW
 |---|---|---|
 | C-types | FE `OutputNode`/`OutputNodeTemplate`/`EnvelopeConfig` types + `outputTree` on the override; `buildOverrideDraft` + both save paths carry it through (data-loss guard) | ☑ `d97b227` + `105258d` |
 | C-designer | `OutputStructureDesigner` modal — tree editor (object/list/value/attribute) bound to incoming fields, LIVE preview (== delivery), Save. Launched from the output editor's "⚄ Design structure" button | ☑ `105258d` (functional first version) |
-| C-polish | drag-reorder, design-system polish, interactive + visual QA (worktree+Playwright recipe), responsive | ◐ NEXT — the founder's UX bar warrants a dedicated visual pass |
+| C-polish | design-system alignment (Bridge Layer): violet→AI-only, green-primary Save, slate badges, navy launch, **3px buyer-blue→supplier-green bridge edge**, "what the supplier receives" copy | ☑ `dafb78a` (token/signature-compliant by construction) |
+| C-visual-QA | pixel-level live-render screenshot pass + drag-reorder + responsive | ◐ NEXT — blocked by `.next` contention with the running `:8082`; do via a fresh worktree (own `.next` + symlinked node_modules) or when `:8082` is free. Component builds + typechecks + uses locked tokens, so this is verification, not a known defect. |
 | C-consolidation | WS-5 (5 areas / one designer / order-review as instance), WS-8 (hide versioning), WS-9 (vocab purge) | ◐ later |
 | B7 | Delete the dead `IParsedOrderTransform` stack (WS-11) | ◐ NEXT |
 | B12 | `EnvelopeConfig` per-connection persistence + X12/cXML identity wiring | ◐ NEXT |
