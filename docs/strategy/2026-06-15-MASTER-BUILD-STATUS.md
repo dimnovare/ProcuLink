@@ -30,9 +30,11 @@ The engine is real and tested (7 input formats parse live; delivery proven on pr
 
 ## BUILD STATUS
 
-### Branches
-- Backend: `feat/trust-layer-ws0` (off `main @ b2c3dce`).
-- Frontend: `feat/trust-layer-ws0` (off `main @ 7c622c1`, == origin/main = deployed prod).
+### Branches — MERGED + DEPLOYED TO PROD (2026-06-15)
+- Backend: `feat/trust-layer-ws0` → **`main @ 49712cf`** (FF). Pushed; Railway redeployed API + Worker (`aware-amazement`). **API verified live** (infer route 401; `/health` OK).
+- Frontend: `feat/trust-layer-ws0` → **`main @ 11e82a2`** (FF). Pushed; **Vercel production ● Ready** (verified, fresh on dynamic routes).
+- No EF migrations (all additive: `OutputTree` rides `canonical_json`). Rollback = Railway/Vercel redeploy of the prior build.
+- **The entire output-layer restructure (A trust + B engine + C designer + D infer, all formats) is LIVE on prod.** Remaining = consolidation (WS-5/8/9), EnvelopeConfig, designer pixel-QA — all post-deploy follow-ups.
 
 ### Phase A — TRUST (WS-0 + WS-13 quick-wins) — **IN PROGRESS**
 P0. Must land before any output-layer feature. Status legend: ☐ todo · ◐ in progress · ☑ done · ✅ verified-live.
