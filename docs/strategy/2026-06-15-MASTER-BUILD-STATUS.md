@@ -84,6 +84,16 @@ Branch `feat/trust-layer-ws0`, commits `3d5a8a4` + `e041922`. All additive + UNW
 | C-polish | design-system alignment (Bridge Layer): violet→AI-only, green-primary Save, slate badges, navy launch, **3px buyer-blue→supplier-green bridge edge**, "what the supplier receives" copy | ☑ `dafb78a` (token/signature-compliant by construction) |
 | C-visual-QA | pixel-level live-render screenshot pass + drag-reorder + responsive | ◐ NEXT — blocked by `.next` contention with the running `:8082`; do via a fresh worktree (own `.next` + symlinked node_modules) or when `:8082` is free. Component builds + typechecks + uses locked tokens, so this is verification, not a known defect. |
 | C-consolidation | WS-5 (5 areas / one designer / order-review as instance), WS-8 (hide versioning), WS-9 (vocab purge) | ◐ later |
+
+### Phase D — paste-sample → infer the tree — SHIPPED
+| Step | What | Status |
+|---|---|---|
+| D-infer | `OutputNodeTemplateInferrer` (deterministic, no AI/network — works for no-egress): JSON + CSV sample → node tree (nesting, repeating groups, columns), leaves pre-bound to canonical fields by name | ☑ `ebef7f1` |
+| D-endpoint | `POST /api/orders/{id}/infer-output-structure` → tree serialized with string enums (FE contract) | ☑ `ebef7f1` |
+| D-fe | Designer "⧉ Paste a supplier sample to start" → auto-detect JSON/CSV → infer → tree opens shaped to match | ☑ `f710acf` |
+| D-xml | XML/cXML/UBL sample inference | ◐ follow-up (JSON+CSV cover the common paste cases) |
+
+> **The complaint-killer flow is LIVE:** paste the file the supplier requires → infer → adjust → live preview (== delivery) → save → deliver. Tests: JSON nesting, CSV columns, infer→emit round-trip, response string-enum serialization. Transform 942 + Api 1077 green.
 | B7 | Delete the dead `IParsedOrderTransform` stack (WS-11) | ◐ NEXT |
 | B12 | `EnvelopeConfig` per-connection persistence + X12/cXML identity wiring | ◐ NEXT |
 
