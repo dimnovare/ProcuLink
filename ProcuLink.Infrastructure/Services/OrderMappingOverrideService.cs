@@ -23,6 +23,9 @@ public sealed class OrderMappingOverrideService : IOrderMappingOverrideService
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        // OutputNode tree (Phase B): enum node types round-trip as camelCase strings ("object"/"array"/
+        // "field"/"attribute") to match the frontend wire contract, not as opaque numbers.
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     private readonly ProcuLinkDbContext _db;

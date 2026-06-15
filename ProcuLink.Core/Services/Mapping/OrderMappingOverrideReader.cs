@@ -17,6 +17,9 @@ public static class OrderMappingOverrideReader
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
+        // OutputNode tree (Phase B): accept camelCase string enum node types ("object"/"array"/
+        // "field"/"attribute") from the frontend (the converter also still reads numeric values).
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     /// <summary>
