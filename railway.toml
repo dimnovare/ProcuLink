@@ -19,7 +19,3 @@ watchPatterns = [
 [deploy]
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
-# Re-trigger 2026-06-16: the B12 backend builds failed transiently on an MCR
-# `dotnet/sdk:8.0` base-image pull (429 Too Many Requests), not on our code.
-# ci re-trigger attempt 1 (MCR base-image outage)
-# ci re-trigger attempt 2 (MCR base-image outage)
