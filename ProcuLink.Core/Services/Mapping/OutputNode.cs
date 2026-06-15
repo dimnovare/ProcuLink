@@ -56,6 +56,20 @@ public record OutputNode
     /// </summary>
     public string? Collection { get; init; }
 
+    /// <summary>
+    /// (B12) Optional XML namespace URI bound to this element/attribute (e.g. the UBL
+    /// <c>CommonBasicComponents-2</c> URI for a <c>cbc:</c> element). Null → the legacy single-arg
+    /// emit path, byte-identical to non-namespaced output. JSON/CSV ignore it.
+    /// </summary>
+    public string? Namespace { get; init; }
+
+    /// <summary>
+    /// (B12) Optional XML prefix (e.g. <c>"cac"</c>/<c>"cbc"</c>) bound to <see cref="Namespace"/>.
+    /// Null prefix + non-null <see cref="Namespace"/> → a default namespace (no prefix). Null + null →
+    /// the legacy single-arg emit. JSON/CSV ignore it.
+    /// </summary>
+    public string? Prefix { get; init; }
+
     // ── Convenience factories (keep call sites + the converter readable) ──────────
 
     public static OutputNode Obj(string name, params OutputNode[] children) =>
