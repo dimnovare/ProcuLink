@@ -43,9 +43,16 @@ public static class OutputNodeTemplateInferrer
 
     private static OutputNode NodeFromXml(XElement el, bool lineScope)
     {
+        var (ns, prefix) = NsOf(el.Name, el);
+
         var attrs = el.Attributes()
             .Where(a => !a.IsNamespaceDeclaration)
-            .Select(a => OutputNode.Attr(a.Name.LocalName, RuleFor(a.Name.LocalName, lineScope)))
+            .Select(a =>
+            {
+                var (ans, aprefix) = NsOf(a.Name, el);
+                return OutputNode.Attr(a.Name.LocalName, RuleFor(a.Name.LocalName, lineScope))
+                    with { Namespace = ans, Prefix = aprefix };
+            })
             .ToList();
 
         var childElements = el.Elements().ToList();
@@ -53,32 +60,43 @@ public static class OutputNodeTemplateInferrer
         {
             // A leaf element with attributes is modelled as an object carrying them; a pure leaf is a field.
             return attrs.Count > 0
-                ? new OutputNode { Name = el.Name.LocalName, NodeType = OutputNodeType.Object, Children = attrs }
-                : OutputNode.FieldOf(el.Name.LocalName, RuleFor(el.Name.LocalName, lineScope));
+                ? new OutputNode { Name = el.Name.LocalName, NodeType = OutputNodeType.Object, Namespace = ns, Prefix = prefix, Children = attrs }
+                : OutputNode.FieldOf(el.Name.LocalName, RuleFor(el.Name.LocalName, lineScope)) with { Namespace = ns, Prefix = prefix };
         }
 
-        var groups = childElements.GroupBy(c => c.Name.LocalName).ToList();
+        // Group by the QUALIFIED name (namespace-aware) so cac:Foo and cbc:Foo never collide.
+        var groups = childElements.GroupBy(c => c.Name).ToList();
 
-        // Wrapped repeating group (e.g. <Lines><Line/><Line/></Lines>) → the line list.
+        // Wrapped repeating group (e.g. <Lines><Line/><Line/></Lines>) → a NAMED array wrapper.
         if (attrs.Count == 0 && groups.Count == 1 && groups[0].Count() > 1)
         {
             return new OutputNode
             {
-                Name = el.Name.LocalName, NodeType = OutputNodeType.Array, Collection = "lines",
+                Name = el.Name.LocalName, NodeType = OutputNodeType.Array, Namespace = ns, Prefix = prefix, Collection = "lines",
                 Children = new() { NodeFromXml(groups[0].First(), lineScope: true) },
             };
         }
 
-        // Object: attributes first, then one child per distinct name (a repeated child → nested list).
+        // Object: attributes first, then one child per distinct name. A repeated child is UNWRAPPED
+        // (empty array name) — the element itself repeats directly under this object, e.g. UBL
+        // <Order><cac:OrderLine/>..</Order>. The item node carries the namespace, not the empty wrapper.
         var children = new List<OutputNode>(attrs);
         foreach (var g in groups)
         {
             children.Add(g.Count() > 1
-                ? new OutputNode { Name = g.Key, NodeType = OutputNodeType.Array, Collection = "lines",
+                ? new OutputNode { Name = "", NodeType = OutputNodeType.Array, Collection = "lines",
                     Children = new() { NodeFromXml(g.First(), lineScope: true) } }
                 : NodeFromXml(g.First(), lineScope));
         }
-        return new OutputNode { Name = el.Name.LocalName, NodeType = OutputNodeType.Object, Children = children };
+        return new OutputNode { Name = el.Name.LocalName, NodeType = OutputNodeType.Object, Namespace = ns, Prefix = prefix, Children = children };
+    }
+
+    /// <summary>The (namespace URI, prefix) of an XML name. Null/null for the no-namespace case (legacy byte-identical). Prefix null = a default namespace.</summary>
+    private static (string? Namespace, string? Prefix) NsOf(System.Xml.Linq.XName name, XElement scope)
+    {
+        var ns = name.NamespaceName;
+        if (string.IsNullOrEmpty(ns)) return (null, null);
+        return (ns, scope.GetPrefixOfNamespace(name.Namespace));
     }
 
     // ── JSON ─────────────────────────────────────────────────────────────────────

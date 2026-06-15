@@ -203,13 +203,17 @@ public sealed class OutputTemplateEmitter
                 break;
 
             case OutputNodeType.Array:
-                // The Array node is a wrapper element; each line renders the item template inside it.
-                StartElement(w, node);
+                // WRAPPED (named) → <Wrapper><item/>..</Wrapper>, e.g. <Lines><Line/>..</Lines>.
+                // UNWRAPPED (empty name) → the item element repeats directly under the parent, e.g.
+                // UBL <Order><cac:OrderLine/>..</Order> (no wrapper). Without this, inferring real UBL
+                // (unwrapped repetition) would double-nest the line element.
+                var wrapped = !string.IsNullOrWhiteSpace(node.Name);
+                if (wrapped) StartElement(w, node);
                 var item = node.Children.FirstOrDefault();
                 if (item is not null)
                     foreach (var line in orderedLines)
                         WriteXmlNode(w, item, lineRowFor(line), lineScope: true, lineRowFor, orderedLines);
-                w.WriteEndElement();
+                if (wrapped) w.WriteEndElement();
                 break;
 
             default: // Field → <Name>value</Name>  (Attribute is handled by the parent Object)
