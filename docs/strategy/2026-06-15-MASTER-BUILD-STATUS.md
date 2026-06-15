@@ -30,7 +30,8 @@ The engine is real and tested (7 input formats parse live; delivery proven on pr
 
 ## BUILD STATUS
 
-### Branches — MERGED + DEPLOYED TO PROD (2026-06-15)
+### Branches — MERGED + DEPLOYED TO PROD (2026-06-15 → -16)
+- **Post-deploy fix `06656d6`** (BE `main`): the live prod walkthrough found the designer modal rendered beautifully but its live preview returned **HTTP 400** — `[FromBody]` MVC binding lacked the string-enum converter. Fixed via the `[JsonConverter]` attribute (above). Pushed; Railway redeploy `03608873` (DEPLOYING at 00:05). Re-verify the preview on the open prod tab once SUCCESS.
 - Backend: `feat/trust-layer-ws0` → **`main @ 49712cf`** (FF). Pushed; Railway redeployed API + Worker (`aware-amazement`). **API verified live** (infer route 401; `/health` OK).
 - Frontend: `feat/trust-layer-ws0` → **`main @ 11e82a2`** (FF). Pushed; **Vercel production ● Ready** (verified, fresh on dynamic routes).
 - No EF migrations (all additive: `OutputTree` rides `canonical_json`). Rollback = Railway/Vercel redeploy of the prior build.
@@ -77,6 +78,7 @@ Branch `feat/trust-layer-ws0`, commits `3d5a8a4` + `e041922`. All additive + UNW
 | B4 | Default `OutputNodeTemplate` per STRUCTURED format = today's hardcoded tree; byte-parity vs `Xml/Cxml/Ubl/X12TransformService` | ◐ OPTIONAL — existing transformers stay as the default; only needed to MIGRATE existing suppliers' flat configs to trees |
 | B6-preview | Preview path honors `OutputTree` so preview == delivery | ☑ `bc87e19` — highest-precedence Mode-0 renders via the same emitter |
 | Wire contract | Override read+write serializers gain `JsonStringEnumConverter` so the tree's node types round-trip as FE strings | ☑ `be68f57` |
+| Wire contract (binding) | **[FromBody] binding** of `OrderMappingOverride` (preview + save endpoints) uses the GLOBAL web JSON options, which lacked the string-enum converter → live walkthrough hit HTTP **400 "Preview failed"**. Fix: `CamelCaseJsonStringEnumConverter` applied as a `[JsonConverter]` attribute on `OutputNodeType` + `OutputNodeTemplate.Format` (carries everywhere incl. MVC binding, leaves the wide-used `OutputFormat` default shape untouched). Added the missing `JsonSerializerDefaults.Web` binding regression test. | ☑ `06656d6` — Api.Tests **1078** green |
 
 ### Phase C — the visual designer — STARTED (functional first version)
 | Step | What | Status |

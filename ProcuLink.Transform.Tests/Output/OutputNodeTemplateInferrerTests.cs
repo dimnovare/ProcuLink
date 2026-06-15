@@ -41,6 +41,22 @@ public class OutputNodeTemplateInferrerTests
         Assert.Equal("Quantity", itemByName["qty"].Rule!.CanonicalField);
     }
 
+    [Theory]
+    [InlineData("poRef")]
+    [InlineData("PO Ref")]
+    [InlineData("PO No")]
+    [InlineData("PONr")]
+    [InlineData("orderNo")]
+    public void Json_PreBinds_CommonPoNumberAliases(string poFieldName)
+    {
+        // Live prod walkthrough (2026-06-16): a supplier sample keyed "poRef" left the PO id unbound.
+        // Common PO-number aliases must pre-bind to PoNumber so paste-sample lands close to correct.
+        var sample = $"{{\"{poFieldName}\":\"PO-1\",\"items\":[{{\"sku\":\"S-1\"}}]}}";
+        var t = OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Json);
+        var field = Assert.Single(t.Root.Children.Where(c => c.Name == poFieldName));
+        Assert.Equal("PoNumber", field.Rule!.CanonicalField);
+    }
+
     [Fact]
     public void Csv_InfersColumns_AndBindsHeaderyColumnToPoNumber()
     {

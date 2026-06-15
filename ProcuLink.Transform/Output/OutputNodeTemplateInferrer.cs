@@ -198,7 +198,7 @@ public static class OutputNodeTemplateInferrer
             // value (e.g. a CSV "OrderRef" column repeated on every row binds to PoNumber).
         }
 
-        if (Has("ponumber", "ordernumber", "ordernr", "orderref", "purchaseorder", "ordno", "ponum")) return "PoNumber";
+        if (Has("ponumber", "ordernumber", "ordernr", "orderref", "purchaseorder", "ordno", "ponum", "poref", "pono", "ponr", "ordernum", "orderno")) return "PoNumber";
         if (Has("orderdate", "podate", "date")) return "OrderDate";
         if (Has("currency", "curr", "ccy")) return "Currency";
         if (Has("buyername", "buyer", "customer", "company")) return "BuyerName";
