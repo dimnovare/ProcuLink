@@ -3,6 +3,13 @@ namespace ProcuLink.Core.Services.Mapping;
 /// <summary>
 /// The kind of an <see cref="OutputNode"/> in the output template tree.
 /// </summary>
+/// <remarks>
+/// Annotated so the values round-trip as camelCase strings ("object"/"array"/"field"/"attribute")
+/// EVERYWHERE — including ASP.NET Core <c>[FromBody]</c> binding, which uses the global web JSON
+/// options that lack a string-enum converter. Without this the frontend tree (<c>"nodeType":"object"</c>)
+/// fails to bind and the preview/save endpoints return HTTP 400.
+/// </remarks>
+[System.Text.Json.Serialization.JsonConverter(typeof(CamelCaseJsonStringEnumConverter))]
 public enum OutputNodeType
 {
     /// <summary>A named wrapper with child nodes — a JSON object, an XML element, a UBL group.</summary>
@@ -71,6 +78,12 @@ public record OutputNode
 /// </summary>
 public record OutputNodeTemplate
 {
+    /// <summary>
+    /// The serialization format. Property-level converter so the value binds from a camelCase string
+    /// ("json"/"csv"/"xml"/"cXml"/…) under <c>[FromBody]</c> too — OutputFormat itself stays unannotated
+    /// because it is used widely elsewhere and must not change its default (numeric) wire shape there.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(CamelCaseJsonStringEnumConverter))]
     public OutputFormat Format { get; init; }
 
     public OutputNode Root { get; init; } = new();
