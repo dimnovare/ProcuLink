@@ -718,6 +718,10 @@ public sealed class OrdersController : ControllerBase
     /// Org-scoped: a cross-tenant or unknown order id returns 404.
     /// </summary>
     [HttpPost("{id:guid}/mapping-override/preview")]
+    // Deterministic in-memory dry-run — NEVER writes, NEVER delivers, does NO LLM work. The
+    // live mapping editor calls this repeatedly (debounced as the user types), so give it the
+    // generous "preview" policy rather than competing on the shared global limiter.
+    [EnableRateLimiting("preview")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -1290,7 +1294,10 @@ public sealed class OrdersController : ControllerBase
     /// Returns 404 when the order doesn't exist for the authenticated organisation.
     /// </summary>
     [HttpGet("{id:guid}/mapping-preview")]
-    [EnableRateLimiting("ai")]
+    // Deterministic read — does NO LLM work (just reads stored suggestions). The live
+    // mapping editor polls this (debounced) while an order parses, so it must NOT share
+    // the tight "ai" cap or it trips "Rate limit exceeded". Use the generous "preview" policy.
+    [EnableRateLimiting("preview")]
     [ProducesResponseType(typeof(MappingPreviewDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]

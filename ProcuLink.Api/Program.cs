@@ -281,6 +281,15 @@ builder.Services.AddRateLimiter(options =>
     // Tighter cap protects the OpenAI bill and latency budget.
     options.AddPolicy("ai", ctx => Window(ctx, "ai", permit: 15, seconds: 60));
 
+    // Deterministic mapping-preview reads (GET .../mapping-preview, POST
+    // .../mapping-override/preview). These do NO LLM work — they read stored
+    // suggestions / run an in-memory dry-run transform — but the live mapping
+    // editor polls them repeatedly (debounced as the user types/while parsing).
+    // They MUST NOT share the tight "ai" cap, or the editor trips a 429. Generous
+    // per-user ceiling so debounced polling never bites, still bounded so a
+    // runaway client can't hammer the transform path.
+    options.AddPolicy("preview", ctx => Window(ctx, "preview", permit: 120, seconds: 60));
+
     // Signed-URL / artifact-download generation. Each call mints a pre-signed R2
     // URL; cap so the surface can't be used to bulk-mint download links.
     options.AddPolicy("signed-url", ctx => Window(ctx, "signed-url", permit: 60, seconds: 60));

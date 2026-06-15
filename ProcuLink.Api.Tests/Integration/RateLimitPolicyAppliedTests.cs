@@ -9,11 +9,13 @@ namespace ProcuLink.Api.Tests.Integration;
 
 // ════════════════════════════════════════════════════════════════════════════
 //  P2-4 follow-up: the named rate-limit policies ("transform", "ai",
-//  "signed-url") were DEFINED in Program.cs but never APPLIED — only the
-//  "upload" policy was wired to an action, so they were dead config. These
-//  tests guard that each expensive / cost-bearing / abusable action now carries
-//  the correct [EnableRateLimiting("<policy>")] attribute, AND that the policy
-//  is actually enforced end-to-end (a live 429 once the window is exhausted).
+//  "signed-url", "preview") were DEFINED in Program.cs but (originally) never
+//  APPLIED — only the "upload" policy was wired to an action, so they were dead
+//  config. These tests guard that each expensive / cost-bearing / abusable
+//  action now carries the correct [EnableRateLimiting("<policy>")] attribute,
+//  AND that the policy is actually enforced end-to-end (a live 429 once the
+//  window is exhausted). The deterministic mapping-preview reads use the
+//  generous "preview" policy (they do no LLM work — the editor polls them).
 //
 //  The attribute-presence checks are the primary regression guard: they prove
 //  the exact action↔policy wiring that the concern was about. The live 429 test
@@ -35,7 +37,10 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
     [InlineData(typeof(OrdersController), nameof(OrdersController.Transform), "transform")]
     // AI-invoking endpoints → "ai" (15/min — protects the OpenAI bill).
     [InlineData(typeof(OrdersController), nameof(OrdersController.AcceptAiSuggestions), "ai")]
-    [InlineData(typeof(OrdersController), nameof(OrdersController.GetMappingPreview), "ai")]
+    // Deterministic mapping-preview reads do NO LLM work but the mapping editor polls them
+    // (debounced) → generous "preview" policy (120/min), NOT the tight "ai" cap.
+    [InlineData(typeof(OrdersController), nameof(OrdersController.GetMappingPreview), "preview")]
+    [InlineData(typeof(OrdersController), nameof(OrdersController.PreviewMappingOverride), "preview")]
     [InlineData(typeof(SchemaInferenceController), nameof(SchemaInferenceController.Infer), "ai")]
     [InlineData(typeof(SchemaInferenceController), nameof(SchemaInferenceController.ProposeMapping), "ai")]
     [InlineData(typeof(MappingSuggestionsController), nameof(MappingSuggestionsController.SuggestFields), "ai")]

@@ -44,6 +44,15 @@ internal sealed class OrderIngestionService
     private readonly IProductCodeSearch?         _productCodeSearch;
     private readonly IAiUsageTracker?            _aiUsage;
 
+    /// <summary>
+    /// Minimum confidence for an AI / fuzzy-catalog supplier-code suggestion to be surfaced on a
+    /// line. Below this floor the suggestion is dropped (AiSuggested* left null) so the reviewer
+    /// sees "no confident match — enter manually" rather than an unrelated catalog code. Does NOT
+    /// apply to the source-manufacturer-part-number suggestion, which is a real code stated in the
+    /// document and is emitted at 0.95.
+    /// </summary>
+    private const float AiSuggestionConfidenceFloor = 0.65f;
+
     public OrderIngestionService(
         ProcuLinkDbContext         db,
         IFileStorageService        fileStorage,
@@ -1167,6 +1176,15 @@ internal sealed class OrderIngestionService
                 else
                 {
                     suggestions.TryGetValue(line.LineNumber, out suggestion);
+
+                    // Confidence floor for AI / fuzzy-catalog suggestions: a weak fuzzy match
+                    // (e.g. "ACME-JSON-2" @ 0.60 for a Yubico YubiKey) is worse than no suggestion —
+                    // it misleads the reviewer into accepting an unrelated code. Below the floor we
+                    // DROP it so the UI shows "no confident match — enter manually" instead. This
+                    // applies ONLY to the AI/fuzzy-catalog path; the source-manufacturer-part-number
+                    // branch above is a real code stated in the document and stays at 0.95.
+                    if (suggestion is not null && suggestion.Confidence < AiSuggestionConfidenceFloor)
+                        suggestion = null;
                 }
             }
 
