@@ -76,6 +76,7 @@ public sealed class SourceTokenizer : ISourceTokenizer
             ".cxml" => TokenizeXml(sourceBytes),  // cXML is XML; reuse the generic XML walk
             ".edi"  => TokenizeEdifact(sourceBytes),
             ".x12"  => TokenizeX12(sourceBytes),
+            ".json" => TokenizeJson(sourceBytes),
             // PDF — no stable addressable cells in a rendered PDF; always return empty.
             // All other unrecognised formats — return empty so downstream falls through.
             _ => Array.Empty<SourceToken>(),
@@ -271,6 +272,73 @@ public sealed class SourceTokenizer : ISourceTokenizer
             colNum = (colNum - 1) / 26;
         }
         return sb.ToString();
+    }
+
+    // ── JSON ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Tokenises a JSON document (object or array root). Every LEAF value (string / number /
+    /// bool / null) becomes a token addressed by its JSON Pointer, id <c>"json:{pointer}"</c>
+    /// (e.g. <c>"json:/lines/0/sku"</c>). This is what gives pushed / API-ingress structured
+    /// orders a complete, draggable source-field set (JSON previously fell through to empty).
+    /// Group is "line" when the leaf is anywhere under an array (per-line), else "header".
+    /// Never throws — malformed JSON returns an empty list.
+    /// </summary>
+    private static IReadOnlyList<SourceToken> TokenizeJson(byte[] bytes)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(bytes);
+            var tokens = new List<SourceToken>();
+            WalkJson(doc.RootElement, pointer: string.Empty, display: string.Empty, underArray: false, tokens);
+            return tokens;
+        }
+        catch
+        {
+            return Array.Empty<SourceToken>();
+        }
+    }
+
+    private static void WalkJson(
+        System.Text.Json.JsonElement el, string pointer, string display, bool underArray, List<SourceToken> tokens)
+    {
+        switch (el.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.Object:
+                foreach (var prop in el.EnumerateObject())
+                {
+                    // JSON Pointer escaping: '~' → '~0', '/' → '~1'.
+                    var key = prop.Name.Replace("~", "~0").Replace("/", "~1");
+                    var childDisplay = string.IsNullOrEmpty(display) ? prop.Name : $"{display} › {prop.Name}";
+                    WalkJson(prop.Value, $"{pointer}/{key}", childDisplay, underArray, tokens);
+                }
+                break;
+
+            case System.Text.Json.JsonValueKind.Array:
+                var i = 0;
+                foreach (var item in el.EnumerateArray())
+                {
+                    // Show 1-based occurrence in the label; keep the 0-based index in the pointer.
+                    var childDisplay = $"{display}[{i + 1}]";
+                    WalkJson(item, $"{pointer}/{i}", childDisplay, underArray: true, tokens);
+                    i++;
+                }
+                break;
+
+            default: // leaf: string / number / true / false / null
+                var value = el.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.String => el.GetString() ?? string.Empty,
+                    System.Text.Json.JsonValueKind.Null   => string.Empty,
+                    _                                      => el.GetRawText(),
+                };
+                tokens.Add(new SourceToken(
+                    Id:    $"json:{pointer}",
+                    Label: string.IsNullOrEmpty(display) ? "(root)" : display,
+                    Value: value,
+                    Group: underArray ? "line" : "header"));
+                break;
+        }
     }
 
     // ── XML ───────────────────────────────────────────────────────────────────
