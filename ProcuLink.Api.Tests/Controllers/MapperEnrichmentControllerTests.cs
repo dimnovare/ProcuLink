@@ -55,7 +55,7 @@ public class MapperEnrichmentControllerTests
     {
         var acceptance = new Mock<ISupplierAcceptanceService>();
         acceptance
-            .Setup(s => s.ValidateOrderAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Setup(s => s.ValidateOrderAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>(), It.IsAny<ProcuLink.Core.Services.OutputFormat?>()))
             .ReturnsAsync(new List<OrderValidationResult>());
 
         var poMappings = new Mock<IPoMappingService>();
@@ -226,7 +226,7 @@ public class MapperEnrichmentControllerTests
         var acceptance = new Mock<ISupplierAcceptanceService>();
         // Service signals "order not found for this org" by returning null.
         acceptance
-            .Setup(s => s.ValidateOrderAsync(It.IsAny<Guid>(), orderId, It.IsAny<CancellationToken>()))
+            .Setup(s => s.ValidateOrderAsync(It.IsAny<Guid>(), orderId, It.IsAny<CancellationToken>(), It.IsAny<ProcuLink.Core.Services.OutputFormat?>()))
             .ReturnsAsync((IReadOnlyList<OrderValidationResult>?)null);
 
         var ctrl = BuildController(db, Guid.NewGuid(), acceptance.Object,
@@ -260,7 +260,7 @@ public class MapperEnrichmentControllerTests
 
         var acceptance = new Mock<ISupplierAcceptanceService>();
         acceptance
-            .Setup(s => s.ValidateOrderAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+            .Setup(s => s.ValidateOrderAsync(orgId, orderId, It.IsAny<CancellationToken>(), It.IsAny<ProcuLink.Core.Services.OutputFormat?>()))
             .ReturnsAsync(rows);
 
         var ctrl = BuildController(db, orgId, acceptance.Object,

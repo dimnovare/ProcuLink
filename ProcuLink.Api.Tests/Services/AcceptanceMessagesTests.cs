@@ -11,18 +11,28 @@ namespace ProcuLink.Api.Tests.Services;
 public class AcceptanceMessagesTests
 {
     [Fact]
-    public void Fail_Max_ReadsHuman_WithCatalogTitle_ActualVsExpected_AndFix()
+    public void Fail_Max_ReadsHuman_ActualVsExpected_AndFix()
     {
-        // unitPrice.max is a known catalog rule → "Unit price at most".
+        // unitPrice.max is a known catalog rule → "Unit price at most" (carried SEPARATELY as the
+        // headline via TitleFor, NOT duplicated into the message — see the title-dup review fix).
         var msg = AcceptanceMessages.ForFail("unitPrice", "max", "100", "50000", lineNumber: 3);
 
         Assert.StartsWith("Line 3:", msg);
-        Assert.Contains("Unit price at most", msg);          // catalog title lead
         Assert.Contains("unit price must be at most 50000", msg);
         Assert.Contains("100", msg);                          // the actual value
         Assert.Contains("Lower unit price to 50000 or less", msg); // suggested fix
-        // The old developer template must be gone.
-        Assert.DoesNotContain("failed rule", msg);
+        Assert.DoesNotContain("failed rule", msg);            // old developer template gone
+        // The headline title is NOT repeated in the message (no double-display in the fix card).
+        Assert.DoesNotContain("Unit price at most", msg);
+        Assert.Equal("Unit price at most", AcceptanceMessages.TitleFor("unitPrice", "max"));
+    }
+
+    [Fact]
+    public void Fail_UnknownOperator_EmptyExpected_HasNoTrailingSpace()
+    {
+        var msg = AcceptanceMessages.ForFail("someField", "custom_check", "X", expectedValue: null, lineNumber: null);
+        Assert.DoesNotContain(" ).", msg);                    // no "(custom_check )." trailing space
+        Assert.Contains("(custom_check)", msg);
     }
 
     [Fact]
@@ -87,6 +97,13 @@ public class AcceptanceMessagesTests
         Assert.Equal("Supplier item code is required", AcceptanceMessages.TitleForCode("supplierItemCode.required"));
         Assert.Null(AcceptanceMessages.TitleForCode("invariant.po_number_present"));
         Assert.Null(AcceptanceMessages.TitleForCode(null));
+    }
+
+    [Fact]
+    public void TitleForCode_KnowsOutputCheckCodes()
+    {
+        Assert.Equal("Buyer item code required for this format", AcceptanceMessages.TitleForCode(AcceptanceMessages.OutputBuyerCodeCode));
+        Assert.Equal("Value adjusted for the output", AcceptanceMessages.TitleForCode(AcceptanceMessages.OutputSanitizedCode));
     }
 
     [Fact]

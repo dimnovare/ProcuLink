@@ -23,9 +23,12 @@ public interface ISupplierAcceptanceService
     Task<bool> ActivateVersionAsync(Guid orgId, Guid supplierId, int versionNo, CancellationToken ct);
 
     /// <summary>
-    /// Evaluates the order against the supplier's active profile, persists + returns results.
-    /// Returns null when the order does not exist for this org (caller should 404).
-    /// An empty list means the order exists but has no active profile or no failing rules.
+    /// Evaluates the order against the supplier's active profile (invariants + acceptance rules +
+    /// output-render checks), persists + returns results. Returns null when the order does not exist
+    /// for this org (caller should 404). An empty list means the order exists but has no active
+    /// profile or failing rules. <paramref name="outputFormat"/> (optional) lets the output checks
+    /// catch the format-mandatory buyer item code; when omitted, the price check still surfaces.
     /// </summary>
-    Task<IReadOnlyList<OrderValidationResult>?> ValidateOrderAsync(Guid orgId, Guid orderId, CancellationToken ct);
+    Task<IReadOnlyList<OrderValidationResult>?> ValidateOrderAsync(
+        Guid orgId, Guid orderId, CancellationToken ct, OutputFormat? outputFormat = null);
 }

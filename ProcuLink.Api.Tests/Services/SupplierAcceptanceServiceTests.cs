@@ -106,6 +106,44 @@ public class SupplierAcceptanceServiceTests
     }
 
     [Fact]
+    public async Task ValidateOrder_X12Format_MissingBuyerCode_SurfacesOutputRow_NotOnlyTransformError()
+    {
+        // The format-mandatory buyer item code (X12/EDIFACT) is an OUTPUT-render requirement that today
+        // only blows up at transform time. Routed into the validate list, it shows up as a plain row.
+        var db = MakeDb();
+        var svc = new SupplierAcceptanceService(db);
+        var orgId = Guid.NewGuid(); var supplierId = Guid.NewGuid(); var orderId = Guid.NewGuid();
+
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = orderId, OrgId = orgId, SupplierId = supplierId, PoNumber = "PO-X12",
+            Status = "ready", Currency = "EUR", OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            Lines = new List<PurchaseOrderLineEntity>
+            {
+                // Resolved (supplier code set, not needs-review, positive price) but EMPTY buyer item
+                // code (BuyerItemCode is a required column; empty string still trips IsNullOrWhiteSpace).
+                new() { Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1, BuyerItemCode = "",
+                        SupplierItemCode = "S1", Quantity = 1, UnitPrice = 5m, NeedsReview = false },
+            }
+        });
+        await db.SaveChangesAsync();
+
+        // No acceptance profile — but the output check still runs for the X12 format.
+        var results = await svc.ValidateOrderAsync(orgId, orderId, CancellationToken.None, OutputFormat.X12);
+
+        Assert.NotNull(results);
+        var outputRow = Assert.Single(results!, r => r.Code == AcceptanceMessages.OutputBuyerCodeCode);
+        Assert.Equal("fail", outputRow.Status);
+        Assert.Equal(1, outputRow.LineNumber);
+        Assert.Contains("buyer item code", outputRow.Message, StringComparison.OrdinalIgnoreCase);
+
+        // Without an output format (JSON default), the X12-only buyer-code requirement does NOT fire.
+        var jsonResults = await svc.ValidateOrderAsync(orgId, orderId, CancellationToken.None);
+        Assert.DoesNotContain(jsonResults!, r => r.Code == AcceptanceMessages.OutputBuyerCodeCode);
+    }
+
+    [Fact]
     public async Task ValidateOrder_NoActiveProfile_RunsInvariantsOnly_NeverVacuouslyEmpty()
     {
         // Trust regression guard: an order with NO acceptance profile must NOT yield an empty result

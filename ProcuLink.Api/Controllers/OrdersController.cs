@@ -1366,9 +1366,16 @@ public sealed class OrdersController : ControllerBase
     [HttpPost("{id:guid}/validate")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Validate(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Validate(Guid id, [FromQuery] string? format, CancellationToken ct)
     {
-        var results = await _acceptance.ValidateOrderAsync(_tenant.OrganisationId, id, ct);
+        // Optional output format → also surfaces the format-mandatory buyer-code output check; when
+        // omitted the price/structural output checks still run (JSON default imposes no extra reqs).
+        ProcuLink.Core.Services.OutputFormat? outputFormat =
+            !string.IsNullOrWhiteSpace(format)
+            && Enum.TryParse<ProcuLink.Core.Services.OutputFormat>(format, ignoreCase: true, out var fmt)
+                ? fmt : null;
+
+        var results = await _acceptance.ValidateOrderAsync(_tenant.OrganisationId, id, ct, outputFormat);
         if (results is null) return NotFound();
         return Ok(results.Select(r => new OrderValidationResultDto(
             r.LineNumber, r.Severity, r.Status, r.Code, r.Message,

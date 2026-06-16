@@ -38,7 +38,7 @@ namespace ProcuLink.Transform.Output;
 /// emitted bytes are byte-for-byte identical to before this guard existed.
 /// </para>
 /// </summary>
-internal static class OutputFieldValidator
+public static class OutputFieldValidator
 {
     /// <summary>
     /// Validates a canonical <see cref="ParsedOrder"/> against the required-field
@@ -81,7 +81,17 @@ internal static class OutputFieldValidator
     /// (empty buyer item code where the format mandates it, missing / zero unit price).
     /// Throws <see cref="TransformValidationException"/> when anything is invalid.
     /// </summary>
-    public static void ValidateEntity(PurchaseOrderEntity order, OutputFormat format)
+    public static void ValidateEntity(PurchaseOrderEntity order, OutputFormat format) =>
+        Throw(CollectEntityProblems(order, format));
+
+    /// <summary>
+    /// The SAME per-line output checks as <see cref="ValidateEntity"/>, but RETURNS the problems
+    /// instead of throwing — so the validation surface (POST /orders/{id}/validate) can show output
+    /// errors (zero/negative price, format-mandatory buyer code) in the plain-language issue list
+    /// BEFORE a transform is attempted, instead of only as a transform-time exception. Pure: no I/O,
+    /// no throw, no transform.
+    /// </summary>
+    public static IReadOnlyList<LineProblem> CollectEntityProblems(PurchaseOrderEntity order, OutputFormat format)
     {
         ArgumentNullException.ThrowIfNull(order);
 
@@ -112,7 +122,7 @@ internal static class OutputFieldValidator
                     "held for review to avoid a zero-value document."));
         }
 
-        Throw(problems);
+        return problems;
     }
 
     /// <summary>

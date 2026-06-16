@@ -47,22 +47,49 @@ public static class AcceptanceMessages
             "line_amount_reconcile"
                          => ("The line amount doesn't add up — quantity × unit price doesn't match the stated total.",
                              "Check the quantity, unit price, and line amount."),
-            _            => ($"{field} doesn't meet the rule ({@operator} {expected}).", null),
+            _            => (expected.Length > 0
+                                ? $"{field} doesn't meet the rule ({@operator} {expected})."
+                                : $"{field} doesn't meet the rule ({@operator}).", null),
         };
 
-        var title = TitleFor(fieldPath, @operator);
-        var lead  = title is null ? string.Empty : $"{title}. ";
-        var tail  = fix is null ? string.Empty : $" {fix}";
-        return $"{where}{lead}{why}{tail}".Trim();
+        // The catalog title is returned SEPARATELY (OrderValidationResultDto.Title) and shown as the
+        // card headline — so it is NOT repeated here. The message is the explanation + suggested fix.
+        var tail = fix is null ? string.Empty : $" {fix}";
+        return $"{where}{why}{tail}".Trim();
     }
 
     /// <summary>The catalog Title for a (field, operator), or null when the pair isn't a known catalog rule.</summary>
     public static string? TitleFor(string fieldPath, string @operator) =>
         TitleForCode(RuleCatalog.CodeFor(fieldPath, @operator));
 
-    /// <summary>The catalog Title for a stored <c>{fieldPath}.{operator}</c> code (null for invariants / ad-hoc rules).</summary>
+    /// <summary>The headline title for a stored code — from the rule catalog, or the output-check
+    /// titles (zero price / buyer-code / sanitized) routed into the validation list. Null for
+    /// invariants / ad-hoc rules (the UI then falls back to the field name).</summary>
     public static string? TitleForCode(string? code) =>
-        string.IsNullOrEmpty(code) ? null : RuleCatalog.Entries.FirstOrDefault(e => e.Code == code)?.Title;
+        string.IsNullOrEmpty(code) ? null
+            : CodeToTitle.TryGetValue(code, out var t) ? t
+            : OutputTitles.TryGetValue(code, out var ot) ? ot
+            : null;
+
+    /// <summary>Stable codes + headlines for output-render problems surfaced in the validation list
+    /// (see <c>OutputFieldValidator.CollectEntityProblems</c>); their Message is already plain.</summary>
+    // Namespaced under "output.*" so they never collide with a catalog acceptance-rule code
+    // (e.g. a real "buyerItemCode.required" rule) — both could otherwise validate the same order.
+    public const string OutputPriceCode = "output.unitPrice";
+    public const string OutputBuyerCodeCode = "output.buyerItemCode";
+    public const string OutputSanitizedCode = "output.sanitized";
+    private static readonly Dictionary<string, string> OutputTitles = new(StringComparer.Ordinal)
+    {
+        [OutputPriceCode]     = "Unit price must be positive",
+        [OutputBuyerCodeCode] = "Buyer item code required for this format",
+        [OutputSanitizedCode] = "Value adjusted for the output",
+    };
+
+    /// <summary>O(1) code→title index over the (static, ~18-entry) catalog — built once, not scanned per result.</summary>
+    private static readonly Dictionary<string, string> CodeToTitle =
+        RuleCatalog.Entries
+            .GroupBy(e => e.Code, StringComparer.Ordinal)   // tolerate any dup code (first wins)
+            .ToDictionary(g => g.Key, g => g.First().Title, StringComparer.Ordinal);
 
     /// <summary>camelCase / dotted field path → spaced lower-case label ("unitPrice" → "unit price", "shipToVat" → "ship to vat").</summary>
     internal static string Humanize(string fieldPath)

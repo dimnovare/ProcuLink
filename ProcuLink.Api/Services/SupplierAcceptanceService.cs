@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Api.Services;
 
@@ -176,7 +177,8 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         return true;
     }
 
-    public async Task<IReadOnlyList<OrderValidationResult>?> ValidateOrderAsync(Guid orgId, Guid orderId, CancellationToken ct)
+    public async Task<IReadOnlyList<OrderValidationResult>?> ValidateOrderAsync(
+        Guid orgId, Guid orderId, CancellationToken ct, OutputFormat? outputFormat = null)
     {
         var order = await _db.PurchaseOrders
             .Include(o => o.Lines)
@@ -199,10 +201,53 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         var results = new List<OrderValidationResult>();
         results.AddRange(InvariantValidator.Evaluate(orgId, orderId, order, now));
         results.AddRange(EvaluateProfile(orgId, orderId, profile, order, now));
+        results.AddRange(EvaluateOutputFields(orgId, orderId, order, outputFormat, now));
 
         _db.OrderValidationResults.AddRange(results);
         await _db.SaveChangesAsync(ct);
         return results;
+    }
+
+    /// <summary>
+    /// Surface the OUTPUT-render problems that NOTHING ELSE already shows, in the SAME plain-language
+    /// list, BEFORE a transform is attempted — so the user sees them where they're looking, not only as
+    /// a later transform exception in <c>/operations/exceptions</c>. Deliberately routes ONLY the
+    /// format-mandatory buyer item code (EDIFACT/X12) and sanitized values: <c>NeedsReview</c> +
+    /// <c>MissingSupplierItemCode</c> are already in the inbox fix queue, and zero/negative price is
+    /// already an <see cref="InvariantValidator"/> row — re-listing either would duplicate.
+    /// <paramref name="outputFormat"/> defaults to JSON (no extra item-code requirement); pass the
+    /// supplier's real format to catch the EDI/X12 buyer-code requirement. Pure (no transform, no I/O).
+    /// </summary>
+    private static IReadOnlyList<OrderValidationResult> EvaluateOutputFields(
+        Guid orgId, Guid orderId, PurchaseOrderEntity order, OutputFormat? outputFormat, DateTime now)
+    {
+        var rows = new List<OrderValidationResult>();
+        var problems = OutputFieldValidator.CollectEntityProblems(order, outputFormat ?? OutputFormat.Json);
+
+        foreach (var p in problems)
+        {
+            string? code = p.Kind switch
+            {
+                LineProblemKind.MissingItemCode => AcceptanceMessages.OutputBuyerCodeCode,
+                LineProblemKind.Sanitized       => AcceptanceMessages.OutputSanitizedCode,
+                // NOT routed (already shown elsewhere): NeedsReview / MissingSupplierItemCode (fix
+                // queue), MissingOrZeroPrice (InvariantValidator's unit-price check).
+                _ => null,
+            };
+            if (code is null) continue;
+
+            rows.Add(new OrderValidationResult
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, OrderId = orderId,
+                ProfileId = null, RuleId = null, LineNumber = p.LineNumber,
+                Severity = p.Kind == LineProblemKind.Sanitized ? "warning" : "error",
+                Status = "fail",
+                Code = code,
+                Message = p.Message, // already plain-language from OutputFieldValidator
+                DetectedAt = now,
+            });
+        }
+        return rows;
     }
 
     // ── Launch batch 7 — revision authority ────────────────────────────────────
