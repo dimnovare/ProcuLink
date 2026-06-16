@@ -67,6 +67,41 @@ public sealed class AdminController : ControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public IActionResult GetAccess() => NoContent();
 
+    // ── GET /api/admin/job-failures ───────────────────────────────────────
+    /// <summary>
+    /// Recent Hangfire job failures (method, exception, reason, failed-at) so the platform owner can
+    /// diagnose a stuck/failing worker without opening the Hangfire Postgres. Cross-tenant by nature
+    /// (Hangfire jobs aren't org-partitioned), which is why this lives on the [AdminOnly] surface, not
+    /// the org-scoped /api/ops. Defensive: if the job store is unavailable it returns an empty list,
+    /// never a 500.
+    /// </summary>
+    [HttpGet("job-failures")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public IActionResult GetJobFailures([FromQuery] int count = 50)
+    {
+        count = Math.Clamp(count, 1, 200);
+        try
+        {
+            var api = Hangfire.JobStorage.Current.GetMonitoringApi();
+            var rows = api.FailedJobs(0, count).Select(kv => new AdminJobFailureDto(
+                Id:               kv.Key,
+                Job:              kv.Value.Job is { } j ? $"{j.Type?.Name}.{j.Method?.Name}" : "(unknown)",
+                ExceptionType:    kv.Value.ExceptionType,
+                ExceptionMessage: Truncate(kv.Value.ExceptionMessage, 600),
+                Reason:           kv.Value.Reason,
+                FailedAt:         kv.Value.FailedAt)).ToList();
+            return Ok(new { totalFailed = api.FailedCount(), shown = rows.Count, failures = rows });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Admin job-failures: Hangfire monitoring API unavailable.");
+            return Ok(new { totalFailed = 0, shown = 0, failures = Array.Empty<AdminJobFailureDto>() });
+        }
+    }
+
+    private static string? Truncate(string? s, int max) =>
+        s is { Length: > 0 } && s.Length > max ? s[..max] + "…" : s;
+
     // ── GET /api/admin/overview ───────────────────────────────────────────
     [HttpGet("overview")]
     [ProducesResponseType(typeof(AdminOverviewDto), StatusCodes.Status200OK)]

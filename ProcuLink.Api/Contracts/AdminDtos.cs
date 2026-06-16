@@ -1,5 +1,14 @@
 namespace ProcuLink.Api.Contracts;
 
+/// <summary>One recent Hangfire job failure for the admin worker-observability view.</summary>
+public sealed record AdminJobFailureDto(
+    string Id,
+    string Job,
+    string? ExceptionType,
+    string? ExceptionMessage,
+    string? Reason,
+    DateTime? FailedAt);
+
 /// <summary>
 /// Platform-wide revenue + health snapshot for the owner/admin overview.
 /// MRR is the DB estimate (active paid orgs × published monthly list price).
