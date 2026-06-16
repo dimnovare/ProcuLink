@@ -26,6 +26,26 @@ public sealed record ParsedInvoiceLineData(
     string? BuyerItemCode,
     string? SupplierItemCode);
 
+/// <summary>
+/// List-row projection for the inbound Invoices table. Carries the joined supplier
+/// display name (from <see cref="Supplier.Name"/>, falling back to the free-text
+/// SupplierRef) and the line count, neither of which lives on <see cref="InvoiceEntity"/>
+/// directly. Field names mirror the frontend <c>InvoiceDto</c> contract exactly.
+/// </summary>
+public sealed record InvoiceListItem(
+    Guid     Id,
+    Guid?    SupplierId,
+    string?  SupplierName,
+    string   InvoiceNumber,
+    DateOnly IssueDate,
+    DateOnly? DueDate,
+    string   Currency,
+    decimal  GrandTotal,
+    string   Status,
+    int      LineCount,
+    string?  SourceFileName,
+    DateTime CreatedAt);
+
 public interface IInvoiceService
 {
     /// <summary>Upload source file to R2, create stub with status=parsing.</summary>
@@ -38,7 +58,12 @@ public interface IInvoiceService
         Guid orgId, Guid invoiceId, ParsedInvoiceData data, CancellationToken ct);
 
     Task<InvoiceEntity?> GetAsync(Guid orgId, Guid invoiceId, CancellationToken ct);
-    Task<IReadOnlyList<InvoiceEntity>> ListAsync(Guid orgId, CancellationToken ct);
+
+    /// <summary>
+    /// List the org's invoices for the inbound Invoices table, enriched with the
+    /// joined supplier display name and line count.
+    /// </summary>
+    Task<IReadOnlyList<InvoiceListItem>> ListAsync(Guid orgId, CancellationToken ct);
 
     /// <summary>Advance status from pending_review → approved.</summary>
     Task<InvoiceEntity> ApproveAsync(Guid orgId, Guid invoiceId, CancellationToken ct);

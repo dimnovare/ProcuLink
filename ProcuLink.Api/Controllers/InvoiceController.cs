@@ -78,8 +78,22 @@ public sealed class InvoiceController : ControllerBase
         var invoices = await _invoices.ListAsync(orgId, ct);
         return Ok(invoices.Select(i => new
         {
-            i.Id, i.InvoiceNumber, i.Status, i.IssueDate, i.DueDate,
-            i.Currency, i.GrandTotal, i.SourceFileName, i.CreatedAt,
+            i.Id,
+            i.SupplierId,
+            i.SupplierName,
+            i.InvoiceNumber,
+            i.Status,
+            // Frontend-aligned aliases (the inbound Invoices table reads these names).
+            invoiceDate = i.IssueDate,
+            totalAmount = i.GrandTotal,
+            i.LineCount,
+            // Legacy field names kept so existing consumers don't break.
+            i.IssueDate,
+            i.DueDate,
+            i.Currency,
+            i.GrandTotal,
+            i.SourceFileName,
+            i.CreatedAt,
         }));
     }
 

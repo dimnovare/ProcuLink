@@ -104,10 +104,29 @@ public sealed class InvoiceService : IInvoiceService
     // (organisation_id, created_at DESC) index and page this the way GET /api/orders
     // already does (limit/offset + totalCount). See
     // docs/audit/2026-06-12-scale-gated-constraints.md.
-    public async Task<IReadOnlyList<InvoiceEntity>> ListAsync(Guid orgId, CancellationToken ct)
+    public async Task<IReadOnlyList<InvoiceListItem>> ListAsync(Guid orgId, CancellationToken ct)
         => await _db.Invoices
                     .Where(i => i.OrganisationId == orgId)
                     .OrderByDescending(i => i.CreatedAt)
+                    // Left-join the supplier by id so the display name resolves even though
+                    // InvoiceEntity has no Supplier navigation. Fall back to the free-text
+                    // SupplierRef captured at parse time when no supplier row is linked.
+                    .Select(i => new InvoiceListItem(
+                        i.Id,
+                        i.SupplierId,
+                        _db.Suppliers
+                            .Where(s => s.OrgId == orgId && s.Id == i.SupplierId)
+                            .Select(s => s.Name)
+                            .FirstOrDefault() ?? i.SupplierRef,
+                        i.InvoiceNumber,
+                        i.IssueDate,
+                        i.DueDate,
+                        i.Currency,
+                        i.GrandTotal,
+                        i.Status,
+                        i.Lines.Count,
+                        i.SourceFileName,
+                        i.CreatedAt))
                     .ToListAsync(ct);
 
     public async Task<InvoiceEntity> ApproveAsync(Guid orgId, Guid invoiceId, CancellationToken ct)
