@@ -70,6 +70,20 @@ public record OutputNode
     /// </summary>
     public string? Prefix { get; init; }
 
+    /// <summary>
+    /// (Output designer) Optional CONDITIONAL inclusion predicate — a bare Scriban boolean condition
+    /// (NO <c>{{ }}</c> delimiters), evaluated against the same row scope as <see cref="OutputFieldRule.Expression"/>:
+    /// <c>order.*</c> in header scope, plus <c>line.*</c> in line scope, with the numeric line fields
+    /// (<c>Quantity</c>/<c>UnitPrice</c>/<c>LineTotal</c>/<c>LineNumber</c>) as real numbers. Examples:
+    /// <c>line.Quantity &gt; 0</c>, <c>order.Currency == "EUR"</c>, <c>line.TaxRate != ""</c>.
+    /// <para>When the predicate is falsy the emitter SKIPS this node: a field/object child is omitted,
+    /// an array ITEM template skips that line (e.g. drop zero-quantity lines). Null/blank → always
+    /// included (byte-identical to before — no behaviour change). A predicate that fails to evaluate
+    /// FAILS OPEN (the node is kept) so an authoring mistake never silently drops the supplier's data.
+    /// CSV applies it to line ITEMS only (fixed column grid); JSON/XML apply it to any node.</para>
+    /// </summary>
+    public string? IncludeWhen { get; init; }
+
     // ── Convenience factories (keep call sites + the converter readable) ──────────
 
     public static OutputNode Obj(string name, params OutputNode[] children) =>

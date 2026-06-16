@@ -105,6 +105,7 @@ public sealed class OutputTemplateEmitter
                 foreach (var child in node.Children)
                 {
                     if (child.NodeType == OutputNodeType.Attribute) continue; // attributes are XML-only
+                    if (!ShouldEmit(child, row, lineScope)) continue;         // conditional field
                     w.WritePropertyName(child.Name);
                     WriteJsonValue(w, child, row, lineScope, lineRowFor, orderedLines);
                 }
@@ -116,7 +117,11 @@ public sealed class OutputTemplateEmitter
                 var item = node.Children.FirstOrDefault();
                 if (item is not null)
                     foreach (var line in orderedLines)
-                        WriteJsonValue(w, item, lineRowFor(line), lineScope: true, lineRowFor, orderedLines);
+                    {
+                        var lineRow = lineRowFor(line);
+                        if (!ShouldEmit(item, lineRow, lineScope: true)) continue; // conditional line (e.g. skip qty 0)
+                        WriteJsonValue(w, item, lineRow, lineScope: true, lineRowFor, orderedLines);
+                    }
                 w.WriteEndArray();
                 break;
 
@@ -217,11 +222,13 @@ public sealed class OutputTemplateEmitter
                 if (rootNamespaces is not null)
                     foreach (var (prefix, uri) in rootNamespaces)
                         w.WriteAttributeString("xmlns", prefix, null, uri);
-                // Attributes first, then element children.
+                // Attributes first, then element children. Conditional (IncludeWhen) nodes are skipped.
                 foreach (var attr in node.Children.Where(c => c.NodeType == OutputNodeType.Attribute))
-                    WriteXmlAttribute(w, attr, row, lineScope);
+                    if (ShouldEmit(attr, row, lineScope))
+                        WriteXmlAttribute(w, attr, row, lineScope);
                 foreach (var child in node.Children.Where(c => c.NodeType != OutputNodeType.Attribute))
-                    WriteXmlNode(w, child, row, lineScope, lineRowFor, orderedLines);
+                    if (ShouldEmit(child, row, lineScope))
+                        WriteXmlNode(w, child, row, lineScope, lineRowFor, orderedLines);
                 w.WriteEndElement();
                 break;
 
@@ -235,7 +242,11 @@ public sealed class OutputTemplateEmitter
                 var item = node.Children.FirstOrDefault();
                 if (item is not null)
                     foreach (var line in orderedLines)
-                        WriteXmlNode(w, item, lineRowFor(line), lineScope: true, lineRowFor, orderedLines);
+                    {
+                        var lineRow = lineRowFor(line);
+                        if (!ShouldEmit(item, lineRow, lineScope: true)) continue; // conditional line
+                        WriteXmlNode(w, item, lineRow, lineScope: true, lineRowFor, orderedLines);
+                    }
                 if (wrapped) w.WriteEndElement();
                 break;
 
@@ -290,6 +301,9 @@ public sealed class OutputTemplateEmitter
         foreach (var line in orderedLines)
         {
             var lineRow = lineRowFor(line);
+            // CSV is a fixed column grid, so a conditional COLUMN can't vary per row; IncludeWhen on the
+            // line-item template instead drops the whole ROW (e.g. skip zero-quantity lines).
+            if (lineItem is not null && !ShouldEmit(lineItem, lineRow, lineScope: true)) continue;
             var lineValues = lineFields
                 .Select(f => MappedTransformService.ResolveRule(f.Rule ?? Empty, lineRow, lineScope: true) ?? string.Empty);
             sb.AppendLine(string.Join(",", headerValues.Concat(lineValues).Select(MappedTransformService.Escape)));
@@ -313,6 +327,42 @@ public sealed class OutputTemplateEmitter
     }
 
     private static readonly OutputFieldRule Empty = new() { FixedValue = string.Empty };
+
+    // ── Conditional inclusion (OutputNode.IncludeWhen) ─────────────────────────────
+
+    /// <summary>
+    /// Whether <paramref name="node"/> should be emitted, per its optional <see cref="OutputNode.IncludeWhen"/>
+    /// predicate. Null/blank → always (byte-identical to before). Otherwise the bare condition is wrapped
+    /// in <c>{{ ( … ) }}</c> and evaluated against the SAME row scope as a leaf <c>Expression</c>
+    /// (<c>order.*</c>, plus <c>line.*</c> in line scope) — so <c>line.Quantity &gt; 0</c> renders
+    /// "true"/"false". A predicate that fails to evaluate FAILS OPEN (kept): an authoring mistake must
+    /// never silently drop the supplier's data.
+    /// </summary>
+    private static bool ShouldEmit(OutputNode node, IReadOnlyDictionary<string, string> row, bool lineScope)
+    {
+        var pred = node.IncludeWhen;
+        if (string.IsNullOrWhiteSpace(pred)) return true;
+
+        var wrapped = "{{ (" + pred + ") }}";
+        var result = lineScope
+            ? ScribanFieldEvaluator.EvaluateLine(wrapped, row)
+            : ScribanFieldEvaluator.EvaluateHeader(wrapped, row);
+
+        if (!result.Ok) return true; // fail-open: our/author error never drops data silently
+        return IsTruthy(result.Value);
+    }
+
+    /// <summary>Scriban-rendered truthiness: blank / "false" / "0" / "no" / "off" / "null" → false; else true.</summary>
+    private static bool IsTruthy(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return false;
+        var t = s.Trim();
+        return !(t.Equals("false", StringComparison.OrdinalIgnoreCase)
+                 || t == "0"
+                 || t.Equals("no", StringComparison.OrdinalIgnoreCase)
+                 || t.Equals("off", StringComparison.OrdinalIgnoreCase)
+                 || t.Equals("null", StringComparison.OrdinalIgnoreCase));
+    }
 
     private static TransformResult Result(byte[] bytes, string contentType, string ext) =>
         new(new MemoryStream(bytes, writable: false), contentType, ext);

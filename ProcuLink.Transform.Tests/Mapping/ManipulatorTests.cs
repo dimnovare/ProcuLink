@@ -73,6 +73,68 @@ public class ManipulatorTests
         m.Apply(null, row: null!).Should().BeNull();
     }
 
+    // NumberFormat
+    [Fact]
+    public void NumberFormat_InvariantGrouping_TwoDecimals()
+    {
+        var m = new NumberFormatManipulator(new[] { "N2" });
+        m.Apply("1234.5", row: null!).Should().Be("1,234.50");
+    }
+
+    [Fact]
+    public void NumberFormat_WithCulture_UsesThatGroupingAndDecimal()
+    {
+        var m = new NumberFormatManipulator(new[] { "N2", "de-DE" });
+        m.Apply("1234.5", row: null!).Should().Be("1.234,50");   // EU grouping
+    }
+
+    [Fact]
+    public void NumberFormat_CurrencyFormat_WithCulture()
+    {
+        var m = new NumberFormatManipulator(new[] { "C2", "en-US" });
+        m.Apply("1234.5", row: null!).Should().Be("$1,234.50");
+    }
+
+    [Fact]
+    public void NumberFormat_NonNumericInput_ReturnedUnchanged()
+    {
+        var m = new NumberFormatManipulator(new[] { "N2" });
+        m.Apply("not-a-number", row: null!).Should().Be("not-a-number");
+    }
+
+    [Fact]
+    public void NumberFormat_BlankInput_ReturnedUnchanged()
+    {
+        var m = new NumberFormatManipulator(new[] { "N2" });
+        m.Apply("", row: null!).Should().Be("");
+        m.Apply(null, row: null!).Should().BeNull();
+    }
+
+    [Fact]
+    public void NumberFormat_UnknownCulture_DoesNotThrow()
+    {
+        // .NET (ICU) may synthesise a culture for an unknown name rather than throwing; either way the
+        // manipulator must never throw and must still produce a numeric string.
+        var m = new NumberFormatManipulator(new[] { "N2", "zz-ZZ" });
+        var act = () => m.Apply("1234.5", row: null!);
+        act.Should().NotThrow();
+        m.Apply("1234.5", row: null!).Should().Contain("234");
+    }
+
+    [Fact]
+    public void NumberFormat_RequiresOneOrTwoParams()
+    {
+        var act = () => new NumberFormatManipulator(Array.Empty<string>());
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void Registry_Resolve_NumberFormat_ReturnsInstance()
+    {
+        var m = ManipulatorRegistry.Resolve("NumberFormat", new[] { "N2" });
+        m.Should().BeOfType<NumberFormatManipulator>();
+    }
+
     // Concat
     [Fact]
     public void Concat_JoinsColumnsWithSeparator()

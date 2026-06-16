@@ -7,9 +7,10 @@ public static class ManipulatorRegistry
     public static IFieldManipulator Resolve(string type, IReadOnlyList<string> @params)
         => type switch
         {
-            "Replace"    => new ReplaceManipulator(@params),
-            "Trim"       => new TrimManipulator(@params),
-            "DateFormat" => new DateFormatManipulator(@params),
+            "Replace"      => new ReplaceManipulator(@params),
+            "Trim"         => new TrimManipulator(@params),
+            "DateFormat"   => new DateFormatManipulator(@params),
+            "NumberFormat" => new NumberFormatManipulator(@params),
             "Concat"     => new ConcatManipulator(@params),
             "Fallback"   => new FallbackManipulator(@params),
             "Split"      => new SplitManipulator(@params),
