@@ -36,7 +36,9 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         ".xlsx",
         ".pdf",
         ".xml",
+        ".cxml",  // cXML is a first-class input format (CxmlOrderParser) — accept it from email too
         ".edi",
+        ".x12",   // ANSI X12 850 is a first-class input format (X12OrderParser) — accept from email
         ".txt",
     };
 

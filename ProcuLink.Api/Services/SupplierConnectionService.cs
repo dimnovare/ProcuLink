@@ -321,7 +321,8 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         if (target.Status != "archived" || target.PublishedAt is null)
             return new ConnectionRollbackOutcome(
                 ConnectionRollbackStatus.InvalidTarget, null,
-                "Rollback target must be a previously published (now archived) revision of this connection.");
+                "You can only roll back to a version that was live before. Pick one of the archived " +
+                "versions in the revision history — the current live version and any drafts can't be rollback targets.");
 
         var maxVersion = await _db.SupplierConnectionRevisions
             .Where(r => r.ConnectionId == connectionId)
@@ -638,7 +639,9 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         var replayNote = replay.OrderCount == 0
             ? "No recent orders matched the replay window — pass-with-note."
             : outputErrors > 0
-                ? $"{outputErrors} of {replay.OrderCount} replayed order(s) failed to render under this revision."
+                ? $"{outputErrors} of {replay.OrderCount} recent order(s) couldn't be rebuilt with this version's " +
+                  "mapping (usually an unmapped or unresolved field). Open them from the inbox to see which field, " +
+                  "fix the mapping, then re-run the test."
                 : null;
         var replayLeg = new ReplayLeg(replayPassed, replay.OrderCount, outputErrors, outputChanged, validationChanged, replayNote);
 
@@ -655,7 +658,8 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         {
             conformanceLeg = new ConformanceLeg(
                 true, null, null, 0, 0,
-                $"Skipped — output format '{rev.OutputFormat ?? "(none)"}' has no named conformance profile.");
+                $"Standards check skipped — '{rev.OutputFormat ?? "(none)"}' is a flexible supplier format, not a " +
+                "published EDI standard (only cXML, UBL, X12, and EDIFACT are standards-checked). Your output still delivers normally.");
         }
         else
         {
