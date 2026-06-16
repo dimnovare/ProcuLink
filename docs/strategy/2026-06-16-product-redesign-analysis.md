@@ -484,3 +484,36 @@ in order:
 This is a **partial redesign**, not a rebuild: ~70% of the value (the engine) stays; the funnel and the
 shell change. Estimate: Phases 1–5 are the MVP of the *good* product; 6–8 make it polished. Await
 approval, then I start with T1 (the lossless model) since everything else depends on it.
+
+---
+
+## Build progress log
+
+### 2026-06-16 — Shell wave A: hide the lifecycle (Phase 7 of the plan, pulled forward) — SHIPPED + LIVE-VERIFIED
+
+The founder greenlit "Shell wave — hide the lifecycle" before the deeper structural phases.
+Shipped to prod (frontend `project-proculink` main) and verified end-to-end via Claude-in-Chrome
+on the real **Acme HTTP (JSON)** connection (created + discarded a real draft to exercise the full loop):
+
+- `77adc6f` — **Click-to-edit overlay** on the read-only (published) connection mapper. The user
+  clicks the mapper → a draft is transparently created (`createDraftMutation`) → the mapper becomes
+  editable. The header "Edit mapping" button steps aside while a draft exists (no second-draft footgun).
+- `149d849` — **Plain-language sweep** over the revision lifecycle (machinery unchanged, display only):
+  badge Published→**Live** / Archived→**Previous** / Test→**Tested** (central in `RevisionStatusBadge`,
+  propagates to list + replay); buttons Run tests→**Test**, Publish→**Make live**, Roll back→**Restore
+  this version**, Archive→**Discard**, Create draft→**Edit mapping**; confirm dialogs + success notices +
+  empty states + the `/connections` first-visit guides reworded; dropped the "immutable" lecture.
+- `88da172` — **Order-review two views unified**: "Triage | Full document" pills + a separate "Map fields
+  by dragging" CTA (three names for two views) → **Fix issues (N) | Map fields**, CTA word now matches the
+  pill. subView ids + `?view=` params unchanged (pure relabel). Touched `SpineReview`, `FixQueueTriage`,
+  `OutputPreview`, `section-guides`.
+- `2b9e07a` — dropped the duplicate "Live" pill (badge already says "Live" → was "Live Live"); live row
+  date now "Live since <date>".
+- `718ea0d` — honest "Discarded" label for archived-never-live versions (was misleadingly "Published —";
+  fixed a pre-existing abandoned-draft row too).
+
+All `bunx tsc --noEmit` clean; `section-guides.test.ts` (21) green. All five deploys Ready/Production.
+
+**Next (per plan):** the deeper structural phases still stand — T1 lossless model (largely done — see
+`2026-06-16-T1-lossless-capture-plan.md`), then collapse duplicate surfaces (Phases 2–5). The shell wave
+above is the low-risk, high-visibility slice of Phase 7 done first.
