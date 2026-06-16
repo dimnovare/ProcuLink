@@ -1371,7 +1371,8 @@ public sealed class OrdersController : ControllerBase
         var results = await _acceptance.ValidateOrderAsync(_tenant.OrganisationId, id, ct);
         if (results is null) return NotFound();
         return Ok(results.Select(r => new OrderValidationResultDto(
-            r.LineNumber, r.Severity, r.Status, r.Code, r.Message)));
+            r.LineNumber, r.Severity, r.Status, r.Code, r.Message,
+            ProcuLink.Api.Services.AcceptanceMessages.TitleForCode(r.Code))));
     }
 
     // ── POST /api/orders/{id}/accept-ai-suggestions ──────────────────────────

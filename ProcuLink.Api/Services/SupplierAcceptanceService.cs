@@ -305,9 +305,11 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         ProfileId = profileId, RuleId = rule.Id, LineNumber = lineNumber,
         Severity = rule.Severity, Status = pass ? "pass" : "fail",
         Code = $"{rule.FieldPath}.{rule.Operator}",
+        // Plain-language, fixable message (was the developer template
+        // "unitPrice ('100') failed rule max 50000"). See AcceptanceMessages.
         Message = pass
-            ? $"{rule.FieldPath} satisfies {rule.Operator}"
-            : $"{rule.FieldPath} ('{actualValue}') failed rule {rule.Operator} {rule.ExpectedValue}",
+            ? AcceptanceMessages.ForPass(rule.FieldPath, rule.Operator)
+            : AcceptanceMessages.ForFail(rule.FieldPath, rule.Operator, actualValue, rule.ExpectedValue, lineNumber),
         DetectedAt = now,
     };
 

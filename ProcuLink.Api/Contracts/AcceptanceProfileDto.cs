@@ -17,4 +17,7 @@ public record CreateAcceptanceProfileRequest(
 
 public record OrderValidationResultDto(
     int?    LineNumber, string Severity, string Status,
-    string  Code, string Message);
+    string  Code, string Message,
+    // Plain-language short title from the rule catalog (null for invariants / ad-hoc rules); the UI
+    // shows it as the issue headline, with Message as the explanation + suggested fix.
+    string? Title = null);
