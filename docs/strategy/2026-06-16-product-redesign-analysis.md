@@ -517,3 +517,23 @@ All `bunx tsc --noEmit` clean; `section-guides.test.ts` (21) green. All five dep
 **Next (per plan):** the deeper structural phases still stand — T1 lossless model (largely done — see
 `2026-06-16-T1-lossless-capture-plan.md`), then collapse duplicate surfaces (Phases 2–5). The shell wave
 above is the low-risk, high-visibility slice of Phase 7 done first.
+
+### 2026-06-16 — Output designer: conditional fields + format helpers (Phase 5 / T7 remaining) — SHIPPED + LIVE-VERIFIED
+
+Grounding (3 parallel investigators) found the doc's Phase-3/5 snapshot STALE: the order-review mapper
+is ALREADY unified (MapperWorkbench sole; legacy triptych orphaned), the designer preview already works
+(== delivery, JSON/XML/CSV-only, paste-sample infer). The genuine remaining Phase-5 gaps were **conditional
+fields** and **format helpers**. Both shipped:
+
+- `2a452e3` (backend) — `OutputNode.IncludeWhen` (bare Scriban predicate; emitter skips falsy
+  nodes/lines; null = byte-identical; fail-open on predicate error) + `NumberFormatManipulator`
+  (Date helper already existed). +16 tests; full Transform suite 985 green; Railway API 21664ccb SUCCESS.
+- `30a19b2` (frontend) — per-node "only include when" input + per-field Date/Number/Currency format
+  presets in `OutputStructureDesigner`. Vercel Ready.
+- LIVE-VERIFIED on prod order 302100430 via the live preview (== delivery): `line.Quantity > 1` →
+  `"lines": []` (numeric coercion + line-drop); Number preset → quantity `1` → `1.00`. Test discarded
+  (not saved).
+
+Remaining redesign items are now mostly cleanup/lower-value: delete the orphaned triptych files (Phase-3
+hygiene), the sync-upload SourceCapture gap (Phase-1 tail), and the larger "collapse duplicate surfaces"
+shell consolidation (much of which the shell waves already covered).
