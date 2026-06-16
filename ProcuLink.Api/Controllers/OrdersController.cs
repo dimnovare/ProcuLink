@@ -1125,15 +1125,23 @@ public sealed class OrdersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetSourceTokens(Guid id, CancellationToken ct)
     {
-        // Org-scoped existence + source file key retrieval.
+        // Org-scoped existence + the persisted lossless capture.
         var order = await _db.PurchaseOrders
             .AsNoTracking()
-            .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId)
-            .Select(o => new { o.SourceFileKey, o.SourceFilePurgedAt })
-            .FirstOrDefaultAsync(ct);
+            .Include(o => o.SourceCapture)
+            .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == _tenant.OrganisationId, ct);
 
         if (order is null)
             return NotFound();
+
+        // T1b — prefer the PERSISTED SourceCapture captured at ingest (structured tokens OR the
+        // PDF/email LLM raw_fields). This is the only way PDF/email orders expose their extracted
+        // fields (the rendered file can't be re-tokenised), it survives a purged / API-pushed order
+        // with no stored file, and it avoids an R2 round-trip. Only when nothing was captured do we
+        // fall back to live re-tokenisation of the stored file below.
+        var persisted = ProcuLink.Transform.Output.SourceTokenSerialization.FromTokensJson(order.SourceCapture?.TokensJson);
+        if (persisted.Count > 0)
+            return Ok(persisted);
 
         // No stored source file → empty list (valid, not an error).
         if (string.IsNullOrEmpty(order.SourceFileKey))

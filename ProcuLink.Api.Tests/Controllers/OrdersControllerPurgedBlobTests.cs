@@ -162,4 +162,44 @@ public class OrdersControllerPurgedBlobTests
         var tokens = Assert.IsAssignableFrom<IEnumerable<ProcuLink.Transform.Tokenizing.SourceToken>>(ok.Value);
         Assert.Empty(tokens);
     }
+
+    // ── T1b: persisted SourceCapture is preferred over re-tokenising the live file ──────────────
+
+    [Fact]
+    public async Task GetSourceTokens_PrefersPersistedSourceCapture_ForPdfRawFields_WithoutTouchingStorage()
+    {
+        // A PDF order: the rendered file can't be re-tokenised (would return empty), so the only way
+        // to expose its extracted fields is the persisted SourceCapture (LLM raw_fields). T1b serves
+        // it — and must NOT hit storage at all (strict mock throws on any call).
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        await using var db = NewDb();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = orderId, OrgId = orgId, SupplierId = Guid.NewGuid(),
+            PoNumber = "PO-PDF", OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency = "EUR", Status = "delivered",
+            SourceFileKey = $"{orgId}/{orderId}/scan.pdf",
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        db.SourceCaptures.Add(new SourceCapture
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId, Format = "pdf", CapturedAt = DateTime.UtcNow,
+            TokensJson = System.Text.Json.JsonDocument.Parse(
+                """[{"label":"Buyer name","value":"Acme"},{"label":"PO ref","value":"123"}]"""),
+        });
+        await db.SaveChangesAsync();
+
+        var fileStorage = new Mock<IFileStorageService>(MockBehavior.Strict); // ANY storage call would throw
+        var ctrl = Build(new Mock<IOrderService>(), orgId, db, fileStorage);
+
+        var result = await ctrl.GetSourceTokens(orderId, CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var tokens = Assert.IsAssignableFrom<IEnumerable<ProcuLink.Transform.Tokenizing.SourceToken>>(ok.Value).ToList();
+        Assert.Equal(2, tokens.Count);
+        Assert.Contains(tokens, t => t.Id == "raw:Buyer name" && t.Value == "Acme");
+        Assert.Contains(tokens, t => t.Id == "raw:PO ref" && t.Value == "123");
+    }
 }

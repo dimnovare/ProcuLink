@@ -862,7 +862,7 @@ internal sealed class OrderIngestionService
             // Tokenisation is best-effort: a tokenizer failure must NOT fail the parse — log and
             // continue, leaving SourceCapture to fall back to raw_fields/null.
             IReadOnlyList<ProcuLink.Transform.Tokenizing.SourceToken>? sourceTokens = null;
-            if (extension is ".csv" or ".xlsx" or ".xml" or ".cxml" or ".edi" or ".x12")
+            if (extension is ".csv" or ".xlsx" or ".xml" or ".cxml" or ".edi" or ".x12" or ".json")
             {
                 try
                 {
