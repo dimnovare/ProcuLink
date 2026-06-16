@@ -74,6 +74,79 @@ public class SchemaFingerprintServiceTests
             "a unique index on (OrganisationId, ColumnNameHash) is what makes the race-recovery path reachable");
     }
 
+    // ── Phase 1: fingerprint → supplier binding ────────────────────────────────
+
+    private static async Task<Guid> SeedOrderForSupplierAsync(
+        ProcuLinkDbContext db, Guid orgId, Guid supplierId, string key)
+    {
+        if (!await db.Suppliers.AnyAsync(s => s.Id == supplierId))
+            db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = $"Supplier {supplierId:N}".Substring(0, 14) });
+        var orderId = Guid.NewGuid();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = orderId, OrgId = orgId, SupplierId = supplierId,
+            PoNumber = "PO-1", Currency = "EUR", Status = OrderStatusConstants.PendingReview,
+            SourceFileKey = key, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        return orderId;
+    }
+
+    [Fact]
+    public async Task RecordParseSuccess_BindsTheOrdersSupplier_SingleSupplierIsNotShared()
+    {
+        using var db = NewDb();
+        var svc = NewService(db);
+        var orgId = Guid.NewGuid(); var supplierId = Guid.NewGuid();
+        var orderId = await SeedOrderForSupplierAsync(db, orgId, supplierId, "k/1.csv");
+
+        await svc.RecordParseSuccessAsync(orgId, orderId, LayoutAHeaders, "csv", CancellationToken.None);
+
+        var match = await svc.LookupAsync(orgId, LayoutAHeaders, CancellationToken.None);
+        match.Should().NotBeNull();
+        match!.SupplierIds.Should().ContainSingle().Which.Should().Be(supplierId);
+        match.IsBoundTo(supplierId).Should().BeTrue();
+        match.IsSharedLayout.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RecordParseSuccess_SameLayoutTwoSuppliers_FlagsSharedLayoutCollision()
+    {
+        using var db = NewDb();
+        var svc = NewService(db);
+        var orgId = Guid.NewGuid();
+        var supplierA = Guid.NewGuid(); var supplierB = Guid.NewGuid();
+
+        var orderA = await SeedOrderForSupplierAsync(db, orgId, supplierA, "k/a.csv");
+        await svc.RecordParseSuccessAsync(orgId, orderA, LayoutAHeaders, "csv", CancellationToken.None);
+        var orderB = await SeedOrderForSupplierAsync(db, orgId, supplierB, "k/b.csv");
+        await svc.RecordParseSuccessAsync(orgId, orderB, LayoutAHeaders, "csv", CancellationToken.None);
+
+        var match = await svc.LookupAsync(orgId, LayoutAHeaders, CancellationToken.None);
+        match.Should().NotBeNull();
+        match!.SeenCount.Should().Be(2);
+        match.SupplierIds.Should().BeEquivalentTo(new[] { supplierA, supplierB });
+        match.IsSharedLayout.Should().BeTrue();   // a shared layout — auto-apply must disambiguate
+    }
+
+    [Fact]
+    public async Task RecordParseSuccess_SameSupplierTwice_BindsOnce_NotShared()
+    {
+        using var db = NewDb();
+        var svc = NewService(db);
+        var orgId = Guid.NewGuid(); var supplierId = Guid.NewGuid();
+
+        var o1 = await SeedOrderForSupplierAsync(db, orgId, supplierId, "k/1.csv");
+        await svc.RecordParseSuccessAsync(orgId, o1, LayoutAHeaders, "csv", CancellationToken.None);
+        var o2 = await SeedOrderForSupplierAsync(db, orgId, supplierId, "k/2.csv");
+        await svc.RecordParseSuccessAsync(orgId, o2, LayoutAHeaders, "csv", CancellationToken.None);
+
+        var match = await svc.LookupAsync(orgId, LayoutAHeaders, CancellationToken.None);
+        match!.SeenCount.Should().Be(2);
+        match.SupplierIds.Should().ContainSingle().Which.Should().Be(supplierId);  // deduped
+        match.IsSharedLayout.Should().BeFalse();
+    }
+
     [Fact]
     public async Task RecordParseSuccess_CreatesFingerprint_OnFirstParse()
     {

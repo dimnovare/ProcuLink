@@ -1504,6 +1504,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasIndex(x => new { x.OrganisationId, x.ColumnNameHash })
              .IsUnique()
              .HasDatabaseName("IX_schema_fingerprints_org_id_column_name_hash");
+            // Phase 1: additive supplier-binding column. Default "" so the migration backfills
+            // existing fingerprint rows (NOT NULL with no default would fail on existing data).
+            b.Property(x => x.SupplierIdsCsv).HasDefaultValue("");
         });
 
         // ── order_confirmations ────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ public class FingerprintBoostTests
     public void Apply_BoostsConfidenceAndSetsSeenCount_WhenMatched()
     {
         var detected = BaseCsv(0.65);
-        var match = new SchemaFingerprintMatch("hash", SeenCount: 1, "Acme", "csv");
+        var match = new SchemaFingerprintMatch("hash", SeenCount: 1, "Acme", "csv", new List<Guid>());
 
         var result = FingerprintBoost.Apply(detected, match);
 
@@ -37,7 +37,7 @@ public class FingerprintBoostTests
     public void Apply_CapsBoostAtMax()
     {
         var detected = BaseCsv(0.50);
-        var match = new SchemaFingerprintMatch("hash", SeenCount: 100, "Acme", "csv");
+        var match = new SchemaFingerprintMatch("hash", SeenCount: 100, "Acme", "csv", new List<Guid>());
 
         var result = FingerprintBoost.Apply(detected, match);
 
@@ -49,7 +49,7 @@ public class FingerprintBoostTests
     public void Apply_NeverExceedsCeiling()
     {
         var detected = BaseCsv(0.95);
-        var match = new SchemaFingerprintMatch("hash", SeenCount: 50, "Acme", "csv");
+        var match = new SchemaFingerprintMatch("hash", SeenCount: 50, "Acme", "csv", new List<Guid>());
 
         var result = FingerprintBoost.Apply(detected, match);
 
@@ -60,7 +60,7 @@ public class FingerprintBoostTests
     public void Apply_IgnoresNonPositiveSeenCount()
     {
         var detected = BaseCsv(0.65);
-        var match = new SchemaFingerprintMatch("hash", SeenCount: 0, "Acme", "csv");
+        var match = new SchemaFingerprintMatch("hash", SeenCount: 0, "Acme", "csv", new List<Guid>());
 
         var result = FingerprintBoost.Apply(detected, match);
 

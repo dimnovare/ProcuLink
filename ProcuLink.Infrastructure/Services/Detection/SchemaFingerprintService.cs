@@ -93,6 +93,12 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
                 }
             }
 
+            // Phase 1: bind THIS order's supplier to the layout (tracked read-modify-write; the COUNT
+            // was already handled atomically above). Lost set-updates are the safe direction.
+            var fpRow = await _db.SchemaFingerprints
+                .FirstOrDefaultAsync(f => f.OrganisationId == organisationId && f.ColumnNameHash == hash, ct);
+            if (fpRow is not null) BindSupplier(fpRow, order.SupplierId);
+
             // Persist the per-order guard hash so a Hangfire retry of THIS order short-circuits.
             order.SchemaFingerprintHash = hash;
             await _db.SaveChangesAsync(ct);
@@ -113,6 +119,7 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
         {
             existing.ParseSuccessCount += 1;
             existing.LastSeenAt = now;
+            BindSupplier(existing, order.SupplierId);   // Phase 1: bind this order's supplier (insert path sets it in NewFingerprint)
         }
         else
         {
@@ -145,10 +152,35 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
             ColumnNameHash = hash,
             DetectedFormat = detectedFormat,
             SampleSupplierName = order.Supplier?.Name,
+            SupplierIdsCsv = order.SupplierId == Guid.Empty ? string.Empty : order.SupplierId.ToString(),
             ParseSuccessCount = 1,
             LastSeenAt = now,
             CreatedAt = now,
         };
+
+    /// <summary>Adds <paramref name="supplierId"/> to the tracked row's supplier set; returns true if it
+    /// was newly added (caller's SaveChanges persists it). Empty/duplicate → no change.</summary>
+    private static bool BindSupplier(SchemaFingerprint row, Guid supplierId)
+    {
+        if (supplierId == Guid.Empty) return false;
+        var ids = ParseSupplierIds(row.SupplierIdsCsv);
+        if (ids.Contains(supplierId)) return false;
+        row.SupplierIdsCsv = string.IsNullOrEmpty(row.SupplierIdsCsv)
+            ? supplierId.ToString()
+            : $"{row.SupplierIdsCsv},{supplierId}";
+        return true;
+    }
+
+    /// <summary>Parse a supplier-id CSV into a de-duplicated, order-preserving list (tolerant of junk).</summary>
+    internal static List<Guid> ParseSupplierIds(string? csv)
+    {
+        var list = new List<Guid>();
+        if (string.IsNullOrWhiteSpace(csv)) return list;
+        foreach (var part in csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (Guid.TryParse(part, out var g) && !list.Contains(g))
+                list.Add(g);
+        return list;
+    }
 
     private async Task RecoverFromConcurrentInsertAsync(
         Guid organisationId, Guid orderId, string hash, DateTime now, CancellationToken ct)
@@ -221,6 +253,8 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
 
         return fp is null
             ? null
-            : new SchemaFingerprintMatch(fp.ColumnNameHash, fp.ParseSuccessCount, fp.SampleSupplierName, fp.DetectedFormat);
+            : new SchemaFingerprintMatch(
+                fp.ColumnNameHash, fp.ParseSuccessCount, fp.SampleSupplierName, fp.DetectedFormat,
+                ParseSupplierIds(fp.SupplierIdsCsv));
     }
 }

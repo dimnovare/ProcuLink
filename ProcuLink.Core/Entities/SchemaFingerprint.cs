@@ -29,6 +29,16 @@ public class SchemaFingerprint
     /// <summary>Best-effort supplier name associated with the layout when first seen. Display only; nullable.</summary>
     public string? SampleSupplierName { get; set; }
 
+    /// <summary>
+    /// (Phase 1) Comma-separated set of supplier IDs whose orders have used this exact layout. The
+    /// binding the future auto-apply needs: it answers "WHOSE recipe?" and, when the set has more than
+    /// one supplier, flags a layout COLLISION (a generic layout shared by several suppliers) so
+    /// auto-apply must NOT silently pick one. Empty until the first parse records a supplier. The set
+    /// is a low-stakes additive signal (the COUNT stays atomic); a rare lost set-update just means a
+    /// supplier isn't auto-applied yet — the safe direction.
+    /// </summary>
+    public string SupplierIdsCsv { get; set; } = string.Empty;
+
     /// <summary>Number of distinct orders this org has successfully parsed with this layout.</summary>
     public int ParseSuccessCount { get; set; }
 

@@ -7,11 +7,21 @@ namespace ProcuLink.Core.Services.Detection;
 /// <param name="SeenCount">How many orders this org has successfully parsed with this layout.</param>
 /// <param name="SampleSupplierName">Best-effort supplier name first associated with the layout. Display only.</param>
 /// <param name="DetectedFormat">The format recorded for the layout (e.g. <c>"csv"</c>).</param>
+/// <param name="SupplierIds">(Phase 1) The supplier(s) whose orders have used this layout. More than
+/// one ⇒ a layout COLLISION: the layout is shared, so a future auto-apply must NOT silently pick one.</param>
 public sealed record SchemaFingerprintMatch(
     string ColumnNameHash,
     int SeenCount,
     string? SampleSupplierName,
-    string DetectedFormat);
+    string DetectedFormat,
+    IReadOnlyList<Guid> SupplierIds)
+{
+    /// <summary>True when more than one supplier has used this exact layout (auto-apply must disambiguate).</summary>
+    public bool IsSharedLayout => SupplierIds.Count > 1;
+
+    /// <summary>Whether <paramref name="supplierId"/> is among the suppliers bound to this layout.</summary>
+    public bool IsBoundTo(Guid supplierId) => SupplierIds.Contains(supplierId);
+}
 
 /// <summary>
 /// Org-scoped schema fingerprinting (v1). Accumulates layouts the organisation has parsed so the
