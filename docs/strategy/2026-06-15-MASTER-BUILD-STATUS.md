@@ -48,12 +48,18 @@ all already exist), behind the SAME `?workshop=1` flag. Phasing:
   to fill" + clickable blocker chips that jump+flash), `WorkshopBrandLoader` (animated link-wire mark),
   header "Send to supplier" + paper-plane + disabled-reason tooltip, FocusControl v3 segmented restyle.
   Verified on prod at both ready + blocking orders.
-- **Phase 2 — outgoing rows (task #116):** needs-attention rows on top, each with an inline AI-fix
-  strip (✦ SUGGESTED · value · why · ConfidenceChip · Apply → real `acceptSuggestion`); "N fields ready
-  · mapped automatically" collapsible (auto-expands when ready); "+ pick a field" dashed-amber.
-- **Phase 3 — received enrichment + rails + states (task #117):** per-field confidence chips +
-  provenance badges + source-type chip + +AI filter chip; per-pane collapse carets → 44px tone-gradient
-  rails + `resolveLayout` widths (336/416 fixed + flex); error/empty/mobile-triage polish.
+- **Phase 2 — outgoing rows (SHIPPED + LIVE, FE `0a73a6f`):** needs-attention rows on top; "N fields
+  ready · mapped automatically" collapsible (auto-expands when ready); inline AI-fix strip on needs-source
+  rows (✦ SUGGESTED · value · rationale · ConfidenceChip · Apply) that reuses `suggestedSourceFor()` +
+  the existing `onPickSource` dispatch (no new mutation path). **Gated to picker mode** — the classic
+  `/inbox` wires screen is byte-unchanged (live-verified: no summary/strip/stepper there). MapperWorkbench
+  suppresses its older attention split in picker mode so OutgoingPane is the single owner.
+- **Phase 3 — received enrichment + rails (SHIPPED + LIVE, FE `0a73a6f`):** per-field ConfidenceChip +
+  SourceTypeChip (from file-key ext) + §6 left-accent; CollapsedRail upgraded to the 44px tone-gradient
+  look; grid rebalanced (incoming fixed-narrow / outgoing flex-wide) + preview widened; error state
+  polished. Built by 2 background agents (distinct panes) + main-thread integration + adversarial review.
+  DEFERRED: provenance badge (ready, but `SourceField` has no location data — no fabrication), mobile
+  triage rebuild (§15), per-pane independent carets / exact resolveLayout (wire-engine risk).
 - Tokens match the app already (navy/blue/green/violet · Bricolage/Inter/JetBrains). 11 mockups in the
   handoff are the pixel reference; `ws3-canvas.jsx`/`ws3-app.jsx` are the interaction reference.
 
