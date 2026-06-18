@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure.Services.Security;
 
@@ -107,10 +108,14 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
             if (authError is not null)
                 return new DeliveryResult(false, authError);
 
-            // Apply extra headers
+            // Apply extra headers. Names+values are tenant-supplied, so each is validated for
+            // CR/LF/NUL/control-char injection before it can reach the request — a header that
+            // fails is skipped (and logged), never smuggled into the outbound request.
             if (httpCfg.Headers is not null)
                 foreach (var (k, v) in httpCfg.Headers)
-                    request.Headers.TryAddWithoutValidation(k, v);
+                    if (!HttpHeaderGuard.TryAdd(request.Headers, k, v))
+                        _logger.LogWarning(
+                            "Skipping invalid delivery header name '{HeaderName}' (failed CR/LF/token validation).", k);
 
             // Body
             request.Content = new ByteArrayContent(content);

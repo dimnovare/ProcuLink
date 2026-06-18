@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Erp;
 
 namespace ProcuLink.Infrastructure.Services.Erp;
@@ -47,11 +48,16 @@ public sealed class ErplyConnector : IErpConnector
                     ? mediaType
                     : new MediaTypeHeaderValue("application/octet-stream");
 
-            message.Headers.TryAddWithoutValidation("X-ProcuLink-FileName", request.FileName);
-            if (!string.IsNullOrWhiteSpace(cfg.ClientCode))
-                message.Headers.TryAddWithoutValidation("X-Erply-Client-Code", cfg.ClientCode);
+            // request.FileName and cfg.ClientCode are tenant-supplied and flow into header
+            // VALUES — validate for CR/LF/NUL injection before adding (the header names are
+            // fixed constants and always valid).
+            if (!HttpHeaderGuard.TryAdd(message.Headers, "X-ProcuLink-FileName", request.FileName))
+                _logger.LogWarning("Skipping X-ProcuLink-FileName header (value failed CR/LF validation).");
+            if (!string.IsNullOrWhiteSpace(cfg.ClientCode)
+                && !HttpHeaderGuard.TryAdd(message.Headers, "X-Erply-Client-Code", cfg.ClientCode))
+                _logger.LogWarning("Skipping X-Erply-Client-Code header (value failed CR/LF validation).");
 
-            ApplyAuth(message, request.DecryptedCredentials);
+            ApplyAuth(message, request.DecryptedCredentials, _logger);
 
             using var timeoutCts = cfg.TimeoutSeconds is > 0
                 ? CancellationTokenSource.CreateLinkedTokenSource(ct)
@@ -78,7 +84,7 @@ public sealed class ErplyConnector : IErpConnector
         }
     }
 
-    private static void ApplyAuth(HttpRequestMessage request, string credentialsJson)
+    private static void ApplyAuth(HttpRequestMessage request, string credentialsJson, ILogger logger)
     {
         if (string.IsNullOrWhiteSpace(credentialsJson))
             return;
@@ -100,7 +106,13 @@ public sealed class ErplyConnector : IErpConnector
             && root.TryGetProperty("value", out var value)
             && !string.IsNullOrWhiteSpace(header.GetString()))
         {
-            request.Headers.TryAddWithoutValidation(header.GetString()!, value.GetString());
+            // The apikey header name+value come from tenant-stored credentials; validate for
+            // CR/LF/NUL/control-char injection before adding, dropping (and logging) on failure.
+            var headerName = header.GetString()!;
+            if (!HttpHeaderGuard.TryAdd(request.Headers, headerName, value.GetString()))
+                logger.LogWarning(
+                    "Skipping invalid Erply apikey auth header name '{HeaderName}' (failed CR/LF/token validation).",
+                    headerName);
         }
     }
 

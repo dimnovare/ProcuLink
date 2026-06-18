@@ -12,6 +12,17 @@ namespace ProcuLink.Infrastructure.Services;
 
 public sealed class DeliveryService : IDeliveryService
 {
+    /// <summary>
+    /// How recently a <c>delivering</c> row must have been stamped to count as "actively in
+    /// flight" and therefore NOT reclaimable by a concurrent retry. A freshly claimed delivery
+    /// updates <c>UpdatedAt</c> to now, so a racing retry that sees the row already
+    /// <c>delivering</c> within this window bows out instead of double-dispatching. Comfortably
+    /// shorter than <c>StuckDeliveryDetectionService</c>'s minute-scale stuck threshold, so a
+    /// genuinely stranded delivery is still recoverable by the sweep — this only closes the
+    /// sub-second concurrent-retry race.
+    /// </summary>
+    private static readonly TimeSpan DeliveringReclaimWindow = TimeSpan.FromMinutes(2);
+
     private readonly ProcuLinkDbContext _db;
     private readonly IFileStorageService _fileStorage;
     private readonly DeliveryEncryptionService _encryption;
@@ -572,15 +583,8 @@ public sealed class DeliveryService : IDeliveryService
                               or OrderStatusConstants.Delivering))
             return new DeliveryResult(false, $"Order status '{order.Status}' is not retryable.");
 
-        var priorAttempts = await _db.DeliveryAttempts
-            .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId, ct);
-
-        if (priorAttempts >= maxAttempts)
-        {
-            await DeadLetterAsync(order, priorAttempts, lastError: "Maximum delivery attempts reached.", ct);
-            return new DeliveryResult(false, "Maximum delivery attempts reached — order moved to dead-letter.");
-        }
-
+        // Resolve the artifact BEFORE the claim: a missing artifact is a side-effect-free
+        // early return, so it must not first flip the order into 'delivering' and strand it.
         var artifact = await _db.OutboundArtifacts
             .Where(a => a.OrderId == orderId && a.OrgId == orgId)
             .OrderByDescending(a => a.CreatedAt)
@@ -588,6 +592,90 @@ public sealed class DeliveryService : IDeliveryService
 
         if (artifact is null)
             return new DeliveryResult(false, "No outbound artifact found. Transform the order before retrying delivery.");
+
+        // ── Concurrency claim ──────────────────────────────────────────────────
+        // The status/attempt-count reads above are advisory only: two concurrent retries
+        // for the SAME order (a duplicated Hangfire activation racing the operator "Retry
+        // now" button, or a backoff-scheduled job firing alongside a manual one) could each
+        // see a deliverable status + an under-cap count and BOTH proceed to dispatch — a
+        // double-delivered PO (or two clobbering terminal statuses). Atomically CLAIM the
+        // order by flipping it to 'delivering' in a single guarded statement and reading the
+        // resulting attempt count INSIDE the same transaction. Under Postgres READ COMMITTED
+        // the second worker's UPDATE blocks on the first's row lock, then re-evaluates the
+        // WHERE against the COMMITTED row, so exactly one claim succeeds and the cap check +
+        // dispatch decision are made exactly once. (Mirrors OrderTransformService's
+        // ready/transforming → transforming claim and the ParseStoredFileAsync
+        // single-transaction-around-the-bulk-ops idiom: ExecuteUpdate auto-commits
+        // independently of a later SaveChanges, so it must enlist in ONE transaction to be
+        // atomic with the count read.)
+        //
+        // Claimable = delivery_failed / ready_to_deliver (an idle, retry-ready order), OR a
+        // 'delivering' row that has gone STALE (UpdatedAt older than the reclaim window). The
+        // staleness gate is what makes the claim mutually exclusive against a CONCURRENT retry:
+        // a fresh claim stamps UpdatedAt = now, so the racing worker that unblocks and sees the
+        // row already 'delivering' with a just-stamped timestamp is OUTSIDE the window → 0 rows
+        // → it bows out instead of double-dispatching. A genuinely STUCK delivering order
+        // (StuckDeliveryDetectionService only re-drives rows stuck for minutes — far past this
+        // window) is still reclaimable, so crash recovery is unaffected.
+        var staleBefore = DateTime.UtcNow - DeliveringReclaimWindow;
+        int priorAttempts;
+        if (_db.Database.IsRelational())
+        {
+            await using var claimTx = await _db.Database.BeginTransactionAsync(ct);
+
+            var claimedAt = DateTime.UtcNow;
+            var claimed = await _db.PurchaseOrders
+                .Where(x => x.Id == orderId && x.OrgId == orgId
+                         && (x.Status == OrderStatusConstants.DeliveryFailed
+                          || x.Status == OrderStatusConstants.ReadyToDeliver
+                          || (x.Status == OrderStatusConstants.Delivering && x.UpdatedAt < staleBefore)))
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(o => o.Status, OrderStatusConstants.Delivering)
+                    .SetProperty(o => o.UpdatedAt, claimedAt), ct);
+
+            if (claimed == 0)
+            {
+                // Another worker already claimed this order for delivery (or it was advanced
+                // out of a claimable state) between our read and this update — do NOT
+                // double-dispatch.
+                await claimTx.RollbackAsync(ct);
+                return new DeliveryResult(false, "Delivery for this order is already in progress.");
+            }
+
+            // Count is read inside the SAME transaction as the claim, so the cap decision is
+            // made against the row this worker now exclusively holds.
+            priorAttempts = await _db.DeliveryAttempts
+                .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId, ct);
+
+            await claimTx.CommitAsync(ct);
+
+            // Keep the tracked entity consistent with the row just claimed (the bulk update
+            // bypasses the change tracker) so DeadLetterAsync / downstream status writes diff
+            // correctly against current AND original values.
+            order.Status    = OrderStatusConstants.Delivering;
+            order.UpdatedAt = claimedAt;
+            var entry = _db.Entry(order);
+            entry.Property(x => x.Status).OriginalValue    = OrderStatusConstants.Delivering;
+            entry.Property(x => x.UpdatedAt).OriginalValue = claimedAt;
+        }
+        else
+        {
+            // EF InMemory test provider cannot translate ExecuteUpdateAsync / transactions —
+            // emulate the claim through the change tracker (InMemory tests are single-threaded,
+            // so the race the relational claim defends against cannot occur there).
+            order.Status    = OrderStatusConstants.Delivering;
+            order.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+
+            priorAttempts = await _db.DeliveryAttempts
+                .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId, ct);
+        }
+
+        if (priorAttempts >= maxAttempts)
+        {
+            await DeadLetterAsync(order, priorAttempts, lastError: "Maximum delivery attempts reached.", ct);
+            return new DeliveryResult(false, "Maximum delivery attempts reached — order moved to dead-letter.");
+        }
 
         // If this attempt is the last one allowed, a failure will dead-letter immediately —
         // DeadLetterAsync runs its own reconcile, so suppress the per-attempt reconcile to

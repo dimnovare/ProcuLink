@@ -3,6 +3,7 @@ using System.Text;
 using System.Xml.Linq;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 
 namespace ProcuLink.Transform.Output;
 
@@ -55,6 +56,42 @@ public sealed class CxmlTransformService : ITransformService
     private const string DefaultConfiguredDomain = "NetworkId";
 
     public bool CanTransform(OutputFormat format) => format == OutputFormat.CXml;
+
+    /// <summary>
+    /// WS-12 overload: drive the From/To/Sender party identity from a per-connection
+    /// <see cref="EnvelopeConfig"/> (its <see cref="CxmlEnvelope"/>). The envelope is mapped onto
+    /// the existing <see cref="CxmlCredentialConfig"/> path, so it reuses the same per-credential
+    /// fallback machinery: a null envelope (or null <see cref="EnvelopeConfig.Cxml"/>) yields the
+    /// legacy <c>OrgId</c>/<c>SupplierId</c>/<c>NetworkUserId</c> GUID identities, BYTE-FOR-BYTE
+    /// identical to the pre-WS-12 output. The shared secret is not part of the envelope identity
+    /// (it is a credential reference, never inline) so no <c>&lt;SharedSecret&gt;</c> is emitted on
+    /// this path.
+    /// </summary>
+    public Task<TransformResult> TransformAsync(
+        PurchaseOrderEntity order,
+        OutputFormat format,
+        CancellationToken ct,
+        EnvelopeConfig? envelope)
+        => TransformAsync(order, format, ct, ToCredentialConfig(envelope?.Cxml));
+
+    /// <summary>
+    /// Maps the <see cref="CxmlEnvelope"/> identity (From/To/Sender domain+identity) onto the
+    /// transform's <see cref="CxmlCredentialConfig"/>. Returns null when the envelope is absent so
+    /// the legacy GUID-identity path stays byte-identical. The shared secret is never carried on the
+    /// envelope, so <see cref="CxmlCredentialConfig.SenderSharedSecret"/> is always null here.
+    /// </summary>
+    private static CxmlCredentialConfig? ToCredentialConfig(CxmlEnvelope? env)
+    {
+        if (env is null) return null;
+        return new CxmlCredentialConfig(
+            FromDomain:         env.FromDomain,
+            FromIdentity:       env.FromIdentity,
+            ToDomain:           env.ToDomain,
+            ToIdentity:         env.ToIdentity,
+            SenderDomain:       env.SenderDomain,
+            SenderIdentity:     env.SenderIdentity,
+            SenderSharedSecret: null);
+    }
 
     public Task<TransformResult> TransformAsync(
         PurchaseOrderEntity order,

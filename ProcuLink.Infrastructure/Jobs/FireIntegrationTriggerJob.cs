@@ -6,6 +6,7 @@ using Hangfire.Server;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Security;
 
@@ -142,9 +143,15 @@ public class FireIntegrationTriggerJob
             {
                 Content = new StringContent(payloadJson, Encoding.UTF8, "application/json"),
             };
+            // sigHeader is server-computed hex (always safe). sub.EventType is a stored,
+            // tenant-influenced value flowing into a header VALUE — validate it for CR/LF/NUL
+            // injection before adding, dropping (and logging) on failure.
             if (sigHeader is not null)
                 request.Headers.TryAddWithoutValidation("X-ProcuLink-Signature", sigHeader);
-            request.Headers.TryAddWithoutValidation("X-ProcuLink-Event", sub.EventType);
+            if (!HttpHeaderGuard.TryAdd(request.Headers, "X-ProcuLink-Event", sub.EventType))
+                _logger.LogWarning(
+                    "Skipping X-ProcuLink-Event header for sub {SubId} (event type failed CR/LF validation).",
+                    subscriptionId);
 
             var response = await client.SendAsync(request, ct);
             if (response.IsSuccessStatusCode)

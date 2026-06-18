@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using ProcuLink.Core.Security;
 
 namespace ProcuLink.Infrastructure.Services.Security;
 
@@ -61,7 +62,13 @@ public sealed class HttpAuthApplier
                     !string.IsNullOrWhiteSpace(h.GetString()))
                 {
                     var headerName = h.GetString()!;
-                    request.Headers.TryAddWithoutValidation(headerName, v.GetString());
+                    // The header name and value come from tenant-stored credentials; validate
+                    // them for CR/LF/NUL/control-char injection before adding. A header that
+                    // fails is dropped (and logged) rather than smuggled into the request.
+                    if (!HttpHeaderGuard.TryAdd(request.Headers, headerName, v.GetString()))
+                        _logger.LogWarning(
+                            "Skipping invalid apikey auth header name '{HeaderName}' (failed CR/LF/token validation).",
+                            headerName);
                 }
                 break;
 

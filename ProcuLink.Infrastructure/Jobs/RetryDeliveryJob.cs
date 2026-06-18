@@ -45,8 +45,16 @@ public class RetryDeliveryJob
     // No Hangfire AutomaticRetry: retry/backoff semantics live inside RetryDeliveryAsync
     // (attempt cap + dead-letter) and the explicit BackoffFor() schedule below, not in
     // Hangfire's own retry queue. A Hangfire-level retry would double-count attempts.
+    //
+    // PerOrderDistributedMutex serialises activations PER ORDER (storage-backed distributed lock
+    // keyed on the orderId argument): two jobs for the SAME order — a duplicated activation, or a
+    // backoff-scheduled run racing the operator "Retry now" button — cannot run this body
+    // concurrently and double-dispatch. This is the OUTER guard; the atomic delivering-claim
+    // inside RetryDeliveryAsync is the INNER, cross-process-correct guard (defence in depth).
+    // Distinct orders still retry fully in parallel.
     [Queue("delivery-retry")]
     [AutomaticRetry(Attempts = 0)]
+    [PerOrderDistributedMutex(orderArgumentIndex: 0, timeoutSeconds: 60)]
     public async Task ExecuteAsync(Guid orderId, Guid organisationId, CancellationToken ct)
     {
         var maxAttempts = _options.MaxAttempts > 0 ? _options.MaxAttempts : MaxAttempts;
