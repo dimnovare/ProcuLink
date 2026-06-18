@@ -68,6 +68,14 @@ public interface IInvoiceService
     /// <summary>Advance status from pending_review → approved.</summary>
     Task<InvoiceEntity> ApproveAsync(Guid orgId, Guid invoiceId, CancellationToken ct);
 
+    /// <summary>
+    /// Mark a stuck invoice as "failed" (called by ParseInvoiceJob when parsing throws).
+    /// Guarantees a parse exception can never strand the invoice in "parsing" — the
+    /// list/detail surfaces show the honest terminal state instead of a perpetual spinner.
+    /// No-op if the invoice is not found.
+    /// </summary>
+    Task SetFailedAsync(Guid orgId, Guid invoiceId, CancellationToken ct);
+
     /// <summary>Transform an approved invoice to the requested format and return bytes.</summary>
     Task<(byte[] Bytes, string ContentType, string FileExtension)> ForwardAsync(
         Guid orgId, Guid invoiceId, string outputFormat, CancellationToken ct);

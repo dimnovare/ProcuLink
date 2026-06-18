@@ -54,40 +54,55 @@ public class ParseInvoiceJob
             return;
         }
 
-        await using var stream = await _storage.DownloadAsync(invoice.SourceFileKey, ct);
-        var ext    = Path.GetExtension(invoice.SourceFileName);
-        var parser = _parserFactory.GetParser(ext, stream);
-        var parsed = await parser.ParseAsync(stream, ct);
+        try
+        {
+            await using var stream = await _storage.DownloadAsync(invoice.SourceFileKey, ct);
+            var ext    = Path.GetExtension(invoice.SourceFileName);
+            var parser = _parserFactory.GetParser(ext, stream);
+            var parsed = await parser.ParseAsync(stream, ct);
 
-        var data = new ParsedInvoiceData(
-            InvoiceNumber: parsed.InvoiceNumber,
-            IssueDate:     parsed.IssueDate,
-            DueDate:       parsed.DueDate,
-            Currency:      parsed.Currency,
-            BuyerRef:      parsed.BuyerRef,
-            SupplierRef:   parsed.SupplierRef,
-            PaymentTerms:  parsed.PaymentTerms,
-            SubTotal:      parsed.SubTotal,
-            TaxTotal:      parsed.TaxTotal,
-            GrandTotal:    parsed.GrandTotal,
-            Lines: parsed.Lines.Select(l => new ParsedInvoiceLineData(
-                LineNumber:       l.LineNumber,
-                Description:      l.Description,
-                Quantity:         l.Quantity,
-                UnitCode:         l.UnitCode,
-                UnitPrice:        l.UnitPrice,
-                TaxRate:          l.TaxRate,
-                LineTotal:        l.LineTotal,
-                BuyerItemCode:    l.BuyerItemCode,
-                SupplierItemCode: l.SupplierItemCode
-            )).ToList()
-        );
+            var data = new ParsedInvoiceData(
+                InvoiceNumber: parsed.InvoiceNumber,
+                IssueDate:     parsed.IssueDate,
+                DueDate:       parsed.DueDate,
+                Currency:      parsed.Currency,
+                BuyerRef:      parsed.BuyerRef,
+                SupplierRef:   parsed.SupplierRef,
+                PaymentTerms:  parsed.PaymentTerms,
+                SubTotal:      parsed.SubTotal,
+                TaxTotal:      parsed.TaxTotal,
+                GrandTotal:    parsed.GrandTotal,
+                Lines: parsed.Lines.Select(l => new ParsedInvoiceLineData(
+                    LineNumber:       l.LineNumber,
+                    Description:      l.Description,
+                    Quantity:         l.Quantity,
+                    UnitCode:         l.UnitCode,
+                    UnitPrice:        l.UnitPrice,
+                    TaxRate:          l.TaxRate,
+                    LineTotal:        l.LineTotal,
+                    BuyerItemCode:    l.BuyerItemCode,
+                    SupplierItemCode: l.SupplierItemCode
+                )).ToList()
+            );
 
-        await _invoices.PersistParsedAsync(organisationId, invoiceId, data, ct);
+            await _invoices.PersistParsedAsync(organisationId, invoiceId, data, ct);
 
-        _logger.LogInformation(
-            "ParseInvoiceJob completed for invoice {InvoiceId}, lines={Count}",
-            invoiceId, parsed.Lines.Count);
+            _logger.LogInformation(
+                "ParseInvoiceJob completed for invoice {InvoiceId}, lines={Count}",
+                invoiceId, parsed.Lines.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ParseInvoiceJob failed for invoice {InvoiceId}: {Error}", invoiceId, ex.Message);
+
+            // Set the terminal user-facing truth FIRST so a parse exception can never
+            // strand the invoice in "parsing". Then rethrow so Hangfire records the
+            // failed attempt (surfaced in /api/ops/job-failures). Mirrors ParseOrderJob.
+            // The status guard above makes retries safe no-ops.
+            await _invoices.SetFailedAsync(organisationId, invoiceId, ct);
+
+            throw new InvalidOperationException($"Invoice parse failed: {ex.Message}", ex);
+        }
     }
 
     public static void Enqueue(IBackgroundJobClient jobs, Guid invoiceId, Guid organisationId)

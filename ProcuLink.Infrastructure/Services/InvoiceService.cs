@@ -141,6 +141,21 @@ public sealed class InvoiceService : IInvoiceService
         return inv;
     }
 
+    // Loads the row and persists via the change tracker (not ExecuteUpdate) so this
+    // works on both Postgres and the EF InMemory test provider, and re-reads at the
+    // moment of failure so the row is not stale. Mirrors OrderIngestionService.SetOrderFailedAsync.
+    public async Task SetFailedAsync(Guid orgId, Guid invoiceId, CancellationToken ct)
+    {
+        var inv = await _db.Invoices
+                           .Where(i => i.OrganisationId == orgId && i.Id == invoiceId)
+                           .FirstOrDefaultAsync(ct);
+        if (inv is null) return;
+
+        inv.Status    = "failed";
+        inv.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
     public async Task<(byte[] Bytes, string ContentType, string FileExtension)> ForwardAsync(
         Guid orgId, Guid invoiceId, string outputFormat, CancellationToken ct)
     {
