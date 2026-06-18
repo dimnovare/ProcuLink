@@ -97,10 +97,29 @@ clean routing/secret review). BE 2793 tests green, FE 509 + build green.
 - **WS-9** — vocabulary purge ("wire"→"map" in visible copy across SpineReview/WireTopology/MapperWireLayer/
   ConnectionDetail; code identifiers untouched) + **CI grep-gate** (`scripts/check-vocabulary.mjs` + `lint:vocab`,
   allowlist empty = real) + a11y-medium (designer labels, Topbar Help aria).
-- **Remaining (wave 4):** designer-reconcile pass — the `OutputStructureDesigner` was never reconciled to the mapper
-  tokens/scale/responsive (ui-ux-pro-max review A4: no mobile breakpoint, off-canonical `#2D6BD4`/`#1E6D29`, sub-scale
-  type, control-height drift, competing first-run primaries) + tabular-nums on mono values + global reduced-motion +
-  mapper-toolbar primary-action grouping. (10 findings — fold into one focused pass.)
+- **Wave 4 — SHIPPED** (FE `176d114`; 3 distinct-file agents + integration + a 4-agent adversarial review workflow
+  (cavecrew per-dimension review → adversarial verify), 509 tests green). Designer-reconcile pass:
+  `OutputStructureDesigner` reconciled to the mapper tokens/scale/responsive — `useIsNarrow()` (matchMedia 860px,
+  listener-cleaned, SSR-safe) → full-screen modal + single stacked column on mobile (no h-scroll); canonical tokens
+  (`#2D6BD4`→`#1E66C9`, `#1E6D29`→`#2E8E3A`, bridge edge gradient); type scale normalized + dark `<pre>` to
+  12px/1.55 + JetBrains Mono + tabular-nums; control heights 30/22, footer 32→44 narrow; first-run empty state
+  (infer focused + "Start blank" escape hatch, single green primary). Plus tabular-nums on all mapper data-value
+  spans; AI-fix Apply + PickerItem imperative-hover→scoped-CSS `:hover` (real-work hovers kept); global
+  `prefers-reduced-motion` reset (existing rules were component-scoped, not duplicated); app-shell `h-screen`→`h-dvh`.
+  Review found 1 confirmed finding (Apply-hover off-palette `#1E6E1F`→`#1E6D29`, fixed in the same commit), 0 remaining.
+  The classic `/inbox` wires screen stays byte-neutral (mapper files shared; all picker-mode-gated or visually identical).
+  **This closes the masterplan's last buildable FE consolidation item.** Remaining = WS-5 flag-flip (founder gate)
+  + the honestly-deferred backend EDI identity items (X12 envelope T5, cXML DTD T7 — rare-format / need founder DTD input).
+
+### Invoice parse-trust fix (#112) — **SHIPPED** (BE `ba74b65`, 2026-06-18)
+Closes the "invoice stuck in `parsing` forever" trust bug (root-caused via a read-only investigation agent;
+suspect 3 confirmed — swallowed exception, no terminal state). `ParseInvoiceJob` had no try-catch, so a parser
+exception (e.g. malformed UBL) propagated raw to Hangfire and stranded the invoice in `parsing` (perpetual
+spinner, same lie as a stuck order). Fix mirrors the deployed order path exactly: `IInvoiceService.SetFailedAsync`
+(change-tracker, InMemory-safe, mirrors `SetOrderFailedAsync`) + `ParseInvoiceJob` wraps the parse body in
+try-catch → set `status="failed"` first (user truth), then rethrow so Hangfire records the attempt (visible in
+`/api/ops/job-failures`); the `status!="parsing"` guard makes retries safe no-ops. No migration. Tests:
+`ParseInvoiceJobFailureTests` (throw→failed+rethrow; retry→skip-no-clobber). Api.Tests **1104** + Infra **749** green.
 - **WS-5 flag-flip (#114) — NOW READY** (mobile built, all phases live + verified). The actual flip changes every real
   user's default + needs a Vercel env change → **left for founder's explicit go**.
 
