@@ -71,8 +71,25 @@ retry double-dispatch race → org-scoped atomic claim + per-order Hangfire mute
 EnvelopeConfig** wired into X12+cXML with byte-identical null fallback + characterization tests) and
 **FE `00ecf17`** (Make-live gated on tests; annual pricing gated honestly; ASN 501→coming-soon; ConfirmDialog
 focus-trap; disabled-Send contrast; 11-control tap-target sweep; off-palette danger borders → tokens). BE
-2844 tests green, FE 509 + build green. **WS-12 remaining:** thread the pinned-revision envelope into the
-OrderTransformService caller + verify on prod (the services now consume it; the caller wiring is the last leg).
+2844 tests green, FE 509 + build green.
+
+**Wave 2 (backlog + masterplan) — SHIPPED** (BE `d95910e` + FE `7d9754f`; 7 distinct-file agents + integration +
+clean routing/secret review). BE 2793 tests green, FE 509 + build green.
+- **WS-11** — deleted the dead `IParsedOrderTransform` export stack (9 files + DI in both Program.cs) + trimmed
+  FormatMatrix to the live `ITransformService` leg (kept all parse-fidelity coverage).
+- **WS-12 end-to-end** — `OrderTransformService` now threads the pinned-revision `EnvelopeConfig` into X12/cXML
+  (+ a routing fix so those OutputTrees reach the fixed transformer); null = byte-identical, cXML secret stays
+  authoritative (review-confirmed). 3 wiring tests.
+- **WS-13e** — dashboard operational funnel (Received→Needs review→Ready→Delivered→Failed) from the real
+  `/api/orders/summary`; WireTopology demoted to a "System map" tab; KPIs label temporal scope.
+- **Engine hardening** — Quantity<=0 validation, SafeLineSum overflow→hold-for-review + eval-failure logging,
+  ExtractBuyerName → shared `OrderHeaderReader`.
+- **Security/honesty backlog** — webhook rate-limit partitioned by tenant slug (+ actually applied); OrderIngestion
+  org_id verified + round-trip test; AdminOnly fail-closed logging; Make-live gate; annual-pricing gate; ASN 501→
+  coming-soon; ReplayPanel clamp; BundleSummary muted; connector CTA; invoice download; email-intake unlock copy;
+  upload copy + drag-reject; Exceptions pagination.
+- **Remaining masterplan (wave 3):** WS-8 History/Advanced drawer; WS-9 vocabulary purge + CI grep gate; designer
+  pixel-QA. **WS-5 flag-flip (#114) stays gated on founder sign-off** (mobile triage not built).
 
 ### Order Workshop (WS-5 consolidation) — **BUILT + FLAG-GATED + LIVE-VERIFIED** (2026-06-18)
 The unified **Order Workshop** replaces the old two-mode Triage/Classic order-review split with one
