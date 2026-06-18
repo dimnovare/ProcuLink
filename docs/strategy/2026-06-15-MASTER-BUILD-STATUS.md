@@ -148,9 +148,16 @@ collapsible 3-zone screen: **Issues on top → mapper below** (IssuesPanel + the
   format-snap `f9aee1f`. 509 vitest green, tsc clean.
 - **"(no preview)" on a blocking order is HONEST** (line needs a supplier code → no valid bytes yet).
 - **FLIPPED LIVE 2026-06-18 (#114):** flag ON in prod, v3 is the default for all users, live-verified across all 4 prod
-  order states. Remaining sub-tasks: (1) resolve the Passport/Conformance/Response parity gap (restore an audit/delivery-
-  response surface in v3 OR confirm it's relocated) BEFORE deleting the old screen; (2) then delete old SpineReview +
-  orphaned wrappers (`ReceivedZone`/`OutputZone`/`MappingPanel`) + their tests.
+  order states.
+- **PARITY GAP RESTORED (FE `21f09cf`):** a parity investigation confirmed the flip dropped 3 HIGH-severity trust
+  surfaces (Passport audit / Conformance / supplier Response) AND broke the Exceptions "Check conformance" deep-link
+  (`/inbox/{id}?tab=conformance`). Restored via a new `OrderDetailsDrawer` (workshop/) — a quiet "Details" header
+  slide-over hosting the 3 EXISTING panels verbatim (`OrderPassport`/`ConformancePanel`/`SupplierResponsePanel`),
+  deep-linkable via `?tab=` (fixes the broken link), conformance profile seeded from the delivered format. Mirrors
+  HistoryDrawer a11y; panels mount only when open. tsc 0 / vitest 509 / build 0; cavecrew-reviewed (callbacks
+  stabilized, conformance default added). Remaining sub-task: delete the old SpineReview + orphaned wrappers
+  (`ReceivedZone`/`OutputZone`/`MappingPanel`) + tests — now UNBLOCKED (parity restored); keep briefly as the
+  `?workshop=0` escape hatch during the initial bake, then delete.
 
 ### Phase A — TRUST (WS-0 + WS-13 quick-wins) — **IN PROGRESS**
 P0. Must land before any output-layer feature. Status legend: ☐ todo · ◐ in progress · ☑ done · ✅ verified-live.
