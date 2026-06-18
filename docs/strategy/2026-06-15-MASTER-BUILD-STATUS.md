@@ -120,8 +120,14 @@ spinner, same lie as a stuck order). Fix mirrors the deployed order path exactly
 try-catch → set `status="failed"` first (user truth), then rethrow so Hangfire records the attempt (visible in
 `/api/ops/job-failures`); the `status!="parsing"` guard makes retries safe no-ops. No migration. Tests:
 `ParseInvoiceJobFailureTests` (throw→failed+rethrow; retry→skip-no-clobber). Api.Tests **1104** + Infra **749** green.
-- **WS-5 flag-flip (#114) — NOW READY** (mobile built, all phases live + verified). The actual flip changes every real
-  user's default + needs a Vercel env change → **left for founder's explicit go**.
+- **WS-5 flag-flip (#114) — FLIPPED + LIVE (2026-06-18, founder granted full autonomy).** `NEXT_PUBLIC_ORDER_WORKSHOP_V2=true`
+  added to Vercel production + fresh `vercel --prod` build (dpl `7cpeqqz6r`) promoted; the env is read at BUILD time so the
+  flip required a rebuild. **Verified live:** clean `/inbox/{id}` (no `?workshop`) renders v3 for all 4 prod orders
+  (pending_review / ready / 2× delivered), zero errors. `?workshop=0` still force-disables (per-session rollback; env-revert
+  = full rollback). **DELETING the old SpineReview is DEFERRED** — v3 lacks the old Passport/Conformance/Response tabs
+  (a feature-parity question now that the flip is live, not dead-code cleanup); old screen also still provides the `?workshop=0`
+  escape hatch. Route is the only `SpineReview` importer; `ReceivedZone`/`OutputZone`/`MappingPanel` + 6 tests are truly
+  orphaned (safe-delete, bundle later); KEEP `SpineConnectors` (helpers live in `stageModel.ts`).
 
 ### Order Workshop (WS-5 consolidation) — **BUILT + FLAG-GATED + LIVE-VERIFIED** (2026-06-18)
 The unified **Order Workshop** replaces the old two-mode Triage/Classic order-review split with one
@@ -141,9 +147,10 @@ collapsible 3-zone screen: **Issues on top → mapper below** (IssuesPanel + the
 - **Commits (FE `main`):** picker `2c97265`/`0d6fcc3`; bug fixes `638e8b6`/`6f2d8e6`/`8cb17f7`; preview
   format-snap `f9aee1f`. 509 vitest green, tsc clean.
 - **"(no preview)" on a blocking order is HONEST** (line needs a supplier code → no valid bytes yet).
-- **NEXT (gated on founder approval after they view `?workshop=1`):** task #114 — flip the flag ON in
-  prod, reduced-mobile pass, delete the old two-mode SpineReview + orphaned triptych + inert workshop
-  wrappers (`ReceivedZone`/`OutputZone`/`MappingPanel`).
+- **FLIPPED LIVE 2026-06-18 (#114):** flag ON in prod, v3 is the default for all users, live-verified across all 4 prod
+  order states. Remaining sub-tasks: (1) resolve the Passport/Conformance/Response parity gap (restore an audit/delivery-
+  response surface in v3 OR confirm it's relocated) BEFORE deleting the old screen; (2) then delete old SpineReview +
+  orphaned wrappers (`ReceivedZone`/`OutputZone`/`MappingPanel`) + their tests.
 
 ### Phase A — TRUST (WS-0 + WS-13 quick-wins) — **IN PROGRESS**
 P0. Must land before any output-layer feature. Status legend: ☐ todo · ◐ in progress · ☑ done · ✅ verified-live.
