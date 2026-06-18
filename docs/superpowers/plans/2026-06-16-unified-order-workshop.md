@@ -242,6 +242,19 @@ test("auto = accepted/high-confidence; attention = unmapped or low-confidence", 
 - [ ] **Step 3: Implement `ReceivedZone`** — reads the lossless tokens (P0 endpoint), groups Header/Parties/Lines/Other, each row = label + value + source pointer + drag handle; collapse rail; honest empty only when truly source-less.
 - [ ] **Step 4: Tests** (model-level: lossless grouping shows every token; no dedup-drop) **+ Commit.**
 
+> **ARCHITECTURE CORRECTION (grounded 2026-06-16, after the P1-leaf agent).** `MapperWorkbench`
+> is ALREADY a full 3-pane mapper (`IncomingPane` + gutter/wires + `OutgoingPane` + `MapperPreviewPane`
+> + `OutputStructureDesigner`), from its solid 2026-06-14 rebuild. So the separate `ReceivedZone` /
+> `OutputZone` / `MappingPanel` wrappers DUPLICATE its panes. **Corrected approach:** `OrderWorkshop` =
+> `IssuesPanel` (top) + the existing `MapperWorkbench` **enhanced** with (a) collapse/focus props for its
+> incoming/preview panes (driven by `useWorkshopLayout`), (b) an "attention-first" default filter on
+> `OutgoingPane` (collapse the AI-auto-mapped behind an "N mapped" chip; show only unmapped/low-conf,
+> using `splitMappings`), and (c) `onFocusField` hooked to the existing `?field=` deep-link/`selectedId`.
+> KEEPERS from P1-leaf: `useWorkshopLayout`, `mappingListModel`, `IssuesPanel`. The `ReceivedZone`/
+> `OutputZone`/`MappingPanel` wrappers are folded into MapperWorkbench enhancements, not mounted alongside
+> it (avoid the double-preview the leaf agent flagged). Touch MapperWorkbench additively (new optional
+> props default to today's behavior → byte-identical when the flag is off).
+
 ### Task 12: `OrderWorkshop` shell + flag wiring
 
 **Files:** Create `OrderWorkshop.tsx`; modify `src/lib/flags.ts` + `SpineReview.tsx`.
