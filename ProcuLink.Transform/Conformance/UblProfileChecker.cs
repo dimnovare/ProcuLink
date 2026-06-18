@@ -3,8 +3,8 @@ using System.Xml.Linq;
 namespace ProcuLink.Transform.Conformance;
 
 /// <summary>
-/// Validates a UBL 2.1 Order-2 document (the output of <c>UblOrderTransformService</c>
-/// / <c>UblParsedOrderTransform</c>, Peppol BIS Order-only 3.0 compatible) against
+/// Validates a UBL 2.1 Order-2 document (the output of <c>UblOrderTransformService</c>,
+/// Peppol BIS Order-only 3.0 compatible) against
 /// the named UBL 2.1 Order profile. Pragmatic structural + mandatory-element +
 /// cardinality checks per OASIS UBL 2.1 Order and Peppol BIS 3.0 — not a full XSD
 /// validator.

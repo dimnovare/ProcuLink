@@ -1,8 +1,6 @@
 using System.Globalization;
 using System.Text;
 using FluentAssertions;
-using ProcuLink.Core.Services;
-using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
 using static ProcuLink.Transform.Tests.FormatMatrix.FormatFixtures;
 
@@ -13,13 +11,10 @@ namespace ProcuLink.Transform.Tests.FormatMatrix;
 /// formats × adversarial values (EU comma-decimal, US dot-decimal, thousands groups,
 /// zero/large qty, unicode descriptions, missing optional fields, many lines).
 ///
-/// Each order is parsed from the in-memory fixture builder (from FormatFixtures),
-/// then transformed through ALL available output formats (UblOrder, X12_850,
-/// EdifactOrders). Every combination asserts:
+/// Each order is parsed from the in-memory fixture builder (from FormatFixtures).
+/// Every combination asserts:
 ///   1. All input lines are present in the parsed order (no silent truncation).
 ///   2. No negative or NaN quantity/price (explicit corruption guard).
-///   3. No exception from any output transform.
-///   4. Every output document is non-empty.
 ///
 /// The suite specifically targets the locale-decimal corruption class:
 ///   • "73,22"  → 73.22 (not 7322 from treating comma as thousands separator)
@@ -35,10 +30,9 @@ namespace ProcuLink.Transform.Tests.FormatMatrix;
 ///     cXML 1.2, UBL 2.1, EDIFACT D96A, X12 850, SAP IDoc ORDERS05.
 ///   • PDF is excluded — the primary path needs a live OpenAI key (non-deterministic).
 ///     See PdfMatrixPlaceholderTests for the honest exclusion documentation.
-///   • Output formats: UblOrder, X12_850, EdifactOrders (the ParsedOrder family).
-///   • The ITransformService family (Csv/Json/Xml/CXml/Ubl/X12 entity-based) is
-///     covered by OutCoverageMatrixTests; the high-volume suite focuses on the
-///     ParsedOrder → output path for speed and breadth.
+///   • The high-volume suite focuses on inbound parse fidelity (no silent truncation,
+///     no locale-decimal corruption) across all input formats; output serialization is
+///     covered by OutCoverageMatrixTests.
 ///   • Target runtime: &lt;30 s (all 200+ cases run in-process with no I/O).
 /// </summary>
 public class HighVolumeMatrixTests
@@ -46,9 +40,6 @@ public class HighVolumeMatrixTests
     // ── Constants ─────────────────────────────────────────────────────────────
 
     private const int TargetCases = 210;  // ≥200 as requested; 210 is 7 formats × 30 cases each
-
-    private static readonly OutputFormat[] AllParsedFormats =
-        { OutputFormat.UblOrder, OutputFormat.X12_850, OutputFormat.EdifactOrders };
 
     private static readonly string[] Currencies = { "EUR", "USD", "PLN", "GBP", "SEK" };
 
@@ -87,16 +78,6 @@ public class HighVolumeMatrixTests
         ("1,234.56", 1234.56m),  // US thousands separator (requires quoted field)
     };
 
-    // ── Factories ─────────────────────────────────────────────────────────────
-
-    private static ParsedOrderTransformFactory TransformFactory() =>
-        new(new IParsedOrderTransform[]
-        {
-            new UblParsedOrderTransform(),
-            new X12ParsedOrderTransform(),
-            new EdifactParsedOrderTransform(),
-        });
-
     // ── Core assertion ────────────────────────────────────────────────────────
 
     private static async Task AssertParseAndTransform(
@@ -123,16 +104,6 @@ public class HighVolumeMatrixTests
             // but we assert it is within the range we'd ever expect from a real PO.
             if (line.UnitPrice is { } price)
                 price.Should().BeGreaterThanOrEqualTo(0m, $"{ctx} unit price must be non-negative");
-        }
-
-        // Round-trip through all output transforms — no exceptions, non-empty.
-        foreach (var fmt in AllParsedFormats)
-        {
-            ParsedOrderTransformResult result;
-            var act = () => { result = TransformFactory().Transform(order, fmt); };
-            act.Should().NotThrow($"[{label}] → {fmt} must not throw");
-            var r = TransformFactory().Transform(order, fmt);
-            r.Content.Length.Should().BeGreaterThan(0, $"[{label}] → {fmt} must emit non-empty output");
         }
     }
 
@@ -392,7 +363,7 @@ public class HighVolumeMatrixTests
     }
 
     [Fact]
-    public async Task AllFormats_UnicodeDescriptions_SurviveParseAndTransform()
+    public async Task AllFormats_UnicodeDescriptions_SurviveParse()
     {
         // All 7 formats must handle the full unicode description set without loss.
         var lines = UnicodeDescriptions
@@ -413,10 +384,6 @@ public class HighVolumeMatrixTests
             var order = await parser.ParseAsync(stream, CancellationToken.None);
             order.Lines.Should().HaveCount(UnicodeDescriptions.Length,
                 $"[{label}] all unicode-description lines must survive");
-
-            foreach (var fmt in AllParsedFormats)
-                TransformFactory().Transform(order, fmt).Content.Length.Should().BeGreaterThan(0,
-                    $"[{label}] unicode order → {fmt} must produce non-empty output");
         }
     }
 
@@ -442,10 +409,6 @@ public class HighVolumeMatrixTests
             using var stream = build();
             var order = await parser.ParseAsync(stream, CancellationToken.None);
             order.Lines.Should().HaveCount(3, $"[{label}] all 3 lines must survive with null fields");
-
-            foreach (var fmt in AllParsedFormats)
-                TransformFactory().Transform(order, fmt).Content.Length.Should().BeGreaterThan(0,
-                    $"[{label}] null-fields order → {fmt} must not crash");
         }
     }
 

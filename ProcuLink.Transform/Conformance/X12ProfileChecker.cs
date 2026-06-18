@@ -2,7 +2,7 @@ namespace ProcuLink.Transform.Conformance;
 
 /// <summary>
 /// Validates an ANSI ASC X12 850 Purchase Order interchange (the output of
-/// <c>X12TransformService</c> / <c>X12ParsedOrderTransform</c>, version 004010)
+/// <c>X12TransformService</c>, version 004010)
 /// against the named X12 850 profile. Pragmatic segment-structure + mandatory-
 /// segment + element-presence + cardinality checks — not a full X12 implementation
 /// guide validator.

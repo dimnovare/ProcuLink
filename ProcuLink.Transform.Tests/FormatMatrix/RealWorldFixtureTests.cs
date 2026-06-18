@@ -2,8 +2,6 @@ using System.Globalization;
 using System.Reflection;
 using System.Text;
 using FluentAssertions;
-using ProcuLink.Core.Services;
-using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
 
 namespace ProcuLink.Transform.Tests.FormatMatrix;
@@ -19,9 +17,6 @@ namespace ProcuLink.Transform.Tests.FormatMatrix;
 ///   2. Canonical parse — order has ≥1 line, a non-null PO number, no negative/NaN
 ///      quantities or prices, and where the document states a line amount,
 ///      qty × unitPrice reconciles within €0.01.
-///   3. All-output round-trip — every parsed order is serialized through ALL
-///      available output transforms; no transform may throw, and every output
-///      must be non-empty.
 ///
 /// What is NOT tested here (non-deterministic / integration-only):
 ///   • PDF text→LLM extraction (OpenAI key required) — see PdfMatrixPlaceholderTests.
@@ -60,21 +55,8 @@ public class RealWorldFixtureTests
             new X12OrderParser(),
         });
 
-    // All ParsedOrder transforms (UBL, X12, EDIFACT) — the hermetic trio.
-    private static ParsedOrderTransformFactory TransformFactory() =>
-        new(new IParsedOrderTransform[]
-        {
-            new UblParsedOrderTransform(),
-            new X12ParsedOrderTransform(),
-            new EdifactParsedOrderTransform(),
-        });
-
-    private static readonly OutputFormat[] AllParsedFormats =
-        { OutputFormat.UblOrder, OutputFormat.X12_850, OutputFormat.EdifactOrders };
-
     /// <summary>
-    /// Core assertion helper: parse the fixture, check canonical invariants,
-    /// then round-trip through every output transform.
+    /// Core assertion helper: parse the fixture and check canonical invariants.
     /// </summary>
     private static async Task AssertRealWorldFixture(
         string resourceName,
@@ -127,15 +109,6 @@ public class RealWorldFixtureTests
                     $"{ctx}: qty({line.Quantity}) × unitPrice({up}) = {computed} " +
                     $"must reconcile with stated lineAmount({lineAmt}) within €0.01");
             }
-        }
-
-        // ── All-output round-trip: no transform may crash ─────────────────────
-        foreach (var fmt in AllParsedFormats)
-        {
-            var result = TransformFactory().Transform(order, fmt);
-            result.Content.Should().NotBeNull($"'{resourceName}' → {fmt} must not throw");
-            result.Content.Length.Should().BeGreaterThan(0,
-                $"'{resourceName}' → {fmt} must produce a non-empty document");
         }
     }
 
@@ -245,10 +218,6 @@ public class RealWorldFixtureTests
         order.Lines.Should().HaveCount(1);
         order.Lines[0].Quantity.Should().Be(1m);
         order.Lines[0].UnitPrice.Should().Be(149.49m);
-
-        foreach (var fmt in AllParsedFormats)
-            TransformFactory().Transform(order, fmt).Content.Length.Should().BeGreaterThan(0,
-                $"IDoc (numeric CURCY) → {fmt} must produce output");
     }
 
     [Fact]
@@ -285,9 +254,6 @@ public class RealWorldFixtureTests
 
         order.GrandTotal.Should().BeApproximately(186.01m, 0.01m,
             "E1EDS01 SUMME=186.01 must be captured as GrandTotal");
-
-        foreach (var fmt in AllParsedFormats)
-            TransformFactory().Transform(order, fmt).Content.Length.Should().BeGreaterThan(0);
     }
 
     [Fact]

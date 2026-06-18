@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
@@ -238,7 +239,14 @@ public sealed class MappedTransformService
 
             if (result.Ok)
                 return result.Value;
-            // Expression failed — fall through to the field/fixed value so the transform survives.
+
+            // Expression failed — fall through to the field/fixed value so the transform survives
+            // (fail-open is intentional and UNCHANGED). Log the failure so an authoring mistake in a
+            // mapping expression is observable instead of silently producing the fallback value.
+            TransformDiagnostics.CreateLogger(nameof(MappedTransformService)).LogWarning(
+                "Output-field expression failed to evaluate ({Scope}); falling back to the " +
+                "field/fixed value. Error: {Error}",
+                lineScope ? "line" : "header", result.Error);
         }
 
         return fallbackFixedValue
@@ -263,15 +271,26 @@ public sealed class MappedTransformService
         // Derivation mirrors ScribanOrderModel: sum of (Qty * UnitPrice) for all lines.
         // When the entity already carries a stated value, use it; compute only when null.
         // Defence-in-depth: the sum is overflow-guarded so a pathological qty/price can never throw
-        // an OverflowException up the CSV/JSON build path (the row bag falls back to 0 instead).
+        // an OverflowException up this row-building path (the structural row bag falls back to 0).
+        // NOTE: a total that overflows is CORRUPT, not legitimately 0 — the native delivery path
+        // (Build → ValidateOrder → GuardLineSumOverflow) holds such an order for review BEFORE this
+        // row builder runs, so a corrupt total can never be DELIVERED as 0. This 0 fallback only
+        // protects the non-delivery reuse paths (preview / OutputTemplateEmitter), and it is logged
+        // so the degradation is observable rather than silent.
         static decimal SafeLineSum(PurchaseOrderEntity o)
         {
             try
             {
                 return o.Lines.Sum(l => l.Quantity * l.UnitPrice);
             }
-            catch (OverflowException)
+            catch (OverflowException ex)
             {
+                TransformDiagnostics.CreateLogger(nameof(MappedTransformService)).LogWarning(
+                    ex,
+                    "Order {OrderId} (PO {PoNumber}): line-sum total overflowed decimal range; " +
+                    "row total degraded to 0 for this non-delivery row build. The native delivery path " +
+                    "holds this order for review instead of emitting a corrupt 0.",
+                    o.Id, o.PoNumber);
                 return 0m;
             }
         }
@@ -283,7 +302,7 @@ public sealed class MappedTransformService
         {
             ["PoNumber"]               = order.PoNumber ?? string.Empty,
             ["OrderDate"]              = order.OrderDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            ["BuyerName"]              = ExtractBuyerName(order),
+            ["BuyerName"]              = OrderHeaderReader.ExtractBuyerName(order),
             ["Currency"]               = order.Currency ?? string.Empty,
             ["SupplierName"]           = order.Supplier?.Name ?? order.SupplierName ?? string.Empty,
             // V5: totals (derived when not stated) and remaining header enrichment.
@@ -400,7 +419,14 @@ public sealed class MappedTransformService
 
     // ── Shared with the fixed transforms ─────────────────────────────────────────
 
-    /// <summary>Same guard as <c>CsvTransformService</c> / <c>JsonTransformService</c>.</summary>
+    /// <summary>
+    /// Same unresolved-line guard as <c>CsvTransformService</c> / <c>JsonTransformService</c>, PLUS a
+    /// corrupt-total guard: a line whose <c>Quantity × UnitPrice</c> overflows the decimal range is
+    /// corrupt, not legitimately zero. Rather than let the row builder silently degrade that total to
+    /// 0 and DELIVER a financially-wrong document, such lines are HELD for review here — the same
+    /// "flag the line for review" mechanism (<see cref="TransformValidationException"/>) the
+    /// unresolved-line guard uses, with a clear per-line problem message.
+    /// </summary>
     private static void ValidateOrder(PurchaseOrderEntity order)
     {
         var unresolved = order.Lines
@@ -411,35 +437,70 @@ public sealed class MappedTransformService
 
         if (unresolved.Count > 0)
             throw new TransformValidationException(unresolved);
+
+        GuardLineSumOverflow(order);
     }
 
-    private static string ExtractBuyerName(PurchaseOrderEntity order)
+    /// <summary>
+    /// Holds an order for review when any line's <c>Quantity × UnitPrice</c> overflows the decimal
+    /// range. A corrupt total must never be DELIVERED as a silent 0 (the founder-bug class of "delivers
+    /// blind"), so this surfaces a clear <see cref="TransformValidationException"/> (the standard hold
+    /// mechanism) instead. Also logs a warning so the rejection is observable. The vast majority of
+    /// orders never trip this; for them it is a couple of multiplies and a no-op.
+    /// </summary>
+    private static void GuardLineSumOverflow(PurchaseOrderEntity order)
     {
-        if (!string.IsNullOrEmpty(order.BuyerName)) return order.BuyerName;
-        if (order.CanonicalJson is null) return string.Empty;
-        try
+        List<LineProblem>? problems = null;
+        foreach (var l in order.Lines)
         {
-            if (order.CanonicalJson.RootElement.ValueKind == JsonValueKind.Object)
+            try
             {
-                if (order.CanonicalJson.RootElement.TryGetProperty("buyerName", out var el))
-                    return el.GetString() ?? string.Empty;
-                if (order.CanonicalJson.RootElement.TryGetProperty("BuyerName", out var el2))
-                    return el2.GetString() ?? string.Empty;
+                _ = l.Quantity * l.UnitPrice;
+            }
+            catch (OverflowException ex)
+            {
+                (problems ??= new List<LineProblem>()).Add(new LineProblem(
+                    l.LineNumber, LineProblemKind.MissingOrZeroPrice,
+                    $"Line {l.LineNumber}: extended amount (quantity × unit price) overflows the " +
+                    "supported numeric range; held for review to avoid delivering a corrupt total."));
+
+                TransformDiagnostics.CreateLogger(nameof(MappedTransformService)).LogWarning(
+                    ex,
+                    "Order {OrderId} (PO {PoNumber}) line {LineNumber}: quantity ({Quantity}) × unit " +
+                    "price ({UnitPrice}) overflowed decimal; holding the order for review rather than " +
+                    "delivering a degraded 0 total.",
+                    order.Id, order.PoNumber, l.LineNumber, l.Quantity, l.UnitPrice);
             }
         }
-        catch { /* malformed JSON — ignore */ }
-        return string.Empty;
+
+        if (problems is { Count: > 0 })
+        {
+            var lineNumbers = problems.Select(p => p.LineNumber).Distinct().OrderBy(n => n).ToList();
+            throw new TransformValidationException(lineNumbers, problems);
+        }
     }
 
     /// <summary>
     /// Overflow-safe decimal multiply for the derived line/extended amounts. A pathological
     /// quantity × unit-price can overflow <see cref="decimal"/>; the row bag must never throw on the
     /// CSV/JSON build path, so an overflow degrades to 0 rather than crashing the preview/transform.
+    /// The native delivery path already holds such an order for review (GuardLineSumOverflow) BEFORE
+    /// reaching here, so a corrupt amount cannot be delivered as 0; this 0 fallback only protects the
+    /// non-delivery reuse paths (preview / OutputTemplateEmitter), and the degradation is logged so it
+    /// is observable rather than silent.
     /// </summary>
     private static decimal SafeMultiply(decimal a, decimal b)
     {
         try { return a * b; }
-        catch (OverflowException) { return 0m; }
+        catch (OverflowException ex)
+        {
+            TransformDiagnostics.CreateLogger(nameof(MappedTransformService)).LogWarning(
+                ex,
+                "Derived amount {A} × {B} overflowed decimal range; row value degraded to 0 for this " +
+                "non-delivery row build.",
+                a, b);
+            return 0m;
+        }
     }
 
     /// <summary>RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline. Internal so the OutputNode CSV emitter escapes byte-identically.</summary>

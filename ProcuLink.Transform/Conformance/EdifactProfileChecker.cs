@@ -1,8 +1,7 @@
 namespace ProcuLink.Transform.Conformance;
 
 /// <summary>
-/// Validates a UN/EDIFACT ORDERS D.96A message (the output of
-/// <c>EdifactParsedOrderTransform</c>) against the named EDIFACT ORDERS D.96A
+/// Validates a UN/EDIFACT ORDERS D.96A message against the named EDIFACT ORDERS D.96A
 /// profile. Pragmatic segment-structure + mandatory-segment + element-presence +
 /// cardinality checks per ISO 9735 + the ORDERS D.96A message guideline — not a
 /// full EDIFACT directory validator.

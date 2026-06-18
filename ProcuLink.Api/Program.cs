@@ -233,11 +233,12 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 // Named per-user fixed-window policies for expensive / cost-bearing / abusable
 // endpoints, PLUS a global fallback limiter so every endpoint has a backstop.
 //
-// Partition key for ALL policies: Clerk `sub` claim first (so an authenticated
+// Partition key for MOST policies: Clerk `sub` claim first (so an authenticated
 // user is limited as themselves regardless of source IP), then the remote IP
-// for unauthenticated-ish callers (webhook receivers, ApiKey ingress), then a
-// shared "anonymous" bucket as the last resort. Helper below keeps this
-// consistent across policies.
+// for unauthenticated-ish callers (ApiKey ingress), then a shared "anonymous"
+// bucket as the last resort. Helper below keeps this consistent across policies.
+// The "webhook" policy is the exception: it partitions by the TENANT slug on the
+// route, so one tenant's HMAC-webhook flood can't exhaust another tenant's quota.
 //
 // Controllers opt into a named policy with [EnableRateLimiting("<name>")];
 // the global limiter applies to everything not otherwise rejected.
@@ -253,15 +254,19 @@ builder.Services.AddRateLimiter(options =>
     // the window is shared. See docs/audit/2026-06-12-scale-gated-constraints.md.
     //
     // sub → IP → "anonymous": authenticated callers are limited per-user; the
-    // unauthenticated ingress/webhook surface is limited per source IP.
+    // unauthenticated ApiKey-ingress surface is limited per source IP. (The webhook
+    // surface overrides this to partition per tenant slug — see the "webhook" policy.)
     static string PartitionKey(HttpContext ctx) =>
         ctx.User.FindFirst("sub")?.Value
         ?? ctx.Connection.RemoteIpAddress?.ToString()
         ?? "anonymous";
 
     static RateLimitPartition<string> Window(HttpContext ctx, string prefix, int permit, int seconds) =>
+        WindowFor(ctx, prefix, PartitionKey(ctx), permit, seconds);
+
+    static RateLimitPartition<string> WindowFor(HttpContext ctx, string prefix, string key, int permit, int seconds) =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: $"{prefix}:{PartitionKey(ctx)}",
+            partitionKey: $"{prefix}:{key}",
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = permit,
@@ -294,10 +299,21 @@ builder.Services.AddRateLimiter(options =>
     // URL; cap so the surface can't be used to bulk-mint download links.
     options.AddPolicy("signed-url", ctx => Window(ctx, "signed-url", permit: 60, seconds: 60));
 
-    // Webhook receivers + ApiKey ingress are unauthenticated-ish and keyed by IP.
-    // Higher ceiling (legitimate integrations are chatty) but still bounded so a
-    // single source can't flood the HMAC-verify / parse path.
-    options.AddPolicy("webhook", ctx => Window(ctx, "webhook", permit: 120, seconds: 60));
+    // Webhook receivers are unauthenticated (HMAC-only) and chatty, so the ceiling
+    // is generous. The PARTITION KEY is the tenant slug carried in the route
+    // (/api/webhook-ingress/{slug}/...), NOT the source IP: many suppliers push
+    // callbacks for one org from a shared egress IP, and an IP-keyed bucket lets a
+    // single noisy tenant exhaust the window for EVERY other tenant. Keying on the
+    // slug isolates each org's quota. Fall back to IP / "anonymous" only when no
+    // slug is on the route (a malformed request that won't match the controller
+    // anyway) so the surface is never left unbounded.
+    static string WebhookKey(HttpContext ctx) =>
+        ctx.Request.RouteValues.TryGetValue("slug", out var slug)
+            && slug?.ToString() is { Length: > 0 } s
+                ? $"slug:{s}"
+                : ctx.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
+
+    options.AddPolicy("webhook", ctx => WindowFor(ctx, "webhook", WebhookKey(ctx), permit: 120, seconds: 60));
 
     // The anonymous support contact form feeds an outbound email sender, so it
     // is a spam/amplification + SMTP-cost vector. Nobody legitimately files
@@ -599,15 +615,6 @@ builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
 builder.Services.AddSingleton<ITransformService, JsonTransformService>();
 builder.Services.AddSingleton<ITransformService, UblOrderTransformService>(); // Group M Phase 1 — UBL 2.1 Peppol BIS 3.0
 builder.Services.AddSingleton<ITransformService, X12TransformService>(); // Group M — ANSI X12 850
-
-// ── Canonical-model output transforms (ProcuLink.Transform) ─────────────────
-// Serialize a ParsedOrder (the pre-resolution canonical model) directly to a
-// standards document. Selected at runtime by ParsedOrderTransformFactory via
-// IEnumerable<IParsedOrderTransform> + CanTransform().
-builder.Services.AddSingleton<IParsedOrderTransform, UblParsedOrderTransform>();     // UBL 2.1 Order
-builder.Services.AddSingleton<IParsedOrderTransform, X12ParsedOrderTransform>();     // ANSI X12 850
-builder.Services.AddSingleton<IParsedOrderTransform, EdifactParsedOrderTransform>(); // UN/EDIFACT ORDERS D.96A
-builder.Services.AddSingleton<ParsedOrderTransformFactory>();
 
 // ── Group V8: standards conformance reports ─────────────────────────────────
 // Validates a generated outbound document against its NAMED standard profile

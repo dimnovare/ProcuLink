@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Xml;
+using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
@@ -348,7 +349,17 @@ public sealed class OutputTemplateEmitter
             ? ScribanFieldEvaluator.EvaluateLine(wrapped, row)
             : ScribanFieldEvaluator.EvaluateHeader(wrapped, row);
 
-        if (!result.Ok) return true; // fail-open: our/author error never drops data silently
+        if (!result.Ok)
+        {
+            // Fail-open: our/author error never drops data silently (behaviour UNCHANGED). Log the
+            // failure so a broken IncludeWhen predicate is observable instead of invisibly emitting
+            // the node it was meant to gate.
+            TransformDiagnostics.CreateLogger(nameof(OutputTemplateEmitter)).LogWarning(
+                "IncludeWhen predicate \"{Predicate}\" failed to evaluate ({Scope}); failing open " +
+                "(node emitted). Error: {Error}",
+                pred, lineScope ? "line" : "header", result.Error);
+            return true;
+        }
         return IsTruthy(result.Value);
     }
 

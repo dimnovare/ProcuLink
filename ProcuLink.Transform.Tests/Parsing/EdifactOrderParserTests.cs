@@ -1,7 +1,5 @@
 using System.Text;
 using FluentAssertions;
-using ProcuLink.Core.Services;
-using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
 
 namespace ProcuLink.Transform.Tests.Parsing;
@@ -225,27 +223,30 @@ public class EdifactOrderParserTests
     {
         // Regression: the parser must release-unescape EXACTLY ONCE. A free-text
         // description containing the release char '?', the component separator ':',
-        // and the element separator '+' is release-escaped by
-        // EdifactParsedOrderTransform on write; the parser must recover it
-        // byte-for-byte. Previously the value was unescaped multiple times (once
-        // while tokenizing segments, again while splitting elements and components),
-        // so the now-bare ':' mis-split the value and the now-bare '?' was dropped —
+        // and the element separator '+' is release-escaped on the wire ('?' → '??',
+        // ':' → '?:', '+' → '?+'); the parser must recover it byte-for-byte.
+        // Previously the value was unescaped multiple times (once while tokenizing
+        // segments, again while splitting elements and components), so the now-bare
+        // ':' mis-split the value and the now-bare '?' was dropped —
         // "Cable 2:1 ratio? a+b" parsed back as "Cable 2 1 ratio a".
         const string tricky = "Cable 2:1 ratio? a+b";
 
-        var source = new ParsedOrder(
-            PoNumber:  "PO-ESC-001",
-            OrderDate: new DateTime(2026, 5, 30),
-            BuyerName: "Acme Buyer Ltd",
-            Currency:  "EUR",
-            Lines: new List<ParsedOrderLine>
-            {
-                new(LineNumber: 1, BuyerItemCode: "ITEM-1", Description: tricky, Quantity: 1m, Unit: "EA", UnitPrice: 9.99m),
-            });
+        // The IMD item-description segment carries the release-escaped free text in
+        // element 3, component index 3 (IMD+F+ANM+:::<descr>). Escaped form below:
+        //   ':' → '?:' · '+' → '?+' · '?' → '??'
+        const string edi =
+            "UNB+UNOC:3+SENDER+RECEIVER+260530:0000+1'" +
+            "UNH+1+ORDERS:D:96A:UN'" +
+            "BGM+220+PO-ESC-001+9'" +
+            "DTM+137:20260530:102'" +
+            "LIN+1++ITEM-1:BP'" +
+            "IMD+F+ANM+:::Cable 2?:1 ratio?? a?+b'" +
+            "QTY+21:1:EA'" +
+            "PRI+AAA:9.99'" +
+            "UNT+7+1'" +
+            "UNZ+1+1'";
 
-        var edi = new EdifactParsedOrderTransform().Transform(source, OutputFormat.EdifactOrders);
-
-        using var stream = new MemoryStream(edi.Content);
+        using var stream = ToStream(edi);
         var parsed = await new EdifactOrderParser().ParseAsync(stream, CancellationToken.None);
 
         parsed.Lines.Should().HaveCount(1);

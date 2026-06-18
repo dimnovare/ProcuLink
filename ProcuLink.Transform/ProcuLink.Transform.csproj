@@ -19,6 +19,12 @@
   <ItemGroup>
     <PackageReference Include="ClosedXML" Version="0.104.2" />
     <PackageReference Include="CsvHelper" Version="33.0.0" />
+    <!-- ILogger abstraction only (no concrete provider) so the static output builders can emit
+         observability warnings for swallowed fail-open paths (corrupt totals, Scriban/SourceMap
+         eval failures) via TransformDiagnostics. Defaults to NullLogger — silent + behaviour-
+         unchanged — until the composition root assigns a factory. net8 servicing band to match
+         the EF/ASP.NET 8.0.x packages the rest of the solution resolves transitively. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
     <PackageReference Include="PdfPig" Version="0.1.14" />
     <!-- Sandboxed per-field expression templating for the flexible per-order mapping override
          (ScribanFieldEvaluator). Scriban is MIT-licensed (no commercial-licence concern) and is a

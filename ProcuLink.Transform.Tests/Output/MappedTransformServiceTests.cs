@@ -276,6 +276,36 @@ public class MappedTransformServiceTests
         act.Should().Throw<ArgumentException>();
     }
 
+    [Fact]
+    public void Build_HoldsForReview_WhenLineTotalOverflowsDecimal_NotSilentZero()
+    {
+        // A pathological quantity × unit-price overflows decimal. The corrupt total must NOT be
+        // silently delivered as 0 — the order is held for review (TransformValidationException),
+        // the same mechanism an unresolved line uses.
+        var order = BuildOrder(new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                LineNumber = 1, BuyerItemCode = "B-1", SupplierItemCode = "SUP-1",
+                Description = "Big", Quantity = decimal.MaxValue, Unit = "EA", UnitPrice = decimal.MaxValue,
+                NeedsReview = false, Confidence = 1.0f,
+            },
+        });
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Lines = { ["code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" } },
+            },
+        };
+
+        var act = () => new MappedTransformService().Build(order, ov, OutputFormat.Csv);
+
+        act.Should().Throw<TransformValidationException>()
+            .Which.UnresolvedLineNumbers.Should().Contain(1);
+    }
+
     // ── Phase 2: LoadCatalogProduct wired through the native CSV/JSON path ────────
     //
     // These prove the WIRING (offer⇔works): a CSV/JSON output rule using the user-selectable

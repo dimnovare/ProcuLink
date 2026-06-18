@@ -5,35 +5,20 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
-using ProcuLink.Transform.Parsing;
 using static ProcuLink.Transform.Tests.FormatMatrix.FormatFixtures;
 
 namespace ProcuLink.Transform.Tests.FormatMatrix;
 
 /// <summary>
 /// OUT-coverage leg of the FormatMatrix stress suite. Every output transform is
-/// exercised against a canonical order and asserted to produce a WELL-FORMED
+/// exercised against a resolved order and asserted to produce a WELL-FORMED
 /// document (valid XML / parseable CSV / valid JSON) whose key fields round-trip.
 ///
-/// Two transform families are covered:
-///   • IParsedOrderTransform (consumes ParsedOrder directly, via ParsedOrderTransformFactory):
-///       UblOrder, X12_850, EdifactOrders.
-///   • ITransformService (consumes a resolved PurchaseOrderEntity):
-///       Csv, Json, Xml, CXml, Ubl, X12  — plus MappedTransformService (CSV/JSON overrides).
+/// Covers the ITransformService family (consumes a resolved PurchaseOrderEntity):
+///   Csv, Json, Xml, CXml, Ubl, X12  — plus MappedTransformService (CSV/JSON overrides).
 /// </summary>
 public class OutCoverageMatrixTests
 {
-    private static ParsedOrder CanonicalOrder() => new(
-        PoNumber:  "PO-OUT-1",
-        OrderDate: new DateTime(2026, 6, 8),
-        BuyerName: "Acme Buyer Ltd",
-        Currency:  "EUR",
-        Lines: new List<ParsedOrderLine>
-        {
-            new(1, "BUY-001", "Widget Type A", 10m, "EA", 12.50m),
-            new(2, "BUY-002", "Widget Type B", 5m,  "EA", 8.00m),
-        });
-
     // A resolved entity for the ITransformService family (needs a non-null
     // SupplierItemCode + NeedsReview=false on every line, else the validation guard throws).
     private static PurchaseOrderEntity ResolvedEntity()
@@ -62,110 +47,12 @@ public class OutCoverageMatrixTests
         return order;
     }
 
-    private static ParsedOrderTransformFactory ParsedFactory() =>
-        new(new IParsedOrderTransform[]
-        {
-            new UblParsedOrderTransform(),
-            new X12ParsedOrderTransform(),
-            new EdifactParsedOrderTransform(),
-        });
-
     private static string ReadStream(TransformResult r)
     {
         r.Content.Position = 0;
         // leaveOpen so callers can read the same result more than once.
         using var sr = new StreamReader(r.Content, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: true);
         return sr.ReadToEnd();
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════
-    // IParsedOrderTransform family — well-formed + round-trip
-    // ════════════════════════════════════════════════════════════════════════════
-
-    [Fact]
-    public void Out_UblOrder_IsWellFormedXml_AndCarriesKeyFields()
-    {
-        var r = ParsedFactory().Transform(CanonicalOrder(), OutputFormat.UblOrder);
-        r.ContentType.Should().Be("application/xml");
-
-        var doc = XDocument.Parse(r.AsText()); // throws if not well-formed
-        doc.Root!.Name.LocalName.Should().Be("Order");
-        r.AsText().Should().Contain("PO-OUT-1").And.Contain("BUY-001").And.Contain("EUR");
-    }
-
-    [Fact]
-    public async Task Out_UblOrder_RoundTripsThroughUblOrderParser()
-    {
-        var r = ParsedFactory().Transform(CanonicalOrder(), OutputFormat.UblOrder);
-        using var stream = new MemoryStream(r.Content);
-        var parsed = await new UblOrderParser().ParseAsync(stream, CancellationToken.None);
-
-        parsed.PoNumber.Should().Be("PO-OUT-1");
-        parsed.Currency.Should().Be("EUR");
-        parsed.Lines.Should().HaveCount(2);
-        parsed.Lines.OrderBy(l => l.LineNumber).First().BuyerItemCode.Should().Be("BUY-001");
-        parsed.Lines.OrderBy(l => l.LineNumber).First().UnitPrice.Should().Be(12.50m);
-    }
-
-    [Fact]
-    public void Out_X12_850_IsWellFormedEnvelope_AndCarriesKeyFields()
-    {
-        var r = ParsedFactory().Transform(CanonicalOrder(), OutputFormat.X12_850);
-        r.ContentType.Should().Be("application/edi-x12");
-
-        var segs = r.AsText().Split('~', StringSplitOptions.RemoveEmptyEntries)
-            .Select(s => s.Trim('\r', '\n', ' ', '\t')).Where(s => s.Length > 0).ToList();
-        segs[0].Should().StartWith("ISA*");
-        segs.Should().Contain(s => s.StartsWith("ST*850"));
-        segs.Should().Contain(s => s.StartsWith("BEG*00*NE*PO-OUT-1"));
-    }
-
-    [Fact]
-    public async Task Out_X12_850_RoundTripsThroughX12OrderParser()
-    {
-        var r = ParsedFactory().Transform(CanonicalOrder(), OutputFormat.X12_850);
-        using var stream = new MemoryStream(r.Content);
-        var parsed = await new X12OrderParser().ParseAsync(stream, CancellationToken.None);
-
-        parsed.PoNumber.Should().Be("PO-OUT-1");
-        parsed.Currency.Should().Be("EUR");
-        parsed.Lines.Should().HaveCount(2);
-        parsed.Lines.OrderBy(l => l.LineNumber).First().BuyerItemCode.Should().Be("BUY-001");
-    }
-
-    [Fact]
-    public void Out_EdifactOrders_IsWellFormed_AndCarriesKeyFields()
-    {
-        var r = ParsedFactory().Transform(CanonicalOrder(), OutputFormat.EdifactOrders);
-        r.ContentType.Should().Be("application/edifact");
-
-        var text = r.AsText();
-        text.Should().StartWith("UNB+");
-        text.Should().Contain("UNH+").And.Contain("ORDERS:D:96A:UN");
-        text.Should().Contain("BGM+220+PO-OUT-1");
-    }
-
-    [Fact]
-    public async Task Out_EdifactOrders_RoundTripsThroughEdifactOrderParser()
-    {
-        var r = ParsedFactory().Transform(CanonicalOrder(), OutputFormat.EdifactOrders);
-        using var stream = new MemoryStream(r.Content);
-        var parsed = await new EdifactOrderParser().ParseAsync(stream, CancellationToken.None);
-
-        parsed.PoNumber.Should().Be("PO-OUT-1");
-        parsed.Currency.Should().Be("EUR");
-        parsed.Lines.Should().HaveCount(2);
-        parsed.Lines.OrderBy(l => l.LineNumber).First().BuyerItemCode.Should().Be("BUY-001");
-        parsed.Lines.OrderBy(l => l.LineNumber).First().UnitPrice.Should().Be(12.50m);
-    }
-
-    [Fact]
-    public void Out_ParsedFactory_UnknownFormat_Throws()
-    {
-        // The ITransformService values (Csv/Json/Xml/CXml/Ubl/X12) are NOT registered
-        // in the ParsedOrder factory — asking for one is a clear NotSupportedException.
-        var act = () => ParsedFactory().Transform(CanonicalOrder(), OutputFormat.Csv);
-        act.Should().Throw<NotSupportedException>();
     }
 
     // ════════════════════════════════════════════════════════════════════════════

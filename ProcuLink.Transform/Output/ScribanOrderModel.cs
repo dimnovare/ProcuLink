@@ -67,7 +67,7 @@ internal static class ScribanOrderModel
 
         var poNumber     = order.PoNumber ?? string.Empty;
         var orderDate    = order.OrderDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var buyerName    = ExtractBuyerName(order);
+        var buyerName    = OrderHeaderReader.ExtractBuyerName(order);
         var currency     = order.Currency ?? string.Empty;
         var supplierName = order.Supplier?.Name ?? order.SupplierName ?? string.Empty;
 
@@ -278,22 +278,4 @@ internal static class ScribanOrderModel
 
     /// <summary>A decimal exposed as a real number, or "" when null (so the template can test/branch).</summary>
     private static object NumberOrEmpty(decimal? value) => value.HasValue ? value.Value : string.Empty;
-
-    private static string ExtractBuyerName(PurchaseOrderEntity order)
-    {
-        if (!string.IsNullOrEmpty(order.BuyerName)) return order.BuyerName;
-        if (order.CanonicalJson is null) return string.Empty;
-        try
-        {
-            if (order.CanonicalJson.RootElement.ValueKind == JsonValueKind.Object)
-            {
-                if (order.CanonicalJson.RootElement.TryGetProperty("buyerName", out var el))
-                    return el.GetString() ?? string.Empty;
-                if (order.CanonicalJson.RootElement.TryGetProperty("BuyerName", out var el2))
-                    return el2.GetString() ?? string.Empty;
-            }
-        }
-        catch { /* malformed JSON — ignore */ }
-        return string.Empty;
-    }
 }

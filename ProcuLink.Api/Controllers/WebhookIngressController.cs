@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Webhooks;
@@ -26,6 +27,11 @@ namespace ProcuLink.Api.Controllers;
 [AllowAnonymous]
 [ApiController]
 [Route("api/webhook-ingress/{slug}")]
+// Rate-limited per TENANT (the {slug} route value), not per source IP — many
+// suppliers push callbacks for one org from a shared egress IP, so an IP-keyed
+// bucket would let one noisy tenant exhaust every other tenant's quota. The
+// "webhook" policy (Program.cs) derives its partition key from this slug.
+[EnableRateLimiting("webhook")]
 public sealed class WebhookIngressController : ControllerBase
 {
     private readonly IHmacWebhookVerifier                  _verifier;

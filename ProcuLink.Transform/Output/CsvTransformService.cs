@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 
@@ -35,7 +34,7 @@ public sealed class CsvTransformService : ITransformService
         var poNumber  = Escape(order.PoNumber ?? string.Empty);
         var orderDate = order.OrderDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var currency  = Escape(order.Currency ?? string.Empty);
-        var buyerName = Escape(ExtractBuyerName(order));
+        var buyerName = Escape(OrderHeaderReader.ExtractBuyerName(order));
 
         foreach (var l in order.Lines.OrderBy(x => x.LineNumber))
         {
@@ -75,32 +74,6 @@ public sealed class CsvTransformService : ITransformService
 
         if (unresolved.Count > 0)
             throw new TransformValidationException(unresolved);
-    }
-
-    /// <summary>
-    /// Resolve the buyer name, reading the denormalised <see cref="PurchaseOrderEntity.BuyerName"/>
-    /// COLUMN first and only falling back to <c>CanonicalJson</c>. The async parse path updates the
-    /// column but not CanonicalJson, so reading CanonicalJson alone delivered an empty buyer for
-    /// correctly-extracted orders. Mirrors <c>JsonTransformService.ExtractBuyerName</c> /
-    /// <c>MappedTransformService.ExtractBuyerName</c> / <c>ScribanOrderModel.ExtractBuyerName</c>
-    /// (consolidating these four copies into one shared helper is a worthwhile follow-up).
-    /// </summary>
-    private static string ExtractBuyerName(PurchaseOrderEntity order)
-    {
-        if (!string.IsNullOrEmpty(order.BuyerName)) return order.BuyerName;
-        if (order.CanonicalJson is null) return string.Empty;
-        try
-        {
-            if (order.CanonicalJson.RootElement.ValueKind == JsonValueKind.Object)
-            {
-                if (order.CanonicalJson.RootElement.TryGetProperty("buyerName", out var el))
-                    return el.GetString() ?? string.Empty;
-                if (order.CanonicalJson.RootElement.TryGetProperty("BuyerName", out var el2))
-                    return el2.GetString() ?? string.Empty;
-            }
-        }
-        catch { /* malformed JSON — ignore */ }
-        return string.Empty;
     }
 
     /// <summary>RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline.</summary>

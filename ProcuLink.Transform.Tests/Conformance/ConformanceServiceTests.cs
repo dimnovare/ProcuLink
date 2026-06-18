@@ -3,7 +3,6 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Transform.Conformance;
 using ProcuLink.Transform.Output;
-using ProcuLink.Transform.Parsing;
 using Xunit;
 
 namespace ProcuLink.Transform.Tests.Conformance;
@@ -22,16 +21,23 @@ public class ConformanceServiceTests
 
     // ── Fixtures ────────────────────────────────────────────────────────────────
 
-    private static ParsedOrder SampleParsedOrder() => new(
-        PoNumber:  "PO-CONF-001",
-        OrderDate: new DateTime(2026, 6, 9),
-        BuyerName: "Acme Buyer Ltd",
-        Currency:  "EUR",
-        Lines: new List<ParsedOrderLine>
-        {
-            new(LineNumber: 1, BuyerItemCode: "BUYER-001", Description: "Widget A", Quantity: 10m, Unit: "EA", UnitPrice: 12.50m),
-            new(LineNumber: 2, BuyerItemCode: "BUYER-002", Description: "Widget B", Quantity: 3m,  Unit: "EA", UnitPrice: 99.00m),
-        });
+    // A structurally-valid UN/EDIFACT ORDERS D.96A interchange (default ISO 9735
+    // delimiters): UNB · UNH(ORDERS:D:96A:UN) · BGM · DTM · 2×(LIN+QTY+PRI) · UNT · UNZ.
+    // The UNT 0074 count (10) is the inclusive UNH..UNT segment count
+    // (UNH·BGM·DTM·LIN·QTY·PRI·LIN·QTY·PRI·UNT).
+    private const string EdifactOrdersSample =
+        "UNB+UNOC:3+SENDER+RECEIVER+260609:0000+1'" +
+        "UNH+1+ORDERS:D:96A:UN'" +
+        "BGM+220+PO-CONF-001+9'" +
+        "DTM+137:20260609:102'" +
+        "LIN+1++BUYER-001:BP'" +
+        "QTY+21:10'" +
+        "PRI+AAA:12.50'" +
+        "LIN+2++BUYER-002:BP'" +
+        "QTY+21:3'" +
+        "PRI+AAA:99.00'" +
+        "UNT+10+1'" +
+        "UNZ+1+1'";
 
     private static PurchaseOrderEntity SampleEntity() => new()
     {
@@ -92,17 +98,6 @@ public class ConformanceServiceTests
     }
 
     [Fact]
-    public void UblOrder_ParsedOrderTransformOutput_PassesProfile()
-    {
-        var result = new UblParsedOrderTransform().Transform(SampleParsedOrder(), OutputFormat.UblOrder);
-
-        var report = _svc.Check(result.AsText(), OutputFormat.UblOrder);
-
-        report.Profile.Should().Be(StandardsProfile.Ubl21Order);
-        report.OverallPass.Should().BeTrue(report.ToMarkdown());
-    }
-
-    [Fact]
     public async Task X12_EntityTransformOutput_PassesProfile()
     {
         var bytes = await new X12TransformService().TransformAsync(SampleEntity(), OutputFormat.X12, default);
@@ -115,21 +110,9 @@ public class ConformanceServiceTests
     }
 
     [Fact]
-    public void X12_850_ParsedOrderTransformOutput_PassesProfile()
+    public void Edifact_RealOrdersD96ADocument_PassesProfile()
     {
-        var result = new X12ParsedOrderTransform().Transform(SampleParsedOrder(), OutputFormat.X12_850);
-
-        var report = _svc.Check(result.AsText(), OutputFormat.X12_850);
-
-        report.OverallPass.Should().BeTrue(report.ToMarkdown());
-    }
-
-    [Fact]
-    public void Edifact_RealTransformOutput_PassesProfile()
-    {
-        var result = new EdifactParsedOrderTransform().Transform(SampleParsedOrder(), OutputFormat.EdifactOrders);
-
-        var report = _svc.Check(result.AsText(), OutputFormat.EdifactOrders);
+        var report = _svc.Check(EdifactOrdersSample, OutputFormat.EdifactOrders);
 
         report.Profile.Should().Be(StandardsProfile.EdifactOrdersD96A);
         report.OverallPass.Should().BeTrue(report.ToMarkdown());
@@ -210,10 +193,11 @@ public class ConformanceServiceTests
     }
 
     [Fact]
-    public void X12_MissingPo1_FailsWithNamedCheck()
+    public async Task X12_MissingPo1_FailsWithNamedCheck()
     {
         // Strip the PO1 detail lines from a real 850 to break the mandatory cardinality.
-        var real = new X12ParsedOrderTransform().Transform(SampleParsedOrder(), OutputFormat.X12_850).AsText();
+        var bytes = await new X12TransformService().TransformAsync(SampleEntity(), OutputFormat.X12, default);
+        var real = ReadAll(bytes.Content);
         var withoutPo1 = string.Concat(real.Split('~')
             .Where(s => !s.TrimStart('\r', '\n').StartsWith("PO1", StringComparison.Ordinal))
             .Select(s => s + "~"))
@@ -231,8 +215,7 @@ public class ConformanceServiceTests
     public void Edifact_WrongMessageType_FailsWithNamedCheck()
     {
         // Take a real ORDERS D.96A message and corrupt the UNH message identifier.
-        var real = new EdifactParsedOrderTransform().Transform(SampleParsedOrder(), OutputFormat.EdifactOrders).AsText();
-        var corrupted = real.Replace("ORDERS:D:96A:UN", "ORDERS:D:01B:UN");
+        var corrupted = EdifactOrdersSample.Replace("ORDERS:D:96A:UN", "ORDERS:D:01B:UN");
 
         var report = _svc.Check(corrupted, OutputFormat.EdifactOrders);
 
@@ -311,10 +294,10 @@ public class ConformanceServiceTests
     // ── 5. Markdown variant renders deterministically ───────────────────────────
 
     [Fact]
-    public void ToMarkdown_RendersProfileNameAndResult()
+    public async Task ToMarkdown_RendersProfileNameAndResult()
     {
-        var result = new X12ParsedOrderTransform().Transform(SampleParsedOrder(), OutputFormat.X12_850);
-        var report = _svc.Check(result.AsText(), OutputFormat.X12_850);
+        var bytes = await new X12TransformService().TransformAsync(SampleEntity(), OutputFormat.X12, default);
+        var report = _svc.Check(ReadAll(bytes.Content), OutputFormat.X12_850);
 
         var md = report.ToMarkdown();
 

@@ -44,7 +44,7 @@ public sealed class JsonTransformService : ITransformService
 
         var totalValue = lines.Sum(l => l.lineTotal);
 
-        var buyerName = ExtractBuyerName(order);
+        var buyerName = OrderHeaderReader.ExtractBuyerName(order);
 
         var payload = new
         {
@@ -66,31 +66,6 @@ public sealed class JsonTransformService : ITransformService
             ContentType:   "application/json",
             FileExtension: ".json"
         ));
-    }
-
-    /// <summary>
-    /// Resolve the buyer name, reading the denormalised <see cref="PurchaseOrderEntity.BuyerName"/>
-    /// COLUMN first and only falling back to <c>CanonicalJson</c>. The async parse path updates the
-    /// column but not CanonicalJson, so reading CanonicalJson alone delivered an empty buyer for
-    /// correctly-extracted orders (prod 14c340a1, 2026-06-13). Mirrors
-    /// <c>MappedTransformService.ExtractBuyerName</c> / <c>ScribanOrderModel.ExtractBuyerName</c>.
-    /// </summary>
-    private static string ExtractBuyerName(PurchaseOrderEntity order)
-    {
-        if (!string.IsNullOrEmpty(order.BuyerName)) return order.BuyerName;
-        if (order.CanonicalJson is null) return string.Empty;
-        try
-        {
-            if (order.CanonicalJson.RootElement.ValueKind == JsonValueKind.Object)
-            {
-                if (order.CanonicalJson.RootElement.TryGetProperty("buyerName", out var el))
-                    return el.GetString() ?? string.Empty;
-                if (order.CanonicalJson.RootElement.TryGetProperty("BuyerName", out var el2))
-                    return el2.GetString() ?? string.Empty;
-            }
-        }
-        catch { /* malformed JSON — ignore */ }
-        return string.Empty;
     }
 
     private static void ValidateOrder(PurchaseOrderEntity order)

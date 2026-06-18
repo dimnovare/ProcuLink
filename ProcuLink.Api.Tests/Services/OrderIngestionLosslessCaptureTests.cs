@@ -177,4 +177,46 @@ public class OrderIngestionLosslessCaptureTests
         Assert.Empty(order.Parties);
         Assert.Null(order.SourceCapture); // no raw_fields → no raw bag row (don't write empty captures)
     }
+
+    /// <summary>
+    /// BE security backlog — tenancy guard. The stub created by the SYNC ingest path
+    /// (email/REST/PDF-AI) MUST carry the caller's <c>OrgId</c> on the FIRST and only
+    /// <c>SaveChangesAsync</c>. A stub persisted with an empty/wrong org_id is a
+    /// cross-tenant leak (it would surface in another tenant's order lists / queries).
+    /// This pins that the persisted row — reloaded from the store, not just the
+    /// in-memory return value — has org_id == the caller's org and non-empty.
+    /// </summary>
+    [Fact]
+    public async Task SyncIngest_persisted_stub_carries_callers_OrgId()
+    {
+        var db = NewDb();
+        var (orgId, supplierId) = await SeedSupplier(db);
+
+        var extracted = new ExtractedOrder(
+            PoNumber: "PO-TENANCY",
+            OrderDate: new DateTime(2026, 6, 12),
+            BuyerName: "Acme",
+            Currency: "EUR",
+            Lines: new[]
+            {
+                new ExtractedOrderLine(1, "B1", "Widget", 2m, "PC", 5m),
+            });
+
+        var svc = BuildService(db);
+        var result = await svc.CreateStubFromParsedOrderAsync(orgId, supplierId, extracted, "rest", CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+
+        // Reload from the context — proves org_id was persisted, not just set in memory.
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == result.Value!.Id);
+
+        Assert.NotEqual(Guid.Empty, order.OrgId);
+        Assert.Equal(orgId, order.OrgId);
+
+        // Belt-and-braces: the org-scoped query the rest of the app uses must find it,
+        // and a different tenant's org-scoped query must NOT.
+        var otherOrgId = Guid.NewGuid();
+        Assert.True(await db.PurchaseOrders.AnyAsync(o => o.Id == order.Id && o.OrgId == orgId));
+        Assert.False(await db.PurchaseOrders.AnyAsync(o => o.Id == order.Id && o.OrgId == otherOrgId));
+    }
 }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Mapping;
@@ -126,7 +127,14 @@ public static class SourceMapReDerive
                 : ScribanFieldEvaluator.EvaluateHeader(rule.Expression, row);
             if (result.Ok)
                 value = result.Value;
-            // Expression failed — fall through to token/fixed/pass-through so the transform survives.
+            else
+                // Expression failed — fall through to token/fixed/pass-through so the transform
+                // survives (fail-open is intentional and UNCHANGED). Log the failure so a mistake in
+                // a SourceMap re-derive expression is observable instead of silently falling back.
+                TransformDiagnostics.CreateLogger(nameof(SourceMapReDerive)).LogWarning(
+                    "SourceMap re-derive expression for field {Field} failed to evaluate ({Scope}); " +
+                    "falling back to token/fixed/parsed value. Error: {Error}",
+                    fieldName, lineScope ? "line" : "header", result.Error);
         }
 
         if (value is null && rule.SourceToken is not null)

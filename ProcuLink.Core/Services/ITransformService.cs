@@ -13,11 +13,11 @@ public enum OutputFormat
     Ubl,
     X12,
 
-    // ── Canonical-model outbound transforms (IParsedOrderTransform) ───────────
-    // Serialize a ParsedOrder (the pre-resolution canonical PO model produced by
-    // the inbound parsers). Selected via ParsedOrderTransformFactory. These are
-    // intentionally distinct enum values from the entity-based Ubl / X12 above so
-    // the two transform families never collide on the same value.
+    // ── Named standards-profile identifiers ───────────────────────────────────
+    // Distinct enum values from the entity-based Ubl / X12 above, used by the
+    // conformance layer (ConformanceService.ProfileForFormat) to name the standard
+    // a generated document is validated against. Kept separate so the conformance
+    // profile selection never collides with the entity-transform values.
     UblOrder,
     X12_850,
     EdifactOrders,

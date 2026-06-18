@@ -1,6 +1,5 @@
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
-using ProcuLink.Transform.Parsing;
 
 namespace ProcuLink.Transform.Output;
 
@@ -12,16 +11,11 @@ namespace ProcuLink.Transform.Output;
 /// missing / zero unit price can produce a <em>structurally invalid</em> document
 /// (e.g. an EDIFACT <c>LIN</c> whose mandatory item-number component is empty) or
 /// a financially-corrupt <c>€0</c> document that delivers blind. Rather than let
-/// the serializers emit those silently, every transform runs the canonical order
-/// through one of the two entry points below <em>before</em> writing a byte:
+/// the serializers emit those silently, every transform runs the resolved order
+/// through <see cref="ValidateEntity"/> (the <see cref="ITransformService"/> family —
+/// a resolved <see cref="PurchaseOrderEntity"/> with a <c>SupplierItemCode</c> and
+/// <c>NeedsReview</c> flag) <em>before</em> writing a byte.
 /// </para>
-/// <list type="bullet">
-///   <item><see cref="ValidateParsedOrder"/> for the <see cref="IParsedOrderTransform"/>
-///   family (canonical <see cref="ParsedOrder"/>, buyer-side item code, no review state).</item>
-///   <item><see cref="ValidateEntity"/> for the <see cref="ITransformService"/> family
-///   (a resolved <see cref="PurchaseOrderEntity"/> with a <c>SupplierItemCode</c> and
-///   <c>NeedsReview</c> flag).</item>
-/// </list>
 ///
 /// <para>
 /// Problems are surfaced by throwing <see cref="TransformValidationException"/>,
@@ -41,44 +35,11 @@ namespace ProcuLink.Transform.Output;
 public static class OutputFieldValidator
 {
     /// <summary>
-    /// Validates a canonical <see cref="ParsedOrder"/> against the required-field
-    /// rules of <paramref name="format"/>. Throws
-    /// <see cref="TransformValidationException"/> if any line is invalid for that
-    /// format. No-op when every line satisfies the format's mandatory fields.
-    /// </summary>
-    public static void ValidateParsedOrder(ParsedOrder order, OutputFormat format)
-    {
-        ArgumentNullException.ThrowIfNull(order);
-
-        var requiresItemCode = FormatRequiresLineItemCode(format);
-        var problems = new List<LineProblem>();
-
-        foreach (var line in order.Lines)
-        {
-            // Required-by-format line item code (EDIFACT LIN03 / X12 PO1 BP qualifier).
-            // An empty value here makes the document STRUCTURALLY invalid for those
-            // formats — a hard, mandatory-segment failure.
-            if (requiresItemCode && string.IsNullOrWhiteSpace(line.BuyerItemCode))
-                problems.Add(new LineProblem(line.LineNumber, LineProblemKind.MissingItemCode,
-                    $"Line {line.LineNumber}: a buyer item code is mandatory for {format} " +
-                    "(empty produces a structurally-invalid document)."));
-
-            // Missing / non-positive unit price. Not structurally fatal, but a 0
-            // line delivers a financially-wrong document — flag it for review.
-            if (line.UnitPrice is null or <= 0m)
-                problems.Add(new LineProblem(line.LineNumber, LineProblemKind.MissingOrZeroPrice,
-                    $"Line {line.LineNumber}: unit price is missing or not positive " +
-                    $"({Describe(line.UnitPrice)}); held for review to avoid a zero-value document."));
-        }
-
-        Throw(problems);
-    }
-
-    /// <summary>
     /// Validates a resolved <see cref="PurchaseOrderEntity"/>. Always enforces the
     /// existing review guard (<c>NeedsReview</c> / null <c>SupplierItemCode</c>),
     /// then layers the format-specific required-field checks
-    /// (empty buyer item code where the format mandates it, missing / zero unit price).
+    /// (empty buyer item code where the format mandates it, missing / zero unit price,
+    /// zero / negative quantity).
     /// Throws <see cref="TransformValidationException"/> when anything is invalid.
     /// </summary>
     public static void ValidateEntity(PurchaseOrderEntity order, OutputFormat format) =>
@@ -120,6 +81,14 @@ public static class OutputFieldValidator
                 problems.Add(new LineProblem(line.LineNumber, LineProblemKind.MissingOrZeroPrice,
                     $"Line {line.LineNumber}: unit price is not positive ({line.UnitPrice}); " +
                     "held for review to avoid a zero-value document."));
+
+            // Zero / negative quantity → a delivered line ordering nothing (or a negative
+            // amount) is almost always a parse/mapping error, not an intentional order. Flag it
+            // for review with the same severity as the price check rather than emitting it blind.
+            if (line.Quantity <= 0m)
+                problems.Add(new LineProblem(line.LineNumber, LineProblemKind.MissingOrZeroQuantity,
+                    $"Line {line.LineNumber}: quantity is not positive ({line.Quantity}); " +
+                    "held for review to avoid ordering a zero / negative quantity."));
         }
 
         return problems;
@@ -151,9 +120,6 @@ public static class OutputFieldValidator
 
         throw new TransformValidationException(lineNumbers, problems);
     }
-
-    private static string Describe(decimal? price) =>
-        price is null ? "null" : price.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }
 
 /// <summary>The category of a per-line output-validation problem.</summary>
@@ -163,6 +129,7 @@ public enum LineProblemKind
     MissingSupplierItemCode,
     MissingItemCode,
     MissingOrZeroPrice,
+    MissingOrZeroQuantity,
     Sanitized,
 }
 

@@ -164,7 +164,16 @@ internal sealed class OrderTransformService
         // OutputTemplateEmitter (arbitrary nesting/arrays/attributes). Everything below gates on
         // !useOutputNode (as they already gate on !useTemplate), so a null OutputTree is byte-for-byte
         // identical to today.
-        var useOutputNode   = mappingOverride?.OutputTree is not null;
+        //
+        // WS-12 exception: an OutputTree whose Format is cXML/X12 does NOT route to the emitter — the
+        // emitter REFUSES those (a generic node tree can't carry a valid cXML Header/DOCTYPE or X12
+        // ISA/GS envelope; it throws). For those formats the tree exists only to carry the per-connection
+        // EnvelopeConfig (OutputNodeTemplate.Envelope) into the dedicated fixed transformer below, so we
+        // keep the fixed-transformer path and read the envelope off the tree (see `envelope` resolution
+        // further down). All other tree formats (JSON/XML/CSV) keep delivering through the emitter.
+        var outputTree      = mappingOverride?.OutputTree;
+        var treeIsFixedFormat = outputTree is { Format: OutputFormat.CXml or OutputFormat.X12 };
+        var useOutputNode   = outputTree is not null && !treeIsFixedFormat;
         var useTemplate     = !useOutputNode && OrderMappingOverrideReader.HasUsableTemplate(mappingOverride);
         var hasUsableOverride =
             !useOutputNode
@@ -203,6 +212,21 @@ internal sealed class OrderTransformService
         var transformer = _transformers.FirstOrDefault(t => t.CanTransform(effectiveFormat));
         if (!useOutputNode && !useTemplate && !useNativeOverride && transformer is null)
             return Result<TransformResponse>.Fail($"No transform service registered for format '{effectiveFormat}'.");
+
+        // ── WS-12 — per-connection EDI/cXML envelope identity ───────────────────
+        // The supplier's required X12 ISA/GS identity (sender/receiver qualifier+id, version, usage,
+        // delimiters) and cXML From/To/Sender party identity ride on the output template as DATA
+        // (OutputNodeTemplate.Envelope), pinned into the order's override JSON exactly like every other
+        // output mode — so a PINNED revision delivers under the SAME envelope it was published with.
+        // Resolved ONLY when the effective format is X12/cXML (every other transformer has no envelope
+        // overload and ignores it). Null — no override, no OutputTree, or a tree without an Envelope —
+        // makes the fixed transform fall back to its legacy baked identity, BYTE-FOR-BYTE identical to
+        // the pre-WS-12 output. The X12 transform ignores cxmlCredentials and cXML ignores nothing here;
+        // see RunFixedTransform / MergeCxmlIdentity below for how the two cXML identity sources (live
+        // delivery-config credentials vs the envelope) compose without dropping the shared secret.
+        EnvelopeConfig? envelope = null;
+        if (effectiveFormat is OutputFormat.CXml or OutputFormat.X12)
+            envelope = outputTree?.Envelope;
 
         // ── Idempotency / concurrency guard ────────────────────────────────────
         // Atomically claim the order by flipping ready → transforming only while it is
@@ -327,7 +351,7 @@ internal sealed class OrderTransformService
             else if (hasUsableOverride)
             {
                 var effectiveEntity = EffectiveEntityResolver.Resolve(entity, mappingOverride!);
-                transformResult = await transformer!.TransformAsync(effectiveEntity, effectiveFormat, ct, cxmlCredentials);
+                transformResult = await RunFixedTransform(transformer!, effectiveEntity, effectiveFormat, cxmlCredentials, envelope, ct);
             }
             else if (useRevisionOutput)
             {
@@ -335,8 +359,8 @@ internal sealed class OrderTransformService
                 {
                     transformResult = useRevisionNative
                         ? new MappedTransformService().Build(entity, revisionOverride!, effectiveFormat, sourceTokens: sourceTokens, catalogLookup: catalogLookup)
-                        : await transformer!.TransformAsync(
-                              EffectiveEntityResolver.Resolve(entity, revisionOverride!), effectiveFormat, ct, cxmlCredentials);
+                        : await RunFixedTransform(
+                              transformer!, EffectiveEntityResolver.Resolve(entity, revisionOverride!), effectiveFormat, cxmlCredentials, envelope, ct);
                 }
                 catch (Exception ex) when (ex is not TransformValidationException and not TransformTemplateException)
                 {
@@ -358,8 +382,8 @@ internal sealed class OrderTransformService
                 {
                     transformResult = useSupplierNative
                         ? new MappedTransformService().Build(entity, supplierOverride!, effectiveFormat, sourceTokens: sourceTokens, catalogLookup: catalogLookup)
-                        : await transformer!.TransformAsync(
-                              EffectiveEntityResolver.Resolve(entity, supplierOverride!), effectiveFormat, ct, cxmlCredentials);
+                        : await RunFixedTransform(
+                              transformer!, EffectiveEntityResolver.Resolve(entity, supplierOverride!), effectiveFormat, cxmlCredentials, envelope, ct);
                 }
                 catch (Exception ex) when (ex is not TransformValidationException and not TransformTemplateException)
                 {
@@ -375,7 +399,7 @@ internal sealed class OrderTransformService
             }
             else
             {
-                transformResult = await transformer!.TransformAsync(entity, effectiveFormat, ct, cxmlCredentials);
+                transformResult = await RunFixedTransform(transformer!, entity, effectiveFormat, cxmlCredentials, envelope, ct);
             }
         }
         catch (TransformTemplateException ex)
@@ -479,6 +503,83 @@ internal sealed class OrderTransformService
             orderId, effectiveFormat, artifactId);
 
         return Result<TransformResponse>.Ok(new TransformResponse(artifactId, artifact.Format, now));
+    }
+
+    // ── WS-12 — fixed-transformer call with the per-connection envelope ────────
+
+    /// <summary>
+    /// Runs the resolved fixed <see cref="ITransformService"/>, threading the per-connection
+    /// <see cref="EnvelopeConfig"/> into the dedicated X12 / cXML transforms via their concrete
+    /// <c>envelope:</c> overloads. Every non-X12/cXML transformer keeps the unchanged
+    /// 4-argument interface call, so a null envelope (or any other format) is BYTE-FOR-BYTE
+    /// identical to the pre-WS-12 path.
+    ///
+    /// <list type="bullet">
+    ///   <item><description><b>X12</b> with an envelope → the <see cref="X12TransformService"/>
+    ///     overload drives ISA/GS identity + delimiters. X12 ignores cXML credentials, so nothing
+    ///     is lost.</description></item>
+    ///   <item><description><b>cXML</b> → the LIVE delivery-config credentials
+    ///     (<paramref name="cxmlCredentials"/>) stay AUTHORITATIVE because they alone carry the
+    ///     decrypted Sender <c>SharedSecret</c>; the envelope only FILLS IN any From/To/Sender
+    ///     identity the live credentials left blank. This composes the two identity sources without
+    ///     dropping the secret and keeps the existing credential path byte-identical when no envelope
+    ///     is set.</description></item>
+    /// </list>
+    /// </summary>
+    private static Task<TransformResult> RunFixedTransform(
+        ITransformService    transformer,
+        PurchaseOrderEntity  order,
+        OutputFormat         format,
+        CxmlCredentialConfig? cxmlCredentials,
+        EnvelopeConfig?      envelope,
+        CancellationToken    ct)
+    {
+        // No envelope → the legacy interface call, byte-for-byte unchanged (covers every non-X12/cXML
+        // format, which never has an envelope, and an unconfigured X12/cXML connection).
+        if (envelope is null)
+            return transformer.TransformAsync(order, format, ct, cxmlCredentials);
+
+        switch (format)
+        {
+            case OutputFormat.X12 when transformer is X12TransformService x12:
+                // X12 has no cXML Header; its overload ignores cxmlCredentials entirely.
+                return x12.TransformAsync(order, format, ct, envelope);
+
+            case OutputFormat.CXml when transformer is CxmlTransformService cxml:
+                // Compose: live credentials win per-credential (and own the shared secret); the
+                // envelope fills only the gaps. A null merge result keeps the legacy GUID identities.
+                return cxml.TransformAsync(order, format, ct, MergeCxmlIdentity(cxmlCredentials, envelope.Cxml));
+
+            default:
+                // Some other transformer happened to be registered for this format, or the concrete
+                // type isn't the expected one — fall back to the interface call (never throw on the
+                // delivery path; the legacy identity is correct-but-unconfigured, not broken output).
+                return transformer.TransformAsync(order, format, ct, cxmlCredentials);
+        }
+    }
+
+    /// <summary>
+    /// Merges the LIVE cXML delivery-config credentials with the per-connection envelope identity for
+    /// the cXML Header. Per-credential precedence: the live config value wins when present, the envelope
+    /// fills the gap, and the decrypted Sender <c>SharedSecret</c> always comes from the live config
+    /// (the envelope never carries a secret — it is a reference). Returns null only when NEITHER source
+    /// has anything, so the cXML transform keeps its legacy <c>OrgId</c>/<c>SupplierId</c> identities.
+    /// </summary>
+    private static CxmlCredentialConfig? MergeCxmlIdentity(CxmlCredentialConfig? live, CxmlEnvelope? env)
+    {
+        if (env is null) return live; // byte-identical to the pre-WS-12 credential-only path.
+
+        static string? Prefer(string? primary, string? fallback) =>
+            string.IsNullOrWhiteSpace(primary) ? fallback : primary;
+
+        return new CxmlCredentialConfig(
+            FromDomain:         Prefer(live?.FromDomain,     env.FromDomain),
+            FromIdentity:       Prefer(live?.FromIdentity,   env.FromIdentity),
+            ToDomain:           Prefer(live?.ToDomain,       env.ToDomain),
+            ToIdentity:         Prefer(live?.ToIdentity,     env.ToIdentity),
+            SenderDomain:       Prefer(live?.SenderDomain,   env.SenderDomain),
+            SenderIdentity:     Prefer(live?.SenderIdentity, env.SenderIdentity),
+            SenderSharedSecret: live?.SenderSharedSecret); // secret only ever comes from live config.
     }
 
     // ── Revision-pinned output mapping (launch batch 7) ───────────────────────
