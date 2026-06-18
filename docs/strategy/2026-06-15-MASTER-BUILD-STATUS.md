@@ -88,8 +88,21 @@ clean routing/secret review). BE 2793 tests green, FE 509 + build green.
   org_id verified + round-trip test; AdminOnly fail-closed logging; Make-live gate; annual-pricing gate; ASN 501→
   coming-soon; ReplayPanel clamp; BundleSummary muted; connector CTA; invoice download; email-intake unlock copy;
   upload copy + drag-reject; Exceptions pagination.
-- **Remaining masterplan (wave 3):** WS-8 History/Advanced drawer; WS-9 vocabulary purge + CI grep gate; designer
-  pixel-QA. **WS-5 flag-flip (#114) stays gated on founder sign-off** (mobile triage not built).
+**Wave 3 — SHIPPED** (FE `6efbfae`; 4 agents incl. ui-ux-pro-max design review + a cavecrew code-review, 509 tests green).
+- **v3 MOBILE TRIAGE** (`MobileTriage.tsx`) — replaces the placeholder mobile region (compact header, collapsible
+  received/send cards w/ live preview, full issue list + one-click Accept, sticky safe-area Send bar; ui-ux-pro-max:
+  44px targets, no h-scroll, reduced-motion). **This unblocks the flag-flip — v3 mobile no longer degrades.**
+- **WS-8** — `HistoryDrawer` slide-over houses version-history/test/make-live/rollback/archive/replay/live-config
+  (handlers reused, focus-trap, aria-modal); main surface stays Edit·Make-live.
+- **WS-9** — vocabulary purge ("wire"→"map" in visible copy across SpineReview/WireTopology/MapperWireLayer/
+  ConnectionDetail; code identifiers untouched) + **CI grep-gate** (`scripts/check-vocabulary.mjs` + `lint:vocab`,
+  allowlist empty = real) + a11y-medium (designer labels, Topbar Help aria).
+- **Remaining (wave 4):** designer-reconcile pass — the `OutputStructureDesigner` was never reconciled to the mapper
+  tokens/scale/responsive (ui-ux-pro-max review A4: no mobile breakpoint, off-canonical `#2D6BD4`/`#1E6D29`, sub-scale
+  type, control-height drift, competing first-run primaries) + tabular-nums on mono values + global reduced-motion +
+  mapper-toolbar primary-action grouping. (10 findings — fold into one focused pass.)
+- **WS-5 flag-flip (#114) — NOW READY** (mobile built, all phases live + verified). The actual flip changes every real
+  user's default + needs a Vercel env change → **left for founder's explicit go**.
 
 ### Order Workshop (WS-5 consolidation) — **BUILT + FLAG-GATED + LIVE-VERIFIED** (2026-06-18)
 The unified **Order Workshop** replaces the old two-mode Triage/Classic order-review split with one
