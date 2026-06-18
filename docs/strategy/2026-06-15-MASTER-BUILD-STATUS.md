@@ -37,6 +37,26 @@ The engine is real and tested (7 input formats parse live; delivery proven on pr
 - No EF migrations (all additive: `OutputTree` rides `canonical_json`). Rollback = Railway/Vercel redeploy of the prior build.
 - **The entire output-layer restructure (A trust + B engine + C designer + D infer, all formats) is LIVE on prod.** Remaining = consolidation (WS-5/8/9), EnvelopeConfig, designer pixel-QA — all post-deploy follow-ups.
 
+### Order Workshop v3 "calm workbench" (Claude Design handoff) — **PHASE 1 SHIPPED + LIVE** (2026-06-18)
+The founder ran the workshop design through **Claude Design**; the hifi handoff lives at
+`~/Downloads/ProcuLink-design/design_handoff_order_workshop/` (README + tokens.css + ws3-*.jsx +
+11 mockups). It is an **evolution** of the existing workshop (picker/preview/designer/transform/focus
+all already exist), behind the SAME `?workshop=1` flag. Phasing:
+- **Phase 1 — chrome (SHIPPED + LIVE-verified, FE `0f9e8d0`):** `WorkshopStepper` (Parse→Normalize→
+  Validate→Transform→Deliver, stage derived from status/blockers/sendState), `SendReadinessStrip`
+  (slim full-width bar that REPLACES the bulky issues card — green "Ready to send" / amber "N fields
+  to fill" + clickable blocker chips that jump+flash), `WorkshopBrandLoader` (animated link-wire mark),
+  header "Send to supplier" + paper-plane + disabled-reason tooltip, FocusControl v3 segmented restyle.
+  Verified on prod at both ready + blocking orders.
+- **Phase 2 — outgoing rows (task #116):** needs-attention rows on top, each with an inline AI-fix
+  strip (✦ SUGGESTED · value · why · ConfidenceChip · Apply → real `acceptSuggestion`); "N fields ready
+  · mapped automatically" collapsible (auto-expands when ready); "+ pick a field" dashed-amber.
+- **Phase 3 — received enrichment + rails + states (task #117):** per-field confidence chips +
+  provenance badges + source-type chip + +AI filter chip; per-pane collapse carets → 44px tone-gradient
+  rails + `resolveLayout` widths (336/416 fixed + flex); error/empty/mobile-triage polish.
+- Tokens match the app already (navy/blue/green/violet · Bricolage/Inter/JetBrains). 11 mockups in the
+  handoff are the pixel reference; `ws3-canvas.jsx`/`ws3-app.jsx` are the interaction reference.
+
 ### Order Workshop (WS-5 consolidation) — **BUILT + FLAG-GATED + LIVE-VERIFIED** (2026-06-18)
 The unified **Order Workshop** replaces the old two-mode Triage/Classic order-review split with one
 collapsible 3-zone screen: **Issues on top → mapper below** (IssuesPanel + the *enhanced*
