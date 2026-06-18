@@ -63,6 +63,17 @@ all already exist), behind the SAME `?workshop=1` flag. Phasing:
 - Tokens match the app already (navy/blue/green/violet · Bricolage/Inter/JetBrains). 11 mockups in the
   handoff are the pixel reference; `ws3-canvas.jsx`/`ws3-app.jsx` are the interaction reference.
 
+### Full design + functionality review + WS-12 (2026-06-18) — **SHIPPED**
+Parallel 14-surface review (103 findings → 17 confirmed critical/high, adversarially verified +
+security-reviewed clean). Full report + the medium/low backlog: [`docs/audit/2026-06-18-design-functionality-review.md`](../audit/2026-06-18-design-functionality-review.md).
+Top 11 fixes shipped — **BE `8749141`** (header-injection guard across all tenant-header sites; delivery
+retry double-dispatch race → org-scoped atomic claim + per-order Hangfire mutex + Postgres test; **WS-12
+EnvelopeConfig** wired into X12+cXML with byte-identical null fallback + characterization tests) and
+**FE `00ecf17`** (Make-live gated on tests; annual pricing gated honestly; ASN 501→coming-soon; ConfirmDialog
+focus-trap; disabled-Send contrast; 11-control tap-target sweep; off-palette danger borders → tokens). BE
+2844 tests green, FE 509 + build green. **WS-12 remaining:** thread the pinned-revision envelope into the
+OrderTransformService caller + verify on prod (the services now consume it; the caller wiring is the last leg).
+
 ### Order Workshop (WS-5 consolidation) — **BUILT + FLAG-GATED + LIVE-VERIFIED** (2026-06-18)
 The unified **Order Workshop** replaces the old two-mode Triage/Classic order-review split with one
 collapsible 3-zone screen: **Issues on top → mapper below** (IssuesPanel + the *enhanced*
