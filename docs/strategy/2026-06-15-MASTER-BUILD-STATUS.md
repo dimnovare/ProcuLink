@@ -37,6 +37,28 @@ The engine is real and tested (7 input formats parse live; delivery proven on pr
 - No EF migrations (all additive: `OutputTree` rides `canonical_json`). Rollback = Railway/Vercel redeploy of the prior build.
 - **The entire output-layer restructure (A trust + B engine + C designer + D infer, all formats) is LIVE on prod.** Remaining = consolidation (WS-5/8/9), EnvelopeConfig, designer pixel-QA — all post-deploy follow-ups.
 
+### Order Workshop (WS-5 consolidation) — **BUILT + FLAG-GATED + LIVE-VERIFIED** (2026-06-18)
+The unified **Order Workshop** replaces the old two-mode Triage/Classic order-review split with one
+collapsible 3-zone screen: **Issues on top → mapper below** (IssuesPanel + the *enhanced*
+`MapperWorkbench`, NOT a duplicate set of panes), lossless incoming pane, flexible add-field/output.
+- **Flag-gated:** `NEXT_PUBLIC_ORDER_WORKSHOP_V2` env OR `?workshop=1` URL override (`src/lib/flags.ts`).
+  Flag OFF → old screen byte-identical. Shipped to FE `main`, deployed (flag OFF).
+- **Mapping mechanic = inline source picker** (founder-chosen over drag-wires; wires now optional behind a
+  "Show connections" toggle). `SourcePickerChip` + `sourcePickerModel.ts`: each output row is a searchable
+  typeahead of incoming fields (AI-suggestion first w/ confidence, grouped header→parties→line→raw, shows
+  each field's actual value), routed through the EXISTING wire-connect dispatch — `buildOverrideDraft` save
+  contract untouched. `MapperWorkbench` gained `mappingMode="picker"|"wires"` (default wires).
+- **LIVE-VERIFIED on prod** (order `5db81f02`, `?workshop=1`): picker opens, searches, AI-first, picking
+  reassigns the source; dedup works (incoming 34→19); bad auto-map (BuyerName←po_number) gone; transform
+  popover clean; designer shows Format JSON; **preview now defaults to the supplier's REAL delivered format**
+  (JSON, not CSV) with manual exploratory override respected (`MapperPreviewPane` snap-to-delivered-format).
+- **Commits (FE `main`):** picker `2c97265`/`0d6fcc3`; bug fixes `638e8b6`/`6f2d8e6`/`8cb17f7`; preview
+  format-snap `f9aee1f`. 509 vitest green, tsc clean.
+- **"(no preview)" on a blocking order is HONEST** (line needs a supplier code → no valid bytes yet).
+- **NEXT (gated on founder approval after they view `?workshop=1`):** task #114 — flip the flag ON in
+  prod, reduced-mobile pass, delete the old two-mode SpineReview + orphaned triptych + inert workshop
+  wrappers (`ReceivedZone`/`OutputZone`/`MappingPanel`).
+
 ### Phase A — TRUST (WS-0 + WS-13 quick-wins) — **IN PROGRESS**
 P0. Must land before any output-layer feature. Status legend: ☐ todo · ◐ in progress · ☑ done · ✅ verified-live.
 
