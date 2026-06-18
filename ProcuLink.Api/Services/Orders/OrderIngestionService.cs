@@ -187,6 +187,15 @@ internal sealed class OrderIngestionService
         // V1: pin the supplier's active connection revision (null = fall back to live config).
         var connectionRevisionId = await ResolveConnectionRevisionAsync(organisationId, supplierId, ct);
 
+        // Workshop P0 — lossless source capture: tokenise the bytes already in hand so the
+        // Order Workshop's "received fields" pane can show EVERY source field, not just the ones the
+        // canonical model promoted. Inline nav (change-tracker path) so the single SaveChanges below
+        // persists it. Best-effort: tokeniser failure / unsupported format yields a null capture and
+        // never fails the ingest (PDF and other no-token formats fall through to no capture here —
+        // the structured-extraction ingest path supplies the raw_fields bag for those).
+        var sourceCapture = await BuildSourceCaptureFromBytesAsync(
+            buffer.ToArray(), extension, organisationId, now, ct);
+
         var entity = new PurchaseOrderEntity
         {
             Id           = orderId,
@@ -207,7 +216,8 @@ internal sealed class OrderIngestionService
             SourceFileKey = sourceFileKey,
             CreatedAt    = now,
             UpdatedAt    = now,
-            Lines        = lineEntities
+            Lines        = lineEntities,
+            SourceCapture = sourceCapture
         };
 
         // 8. Persist order + audit event in a single transaction
@@ -1225,6 +1235,47 @@ internal sealed class OrderIngestionService
     }
 
     // ── Phase 1 lossless capture — SourceCapture helpers ───────────────────────
+
+    /// <summary>
+    /// Workshop P0 — tokenises raw source bytes (CSV/XLSX/XML/cXML/EDI/X12/JSON) into a lossless
+    /// <see cref="SourceCapture"/> nav row so the SYNC file-ingest path
+    /// (<see cref="CreateFromFileAsync"/>) persists EVERY addressable source field, not just the
+    /// canonical-promoted ones. Inline nav (one SaveChanges persists it). Mirrors the async path's
+    /// token bag shape (id/label/value/group) so <c>SourceTokenSerialization.FromTokensJson</c> reads
+    /// it back identically. Best-effort: an unsupported format or a tokeniser failure returns null —
+    /// the ingest is NEVER failed by capture. Pure aside from the (no-throw) tokenise call.
+    /// </summary>
+    private async Task<SourceCapture?> BuildSourceCaptureFromBytesAsync(
+        byte[] bytes, string? extension, Guid orgId, DateTime now, CancellationToken ct)
+    {
+        var ext = (extension ?? string.Empty).Trim().ToLowerInvariant();
+        if (ext is not (".csv" or ".xlsx" or ".xml" or ".cxml" or ".edi" or ".x12" or ".json"))
+            return null;
+
+        IReadOnlyList<ProcuLink.Transform.Tokenizing.SourceToken> tokens;
+        try
+        {
+            tokens = await _tokenizer.TokenizeAsync(bytes, ext, ct);
+        }
+        catch (Exception exTok)
+        {
+            _logger.LogWarning(exTok,
+                "Sync-ingest source tokenization failed for org {OrgId} (non-fatal — no capture written).", orgId);
+            return null;
+        }
+
+        if (tokens is not { Count: > 0 }) return null;
+
+        var bag = tokens.Select(t => new { id = t.Id, label = t.Label, value = t.Value, group = t.Group });
+        return new SourceCapture
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            Format     = ext.TrimStart('.'),
+            CapturedAt = now,
+            TokensJson = JsonDocument.Parse(JsonSerializer.Serialize(bag)),
+        };
+    }
 
     /// <summary>
     /// Builds an inline <see cref="SourceCapture"/> nav row from an LLM/email raw-fields bag

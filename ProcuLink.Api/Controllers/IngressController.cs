@@ -154,7 +154,13 @@ public sealed class IngressController : ControllerBase
                 Quantity:      l.Quantity,
                 Unit:          l.Unit,
                 UnitPrice:     l.UnitPrice
-            )).ToList()
+            )).ToList(),
+            // Workshop P0 — lossless capture for PUSHED orders. A pushed order has no stored source
+            // FILE, so the only way it can expose draggable source fields in the Order Workshop is a
+            // persisted SourceCapture. Project every pushed field (header + per line) into the
+            // raw-fields bag; CreateStubFromParsedOrderAsync persists it as the one-per-order capture
+            // (addressable as raw:{label} by a SourceMap rule). Null/blank values are dropped there.
+            RawFields: BuildPushedRawFields(req)
         );
 
         var result = await orders.CreateStubFromParsedOrderAsync(orgId, supplierId, extracted, "ingress_api", ct);
@@ -291,6 +297,46 @@ public sealed class IngressController : ControllerBase
             return null;
 
         return trimmed;
+    }
+
+    /// <summary>
+    /// Workshop P0 — projects every field of a PUSHED order payload into a flat raw-fields bag
+    /// (header + per-line) so the persisted <see cref="ProcuLink.Core.Services.Ai.ExtractedOrder"/>
+    /// carries a lossless <c>SourceCapture</c>. Without a stored source file, this bag is the only
+    /// way a pushed order exposes draggable source fields in the Order Workshop. Labels are stable
+    /// and human-readable ("Line 1 · Buyer item code"); blank values are dropped downstream by
+    /// <c>BuildSourceCapture</c>. Pure — no I/O.
+    /// </summary>
+    private static IReadOnlyList<ExtractedRawField> BuildPushedRawFields(IngressOrderRequest req)
+    {
+        var fields = new List<ExtractedRawField>();
+
+        void Add(string label, string? value)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                fields.Add(new ExtractedRawField(label, value!.Trim()));
+        }
+
+        // Header-level pushed fields.
+        Add("Order number", req.OrderNumber);
+        Add("Order date", req.OrderDate?.ToString("yyyy-MM-dd"));
+        Add("Currency", req.Currency);
+        Add("Notes", req.Notes);
+        Add("Supplier", req.SupplierId);
+
+        // Per-line pushed fields — one labelled entry per non-blank value.
+        for (var i = 0; i < req.Lines.Count; i++)
+        {
+            var line = req.Lines[i];
+            var n = i + 1;
+            Add($"Line {n} · Buyer item code", line.BuyerItemCode);
+            Add($"Line {n} · Description", line.Description);
+            Add($"Line {n} · Quantity", line.Quantity.ToString(CultureInfo.InvariantCulture));
+            Add($"Line {n} · Unit", line.Unit);
+            Add($"Line {n} · Unit price", line.UnitPrice.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return fields;
     }
 
     /// <summary>

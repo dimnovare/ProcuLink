@@ -202,4 +202,51 @@ public class OrdersControllerPurgedBlobTests
         Assert.Contains(tokens, t => t.Id == "raw:Buyer name" && t.Value == "Acme");
         Assert.Contains(tokens, t => t.Id == "raw:PO ref" && t.Value == "123");
     }
+
+    // ── Workshop P0 (Task 4): persisted structured capture survives a PURGED source blob ──
+
+    [Fact]
+    public async Task GetSourceTokens_PrefersPersistedStructuredCapture_AfterSourceBlobPurged_WithoutTouchingStorage()
+    {
+        // The Task-4 scenario: a CSV order whose source FILE was purged per retention policy, but
+        // whose persisted SourceCapture retains the full structured token set. Without the
+        // capture-first precedence the endpoint would re-tokenise the (gone) blob and return empty.
+        // It must instead return every persisted token — and must NOT hit storage (strict mock
+        // throws on any call).
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        await using var db = NewDb();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = orderId, OrgId = orgId, SupplierId = Guid.NewGuid(),
+            PoNumber = "PO-CSV-PURGED", OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency = "EUR", Status = "delivered",
+            SourceFileKey = $"{orgId}/{orderId}/order.csv",
+            SourceFilePurgedAt = DateTime.UtcNow, // blob gone — re-tokenisation impossible
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        db.SourceCaptures.Add(new SourceCapture
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId, Format = "csv", CapturedAt = DateTime.UtcNow,
+            // The full structured token bag (id/label/value/group) the ingest path persists.
+            TokensJson = System.Text.Json.JsonDocument.Parse(
+                "[{\"id\":\"cell:r1c1\",\"label\":\"po_number\",\"value\":\"po_number\",\"group\":\"header\"}," +
+                "{\"id\":\"cell:r2c1\",\"label\":\"po_number row 2\",\"value\":\"PO-CSV-PURGED\",\"group\":\"line\"}," +
+                "{\"id\":\"cell:r2c2\",\"label\":\"buyer_code row 2\",\"value\":\"ACM-BOLT-001\",\"group\":\"line\"}]"),
+        });
+        await db.SaveChangesAsync();
+
+        var fileStorage = new Mock<IFileStorageService>(MockBehavior.Strict); // any storage call would throw
+        var ctrl = Build(new Mock<IOrderService>(), orgId, db, fileStorage);
+
+        var result = await ctrl.GetSourceTokens(orderId, CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var tokens = Assert.IsAssignableFrom<IEnumerable<ProcuLink.Transform.Tokenizing.SourceToken>>(ok.Value).ToList();
+        Assert.Equal(3, tokens.Count);
+        // The full structured token set — including the stable cell ids — survives the purge.
+        Assert.Contains(tokens, t => t.Id == "cell:r2c2" && t.Value == "ACM-BOLT-001");
+        Assert.Contains(tokens, t => t.Id == "cell:r2c1" && t.Value == "PO-CSV-PURGED");
+    }
 }
