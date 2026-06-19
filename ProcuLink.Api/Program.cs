@@ -275,8 +275,14 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0   // reject immediately — no queuing
             });
 
-    // Per-user fixed-window policy for the upload endpoint (unchanged: 20/min).
-    options.AddPolicy("upload", ctx => Window(ctx, "upload", permit: 20, seconds: 60));
+    // Per-user fixed-window policy for the upload endpoint. Bulk PO upload is a
+    // first-class flow — a procurement team legitimately drops a daily batch of
+    // dozens of POs at once — so 20/min was too tight (it tripped on a ~24-file
+    // drop and the client mislabeled the 429 as "Plan limit reached"). 60/min
+    // comfortably covers a real batch while staying a safe abuse ceiling (each
+    // upload enqueues one parse job; well under the global 300/min backstop). The
+    // client also paces + retries on a throttle, so larger batches self-throttle.
+    options.AddPolicy("upload", ctx => Window(ctx, "upload", permit: 60, seconds: 60));
 
     // Transform is CPU/IO-heavy (parse + standards serialization + enqueue
     // delivery). Cap per-user so a tight client loop can't hammer the worker.
