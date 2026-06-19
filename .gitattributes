@@ -1,0 +1,6 @@
+# Keep the embedded onboarding fixtures byte-identical across platforms. Without this,
+# git normalizes the CSV to LF in the repo while Windows checks out CRLF, so the Linux
+# (Railway Docker) build embedded LF-only bytes — which parsed to an EMPTY order on prod
+# while Windows dev (CRLF) parsed fine. Force CRLF so every build embeds the same bytes.
+ProcuLink.Api/Fixtures/*.csv text eol=crlf
+ProcuLink.Infrastructure/Fixtures/*.csv text eol=crlf

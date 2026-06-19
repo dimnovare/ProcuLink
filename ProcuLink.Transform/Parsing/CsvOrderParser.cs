@@ -41,7 +41,11 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
         var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
         var text = utf8.GetString(src.ToArray());
         if (text.Length > 0 && text[0] == '﻿') text = text[1..];  // strip a UTF-8 BOM
-        text = text.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n', ' ', '\t');
+        // Collapse every line ending to \n, drop trailing blank lines, then re-emit CRLF.
+        // CRLF is the form proven to parse correctly on BOTH platforms (Windows dev + real
+        // customer CSV uploads on Linux prod); the git-normalized LF-only embedded fixture
+        // was the only input that parsed to an empty order on Linux, so we never feed bare LF.
+        text = text.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n', ' ', '\t').Replace("\n", "\r\n");
         var ms = new MemoryStream(utf8.GetBytes(text));
 
         var delimiter = DetectDelimiter(ms);
