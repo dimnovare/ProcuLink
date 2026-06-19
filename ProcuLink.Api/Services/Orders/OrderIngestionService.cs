@@ -637,6 +637,25 @@ internal sealed class OrderIngestionService
                 else if (poMapping is not null && extension == ".csv")
                 {
                     parsedOrder = await ParseWithMappingTemplateAsync(buffer.ToArray(), poMapping, ct);
+
+                    // Self-heal a FORMAT-MISMATCHED template. If the supplier's PO-mapping
+                    // template maps source fields the uploaded CSV simply doesn't have (e.g. a
+                    // cXML/XPath template applied to a flat CSV), every field resolves blank and
+                    // the order would land with phantom empty lines that silently slip past the
+                    // 0-lines guard below — worse than no template at all. Fall back to the
+                    // deterministic alias CSV parser, which recovers the real data (and still
+                    // fails loudly via the 0-lines guard if the file genuinely has no rows).
+                    if (IsDegenerateParse(parsedOrder))
+                    {
+                        _logger.LogWarning(
+                            "Order {OrderId}: PO-mapping template produced an all-empty parse for a CSV — " +
+                            "template fields do not match the file. Falling back to the default CSV parser.",
+                            orderId);
+                        buffer.Position = 0;
+                        var fallbackParser = _parserFactory.GetParser(extension, buffer);
+                        buffer.Position = 0;
+                        parsedOrder = await fallbackParser.ParseAsync(buffer, ct);
+                    }
                 }
                 else
                 {
@@ -938,6 +957,24 @@ internal sealed class OrderIngestionService
     /// </summary>
     internal static bool IsEmptyTemplate(PoMappingConfig? poMapping) =>
         poMapping is not null && poMapping.Header.Count == 0 && poMapping.Lines.Count == 0;
+
+    /// <summary>
+    /// True when a parse produced rows but NOTHING usable — no PO number and every line
+    /// completely blank (no buyer code, no description, zero quantity AND zero/absent unit
+    /// price). This is the signature of a PO-mapping template whose source fields don't
+    /// exist in the uploaded file — e.g. a cXML/XPath template applied to a flat CSV: every
+    /// field resolves to blank and the order lands with phantom empty lines that slip past
+    /// the <c>Lines.Count == 0</c> guard. A genuinely empty file yields 0 lines (caught
+    /// there); this catches the "lines present, all empty" format-mismatch instead.
+    /// </summary>
+    internal static bool IsDegenerateParse(ParsedOrder o) =>
+        o.Lines.Count > 0
+        && string.IsNullOrWhiteSpace(o.PoNumber)
+        && o.Lines.All(l =>
+            string.IsNullOrWhiteSpace(l.BuyerItemCode)
+            && string.IsNullOrWhiteSpace(l.Description)
+            && l.Quantity == 0m
+            && (l.UnitPrice ?? 0m) == 0m);
 
     /// <summary>
     /// Routes a PDF to the LLM structured extractor when one is available and it
