@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using CsvHelper;
 using CsvHelper.Configuration;
 using CsvHelper.Configuration.Attributes;
@@ -28,10 +29,20 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
 
     public async Task<ParsedOrder> ParseAsync(Stream fileStream, CancellationToken ct)
     {
-        // Buffer the stream so we can peek for delimiter detection
-        using var ms = new MemoryStream();
-        await fileStream.CopyToAsync(ms, ct);
-        ms.Position = 0;
+        // Buffer + NORMALIZE so the parse is byte-deterministic across platforms. The
+        // embedded onboarding fixture parsed correctly on Windows but to an EMPTY order on
+        // Linux (prod) — same parser, divergent bytes: git stores the CSV LF-normalized, the
+        // Windows working copy is CRLF, and the trailing blank line was counted as an extra
+        // empty row on one platform but not the other. Decoding UTF-8 explicitly (BOM-safe),
+        // unifying line endings to \n, and dropping trailing blank lines removes every
+        // OS/encoding-dependent variable before CsvHelper sees the text.
+        using var src = new MemoryStream();
+        await fileStream.CopyToAsync(src, ct);
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+        var text = utf8.GetString(src.ToArray());
+        if (text.Length > 0 && text[0] == '﻿') text = text[1..];  // strip a UTF-8 BOM
+        text = text.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n', ' ', '\t');
+        var ms = new MemoryStream(utf8.GetBytes(text));
 
         var delimiter = DetectDelimiter(ms);
         ms.Position = 0;
@@ -44,7 +55,7 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
             PrepareHeaderForMatch  = args => NormalizeHeader(args.Header)
         };
 
-        using var reader = new StreamReader(ms);
+        using var reader = new StreamReader(ms, utf8);
         using var csv    = new CsvReader(reader, config);
 
         csv.Context.RegisterClassMap<RawRowMap>();
