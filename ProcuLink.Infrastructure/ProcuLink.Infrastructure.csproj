@@ -42,7 +42,11 @@
     <!-- Linked embed so SampleOrderService can load the sample fixture from its own assembly
          without taking a project reference on ProcuLink.Api (which would create a dependency cycle).
          The same file is also embedded in ProcuLink.Api for symmetry with other Api fixtures. -->
-    <EmbeddedResource Include="..\ProcuLink.Api\Fixtures\sample-order.csv" Link="Fixtures\sample-order.csv" LogicalName="ProcuLink.Infrastructure.Fixtures.sample-order.csv" />
+    <!-- FORWARD SLASHES are mandatory: on Linux (the Railway Docker build) a backslash is a
+         legal filename char, so MSBuild treats "..\ProcuLink.Api\..." as ONE literal filename,
+         fails to find it, and silently does NOT embed the resource — then GetManifestResourceStream
+         returns null at runtime and POST /api/onboarding/sample-order throws an unhandled 500. -->
+    <EmbeddedResource Include="../ProcuLink.Api/Fixtures/sample-order.csv" Link="Fixtures/sample-order.csv" LogicalName="ProcuLink.Infrastructure.Fixtures.sample-order.csv" />
   </ItemGroup>
 
   <ItemGroup>

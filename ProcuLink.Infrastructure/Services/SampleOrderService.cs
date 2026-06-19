@@ -77,7 +77,11 @@ public sealed class SampleOrderService : ISampleOrderService
     {
         var now = DateTime.UtcNow;
 
-        // 1. Idempotent: reuse existing __sample__ supplier or create one.
+        // 1. Idempotent: reuse existing __sample__ supplier or create one. The lookup is
+        //    INTENTIONALLY unfiltered by DeletedAt — a prior org purge soft-deletes suppliers,
+        //    and the unique (org_id, code) index still covers the soft-deleted row, so a
+        //    DeletedAt==null filter would force an INSERT that collides with it. Instead reuse
+        //    the row and re-activate it.
         var supplier = await _db.Suppliers
             .FirstOrDefaultAsync(s => s.OrgId == organisationId && s.Code == SampleSupplierCode, ct);
         if (supplier is null)
@@ -92,6 +96,12 @@ public sealed class SampleOrderService : ISampleOrderService
                 CreatedAt = now,
             };
             _db.Suppliers.Add(supplier);
+        }
+        else if (supplier.DeletedAt is not null)
+        {
+            // Re-activate a sample supplier a previous purge soft-deleted, so the new sample
+            // order links to a LIVE supplier (and isn't hidden from supplier lists).
+            supplier.DeletedAt = null;
         }
 
         // 1b. Seed the sample supplier's catalog + the 2-of-3 item mappings (idempotent,
