@@ -16,7 +16,14 @@
 **Verify on prod:** transform a real order, edit a mapping, Send, confirm the delivered artifact reflects the edit (check the delivery attempt body).
 **Risk:** changes sending behavior — the whole point. Gate behind the byte test + a manual prod verify before wide use.
 
-## F-4 — The workshop preview must be the REAL emitter output, not a mock (P0)
+## ⚠ F-4 CORRECTION (2026-06-20, live-verified) — DO NOT implement as written below
+
+Live DOM probe of deployed prod (`/inbox/[orderId]`, real order): the page renders the **v3 workshop** (send-strip + "Fix these to send", no Passport/Conformance tabs) and the preview is **`MapperPreviewPane`** (a `<pre>`, "(no preview)" when unresolved) — which **already calls the real `previewMappingOverride` emitter**. The `OutputPreview.tsx` mock (fabricated `<ItemOut>` / 6-row list) is the **SpineReview/triage/mobile** path, which is **NOT the live default** on prod. The audit agent flagged F-4 from local `main` (where SpineReview is still the default) — the local↔origin divergence. **Fixing `OutputPreview` would fix a panel prod users don't see.**
+**Real prod "preview won't switch format" = MV-4 (MapperPreviewPane defaults to `csv` for non-revision orders) + the order being unresolved (gated) + F-1 (can't bind arbitrary fields).** Re-scope F-4 to **MV-4 in `MapperPreviewPane`** (drive format from the supplier's delivery format, not a `?? "csv"` default) and verify on a RESOLVED prod order. Only fix `OutputPreview` if/when SpineReview is intentionally still shipped somewhere. Confirm which review screen is the live default (resolve the local↔origin FE divergence) before any preview work.
+
+---
+
+## F-4 (ORIGINAL, superseded by the correction above) — OutputPreview mock
 
 **Bug:** `OutputPreview.tsx` renders a fabricated cXML scaffold (`:299-333`) / generic 6-row `po_number:…` list (`:338-362`) driven by `order.lines`+`fieldValues` — it NEVER calls the transform/emitter. `outFmt` comes from the last artifact, not the designer format. So a designed nested structure shows the flat mock; the format badge lies. This is the root of "preview won't switch format / I can't design the output."
 **Fix:** Replace the mock body in `OutputPreview.tsx` with a call to the real preview path — `apiClient.previewMappingOverride(orderId, baseOverride, deliveredFormat)` (Mode-0 emitter, already correct + already what `MapperPreviewPane` uses) — and render the returned bytes verbatim (mono, format-appropriate). Drive `deliveredFormat` from the supplier's delivery format (one source of truth), not the last artifact. Remove the cXML scaffold + the 6-row generator. Keep loading/error states; surface emitter errors inline.
