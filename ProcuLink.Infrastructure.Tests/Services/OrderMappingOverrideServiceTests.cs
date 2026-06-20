@@ -192,6 +192,80 @@ public class OrderMappingOverrideServiceTests
         result.Should().BeNull();
     }
 
+    // ── MV-1: a mapping edit on an already-transformed order resets it to 'ready' so the next Send
+    //         re-transforms instead of shipping the stale artifact. An UNCHANGED upsert does not. ──
+
+    private static async Task<(Guid orgId, Guid orderId)> SeedOrderWithStatusAsync(
+        ProcuLinkDbContext db, string status)
+    {
+        var orgId      = Guid.NewGuid();
+        var orderId    = Guid.NewGuid();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = orderId, OrgId = orgId, SupplierId = Guid.NewGuid(),
+            PoNumber = "PO-MV1", Currency = "EUR", OrderDate = new DateOnly(2026, 1, 1),
+            Status = status, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        return (orgId, orderId);
+    }
+
+    private static async Task<string> StatusOf(ProcuLinkDbContext db, Guid orderId) =>
+        await db.PurchaseOrders.AsNoTracking().Where(o => o.Id == orderId).Select(o => o.Status).FirstAsync();
+
+    [Theory]
+    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.ReadyToDeliver)]
+    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.Transforming)]
+    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.Delivered)]
+    public async Task UpsertAsync_ChangedOverride_PastReady_ResetsStatusToReady(string startStatus)
+    {
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedOrderWithStatusAsync(db, startStatus);
+        var svc = new OrderMappingOverrideService(db);
+
+        await svc.UpsertAsync(orgId, orderId, SampleOverride(), CancellationToken.None);
+
+        (await StatusOf(db, orderId)).Should().Be(ProcuLink.Core.Constants.OrderStatusConstants.Ready);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_UnchangedOverride_LeavesStatusUntouched()
+    {
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedOrderWithStatusAsync(
+            db, ProcuLink.Core.Constants.OrderStatusConstants.ReadyToDeliver);
+        var svc = new OrderMappingOverrideService(db);
+
+        // First write transitions the order back to 'ready'; re-seed it to ready_to_deliver to isolate
+        // the "unchanged re-save" case (InMemory provider — mutate the tracked entity + SaveChanges).
+        await svc.UpsertAsync(orgId, orderId, SampleOverride(), CancellationToken.None);
+        var tracked = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        tracked.Status = ProcuLink.Core.Constants.OrderStatusConstants.ReadyToDeliver;
+        await db.SaveChangesAsync();
+
+        // Re-save the SAME override content — no re-transform should be forced.
+        await svc.UpsertAsync(orgId, orderId, SampleOverride(), CancellationToken.None);
+
+        (await StatusOf(db, orderId)).Should()
+            .Be(ProcuLink.Core.Constants.OrderStatusConstants.ReadyToDeliver);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ChangedOverride_UpstreamOfTransform_DoesNotResetStatus()
+    {
+        // An order still in pending_review/ready has no artifact to make stale — the upsert must not
+        // touch its status (a 'ready' order stays 'ready'; a 'pending_review' stays pending_review).
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedOrderWithStatusAsync(
+            db, ProcuLink.Core.Constants.OrderStatusConstants.PendingReview);
+        var svc = new OrderMappingOverrideService(db);
+
+        await svc.UpsertAsync(orgId, orderId, SampleOverride(), CancellationToken.None);
+
+        (await StatusOf(db, orderId)).Should()
+            .Be(ProcuLink.Core.Constants.OrderStatusConstants.PendingReview);
+    }
+
     [Fact]
     public async Task UpsertAsync_RoundTripsPerLineCustomFieldValues()
     {

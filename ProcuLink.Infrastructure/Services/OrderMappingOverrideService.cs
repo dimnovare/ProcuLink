@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services.Mapping;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -61,12 +62,41 @@ public sealed class OrderMappingOverrideService : IOrderMappingOverrideService
 
         var rawJson = JsonSerializer.Serialize(@override, SerializerOptions);
 
+        // MV-1: did the override CONTENT actually change? The previously-stored override text is
+        // re-serialised through the SAME SetRawValue(parse → WriteTo) path that produced `rawJson`,
+        // so an ordinal compare is a faithful "changed?" signal (and an UNCHANGED re-save must never
+        // trigger a needless re-transform).
+        var previousRaw = OrderMappingOverrideReader.ReadRawJson(entity.CanonicalJson);
+        var contentChanged = !string.Equals(previousRaw, rawJson, StringComparison.Ordinal);
+
         // Merge the override under its key, preserving every other canonical_json property verbatim.
         entity.CanonicalJson = CanonicalJsonMerge.SetRawValue(
             entity.CanonicalJson, OrderMappingOverrideReader.CanonicalKey, rawJson);
         entity.UpdatedAt = DateTime.UtcNow;
 
+        // MV-1 — never ship a stale artifact after a mapping edit. If the order has already been
+        // transformed (or is mid-transform / delivered) AND the override content changed, the
+        // existing artifact no longer reflects what the user designed. Reset the order to 'ready' so
+        // the next Send RE-TRANSFORMS (producing a fresh artifact) instead of redelivering the stale
+        // one. We do NOT delete the old artifact — audit history is preserved; the re-transform makes
+        // a new one that Redeliver/Send then ships. Both mutations land in ONE SaveChangesAsync on the
+        // same tracked entity (a single atomic UPDATE), so the override write and the status reset can
+        // never half-apply. An UNCHANGED upsert, or an order still upstream of transform
+        // (pending_review/ready/etc.), leaves the status untouched — no needless re-transform.
+        if (contentChanged && IsPastReady(entity.Status))
+            entity.Status = OrderStatusConstants.Ready;
+
         await _db.SaveChangesAsync(ct);
         return true;
     }
+
+    /// <summary>
+    /// True for the post-transform delivery states whose persisted artifact a mapping edit would make
+    /// stale (the order has already been transformed at least once). <see cref="OrderStatusMachine"/>
+    /// documents <c>ready_to_deliver/delivered → ready</c> as the MV-1 re-transform path.
+    /// </summary>
+    private static bool IsPastReady(string status) =>
+        status is OrderStatusConstants.ReadyToDeliver
+               or OrderStatusConstants.Transforming
+               or OrderStatusConstants.Delivered;
 }

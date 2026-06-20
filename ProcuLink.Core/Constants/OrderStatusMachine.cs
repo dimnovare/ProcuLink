@@ -30,9 +30,11 @@ public static class OrderStatusMachine
             [PendingReview]      = Set(Ready, PendingReview, RejectedBySupplier),
             [Ready]              = Set(Transforming, PendingReview, RejectedBySupplier),
             [Transforming]       = Set(ReadyToDeliver, Ready, Failed, RejectedBySupplier),
-            [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, RejectedBySupplier),
+            // ready_to_deliver/delivered → ready: a mapping edit after transform (MV-1) invalidates
+            // the artifact and resets the order so the next Send re-transforms.
+            [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
             [Delivering]         = Set(Delivered, DeliveryFailed, RejectedBySupplier),
-            [Delivered]          = Set(DeliveryFailed, RejectedBySupplier),
+            [Delivered]          = Set(DeliveryFailed, Ready, RejectedBySupplier),
             [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, RejectedBySupplier),
             [DeliveryDeadLetter] = Set(Delivering, RejectedBySupplier),
             [RejectedBySupplier] = Set(),
