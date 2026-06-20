@@ -203,14 +203,22 @@ public static class OutputNodeTemplateInferrer
     // ── Name → canonical-field heuristic ─────────────────────────────────────────
 
     /// <summary>
-    /// Build a leaf rule: pre-bind to the most likely canonical field by name; else leave a blank
-    /// fixed value for the user to fill. Pure name matching — never guesses values.
+    /// Build a leaf rule: pre-bind to the most likely canonical field by name; else leave the leaf
+    /// UNBOUND for the user to map. Pure name matching — never guesses values.
+    ///
+    /// F-2: an unmappable column emits <see cref="OutputFieldRule.FixedValue"/> = <c>null</c> (UNBOUND),
+    /// NOT <c>""</c>. A null fixed value + null canonical field is what the designer reads as "needs a
+    /// field" (amber), so an inferred-but-unmapped column surfaces as TODO instead of masquerading as a
+    /// bound empty-string pill that silently delivers "" forever. This is purely a binding-state change:
+    /// at DELIVERY time an unbound leaf and an empty-fixed-value leaf BOTH resolve to "" (the emitters
+    /// coalesce a null resolved value to string.Empty), so emitted bytes are unchanged. An explicitly
+    /// user-set "" still travels as FixedValue = "" and still delivers "".
     /// </summary>
     private static OutputFieldRule RuleFor(string name, bool lineScope)
     {
         var canonical = GuessCanonical(name, lineScope);
         return canonical is null
-            ? new OutputFieldRule { OutputPath = name, FixedValue = "" }
+            ? new OutputFieldRule { OutputPath = name, FixedValue = null }
             : new OutputFieldRule { OutputPath = name, CanonicalField = canonical };
     }
 

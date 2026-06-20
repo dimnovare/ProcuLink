@@ -102,6 +102,106 @@ public class OutputNodeTemplateInferrerTests
         Assert.Equal("Quantity", lineItem.Children.Single(c => c.Name == "Qty").Rule!.CanonicalField);
     }
 
+    // ── F-2: inferred-but-unmapped columns are UNBOUND (null), not a silent empty-string pill ──
+
+    [Fact]
+    public void Json_UnmappableColumn_InfersUnboundRule_NotEmptyFixedValue()
+    {
+        // EANCode / extraThing have no name match → they must come back UNBOUND (FixedValue == null,
+        // CanonicalField == null) so the designer shows "pick a field" instead of a bound "" pill that
+        // silently delivers empty forever.
+        const string sample = """
+        {"orderNumber":"PO-1","EANCode":"X","items":[{"sku":"S-1","extraThing":"Y"}]}
+        """;
+        var t = OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Json);
+
+        var ean = Assert.Single(t.Root.Children.Where(c => c.Name == "EANCode"));
+        Assert.Null(ean.Rule!.CanonicalField);
+        Assert.Null(ean.Rule!.FixedValue);   // F-2: UNBOUND, not ""
+
+        var item = Assert.Single(t.Root.Children.Where(c => c.NodeType == OutputNodeType.Array)).Children[0];
+        var extra = Assert.Single(item.Children.Where(c => c.Name == "extraThing"));
+        Assert.Null(extra.Rule!.CanonicalField);
+        Assert.Null(extra.Rule!.FixedValue);
+
+        // A MAPPABLE column is still bound (unchanged).
+        var po = Assert.Single(t.Root.Children.Where(c => c.Name == "orderNumber"));
+        Assert.Equal("PoNumber", po.Rule!.CanonicalField);
+    }
+
+    [Theory]
+    [InlineData(OutputFormat.Csv, "OrderRef,EANCode\nPO-1,X\n")]
+    public void Csv_UnmappableColumn_InfersUnboundRule(OutputFormat format, string sample)
+    {
+        var t = OutputNodeTemplateInferrer.FromSample(sample, format);
+        var arr = Assert.Single(t.Root.Children.Where(c => c.NodeType == OutputNodeType.Array));
+        var ean = Assert.Single(arr.Children[0].Children.Where(c => c.Name == "EANCode"));
+        Assert.Null(ean.Rule!.CanonicalField);
+        Assert.Null(ean.Rule!.FixedValue);   // F-2
+    }
+
+    [Fact]
+    public void ByteParity_UnboundInferredColumn_DeliversIdenticallyTo_ExplicitEmptyFixedValue()
+    {
+        // Characterization (byte-parity gate): the F-2 change ("" → null for inferred-unmapped) must
+        // NOT change emitted bytes. An UNBOUND inferred column (FixedValue == null) and an EXPLICIT
+        // empty fixed value (FixedValue == "") both deliver the same bytes — only the designer
+        // binding-state differs.
+        const string sample = """
+        {"orderNumber":"X","EANCode":"X","items":[{"sku":"X","qty":0}]}
+        """;
+        var order = MakeResolvedOrder();
+
+        // Inferred tree: EANCode comes back UNBOUND under F-2.
+        var inferred = OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Json);
+        var inferredBytes = Emit(inferred, order);
+
+        // Same tree but EANCode explicitly set to FixedValue == "" (the pre-F-2 inferred shape, and
+        // exactly what a user setting an empty constant produces).
+        var explicitEmpty = WithEanFixedValue(OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Json), "");
+        var explicitBytes = Emit(explicitEmpty, order);
+
+        Assert.Equal(explicitBytes, inferredBytes);   // identical delivered bytes
+
+        // And the unbound column renders as an empty string in the JSON (not dropped, not crashing).
+        using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(inferredBytes));
+        Assert.Equal("", doc.RootElement.GetProperty("EANCode").GetString());
+    }
+
+    private static OutputNodeTemplate WithEanFixedValue(OutputNodeTemplate t, string value)
+    {
+        // OutputNode is an init-only record — swap the EANCode child in the (mutable) Children list
+        // for a copy whose Rule carries an EXPLICIT empty fixed value.
+        var idx = t.Root.Children.FindIndex(c => c.Name == "EANCode");
+        var ean = t.Root.Children[idx];
+        t.Root.Children[idx] = ean with
+        {
+            Rule = new OutputFieldRule { OutputPath = ean.Rule!.OutputPath, FixedValue = value },
+        };
+        return t;
+    }
+
+    private static PurchaseOrderEntity MakeResolvedOrder()
+    {
+        var orderId = Guid.NewGuid();
+        return new PurchaseOrderEntity
+        {
+            Id = orderId, OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
+            PoNumber = "PO-42", Currency = "EUR", OrderDate = new DateOnly(2026, 6, 15),
+            Lines = { new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
+                SupplierItemCode = "S-9", Quantity = 7m, UnitPrice = 1m, NeedsReview = false } },
+        };
+    }
+
+    private static byte[] Emit(OutputNodeTemplate template, PurchaseOrderEntity order)
+    {
+        var result = new OutputTemplateEmitter().Emit(template, order, new OrderMappingOverride());
+        result.Content.Position = 0;
+        using var ms = new MemoryStream();
+        result.Content.CopyTo(ms);
+        return ms.ToArray();
+    }
+
     [Fact]
     public void Inferred_Json_RoundTrips_ThroughEmitter_WithSameShape()
     {
