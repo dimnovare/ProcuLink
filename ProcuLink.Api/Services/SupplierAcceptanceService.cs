@@ -467,12 +467,12 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
                 var allowed = (rule.ExpectedValue ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
                 return actual is not null && allowed.Contains(actual, StringComparer.OrdinalIgnoreCase);
             case "min":
-                return double.TryParse(actual, NumberStyles.Any, CultureInfo.InvariantCulture, out var a1)
-                    && double.TryParse(rule.ExpectedValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var m1)
+                return TryParseNumeric(actual, out var a1)
+                    && TryParseNumeric(rule.ExpectedValue, out var m1)
                     && a1 >= m1;
             case "max":
-                return double.TryParse(actual, NumberStyles.Any, CultureInfo.InvariantCulture, out var a2)
-                    && double.TryParse(rule.ExpectedValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var m2)
+                return TryParseNumeric(actual, out var a2)
+                    && TryParseNumeric(rule.ExpectedValue, out var m2)
                     && a2 <= m2;
             case "not_equals":
                 return !string.Equals(actual, rule.ExpectedValue, StringComparison.OrdinalIgnoreCase);
@@ -480,12 +480,12 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
                 return actual is not null
                     && actual.Contains(rule.ExpectedValue ?? "", StringComparison.OrdinalIgnoreCase);
             case "greater_than":
-                return double.TryParse(actual, NumberStyles.Any, CultureInfo.InvariantCulture, out var a3)
-                    && double.TryParse(rule.ExpectedValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var m3)
+                return TryParseNumeric(actual, out var a3)
+                    && TryParseNumeric(rule.ExpectedValue, out var m3)
                     && a3 > m3;
             case "less_than":
-                return double.TryParse(actual, NumberStyles.Any, CultureInfo.InvariantCulture, out var a4)
-                    && double.TryParse(rule.ExpectedValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var m4)
+                return TryParseNumeric(actual, out var a4)
+                    && TryParseNumeric(rule.ExpectedValue, out var m4)
                     && a4 < m4;
             case "max_length":
                 return actual is not null
@@ -543,6 +543,76 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         "greater_than", "less_than", "max_length", "date_sanity", "not_label",
         "vat_format", "line_amount_reconcile",
     };
+
+    /// <summary>
+    /// Locale-safe numeric parse for the comparison operators (min / max / greater_than / less_than).
+    /// Both operands flow through here:
+    ///   • the order's value (<c>actual</c>) — for line numeric fields this is already an
+    ///     InvariantCulture string from a TYPED decimal column (e.g. "73.22"), so it reads back exactly;
+    ///   • the rule's threshold (<c>rule.ExpectedValue</c>) — a RAW token the author typed, which may be
+    ///     comma-decimal ("73,22", "50,00").
+    /// The previous <c>double.TryParse(NumberStyles.Any, InvariantCulture)</c> silently read a
+    /// comma-decimal token as a thousands-grouped integer ("73,22" → 7322), so a <c>max:5000</c> rule
+    /// PASSED a non-conforming value. We reuse the same locale-safe "last separator is the decimal;
+    /// refuse genuine ambiguity" logic as the CSV parser. A token that cannot be read unambiguously
+    /// returns false → the comparison fails CLOSED (surfaces for review) rather than silently passing.
+    /// Mirrors <c>CsvOrderParser.ParseDecimalFlexible</c>; <c>european</c> is left false because the
+    /// rule editor / typed columns are not delimiter-tagged, but the "last separator wins" rule still
+    /// reads both US ("1,234.56") and EU ("1.234,56" / "73,22") correctly. A US-thousands token whose
+    /// only separator is a comma with exactly 3 trailing digits (e.g. "5,000") is treated as the
+    /// integer 5000 — the intended threshold, not 5.0.
+    /// </summary>
+    internal static bool TryParseNumeric(string? raw, out double value)
+    {
+        value = 0d;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+
+        // Reject any non-numeric noise (letters, exponents, '%', …) rather than silently stripping it
+        // into a plausible-but-wrong number. Digits, the two separators, a sign, whitespace and
+        // currency symbols are the only permitted characters.
+        foreach (var c in raw)
+        {
+            if (char.IsDigit(c) || c is '.' or ',' or '-' or '+') continue;
+            if (char.IsWhiteSpace(c)) continue;
+            if (char.GetUnicodeCategory(c) == UnicodeCategory.CurrencySymbol) continue;
+            return false;
+        }
+
+        var s = new string(raw.Where(c => char.IsDigit(c) || c is '.' or ',' or '-').ToArray());
+        if (s.Length == 0 || s == "-") return false;
+
+        int lastDot = s.LastIndexOf('.'), lastComma = s.LastIndexOf(',');
+        char? decimalSep;
+        if (lastDot >= 0 && lastComma >= 0)
+        {
+            decimalSep = lastComma > lastDot ? ',' : '.';                 // both present → last wins
+        }
+        else if (lastComma >= 0)
+        {
+            bool single = s.IndexOf(',') == lastComma;
+            int trailing = s.Length - lastComma - 1;
+            // A single comma with exactly 3 trailing digits ("5,000") is a US thousands group → integer.
+            decimalSep = (single && trailing == 3) ? null : ',';
+        }
+        else if (lastDot >= 0)
+        {
+            // Only a dot present. A single dot with exactly 3 trailing digits ("5.000") is ambiguous
+            // (decimal 5.0 vs EU thousands 5000); the rule editor / typed columns use a decimal point
+            // by convention, so we keep '.' as the decimal (→ 5.0). This matches how the order's typed
+            // decimal columns serialise ("73.22"), so the actual operand reads back exactly as before.
+            decimalSep = '.';
+        }
+        else
+        {
+            decimalSep = null;                                            // pure integer
+        }
+
+        string normalized = decimalSep is char ds
+            ? s.Replace(ds == '.' ? "," : ".", "").Replace(ds, '.')      // strip groups, decimal → '.'
+            : s.Replace(",", "").Replace(".", "");                       // integer / thousands-only
+
+        return double.TryParse(normalized, NumberStyles.Number, CultureInfo.InvariantCulture, out value);
+    }
 
     /// <summary>
     /// True when <paramref name="actual"/> is a swept label cell for <paramref name="label"/>: it
