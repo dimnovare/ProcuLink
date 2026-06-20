@@ -184,7 +184,12 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
         }
 
         // ── Line items ─────────────────────────────────────────────────────────
-        var lines = ParseLines(segments);
+        // Thread the UNA-declared decimal mark through so numeric values are read in the
+        // sender's locale. Without it, an EU file that declares ',' as the decimal mark
+        // (UNA:+,? ') had its quantities/prices parsed under a hard-coded '.' decimal, so
+        // "1.234,56" failed to parse (→ null) and an EU-grouped "1.000" was silently
+        // under-read as 1.0 instead of 1000 (~1000× wrong). See ParseDecimal.
+        var lines = ParseLines(segments, delimiters.Decimal);
 
         return new ParsedOrder(
             PoNumber:  poNumber,
@@ -196,20 +201,22 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
 
     // ── Line parsing ─────────────────────────────────────────────────────────
 
-    private static IReadOnlyList<ParsedOrderLine> ParseLines(List<Segment> segments)
+    private static IReadOnlyList<ParsedOrderLine> ParseLines(List<Segment> segments, char decimalMark)
     {
         var lines  = new List<ParsedOrderLine>();
         int auto   = 1;
 
         // LIN starts a line group. Subsequent segments (IMD/QTY/PRI/...) belong to
         // the current line until the next LIN or UNS / UNT.
-        Segment? currentLin = null;
-        var      lineDescr  = (string?)null;
-        var      lineQty    = 0m;
-        var      lineUnit   = (string?)null;
-        var      linePrice  = (decimal?)null;
-        var      lineNumber = 0;
-        var      lineCode   = string.Empty;
+        Segment? currentLin    = null;
+        var      lineDescr     = (string?)null;
+        var      lineQty       = 0m;
+        var      lineUnit      = (string?)null;
+        var      linePrice     = (decimal?)null;
+        var      lineNumber    = 0;
+        var      lineCode      = string.Empty;
+        var      qtyAmbiguous   = false;
+        var      priceAmbiguous = false;
 
         void Flush()
         {
@@ -220,7 +227,13 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
                 Description:   NullIfEmpty(lineDescr),
                 Quantity:      lineQty,
                 Unit:          NullIfEmpty(lineUnit),
-                UnitPrice:     linePrice));
+                UnitPrice:     linePrice,
+                // Refuse to deliver a silently-wrong number: a quantity or unit price the parser
+                // could not read unambiguously in the declared locale flags the line so it surfaces
+                // for human review instead of being delivered ~10×/100×/1000× wrong. Mirrors
+                // CsvOrderParser's NeedsReview/ReviewReason contract.
+                NeedsReview:   qtyAmbiguous || priceAmbiguous,
+                ReviewReason:  BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous)));
         }
 
         foreach (var seg in segments)
@@ -229,11 +242,13 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
             {
                 case "LIN":
                     Flush();
-                    currentLin = seg;
-                    lineDescr  = null;
-                    lineQty    = 0m;
-                    lineUnit   = null;
-                    linePrice  = null;
+                    currentLin     = seg;
+                    lineDescr      = null;
+                    lineQty        = 0m;
+                    lineUnit       = null;
+                    linePrice      = null;
+                    qtyAmbiguous   = false;
+                    priceAmbiguous = false;
 
                     // LIN+1++ITEM-CODE:IN
                     var lnNumRaw = seg.Element(1);
@@ -263,7 +278,9 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
                     if (string.Equals(qtyQualifier, "21", StringComparison.Ordinal)
                         || string.Equals(qtyQualifier, "1",  StringComparison.Ordinal))
                     {
-                        lineQty  = ParseDecimal(seg.Component(1, 1)) ?? 0m;
+                        var (qtyVal, qtyAmb) = ParseDecimal(seg.Component(1, 1), decimalMark);
+                        lineQty      = qtyVal ?? 0m;
+                        qtyAmbiguous = qtyAmb;
                         lineUnit = NullIfEmpty(seg.Component(1, 2)) ?? lineUnit;
                     }
                     break;
@@ -274,7 +291,9 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
                     if (string.Equals(priQualifier, "AAA", StringComparison.Ordinal)
                         || string.Equals(priQualifier, "AAB", StringComparison.Ordinal))
                     {
-                        linePrice = ParseDecimal(seg.Component(1, 1));
+                        var (priceVal, priceAmb) = ParseDecimal(seg.Component(1, 1), decimalMark);
+                        linePrice      = priceVal;
+                        priceAmbiguous = priceAmb;
                     }
                     break;
 
@@ -552,16 +571,89 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
             : null;
     }
 
-    private static decimal? ParseDecimal(string? value)
+    /// <summary>
+    /// Parse an EDIFACT numeric value honouring the UNA-declared <paramref name="decimalMark"/>
+    /// ('.' by ISO 9735 default, but ',' in many EU files). The OTHER of '.'/',' is treated as a
+    /// thousands/grouping separator. Returns <c>(value, ambiguous)</c>; <c>ambiguous</c> is true when
+    /// the token could not be read unambiguously and the parser refuses to guess (the caller flags the
+    /// line for review rather than emitting a silently-wrong number). A blank token is NOT ambiguous
+    /// (a legitimately absent optional value → null).
+    ///
+    /// Mirrors <see cref="CsvOrderParser"/>'s locale-safe "last separator is the decimal; refuse-and-
+    /// flag genuine ambiguity" reader, with the declared decimal mark as the locale signal:
+    ///   • a comma decimal mark ⇒ European, so a lone "1.000" (3 trailing digits) is grouping → 1000,
+    ///     "1.234,56" → 1234.56, "73,22" → 73.22;
+    ///   • a dot decimal mark (ISO default) keeps "12.50"/"125.5"/"3.50" as decimals.
+    /// This replaces the previous hard-coded '.'-only reader that read "1.234,56" as null and an
+    /// EU-grouped "1.000" as 1.0 (~1000× under-read), both silently.
+    /// </summary>
+    private static (decimal? Value, bool Ambiguous) ParseDecimal(string? value, char decimalMark)
     {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        var normalized = value.Trim();
-        if (normalized.Contains(',') && !normalized.Contains('.'))
-            normalized = normalized.Replace(',', '.');
-        return decimal.TryParse(normalized, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)
-            ? d
-            : null;
+        if (string.IsNullOrWhiteSpace(value)) return (null, false);
+
+        // A comma decimal mark is the locale signal that this is a European number (where '.' groups
+        // thousands). Anything else (the ISO default '.') reads as US/invariant where '.' is decimal.
+        var european = decimalMark == ',';
+
+        // Guard against silently stripping a stray non-numeric character into a plausible-but-wrong
+        // number (e.g. "1.5e2" → "1.52"): only digits, the two separators, a sign, whitespace and
+        // currency symbols are allowed; ANY other character makes the token ambiguous → review.
+        foreach (var c in value)
+        {
+            if (char.IsDigit(c) || c is '.' or ',' or '-' or '+') continue;
+            if (char.IsWhiteSpace(c)) continue;
+            if (char.GetUnicodeCategory(c) == UnicodeCategory.CurrencySymbol) continue;
+            return (null, true);
+        }
+
+        var s = new string(value.Where(c => char.IsDigit(c) || c is '.' or ',' or '-').ToArray());
+        if (s.Length == 0 || s == "-") return (null, false);
+
+        int lastDot = s.LastIndexOf('.'), lastComma = s.LastIndexOf(',');
+        char? decimalSep;
+        if (lastDot >= 0 && lastComma >= 0)
+        {
+            decimalSep = lastComma > lastDot ? ',' : '.';                 // both → last wins
+        }
+        else if (lastComma >= 0)
+        {
+            bool single = s.IndexOf(',') == lastComma;
+            int trailing = s.Length - lastComma - 1;
+            decimalSep = (european || !(single && trailing == 3)) ? ',' : null;
+        }
+        else if (lastDot >= 0)
+        {
+            bool single = s.IndexOf('.') == lastDot;
+            int trailing = s.Length - lastDot - 1;
+            decimalSep = (european && single && trailing == 3) ? null : '.';
+        }
+        else
+        {
+            decimalSep = null;                                            // pure integer
+        }
+
+        string normalized = decimalSep is char ds
+            ? s.Replace(ds == '.' ? "," : ".", "").Replace(ds, '.')      // strip groups, decimal → '.'
+            : s.Replace(",", "").Replace(".", "");                       // integer / thousands-only
+
+        // Numeric characters only but still unparseable (e.g. "1-2-3", a lone separator) → ambiguous,
+        // so it surfaces for review rather than being silently dropped to null.
+        return decimal.TryParse(normalized, NumberStyles.Number, CultureInfo.InvariantCulture, out var d)
+            ? (d, false) : (null, true);
     }
+
+    /// <summary>
+    /// Short "why was this flagged" string for the review UI, matching the CsvOrderParser copy.
+    /// Null when nothing was ambiguous.
+    /// </summary>
+    private static string? BuildAmbiguityReason(bool qtyAmbiguous, bool priceAmbiguous) =>
+        (qtyAmbiguous, priceAmbiguous) switch
+        {
+            (true,  true)  => "The quantity and unit price could not be read unambiguously from the source file.",
+            (true,  false) => "The quantity could not be read unambiguously from the source file.",
+            (false, true)  => "The unit price could not be read unambiguously from the source file.",
+            _              => null,
+        };
 
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

@@ -216,6 +216,98 @@ public class EdifactOrderParserTests
         result.Lines[0].UnitPrice.Should().Be(3.50m);
     }
 
+    // ── EU-locale decimals (IN-5 regression) ─────────────────────────────────
+    // The UNA decimal mark must drive numeric interpretation. Before the fix the parser
+    // hard-coded '.' as the decimal, so an EU file declaring ',' as the decimal mark
+    // (UNA:+,? ') silently under-read EU-grouped "1.000" as 1.0 (~1000×) and failed
+    // "1.234,56" to null. The decimal mark below is ',' (5th UNA char): "UNA" + ':' comp
+    // + '+' elem + ',' decimal + '?' release + ' ' reserved + '\'' segment.
+
+    [Fact]
+    public async Task ParseAsync_EuDeclaredCommaDecimal_ReadsGroupingAndDecimalsCorrectly()
+    {
+        // Pinned IN-5 golden values under a comma decimal mark:
+        //   "1.000"    → 1000      (EU thousands grouping, NOT 1.0 — no silent ~1000× under-read)
+        //   "1.234,56" → 1234.56   (grouped thousands + comma decimal — previously parsed to null)
+        //   "73,22"    → 73.22     (comma decimal — previously 7322 under invariant)
+        var edi =
+            "UNA:+,? '" +
+            "UNB+UNOC:3+SENDER:14+RECEIVER:14+240115:0900+1'" +
+            "UNH+1+ORDERS:D:96A:UN'" +
+            "BGM+220+PO-EU-DEC+9'" +
+            "DTM+137:20240115:102'" +
+            "CUX+2:EUR:9'" +
+            "NAD+BY+5412345678901::9++Acme Buyer Ltd'" +
+            "LIN+1++ITEM-THOUSAND:IN'" +
+            "QTY+21:1.000:PCE'" +
+            "PRI+AAA:1.234,56'" +
+            "LIN+2++ITEM-DEC:IN'" +
+            "QTY+21:5:PCE'" +
+            "PRI+AAA:73,22'" +
+            "UNS+S'" +
+            "UNT+12+1'" +
+            "UNZ+1+1'";
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        result.Lines.Should().HaveCount(2);
+
+        // Line 1: EU-grouped quantity is one thousand, not 1.0.
+        result.Lines[0].Quantity.Should().Be(1000m);
+        result.Lines[0].UnitPrice.Should().Be(1234.56m);
+        result.Lines[0].NeedsReview.Should().BeFalse();
+
+        // Line 2: comma decimal read as 73.22, not 7322.
+        result.Lines[1].Quantity.Should().Be(5m);
+        result.Lines[1].UnitPrice.Should().Be(73.22m);
+        result.Lines[1].NeedsReview.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ParseAsync_DefaultDotDecimal_StillReadsDecimalsCorrectly()
+    {
+        // Regression guard for the ISO default '.' decimal mark (no UNA / UNA declares '.'):
+        // "12.50" stays 12.50 and "125.5" stays 125.5 — the locale-aware reader must not
+        // treat a '.' decimal as a thousands group.
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-A:IN'" + NL +
+            "QTY+21:125.5:KGM'" + NL +
+            "PRI+AAA:12.50'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        result.Lines.Should().HaveCount(1);
+        result.Lines[0].Quantity.Should().Be(125.5m);
+        result.Lines[0].UnitPrice.Should().Be(12.50m);
+        result.Lines[0].NeedsReview.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ParseAsync_AmbiguousNumericToken_FlagsLineForReview_NeverSilentlyWrong()
+    {
+        // A price carrying a stray letter ("12.5x") cannot be read unambiguously. The parser must
+        // refuse to emit a silently-wrong number: UnitPrice stays null and the line is review-flagged
+        // (mirrors CsvOrderParser) rather than being delivered as a plausible-but-wrong 12.5.
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-AMB:IN'" + NL +
+            "QTY+21:10:PCE'" + NL +
+            "PRI+AAA:12.5x'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        result.Lines.Should().HaveCount(1);
+        result.Lines[0].UnitPrice.Should().BeNull();
+        result.Lines[0].NeedsReview.Should().BeTrue();
+        result.Lines[0].ReviewReason.Should().NotBeNullOrEmpty();
+    }
+
     // ── Release-escape round-trip (regression) ────────────────────────────────
 
     [Fact]
