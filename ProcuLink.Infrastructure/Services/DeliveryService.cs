@@ -82,19 +82,29 @@ public sealed class DeliveryService : IDeliveryService
         Guid artifactId,
         bool requireAutoDeliver,
         CancellationToken ct)
-        => DispatchArtifactAsync(orgId, orderId, artifactId, requireAutoDeliver, reconcileFailedAttempt: true, ct);
+        // Public entry point = the FIRST-DELIVER / redeliver / requeue path (DeliverOrderJob). It is
+        // NOT yet holding a delivery claim, so it must atomically claim the order before dispatch
+        // (see the claim block below). The retry path enters through the internal overload with
+        // alreadyClaimed: true because RetryDeliveryAsync already made the claim.
+        => DispatchArtifactAsync(orgId, orderId, artifactId, requireAutoDeliver, reconcileFailedAttempt: true, alreadyClaimed: false, ct);
 
     // Internal overload. <paramref name="reconcileFailedAttempt"/> lets the retry path opt out
     // of reconciling a failed attempt it is about to dead-letter: DeadLetterAsync reconciles
     // once at the end, so reconciling on the failed attempt first would write a transient
     // delivery_failed exception that the dead-letter reconcile immediately resolves. Successful
     // attempts always reconcile regardless of this flag.
+    //
+    // <paramref name="alreadyClaimed"/> = true ONLY when the caller (RetryDeliveryAsync) has already
+    // atomically flipped the order to 'delivering'. A direct call (alreadyClaimed: false) must make
+    // the claim itself so two concurrent first-deliver/redeliver/requeue activations can't both
+    // dispatch the same PO (D-1).
     private async Task<DeliveryResult> DispatchArtifactAsync(
         Guid orgId,
         Guid orderId,
         Guid artifactId,
         bool requireAutoDeliver,
         bool reconcileFailedAttempt,
+        bool alreadyClaimed,
         CancellationToken ct)
     {
         var artifact = await _db.OutboundArtifacts
@@ -131,15 +141,109 @@ public sealed class DeliveryService : IDeliveryService
         if (credentials is null)
             return await FailBeforeDispatchAsync(order, artifact, config, "Delivery credentials could not be decrypted.", reconcileFailedAttempt, ct);
 
+        // ── Concurrency claim (D-1) ───────────────────────────────────────────────
         // SLA timer: opening a fresh delivery attempt (re)starts the confirmation window
         // and clears any prior breach flag. The SLA sweep flags the order if this deadline
         // passes without a confirmed delivery.
+        //
+        // The status flip to 'delivering' is ALSO the delivery claim. A direct call
+        // (alreadyClaimed: false — the first-deliver/redeliver/requeue path via DeliverOrderJob)
+        // must claim ATOMICALLY: two concurrent activations for the SAME order (a double-clicked
+        // Redeliver, a Redeliver racing an ops Requeue, or either racing a scheduled
+        // RetryDeliveryJob) could each read a deliverable status and BOTH dispatch — the same PO
+        // POSTed twice to a real supplier. Mirrors RetryDeliveryAsync's claim verbatim: a single
+        // guarded ExecuteUpdateAsync inside one transaction; 0 rows ⇒ another worker already
+        // claimed it (or it's already delivered/terminal) ⇒ a BENIGN no-op result, never a throw
+        // and never a dispatch. The retry path enters with alreadyClaimed: true (RetryDeliveryAsync
+        // already flipped the row to a FRESH 'delivering'), so it skips the claim and only stamps
+        // the SLA window.
+        //
+        // Claimable = ready_to_deliver / delivery_failed (idle, send-ready), OR a STALE 'delivering'
+        // (UpdatedAt older than the reclaim window — crash recovery). A 'delivered'/terminal order is
+        // NOT claimable, so a redeliver on an already-delivered order affects 0 rows and no-ops.
         var dispatchStart = DateTime.UtcNow;
-        order.Status = OrderStatusConstants.Delivering;
-        order.DeliveryDueAt = dispatchStart + _reliability.SlaWindow;
-        order.SlaBreached = false;
-        order.UpdatedAt = dispatchStart;
-        await _db.SaveChangesAsync(ct);
+        var dueAt = dispatchStart + _reliability.SlaWindow;
+
+        if (!alreadyClaimed)
+        {
+            var staleBefore = dispatchStart - DeliveringReclaimWindow;
+
+            if (_db.Database.IsRelational())
+            {
+                await using var claimTx = await _db.Database.BeginTransactionAsync(ct);
+
+                var claimed = await _db.PurchaseOrders
+                    .Where(x => x.Id == orderId && x.OrgId == orgId
+                             && (x.Status == OrderStatusConstants.ReadyToDeliver
+                              || x.Status == OrderStatusConstants.DeliveryFailed
+                              || (x.Status == OrderStatusConstants.Delivering && x.UpdatedAt < staleBefore)))
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(o => o.Status, OrderStatusConstants.Delivering)
+                        .SetProperty(o => o.DeliveryDueAt, dueAt)
+                        .SetProperty(o => o.SlaBreached, false)
+                        .SetProperty(o => o.UpdatedAt, dispatchStart), ct);
+
+                if (claimed == 0)
+                {
+                    // Another worker already claimed this order for delivery, or it was advanced out
+                    // of a claimable state (e.g. already delivered) between our read and this update.
+                    // Do NOT double-dispatch — return a BENIGN success no-op (no attempt row, no throw,
+                    // no retry scheduled by DeliverOrderJob, which only checks result.Success).
+                    await claimTx.RollbackAsync(ct);
+                    _logger.LogInformation(
+                        "Delivery {OrderId}: not claimed (already delivering/delivered/terminal) — skipping dispatch.",
+                        orderId);
+                    return new DeliveryResult(true, null);
+                }
+
+                await claimTx.CommitAsync(ct);
+
+                // Keep the tracked entity consistent with the row just claimed (the bulk update
+                // bypasses the change tracker) so PersistAttemptAsync's later status write diffs
+                // correctly against the current AND original values.
+                order.Status        = OrderStatusConstants.Delivering;
+                order.DeliveryDueAt = dueAt;
+                order.SlaBreached   = false;
+                order.UpdatedAt     = dispatchStart;
+                var entry = _db.Entry(order);
+                entry.Property(x => x.Status).OriginalValue        = OrderStatusConstants.Delivering;
+                entry.Property(x => x.DeliveryDueAt).OriginalValue = dueAt;
+                entry.Property(x => x.SlaBreached).OriginalValue   = false;
+                entry.Property(x => x.UpdatedAt).OriginalValue     = dispatchStart;
+            }
+            else
+            {
+                // EF InMemory test provider cannot translate ExecuteUpdateAsync / transactions —
+                // emulate the claim through the change tracker (InMemory tests are single-threaded,
+                // so the race the relational claim defends against cannot occur there). A non-claimable
+                // status (e.g. already delivered) still no-ops, matching the relational 0-rows branch.
+                if (order.Status is not (OrderStatusConstants.ReadyToDeliver
+                                      or OrderStatusConstants.DeliveryFailed
+                                      or OrderStatusConstants.Delivering))
+                {
+                    _logger.LogInformation(
+                        "Delivery {OrderId}: not claimed (status '{Status}' not claimable) — skipping dispatch.",
+                        orderId, order.Status);
+                    return new DeliveryResult(true, null);
+                }
+
+                order.Status = OrderStatusConstants.Delivering;
+                order.DeliveryDueAt = dueAt;
+                order.SlaBreached = false;
+                order.UpdatedAt = dispatchStart;
+                await _db.SaveChangesAsync(ct);
+            }
+        }
+        else
+        {
+            // The retry path already holds the claim (status is a fresh 'delivering'); just (re)open
+            // the SLA window for this attempt, exactly as before.
+            order.Status = OrderStatusConstants.Delivering;
+            order.DeliveryDueAt = dueAt;
+            order.SlaBreached = false;
+            order.UpdatedAt = dispatchStart;
+            await _db.SaveChangesAsync(ct);
+        }
 
         _logger.LogInformation(
             "Delivery {OrderId}: downloading artifact {FileKey} ({Protocol})",
@@ -687,6 +791,9 @@ public sealed class DeliveryService : IDeliveryService
             orgId, orderId, artifact.Id,
             requireAutoDeliver: false,
             reconcileFailedAttempt: !willDeadLetterOnFailure,
+            // RetryDeliveryAsync already made the atomic 'delivering' claim above — do NOT claim again
+            // (a second claim would reject the fresh-'delivering' row it just set and break the retry).
+            alreadyClaimed: true,
             ct);
 
         if (!result.Success && willDeadLetterOnFailure)

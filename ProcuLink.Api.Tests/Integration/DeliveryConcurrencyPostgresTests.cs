@@ -1,0 +1,289 @@
+using System.Collections.Concurrent;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using ProcuLink.Core.Constants;
+using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
+using Testcontainers.PostgreSql;
+using Xunit;
+
+namespace ProcuLink.Api.Tests.Integration;
+
+/// <summary>
+/// D-1 (HIGH) — proves the first-deliver/redeliver/requeue path can NOT double-send a PO on REAL
+/// Postgres, where <c>DispatchArtifactAsync</c>'s atomic <c>ExecuteUpdateAsync</c> ready_to_deliver /
+/// delivery_failed / stale-delivering → delivering claim actually runs (the EF InMemory provider can't
+/// translate it). The claim mirrors <c>RetryDeliveryAsync</c>'s verbatim:
+/// <list type="bullet">
+/// <item>two parallel <c>DispatchArtifactAsync</c> for the SAME order → exactly ONE dispatch, ONE
+/// success attempt row (a double-clicked Redeliver / Redeliver racing an ops Requeue);</item>
+/// <item>a direct dispatch racing the <c>RetryDeliveryAsync</c> path → exactly ONE dispatch;</item>
+/// <item>a redeliver on an already-<c>delivered</c> order → NO new dispatch, NO new attempt row.</item>
+/// </list>
+/// Docker-gated; skips where Docker is absent.
+/// </summary>
+[Collection("postgres-container")]
+public sealed class DeliveryConcurrencyPostgresTests : IAsyncLifetime
+{
+    private PostgreSqlContainer? _pg;
+    private DbContextOptions<ProcuLinkDbContext>? _options;
+
+    public async Task InitializeAsync()
+    {
+        if (DockerProbe.UnavailableReason is not null)
+            return;
+
+        _pg = new PostgreSqlBuilder()
+            .WithImage("postgres:16")
+            .WithDatabase($"proculink_deliv_{Guid.NewGuid():N}")
+            .WithUsername("postgres")
+            .WithPassword("postgres")
+            .Build();
+
+        await _pg.StartAsync();
+
+        // Pooling=false so each concurrent context opens its OWN physical connection — the claim race
+        // is only real when two workers hold two connections (a pooled single connection would
+        // serialise them and hide the bug the atomic claim must defend against).
+        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        {
+            Pooling = false,
+        }.ConnectionString;
+
+        _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseNpgsql(connectionString)
+            .Options;
+
+        await using var migrateDb = new ProcuLinkDbContext(_options);
+        await migrateDb.Database.MigrateAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        if (_pg is not null)
+            await _pg.DisposeAsync();
+    }
+
+    private ProcuLinkDbContext NewContext() => new(_options!);
+
+    // ── A counting dispatcher shared across the two concurrent services. Thread-safe; records every
+    //    dispatch so we can assert "exactly one" survived the claim. ──
+    private sealed class CountingDispatcher : IDeliveryDispatcher
+    {
+        private int _calls;
+        public int Calls => Volatile.Read(ref _calls);
+        public string Protocol => "http";
+
+        public Task<DeliveryResult> DispatchAsync(
+            byte[] content, string fileName, string contentType,
+            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _calls);
+            return Task.FromResult(new DeliveryResult(true, null, 200));
+        }
+    }
+
+    private static DeliveryEncryptionService CreateEncryption()
+    {
+        var key = Convert.ToBase64String(new byte[32]);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Delivery:EncryptionKey"] = key })
+            .Build();
+        return new DeliveryEncryptionService(config);
+    }
+
+    private static DeliveryService BuildService(
+        ProcuLinkDbContext db, IDeliveryDispatcher dispatcher, DeliveryEncryptionService encryption) =>
+        new(
+            db,
+            new CountingFileStorage(),
+            encryption,
+            new[] { dispatcher },
+            new NoOpIntegrationTriggerService(),
+            new ProcuLink.Api.Tests.TestDoubles.FakeAnalyticsService(),
+            new OrderExceptionService(db),
+            NullLogger<DeliveryService>.Instance);
+
+    private sealed class NoOpIntegrationTriggerService : IIntegrationTriggerService
+    {
+        public Task EnqueueAsync(Guid organisationId, string eventType, object payload, CancellationToken ct)
+            => Task.CompletedTask;
+    }
+
+    private sealed class CountingFileStorage : IFileStorageService
+    {
+        public Task<string> UploadAsync(Stream content, string key, string contentType, CancellationToken ct) =>
+            Task.FromResult(key);
+        public Task<string> GetSignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct) =>
+            Task.FromResult($"https://files.example/{key}");
+        public Task<Stream> DownloadAsync(string key, CancellationToken ct) =>
+            Task.FromResult<Stream>(new MemoryStream("order,line\r\n1,ok\r\n"u8.ToArray()));
+        public Task DeleteAsync(string key, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    /// <summary>Seeds org + supplier + delivery config + a ready_to_deliver order with one artifact.</summary>
+    private async Task<(Guid OrgId, Guid SupplierId, Guid OrderId, Guid ArtifactId)> SeedDeliverableOrderAsync(
+        DeliveryEncryptionService encryption, string status = OrderStatusConstants.ReadyToDeliver)
+    {
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var orderId    = Guid.NewGuid();
+        var artifactId = Guid.NewGuid();
+        var now        = DateTime.UtcNow;
+
+        await using var db = NewContext();
+        db.Organisations.Add(new Organisation
+        {
+            Id = orgId, ClerkOrgId = $"org_deliv_{orgId:N}", Name = "Delivery Org",
+            Slug = $"deliv-{orgId:N}", Plan = "operations", AccountStatus = "active", CreatedAt = now,
+        });
+        db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "Deliv Supplier", CreatedAt = now });
+        await db.SaveChangesAsync();
+
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = orderId, OrgId = orgId, SupplierId = supplierId,
+            PoNumber = "PO-DELIV-CONC-1", BuyerName = "Buyer", OrderDate = new DateOnly(2026, 6, 1),
+            Currency = "EUR", Status = status, CreatedAt = now, UpdatedAt = now,
+        });
+        db.OutboundArtifacts.Add(new OutboundArtifact
+        {
+            Id = artifactId, OrderId = orderId, OrgId = orgId,
+            Format = "csv", FileKey = "artifact.csv", CreatedAt = now,
+        });
+        db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
+            Protocol = "http", AutoDeliver = true,
+            ConfigJson = "{\"url\":\"https://supplier.example/orders\"}",
+            EncryptedCredentials = encryption.Encrypt("{\"type\":\"none\"}"),
+            CreatedAt = now, UpdatedAt = now,
+        });
+        await db.SaveChangesAsync();
+
+        return (orgId, supplierId, orderId, artifactId);
+    }
+
+    [DockerRequiredFact]
+    public async Task TwoParallelDispatches_SameOrder_DispatchExactlyOnce()
+    {
+        var encryption = CreateEncryption();
+        var ids = await SeedDeliverableOrderAsync(encryption);
+        var dispatcher = new CountingDispatcher();
+
+        // Two concurrent activations (each with its OWN context, like two Hangfire workers) call the
+        // SAME DispatchArtifactAsync the DeliverOrderJob first-deliver/redeliver path calls.
+        async Task<DeliveryResult> RunOne()
+        {
+            await using var db = NewContext();
+            var svc = BuildService(db, dispatcher, encryption);
+            return await svc.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: false, CancellationToken.None);
+        }
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => RunOne()));
+
+        // Exactly ONE worker dispatched to the supplier.
+        Assert.Equal(1, dispatcher.Calls);
+
+        await using (var db = NewContext())
+        {
+            // Exactly ONE success attempt row — no double-delivery audit trail.
+            var attempts = await db.DeliveryAttempts.AsNoTracking()
+                .Where(a => a.OrderId == ids.OrderId && a.OrgId == ids.OrgId).ToListAsync();
+            var success = Assert.Single(attempts);
+            Assert.Equal("success", success.Status);
+
+            var status = await db.PurchaseOrders.AsNoTracking()
+                .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
+            Assert.Equal(OrderStatusConstants.Delivered, status);
+        }
+
+        // Both calls report success (one delivered, one benign "already in progress" no-op).
+        Assert.All(results, r => Assert.True(r.Success));
+    }
+
+    [DockerRequiredFact]
+    public async Task DirectDispatch_RacingRetryDelivery_DispatchExactlyOnce()
+    {
+        var encryption = CreateEncryption();
+        var ids = await SeedDeliverableOrderAsync(encryption);
+        var dispatcher = new CountingDispatcher();
+
+        async Task<DeliveryResult> RunDispatch()
+        {
+            await using var db = NewContext();
+            var svc = BuildService(db, dispatcher, encryption);
+            return await svc.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: false, CancellationToken.None);
+        }
+
+        async Task<DeliveryResult> RunRetry()
+        {
+            await using var db = NewContext();
+            var svc = BuildService(db, dispatcher, encryption);
+            return await svc.RetryDeliveryAsync(ids.OrgId, ids.OrderId, maxAttempts: 3, CancellationToken.None);
+        }
+
+        // A DeliverOrderJob (direct dispatch) racing a RetryDeliveryJob for the same order. The atomic
+        // delivering-claim in BOTH paths is keyed on the same row, so only one wins the claim.
+        var dispatchTask = RunDispatch();
+        var retryTask = RunRetry();
+        await Task.WhenAll(dispatchTask, retryTask);
+
+        Assert.Equal(1, dispatcher.Calls);
+
+        await using var verify = NewContext();
+        var attempts = await verify.DeliveryAttempts.AsNoTracking()
+            .Where(a => a.OrderId == ids.OrderId && a.OrgId == ids.OrgId).ToListAsync();
+        // One success attempt; the loser made no attempt (benign "already in progress").
+        var success = Assert.Single(attempts);
+        Assert.Equal("success", success.Status);
+
+        var status = await verify.PurchaseOrders.AsNoTracking()
+            .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
+        Assert.Equal(OrderStatusConstants.Delivered, status);
+    }
+
+    [DockerRequiredFact]
+    public async Task Redeliver_OnAlreadyDeliveredOrder_IsNoOp()
+    {
+        var encryption = CreateEncryption();
+        // Order is already terminal-delivered (with the original successful attempt on record).
+        var ids = await SeedDeliverableOrderAsync(encryption, status: OrderStatusConstants.Delivered);
+        var now = DateTime.UtcNow;
+        await using (var seed = NewContext())
+        {
+            seed.DeliveryAttempts.Add(new DeliveryAttempt
+            {
+                Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+                Channel = "http", Destination = "https://supplier.example/orders",
+                Status = "success", AttemptNumber = 1, AttemptedAt = now, ResponseCode = 200,
+                AcknowledgedAt = now,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var dispatcher = new CountingDispatcher();
+        await using (var db = NewContext())
+        {
+            var svc = BuildService(db, dispatcher, encryption);
+            var result = await svc.DispatchArtifactAsync(
+                ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: false, CancellationToken.None);
+            // A redeliver on a delivered order must NOT re-dispatch — benign no-op, not a throw.
+            Assert.True(result.Success);
+        }
+
+        // No new dispatch, no new attempt row: still the single original success attempt.
+        Assert.Equal(0, dispatcher.Calls);
+        await using var verify = NewContext();
+        var attempts = await verify.DeliveryAttempts.AsNoTracking()
+            .Where(a => a.OrderId == ids.OrderId && a.OrgId == ids.OrgId).ToListAsync();
+        Assert.Single(attempts);
+        var status = await verify.PurchaseOrders.AsNoTracking()
+            .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
+        Assert.Equal(OrderStatusConstants.Delivered, status);
+    }
+}

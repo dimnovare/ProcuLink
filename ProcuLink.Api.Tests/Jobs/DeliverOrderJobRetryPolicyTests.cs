@@ -1,5 +1,6 @@
 using Hangfire;
 using ProcuLink.Api.Jobs;
+using ProcuLink.Infrastructure.Jobs;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Jobs;
@@ -30,5 +31,27 @@ public class DeliverOrderJobRetryPolicyTests
             .Single(n => n.MemberName == nameof(AutomaticRetryAttribute.Attempts))
             .TypedValue.Value;
         Assert.Equal(0, attempts);
+    }
+
+    /// <summary>
+    /// D-1: DeliverOrderJob must carry the per-order distributed mutex (keyed on the orderId argument,
+    /// index 0) so two activations for the SAME order — a double-clicked Redeliver, or one racing a
+    /// scheduled RetryDeliveryJob — can't run concurrently and double-dispatch. The attribute exists and
+    /// is already applied to RetryDeliveryJob; this pins it onto the first-deliver/redeliver path too.
+    /// </summary>
+    [Fact]
+    public void ExecuteAsync_HasPerOrderDistributedMutex_KeyedOnOrderIdArgument()
+    {
+        var attr = typeof(DeliverOrderJob)
+            .GetMethod(nameof(DeliverOrderJob.ExecuteAsync))!
+            .GetCustomAttributes(typeof(PerOrderDistributedMutexAttribute), inherit: false)
+            .Cast<PerOrderDistributedMutexAttribute>()
+            .SingleOrDefault();
+
+        Assert.NotNull(attr);
+
+        // orderId is the FIRST parameter of ExecuteAsync, so the mutex must key on argument index 0.
+        var parameters = typeof(DeliverOrderJob).GetMethod(nameof(DeliverOrderJob.ExecuteAsync))!.GetParameters();
+        Assert.Equal("orderId", parameters[0].Name);
     }
 }

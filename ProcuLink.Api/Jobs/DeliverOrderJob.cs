@@ -43,8 +43,17 @@ public class DeliverOrderJob
     // and the single retry authority is the RetryDeliveryJob backoff queue scheduled below.
     // A Hangfire-level retry would re-dispatch on top of that queue (double-delivery risk)
     // and double-count attempts past the dead-letter cap.
+    //
+    // PerOrderDistributedMutex (D-1) serialises activations PER ORDER (storage-backed distributed
+    // lock keyed on the orderId argument, index 0). Two DeliverOrderJob activations for the SAME
+    // order — a double-clicked Redeliver, a Redeliver racing an ops Requeue — cannot run this body
+    // concurrently and double-dispatch. It shares the SAME lock resource key as RetryDeliveryJob
+    // ("retry-delivery:order:{orderId}"), so a DeliverOrderJob also can't interleave with a
+    // scheduled RetryDeliveryJob for that order. This is the OUTER guard; DispatchArtifactAsync's
+    // atomic 'delivering' claim is the INNER, cross-process-correct guard (defence in depth).
     [Queue("critical")]
     [AutomaticRetry(Attempts = 0)]
+    [PerOrderDistributedMutex(orderArgumentIndex: 0)]
     public async Task ExecuteAsync(
         Guid orderId,
         Guid organisationId,
