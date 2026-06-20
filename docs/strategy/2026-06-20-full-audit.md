@@ -50,7 +50,22 @@ Adversarially verified against the real code paths. (`H#` = hunter id.)
 
 # UI/UX Problems Found
 
-(Per-screen agent was rate-limited; this is from live probes + prior analysis.)
+> Per-screen agent re-ran successfully on 2026-06-20 (19 screens). Full detail in the "Per-Screen Appendix" at the bottom of this doc. Headline cross-cutting themes:
+> 1. **4+ screens fight over "orders in trouble"** (Dashboard strip, Inbox needs-review/failed, Exceptions, Health, Delivery-log) — all funnel to `/inbox/{id}`. Pick ONE primary triage surface; make the rest thin links.
+> 2. **Validation split across 3 screens, only 1 enforces** — `/library/rules` (inert `Active` toggle + trigger counts that IMPLY enforcement but don't — a trust bomb, confirmed `ValidationRules.tsx:9-15`), `/library/rule-definitions` (read-only catalog), supplier "Validation rules" tab (the only enforcer).
+> 3. **Mapping split + ambiguously named** — supplier "Mappings" (SKU) vs "PO Mapping" (columns) vs standalone `/library/mappings` (duplicate). Rename to "Item codes" + "File layout".
+> 4. **Two webhook surfaces, same API** — Operations→Webhooks and Settings→Connectors.
+> 5. **Dashboard duplicates Inbox+Suppliers+Exceptions** — make it a thin "what needs me + headline counts".
+> 6. **#114 cutover half-done** — workshop flag ON in prod but `SpineReview` (2,588 lines, two sub-views, two mobile layouts) is still the mount point and still ships → every fix lands in two diverging places. Delete it.
+> 7. **Status vocabulary in ≥3 places, disagreeing** ("Ready"/"Normalized"/"Ready to send"/"Sending") while a canonical `UnifiedStatusBadge` exists unused.
+> 8. **Raw machine codes leak** — Exceptions "Code" column, Health `lastResponseCode (504)`/`(host_not_allowed)`.
+> 9. **Jargon in user copy** — append-only/immutable/crossing (Delivery-log), dead-letter/requeue/Worker/heartbeat (Health), HMAC-SHA256/ingress (Settings/Webhooks), canonical (Standards/Templates/Passport), Passport/Conformance, SFTP/S3 "pull".
+> 10. **Decorative/always-empty controls (offer⇔works smell)** — supplier Overview 4 "—" KPI cards; Upload `Size` permanent "—"; Connectors "0 connected" + dead Add/Connect/Test-fire; Webhooks empty "Recent deliveries"; Delivery-log "Retry delivery" that only navigates; **Drafts = an entire nav-level promise with no implementation** ("Go to Inbox" CTA dead-ends).
+> 11. **Mock data renders as convincing fact** under `isApiMockMode` across most screens — gating looks correct, but the rich fake numbers set an expectation the real empty states can't meet (worst: supplier Overview).
+>
+> **Best-in-class to preserve:** Inbox empty/loading/error; Upload's whole flow + rate-limit-vs-quota messaging; Settings error copy; Exceptions empty state; and the honest "Sent — acceptance unconfirmed (a 2xx is not business acceptance)" framing — that trust posture is the model.
+
+(Earlier live-probe + prior-analysis notes:)
 - **Money screen:** duplicate review surfaces ("Fix these to send" + the new send-strip both render); blocker chips dead; no inline fix; preview is a mock (F-4); two disconnected format controls (F-5); the OutputZone format `<select>` changes nothing.
 - **Dashboard/health:** says "0 problems" while 78 orders are stuck — erodes trust.
 - **Deep panels** (OrderPassport, ConformancePanel, ReplayPanel) are dense with developer jargon (see Copy).
@@ -174,4 +189,34 @@ One screen. Left: "What we received" (real values). Center: issues to fix — **
 
 Ship the **P0 trust trio first** (MV-1 stale-send, F-4 real preview, F-2 silent-empty) — these are the difference between "looks like it works" and "is trustworthy," and they're the founder's exact complaint. Then the **P1 money-view cluster** (inline resolution #123, bind-any-field F-1, EDIFACT/validation money bugs). The **safe batch** (polling, errors, copy, F-6 guard, format-list) can ship immediately on a go — pure text/config, no bytes, no migrations. Keep the engine; fix the trust layer and the money view. Do not flip more flags or add screens until MV-1 and F-4 are closed.
 
-**Coverage honesty:** the per-screen UX audit and the dedicated delivery-idempotency bug hunt were cut short by API rate-limiting — re-run those two before treating delivery/idempotency and the secondary screens as cleared.
+**Coverage honesty:** the per-screen UX audit was re-run successfully (2026-06-20, appendix below). The dedicated delivery-idempotency bug hunt is still being re-run — don't treat delivery/idempotency as cleared until it lands.
+
+---
+
+# Per-Screen Appendix (2026-06-20, 19 screens, read-only)
+
+Persona: procurement coordinator, not a developer. **Nav gate:** the launch nav (`launch-flags.ts:13,26`) shows only Dashboard/Upload/Inbox/Suppliers/Connections/Exceptions/Health/Admin/Settings/Help; Mappings/Rules/Rule-definitions/Templates/Standards/Buyers/Drafts/Connectors(ops)/Delivery-log/Webhooks are URL-only until `NEXT_PUBLIC_LAUNCH_FULL_NAV=true` — fix or delete the misleading ones BEFORE flipping it.
+
+| # | Screen | Top problems (remove / rename / fix) |
+|---|---|---|
+| 1 | Dashboard (`BridgeDashboard`) | worse copy of Inbox+Suppliers+Exceptions; `IN_TRANSIT_MOCK_FALLBACK` fake rows; "Export report" truncates to 100 silently; 2 lifecycle vocabularies; 3 near-synonym counts on 3 time bases. Lead with the exception strip, cut tabs/topology. |
+| 2 | Inbox (`InboxView`) | TWO columns show the same lifecycle (Pipeline stepper + Status pill); `generateOrders(50)`+SEED mock; dead `assigned`="—"; session-only Columns menu; j/k nav. Wire `UnifiedStatusBadge`; default to "Needs review". |
+| 3 | Drafts | **offer⇔works: describes a save-draft feature that doesn't exist** (no save control, no endpoint); always empty for real users; `DEMO_DRAFTS`→`/inbox/d1` 404; CTA "Go to Inbox" wrong; no loading/error. Remove from nav until real. |
+| 4 | Upload (`UploadWorkbench`) | **best screen.** `Size` column permanent "—"; `DEMO_RECENT`; detection pill shows raw "cXML/UBL/EDIFACT/X12" acronyms; "Route" vs Suppliers' "Channel". |
+| 5 | Order review (`SpineReview`+`OrderWorkshop`) | **most over-built; #114 cutover half-done** — `page.tsx:14` still mounts the 2,588-line SpineReview which forks to the workshop; 3 redundant "ready?" surfaces in ~100px; 2 progress models (5 vs 4 stages); "Received/47 fields" dumps raw `cell:r2c3`; `DocumentAnatomy` fake-PO; orphaned-but-shipped `ReceivedZone`/`OutputZone`; Passport/Conformance/canonical jargon. Delete SpineReview. |
+| 6 | Suppliers (`SupplierDockList`) | subtitle leaks "versioned integration lives in Connections"; "Connection ›" column re-enters revision jargon. |
+| 7 | Supplier detail (`SupplierDockProfile`) | **"Mappings" vs "PO Mapping" tabs are indistinguishable** → rename "Item codes" / "File layout"; Overview 4 KPI cards permanent "—"; Delivery summary mock-only; raw fieldPath/operator strings. |
+| 8 | Mappings (`MappingEditor`) | must pick supplier first → reads as broken; `MOCK_ROWS`; **no fetch-error branch**; "Inherited" chip unexplained; duplicates the supplier Mappings tab. |
+| 9 | Rules (`ValidationRules`) | **MOST MISLEADING: inert `Active` toggle + "Triggered 30d" counts imply enforcement but the service is never called by transform/delivery** (`:9-15`). Trust bomb. Kill the toggle+counts or make read-only. |
+| 10 | Rule definitions | "Rule definitions" vs "Rule catalog" vs "Validation rules" — 3 synonyms; raw code/fieldPath/operator + UBL/X12 refs. Hide under Advanced. |
+| 11 | Templates | right pane = raw cXML/UBL/EDIFACT envelope with `{token}`s — exactly what a coordinator avoids; card preview always renders canned illustration, never the saved body (can diverge). |
+| 12 | Standards | clean reference; rename "Canonical field"→"Field"; duplicates the per-field popovers + rule-definitions + supplier bindings (same data ≥4 places). |
+| 13 | Buyers | clean; `MOCK_BUYERS`; hardcoded inbound copy, doesn't use `useOrderDirection` (inconsistent); really an inbox filter. |
+| 14 | Connectors (ops) | **always "0 connected" in live mode**; every supplier = identical "Available API (REST)" card; **dead Add/Connect/Test-fire** (just open a panel telling you to go to the supplier Delivery tab); `MOCK_CONNECTORS`; overlaps Settings→Connectors. |
+| 15 | Exceptions | strong empty/error; but "Code" column leaks `unresolved_mapping`; "Stage" pipeline jargon (disagrees with detail "Step"); a "Resolve" button branch that never renders + 2 tooltips for it. |
+| 16 | Health | confirmed "All clear" while stuck-in-review exists (no tile); **dead-letter/requeue/Worker/heartbeat/`'parsing'` jargon**; "Dead-letter" tile links to the page you're on; raw `(504)`/`(host_not_allowed)` in rows; 3 tiles → same `/inbox?status=failed`. |
+| 17 | Delivery log (`CrossingsLog`) | "Append-only · immutable · crossing" jargon; **"Retry delivery" button that only navigates** (no retry API); `MOCK_LOG` convincing fake corpus. |
+| 18 | Webhooks | developer screen on an ops menu; event codes/HMAC-SHA256/signing-secret; **"Recent deliveries" always empty in live**; "Edit" hidden in live (half-CRUD); duplicates Settings→Connectors (same API). |
+| 19 | Settings | best error copy in the app; mixed audience — group SFTP/S3/API-keys/Connectors under "Developers & integrations"; raw `ingress` URL + `X-ProcuLink-Key`; "SFTP/S3 pull"→"folder"/"cloud storage". |
+
+**Safe-batch candidates from this appendix** (text/hide-dead-control only, no bytes/migration/auth/route-delete): #9 kill the deceptive Active toggle+counts (or label "reference only"); #17 relabel "Retry delivery"→"Open order"; #16 fix the dead-letter self-link + de-jargon the Worker banner; #14 hide dead Add/Connect/Test-fire; jargon renames (#1,6,7,11,12,16,17,18,19); #7 rename the two ambiguous tabs. Higher-risk (defer): deleting SpineReview (#5/#114), removing routes (#3 Drafts), wiring `UnifiedStatusBadge`.
