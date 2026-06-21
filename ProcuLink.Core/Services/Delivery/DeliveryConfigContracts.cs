@@ -23,7 +23,10 @@ public sealed record CxmlCredentialsInput(
     string? ToIdentity,
     string? SenderDomain,
     string? SenderIdentity,
-    string? SenderSharedSecret = null);
+    string? SenderSharedSecret = null,
+    // Optional configurable cXML DOCTYPE (T7). Free-text DTD URI; null/blank = no DOCTYPE.
+    string? DtdSystemId = null,
+    string? DtdPublicId = null);
 
 /// <summary>
 /// The non-secret cXML identity fields persisted as cleartext JSON in
@@ -36,7 +39,11 @@ public sealed record CxmlIdentityFields(
     string? ToDomain,
     string? ToIdentity,
     string? SenderDomain,
-    string? SenderIdentity);
+    string? SenderIdentity,
+    // Configurable cXML DOCTYPE (T7), persisted as camelCase dtdSystemId / dtdPublicId. The FRONTEND
+    // writes these keys. Additive: an older row without them deserializes to null = no DOCTYPE.
+    string? DtdSystemId = null,
+    string? DtdPublicId = null);
 
 public sealed record DeliveryConfigResponse(
     Guid SupplierId,
@@ -72,7 +79,10 @@ public sealed record CxmlCredentialsResponse(
     string? ToIdentity,
     string? SenderDomain,
     string? SenderIdentity,
-    bool HasSharedSecret);
+    bool HasSharedSecret,
+    // Configurable cXML DOCTYPE (T7) — returned cleartext so the editor can pre-fill the DTD inputs.
+    string? DtdSystemId = null,
+    string? DtdPublicId = null);
 
 public sealed record DeliveryTestResult(
     bool Success,

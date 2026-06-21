@@ -157,4 +157,11 @@ public record CxmlEnvelope
     public string? ToIdentity { get; init; }
     public string? SenderDomain { get; init; }
     public string? SenderIdentity { get; init; }
+
+    /// <summary>Optional cXML DOCTYPE SYSTEM id (DTD URI), pinned on the revision so a reproduced
+    /// order emits the same DOCTYPE. Null/blank → no DOCTYPE (byte-identical).</summary>
+    public string? DtdSystemId { get; init; }
+
+    /// <summary>Optional cXML DOCTYPE PUBLIC id (PUBLIC form requires <see cref="DtdSystemId"/> too).</summary>
+    public string? DtdPublicId { get; init; }
 }

@@ -301,6 +301,44 @@ public class DeliveryConfigServiceTests
     }
 
     [Fact]
+    public async Task UpsertThenGet_RoundTripsConfigurableDtd()
+    {
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
+            "NetworkId", "REDACTED-NETWORK-ID", null, null, null, null,
+            SenderSharedSecret: null,
+            DtdSystemId: "http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd",
+            DtdPublicId: "-//cXML//DTD cXML 1.2.024//EN")), default);
+
+        var fetched = await service.GetAsync(orgId, supplierId, default);
+
+        // The editor reads the DTD back to pre-fill its inputs (preview == delivery).
+        fetched!.CxmlCredentials!.DtdSystemId.Should().Be("http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd");
+        fetched.CxmlCredentials.DtdPublicId.Should().Be("-//cXML//DTD cXML 1.2.024//EN");
+    }
+
+    [Fact]
+    public async Task UpsertThenGet_NoDtd_LeavesDtdNull()
+    {
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
+            "NetworkId", "REDACTED-NETWORK-ID", null, null, null, null, "shh")), default);
+
+        var fetched = await service.GetAsync(orgId, supplierId, default);
+
+        fetched!.CxmlCredentials!.DtdSystemId.Should().BeNull();
+        fetched.CxmlCredentials.DtdPublicId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task UpsertAsync_NullSharedSecret_KeepsExistingSecret_ButUpdatesIdentities()
     {
         await using var db = CreateDb();
