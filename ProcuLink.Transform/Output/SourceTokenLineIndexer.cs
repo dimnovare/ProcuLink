@@ -48,6 +48,12 @@ public static class SourceTokenLineIndexer
     // json:/a/0/b — the FIRST 0-based numeric pointer segment is the array index.
     private static readonly Regex JsonArrayIndex = new(@"^json:.*?/(\d+)(?:/|$)", RegexOptions.Compiled);
 
+    // cell:r{n}c{c} — capture BOTH the row and the column so we can drop the row.
+    private static readonly Regex CellRowCol = new(@"^cell:r(\d+)c(\d+)$", RegexOptions.Compiled);
+
+    // seg:{TAG}[{n}]rest — capture the tag, the occurrence, and the trailing element path.
+    private static readonly Regex SegRelative = new(@"^(seg:[^\[]+)\[\d+\](.*)$", RegexOptions.Compiled);
+
     /// <summary>
     /// The 1-based line ordinal the token id addresses, or <c>null</c> for a header-scoped /
     /// non-positional id. Pure; never throws (a malformed/unknown id simply yields null).
@@ -82,6 +88,70 @@ public static class SourceTokenLineIndexer
             return idx + 1;
 
         // raw:{label}, unknown ids → header-scope.
+        return null;
+    }
+
+    /// <summary>
+    /// F-1 Phase 4 — the RELATIVE alias key for a line-scoped token id: the SAME id with its per-line
+    /// ordinal stripped, so the key is IDENTICAL across every line. A rule bound to this key resolves to
+    /// EACH line's own value (where the absolute id resolves only one specific line). Returns <c>null</c>
+    /// for any id <see cref="LineOrdinalOf"/> would treat as header-scoped / non-positional (a header
+    /// cell, an unpredicated XML element, a <c>raw:</c> field, null/empty), so the alias is emitted only
+    /// when there is a genuine repeating-line address. Pure; never throws.
+    ///
+    /// <para>This is the ONE source of truth for the relative-id format — the source-tokens DTO and the
+    /// override injector both call it, so the FE picker and the BE resolver can never drift.</para>
+    ///
+    /// <para><b>Per-format strip</b> (mirrors <see cref="LineOrdinalOf"/>'s format detection verbatim):</para>
+    /// <list type="bullet">
+    ///   <item><b>CSV / XLSX</b> <c>cell:r{n}c{c}</c> → <c>cell:c{c}</c> (drop the row, keep the column).
+    ///         Row 1 (the header) → null.</item>
+    ///   <item><b>XML / cXML / UBL / IDoc</b> XPath → strip the DEEPEST <c>[n]</c> positional predicate
+    ///         ONLY: <c>/Order/Lines/Line[2]/Qty</c> → <c>/Order/Lines/Line/Qty</c> (other predicates
+    ///         are left intact). No predicate → null.</item>
+    ///   <item><b>EDIFACT / X12</b> <c>seg:{TAG}[{n}].el…</c> → <c>seg:{TAG}.el…</c> (drop the occurrence).</item>
+    ///   <item><b>JSON</b> <c>json:/…/{i}/…</c> → replace the FIRST array index with <c>*</c>:
+    ///         <c>json:/lines/0/sku</c> → <c>json:/lines/*/sku</c>. No array index → null.</item>
+    ///   <item>Everything else (<c>raw:</c>, unknown ids, null/empty) → null.</item>
+    /// </list>
+    /// </summary>
+    public static string? RelativeLineKey(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+
+        // CSV / XLSX — cell:r{n}c{c} → cell:c{c}. Only a data row (n >= 2) addresses a line; row 1 is
+        // the header (header-scope, no relative alias) — kept consistent with LineOrdinalOf.
+        var cell = CellRowCol.Match(id);
+        if (cell.Success)
+        {
+            if (int.TryParse(cell.Groups[1].Value, out var row) && row >= 2)
+                return $"cell:c{cell.Groups[2].Value}";
+            return null; // header row
+        }
+
+        // EDIFACT / X12 — seg:{TAG}[{n}].el… → seg:{TAG}.el… (drop the occurrence, keep the element path).
+        var seg = SegRelative.Match(id);
+        if (seg.Success)
+            return seg.Groups[1].Value + seg.Groups[2].Value;
+
+        // XML family — strip the DEEPEST [n] predicate only; leave any other predicates intact.
+        if (id.StartsWith('/'))
+        {
+            var matches = XpathPredicate.Matches(id);
+            if (matches.Count == 0) return null; // no line predicate → header-scope
+            var deepest = matches[^1];
+            return id.Remove(deepest.Index, deepest.Length);
+        }
+
+        // JSON — replace the FIRST array index with '*' so the key is identical across lines.
+        var json = JsonArrayIndex.Match(id);
+        if (json.Success)
+        {
+            var g = json.Groups[1];
+            return id.Remove(g.Index, g.Length).Insert(g.Index, "*");
+        }
+
+        // raw:{label}, unknown ids → header-scope (no relative alias).
         return null;
     }
 }

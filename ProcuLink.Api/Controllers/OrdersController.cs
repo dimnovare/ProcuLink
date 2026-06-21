@@ -1186,7 +1186,7 @@ public sealed class OrdersController : ControllerBase
     /// </list>
     /// </summary>
     [HttpGet("{id:guid}/source-tokens")]
-    [ProducesResponseType(typeof(IReadOnlyList<SourceToken>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(IReadOnlyList<SourceTokenDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetSourceTokens(Guid id, CancellationToken ct)
     {
@@ -1206,22 +1206,22 @@ public sealed class OrdersController : ControllerBase
         // fall back to live re-tokenisation of the stored file below.
         var persisted = ProcuLink.Transform.Output.SourceTokenSerialization.FromTokensJson(order.SourceCapture?.TokensJson);
         if (persisted.Count > 0)
-            return Ok(persisted);
+            return Ok(SourceTokenDto.FromMany(persisted));
 
         // No stored source file → empty list (valid, not an error).
         if (string.IsNullOrEmpty(order.SourceFileKey))
-            return Ok(Array.Empty<SourceToken>());
+            return Ok(Array.Empty<SourceTokenDto>());
 
         // Source blob purged per the org's retention policy → same graceful empty list
         // (the SourceMap editor degrades to manual entry), never a 500 or a pointless
         // storage call for a blob we know is gone.
         if (order.SourceFilePurgedAt is not null)
-            return Ok(Array.Empty<SourceToken>());
+            return Ok(Array.Empty<SourceTokenDto>());
 
         // Derive file extension from the stored R2 key.
         var ext = System.IO.Path.GetExtension(order.SourceFileKey);
         if (string.IsNullOrEmpty(ext))
-            return Ok(Array.Empty<SourceToken>());
+            return Ok(Array.Empty<SourceTokenDto>());
 
         // Download the source file from R2 / local storage.
         byte[] bytes;
@@ -1235,12 +1235,12 @@ public sealed class OrdersController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not download source file {Key} for tokenisation", order.SourceFileKey);
-            return Ok(Array.Empty<SourceToken>());
+            return Ok(Array.Empty<SourceTokenDto>());
         }
 
         // Tokenise. Unsupported formats return an empty list (no exception).
         var tokens = await _tokenizer.TokenizeAsync(bytes, ext, ct);
-        return Ok(tokens);
+        return Ok(SourceTokenDto.FromMany(tokens));
     }
 
     // ── POST /api/orders/{id}/transform ──────────────────────────────────────

@@ -437,6 +437,13 @@ public sealed class MappedTransformService
                 var ordinal = SourceTokenLineIndexer.LineOrdinalOf(t.Id);
                 if (ordinal is null || ordinal.Value != position) continue;
                 row[$"src::{t.Id}"] = t.Value ?? string.Empty;
+
+                // F-1 Phase 4: ALSO write a RELATIVE alias whose key is identical across lines (the
+                // ordinal stripped). One rule bound to the relative key then resolves to THIS line's own
+                // value — so a repeating non-canonical column can be bound once for EVERY line. Inert
+                // (byte-identical) unless a rule actually names the relative key.
+                var rel = SourceTokenLineIndexer.RelativeLineKey(t.Id);
+                if (rel is not null) row[$"src::{rel}"] = t.Value ?? string.Empty;
             }
         }
 
