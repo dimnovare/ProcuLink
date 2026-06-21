@@ -54,10 +54,13 @@ public class OpsHealthServiceTests
             Order(orgId, supplierId, OrderStatusConstants.DeliveryDeadLetter),
             Order(orgId, supplierId, OrderStatusConstants.RejectedBySupplier),
             Order(orgId, supplierId, OrderStatusConstants.Failed),
+            Order(orgId, supplierId, OrderStatusConstants.PendingReview),     // manual-review backlog (informational)
+            Order(orgId, supplierId, OrderStatusConstants.PendingReview),
             Order(orgId, supplierId, OrderStatusConstants.Delivered, fresh, slaBreached: false),
             Order(orgId, supplierId, OrderStatusConstants.DeliveryFailed, fresh, slaBreached: true),
             // other org — must never be counted
-            Order(otherOrg, supplierId, OrderStatusConstants.DeliveryDeadLetter, stale)
+            Order(otherOrg, supplierId, OrderStatusConstants.DeliveryDeadLetter, stale),
+            Order(otherOrg, supplierId, OrderStatusConstants.PendingReview)
         );
 
         db.OrderExceptions.AddRange(
@@ -82,7 +85,35 @@ public class OpsHealthServiceTests
         s.SlaBreached.Should().Be(1);             // the non-delivered breached order
         s.OpenExceptions.Should().Be(1);          // only org-scoped open
         s.StuckThresholdMinutes.Should().Be(30);
+        s.PendingReview.Should().Be(2);           // org-scoped manual-review backlog (informational)
+        // PendingReview is a user-action backlog, NOT a system fault → excluded from TotalProblemOrders.
         s.TotalProblemOrders.Should().Be(1 + 1 + 1 + 2 + 2 + 1 + 1);
+    }
+
+    [Fact]
+    public async Task GetHealth_PendingReviewOnly_CountsPendingReview_ButTotalProblemOrdersStaysZero()
+    {
+        // pending_review is a USER-action backlog, not a system fault. A large review backlog
+        // must surface in PendingReview WITHOUT inflating TotalProblemOrders (mislabelling normal
+        // review as a fault is the opposite error this fix guards against).
+        await using var db = NewDb();
+        var orgId      = Guid.NewGuid();
+        var otherOrg   = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.PurchaseOrders.AddRange(
+            Order(orgId, supplierId, OrderStatusConstants.PendingReview),
+            Order(orgId, supplierId, OrderStatusConstants.PendingReview),
+            Order(orgId, supplierId, OrderStatusConstants.PendingReview),
+            // other org — must never be counted
+            Order(otherOrg, supplierId, OrderStatusConstants.PendingReview));
+        await db.SaveChangesAsync();
+
+        var svc = new OpsHealthService(db);
+        var s   = await svc.GetHealthAsync(orgId, CancellationToken.None);
+
+        s.PendingReview.Should().Be(3, "org-scoped count of pending_review orders");
+        s.TotalProblemOrders.Should().Be(0, "pending_review is a user-action backlog, not a system fault");
     }
 
     [Fact]

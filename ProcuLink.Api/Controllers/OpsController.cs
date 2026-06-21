@@ -73,7 +73,8 @@ public sealed class OpsController : ControllerBase
             ActiveWorkers:                s.ActiveWorkers,
             LastWorkerHeartbeatUtc:       s.LastWorkerHeartbeatUtc,
             SecondsSinceWorkerHeartbeat:  s.SecondsSinceWorkerHeartbeat,
-            WorkerHealthy:                s.WorkerHealthy));
+            WorkerHealthy:                s.WorkerHealthy,
+            PendingReview:                s.PendingReview));
     }
 
     // ── GET /api/ops/dead-letter ──────────────────────────────────────────────

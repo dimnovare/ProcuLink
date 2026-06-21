@@ -67,9 +67,16 @@ public sealed record OpsHealthSummary(
     int       ActiveWorkers             = 0,
     DateTime? LastWorkerHeartbeatUtc    = null,
     double?   SecondsSinceWorkerHeartbeat = null,
-    bool      WorkerHealthy             = false)
+    bool      WorkerHealthy             = false,
+    // INFORMATIONAL ONLY — orders awaiting a USER action (manual review), NOT a system fault.
+    // Deliberately excluded from TotalProblemOrders so a normal review backlog is never
+    // mislabelled as a fault; surfaced so an operator can still see a large backlog building up.
+    int       PendingReview             = 0)
 {
-    /// <summary>Sum of all problematic order counts (excludes OpenExceptions, which can overlap order states).</summary>
+    /// <summary>
+    /// Sum of all problematic order counts (excludes OpenExceptions, which can overlap order
+    /// states, AND PendingReview, which is a user-action backlog, not a system fault).
+    /// </summary>
     public int TotalProblemOrders =>
         ParsingStuck + DeliveringStuck + TransformFailed + DeliveryFailed +
         DeliveryDeadLetter + RejectedBySupplier + Failed;

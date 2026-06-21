@@ -81,7 +81,10 @@ public sealed class OpsHealthService : IOpsHealthService
             ActiveWorkers:                activeWorkers,
             LastWorkerHeartbeatUtc:       lastHeartbeat,
             SecondsSinceWorkerHeartbeat:  secondsSince,
-            WorkerHealthy:                workerHealthy);
+            WorkerHealthy:                workerHealthy,
+            // INFORMATIONAL: manual-review backlog (user action pending), reused from the same
+            // org-scoped GROUP BY — no extra round-trip. NOT a system fault → not in TotalProblemOrders.
+            PendingReview:                Count(OrderStatusConstants.PendingReview));
     }
 
     /// <summary>

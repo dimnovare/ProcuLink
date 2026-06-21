@@ -20,6 +20,11 @@ namespace ProcuLink.Api.Contracts;
 /// <param name="LastWorkerHeartbeatUtc">Most-recent heartbeat timestamp across all Hangfire servers. Null if no servers registered.</param>
 /// <param name="SecondsSinceWorkerHeartbeat">Seconds elapsed since the most-recent heartbeat. Null if no servers registered.</param>
 /// <param name="WorkerHealthy">True iff at least one Hangfire server sent a heartbeat within the last 60 seconds.</param>
+/// <param name="PendingReview">
+/// INFORMATIONAL count of orders in <c>pending_review</c> — a USER-action backlog (orders waiting
+/// for a human to resolve mappings/exceptions), NOT a system fault. Deliberately excluded from
+/// <paramref name="TotalProblemOrders"/>; surfaced so an operator can see a large review backlog.
+/// </param>
 public record OpsHealthDto(
     int ParsingStuck,
     int DeliveringStuck,
@@ -35,7 +40,8 @@ public record OpsHealthDto(
     int        ActiveWorkers,
     DateTime?  LastWorkerHeartbeatUtc,
     double?    SecondsSinceWorkerHeartbeat,
-    bool       WorkerHealthy
+    bool       WorkerHealthy,
+    int        PendingReview
 );
 
 /// <summary>

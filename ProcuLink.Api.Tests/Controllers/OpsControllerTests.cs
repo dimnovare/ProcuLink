@@ -75,7 +75,8 @@ public class OpsControllerTests
               .ReturnsAsync(new OpsHealthSummary(
                   ParsingStuck: 1, DeliveringStuck: 0, TransformFailed: 0,
                   DeliveryFailed: 2, DeliveryDeadLetter: 3, RejectedBySupplier: 0,
-                  Failed: 0, SlaBreached: 1, OpenExceptions: 4, StuckThresholdMinutes: 30));
+                  Failed: 0, SlaBreached: 1, OpenExceptions: 4, StuckThresholdMinutes: 30,
+                  PendingReview: 7));
 
         var result = await ctrl.GetHealth(CancellationToken.None);
 
@@ -83,7 +84,28 @@ public class OpsControllerTests
         var dto = ok.Value.Should().BeOfType<OpsHealthDto>().Subject;
         dto.DeliveryDeadLetter.Should().Be(3);
         dto.OpenExceptions.Should().Be(4);
-        dto.TotalProblemOrders.Should().Be(1 + 2 + 3); // sum of order-state counts
+        dto.PendingReview.Should().Be(7);              // informational manual-review backlog
+        dto.TotalProblemOrders.Should().Be(1 + 2 + 3); // sum of order-state counts; PendingReview excluded
+    }
+
+    [Fact]
+    public void OpsHealthDto_SerialisesPendingReview_AsCamelCaseJson()
+    {
+        // The frontend reads exactly `pendingReview`. Pin the System.Text.Json camelCase
+        // contract so a rename can't silently break the operator dashboard.
+        var dto = new OpsHealthDto(
+            ParsingStuck: 0, DeliveringStuck: 0, TransformFailed: 0, DeliveryFailed: 0,
+            DeliveryDeadLetter: 0, RejectedBySupplier: 0, Failed: 0, SlaBreached: 0,
+            OpenExceptions: 0, StuckThresholdMinutes: 30, TotalProblemOrders: 0,
+            ActiveWorkers: 0, LastWorkerHeartbeatUtc: null, SecondsSinceWorkerHeartbeat: null,
+            WorkerHealthy: false, PendingReview: 5);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(dto, new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        });
+
+        json.Should().Contain("\"pendingReview\":5");
     }
 
     // ── GET /api/ops/dead-letter ──────────────────────────────────────────────
