@@ -344,6 +344,122 @@ public class OutputTemplateEmitterTests
         Assert.Equal("PO-1,S-2,", rows[2]);          // line 2 does NOT carry cell:r2c7 (never reads line 1)
     }
 
+    // ── F-1 Phase 4: ONE rule bound to the RELATIVE key emits EACH line's OWN column value ──────────
+    //
+    // The headline gap closed by Phase 4. With the ABSOLUTE id (cell:r2c7) a line rule resolved only in
+    // line 1's bag (lines 2/3 empty). The RELATIVE alias (cell:c7) is injected into EVERY line's bag
+    // holding THAT line's own value, so ONE rule emits line 1 → row-2's value, line 2 → row-3's value.
+
+    [Fact]
+    public void Csv_AstField_BoundToRelativeLineKey_EmitsEachLinesOwnValue()
+    {
+        // Per-line tokens: line 1 = data-row 2 (cell:r2c7), line 2 = data-row 3 (cell:r3c7).
+        var tokens = new List<SourceToken>
+        {
+            new("cell:r2c7", "Batch · row 2", "BATCH-A", "line"),
+            new("cell:r3c7", "Batch · row 3", "BATCH-B", "line"),
+        };
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Csv,
+            Root = OutputNode.Obj("root",
+                OutputNode.FieldOf("OrderRef", Canon("PoNumber")),
+                OutputNode.Arr("lines", OutputNode.Obj("line",
+                    OutputNode.FieldOf("Sku", Canon("SupplierItemCode")),
+                    // ONE rule bound to the RELATIVE column key (row stripped) — not cell:r2c7.
+                    OutputNode.FieldOf("Batch",
+                        new OutputFieldRule { OutputPath = "Batch", CanonicalField = "src::cell:c7" })))),
+        };
+
+        var csv  = ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride(), tokens));
+        var rows = csv.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal("OrderRef,Sku,Batch", rows[0]);
+        Assert.Equal("PO-1,S-1,BATCH-A", rows[1]);   // line 1 → ITS OWN row-2 value
+        Assert.Equal("PO-1,S-2,BATCH-B", rows[2]);   // line 2 → ITS OWN row-3 value (NOT empty, NOT BATCH-A)
+    }
+
+    [Fact]
+    public void Xml_AstField_BoundToRelativeLineKey_EmitsEachLinesOwnValue()
+    {
+        // Per-line XML tokens: line 1 = …/Line[1]/Batch, line 2 = …/Line[2]/Batch.
+        var tokens = new List<SourceToken>
+        {
+            new("/Order/Lines/Line[1]/Batch", "Batch (line 1)", "BATCH-A", "line"),
+            new("/Order/Lines/Line[2]/Batch", "Batch (line 2)", "BATCH-B", "line"),
+        };
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Xml,
+            Root = OutputNode.Obj("Order",
+                OutputNode.Arr("Lines", OutputNode.Obj("Line",
+                    OutputNode.FieldOf("Sku", Canon("SupplierItemCode")),
+                    // ONE rule bound to the RELATIVE XPath (deepest [n] stripped).
+                    OutputNode.FieldOf("Batch",
+                        new OutputFieldRule { OutputPath = "Batch", CanonicalField = "src::/Order/Lines/Line/Batch" })))),
+        };
+
+        var xml   = XDocument.Parse(ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride(), tokens)));
+        var lines = xml.Root!.Element("Lines")!.Elements("Line").ToList();
+
+        Assert.Equal("BATCH-A", lines[0].Element("Batch")!.Value);   // line 1 → its own value
+        Assert.Equal("BATCH-B", lines[1].Element("Batch")!.Value);   // line 2 → its own value
+    }
+
+    [Fact]
+    public void Json_AstField_BoundToRelativeLineKey_EmitsEachLinesOwnValue()
+    {
+        // Per-line JSON tokens: line 1 = json:/lines/0/batch, line 2 = json:/lines/1/batch.
+        var tokens = new List<SourceToken>
+        {
+            new("json:/lines/0/batch", "Batch (line 1)", "BATCH-A", "line"),
+            new("json:/lines/1/batch", "Batch (line 2)", "BATCH-B", "line"),
+        };
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Json,
+            Root = OutputNode.Obj("root",
+                OutputNode.Arr("items", OutputNode.Obj("item",
+                    OutputNode.FieldOf("sku", Canon("SupplierItemCode")),
+                    // ONE rule bound to the RELATIVE pointer (first index → '*').
+                    OutputNode.FieldOf("batch",
+                        new OutputFieldRule { OutputPath = "batch", CanonicalField = "src::json:/lines/*/batch" })))),
+        };
+
+        using var doc = JsonDocument.Parse(ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride(), tokens)));
+        var items = doc.RootElement.GetProperty("items");
+
+        Assert.Equal("BATCH-A", items[0].GetProperty("batch").GetString());   // line 1 → its own value
+        Assert.Equal("BATCH-B", items[1].GetProperty("batch").GetString());   // line 2 → its own value
+    }
+
+    [Fact]
+    public void Csv_AbsoluteLineKey_StillResolvesOnlyTheSpecificLine_NoRegression()
+    {
+        // The absolute id must STILL pin one specific line (line[2] never reads line[1]) — the relative
+        // alias is additive, not a replacement.
+        var tokens = new List<SourceToken>
+        {
+            new("cell:r2c7", "Batch · row 2", "BATCH-A", "line"),
+            new("cell:r3c7", "Batch · row 3", "BATCH-B", "line"),
+        };
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Csv,
+            Root = OutputNode.Obj("root",
+                OutputNode.Arr("lines", OutputNode.Obj("line",
+                    OutputNode.FieldOf("Sku", Canon("SupplierItemCode")),
+                    OutputNode.FieldOf("Batch",
+                        new OutputFieldRule { OutputPath = "Batch", CanonicalField = "src::cell:r2c7" })))),  // ABSOLUTE
+        };
+
+        var csv  = ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride(), tokens));
+        var rows = csv.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal("S-1,BATCH-A", rows[1]);   // line 1 binds its absolute cell
+        Assert.Equal("S-2,", rows[2]);           // line 2's bag does NOT carry cell:r2c7 → empty (specific line)
+    }
+
     private static string ReadAll(TransformResult result)
     {
         result.Content.Position = 0;

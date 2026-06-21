@@ -178,17 +178,28 @@ public class OutputTemplateEmitterByteParityTests
     // The core trust gate. Widening the row bag with a full set of header AND line source tokens — none
     // of which any rule in the tree names — must produce BYTE-IDENTICAL output to the unbound emit, for
     // every emitter family (JSON / XML / XML+root-namespaces / CSV). Extra keys in the bag are inert.
+    //
+    // F-1 Phase 4: the line tokens ALSO cause the row builder to inject RELATIVE alias keys (cell:c4,
+    // …/Line/Batch, seg:LIN.el1, json:/lines/*/sku). Those aliases must be JUST AS INERT — an unbound
+    // order is byte-identical whether or not the relative aliases are present. The per-format line tokens
+    // below exercise every relative-key shape so the oracle proves the aliases never leak into output.
 
-    /// <summary>A realistic, NOISY token set (header + per-line) — none referenced by the trees above.</summary>
+    /// <summary>A realistic, NOISY token set (header + per-line, every relative-key format) — none referenced by the trees above.</summary>
     private static IReadOnlyList<SourceToken> NoiseTokens() => new List<SourceToken>
     {
         new("cell:r1c1", "PO Number · header row", "PO-1",        "header"),
         new("cell:r1c9", "Buyer VAT · header row", "EE100200300", "header"),
         new("/Order/Header/Note", "Note", "free text, with comma & \"quote\"", "header"),
         new("seg:RFF[1].el2", "RFF reference number", "REF-XYZ", "header"),
-        new("cell:r2c4", "EAN · row 2", "EAN-FIRST",  "line"),
+        // Per-line tokens — each yields a RELATIVE alias the row builder also injects (still inert):
+        new("cell:r2c4", "EAN · row 2", "EAN-FIRST",  "line"),        // → src::cell:c4
         new("cell:r3c4", "EAN · row 3", "EAN-SECOND", "line"),
+        new("/Order/Lines/Line[1]/Batch", "Batch", "B-1", "line"),    // → src::/Order/Lines/Line/Batch
         new("/Order/Lines/Line[2]/Batch", "Batch", "B-2", "line"),
+        new("seg:LIN[1].el5", "LIN warehouse", "WH-1", "line"),       // → src::seg:LIN.el5
+        new("seg:LIN[2].el5", "LIN warehouse", "WH-2", "line"),
+        new("json:/lines/0/wh", "warehouse", "JWH-1", "line"),        // → src::json:/lines/*/wh
+        new("json:/lines/1/wh", "warehouse", "JWH-2", "line"),
         new("raw:Free Field", "Free Field", "ignored", null),
     };
 

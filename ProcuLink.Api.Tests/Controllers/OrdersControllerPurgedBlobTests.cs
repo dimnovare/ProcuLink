@@ -159,7 +159,7 @@ public class OrdersControllerPurgedBlobTests
         var result = await ctrl.GetSourceTokens(orderId, CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result);
-        var tokens = Assert.IsAssignableFrom<IEnumerable<ProcuLink.Transform.Tokenizing.SourceToken>>(ok.Value);
+        var tokens = Assert.IsAssignableFrom<IEnumerable<ProcuLink.Api.Contracts.SourceTokenDto>>(ok.Value);
         Assert.Empty(tokens);
     }
 
@@ -197,10 +197,12 @@ public class OrdersControllerPurgedBlobTests
         var result = await ctrl.GetSourceTokens(orderId, CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result);
-        var tokens = Assert.IsAssignableFrom<IEnumerable<ProcuLink.Transform.Tokenizing.SourceToken>>(ok.Value).ToList();
+        var tokens = Assert.IsAssignableFrom<IEnumerable<ProcuLink.Api.Contracts.SourceTokenDto>>(ok.Value).ToList();
         Assert.Equal(2, tokens.Count);
         Assert.Contains(tokens, t => t.Id == "raw:Buyer name" && t.Value == "Acme");
         Assert.Contains(tokens, t => t.Id == "raw:PO ref" && t.Value == "123");
+        // raw:/header tokens carry no per-line ordinal → no relative alias.
+        Assert.All(tokens, t => Assert.Null(t.RelativeId));
     }
 
     // ── Workshop P0 (Task 4): persisted structured capture survives a PURGED source blob ──
@@ -243,10 +245,52 @@ public class OrdersControllerPurgedBlobTests
         var result = await ctrl.GetSourceTokens(orderId, CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result);
-        var tokens = Assert.IsAssignableFrom<IEnumerable<ProcuLink.Transform.Tokenizing.SourceToken>>(ok.Value).ToList();
+        var tokens = Assert.IsAssignableFrom<IEnumerable<ProcuLink.Api.Contracts.SourceTokenDto>>(ok.Value).ToList();
         Assert.Equal(3, tokens.Count);
         // The full structured token set — including the stable cell ids — survives the purge.
         Assert.Contains(tokens, t => t.Id == "cell:r2c2" && t.Value == "ACM-BOLT-001");
         Assert.Contains(tokens, t => t.Id == "cell:r2c1" && t.Value == "PO-CSV-PURGED");
+    }
+
+    // ── F-1 Phase 4: the DTO carries relativeId (the per-line alias) for line tokens, null for headers ──
+
+    [Fact]
+    public async Task GetSourceTokens_DtoCarriesRelativeId_ForLineTokens_NullForHeaderTokens()
+    {
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        await using var db = NewDb();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = orderId, OrgId = orgId, SupplierId = Guid.NewGuid(),
+            PoNumber = "PO-REL", OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency = "EUR", Status = "delivered",
+            SourceFileKey = $"{orgId}/{orderId}/order.csv",
+            SourceFilePurgedAt = DateTime.UtcNow, // serve from persisted capture, never storage
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        db.SourceCaptures.Add(new SourceCapture
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId, Format = "csv", CapturedAt = DateTime.UtcNow,
+            TokensJson = System.Text.Json.JsonDocument.Parse(
+                "[{\"id\":\"cell:r1c1\",\"label\":\"po_number\",\"value\":\"po_number\",\"group\":\"header\"}," +
+                "{\"id\":\"cell:r2c2\",\"label\":\"warehouse row 2\",\"value\":\"WH-A\",\"group\":\"line\"}]"),
+        });
+        await db.SaveChangesAsync();
+
+        var fileStorage = new Mock<IFileStorageService>(MockBehavior.Strict);
+        var ctrl = Build(new Mock<IOrderService>(), orgId, db, fileStorage);
+
+        var result = await ctrl.GetSourceTokens(orderId, CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var tokens = Assert.IsAssignableFrom<IEnumerable<ProcuLink.Api.Contracts.SourceTokenDto>>(ok.Value).ToList();
+
+        var header = Assert.Single(tokens, t => t.Id == "cell:r1c1");
+        Assert.Null(header.RelativeId);                       // header row → no relative alias
+
+        var line = Assert.Single(tokens, t => t.Id == "cell:r2c2");
+        Assert.Equal("cell:c2", line.RelativeId);             // line token → the per-line relative key
     }
 }

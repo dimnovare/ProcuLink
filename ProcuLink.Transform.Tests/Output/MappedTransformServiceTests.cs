@@ -530,6 +530,83 @@ public class MappedTransformServiceTests
         rows[2].Should().Be("SUP-2,");
     }
 
+    // ── F-1 Phase 4: ONE rule bound to the RELATIVE key emits EACH line's OWN value ─────────────────
+
+    [Fact]
+    public void Build_Csv_BindsRelativeLineKey_EmitsEachLinesOwnValue()
+    {
+        var order  = BuildOrder();
+        // Line 1 = data-row 2 (cell:r2c4), line 2 = data-row 3 (cell:r3c4). Relative key = cell:c4.
+        var tokens = new List<SourceToken>
+        {
+            new("cell:r2c4", "EAN · row 2", "EAN-FIRST",  "line"),
+            new("cell:r3c4", "EAN · row 3", "EAN-SECOND", "line"),
+        };
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Lines =
+                {
+                    ["code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" },
+                    // ONE rule bound to the RELATIVE column key — emits EACH line's own cell.
+                    ["ean"]  = new OutputFieldRule { OutputPath = "Ean",  CanonicalField = "src::cell:c4" },
+                },
+            },
+        };
+
+        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+        rows[0].Should().Be("Code,Ean");
+        rows[1].Should().Be("SUP-1,EAN-FIRST");    // line 1 → its OWN row-2 value
+        rows[2].Should().Be("SUP-2,EAN-SECOND");   // line 2 → its OWN row-3 value (NOT empty, NOT line 1's)
+    }
+
+    [Fact]
+    public void BuildLineRow_InjectsRelativeAlias_HoldingEachLinesOwnValue_EdiAndAllFormats()
+    {
+        // Proves the alias injection at the row-bag level for EVERY per-line format (incl. EDI, which is
+        // not an emitter target). Each line's bag must carry the RELATIVE key holding THAT line's value.
+        var order  = BuildOrder();
+        var line1  = order.Lines.Single(l => l.LineNumber == 1);
+        var line2  = order.Lines.Single(l => l.LineNumber == 2);
+        var ov     = new OrderMappingOverride();
+
+        var tokens = new List<SourceToken>
+        {
+            // EDIFACT: seg:LIN[n].el5 → relative seg:LIN.el5
+            new("seg:LIN[1].el5", "LIN warehouse", "WH-A", "line"),
+            new("seg:LIN[2].el5", "LIN warehouse", "WH-B", "line"),
+            // XML: …/Line[n]/Batch → relative …/Line/Batch
+            new("/Order/Lines/Line[1]/Batch", "Batch", "B-A", "line"),
+            new("/Order/Lines/Line[2]/Batch", "Batch", "B-B", "line"),
+            // JSON: json:/lines/{i}/sku → relative json:/lines/*/sku
+            new("json:/lines/0/sku", "sku", "J-A", "line"),
+            new("json:/lines/1/sku", "sku", "J-B", "line"),
+        };
+
+        var row1 = MappedTransformService.BuildLineRow(order, ov, line1, catalogLookup: null, sourceTokens: tokens);
+        var row2 = MappedTransformService.BuildLineRow(order, ov, line2, catalogLookup: null, sourceTokens: tokens);
+
+        // Line 1's bag: the relative keys hold line 1's OWN values.
+        row1["src::seg:LIN.el5"].Should().Be("WH-A");
+        row1["src::/Order/Lines/Line/Batch"].Should().Be("B-A");
+        row1["src::json:/lines/*/sku"].Should().Be("J-A");
+
+        // Line 2's bag: the SAME relative keys hold line 2's OWN values (never line 1's).
+        row2["src::seg:LIN.el5"].Should().Be("WH-B");
+        row2["src::/Order/Lines/Line/Batch"].Should().Be("B-B");
+        row2["src::json:/lines/*/sku"].Should().Be("J-B");
+
+        // The absolute id still lands ONLY in its own line's bag (no cross-line leak).
+        row1.Should().ContainKey("src::seg:LIN[1].el5");
+        row1.Should().NotContainKey("src::seg:LIN[2].el5");
+        row2.Should().ContainKey("src::seg:LIN[2].el5");
+        row2.Should().NotContainKey("src::seg:LIN[1].el5");
+    }
+
     [Fact]
     public void Build_Json_BindsSourceToken_PreservesEuLocaleValueVerbatim()
     {
