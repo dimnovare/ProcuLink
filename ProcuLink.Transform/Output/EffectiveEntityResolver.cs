@@ -75,7 +75,7 @@ public static class EffectiveEntityResolver
         // SourceMap re-derive runs first (no-op when absent), then output-rule overrides that target
         // recognised header canonical fields are written back onto the clone's typed columns.
         var headerRow = SourceMapReDerive.ApplyToHeaderRow(
-            MappedTransformService.BuildHeaderRow(order, @override), @override, tokens);
+            MappedTransformService.BuildHeaderRow(order, @override, tokens), @override, tokens);
 
         // Apply SourceMap-derived header values onto typed columns (SourceMap can change PoNumber etc.
         // even with no Output rules). Skipped when there is no SourceMap.
@@ -97,7 +97,7 @@ public static class EffectiveEntityResolver
         foreach (var line in clone.Lines)
         {
             var lineRow = SourceMapReDerive.ApplyToLineRow(
-                MappedTransformService.BuildLineRow(order, @override, line), @override, tokens);
+                MappedTransformService.BuildLineRow(order, @override, line, catalogLookup: null, sourceTokens: tokens), @override, tokens);
 
             if (hasSourceMap)
                 ApplyLineRowToEntity(line, lineRow);

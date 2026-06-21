@@ -42,13 +42,14 @@ public sealed class OutputTemplateEmitter
         var tokens = sourceTokens ?? Array.Empty<SourceToken>();
 
         // Header value bag (resolved once), with the SourceMap re-derive applied — exactly as the flat
-        // builder does. Line bags are built lazily per line inside an Array node.
+        // builder does. Line bags are built lazily per line inside an Array node. F-1 Seam A: pass the
+        // token list one level deeper so the row builders inject the reserved src:: keys.
         var headerRow = SourceMapReDerive.ApplyToHeaderRow(
-            MappedTransformService.BuildHeaderRow(order, @override), @override, tokens);
+            MappedTransformService.BuildHeaderRow(order, @override, tokens), @override, tokens);
 
         IReadOnlyDictionary<string, string> LineRowFor(PurchaseOrderLineEntity line) =>
             SourceMapReDerive.ApplyToLineRow(
-                MappedTransformService.BuildLineRow(order, @override, line, catalogLookup), @override, tokens);
+                MappedTransformService.BuildLineRow(order, @override, line, catalogLookup, tokens), @override, tokens);
 
         var orderedLines = order.Lines.OrderBy(l => l.LineNumber).ToList();
 

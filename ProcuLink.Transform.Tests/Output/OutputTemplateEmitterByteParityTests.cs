@@ -3,6 +3,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
+using ProcuLink.Transform.Tokenizing;
 using Xunit;
 
 namespace ProcuLink.Transform.Tests.Output;
@@ -170,5 +171,52 @@ public class OutputTemplateEmitterByteParityTests
     {
         const string expected = "OrderRef,ItemCode,Qty\nPO-1,S-1,3\nPO-1,S-2,2\n";
         Assert.Equal(expected, N(Emit(CsvTree())));
+    }
+
+    // ── F-1 byte-safety oracle: injecting src:: keys with NO rule referencing them is INERT ─────────
+    //
+    // The core trust gate. Widening the row bag with a full set of header AND line source tokens — none
+    // of which any rule in the tree names — must produce BYTE-IDENTICAL output to the unbound emit, for
+    // every emitter family (JSON / XML / XML+root-namespaces / CSV). Extra keys in the bag are inert.
+
+    /// <summary>A realistic, NOISY token set (header + per-line) — none referenced by the trees above.</summary>
+    private static IReadOnlyList<SourceToken> NoiseTokens() => new List<SourceToken>
+    {
+        new("cell:r1c1", "PO Number · header row", "PO-1",        "header"),
+        new("cell:r1c9", "Buyer VAT · header row", "EE100200300", "header"),
+        new("/Order/Header/Note", "Note", "free text, with comma & \"quote\"", "header"),
+        new("seg:RFF[1].el2", "RFF reference number", "REF-XYZ", "header"),
+        new("cell:r2c4", "EAN · row 2", "EAN-FIRST",  "line"),
+        new("cell:r3c4", "EAN · row 3", "EAN-SECOND", "line"),
+        new("/Order/Lines/Line[2]/Batch", "Batch", "B-2", "line"),
+        new("raw:Free Field", "Free Field", "ignored", null),
+    };
+
+    private static byte[] EmitBytes(OutputNodeTemplate t, IReadOnlyList<SourceToken>? tokens)
+    {
+        var r = new OutputTemplateEmitter().Emit(t, ResolvedOrder(), new OrderMappingOverride(), tokens);
+        r.Content.Position = 0;
+        using var ms = new MemoryStream();
+        r.Content.CopyTo(ms);
+        return ms.ToArray();
+    }
+
+    public static IEnumerable<object[]> ParityTrees() => new[]
+    {
+        new object[] { "json",      JsonTree() },
+        new object[] { "xml",       XmlTree() },
+        new object[] { "xml-rootns", XmlRootNsTree() },
+        new object[] { "csv",       CsvTree() },
+    };
+
+    [Theory]
+    [MemberData(nameof(ParityTrees))]
+    public void InjectingUnreferencedSrcTokens_IsByteIdentical_PerEmitterFamily(string name, OutputNodeTemplate tree)
+    {
+        var unbound = EmitBytes(tree, tokens: null);            // today's bytes (no tokens)
+        var widened = EmitBytes(tree, tokens: NoiseTokens());   // bag widened with src:: keys, none referenced
+
+        Assert.True(unbound.SequenceEqual(widened),
+            $"[{name}] injecting unreferenced src:: tokens changed the output bytes — byte-safety violated.");
     }
 }

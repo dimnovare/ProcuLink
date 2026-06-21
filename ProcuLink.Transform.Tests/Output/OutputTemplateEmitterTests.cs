@@ -5,6 +5,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
+using ProcuLink.Transform.Tokenizing;
 using Xunit;
 
 namespace ProcuLink.Transform.Tests.Output;
@@ -276,6 +277,71 @@ public class OutputTemplateEmitterTests
         var json = ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride()));
         using var doc = JsonDocument.Parse(json);
         Assert.Equal("PO-1", doc.RootElement.GetProperty("po").GetString());   // kept despite broken predicate
+    }
+
+    // ── F-1: an AST leaf bound to an arbitrary source field (src:: key OR typed SourceToken) ────────
+
+    [Fact]
+    public void Json_AstField_BoundToSrcCanonicalField_EmitsTokenValue()
+    {
+        var tokens = new List<SourceToken> { new("/Order/Parties/Buyer/VatId", "Buyer VAT", "EE42", "header") };
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Json,
+            Root = OutputNode.Obj("root",
+                OutputNode.FieldOf("po", Canon("PoNumber")),
+                OutputNode.FieldOf("buyerVat",
+                    new OutputFieldRule { OutputPath = "buyerVat", CanonicalField = "src::/Order/Parties/Buyer/VatId" })),
+        };
+
+        var json = ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride(), tokens));
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("EE42", doc.RootElement.GetProperty("buyerVat").GetString());
+    }
+
+    [Fact]
+    public void Xml_AstField_BoundToTypedSourceToken_EmitsTokenValue()
+    {
+        var tokens = new List<SourceToken> { new("seg:RFF[1].el2", "RFF reference", "REF-99", "header") };
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Xml,
+            Root = OutputNode.Obj("Order",
+                OutputNode.FieldOf("Ref", new OutputFieldRule { OutputPath = "Ref", SourceToken = "seg:RFF[1].el2" }),
+                OutputNode.Arr("Lines", OutputNode.Obj("Line",
+                    OutputNode.FieldOf("Sku", Canon("SupplierItemCode"))))),
+        };
+
+        var xml = XDocument.Parse(ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride(), tokens)));
+        Assert.Equal("REF-99", xml.Root!.Element("Ref")!.Value);
+    }
+
+    [Fact]
+    public void Csv_AstField_BoundToLineSourceToken_ResolvesPerLine()
+    {
+        // Per-line tokens: line 1 = data-row 2 (cell:r2c7), line 2 = data-row 3 (cell:r3c7).
+        var tokens = new List<SourceToken>
+        {
+            new("cell:r2c7", "Batch · row 2", "BATCH-A", "line"),
+            new("cell:r3c7", "Batch · row 3", "BATCH-B", "line"),
+        };
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Csv,
+            Root = OutputNode.Obj("root",
+                OutputNode.FieldOf("OrderRef", Canon("PoNumber")),
+                OutputNode.Arr("lines", OutputNode.Obj("line",
+                    OutputNode.FieldOf("Sku", Canon("SupplierItemCode")),
+                    OutputNode.FieldOf("Batch",
+                        new OutputFieldRule { OutputPath = "Batch", CanonicalField = "src::cell:r2c7" })))),
+        };
+
+        var csv  = ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride(), tokens));
+        var rows = csv.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal("OrderRef,Sku,Batch", rows[0]);
+        Assert.Equal("PO-1,S-1,BATCH-A", rows[1]);   // line 1 → its own batch
+        Assert.Equal("PO-1,S-2,", rows[2]);          // line 2 does NOT carry cell:r2c7 (never reads line 1)
     }
 
     private static string ReadAll(TransformResult result)

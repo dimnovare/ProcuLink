@@ -5,6 +5,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
+using ProcuLink.Transform.Tokenizing;
 
 namespace ProcuLink.Transform.Tests.Output;
 
@@ -462,6 +463,197 @@ public class MappedTransformServiceTests
         var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
 
         rows[1].Should().Be("7.77");
+    }
+
+    // ── F-1 Seam A: bind an ARBITRARY source field via CanonicalField == "src::{tokenId}" ────────
+    //
+    // These prove the row bag is widened with the reserved src:: namespace and that every binding
+    // reader (CanonicalField here) resolves a token the canonical model does NOT model.
+
+    [Fact]
+    public void Build_Csv_BindsHeaderSourceToken_ViaSrcCanonicalField_Verbatim()
+    {
+        var order  = BuildOrder();
+        var tokens = new List<SourceToken>
+        {
+            // A header field the canonical model has no slot for — e.g. a buyer VAT id.
+            new("cell:r1c9", "Buyer VAT · header row", "EE100200300", "header"),
+        };
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = { ["vat"] = new OutputFieldRule { OutputPath = "BuyerVat", CanonicalField = "src::cell:r1c9" } },
+                Lines  = { ["code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" } },
+            },
+        };
+
+        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+        rows[0].Should().Be("BuyerVat,Code");
+        rows[1].Should().Be("EE100200300,SUP-1");   // the arbitrary source field emitted verbatim
+        rows[2].Should().Be("EE100200300,SUP-2");
+    }
+
+    [Fact]
+    public void Build_Csv_BindsLineSourceToken_ToTheCorrectLine_ViaSrcCanonicalField()
+    {
+        var order  = BuildOrder();
+        // Line 1 lives at source data-row 2 (cell:r2c4), line 2 at data-row 3 (cell:r3c4).
+        var tokens = new List<SourceToken>
+        {
+            new("cell:r2c4", "EAN · row 2", "EAN-FIRST",  "line"),
+            new("cell:r3c4", "EAN · row 3", "EAN-SECOND", "line"),
+        };
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Lines =
+                {
+                    ["code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" },
+                    ["ean"]  = new OutputFieldRule { OutputPath = "Ean",  CanonicalField = "src::cell:r2c4" },
+                },
+            },
+        };
+
+        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+        rows[0].Should().Be("Code,Ean");
+        // Line 1 binds cell:r2c4 → its OWN value; line 2's bag does NOT carry cell:r2c4 → empty (never
+        // reads line 1's value). This is the "line[2] never reads line[1]" guarantee.
+        rows[1].Should().Be("SUP-1,EAN-FIRST");
+        rows[2].Should().Be("SUP-2,");
+    }
+
+    [Fact]
+    public void Build_Json_BindsSourceToken_PreservesEuLocaleValueVerbatim()
+    {
+        var order  = BuildOrder();
+        var tokens = new List<SourceToken>
+        {
+            // EU locale price string must survive byte-for-byte — never numeric-parsed in the bag.
+            new("/Order/Header/Total", "Total", "1.234,56", "header"),
+        };
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = { ["t"] = new OutputFieldRule { OutputPath = "total", CanonicalField = "src::/Order/Header/Total" } },
+                Lines  = { ["code"] = new OutputFieldRule { OutputPath = "code", CanonicalField = "SupplierItemCode" } },
+            },
+        };
+
+        using var doc = ReadJson(new MappedTransformService().Build(order, ov, OutputFormat.Json, tokens));
+        doc.RootElement.GetProperty("header").GetProperty("total").GetString().Should().Be("1.234,56");
+    }
+
+    // ── F-1 Seam B: the typed OutputFieldRule.SourceToken property (bare id; resolver prefixes src::) ─
+
+    [Fact]
+    public void Build_Csv_BindsTypedSourceToken_EmitsTokenValue()
+    {
+        var order  = BuildOrder();
+        var tokens = new List<SourceToken>
+        {
+            new("seg:RFF[1].el2", "RFF reference number", "REF-XYZ", "header"),
+        };
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                // BARE token id on the typed property (no src:: prefix — the resolver adds it).
+                Header = { ["ref"] = new OutputFieldRule { OutputPath = "Ref", SourceToken = "seg:RFF[1].el2" } },
+                Lines  = { ["code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" } },
+            },
+        };
+
+        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+        rows[0].Should().Be("Ref,Code");
+        rows[1].Should().Be("REF-XYZ,SUP-1");
+    }
+
+    [Fact]
+    public void ResolveRule_SourceTokenPrecedence_WinsOverFixedValue()
+    {
+        var order  = BuildOrder();
+        var tokens = new List<SourceToken> { new("cell:r1c2", "X", "FROM-TOKEN", "header") };
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header =
+                {
+                    // Both a token AND a fixed value set — the token must win (Expr → SourceToken → Fixed → Canon).
+                    ["x"] = new OutputFieldRule { OutputPath = "X", SourceToken = "cell:r1c2", FixedValue = "FROM-FIXED" },
+                },
+                Lines = { ["code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" } },
+            },
+        };
+
+        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+        rows[1].Should().StartWith("FROM-TOKEN,");
+    }
+
+    [Fact]
+    public void ResolveRule_NotFoundSourceToken_FallsThroughToFixedValue_NeverEmitsLiteralSrc()
+    {
+        var order  = BuildOrder();
+        var tokens = new List<SourceToken>(); // no tokens → the bound id is absent from the bag
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header =
+                {
+                    ["x"] = new OutputFieldRule { OutputPath = "X", SourceToken = "cell:r9c9", FixedValue = "FALLBACK" },
+                },
+                Lines = { ["code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" } },
+            },
+        };
+
+        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+        rows[1].Should().StartWith("FALLBACK,");        // fell through to FixedValue
+        csv.Should().NotContain("src::");               // never emits a literal "src::…"
+    }
+
+    [Fact]
+    public void ResolveRule_NotFoundSourceToken_NoFixed_FallsThroughToCanonicalField()
+    {
+        var order  = BuildOrder();
+        var tokens = new List<SourceToken>();
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header =
+                {
+                    // Token absent, no FixedValue → must fall through to the canonical field.
+                    ["po"] = new OutputFieldRule { OutputPath = "Po", SourceToken = "cell:r9c9", CanonicalField = "PoNumber" },
+                },
+                Lines = { ["code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" } },
+            },
+        };
+
+        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+        rows[1].Should().StartWith("PO-9001,");
     }
 
     [Fact]

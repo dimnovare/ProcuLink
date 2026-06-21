@@ -443,6 +443,49 @@ public class ScribanExpressionMappingTests
         result["PoNumber"].Should().Be("PASS-THROUGH");
     }
 
+    // ── F-1: Scriban indexer access to a bound source field via order["src::…"] ─────────────────
+
+    [Fact]
+    public void Output_ScribanExpression_ReadsBoundSourceToken_ViaIndexer()
+    {
+        var order  = BuildOrder();
+        var tokens = new List<SourceToken> { new("cell:r1c9", "Buyer VAT", "EE777", "header") };
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                // The src:: key is a legal ScriptObject member accessed by the indexer form.
+                Header = { ["vat"] = new OutputFieldRule { OutputPath = "Vat", Expression = "VAT:{{ order[\"src::cell:r1c9\"] }}" } },
+                Lines  = { ["code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" } },
+            },
+        };
+
+        var rows = Rows(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        rows[0].Should().Be("Vat,Code");
+        rows[1].Should().Be("VAT:EE777,SUP-1");
+    }
+
+    [Fact]
+    public void Output_ScribanExpression_MissingSrcKey_RendersEmpty_FailOpen()
+    {
+        var order  = BuildOrder();
+        var tokens = new List<SourceToken>(); // no tokens → src::missing is absent from the bag
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = { ["x"] = new OutputFieldRule { OutputPath = "X", Expression = "[{{ order[\"src::missing\"] }}]" } },
+                Lines  = { ["code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" } },
+            },
+        };
+
+        var rows = Rows(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        rows[0].Should().Be("X,Code");
+        rows[1].Should().Be("[],SUP-1");   // relaxed member access → empty, never throws
+    }
+
     // ── Additive invariant: no Expression → byte-for-byte unchanged ─────────────
 
     [Fact]

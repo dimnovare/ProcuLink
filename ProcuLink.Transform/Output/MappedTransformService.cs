@@ -124,7 +124,7 @@ public sealed class MappedTransformService
 
         // Resolve header values once (header scope).
         // SourceMap re-derive runs first (no-op when SourceMap is absent/empty).
-        var headerRow    = SourceMapReDerive.ApplyToHeaderRow(BuildHeaderRow(order, @override), @override, tokens);
+        var headerRow    = SourceMapReDerive.ApplyToHeaderRow(BuildHeaderRow(order, @override, tokens), @override, tokens);
         var headerValues = headerCols
             .Select(c => ResolveRule(c.Value, headerRow, lineScope: false) ?? string.Empty)
             .ToList();
@@ -132,7 +132,7 @@ public sealed class MappedTransformService
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
             // SourceMap re-derive for each line row.
-            var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line, catalogLookup), @override, tokens);
+            var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line, catalogLookup, tokens), @override, tokens);
 
             var lineValues = lineCols
                 .Select(c => ResolveRule(c.Value, lineRow, lineScope: true) ?? string.Empty)
@@ -155,7 +155,7 @@ public sealed class MappedTransformService
         IReadOnlyDictionary<string, SupplierProduct>? catalogLookup)
     {
         // SourceMap re-derive for header row.
-        var headerRow = SourceMapReDerive.ApplyToHeaderRow(BuildHeaderRow(order, @override), @override, tokens);
+        var headerRow = SourceMapReDerive.ApplyToHeaderRow(BuildHeaderRow(order, @override, tokens), @override, tokens);
 
         var header = new Dictionary<string, string?>();
         foreach (var (_, rule) in output.Header)
@@ -165,7 +165,7 @@ public sealed class MappedTransformService
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
             // SourceMap re-derive for each line row.
-            var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line, catalogLookup), @override, tokens);
+            var lineRow = SourceMapReDerive.ApplyToLineRow(BuildLineRow(order, @override, line, catalogLookup, tokens), @override, tokens);
             var obj = new Dictionary<string, string?>();
             foreach (var (_, rule) in output.Lines)
                 obj[rule.OutputPath] = ResolveRule(rule, lineRow, lineScope: true) ?? string.Empty;
@@ -204,6 +204,7 @@ public sealed class MappedTransformService
     {
         string? value = ResolveExpressionOrField(
             rule.Expression,
+            fallbackSourceToken: rule.SourceToken,
             fallbackFixedValue: rule.FixedValue,
             fallbackCanonicalField: rule.CanonicalField,
             row: row,
@@ -219,13 +220,16 @@ public sealed class MappedTransformService
     }
 
     /// <summary>
-    /// Shared value-selection helper used by both the output-rule path here and the SourceMap
-    /// re-derive path (<see cref="SourceMapReDerive"/>). Expression wins when present and non-blank;
-    /// otherwise the supplied fixed value, then the named field in <paramref name="row"/>. On an
-    /// expression compile/eval failure, falls back to the fixed/field value (never throws).
+    /// Shared value-selection helper for the output-rule path. Precedence (F-1):
+    /// <c>Expression → SourceToken → FixedValue → CanonicalField</c>. Expression wins when present and
+    /// non-blank; then a bound source token (looked up as <c>row["src::"+token]</c>); then the supplied
+    /// fixed value; then the named field in <paramref name="row"/>. On an expression compile/eval
+    /// failure, falls through to the token/fixed/field value (never throws). A <paramref name="fallbackSourceToken"/>
+    /// id that is NOT present in the bag falls through too — it never emits a literal "src::…".
     /// </summary>
     internal static string? ResolveExpressionOrField(
         string? expression,
+        string? fallbackSourceToken,
         string? fallbackFixedValue,
         string? fallbackCanonicalField,
         IReadOnlyDictionary<string, string> row,
@@ -240,14 +244,21 @@ public sealed class MappedTransformService
             if (result.Ok)
                 return result.Value;
 
-            // Expression failed — fall through to the field/fixed value so the transform survives
+            // Expression failed — fall through to the token/field/fixed value so the transform survives
             // (fail-open is intentional and UNCHANGED). Log the failure so an authoring mistake in a
             // mapping expression is observable instead of silently producing the fallback value.
             TransformDiagnostics.CreateLogger(nameof(MappedTransformService)).LogWarning(
                 "Output-field expression failed to evaluate ({Scope}); falling back to the " +
-                "field/fixed value. Error: {Error}",
+                "source-token/field/fixed value. Error: {Error}",
                 lineScope ? "line" : "header", result.Error);
         }
+
+        // F-1 Seam B: a bound source token resolves through the reserved src:: namespace the row builder
+        // injects. A not-found token id falls through to FixedValue/CanonicalField (never crashes, never
+        // emits a literal "src::…").
+        if (!string.IsNullOrWhiteSpace(fallbackSourceToken)
+            && row.TryGetValue($"src::{fallbackSourceToken}", out var tokenValue))
+            return tokenValue;
 
         return fallbackFixedValue
             ?? (fallbackCanonicalField is not null && row.TryGetValue(fallbackCanonicalField, out var v) ? v : null);
@@ -263,9 +274,18 @@ public sealed class MappedTransformService
     /// <c>RequestedDeliveryDate</c>. These keys are always present; existing templates and
     /// overrides that do not reference them are unaffected (the fixed transforms never read
     /// this bag). Adding a key to the row bag cannot change fixed-transform output.
+    ///
+    /// <para>F-1 Seam A (bind ANY source field): when <paramref name="sourceTokens"/> is non-null,
+    /// every header-scope token (<c>Group != "line"</c>, OR a line-scope token whose addressed ordinal
+    /// matches no line) is appended under the reserved key <c>"src::"+token.Id</c> with its VERBATIM
+    /// value (never numeric-parsed — EU <c>1.234,56</c> survives). A rule (or Scriban <c>order["src::…"]</c>)
+    /// can then bind that arbitrary source field. The keys are INERT unless a rule names them, so an
+    /// order with no <c>src::</c> binding is byte-identical to today (proven by the byte-parity oracle).
+    /// The <c>::</c> separator cannot collide with a canonical name or a guarded custom-field key.</para>
     /// </summary>
     internal static Dictionary<string, string> BuildHeaderRow(
-        PurchaseOrderEntity order, OrderMappingOverride @override)
+        PurchaseOrderEntity order, OrderMappingOverride @override,
+        IReadOnlyList<SourceToken>? sourceTokens = null)
     {
         // V5: SubTotal/TaxTotal/GrandTotal prefer the parser-stated value; fall back to derivation.
         // Derivation mirrors ScribanOrderModel: sum of (Qty * UnitPrice) for all lines.
@@ -322,6 +342,22 @@ public sealed class MappedTransformService
             row[cf.Key] = cf.Value ?? string.Empty;
         }
 
+        // F-1 Seam A: append header-scope source tokens under the reserved "src::" namespace. A line
+        // token whose ordinal can't be matched to a line is header-scope too (still bindable). Verbatim
+        // values; appended LAST so they can never shadow a canonical/custom key (TryGetValue order is
+        // irrelevant — the reserved keys are distinct, and only a rule that NAMES one emits it).
+        if (sourceTokens is { Count: > 0 })
+        {
+            foreach (var t in sourceTokens)
+            {
+                if (t is null || string.IsNullOrEmpty(t.Id)) continue;
+                var isLineScoped = string.Equals(t.Group, "line", StringComparison.Ordinal)
+                                   && SourceTokenLineIndexer.LineOrdinalOf(t.Id) is not null;
+                if (isLineScoped) continue; // belongs in a specific line bag, not the header bag
+                row[$"src::{t.Id}"] = t.Value ?? string.Empty;
+            }
+        }
+
         return row;
     }
 
@@ -339,13 +375,21 @@ public sealed class MappedTransformService
     /// manipulator returns "" exactly as it did before this wiring. The price is a typed decimal
     /// column formatted with <see cref="CultureInfo.InvariantCulture"/> (a clean machine value, never
     /// re-parsed from a locale string).</para>
+    ///
+    /// <para>F-1 Seam A: when <paramref name="sourceTokens"/> is non-null, this line's bag also carries
+    /// (a) every header-scope <c>src::</c> token (via the inner <see cref="BuildHeaderRow"/> call) AND
+    /// (b) ONLY the <c>Group=="line"</c> tokens whose addressed ordinal (<see cref="SourceTokenLineIndexer"/>)
+    /// matches THIS line's 1-based position among the order's lines — so line 2 never reads line 1's
+    /// value. Values are verbatim; keys are inert unless a rule names them (byte-identical when unbound).</para>
     /// </summary>
     internal static Dictionary<string, string> BuildLineRow(
         PurchaseOrderEntity order, OrderMappingOverride @override, PurchaseOrderLineEntity line,
-        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup = null)
+        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup = null,
+        IReadOnlyList<SourceToken>? sourceTokens = null)
     {
-        // Start from the header bag so line rules can reference order-level fields.
-        var row = BuildHeaderRow(order, @override);
+        // Start from the header bag so line rules can reference order-level fields. The header-scope
+        // src:: tokens are injected by this call; the line-scope ones are injected below for THIS line.
+        var row = BuildHeaderRow(order, @override, sourceTokens);
 
         row["LineNumber"]       = line.LineNumber.ToString(CultureInfo.InvariantCulture);
         row["BuyerItemCode"]    = line.BuyerItemCode ?? string.Empty;
@@ -379,7 +423,41 @@ public sealed class MappedTransformService
 
         InjectCatalogRow(row, line, catalogLookup);
 
+        // F-1 Seam A: inject ONLY this line's source tokens. The line's position is its 1-based rank in
+        // the LineNumber-ordered sequence (so the n-th data row's tokens land in the n-th line's bag,
+        // robust to LineNumber gaps). A line token addressing a different ordinal is skipped here — it
+        // is never read by this line, so line 2 can never see line 1's value.
+        if (sourceTokens is { Count: > 0 })
+        {
+            var position = LinePosition(order, line);
+            foreach (var t in sourceTokens)
+            {
+                if (t is null || string.IsNullOrEmpty(t.Id)) continue;
+                if (!string.Equals(t.Group, "line", StringComparison.Ordinal)) continue;
+                var ordinal = SourceTokenLineIndexer.LineOrdinalOf(t.Id);
+                if (ordinal is null || ordinal.Value != position) continue;
+                row[$"src::{t.Id}"] = t.Value ?? string.Empty;
+            }
+        }
+
         return row;
+    }
+
+    /// <summary>
+    /// The 1-based position of <paramref name="line"/> among the order's lines, ordered by
+    /// <c>LineNumber</c> (the same ordering the CSV/JSON/emitter row loops use). This is matched against
+    /// a source token's addressed ordinal so per-line tokens land in the correct line's bag. Falls back
+    /// to <c>1</c> if the line is somehow not found in the collection (defensive; never throws).
+    /// </summary>
+    private static int LinePosition(PurchaseOrderEntity order, PurchaseOrderLineEntity line)
+    {
+        var pos = 0;
+        foreach (var l in order.Lines.OrderBy(x => x.LineNumber))
+        {
+            pos++;
+            if (ReferenceEquals(l, line)) return pos;
+        }
+        return 1;
     }
 
     /// <summary>
