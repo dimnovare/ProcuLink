@@ -73,6 +73,41 @@ public class CxmlTransformServiceDtdTests
         xml.Should().NotContain("<!DOCTYPE");
     }
 
+    // ── SAFETY: a free-text DTD value with a char illegal in a DOCTYPE external id must NOT strand ──
+    // the order. The value is written VERBATIM into `<!DOCTYPE cXML …>` (XLinq does not escape it), so
+    // a quote/angle-bracket/control char would close the literal early (malformed, unparseable) or throw
+    // at serialization — which OrderTransformService's cXML branch does not catch. The transform skips
+    // the DOCTYPE and delivers valid, parseable cXML instead.
+    [Theory]
+    [InlineData("http://example.com/dtd\"quote.dtd")]   // double-quote closes the literal early
+    [InlineData("http://example.com/dtd'quote.dtd")]     // single-quote
+    [InlineData("http://example.com/d<td>.dtd")]          // angle brackets
+    [InlineData("http://example.com/dtd\nnewline.dtd")]   // control / newline
+    public async Task DtdWithIllegalChar_SkipsDoctype_DeliversValidParseableCxml_NoThrow(string badDtd)
+    {
+        var creds = new CxmlCredentialConfig(null, null, null, null, null, null, null) { DtdSystemId = badDtd };
+
+        var xml = await RenderAsync(creds);                 // must not throw
+
+        xml.Should().NotContain("<!DOCTYPE");               // the malformed declaration is skipped
+        XDocument.Parse(xml).Root!.Name.LocalName.Should().Be("cXML"); // output stays valid + parseable
+    }
+
+    [Fact]
+    public async Task DtdPublicIdWithIllegalChar_SkipsDoctype_NoThrow()
+    {
+        var creds = new CxmlCredentialConfig(null, null, null, null, null, null, null)
+        {
+            DtdSystemId = DtdUri,
+            DtdPublicId = "-//cXML//DTD \"broken\"//EN",     // a quote in the public id
+        };
+
+        var xml = await RenderAsync(creds);
+
+        xml.Should().NotContain("<!DOCTYPE");
+        XDocument.Parse(xml).Root!.Name.LocalName.Should().Be("cXML");
+    }
+
     [Fact]
     public async Task UnsetDtd_BlankSystemId_NoDoctype()
     {

@@ -207,8 +207,28 @@ public sealed class CxmlTransformService : ITransformService
         var publicId = cfg?.DtdPublicId?.Trim();
         publicId = string.IsNullOrWhiteSpace(publicId) ? null : publicId;
 
+        // DEFENSIVE (must never strand an order): the external identifiers are written VERBATIM into
+        // the `<!DOCTYPE cXML …>` declaration — XLinq does NOT escape them. A value carrying a quote,
+        // an angle bracket, or a control/newline character would close the literal early (malformed,
+        // unparseable cXML) or throw at serialization, which OrderTransformService's cXML branch does
+        // not catch → the order strands in `transforming`. A real DTD URI / public id never contains
+        // these; reject them at config-save time AND, as the backstop here, SKIP the DOCTYPE (deliver
+        // valid cXML without it) rather than emit a broken one or throw.
+        if (!IsValidDtdExternalId(systemId) || (publicId is not null && !IsValidDtdExternalId(publicId)))
+            return null;
+
         return new XDocumentType("cXML", publicId, systemId, null);
     }
+
+    /// <summary>
+    /// True when <paramref name="value"/> is safe to write verbatim into a <c>&lt;!DOCTYPE&gt;</c>
+    /// external identifier. An XML SystemLiteral cannot contain its delimiter quote and a PubidLiteral
+    /// has an even tighter set; we conservatively reject BOTH quote styles, angle brackets, and any
+    /// control/newline character — the only ways a free-text DTD value could break (or throw on) the
+    /// DOCTYPE declaration. A legitimate DTD URI / FPI never contains these.
+    /// </summary>
+    private static bool IsValidDtdExternalId(string value) =>
+        !value.Any(c => c is '"' or '\'' or '<' or '>' || char.IsControl(c));
 
     // ── Header credential helpers ─────────────────────────────────────────────
 
