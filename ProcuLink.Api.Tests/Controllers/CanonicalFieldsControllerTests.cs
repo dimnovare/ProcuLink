@@ -147,6 +147,20 @@ public class CanonicalFieldsControllerTests
     }
 
     [Fact]
+    public async Task Create_KeyContainingReservedSeparator_Returns400_AndWritesNothing()
+    {
+        // F-1 defensive guard: "::" is the reserved src:: namespace separator and must never be
+        // spoofable through a user-defined canonical-field key.
+        var (ctrl, orgId, db) = Build();
+        var connId = SeedConnection(db, orgId);
+
+        var result = await ctrl.Create(connId, Req("src::cell:r1c1"), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        db.CanonicalFieldDefs.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Create_DuplicateActiveKey_Returns409()
     {
         var (ctrl, orgId, db) = Build();

@@ -601,6 +601,14 @@ public sealed class OrdersController : ControllerBase
         if (request is null)
             return BadRequest(new { error = "A mapping override body is required." });
 
+        // F-1 defensive guard: "::" is the RESERVED namespace separator for bound source-token keys
+        // (src::{tokenId}). A user-defined custom-field key may never contain it, so the reserved
+        // namespace can never be spoofed by a custom field. (The typed OutputFieldRule.SourceToken holds
+        // a BARE token id — the src:: prefix is applied only at lookup — so it needs no such guard.)
+        var reservedKeyError = ValidateReservedCustomFieldKeys(request);
+        if (reservedKeyError is not null)
+            return BadRequest(new { error = reservedKeyError });
+
         // Validate every manipulator on every output rule (header + line) by attempting to
         // resolve it and apply it against an empty row. Fail at edit time, never at deliver time.
         var validationError = ValidateOverrideManipulators(request);
@@ -614,6 +622,21 @@ public sealed class OrdersController : ControllerBase
         // Echo back the persisted override so the frontend can confirm the exact stored shape.
         var stored = await _mappingOverrides.GetAsync(_tenant.OrganisationId, id, ct);
         return Ok(stored);
+    }
+
+    /// <summary>
+    /// F-1 defensive guard: a custom-field key may never contain the reserved <c>"::"</c> namespace
+    /// separator (used by bound source-token keys, <c>src::{tokenId}</c>). Returns null when all keys
+    /// are clean, or a human-readable error for the first offending key. Fail at edit time.
+    /// </summary>
+    private static string? ValidateReservedCustomFieldKeys(OrderMappingOverride @override)
+    {
+        foreach (var cf in @override.CustomFields ?? new List<CustomField>())
+        {
+            if (cf.Key is not null && cf.Key.Contains("::", StringComparison.Ordinal))
+                return $"Custom field key '{cf.Key}' may not contain '::' (a reserved namespace separator).";
+        }
+        return null;
     }
 
     /// <summary>

@@ -202,6 +202,19 @@ public record OutputFieldRule
     public string? Expression { get; init; }
 
     /// <summary>
+    /// F-1 (bind ANY source field) — optional BARE source-token id (e.g. <c>"cell:r2c5"</c>, an XPath,
+    /// an EDI segment address, a <c>raw:{label}</c>). The DIRECT TWIN of <see cref="SourceFieldRule.SourceToken"/>
+    /// — same name, same semantics, same <c>src::</c> lookup — so there is ONE binding concept across the
+    /// input and output sides. When set (and <see cref="Expression"/> is blank) the value is taken from the
+    /// addressed source field: the resolver looks up <c>row["src::"+SourceToken]</c> (the row builder
+    /// injects every source token under that reserved namespace). Precedence is
+    /// <c>Expression → SourceToken → FixedValue → CanonicalField</c>. A token id that is NOT found in the
+    /// bag falls through to <see cref="FixedValue"/>/<see cref="CanonicalField"/> (never crashes, never
+    /// emits a literal "src::…"). Null (the default) → no token binding, byte-for-byte identical to today.
+    /// </summary>
+    public string? SourceToken { get; init; }
+
+    /// <summary>
     /// Name of the canonical (or custom) field to source the value from. Null when using
     /// <see cref="FixedValue"/> only. Recognised canonical names mirror the fixed transformers
     /// (header: PoNumber/OrderDate/BuyerName/Currency/SupplierName; line:

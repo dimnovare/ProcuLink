@@ -71,6 +71,11 @@ public sealed class CanonicalFieldsController : ControllerBase
             return BadRequest("A canonical field key is required.");
         if (string.IsNullOrWhiteSpace(request.Label))
             return BadRequest("A canonical field label is required.");
+        // F-1 defensive guard: "::" is the RESERVED namespace separator for bound source-token keys
+        // (src::{tokenId}). A user-defined field key may never contain it, so the reserved namespace
+        // can never be spoofed by a custom/canonical key.
+        if (request.Key.Contains("::", StringComparison.Ordinal))
+            return BadRequest("A canonical field key may not contain '::' (a reserved namespace separator).");
 
         if (!await ConnectionBelongsToOrgAsync(connectionId, ct)) return NotFound("Connection not found.");
 

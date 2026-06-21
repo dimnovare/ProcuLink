@@ -156,6 +156,59 @@ public class OrdersControllerMappingOverrideTests
     }
 
     [Fact]
+    public async Task Put_CustomFieldKeyWithReservedSeparator_Returns400_AndDoesNotPersist()
+    {
+        // F-1 defensive guard: a custom-field key may never contain "::" (the reserved src:: namespace
+        // separator), so the reserved binding namespace can't be spoofed by a custom field.
+        await using var db = NewDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = await SeedOrderAsync(db, orgId);
+        var ctrl    = Build(db, orgId);
+
+        var bad = new OrderMappingOverride
+        {
+            CustomFields = { new CustomField { Key = "src::cell:r1c1", Label = "Spoof", Scope = "header", Value = "x" } },
+            Output = new OutputMappingConfig
+            {
+                Header = { ["po"] = new OutputFieldRule { OutputPath = "Ref", CanonicalField = "PoNumber" } },
+            },
+        };
+
+        var result = await ctrl.PutMappingOverride(orderId, bad, CancellationToken.None);
+        Assert.IsType<BadRequestObjectResult>(result);
+
+        var stored = await new OrderMappingOverrideService(db).GetAsync(orgId, orderId, CancellationToken.None);
+        Assert.Null(stored);
+    }
+
+    [Fact]
+    public async Task Put_TypedSourceTokenRule_Persists_AndRoundTrips()
+    {
+        // F-1 Seam B: the typed OutputFieldRule.SourceToken (a BARE token id) round-trips through the
+        // canonical_json override store — it needs no "::" guard (the src:: prefix is applied at lookup).
+        await using var db = NewDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = await SeedOrderAsync(db, orgId);
+        var ctrl    = Build(db, orgId);
+
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = { ["vat"] = new OutputFieldRule { OutputPath = "BuyerVat", SourceToken = "cell:r1c9" } },
+            },
+        };
+
+        var put = await ctrl.PutMappingOverride(orderId, ov, CancellationToken.None);
+        Assert.IsType<OkObjectResult>(put);
+
+        var get = await ctrl.GetMappingOverride(orderId, CancellationToken.None);
+        var getOk = Assert.IsType<OkObjectResult>(get);
+        var body  = Assert.IsType<OrderMappingOverride>(getOk.Value);
+        Assert.Equal("cell:r1c9", body.Output!.Header["vat"].SourceToken);
+    }
+
+    [Fact]
     public async Task Put_CrossTenantOrder_Returns404()
     {
         await using var db = NewDb();
