@@ -895,6 +895,48 @@ public sealed class OrdersController : ControllerBase
                     id, effectiveConfig.Source, effectiveConfig.OutputFormat, fmt);
             }
         }
+        else if (!honorFormat && !effectiveConfig.IsRevision)
+        {
+            // LIVE (non-revision) parity (MV-4): the transform/deliver path resolves the format as
+            // explicit-request ?? supplier delivery-config format ?? safe default (the transform action
+            // above, lines ~1244-1257). The live mapping editor always POSTs the FE default format=csv,
+            // so without this a non-revision supplier that DELIVERS non-CSV (xml/json/cxml/ubl/x12)
+            // previewed as CSV — preview ≠ delivered bytes. Resolve the SAME delivery-config format and
+            // swap to it so the default preview equals what "send to supplier" produces. honorFormat=true
+            // (the user explicitly exploring a format) skips this, exactly like the revision swap above.
+            string? deliveryFormat = null;
+            try
+            {
+                deliveryFormat = await (
+                    from c in _db.SupplierDeliveryConfigs.AsNoTracking()
+                    where c.OrgId == _tenant.OrganisationId && c.SupplierId == order.SupplierId
+                    select c.OutputFormat
+                ).FirstOrDefaultAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                // A delivery-config read failure must NEVER break the read-only preview — keep the
+                // requested format (the FE csv default). Defensive parity with the other preview
+                // fallbacks (TryBuildSupplierPromotedOverrideAsync / TryBuildPinnedRevisionOverride,
+                // which also swallow and fall back rather than 500 the editor).
+                _logger.LogWarning(ex,
+                    "Order {OrderId}: could not read the supplier's live delivery format for preview — using the requested format {Requested}.",
+                    id, fmt);
+            }
+
+            if (!string.IsNullOrWhiteSpace(deliveryFormat)
+                && Enum.TryParse<OutputFormat>(deliveryFormat, ignoreCase: true, out var liveFormat)
+                && MappedTransformService.SupportsOverrideFormat(liveFormat))
+            {
+                if (liveFormat != fmt)
+                    _logger.LogInformation(
+                        "Order {OrderId}: preview format {LiveFormat} taken from the supplier's live delivery config (requested {Requested}).",
+                        id, liveFormat, fmt);
+                fmt = liveFormat;
+            }
+            // No delivery-config format, or one that cannot be previewed → keep the requested fmt
+            // (the FE csv default) exactly as before. Never a 400 here; fmt already validated above.
+        }
 
         // Same manipulator guard as PUT — surface a bad rule at edit time, never at transform time.
         var validationError = ValidateOverrideManipulators(fieldOverride);
