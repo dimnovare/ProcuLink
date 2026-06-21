@@ -54,18 +54,25 @@ public sealed class CxmlCredentialResolver : ICxmlCredentialResolver
             : _encryption.Decrypt(row.EncryptedCxmlSharedSecret);
 
         // Nothing usable → legacy identities (null is the "unconfigured" signal the transform expects).
+        // A configured DTD counts as "configured" too: a supplier may set ONLY a DOCTYPE (no network
+        // identity, no secret) and that DTD must still reach the transform.
         var hasAnyIdentity = ids is not null && (
             !string.IsNullOrWhiteSpace(ids.FromDomain) || !string.IsNullOrWhiteSpace(ids.FromIdentity) ||
             !string.IsNullOrWhiteSpace(ids.ToDomain) || !string.IsNullOrWhiteSpace(ids.ToIdentity) ||
             !string.IsNullOrWhiteSpace(ids.SenderDomain) || !string.IsNullOrWhiteSpace(ids.SenderIdentity));
+        var hasDtd = ids is not null && !string.IsNullOrWhiteSpace(ids.DtdSystemId);
 
-        if (!hasAnyIdentity && string.IsNullOrWhiteSpace(sharedSecret))
+        if (!hasAnyIdentity && !hasDtd && string.IsNullOrWhiteSpace(sharedSecret))
             return null;
 
         return new CxmlCredentialConfig(
             ids?.FromDomain, ids?.FromIdentity,
             ids?.ToDomain, ids?.ToIdentity,
             ids?.SenderDomain, ids?.SenderIdentity,
-            sharedSecret);
+            sharedSecret)
+        {
+            DtdSystemId = ids?.DtdSystemId,
+            DtdPublicId = ids?.DtdPublicId,
+        };
     }
 }

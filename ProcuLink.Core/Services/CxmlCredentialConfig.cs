@@ -17,6 +17,13 @@ namespace ProcuLink.Core.Services;
 ///
 /// <para><see cref="SenderSharedSecret"/> is the DECRYPTED secret; it is emitted as the
 /// Sender credential's <c>&lt;SharedSecret&gt;</c> element only when non-blank.</para>
+///
+/// <para><b>Configurable DOCTYPE (T7):</b> <see cref="DtdSystemId"/> / <see cref="DtdPublicId"/> are
+/// the OPTIONAL cXML <c>&lt;!DOCTYPE&gt;</c> the supplier requires (free-text DTD URI — the founder
+/// doesn't yet know which version). They are init-only so the positional constructor and every
+/// existing caller stay byte-identical. A null/blank <see cref="DtdSystemId"/> emits NO DOCTYPE,
+/// so an unconfigured supplier is byte-identical to the pre-feature output. SYSTEM form when only
+/// <see cref="DtdSystemId"/> is set; PUBLIC form when <see cref="DtdPublicId"/> is also set.</para>
 /// </summary>
 public sealed record CxmlCredentialConfig(
     string? FromDomain,
@@ -25,7 +32,15 @@ public sealed record CxmlCredentialConfig(
     string? ToIdentity,
     string? SenderDomain,
     string? SenderIdentity,
-    string? SenderSharedSecret);
+    string? SenderSharedSecret)
+{
+    /// <summary>Optional cXML DOCTYPE SYSTEM id (the DTD URI). Null/blank → no DOCTYPE emitted.</summary>
+    public string? DtdSystemId { get; init; }
+
+    /// <summary>Optional cXML DOCTYPE PUBLIC id. Only meaningful alongside <see cref="DtdSystemId"/>
+    /// (PUBLIC form requires both); ignored when <see cref="DtdSystemId"/> is blank.</summary>
+    public string? DtdPublicId { get; init; }
+}
 
 /// <summary>
 /// Resolves a supplier's <see cref="CxmlCredentialConfig"/> (decrypting the sender shared

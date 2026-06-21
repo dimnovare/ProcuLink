@@ -579,7 +579,13 @@ internal sealed class OrderTransformService
             ToIdentity:         Prefer(live?.ToIdentity,     env.ToIdentity),
             SenderDomain:       Prefer(live?.SenderDomain,   env.SenderDomain),
             SenderIdentity:     Prefer(live?.SenderIdentity, env.SenderIdentity),
-            SenderSharedSecret: live?.SenderSharedSecret); // secret only ever comes from live config.
+            SenderSharedSecret: live?.SenderSharedSecret) // secret only ever comes from live config.
+        {
+            // The configurable DOCTYPE (T7) composes with the SAME precedence: the live delivery-config
+            // DTD wins per-field; the pinned-revision envelope fills the gap. Null/blank both → no DOCTYPE.
+            DtdSystemId = Prefer(live?.DtdSystemId, env.DtdSystemId),
+            DtdPublicId = Prefer(live?.DtdPublicId, env.DtdPublicId),
+        };
     }
 
     // ── Revision-pinned output mapping (launch batch 7) ───────────────────────

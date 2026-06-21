@@ -108,7 +108,9 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             new CxmlIdentityFields(
                 Trimmed(cxml.FromDomain), Trimmed(cxml.FromIdentity),
                 Trimmed(cxml.ToDomain), Trimmed(cxml.ToIdentity),
-                Trimmed(cxml.SenderDomain), Trimmed(cxml.SenderIdentity)),
+                Trimmed(cxml.SenderDomain), Trimmed(cxml.SenderIdentity),
+                // Configurable cXML DOCTYPE (T7) — persisted as camelCase dtdSystemId/dtdPublicId.
+                Trimmed(cxml.DtdSystemId), Trimmed(cxml.DtdPublicId)),
             CxmlJsonOptions);
 
         if (cxml.SenderSharedSecret is not null)
@@ -170,7 +172,8 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             ids?.FromDomain, ids?.FromIdentity,
             ids?.ToDomain, ids?.ToIdentity,
             ids?.SenderDomain, ids?.SenderIdentity,
-            HasSharedSecret: hasSecret);
+            HasSharedSecret: hasSecret,
+            DtdSystemId: ids?.DtdSystemId, DtdPublicId: ids?.DtdPublicId);
     }
 
     private static string? NormalizeOutputFormat(string? format)

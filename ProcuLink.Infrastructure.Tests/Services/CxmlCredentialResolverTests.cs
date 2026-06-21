@@ -96,4 +96,94 @@ public class CxmlCredentialResolverTests
             .ResolveAsync(Guid.NewGuid(), supplierId, default); // different org
         resolved.Should().BeNull();
     }
+
+    // ── Configurable cXML DOCTYPE (T7) — write→read round-trip ─────────────────
+
+    [Fact]
+    public async Task Resolve_CarriesDtd_WhenConfigured()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await new DeliveryConfigService(db, encryption).UpsertAsync(orgId, supplierId, CxmlReq(
+            new CxmlCredentialsInput(
+                "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID",
+                SenderSharedSecret: null,
+                DtdSystemId: "http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd",
+                DtdPublicId: "-//cXML//DTD cXML 1.2.024//EN")),
+            default);
+
+        var resolved = await new CxmlCredentialResolver(db, encryption).ResolveAsync(orgId, supplierId, default);
+
+        resolved.Should().NotBeNull();
+        resolved!.DtdSystemId.Should().Be("http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd");
+        resolved.DtdPublicId.Should().Be("-//cXML//DTD cXML 1.2.024//EN");
+    }
+
+    [Fact]
+    public async Task Resolve_CarriesDtd_EvenWhenNoNetworkIdentityOrSecret()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        // A supplier that ONLY needs a DOCTYPE — no network identities, no secret.
+        await new DeliveryConfigService(db, encryption).UpsertAsync(orgId, supplierId, CxmlReq(
+            new CxmlCredentialsInput(
+                null, null, null, null, null, null,
+                SenderSharedSecret: null,
+                DtdSystemId: "http://example.test/cXML.dtd")),
+            default);
+
+        var resolved = await new CxmlCredentialResolver(db, encryption).ResolveAsync(orgId, supplierId, default);
+
+        resolved.Should().NotBeNull("a configured DTD alone is enough to need a non-null config");
+        resolved!.DtdSystemId.Should().Be("http://example.test/cXML.dtd");
+    }
+
+    [Fact]
+    public async Task PersistedDtd_UsesCamelCaseJsonKeys_TheFrontendWrites()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await new DeliveryConfigService(db, encryption).UpsertAsync(orgId, supplierId, CxmlReq(
+            new CxmlCredentialsInput(
+                "NetworkId", "REDACTED-NETWORK-ID", null, null, null, null,
+                SenderSharedSecret: null,
+                DtdSystemId: "http://example.test/cXML.dtd",
+                DtdPublicId: "-//X//Y//EN")),
+            default);
+
+        var row = await db.SupplierDeliveryConfigs
+            .AsNoTracking()
+            .FirstAsync(x => x.OrgId == orgId && x.SupplierId == supplierId);
+
+        // The FRONTEND writes camelCase dtdSystemId / dtdPublicId — pin those exact keys.
+        row.CxmlConfigJson.Should().Contain("\"dtdSystemId\":\"http://example.test/cXML.dtd\"");
+        row.CxmlConfigJson.Should().Contain("\"dtdPublicId\":\"-//X//Y//EN\"");
+    }
+
+    [Fact]
+    public async Task Resolve_NoDtd_LeavesDtdNull()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await new DeliveryConfigService(db, encryption).UpsertAsync(orgId, supplierId, CxmlReq(
+            new CxmlCredentialsInput("NetworkId", "REDACTED-NETWORK-ID", null, null, null, null, null)), default);
+
+        var resolved = await new CxmlCredentialResolver(db, encryption).ResolveAsync(orgId, supplierId, default);
+
+        resolved.Should().NotBeNull();
+        resolved!.DtdSystemId.Should().BeNull();
+        resolved.DtdPublicId.Should().BeNull();
+    }
 }

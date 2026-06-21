@@ -90,7 +90,13 @@ public sealed class CxmlTransformService : ITransformService
             ToIdentity:         env.ToIdentity,
             SenderDomain:       env.SenderDomain,
             SenderIdentity:     env.SenderIdentity,
-            SenderSharedSecret: null);
+            SenderSharedSecret: null)
+        {
+            // Carry the per-revision DTD onto the credential path so the envelope-only call emits the
+            // configured DOCTYPE. Null/blank → no DOCTYPE (byte-identical).
+            DtdSystemId = env.DtdSystemId,
+            DtdPublicId = env.DtdPublicId,
+        };
     }
 
     public Task<TransformResult> TransformAsync(
@@ -112,8 +118,15 @@ public sealed class CxmlTransformService : ITransformService
         var totalAmount = order.Lines.Sum(l => l.Quantity * l.UnitPrice)
                               .ToString("F2", CultureInfo.InvariantCulture);
 
-        var doc = new XDocument(
-            new XDeclaration("1.0", "UTF-8", null),
+        // ── Configurable DOCTYPE (T7) ─────────────────────────────────────────
+        // When the supplier configured a cXML DTD, prepend an <!DOCTYPE cXML …> node BEFORE the root
+        // (XDocument.ToString — the serialization path used at the bottom — renders it after the
+        // <?xml?> declaration, verified by characterization tests). A null/blank DtdSystemId yields NO
+        // DocumentType node, so an unconfigured supplier is BYTE-IDENTICAL to the pre-feature output.
+        // PUBLIC form when a public id is also set; SYSTEM form when only the system id is set.
+        var docType = BuildDocumentType(cxmlCredentials);
+
+        var rootElement =
             new XElement("cXML",
                 new XAttribute("payloadID", payloadId),
                 new XAttribute("timestamp",  timestamp),
@@ -155,8 +168,15 @@ public sealed class CxmlTransformService : ITransformService
                              .Select(l => BuildItemOut(l, currency))
                     )
                 )
-            )
-        );
+            );
+
+        // Assemble the document: declaration, then the OPTIONAL DOCTYPE node (null → omitted), then
+        // the root. Passing a null content item to XDocument is ignored, so an unconfigured supplier
+        // produces the exact same node set — and bytes — as before.
+        var doc = new XDocument(
+            new XDeclaration("1.0", "UTF-8", null),
+            docType,
+            rootElement);
 
         var bytes  = Encoding.UTF8.GetBytes(doc.Declaration + Environment.NewLine + doc.ToString());
         var stream = new MemoryStream(bytes);
@@ -166,6 +186,28 @@ public sealed class CxmlTransformService : ITransformService
             ContentType:   "application/xml",
             FileExtension: ".cxml"
         ));
+    }
+
+    // ── DOCTYPE (T7) ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the optional cXML <c>&lt;!DOCTYPE&gt;</c> node from the configured DTD identifiers, or
+    /// returns null when no DTD is configured (→ no DocumentType node → byte-identical output).
+    /// A blank <see cref="CxmlCredentialConfig.DtdSystemId"/> is the "unset" signal — the public id
+    /// alone never emits a DOCTYPE. Values are trimmed. SYSTEM form when only the system id is set;
+    /// PUBLIC form when a public id is also set (XLinq renders PUBLIC iff a non-null public id is
+    /// supplied).
+    /// </summary>
+    private static XDocumentType? BuildDocumentType(CxmlCredentialConfig? cfg)
+    {
+        var systemId = cfg?.DtdSystemId?.Trim();
+        if (string.IsNullOrWhiteSpace(systemId))
+            return null;
+
+        var publicId = cfg?.DtdPublicId?.Trim();
+        publicId = string.IsNullOrWhiteSpace(publicId) ? null : publicId;
+
+        return new XDocumentType("cXML", publicId, systemId, null);
     }
 
     // ── Header credential helpers ─────────────────────────────────────────────
