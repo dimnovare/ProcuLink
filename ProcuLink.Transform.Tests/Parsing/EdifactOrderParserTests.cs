@@ -35,14 +35,41 @@ public class EdifactOrderParserTests
     // ── CanParse ──────────────────────────────────────────────────────────────
 
     [Fact]
-    public void CanParse_ReturnsTrueForEdi()
+    public void CanParse_ReturnsTrueForEdiAndTxt()
     {
+        // IN-3: EDIFACT interchanges are routinely delivered as .txt. CanParse must
+        // claim BOTH .edi and .txt so an extension-only gate (GetParser(extension))
+        // lets a .txt EDIFACT file through instead of rejecting it as unsupported.
         var parser = new EdifactOrderParser();
         parser.CanParse(".edi").Should().BeTrue();
         parser.CanParse(".EDI").Should().BeTrue();
+        parser.CanParse(".txt").Should().BeTrue();
+        parser.CanParse(".TXT").Should().BeTrue();
         parser.CanParse(".csv").Should().BeFalse();
         parser.CanParse(".xml").Should().BeFalse();
-        parser.CanParse(".txt").Should().BeFalse();  // factory dispatch is extension-only today
+        parser.CanParse(".pdf").Should().BeFalse();
+        parser.CanParse(".xlsx").Should().BeFalse();
+        parser.CanParse(".x12").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ParseAsync_PlainNonEdifactText_FailsLoudly_NeverSilentEmptySuccess()
+    {
+        // CRITICAL EDGE (IN-3): with .txt now claimed, a NON-EDIFACT .txt that fails
+        // content-sniffing falls through to this parser. It MUST fail LOUDLY — never
+        // silently produce an empty/0-line order that looks delivered. A plain text
+        // file has no UNH/ORDERS envelope, so ParseAsync throws a typed exception
+        // (the ingest 0-lines guard never even gets a populated-but-empty order).
+        const string plain =
+            "Hello, this is just an ordinary text note." + NL +
+            "It is not an EDIFACT interchange at all." + NL +
+            "Please call me back about the shipment." + NL;
+
+        var parser = new EdifactOrderParser();
+        var act = async () => await parser.ParseAsync(ToStream(plain), CancellationToken.None);
+
+        await act.Should().ThrowAsync<EdifactParseException>()
+                 .WithMessage("*UNH*");
     }
 
     [Fact]

@@ -62,14 +62,25 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
     private const char DefaultSegment   = '\'';
 
     /// <summary>
-    /// Returns true for <c>.edi</c>. <c>.txt</c> and content-type sniffing
-    /// (<c>application/edifact</c>, <c>application/edi-x12</c>) require the
-    /// caller / factory to do content-based dispatch — see
-    /// <see cref="LooksLikeEdifact"/>. The current <see cref="OrderParserFactory"/>
-    /// is extension-only, so we only claim <c>.edi</c> here.
+    /// Returns true for <c>.edi</c> AND <c>.txt</c>. EDIFACT interchanges are
+    /// routinely delivered with a <c>.txt</c> extension, so an extension-only
+    /// gate (e.g. <see cref="OrderParserFactory.GetParser(string)"/>) must let a
+    /// <c>.txt</c> through to this parser instead of rejecting it as an
+    /// unsupported format before the content-sniffing stream overload runs.
+    ///
+    /// Claiming <c>.txt</c> here means a NON-EDIFACT <c>.txt</c> (plain text) can
+    /// also reach <see cref="ParseAsync"/> as a fallback when no other parser
+    /// claims it — that is SAFE: <see cref="ParseAsync"/> fails LOUDLY (a typed
+    /// <see cref="EdifactParseException"/> for a missing UNH/ORDERS envelope, and
+    /// the no-segments guard), so a free-text <c>.txt</c> never produces a silent
+    /// empty/0-line "success". Content-type sniffing
+    /// (<c>application/edifact</c>, <c>application/edi-x12</c>) is handled by the
+    /// factory via <see cref="LooksLikeEdifact"/>; X12 <c>.txt</c> is sniffed and
+    /// routed to the X12 parser before this extension fallback.
     /// </summary>
     public bool CanParse(string fileExtension) =>
-        string.Equals(fileExtension, ".edi", StringComparison.OrdinalIgnoreCase);
+        string.Equals(fileExtension, ".edi", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(fileExtension, ".txt", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Public content-sniffing helper for the eventual factory upgrade that
