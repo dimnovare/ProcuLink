@@ -217,6 +217,11 @@ public class OrderMappingOverrideServiceTests
     [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.ReadyToDeliver)]
     [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.Transforming)]
     [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.Delivered)]
+    // MV-1 sibling: a delivery_failed order is re-dispatchable (RedeliverableFrom) and a
+    // dead-lettered order is rescue-requeueable — both ship the LATEST STORED artifact without
+    // re-transforming, so a mapping edit after either state must also reset to 'ready'.
+    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.DeliveryFailed)]
+    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.DeliveryDeadLetter)]
     public async Task UpsertAsync_ChangedOverride_PastReady_ResetsStatusToReady(string startStatus)
     {
         await using var db = NewDb();

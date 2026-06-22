@@ -35,8 +35,11 @@ public static class OrderStatusMachine
             [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
             [Delivering]         = Set(Delivered, DeliveryFailed, RejectedBySupplier),
             [Delivered]          = Set(DeliveryFailed, Ready, RejectedBySupplier),
-            [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, RejectedBySupplier),
-            [DeliveryDeadLetter] = Set(Delivering, RejectedBySupplier),
+            // delivery_failed/delivery_dead_letter → ready: the MV-1 sibling — a mapping edit after a
+            // failed/dead-lettered delivery invalidates the stored artifact (Retry/requeue would ship it
+            // un-re-transformed), so the order resets and the next Send re-transforms.
+            [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, Ready, RejectedBySupplier),
+            [DeliveryDeadLetter] = Set(Delivering, Ready, RejectedBySupplier),
             [RejectedBySupplier] = Set(),
             [Failed]             = Set(),
             [TransformFailed]    = Set(),

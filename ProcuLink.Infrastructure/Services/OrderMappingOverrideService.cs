@@ -91,12 +91,20 @@ public sealed class OrderMappingOverrideService : IOrderMappingOverrideService
     }
 
     /// <summary>
-    /// True for the post-transform delivery states whose persisted artifact a mapping edit would make
-    /// stale (the order has already been transformed at least once). <see cref="OrderStatusMachine"/>
-    /// documents <c>ready_to_deliver/delivered → ready</c> as the MV-1 re-transform path.
+    /// True for the post-transform states whose persisted artifact a mapping edit would make stale (the
+    /// order has already been transformed at least once). <see cref="OrderStatusMachine"/> documents
+    /// <c>ready_to_deliver/transforming/delivered → ready</c> as the MV-1 re-transform path. The two
+    /// delivery-failure states (<c>delivery_failed</c>, <c>delivery_dead_letter</c>) are included too:
+    /// both are post-artifact and re-dispatchable/rescuable — Retry/Redeliver and the ops requeue ship
+    /// the LATEST STORED artifact WITHOUT re-transforming, so a mapping edit after either state would
+    /// otherwise deliver the pre-edit content invisibly (the MV-1 sibling bug). <c>rejected_by_supplier</c>
+    /// is deliberately excluded: it has no outgoing transitions (it never re-dispatches), so its artifact
+    /// can never be re-shipped — resetting it would be dead weight, not a fix.
     /// </summary>
     private static bool IsPastReady(string status) =>
         status is OrderStatusConstants.ReadyToDeliver
                or OrderStatusConstants.Transforming
-               or OrderStatusConstants.Delivered;
+               or OrderStatusConstants.Delivered
+               or OrderStatusConstants.DeliveryFailed
+               or OrderStatusConstants.DeliveryDeadLetter;
 }
