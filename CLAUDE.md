@@ -6,7 +6,8 @@
 > (live build status + how to resume) → which points to the combined masterplan
 > [`docs/strategy/2026-06-15-output-layer-restructuring-masterplan.md`](docs/strategy/2026-06-15-output-layer-restructuring-masterplan.md)
 > (Parts 1–4 reconciled + verified; WS-0…WS-14, phases A→E). Build from there.
-> Phase A (the two P0 trust bombs) is in progress on branch `feat/trust-layer-ws0`.
+> Phase A (the two P0 trust bombs) is complete and merged to `main` (the `feat/trust-layer-ws0`
+> branch is gone); see the MASTER-BUILD-STATUS doc above for the live phase/status source of truth.
 > Older strategy/plan docs are historical context, superseded by the masterplan where they conflict.
 
 ## What this project is
@@ -467,7 +468,7 @@ Read this before starting new work:
   - New `ProcuLink.Api.Tests` project added to `ProcuLink.slnx`; 11 new tests (2 middleware + 2 suppliers + 2 parse job + 2 transform job + 3 billing).
   - `FakeAnalyticsService` in both `ProcuLink.Infrastructure.Tests/TestDoubles/` and `ProcuLink.Api.Tests/TestDoubles/`.
   - 2 new delivery emit tests in `ProcuLink.Infrastructure.Tests/Services/DeliveryServiceEmitsFirstDeliverySucceededTests.cs`.
-- **Last verified commands (historical snapshot — current count is 988; see top of file):**
+- **Last verified commands (historical snapshot — the 211/988 figures below are point-in-time; for the LIVE test count see `STATUS.md` / run the suites in git):**
   - `dotnet build ProcuLink.Api/ProcuLink.Api.csproj --no-restore` passed (API process locking DLLs; build Infrastructure + tests fine).
   - `dotnet test ProcuLink.slnx --no-restore` passed, **211 tests** (102 Transform + 11 Api.Tests + 98 Infrastructure), 0 failures.
   - `bun run build` in `project-proculink` passed; existing warnings remain for Sentry global error handler, Sentry `onRequestError`, Browserslist age, and Next ESLint plugin.
