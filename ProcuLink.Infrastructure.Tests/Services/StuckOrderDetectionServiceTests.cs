@@ -99,6 +99,43 @@ public class StuckOrderDetectionServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_StuckTransformingOrderPastRequeueCap_RecoversToReadyNotFailed()
+    {
+        // A 'transforming' strand is NOT a genuine failure: a transform job that actually ran
+        // and failed reverts itself to 'ready', so a strand the sweep still sees past the cap is
+        // the rare "claimed but no job ran" crash window. It must recover to the healthy,
+        // re-sendable 'ready' state — never terminal Failed (the delivery sweep's analogue
+        // dead-letters to the RECOVERABLE delivery_dead_letter, not Failed).
+        await using var db = CreateDb();
+        var orderId = await SeedOrderAsync(
+            db, OrderStatusConstants.Transforming, updatedMinutesAgo: 60, requeueCount: MaxRequeues);
+        var enqueuer = new RecordingParseEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        acted.Should().Be(1);
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        // Recovered to a healthy, re-sendable state — NOT terminal Failed.
+        order.Status.Should().Be(OrderStatusConstants.Ready);
+        // Requeue budget reset so a future genuine stall gets fresh attempts.
+        order.RequeueCount.Should().Be(0);
+
+        // Recovery does not use the parse seam.
+        enqueuer.Calls.Should().BeEmpty();
+
+        // A recovery (not a dead-letter) audit event is written.
+        var audit = await db.AuditEvents.SingleAsync(e => e.EntityId == orderId);
+        audit.Action.Should().Be("StuckTransformRecovered");
+        var root = audit.Payload!.RootElement;
+        root.GetProperty("reason").GetString().Should().Be("StuckTransformRecovered");
+        root.GetProperty("deadLettered").GetBoolean().Should().BeFalse();
+        root.GetProperty("toStatus").GetString().Should().Be(OrderStatusConstants.Ready);
+        // The stalled count is reported even though it is reset on the order.
+        root.GetProperty("requeueCount").GetInt32().Should().Be(MaxRequeues);
+    }
+
+    [Fact]
     public async Task RunAsync_RepeatedStalls_RequeueUntilCapThenDeadLetter()
     {
         await using var db = CreateDb();

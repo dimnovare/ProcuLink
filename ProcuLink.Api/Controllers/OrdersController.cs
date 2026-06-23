@@ -1327,12 +1327,20 @@ public sealed class OrdersController : ControllerBase
         // Atomically claim ready → transforming BEFORE enqueueing — the same transition
         // TransformAsync enforces. A racy read-then-enqueue here let two concurrent requests
         // both see "ready" and enqueue two transform jobs for the same order.
+        //
+        // CancellationToken.None (NOT the request ct) on purpose: there is no await between
+        // this committed claim and the synchronous Enqueue below, so a client disconnect can
+        // only interrupt the claim itself. If it cancelled the claim AFTER the row committed
+        // 'transforming' server-side but BEFORE this call returned, the method would unwind
+        // without enqueuing — stranding the order in 'transforming' with no job. Making the
+        // claim uninterruptible means it either fully happens (→ we enqueue) or never started
+        // (→ the order stays 'ready'); the rare strand window is closed.
         var claimed = await _db.PurchaseOrders
             .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId
                      && o.Status == OrderStatusConstants.Ready)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(o => o.Status, OrderStatusConstants.Transforming)
-                .SetProperty(o => o.UpdatedAt, DateTime.UtcNow), ct);
+                .SetProperty(o => o.UpdatedAt, DateTime.UtcNow), CancellationToken.None);
 
         if (claimed == 0)
         {
@@ -1359,13 +1367,15 @@ public sealed class OrdersController : ControllerBase
         catch
         {
             // Release the claim — a failed enqueue must not strand the order in
-            // 'transforming' (nothing else would ever pick it up again).
+            // 'transforming' (nothing else would ever pick it up again). CancellationToken.None
+            // so a client disconnect that triggered this path cannot also abort the
+            // compensating release.
             await _db.PurchaseOrders
                 .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId
                          && o.Status == OrderStatusConstants.Transforming)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.Status, OrderStatusConstants.Ready)
-                    .SetProperty(o => o.UpdatedAt, DateTime.UtcNow), ct);
+                    .SetProperty(o => o.UpdatedAt, DateTime.UtcNow), CancellationToken.None);
             throw;
         }
 

@@ -20,10 +20,12 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
     };
 
     /// <summary>
-    /// How many times a single order may be re-enqueued before we give up and
-    /// dead-letter it. A transient Worker restart mid-job is recoverable; an order
-    /// that keeps stalling after this many requeues is genuinely failing, so we stop
-    /// looping it and mark it failed with a clear reason.
+    /// How many times a single order may be re-enqueued before we stop looping it.
+    /// A transient Worker restart mid-job is recoverable; past this cap the outcome is
+    /// status-aware: a 'parsing' strand that keeps failing to parse is dead-lettered to
+    /// terminal 'failed', whereas a 'transforming' strand is recovered to the re-sendable
+    /// 'ready' state (a real failing transform reverts itself to 'ready', so a strand the
+    /// sweep still sees is a rare claimed-but-no-job crash window — never a true failure).
     /// </summary>
     private const int MaxRequeues = 2;
 
@@ -131,9 +133,58 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
                     "StuckOrderDetection: order {OrderId} (org {OrgId}) stuck in '{FromStatus}' since {StuckSince:o} — requeueing (attempt {RequeueCount}/{MaxRequeues}, new status '{ToStatus}').",
                     order.Id, order.OrgId, fromStatus, stuckSince, order.RequeueCount, MaxRequeues, order.Status);
             }
+            else if (fromStatus == OrderStatusConstants.Transforming)
+            {
+                // ── Requeue cap exceeded, but a 'transforming' strand is NOT a genuine
+                //    failure → recover to 'ready', never terminal Failed ───────────────
+                // The order is already fully resolved, and a transform job that actually RAN
+                // and failed reverts ITSELF to 'ready' (+ Hangfire AutomaticRetry) — so a strand
+                // this sweep still sees only ever means "claimed but no job ran": the rare crash
+                // window between the controller's claim commit and its synchronous enqueue. That
+                // must never become a permanent false-failure. Recover it to the healthy,
+                // re-sendable 'ready' state (mirrors how a stuck DELIVERY dead-letters to the
+                // RECOVERABLE delivery_dead_letter, never terminal Failed). RequeueCount is reset
+                // so a future genuine stall gets a fresh requeue budget.
+                var stalledRequeueCount = order.RequeueCount;
+                order.Status = OrderStatusConstants.Ready;
+                order.RequeueCount = 0;
+                order.UpdatedAt = now;
+
+                var recoverPayload = JsonSerializer.Serialize(new
+                {
+                    reason = "StuckTransformRecovered",
+                    fromStatus,
+                    toStatus = OrderStatusConstants.Ready,
+                    stuckSince,
+                    detectedAt = now,
+                    thresholdMinutes = stuckThreshold.TotalMinutes,
+                    requeueCount = stalledRequeueCount,
+                    maxRequeues = MaxRequeues,
+                    deadLettered = false,
+                    detail = "Order stranded in 'transforming' (claimed but no transform job ran) past the requeue cap — recovered to 'ready' so it can be re-sent; never marked failed.",
+                });
+
+                _db.AuditEvents.Add(new AuditEvent
+                {
+                    Id = Guid.NewGuid(),
+                    OrgId = order.OrgId,
+                    UserId = null,
+                    EntityType = "Order",
+                    EntityId = order.Id,
+                    Action = "StuckTransformRecovered",
+                    Payload = JsonDocument.Parse(recoverPayload),
+                    CreatedAt = now,
+                });
+
+                _logger.LogWarning(
+                    "StuckOrderDetection: order {OrderId} (org {OrgId}) stranded in 'transforming' since {StuckSince:o} past the requeue cap — recovering to 'ready' (NOT failed).",
+                    order.Id, order.OrgId, stuckSince);
+            }
             else
             {
                 // ── Requeue cap exceeded → dead-letter (genuinely failed) ─────────
+                // Reached only for a 'parsing' strand: a file that keeps failing to parse is
+                // genuinely unprocessable, so it is dead-lettered as failed.
                 order.Status = OrderStatusConstants.Failed;
                 order.UpdatedAt = now;
 
