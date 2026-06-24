@@ -250,4 +250,56 @@ public class X12OrderParserTests
         var act = async () => await parser.ParseAsync(ToStream(edi), CancellationToken.None);
         await act.Should().ThrowAsync<X12ParseException>().WithMessage("*BEG*");
     }
+
+    // ── B3: locale-aware decimal parsing (shared NumberParsing reader) ───────────
+    // X12 is an invariant-locale standard ('.' decimal, ',' groups thousands). The old
+    // naive ParseDecimal only swapped ','→'.' when no '.' was present, so EU "1.234,56"
+    // collapsed to 1.23456 (group dropped) and "73,22" passed through as the catastrophic
+    // 7322. Both are now read correctly OR flagged NeedsReview — never silently wrong.
+
+    private static async Task<ParsedOrderLine> ParsePo1PriceAsync(string priceElement)
+    {
+        // '*' is the X12 element separator, so a ',' inside the price is a normal character,
+        // not a delimiter — the price element survives intact.
+        var edi =
+            Header() +
+            $"PO1*1*2*EA*{priceElement}*PE*BP*ITEM-1~" + NL +
+            Trailer(lineCount: 1, segCount: 6);
+        var parser = new X12OrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+        result.Lines.Should().ContainSingle();
+        return result.Lines[0];
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuThousandsGroupedPrice_ReadsCorrectlyOrFlags()
+    {
+        // "1.234,56" must read as 1234.56 (last separator ',' is the decimal) — never null,
+        // never 1.23456.
+        var line = await ParsePo1PriceAsync("1.234,56");
+
+        line.UnitPrice.Should().NotBe(1.23456m, "the thousands group must not be silently dropped");
+        (line.UnitPrice == 1234.56m || line.NeedsReview).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuCommaDecimalPrice_IsNeverReadAs100x()
+    {
+        // "73,22" must never become 7322.
+        var line = await ParsePo1PriceAsync("73,22");
+
+        line.UnitPrice.Should().NotBe(7322m, "a comma must never be treated as a thousands group here");
+        (line.UnitPrice == 73.22m || line.NeedsReview).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ParseAsync_InvariantPrices_AreByteUnchanged()
+    {
+        // The fix must not alter correctly-formatted invariant numbers.
+        (await ParsePo1PriceAsync("73.22")).UnitPrice.Should().Be(73.22m);
+        (await ParsePo1PriceAsync("1234.56")).UnitPrice.Should().Be(1234.56m);
+
+        var clean = await ParsePo1PriceAsync("73.22");
+        clean.NeedsReview.Should().BeFalse();
+    }
 }

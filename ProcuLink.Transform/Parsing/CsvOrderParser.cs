@@ -123,8 +123,8 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
         foreach (var raw in rows)
         {
             var lineNumber  = int.TryParse(raw.LineNumber, out var ln) ? ln : autoLineNum;
-            var (qtyVal,   qtyAmbiguous)   = ParseDecimalFlexible(raw.Quantity,  european);
-            var (priceVal, priceAmbiguous) = ParseDecimalFlexible(raw.UnitPrice, european);
+            var (qtyVal,   qtyAmbiguous)   = NumberParsing.TryParseFlexibleDecimal(raw.Quantity,  european);
+            var (priceVal, priceAmbiguous) = NumberParsing.TryParseFlexibleDecimal(raw.UnitPrice, european);
             var buyerCode   = NullIfEmpty(raw.BuyerItemCode ?? raw.ItemCode) ?? string.Empty;
 
             lines.Add(new ParsedOrderLine(
@@ -138,98 +138,13 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
                 // parser could not unambiguously read (e.g. scientific notation "1.5e2",
                 // letters) flags the line so it surfaces for human review.
                 NeedsReview:   qtyAmbiguous || priceAmbiguous,
-                ReviewReason:  BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous)
+                ReviewReason:  NumberParsing.BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous)
             ));
 
             autoLineNum++;
         }
 
         return new ParsedOrder(poNumber, orderDate, buyerName, currency, lines);
-    }
-
-    /// <summary>
-    /// Short "why was this flagged" string for the review UI. Null when nothing was
-    /// ambiguous (the line is not parser-flagged).
-    /// </summary>
-    private static string? BuildAmbiguityReason(bool qtyAmbiguous, bool priceAmbiguous) =>
-        (qtyAmbiguous, priceAmbiguous) switch
-        {
-            (true,  true)  => "The quantity and unit price could not be read unambiguously from the source file.",
-            (true,  false) => "The quantity could not be read unambiguously from the source file.",
-            (false, true)  => "The unit price could not be read unambiguously from the source file.",
-            _              => null,
-        };
-
-    /// <summary>
-    /// Parse a decimal that may be US ("1,234.56", "73.22") or European
-    /// ("1.234,56", "73,22", "1.000") notation. Rules:
-    ///  • both separators present → the LAST one is the decimal separator;
-    ///  • only ',' → decimal, UNLESS it's a single comma with exactly 3 trailing
-    ///    digits and the file is NOT European (then it's a US thousands group);
-    ///  • only '.' → decimal, UNLESS the file IS European AND it's a single dot
-    ///    with exactly 3 trailing digits (then it's a European thousands group).
-    /// `european` is inferred from a ';' delimiter. This prevents the silent
-    /// 10×/100× corruption where "73,22" was read as 7322 under InvariantCulture.
-    ///
-    /// Returns <c>(value, ambiguous)</c>. <c>ambiguous</c> is true when the token
-    /// could NOT be read unambiguously and the parser refuses to guess — the caller
-    /// flags the line for review instead of emitting a silently-wrong number. A blank
-    /// token is NOT ambiguous (it is a legitimately empty optional value → null).
-    /// </summary>
-    private static (decimal? Value, bool Ambiguous) ParseDecimalFlexible(string? raw, bool european)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return (null, false);
-
-        // Guard against the silent-wrong-value class: the digit/separator filter below
-        // strips EVERY non-numeric character, so a stray letter would be deleted and the
-        // remaining digits concatenated (e.g. "1.5e2" → "1.52" — a plausible, catastrophic
-        // mis-price). Only genuine numeric noise may be silently stripped: whitespace
-        // (incl. NBSP/thin-space thousands separators) and currency symbols. ANY other
-        // character (letters such as an 'e' exponent, '%', etc.) means the token is
-        // ambiguous → refuse it and let the line go to review.
-        foreach (var c in raw)
-        {
-            if (char.IsDigit(c) || c is '.' or ',' or '-' or '+') continue;
-            if (char.IsWhiteSpace(c)) continue;
-            if (char.GetUnicodeCategory(c) == UnicodeCategory.CurrencySymbol) continue;
-            return (null, true);
-        }
-
-        var s = new string(raw.Where(c => char.IsDigit(c) || c is '.' or ',' or '-').ToArray());
-        if (s.Length == 0 || s == "-") return (null, false);
-
-        int lastDot = s.LastIndexOf('.'), lastComma = s.LastIndexOf(',');
-        char? decimalSep;
-        if (lastDot >= 0 && lastComma >= 0)
-        {
-            decimalSep = lastComma > lastDot ? ',' : '.';                 // both → last wins
-        }
-        else if (lastComma >= 0)
-        {
-            bool single = s.IndexOf(',') == lastComma;
-            int trailing = s.Length - lastComma - 1;
-            decimalSep = (european || !(single && trailing == 3)) ? ',' : null;
-        }
-        else if (lastDot >= 0)
-        {
-            bool single = s.IndexOf('.') == lastDot;
-            int trailing = s.Length - lastDot - 1;
-            decimalSep = (european && single && trailing == 3) ? null : '.';
-        }
-        else
-        {
-            decimalSep = null;                                            // pure integer
-        }
-
-        string normalized = decimalSep is char ds
-            ? s.Replace(ds == '.' ? "," : ".", "").Replace(ds, '.')      // strip groups, decimal → '.'
-            : s.Replace(",", "").Replace(".", "");                       // integer / thousands-only
-
-        // The token contained only numeric characters but still didn't parse (e.g. "1-2-3",
-        // "--5", or a lone separator) — treat as ambiguous so it surfaces for review rather
-        // than being silently dropped to null.
-        return decimal.TryParse(normalized, NumberStyles.Number, CultureInfo.InvariantCulture, out var d)
-            ? (d, false) : (null, true);
     }
 
     private static DateTime? ParseDate(string? value)

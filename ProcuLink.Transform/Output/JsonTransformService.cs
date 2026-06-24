@@ -26,6 +26,10 @@ public sealed class JsonTransformService : ITransformService
         CxmlCredentialConfig? cxmlCredentials = null) // not used: JSON has no cXML Header
     {
         ValidateOrder(order);
+        // B1: same price>0 / qty>0 output invariant as the fixed CSV/XML transforms — for a fixed
+        // JSON transform the entity's canonical columns ARE the emitted bytes (override/template/
+        // OutputNode paths emit elsewhere and are intentionally not guarded here).
+        OutputFieldValidator.ValidateEntity(order, format);
 
         var lines = order.Lines
             .OrderBy(l => l.LineNumber)

@@ -463,4 +463,51 @@ public class CxmlOrderParserTests
         result.Lines[1].BuyerItemCode.Should().Be("SUP-XYZ-002");
         result.Lines[1].Quantity.Should().Be(5m);
     }
+
+    // ── B3: locale-aware decimal parsing (shared NumberParsing reader) ───────────
+    // cXML 1.2 is an invariant-locale standard ('.' decimal, ',' groups thousands). The old
+    // naive ParseDecimal collapsed EU "1.234,56" to 1.23456 and let "73,22" through as the
+    // catastrophic 7322. Both are now read correctly OR flagged NeedsReview, and invariant
+    // numbers stay byte-identical.
+
+    private static async Task<ParsedOrderLine> ParseCxmlLineAsync(string quantity, string unitPrice)
+    {
+        var parser = new CxmlOrderParser();
+        var result = await parser.ParseAsync(
+            ToStream(SampleCxml(quantity: quantity, unitPrice: unitPrice)), CancellationToken.None);
+        result.Lines.Should().ContainSingle();
+        return result.Lines[0];
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuThousandsGroupedPrice_ReadsCorrectlyOrFlags()
+    {
+        var line = await ParseCxmlLineAsync(quantity: "1", unitPrice: "1.234,56");
+
+        line.UnitPrice.Should().NotBe(1.23456m, "the thousands group must not be silently dropped");
+        (line.UnitPrice == 1234.56m || line.NeedsReview).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuCommaDecimalPrice_IsNeverReadAs100x()
+    {
+        var line = await ParseCxmlLineAsync(quantity: "2", unitPrice: "73,22");
+
+        line.UnitPrice.Should().NotBe(7322m, "a comma must never be treated as a thousands group here");
+        (line.UnitPrice == 73.22m || line.NeedsReview).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ParseAsync_InvariantQuantityAndPrice_AreByteUnchanged()
+    {
+        var line = await ParseCxmlLineAsync(quantity: "10", unitPrice: "73.22");
+
+        line.Quantity.Should().Be(10m);
+        line.UnitPrice.Should().Be(73.22m);
+        line.NeedsReview.Should().BeFalse();
+
+        var grouped = await ParseCxmlLineAsync(quantity: "1", unitPrice: "1234.56");
+        grouped.UnitPrice.Should().Be(1234.56m);
+        grouped.NeedsReview.Should().BeFalse();
+    }
 }

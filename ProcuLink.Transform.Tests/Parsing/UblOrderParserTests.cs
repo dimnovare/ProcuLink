@@ -438,4 +438,75 @@ public class UblOrderParserTests
         using var stream = ToStream(xml);
         UblOrderParser.IsUblOrderDocument(stream).Should().BeFalse();
     }
+
+    // ── B3: locale-aware decimal parsing (shared NumberParsing reader) ───────────
+    // UBL 2.1 / Peppol BIS is an invariant-locale standard ('.' decimal, ',' groups
+    // thousands). The old naive ParseDecimal collapsed EU "1.234,56" to 1.23456 and let
+    // "73,22" through as the catastrophic 7322. Both are now read correctly OR flagged
+    // NeedsReview, and invariant numbers stay byte-identical.
+
+    private static string UblWithQuantityAndPrice(string quantity, string price) => $"""
+        <?xml version="1.0" encoding="UTF-8"?>
+        <Order xmlns="{UblOrderNs}"
+               xmlns:cbc="{CbcNs}"
+               xmlns:cac="{CacNs}">
+          <cbc:ID>PO-DEC</cbc:ID>
+          <cbc:IssueDate>2026-05-28</cbc:IssueDate>
+          <cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
+          <cac:OrderLine>
+            <cac:LineItem>
+              <cbc:ID>1</cbc:ID>
+              <cbc:Quantity unitCode="EA">{quantity}</cbc:Quantity>
+              <cac:Price>
+                <cbc:PriceAmount currencyID="EUR">{price}</cbc:PriceAmount>
+              </cac:Price>
+              <cac:Item>
+                <cbc:Name>Decimal Item</cbc:Name>
+                <cac:SellersItemIdentification><cbc:ID>SUP-DEC-1</cbc:ID></cac:SellersItemIdentification>
+              </cac:Item>
+            </cac:LineItem>
+          </cac:OrderLine>
+        </Order>
+        """;
+
+    private static async Task<ParsedOrderLine> ParseUblLineAsync(string quantity, string price)
+    {
+        var parser = new UblOrderParser();
+        var result = await parser.ParseAsync(
+            ToStream(UblWithQuantityAndPrice(quantity, price)), CancellationToken.None);
+        result.Lines.Should().ContainSingle();
+        return result.Lines[0];
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuThousandsGroupedPrice_ReadsCorrectlyOrFlags()
+    {
+        var line = await ParseUblLineAsync(quantity: "1", price: "1.234,56");
+
+        line.UnitPrice.Should().NotBe(1.23456m, "the thousands group must not be silently dropped");
+        (line.UnitPrice == 1234.56m || line.NeedsReview).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuCommaDecimalPrice_IsNeverReadAs100x()
+    {
+        var line = await ParseUblLineAsync(quantity: "2", price: "73,22");
+
+        line.UnitPrice.Should().NotBe(7322m, "a comma must never be treated as a thousands group here");
+        (line.UnitPrice == 73.22m || line.NeedsReview).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ParseAsync_InvariantQuantityAndPrice_AreByteUnchanged()
+    {
+        var line = await ParseUblLineAsync(quantity: "10", price: "73.22");
+
+        line.Quantity.Should().Be(10m);
+        line.UnitPrice.Should().Be(73.22m);
+        line.NeedsReview.Should().BeFalse();
+
+        var grouped = await ParseUblLineAsync(quantity: "1", price: "1234.56");
+        grouped.UnitPrice.Should().Be(1234.56m);
+        grouped.NeedsReview.Should().BeFalse();
+    }
 }

@@ -164,13 +164,14 @@ public sealed class UblOrderParser : IPurchaseOrderParser
 
             // Quantity: <cbc:Quantity unitCode="EA">10</cbc:Quantity>
             var quantityEl = GetChild(lineItemEl, "Quantity");
-            var quantity   = ParseDecimal(quantityEl?.Value) ?? 0m;
+            var (quantityVal, qtyAmbiguous) = ParseDecimal(quantityEl?.Value);
+            var quantity   = quantityVal ?? 0m;
             var unit       = quantityEl?.Attribute("unitCode")?.Value?.Trim();
 
             // Price: <cac:Price><cbc:PriceAmount currencyID="EUR">125.00</cbc:PriceAmount></cac:Price>
             var priceEl        = GetChild(lineItemEl, "Price");
             var priceAmountEl  = priceEl is null ? null : GetChild(priceEl, "PriceAmount");
-            var unitPrice      = ParseDecimal(priceAmountEl?.Value);
+            var (unitPrice, priceAmbiguous) = ParseDecimal(priceAmountEl?.Value);
 
             // Line currency overrides header if header lacked one
             var lineCurrency = priceAmountEl?.Attribute("currencyID")?.Value;
@@ -216,7 +217,12 @@ public sealed class UblOrderParser : IPurchaseOrderParser
                 Description:   NullIfEmpty(itemName),
                 Quantity:      quantity,
                 Unit:          NullIfEmpty(unit),
-                UnitPrice:     unitPrice));
+                UnitPrice:     unitPrice,
+                // Refuse to deliver a silently-wrong number: a quantity or unit price the parser
+                // could not read unambiguously flags the line for human review. Mirrors
+                // CsvOrderParser/EdifactOrderParser's NeedsReview/ReviewReason contract.
+                NeedsReview:   qtyAmbiguous || priceAmbiguous,
+                ReviewReason:  NumberParsing.BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous)));
 
             autoLine++;
         }
@@ -343,16 +349,16 @@ public sealed class UblOrderParser : IPurchaseOrderParser
         return null;
     }
 
-    private static decimal? ParseDecimal(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        var normalized = value.Trim();
-        if (normalized.Contains(',') && !normalized.Contains('.'))
-            normalized = normalized.Replace(',', '.');
-        return decimal.TryParse(normalized, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)
-            ? d
-            : null;
-    }
+    /// <summary>
+    /// Parse a UBL numeric value via the shared locale-aware reader. UBL 2.1 / Peppol BIS
+    /// is an invariant-locale standard: '.' is the decimal separator and ',' groups thousands,
+    /// so <c>european: false</c>. Returns <c>(value, ambiguous)</c>; the caller flags the line
+    /// for review when the token could not be read unambiguously rather than emitting a
+    /// silently-wrong number. This replaces the old "swap ',' for '.' only when no '.' present"
+    /// reader that read EU "1.234,56" as 1.23456 (group dropped) or null.
+    /// </summary>
+    private static (decimal? Value, bool Ambiguous) ParseDecimal(string? value) =>
+        NumberParsing.TryParseFlexibleDecimal(value, european: false);
 
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

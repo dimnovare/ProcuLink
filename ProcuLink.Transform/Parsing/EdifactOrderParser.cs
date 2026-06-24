@@ -599,72 +599,14 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
     /// EU-grouped "1.000" as 1.0 (~1000× under-read), both silently.
     /// </summary>
     private static (decimal? Value, bool Ambiguous) ParseDecimal(string? value, char decimalMark)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return (null, false);
-
         // A comma decimal mark is the locale signal that this is a European number (where '.' groups
         // thousands). Anything else (the ISO default '.') reads as US/invariant where '.' is decimal.
-        var european = decimalMark == ',';
+        // Delegates to the shared NumberParsing reader so EDIFACT, CSV, X12, UBL and cXML all read the
+        // same EU/US number identically.
+        => NumberParsing.TryParseFlexibleDecimal(value, european: decimalMark == ',');
 
-        // Guard against silently stripping a stray non-numeric character into a plausible-but-wrong
-        // number (e.g. "1.5e2" → "1.52"): only digits, the two separators, a sign, whitespace and
-        // currency symbols are allowed; ANY other character makes the token ambiguous → review.
-        foreach (var c in value)
-        {
-            if (char.IsDigit(c) || c is '.' or ',' or '-' or '+') continue;
-            if (char.IsWhiteSpace(c)) continue;
-            if (char.GetUnicodeCategory(c) == UnicodeCategory.CurrencySymbol) continue;
-            return (null, true);
-        }
-
-        var s = new string(value.Where(c => char.IsDigit(c) || c is '.' or ',' or '-').ToArray());
-        if (s.Length == 0 || s == "-") return (null, false);
-
-        int lastDot = s.LastIndexOf('.'), lastComma = s.LastIndexOf(',');
-        char? decimalSep;
-        if (lastDot >= 0 && lastComma >= 0)
-        {
-            decimalSep = lastComma > lastDot ? ',' : '.';                 // both → last wins
-        }
-        else if (lastComma >= 0)
-        {
-            bool single = s.IndexOf(',') == lastComma;
-            int trailing = s.Length - lastComma - 1;
-            decimalSep = (european || !(single && trailing == 3)) ? ',' : null;
-        }
-        else if (lastDot >= 0)
-        {
-            bool single = s.IndexOf('.') == lastDot;
-            int trailing = s.Length - lastDot - 1;
-            decimalSep = (european && single && trailing == 3) ? null : '.';
-        }
-        else
-        {
-            decimalSep = null;                                            // pure integer
-        }
-
-        string normalized = decimalSep is char ds
-            ? s.Replace(ds == '.' ? "," : ".", "").Replace(ds, '.')      // strip groups, decimal → '.'
-            : s.Replace(",", "").Replace(".", "");                       // integer / thousands-only
-
-        // Numeric characters only but still unparseable (e.g. "1-2-3", a lone separator) → ambiguous,
-        // so it surfaces for review rather than being silently dropped to null.
-        return decimal.TryParse(normalized, NumberStyles.Number, CultureInfo.InvariantCulture, out var d)
-            ? (d, false) : (null, true);
-    }
-
-    /// <summary>
-    /// Short "why was this flagged" string for the review UI, matching the CsvOrderParser copy.
-    /// Null when nothing was ambiguous.
-    /// </summary>
     private static string? BuildAmbiguityReason(bool qtyAmbiguous, bool priceAmbiguous) =>
-        (qtyAmbiguous, priceAmbiguous) switch
-        {
-            (true,  true)  => "The quantity and unit price could not be read unambiguously from the source file.",
-            (true,  false) => "The quantity could not be read unambiguously from the source file.",
-            (false, true)  => "The unit price could not be read unambiguously from the source file.",
-            _              => null,
-        };
+        NumberParsing.BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous);
 
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

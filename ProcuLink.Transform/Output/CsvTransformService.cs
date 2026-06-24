@@ -27,6 +27,14 @@ public sealed class CsvTransformService : ITransformService
         CxmlCredentialConfig? cxmlCredentials = null) // not used: CSV has no cXML Header
     {
         ValidateOrder(order);
+        // B1: enforce the price>0 / qty>0 output invariant the X12/UBL/cXML transforms already apply.
+        // For a FIXED CSV transform the entity's canonical columns ARE the emitted bytes, so a line
+        // with UnitPrice<=0 or Quantity<=0 is held (revert to 'ready', no artifact) rather than
+        // delivering a $0 / zero-qty line. NOTE: override / whole-document-template / OutputNode-tree
+        // output emits via a different path that can legitimately transform values or drop lines
+        // (IncludeWhen), so the guard lives HERE in the fixed transforms — not centrally — to avoid
+        // pre-empting those features.
+        OutputFieldValidator.ValidateEntity(order, format);
 
         var sb = new StringBuilder();
         sb.AppendLine("PoNumber,OrderDate,Currency,BuyerName,SupplierItemCode,Description,Quantity,Unit,UnitPrice,LineTotal");

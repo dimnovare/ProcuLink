@@ -33,6 +33,10 @@ public sealed class XmlTransformService : ITransformService
         CxmlCredentialConfig? cxmlCredentials = null) // not used: generic XML has no cXML Header
     {
         ValidateOrder(order);
+        // B1: same price>0 / qty>0 output invariant as the fixed CSV/JSON transforms — for a fixed
+        // XML transform the entity's canonical columns ARE the emitted bytes (override/template/
+        // OutputNode paths emit elsewhere and are intentionally not guarded here).
+        OutputFieldValidator.ValidateEntity(order, format);
 
         var doc = new XDocument(
             new XDeclaration("1.0", "utf-8", null),

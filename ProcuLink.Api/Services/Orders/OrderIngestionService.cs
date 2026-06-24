@@ -1877,14 +1877,27 @@ internal sealed class OrderIngestionService
         if (mapped.OrderDate is not null && DateTime.TryParse(mapped.OrderDate, CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var d))
             orderDate = d;
 
-        var lines = mapped.Lines.Select((l, i) => new ParsedOrderLine(
-            LineNumber:    int.TryParse(l.LineNumber, out var ln) ? ln : (i + 1),
-            BuyerItemCode: l.BuyerItemCode ?? string.Empty,
-            Description:   l.Description,
-            Quantity:      decimal.TryParse(l.Quantity, NumberStyles.Any, CultureInfo.InvariantCulture, out var qty) ? qty : 0,
-            Unit:          l.Unit,
-            UnitPrice:     decimal.TryParse(l.UnitPrice, NumberStyles.Any, CultureInfo.InvariantCulture, out var up) ? up : null
-        )).ToList();
+        // Read quantity/unit price through the SAME locale-aware reader the direct CSV
+        // path uses (CsvOrderParser → NumberParsing), with a ';' template separator as the
+        // European locale signal (',' is the decimal mark there). The previous
+        // NumberStyles.Any + InvariantCulture read EU "73,22" as 7322 (100× over) and
+        // "1.234,56" as null/0, both silently; now an ambiguous/unparseable token flags the
+        // line NeedsReview so a coordinator checks instead of a wrong value shipping.
+        var european = config.Separator == ";";
+        var lines = mapped.Lines.Select((l, i) =>
+        {
+            var (qty,   qtyAmbiguous)   = NumberParsing.TryParseFlexibleDecimal(l.Quantity,  european);
+            var (price, priceAmbiguous) = NumberParsing.TryParseFlexibleDecimal(l.UnitPrice, european);
+            return new ParsedOrderLine(
+                LineNumber:    int.TryParse(l.LineNumber, out var ln) ? ln : (i + 1),
+                BuyerItemCode: l.BuyerItemCode ?? string.Empty,
+                Description:   l.Description,
+                Quantity:      qty ?? 0m,
+                Unit:          l.Unit,
+                UnitPrice:     price,
+                NeedsReview:   qtyAmbiguous || priceAmbiguous,
+                ReviewReason:  NumberParsing.BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous));
+        }).ToList();
 
         return Task.FromResult(new ParsedOrder(
             PoNumber:  mapped.PoNumber ?? string.Empty,

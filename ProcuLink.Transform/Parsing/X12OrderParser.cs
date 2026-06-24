@@ -216,6 +216,8 @@ public sealed class X12OrderParser : IPurchaseOrderParser
         var linePrice  = (decimal?)null;
         var lineNumber = 0;
         var lineCode   = string.Empty;
+        var qtyAmbiguous   = false;
+        var priceAmbiguous = false;
 
         void Flush()
         {
@@ -226,7 +228,12 @@ public sealed class X12OrderParser : IPurchaseOrderParser
                 Description:   NullIfEmpty(lineDescr),
                 Quantity:      lineQty,
                 Unit:          NullIfEmpty(lineUnit),
-                UnitPrice:     linePrice));
+                UnitPrice:     linePrice,
+                // Refuse to deliver a silently-wrong number: a quantity or unit price the parser
+                // could not read unambiguously flags the line for human review. Mirrors
+                // CsvOrderParser/EdifactOrderParser's NeedsReview/ReviewReason contract.
+                NeedsReview:   qtyAmbiguous || priceAmbiguous,
+                ReviewReason:  NumberParsing.BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous)));
         }
 
         foreach (var seg in segments)
@@ -235,8 +242,10 @@ public sealed class X12OrderParser : IPurchaseOrderParser
             {
                 case "PO1":
                     Flush();
-                    currentPo1 = seg;
-                    lineDescr  = null;
+                    currentPo1     = seg;
+                    lineDescr      = null;
+                    qtyAmbiguous   = false;
+                    priceAmbiguous = false;
 
                     // PO1*1*12*EA*4.50*PE*BP*ACME-WIDGET-A*VP*SUP-001
                     //   01 = assigned identifier (line number)
@@ -247,9 +256,13 @@ public sealed class X12OrderParser : IPurchaseOrderParser
                     lineNumber = int.TryParse(lnRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ln)
                         ? ln
                         : auto;
-                    lineQty   = ParseDecimal(seg.Element(2)) ?? 0m;
+                    var (qtyVal,   qtyAmb)   = ParseDecimal(seg.Element(2));
+                    var (priceVal, priceAmb) = ParseDecimal(seg.Element(4));
+                    lineQty        = qtyVal ?? 0m;
+                    qtyAmbiguous   = qtyAmb;
+                    linePrice      = priceVal;
+                    priceAmbiguous = priceAmb;
                     lineUnit  = NullIfEmpty(seg.Element(3));
-                    linePrice = ParseDecimal(seg.Element(4));
                     lineCode  = ExtractItemCode(seg) ?? string.Empty;
                     auto++;
                     break;
@@ -396,16 +409,16 @@ public sealed class X12OrderParser : IPurchaseOrderParser
             : null;
     }
 
-    private static decimal? ParseDecimal(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        var normalized = value.Trim();
-        if (normalized.Contains(',') && !normalized.Contains('.'))
-            normalized = normalized.Replace(',', '.');
-        return decimal.TryParse(normalized, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)
-            ? d
-            : null;
-    }
+    /// <summary>
+    /// Parse an X12 numeric value via the shared locale-aware reader. X12 (ASC X12 850)
+    /// is an invariant-locale standard: '.' is the decimal separator and ',' groups
+    /// thousands, so <c>european: false</c>. Returns <c>(value, ambiguous)</c>; the caller
+    /// flags the line for review when the token could not be read unambiguously rather than
+    /// emitting a silently-wrong number. This replaces the old "swap ',' for '.' only when
+    /// no '.' present" reader that read EU "1.234,56" as 1.23456 (group dropped) or null.
+    /// </summary>
+    private static (decimal? Value, bool Ambiguous) ParseDecimal(string? value) =>
+        NumberParsing.TryParseFlexibleDecimal(value, european: false);
 
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
