@@ -279,6 +279,96 @@ public class IDocOrders05ParserTests
         result.Lines[0].BuyerItemCode.Should().Be("ABC");
     }
 
+    // ── B3: locale-aware decimal parsing (shared NumberParsing reader) ───────────
+    // SAP IDoc emits invariant-locale numbers ('.' decimal, ',' groups thousands). The old
+    // naive ParseDecimal only swapped ','→'.' when no '.' was present, so EU "1.234,56"
+    // collapsed to 1.23456 (group dropped) and never flagged it. Now read correctly OR
+    // flagged NeedsReview — never silently wrong. Correctly-formatted numbers are unchanged.
+
+    /// <summary>
+    /// Builds a one-line ORDERS05 IDOC whose VPREI (unit price) and MENGE (quantity)
+    /// carry the supplied raw tokens, so the decimal reader can be exercised directly.
+    /// </summary>
+    private static string OneLineIdoc(string vprei, string menge = "1") => $"""
+        <ORDERS05><IDOC BEGIN="1">
+          <E1EDK02 SEGMENT="1"><QUALF>001</QUALF><BELNR>PO-DEC-1</BELNR></E1EDK02>
+          <E1EDP01 SEGMENT="1">
+            <POSEX>00010</POSEX><MENGE>{menge}</MENGE><MENEE>EA</MENEE><VPREI>{vprei}</VPREI>
+            <E1EDP19 SEGMENT="1"><QUALF>002</QUALF><IDTNR>ITEM-1</IDTNR></E1EDP19>
+          </E1EDP01>
+        </IDOC></ORDERS05>
+        """;
+
+    private static async Task<ParsedOrderLine> ParseIdocPriceAsync(string vprei)
+    {
+        var parser = new IDocOrders05Parser();
+        await using var stream = ToStream(OneLineIdoc(vprei));
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+        result.Lines.Should().ContainSingle();
+        return result.Lines[0];
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuThousandsGroupedPrice_ReadsCorrectlyOrFlags()
+    {
+        // "1.234,56" must read as 1234.56 (last separator ',' is the decimal) — never null,
+        // never 1.23456 (the old reader silently dropped the thousands group).
+        var line = await ParseIdocPriceAsync("1.234,56");
+
+        line.UnitPrice.Should().NotBe(1.23456m, "the thousands group must not be silently dropped");
+        line.UnitPrice.Should().NotBeNull("a readable price must never collapse to null");
+        (line.UnitPrice == 1234.56m || line.NeedsReview).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuCommaDecimalPrice_IsNeverReadAs100x()
+    {
+        // "73,22" must never become 7322.
+        var line = await ParseIdocPriceAsync("73,22");
+
+        line.UnitPrice.Should().NotBe(7322m, "a comma must never be treated as a thousands group here");
+        (line.UnitPrice == 73.22m || line.NeedsReview).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ParseAsync_InvariantPrices_AreByteUnchangedAndNotFlagged()
+    {
+        // The fix must not alter correctly-formatted invariant numbers, nor flag them.
+        var a = await ParseIdocPriceAsync("73.22");
+        a.UnitPrice.Should().Be(73.22m);
+        a.NeedsReview.Should().BeFalse();
+        a.ReviewReason.Should().BeNull();
+
+        var b = await ParseIdocPriceAsync("1234.56");
+        b.UnitPrice.Should().Be(1234.56m);
+        b.NeedsReview.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ParseAsync_SingleSeparatorAmbiguousPrice_IsCorrectOrFlagged_NeverSilentlyWrong()
+    {
+        // "1.234" is single-dot, 3 trailing digits — could be 1.234 (decimal) or 1234
+        // (EU thousands group). Under european:false the reader takes it as the invariant
+        // decimal 1.234; whichever it chooses it must be a real reading, never silently wrong.
+        var line = await ParseIdocPriceAsync("1.234");
+
+        (line.UnitPrice == 1.234m || line.UnitPrice == 1234m || line.NeedsReview)
+            .Should().BeTrue("the value must be a defensible reading or flagged for review");
+    }
+
+    [Fact]
+    public async Task ParseAsync_AmbiguousQuantity_FlagsLineForReview()
+    {
+        // A stray exponent in the quantity is the silent-corruption class the guard rejects.
+        var parser = new IDocOrders05Parser();
+        await using var stream = ToStream(OneLineIdoc(vprei: "1.05", menge: "1.5e2"));
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.Lines.Should().ContainSingle();
+        result.Lines[0].NeedsReview.Should().BeTrue("an exponent token must not be silently coerced into a quantity");
+        result.Lines[0].ReviewReason.Should().NotBeNull();
+    }
+
     // ── OrderParserFactory .xml disambiguation ──────────────────────────────────
 
     [Fact]

@@ -97,10 +97,11 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
                 continue;
 
             var lineNumber = int.Parse(match.Groups["line"].Value, CultureInfo.InvariantCulture);
-            var quantity = ParseDecimal(match.Groups["qty"].Value) ?? 0m;
-            var unitPrice = match.Groups["price"].Success
+            var (quantityVal, qtyAmbiguous) = ParseDecimal(match.Groups["qty"].Value);
+            var quantity = quantityVal ?? 0m;
+            var (unitPrice, priceAmbiguous) = match.Groups["price"].Success
                 ? ParseDecimal(match.Groups["price"].Value)
-                : null;
+                : (null, false);
 
             parsedLines.Add(new ParsedOrderLine(
                 LineNumber:    lineNumber,
@@ -108,7 +109,12 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
                 Description:   NullIfEmpty(match.Groups["desc"].Value),
                 Quantity:      quantity,
                 Unit:          NullIfEmpty(match.Groups["unit"].Value),
-                UnitPrice:     unitPrice));
+                UnitPrice:     unitPrice,
+                // Refuse to deliver a silently-wrong number: a quantity or unit price the parser
+                // could not read unambiguously flags the line for human review. Mirrors
+                // CsvOrderParser/EdifactOrderParser/X12OrderParser's NeedsReview/ReviewReason contract.
+                NeedsReview:   qtyAmbiguous || priceAmbiguous,
+                ReviewReason:  NumberParsing.BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous)));
         }
 
         return parsedLines;
@@ -148,19 +154,18 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
         return null;
     }
 
-    private static decimal? ParseDecimal(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        var normalized = value.Trim();
-        if (normalized.Contains(",", StringComparison.Ordinal) && !normalized.Contains(".", StringComparison.Ordinal))
-            normalized = normalized.Replace(',', '.');
-
-        return decimal.TryParse(normalized, NumberStyles.Any, CultureInfo.InvariantCulture, out var result)
-            ? result
-            : null;
-    }
+    /// <summary>
+    /// Parse a numeric token from the deterministic PDF text fallback via the shared
+    /// locale-aware reader. The regex column extractor captures point-decimal numbers
+    /// ("12.50") and bare EU comma-decimals ("73,22"), so <c>european: false</c> reads both
+    /// correctly while flagging genuinely-ambiguous tokens for human review. Returns
+    /// <c>(value, ambiguous)</c>; the caller flags the line for review when the token could
+    /// not be read unambiguously rather than emitting a silently-wrong number. This replaces
+    /// the old "swap ',' for '.' only when no '.' present" reader that never flagged the
+    /// silent-corruption class.
+    /// </summary>
+    private static (decimal? Value, bool Ambiguous) ParseDecimal(string? value) =>
+        NumberParsing.TryParseFlexibleDecimal(value, european: false);
 
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

@@ -76,11 +76,15 @@ public static class OutputFieldValidator
                     $"Line {line.LineNumber}: a buyer item code is mandatory for {format} " +
                     "(empty produces a structurally-invalid document)."));
 
-            // Missing / non-positive unit price → financially-wrong zero-value document.
-            if (line.UnitPrice <= 0m)
+            // Negative unit price → a financially-impossible line; still a hard hold.
+            // A €0 price is NOT held here (founder-approved): legitimately-free lines must
+            // deliver. The non-blocking €0 warning is surfaced by InvariantValidator
+            // ("invariant.unit_price_valid", severity "warning") on the validation surface,
+            // so the coordinator still SEES the zero without it blocking transform/delivery.
+            if (line.UnitPrice < 0m)
                 problems.Add(new LineProblem(line.LineNumber, LineProblemKind.MissingOrZeroPrice,
-                    $"Line {line.LineNumber}: unit price is not positive ({line.UnitPrice}); " +
-                    "held for review to avoid a zero-value document."));
+                    $"Line {line.LineNumber}: unit price is negative ({line.UnitPrice}); " +
+                    "held for review to avoid a negative-value document."));
 
             // Zero / negative quantity → a delivered line ordering nothing (or a negative
             // amount) is almost always a parse/mapping error, not an intentional order. Flag it

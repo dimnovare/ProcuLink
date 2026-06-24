@@ -188,15 +188,35 @@ public class UblOrderTransformServiceTests
     // ── Required-field validation (output-format hardening) ────────────────────
 
     [Fact]
-    public async Task TransformAsync_ZeroUnitPrice_IsFlaggedForReview()
+    public async Task TransformAsync_ZeroUnitPrice_NowTransforms()
     {
-        // A €0 line delivers a financially-wrong document. UBL holds it for review.
+        // A €0 line is a legitimately-free line (founder-approved): UBL transforms it, not held.
         var lines = new[]
         {
             new PurchaseOrderLineEntity
             {
                 LineNumber = 1, BuyerItemCode = "B-001", SupplierItemCode = "SUP-1",
                 Description = "Widget", Quantity = 1m, Unit = "EA", UnitPrice = 0m,
+                NeedsReview = false, Confidence = 1.0f,
+            }
+        };
+
+        var svc = new UblOrderTransformService();
+        var result = await svc.TransformAsync(BuildOrder(lines: lines), OutputFormat.Ubl, CancellationToken.None);
+
+        result.Content.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task TransformAsync_NegativeUnitPrice_IsFlaggedForReview()
+    {
+        // A negative unit price is financially impossible. UBL still holds it for review.
+        var lines = new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                LineNumber = 1, BuyerItemCode = "B-001", SupplierItemCode = "SUP-1",
+                Description = "Widget", Quantity = 1m, Unit = "EA", UnitPrice = -5m,
                 NeedsReview = false, Confidence = 1.0f,
             }
         };

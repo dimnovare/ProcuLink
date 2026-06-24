@@ -7,11 +7,15 @@ using Xunit;
 namespace ProcuLink.Transform.Tests.Output;
 
 /// <summary>
-/// B1 — the price &gt; 0 / qty &gt; 0 output invariant (<see cref="OutputFieldValidator"/>) now lives
-/// inside the FIXED CSV / JSON / XML transforms, where the entity's canonical columns ARE the emitted
-/// bytes — matching the X12 / UBL / cXML transforms which already enforced it. A zero/negative price or
-/// quantity is HELD (<see cref="TransformValidationException"/>) instead of emitting a $0 / zero-qty
-/// line; a fully-valid order emits normally.
+/// B1 — the price / qty output invariant (<see cref="OutputFieldValidator"/>) lives inside the FIXED
+/// CSV / JSON / XML transforms, where the entity's canonical columns ARE the emitted bytes — matching
+/// the X12 / UBL / cXML transforms which already enforced it. A NEGATIVE price or a zero/negative
+/// quantity is HELD (<see cref="TransformValidationException"/>) instead of emitting a malformed line.
+///
+/// <para>A €0 unit price is NO LONGER held (founder-approved 2026-06): a legitimately-free line must
+/// transform and deliver. The non-blocking €0 warning is surfaced separately by InvariantValidator on
+/// the validation surface, so the coordinator still sees the zero without it blocking delivery. A
+/// fully-valid order emits normally.</para>
 ///
 /// <para>The guard is deliberately NOT applied to the override / whole-document-template / OutputNode
 /// paths: those emit via a path that can legitimately transform values or drop lines (IncludeWhen), so
@@ -54,9 +58,18 @@ public class FixedTransformOutputInvariantTests
 
     [Theory]
     [MemberData(nameof(FixedFormats))]
-    public async Task ZeroPriceLine_IsHeld(OutputFormat format)
+    public async Task ZeroPriceLine_NowDelivers(OutputFormat format)
     {
-        var act = async () => await For(format).TransformAsync(Order(line1Price: 0m), format, CancellationToken.None);
+        // €0 is a legitimately-free line (founder-approved): it must transform, not throw.
+        var result = await For(format).TransformAsync(Order(line1Price: 0m), format, CancellationToken.None);
+        result.Content.Should().NotBeNull();
+    }
+
+    [Theory]
+    [MemberData(nameof(FixedFormats))]
+    public async Task NegativePriceLine_IsHeld(OutputFormat format)
+    {
+        var act = async () => await For(format).TransformAsync(Order(line1Price: -5m), format, CancellationToken.None);
         await act.Should().ThrowAsync<TransformValidationException>();
     }
 

@@ -114,6 +114,79 @@ public class PdfOrderParserTests
             "an already-cancelled token must fail fast rather than parse");
     }
 
+    // ── B3: locale-aware decimal parsing (shared NumberParsing reader) ───────────
+    // The deterministic PDF text fallback previously read numbers with the naive
+    // "swap ','→'.' only when no '.' present" reader, which never flagged the
+    // silent-corruption class. It now delegates to NumberParsing.TryParseFlexibleDecimal
+    // (european: false) so EU comma-decimals read correctly and ambiguous tokens flag
+    // NeedsReview, while invariant numbers stay byte-identical.
+    //
+    // NOTE: the line-column regex captures a single separator group
+    // (-?\d+(?:[.,]\d+)?), so a grouped EU price like "1.234,56" never matches a PDF
+    // line row in the first place (two separators) — only single-separator tokens
+    // ("12.50", "73,22") reach ParseDecimal here. We therefore exercise the reachable
+    // tokens: the EU comma-decimal must never become 100×, and invariant numbers are
+    // unchanged.
+
+    private static async Task<ParsedOrderLine> ParsePdfLineAsync(string qty, string price)
+    {
+        var parser = new PdfOrderParser();
+        await using var stream = new MemoryStream(CreatePdf(
+            "PO Number: PO-DEC-1",
+            "Currency: EUR",
+            $"1 ITEM-1 Widget {qty} PCS {price}"));
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+        result.Lines.Should().ContainSingle();
+        return result.Lines[0];
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuCommaDecimalPrice_IsNeverReadAs100x()
+    {
+        // "73,22" must never become 7322 (a comma is the decimal here, not a thousands group).
+        var line = await ParsePdfLineAsync(qty: "2", price: "73,22");
+
+        line.UnitPrice.Should().NotBe(7322m, "a comma must never be treated as a thousands group here");
+        (line.UnitPrice == 73.22m || line.NeedsReview).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuCommaDecimalQuantity_IsNeverReadAs100x()
+    {
+        // Quantity "73,22" (e.g. 73.22 kg) must never become 7322.
+        var line = await ParsePdfLineAsync(qty: "73,22", price: "10.00");
+
+        line.Quantity.Should().NotBe(7322m, "a comma must never be treated as a thousands group here");
+        (line.Quantity == 73.22m || line.NeedsReview).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ParseAsync_InvariantPrices_AreByteUnchangedAndNotFlagged()
+    {
+        // The fix must not alter correctly-formatted invariant numbers, nor flag them.
+        var a = await ParsePdfLineAsync(qty: "4", price: "73.22");
+        a.UnitPrice.Should().Be(73.22m);
+        a.Quantity.Should().Be(4m);
+        a.NeedsReview.Should().BeFalse();
+        a.ReviewReason.Should().BeNull();
+
+        var b = await ParsePdfLineAsync(qty: "1", price: "1234.56");
+        b.UnitPrice.Should().Be(1234.56m);
+        b.NeedsReview.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ParseAsync_SingleSeparatorAmbiguousPrice_IsCorrectOrFlagged_NeverSilentlyWrong()
+    {
+        // "1.234" is single-dot, 3 trailing digits — could be the invariant decimal 1.234
+        // or an EU thousands group 1234. Under european:false the reader takes the decimal;
+        // whichever it chooses it must be a real reading, never silently wrong.
+        var line = await ParsePdfLineAsync(qty: "2", price: "1.234");
+
+        (line.UnitPrice == 1.234m || line.UnitPrice == 1234m || line.NeedsReview)
+            .Should().BeTrue("the value must be a defensible reading or flagged for review");
+    }
+
     private static byte[] CreatePdf(params string[] lines)
     {
         var content = new StringBuilder();

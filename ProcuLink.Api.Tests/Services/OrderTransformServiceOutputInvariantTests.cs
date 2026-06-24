@@ -18,19 +18,23 @@ namespace ProcuLink.Api.Tests.Services;
 /// <summary>
 /// B1 — output invariant on the FIXED CSV/JSON/XML transform path.
 ///
-/// <para>The output guard <see cref="OutputFieldValidator.ValidateEntity"/> (UnitPrice &lt;= 0 or
+/// <para>The output guard <see cref="OutputFieldValidator.ValidateEntity"/> (UnitPrice &lt; 0 or
 /// Quantity &lt;= 0 → hold for review) was previously wired ONLY into the X12 / UBL / cXML
 /// transforms. It is now also applied inside the fixed CSV / JSON / XML transforms (where the
-/// entity's canonical columns ARE the emitted bytes), closing the gap where a $0 / zero-qty line
-/// could deliver. It is deliberately NOT applied to the override / whole-document-template /
-/// OutputNode-tree paths, which emit via a path that can legitimately transform values or drop
-/// lines (IncludeWhen) — guarding the raw entity there would pre-empt those features (the adversarial
-/// review caught exactly that when an earlier draft guarded centrally in OrderTransformService).
-/// These tests drive a plain (no-override) order through <see cref="OrderService.TransformAsync"/>:
-/// a CSV/JSON order with a zero price or negative quantity is HELD
-/// (<see cref="TransformValidationException"/> → status reverts to <c>ready</c>, NO artifact), while a
-/// fully-valid order still transforms (no false positive — valid bytes unchanged). A regression pair
-/// confirms X12 is unchanged.</para>
+/// entity's canonical columns ARE the emitted bytes). It is deliberately NOT applied to the override /
+/// whole-document-template / OutputNode-tree paths, which emit via a path that can legitimately
+/// transform values or drop lines (IncludeWhen) — guarding the raw entity there would pre-empt those
+/// features (the adversarial review caught exactly that when an earlier draft guarded centrally in
+/// OrderTransformService).</para>
+///
+/// <para>A €0 unit price is NO LONGER held (founder-approved 2026-06): a legitimately-free line must
+/// transform and deliver, with the non-blocking €0 warning surfaced separately by InvariantValidator.
+/// A NEGATIVE price and a zero/negative quantity remain hard holds. These tests drive a plain
+/// (no-override) order through <see cref="OrderService.TransformAsync"/>: a CSV/JSON order with a zero
+/// price now transforms successfully and produces an artifact; a negative price or negative quantity is
+/// HELD (<see cref="TransformValidationException"/> → status reverts to <c>ready</c>, NO artifact),
+/// while a fully-valid order still transforms (no false positive — valid bytes unchanged). A regression
+/// pair confirms X12 is unchanged.</para>
 /// </summary>
 public class OrderTransformServiceOutputInvariantTests
 {
@@ -140,13 +144,33 @@ public class OrderTransformServiceOutputInvariantTests
         Assert.Equal(0, artifacts);
     }
 
-    // ── CSV / JSON: a bad line is now HELD ─────────────────────────────────────
+    // ── CSV / JSON: €0 now transforms; negative price / negative qty stay HELD ──
 
     [Fact]
-    public async Task TransformAsync_Csv_ZeroPriceLine_IsHeld_StatusRevertsToReady_NoArtifact()
+    public async Task TransformAsync_Csv_ZeroPriceLine_NowTransformsSuccessfully_AndProducesArtifact()
     {
         await using var db = NewDb();
         var (orgId, orderId) = await SeedResolvedOrderAsync(db, line1Price: 0m);
+        var (svc, uploads, captured) = Build(db);
+
+        var result = await svc.TransformAsync(orgId, orderId, OutputFormat.Csv, CancellationToken.None);
+
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.Equal(1, uploads());
+        Assert.NotNull(captured());
+
+        var reloaded = await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId);
+        Assert.Equal(OrderStatusConstants.ReadyToDeliver, reloaded.Status);
+
+        var artifacts = await db.OutboundArtifacts.AsNoTracking().Where(a => a.OrderId == orderId).CountAsync();
+        Assert.Equal(1, artifacts);
+    }
+
+    [Fact]
+    public async Task TransformAsync_Csv_NegativePriceLine_IsHeld_StatusRevertsToReady_NoArtifact()
+    {
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedResolvedOrderAsync(db, line1Price: -5m);
         var (svc, uploads, _) = Build(db);
 
         await AssertHeldAsync(db, svc, uploads, orgId, orderId, OutputFormat.Csv);
@@ -163,13 +187,20 @@ public class OrderTransformServiceOutputInvariantTests
     }
 
     [Fact]
-    public async Task TransformAsync_Json_ZeroPriceLine_IsHeld_StatusRevertsToReady_NoArtifact()
+    public async Task TransformAsync_Json_ZeroPriceLine_NowTransformsSuccessfully_AndProducesArtifact()
     {
         await using var db = NewDb();
         var (orgId, orderId) = await SeedResolvedOrderAsync(db, line1Price: 0m);
-        var (svc, uploads, _) = Build(db);
+        var (svc, uploads, captured) = Build(db);
 
-        await AssertHeldAsync(db, svc, uploads, orgId, orderId, OutputFormat.Json);
+        var result = await svc.TransformAsync(orgId, orderId, OutputFormat.Json, CancellationToken.None);
+
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.Equal(1, uploads());
+        Assert.NotNull(captured());
+
+        var reloaded = await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId);
+        Assert.Equal(OrderStatusConstants.ReadyToDeliver, reloaded.Status);
     }
 
     [Fact]
@@ -238,10 +269,24 @@ public class OrderTransformServiceOutputInvariantTests
     }
 
     [Fact]
-    public async Task TransformAsync_X12_ZeroPriceLine_StillHeld_StatusRevertsToReady_NoArtifact()
+    public async Task TransformAsync_X12_ZeroPriceLine_NowTransformsSuccessfully()
     {
         await using var db = NewDb();
         var (orgId, orderId) = await SeedResolvedOrderAsync(db, line1Price: 0m);
+        var (svc, uploads, captured) = Build(db);
+
+        var result = await svc.TransformAsync(orgId, orderId, OutputFormat.X12, CancellationToken.None);
+
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.Equal(1, uploads());
+        Assert.NotNull(captured());
+    }
+
+    [Fact]
+    public async Task TransformAsync_X12_NegativePriceLine_StillHeld_StatusRevertsToReady_NoArtifact()
+    {
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedResolvedOrderAsync(db, line1Price: -5m);
         var (svc, uploads, _) = Build(db);
 
         await AssertHeldAsync(db, svc, uploads, orgId, orderId, OutputFormat.X12);

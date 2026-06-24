@@ -116,7 +116,9 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
         }
 
         // ── Grand total: E1EDS01 SUMME ─────────────────────────────────────────
-        var grandTotal = ParseDecimal(ChildValue(eds01, "SUMME"));
+        // Header total is not line-level so it carries no per-line review flag; the
+        // ambiguity bit is discarded here (a header total never gates a line's review).
+        var (grandTotal, _) = ParseDecimal(ChildValue(eds01, "SUMME"));
 
         // ── Parties: AG=buyer, LF=supplier (WE=ship-to ignored) ────────────────
         var ka1 = Children(idoc, "E1EDKA1").ToList();
@@ -138,10 +140,14 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
                 ? ln
                 : autoLine;
 
-            var quantity = ParseDecimal(ChildValue(lineEl, "MENGE")) ?? 0m;
+            var (quantityVal, qtyAmbiguous) = ParseDecimal(ChildValue(lineEl, "MENGE"));
+            var quantity = quantityVal ?? 0m;
             var unit = NullIfEmpty(ChildValue(lineEl, "MENEE"));
-            var unitPrice = ParseDecimal(ChildValue(lineEl, "VPREI"));
-            var lineAmount = ParseDecimal(ChildValue(lineEl, "NETWR"));
+            var (unitPrice, priceAmbiguous) = ParseDecimal(ChildValue(lineEl, "VPREI"));
+            // NETWR (line amount) is a derived total, not a price the buyer keys; it is
+            // not folded into NeedsReview (matching X12/cXML, which flag only qty + unit
+            // price). Its ambiguity bit is discarded.
+            var (lineAmount, _) = ParseDecimal(ChildValue(lineEl, "NETWR"));
 
             // V5: per-line delivery date from E1EDP20 EDATU (yyyyMMdd).
             // Present on every line in the real fixture corpus (idoc-orders05-11/-710).
@@ -176,6 +182,11 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
                 Unit: unit,
                 UnitPrice: unitPrice,
                 LineAmount: lineAmount,
+                // Refuse to deliver a silently-wrong number: a quantity or unit price the parser
+                // could not read unambiguously flags the line for human review. Mirrors
+                // CsvOrderParser/EdifactOrderParser/X12OrderParser's NeedsReview/ReviewReason contract.
+                NeedsReview: qtyAmbiguous || priceAmbiguous,
+                ReviewReason: NumberParsing.BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous),
                 // V5: populate per-line delivery date from E1EDP20 EDATU.
                 DeliveryDate: lineDeliveryDate));
 
@@ -320,18 +331,18 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
             : null;
     }
 
-    private static decimal? ParseDecimal(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        var normalized = value.Trim();
-        // IDoc decimals use '.' as the decimal point (e.g. "1.000" = 1, "149.49").
-        // Mirror the sibling parsers: only treat ',' as a decimal point when no '.' is present.
-        if (normalized.Contains(',') && !normalized.Contains('.'))
-            normalized = normalized.Replace(',', '.');
-        return decimal.TryParse(normalized, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)
-            ? d
-            : null;
-    }
+    /// <summary>
+    /// Parse a SAP IDoc numeric value via the shared locale-aware reader. SAP IDoc
+    /// emits invariant-locale numbers ('.' decimal, ',' groups thousands), so
+    /// <c>european: false</c>. Returns <c>(value, ambiguous)</c>; the caller flags the line
+    /// for review when the token could not be read unambiguously rather than emitting a
+    /// silently-wrong number. This replaces the old "swap ',' for '.' only when no '.'
+    /// present" reader that read EU "1.234,56" as 1.23456 (group dropped) or null and never
+    /// flagged the corruption — <c>european: false</c> still reads "1.234,56" → 1234.56 via
+    /// the both-separators-present last-wins rule.
+    /// </summary>
+    private static (decimal? Value, bool Ambiguous) ParseDecimal(string? value) =>
+        NumberParsing.TryParseFlexibleDecimal(value, european: false);
 
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
