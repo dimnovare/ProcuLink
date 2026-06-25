@@ -67,6 +67,40 @@ public class EffectiveEntityResolverTests
         return sr.ReadToEnd();
     }
 
+    [Fact]
+    public void Resolve_PreservesContactAndShipToBillToColumns_OnTheClone()
+    {
+        // Regression: Clone is a hand-maintained field copy. When it omits the contact/address columns,
+        // the structured preview + delivery path (which always goes through Resolve) silently drops every
+        // <Contact>/<ShipTo>/<BillTo> block even though the source order has them populated.
+        var order = BuildOrder();
+        order.ContactName = "REDACTED-NAME"; order.ContactEmail = "redacted@example.invalid"; order.ContactPhone = "REDACTED-PHONE";
+        order.ShipToName = "Usine REDACTED-PARTY"; order.ShipToStreet = "REDACTED-ADDRESS"; order.ShipToCity = "REDACTED-ADDRESS";
+        order.ShipToPostalCode = "63040"; order.ShipToCountry = "FRANCE"; order.ShipToDeliverTo = "Jacquet";
+        order.BillToName = "REDACTED-PARTY"; order.BillToStreet = "Place des Carmes"; order.BillToCity = "REDACTED-ADDRESS";
+        order.BillToPostalCode = "63040"; order.BillToCountry = "France";
+
+        var effective = EffectiveEntityResolver.Resolve(order, new OrderMappingOverride());
+
+        effective.ContactName.Should().Be("REDACTED-NAME");
+        effective.ContactEmail.Should().Be("redacted@example.invalid");
+        effective.ContactPhone.Should().Be("REDACTED-PHONE");
+        effective.ShipToName.Should().Be("Usine REDACTED-PARTY");
+        effective.ShipToStreet.Should().Be("REDACTED-ADDRESS");
+        effective.ShipToCity.Should().Be("REDACTED-ADDRESS");
+        effective.ShipToPostalCode.Should().Be("63040");
+        effective.ShipToCountry.Should().Be("FRANCE");
+        effective.ShipToDeliverTo.Should().Be("Jacquet");
+        effective.BillToName.Should().Be("REDACTED-PARTY");
+        effective.BillToStreet.Should().Be("Place des Carmes");
+        effective.BillToCity.Should().Be("REDACTED-ADDRESS");
+
+        // And the cXML transform run on the effective entity actually emits the blocks.
+        var cxml = Run(TransformerFor(OutputFormat.CXml), effective, OutputFormat.CXml);
+        cxml.Should().Contain("<BillTo>").And.Contain("<Contact>").And.Contain("<ShipTo>");
+        cxml.Should().Contain("REDACTED-PARTY").And.Contain("REDACTED-NAME");
+    }
+
     // ── SupportsOverrideFormat ────────────────────────────────────────────────
 
     [Fact]

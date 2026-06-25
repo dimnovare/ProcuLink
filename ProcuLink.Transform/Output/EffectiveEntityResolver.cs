@@ -268,6 +268,30 @@ public static class EffectiveEntityResolver
             DocumentType          = src.DocumentType,
             // V5: requested delivery date (in-memory only; not a DB column).
             RequestedDeliveryDate = src.RequestedDeliveryDate,
+            // Contact + ship-to/bill-to address columns: the structured transforms (cXML/UBL/X12/XML)
+            // read these to emit <Contact>/<ShipTo>/<BillTo>. They are NOT override-targetable canonical
+            // fields, so they're carried through verbatim — omitting them here silently drops every
+            // address/contact block on the preview + delivery path (the override/structured path), even
+            // though the columns are populated on the source order.
+            ContactName       = src.ContactName,
+            ContactEmail      = src.ContactEmail,
+            ContactPhone      = src.ContactPhone,
+            ShipToName        = src.ShipToName,
+            ShipToDeliverTo   = src.ShipToDeliverTo,
+            ShipToStreet      = src.ShipToStreet,
+            ShipToCity        = src.ShipToCity,
+            ShipToPostalCode  = src.ShipToPostalCode,
+            ShipToCountry     = src.ShipToCountry,
+            ShipToEmail       = src.ShipToEmail,
+            ShipToPhone       = src.ShipToPhone,
+            BillToName        = src.BillToName,
+            BillToDeliverTo   = src.BillToDeliverTo,
+            BillToStreet      = src.BillToStreet,
+            BillToCity        = src.BillToCity,
+            BillToPostalCode  = src.BillToPostalCode,
+            BillToCountry     = src.BillToCountry,
+            BillToEmail       = src.BillToEmail,
+            BillToPhone       = src.BillToPhone,
         };
 
         if (src.Supplier is not null)
