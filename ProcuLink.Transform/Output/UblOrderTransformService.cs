@@ -39,9 +39,17 @@ namespace ProcuLink.Transform.Output;
 /// &lt;/Order&gt;
 /// </code>
 ///
-/// Buyer and supplier party names are currently emitted as placeholders
-/// ("ProcuLink Buyer" and the supplier id, respectively); a future pass will
-/// pull real party metadata from buyer / supplier entities.
+/// The buyer party name is the canonical buyer name (<see cref="OrderHeaderReader.ExtractBuyerName"/>),
+/// falling back to the legacy "ProcuLink Buyer" placeholder when the order carries none; the supplier
+/// party name is still emitted as the supplier id (real supplier metadata is a future pass).
+///
+/// <para><b>Address + contact.</b> When the order carries address data the document additionally
+/// emits a <c>cac:PostalAddress</c> + <c>cac:Contact</c> inside <c>BuyerCustomerParty/Party</c> (fed
+/// from the canonical BillTo* + Contact* fields) and a <c>cac:Delivery</c> (fed from ShipTo*). Each
+/// block is null-gated on its source NAME (Contact on any of its 3 fields), so an order with no
+/// address data emits NONE of them and stays byte-identical to the pre-feature output. Country codes
+/// are emitted verbatim (free-text — no ISO fabrication). The canonical model carries no buyer postal
+/// address, so the buyer's real address rides on BillTo (and the delivery address on ShipTo).</para>
 ///
 /// Validation mirrors <see cref="CxmlTransformService"/>: throws
 /// <see cref="TransformValidationException"/> when any line still requires review
@@ -74,11 +82,12 @@ public sealed class UblOrderTransformService : ITransformService
 
         var currency = string.IsNullOrWhiteSpace(order.Currency) ? "EUR" : order.Currency;
 
-        // Placeholder party names — these will be wired to real buyer/supplier
-        // metadata in a follow-up pass. Kept here so the document is valid UBL
-        // (PartyName/Name is required by Peppol BIS 3.0 if PartyLegalEntity is absent).
-        var buyerName    = "ProcuLink Buyer";
-        var supplierName = order.SupplierId.ToString();
+        // Buyer name: the canonical buyer name, falling back to the legacy placeholder when blank so
+        // the document stays valid UBL (PartyName/Name is required by Peppol BIS 3.0 if
+        // PartyLegalEntity is absent). Supplier name remains the supplier id (placeholder).
+        var resolvedBuyer = OrderHeaderReader.ExtractBuyerName(order);
+        var buyerName     = string.IsNullOrWhiteSpace(resolvedBuyer) ? "ProcuLink Buyer" : resolvedBuyer;
+        var supplierName  = order.SupplierId.ToString();
 
         var root = new XElement(UblOrder + "Order",
             new XAttribute(XNamespace.Xmlns + "cac", Cac.NamespaceName),
@@ -91,11 +100,16 @@ public sealed class UblOrderTransformService : ITransformService
             new XElement(Cbc + "IssueDate",           order.OrderDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
             new XElement(Cbc + "DocumentCurrencyCode", currency),
 
-            // ── BuyerCustomerParty (placeholder) ─────────────────────────────
+            // ── BuyerCustomerParty ────────────────────────────────────────────
+            // PartyName + a null-gated PostalAddress (from BillTo*) + null-gated Contact (from
+            // Contact*). Null helpers are dropped by the Party XElement → byte-identical when absent.
             new XElement(Cac + "BuyerCustomerParty",
                 new XElement(Cac + "Party",
                     new XElement(Cac + "PartyName",
-                        new XElement(Cbc + "Name", buyerName)))),
+                        new XElement(Cbc + "Name", buyerName)),
+                    BuildPostalAddress(order.BillToStreet, order.BillToCity,
+                        order.BillToPostalCode, order.BillToCountry),
+                    BuildContact(order))),
 
             // ── SellerSupplierParty (placeholder) ────────────────────────────
             new XElement(Cac + "SellerSupplierParty",
@@ -103,6 +117,12 @@ public sealed class UblOrderTransformService : ITransformService
                     new XElement(Cac + "PartyName",
                         new XElement(Cbc + "Name", supplierName))))
         );
+
+        // ── Delivery (ship-to) — null-gated on ShipToName. Sits after the parties,
+        // before the OrderLine loop (UBL 2.1 sequence: parties → Delivery → OrderLine). ──
+        var delivery = BuildDelivery(order);
+        if (delivery is not null)
+            root.Add(delivery);
 
         // One OrderLine per purchase-order line, sorted deterministically.
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
@@ -120,6 +140,66 @@ public sealed class UblOrderTransformService : ITransformService
             ContentType:   "application/xml",
             FileExtension: ".xml"
         ));
+    }
+
+    // ── Address / contact / delivery helpers ───────────────────────────────────
+
+    private static bool IsBlank(string? s) => string.IsNullOrWhiteSpace(s);
+
+    /// <summary>
+    /// Builds a <c>cac:PostalAddress</c> (StreetName / CityName / PostalZone / Country) with per-leaf
+    /// null-drop, or null when ALL FOUR fields are blank (→ dropped by the parent → byte-identical for
+    /// orders with no postal address). Country code is emitted verbatim (free text, no ISO fabrication).
+    /// </summary>
+    private static XElement? BuildPostalAddress(string? street, string? city, string? postal, string? country)
+    {
+        if (IsBlank(street) && IsBlank(city) && IsBlank(postal) && IsBlank(country))
+            return null;
+
+        return new XElement(Cac + "PostalAddress",
+            IsBlank(street)  ? null : new XElement(Cbc + "StreetName", street),
+            IsBlank(city)    ? null : new XElement(Cbc + "CityName",   city),
+            IsBlank(postal)  ? null : new XElement(Cbc + "PostalZone", postal),
+            IsBlank(country) ? null : new XElement(Cac + "Country",
+                                          new XElement(Cbc + "IdentificationCode", country)));
+    }
+
+    /// <summary>
+    /// Builds a <c>cac:Contact</c> (Name / Telephone / ElectronicMail) from the order's ordering
+    /// contact, with per-leaf null-drop, or null when all three are blank (→ byte-identical when absent).
+    /// </summary>
+    private static XElement? BuildContact(PurchaseOrderEntity o)
+    {
+        if (IsBlank(o.ContactName) && IsBlank(o.ContactPhone) && IsBlank(o.ContactEmail))
+            return null;
+
+        return new XElement(Cac + "Contact",
+            IsBlank(o.ContactName)  ? null : new XElement(Cbc + "Name",          o.ContactName),
+            IsBlank(o.ContactPhone) ? null : new XElement(Cbc + "Telephone",     o.ContactPhone),
+            IsBlank(o.ContactEmail) ? null : new XElement(Cbc + "ElectronicMail", o.ContactEmail));
+    }
+
+    /// <summary>
+    /// Builds <c>cac:Delivery</c> from the ship-to address, or null when there is no ship-to name
+    /// (→ no node → byte-identical for orders without a ship-to). Emits a
+    /// <c>cac:DeliveryLocation/cac:Address</c> (from ShipTo street/city/postal/country) and a
+    /// <c>cac:DeliveryParty/cac:PartyName/cbc:Name</c> (from ShipToName). Gated on the NAME because
+    /// the DeliveryParty name is the only always-meaningful ship-to field.
+    /// </summary>
+    private static XElement? BuildDelivery(PurchaseOrderEntity o)
+    {
+        if (IsBlank(o.ShipToName))
+            return null;
+
+        var address = BuildPostalAddress(o.ShipToStreet, o.ShipToCity, o.ShipToPostalCode, o.ShipToCountry);
+
+        return new XElement(Cac + "Delivery",
+            address is null ? null
+                : new XElement(Cac + "DeliveryLocation",
+                    new XElement(Cac + "Address", address.Elements())),
+            new XElement(Cac + "DeliveryParty",
+                new XElement(Cac + "PartyName",
+                    new XElement(Cbc + "Name", o.ShipToName))));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

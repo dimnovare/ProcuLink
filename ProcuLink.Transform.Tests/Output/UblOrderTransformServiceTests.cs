@@ -185,6 +185,108 @@ public class UblOrderTransformServiceTests
         firstParsedLine.Description.Should().Be("Round-trip widget");
     }
 
+    // ── Address + contact + buyer-name (mirrors cXML; reuses canonical fields) ──
+
+    /// <summary>
+    /// REDACTED-PARTY-shaped, fully-populated address order: ship-to + bill-to + contact + buyer name.
+    /// </summary>
+    private static PurchaseOrderEntity BuildAddressedOrder()
+    {
+        var order = BuildOrder();
+        order.BuyerName        = "REDACTED-PARTY";
+        order.ContactName      = "REDACTED-NAME";
+        order.ContactEmail     = "redacted@example.invalid";
+        order.ContactPhone     = "REDACTED-PHONE";
+        order.ShipToName       = "REDACTED-PARTY";
+        order.ShipToStreet     = "REDACTED-ADDRESS)";
+        order.ShipToCity       = "REDACTED-ADDRESS";
+        order.ShipToPostalCode = "63040";
+        order.ShipToCountry    = "FRANCE";
+        order.BillToName       = "REDACTED-PARTY";
+        order.BillToStreet     = "REDACTED-ADDRESS";
+        order.BillToCity       = "REDACTED-ADDRESS";
+        order.BillToPostalCode = "63000";
+        order.BillToCountry    = "FRANCE";
+        return order;
+    }
+
+    [Fact]
+    public async Task TransformAsync_NoAddressData_EmitsNoAddressBlocks()
+    {
+        // BYTE-SAFETY LOCK: an order with no ShipTo*/BillTo*/Contact* and no BuyerName must emit
+        // NO PostalAddress / Contact / Delivery — existing UBL suppliers are byte-unaffected. The
+        // buyer party falls back to the "ProcuLink Buyer" placeholder (BuyerName is blank here).
+        var svc = new UblOrderTransformService();
+        var xml = await ReadContentAsString(
+            await svc.TransformAsync(BuildOrder(), OutputFormat.Ubl, CancellationToken.None));
+
+        xml.Should().NotContain("PostalAddress");
+        xml.Should().NotContain("cac:Contact");
+        xml.Should().NotContain("<cac:Contact");
+        xml.Should().NotContain("Delivery");
+        xml.Should().Contain("ProcuLink Buyer", "buyer name falls back to the placeholder when blank");
+    }
+
+    [Fact]
+    public async Task TransformAsync_WithBuyerName_ReplacesPlaceholder()
+    {
+        var svc   = new UblOrderTransformService();
+        var order = BuildOrder();
+        order.BuyerName = "REDACTED-PARTY";
+
+        var doc = XDocument.Parse(await ReadContentAsString(
+            await svc.TransformAsync(order, OutputFormat.Ubl, CancellationToken.None)));
+
+        var buyerParty = doc.Descendants(Cac + "BuyerCustomerParty").Single();
+        buyerParty.Descendants(Cbc + "Name").First().Value.Should().Be("REDACTED-PARTY");
+    }
+
+    [Fact]
+    public async Task TransformAsync_WithAddresses_EmitsBuyerPostalAndContact_FromBillTo()
+    {
+        var svc = new UblOrderTransformService();
+        var doc = XDocument.Parse(await ReadContentAsString(
+            await svc.TransformAsync(BuildAddressedOrder(), OutputFormat.Ubl, CancellationToken.None)));
+
+        var buyerParty = doc.Descendants(Cac + "BuyerCustomerParty").Single().Element(Cac + "Party")!;
+
+        // BuyerCustomerParty/Party/PostalAddress fed from BillTo*.
+        var postal = buyerParty.Element(Cac + "PostalAddress")!;
+        postal.Should().NotBeNull();
+        postal.Element(Cbc + "StreetName")!.Value.Should().Be("REDACTED-ADDRESS");
+        postal.Element(Cbc + "CityName")!.Value.Should().Be("REDACTED-ADDRESS");
+        postal.Element(Cbc + "PostalZone")!.Value.Should().Be("63000");
+        postal.Element(Cac + "Country")!.Element(Cbc + "IdentificationCode")!.Value.Should().Be("FRANCE");
+
+        // BuyerCustomerParty/Party/Contact fed from Contact*.
+        var contact = buyerParty.Element(Cac + "Contact")!;
+        contact.Should().NotBeNull();
+        contact.Element(Cbc + "Name")!.Value.Should().Be("REDACTED-NAME");
+        contact.Element(Cbc + "Telephone")!.Value.Should().Be("REDACTED-PHONE");
+        contact.Element(Cbc + "ElectronicMail")!.Value.Should().Be("redacted@example.invalid");
+    }
+
+    [Fact]
+    public async Task TransformAsync_WithShipTo_EmitsDeliveryBlock()
+    {
+        var svc = new UblOrderTransformService();
+        var doc = XDocument.Parse(await ReadContentAsString(
+            await svc.TransformAsync(BuildAddressedOrder(), OutputFormat.Ubl, CancellationToken.None)));
+
+        var delivery = doc.Descendants(Cac + "Delivery").Single();
+
+        // Delivery/DeliveryLocation/Address fed from ShipTo*.
+        var address = delivery.Element(Cac + "DeliveryLocation")!.Element(Cac + "Address")!;
+        address.Element(Cbc + "StreetName")!.Value.Should().Be("REDACTED-ADDRESS)");
+        address.Element(Cbc + "CityName")!.Value.Should().Be("REDACTED-ADDRESS");
+        address.Element(Cbc + "PostalZone")!.Value.Should().Be("63040");
+        address.Element(Cac + "Country")!.Element(Cbc + "IdentificationCode")!.Value.Should().Be("FRANCE");
+
+        // Delivery/DeliveryParty/PartyName/Name fed from ShipToName.
+        delivery.Element(Cac + "DeliveryParty")!.Element(Cac + "PartyName")!.Element(Cbc + "Name")!
+            .Value.Should().Be("REDACTED-PARTY");
+    }
+
     // ── Required-field validation (output-format hardening) ────────────────────
 
     [Fact]
