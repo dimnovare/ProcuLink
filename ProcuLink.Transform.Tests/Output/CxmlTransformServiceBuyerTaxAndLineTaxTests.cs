@@ -152,6 +152,25 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
     }
 
     [Fact]
+    public async Task LineTax_RateNotCaptured_DerivesRateFromAmount()
+    {
+        // The extractor often captures the tax AMOUNT but not the RATE (TaxRate==0 = "not stated").
+        // The <Tax> description must then derive the rate from amount ÷ net (834.27/3337.08 = 25%),
+        // not print the misleading literal "VAT 0%".
+        var order = BuildOrder();
+        order.Lines[0].Quantity  = 1m;
+        order.Lines[0].UnitPrice = 3337.08m;
+        order.Lines[0].TaxAmount = 834.27m;
+        order.Lines[0].TaxRate   = 0m;       // not captured
+
+        var xml = await RenderAsync(order);
+        var doc = XDocument.Parse(xml);
+        var tax = doc.Descendants("ItemOut").Single().Element("Tax")!;
+        tax.Element("Description")!.Value.Should().Be("VAT 25%");
+        tax.Element("Description")!.Value.Should().NotContain("0%");
+    }
+
+    [Fact]
     public async Task LineTaxAmount_Absent_NoTaxBlock_ByteIdentical()
     {
         var order = BuildOrder();          // no TaxAmount on the line

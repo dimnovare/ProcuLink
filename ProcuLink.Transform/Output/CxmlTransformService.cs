@@ -448,8 +448,14 @@ public sealed class CxmlTransformService : ITransformService
         if (line.TaxAmount is not { } taxAmount)
             return null;
 
-        var description = line.TaxRate is { } rate
-            ? $"VAT {rate.ToString("0.##", CultureInfo.InvariantCulture)}%"
+        // Prefer the captured rate; treat 0/absent as "not stated" (the strict-mode convention) and
+        // derive it from amount ÷ (qty × unit price) so a real VAT line reads "VAT 25%", not "VAT 0%".
+        var net = line.Quantity * line.UnitPrice;
+        var effRate = line.TaxRate is { } r && r > 0m
+            ? r
+            : net > 0m ? Math.Round(taxAmount / net * 100m, 0) : (decimal?)null;
+        var description = effRate is { } pct
+            ? $"VAT {pct.ToString("0.##", CultureInfo.InvariantCulture)}%"
             : "Tax";
 
         return new XElement("Tax",
