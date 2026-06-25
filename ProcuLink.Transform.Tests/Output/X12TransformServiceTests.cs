@@ -60,6 +60,26 @@ public class X12TransformServiceTests
            .Where(s => s.Length > 0)
            .ToList();
 
+    [Fact]
+    public async Task ContactPresentButNoPartyNames_DoesNotEmitOrphanPer()
+    {
+        // A PER in the 850 heading is only valid INSIDE an N1 loop. An order with a contact but no
+        // ship-to / bill-to / buyer NAME has no N1 loop, so the contact PER must be suppressed (else a
+        // strict 850 validator rejects an orphan heading PER).
+        var order = BuildOrder();
+        order.BuyerName    = "";                  // → ExtractBuyerName empty → no N1*BY
+        order.ContactName  = "REDACTED-NAME";
+        order.ContactEmail = "redacted@example.invalid";
+        order.ContactPhone = "REDACTED-PHONE";
+        // no ShipToName / BillToName → no N1*ST / N1*BT
+
+        var result = await new X12TransformService().TransformAsync(order, OutputFormat.X12, CancellationToken.None);
+        var segs = SplitSegments(await ReadContentAsString(result));
+
+        segs.Any(s => s.StartsWith("N1")).Should().BeFalse("no party name → no N1 loop");
+        segs.Any(s => s.StartsWith("PER")).Should().BeFalse("a heading PER is only valid inside an N1 loop");
+    }
+
     // ── Routing ────────────────────────────────────────────────────────────────
 
     [Fact]

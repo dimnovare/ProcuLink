@@ -145,6 +145,7 @@ public sealed class X12TransformService : ITransformService
         // contact / buyer data appends ZERO segments here — SE/CTT stay byte-identical to the
         // pre-feature baseline. Every free-text value is delimiter-sanitized (Sanitize); X12 has no
         // escape mechanism so a delimiter must be space-substituted, never allowed into the structure.
+        var n1LoopStart = tx.Count;
         AppendN1Address(tx, elementSep, "ST",
             order.ShipToName, order.ShipToStreet, order.ShipToCity, order.ShipToPostalCode,
             order.ShipToCountry, order.ShipToDeliverTo, order.ShipToEmail, order.ShipToPhone);
@@ -157,10 +158,16 @@ public sealed class X12TransformService : ITransformService
         if (!string.IsNullOrWhiteSpace(buyerName))
             tx.Add(Segment(elementSep, "N1", "BY", Sanitize(buyerName)));
 
-        // Order-level ordering contact: PER*BD (buyer-department contact). Gated on any of the 3.
-        if (!string.IsNullOrWhiteSpace(order.ContactName)
-            || !string.IsNullOrWhiteSpace(order.ContactEmail)
-            || !string.IsNullOrWhiteSpace(order.ContactPhone))
+        // Order-level ordering contact: PER*BD. PER in the 850 heading is only valid INSIDE an N1
+        // loop, so it's emitted only when at least one N1 (ship-to / bill-to / buyer) was actually
+        // appended above — otherwise a contact-only order would emit an orphan heading PER that a
+        // strict validator rejects. (Realistically the buyer name is always present, so the PER hangs
+        // off the N1*BY loop, matching the reference output.)
+        var anyN1Emitted = tx.Count > n1LoopStart;
+        if (anyN1Emitted
+            && (!string.IsNullOrWhiteSpace(order.ContactName)
+                || !string.IsNullOrWhiteSpace(order.ContactEmail)
+                || !string.IsNullOrWhiteSpace(order.ContactPhone)))
         {
             tx.Add(Segment(elementSep, "PER", "BD",
                 Sanitize(order.ContactName ?? string.Empty),
