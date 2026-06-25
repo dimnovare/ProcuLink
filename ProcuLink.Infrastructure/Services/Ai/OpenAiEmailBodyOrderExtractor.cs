@@ -194,6 +194,17 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
                 new SystemChatMessage(
                     "Extract a purchase order from this email body. " +
                     "Return only structured data matching the schema. " +
+                    // ── Party NAME is mandatory whenever an address is present (mirrors the PDF extractor). ──
+                    "Capture every named address as a party in 'parties' with its role " +
+                    "(shipTo / billTo / remitTo), street, city, postal_code, country and VAT when stated. " +
+                    "For EACH party you MUST capture its 'name' — the company, plant, site, store, " +
+                    "warehouse or organisation name printed at or directly above that address block " +
+                    "(e.g. a delivery site like 'REDACTED-PARTY' or 'Warehouse 3 — Riga'). " +
+                    "NEVER leave a party's 'name' blank when an address is present: if only a site, " +
+                    "plant, depot or building label is shown, use that label as the 'name'. The ship-to " +
+                    "name is often a DIFFERENT site than the buyer's head office — extract the site name " +
+                    "actually shown by the ship-to address; do NOT copy buyer_name into it, and do NOT " +
+                    "leave it empty just because it differs from the buyer. " +
                     "Set confidence to 0.0–1.0 based on how clearly the email contains a real purchase order."),
                 new UserChatMessage(emailBody),
             };

@@ -172,7 +172,22 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         "invoice number / amount due), 'purchase_order' if it is an order being placed, else 'other'. " +
         // ── Phase 1 lossless capture (parties / contact / line enrichment / raw_fields) ──
         "Capture every named address as a party in 'parties' with its role (shipTo / billTo / " +
-        "remitTo), street, city, postal_code, country and VAT/tax id when printed. Capture the " +
+        "remitTo), street, city, postal_code, country and VAT/tax id when printed. " +
+        // ── Party NAME is mandatory whenever an address is present ──
+        "For EACH party (shipTo / billTo / remitTo) you MUST capture its 'name' — the company, " +
+        "plant, site, store, warehouse or organisation name printed at or directly above that " +
+        "address block (e.g. a delivery site like 'REDACTED-PARTY' or " +
+        "'Warehouse 3 — Riga'). NEVER leave a party's 'name' blank when an address is present: if " +
+        "only a site, plant, depot or building label is shown, use that label as the 'name'. " +
+        "The ship-to name is often a DIFFERENT site/plant than the buyer's head office — extract the " +
+        "site name actually printed by the ship-to address; do NOT copy buyer_name into it, and do " +
+        "NOT leave it empty just because it differs from the buyer. Keep 'deliver_to' (an " +
+        "attention / care-of PERSON at the address) SEPARATE from 'name' (the organisation / site). " +
+        "Worked example — buyer 'ACME Foods SA' shipping to a plant: the shipTo party is " +
+        "{ name: 'REDACTED-PARTY', street: 'REDACTED-ADDRESS', city: " +
+        "'REDACTED-PARTY " +
+        "NOT { name: '' }. " +
+        "Capture the " +
         "ordering contact (name/email/phone) in 'contact'. Capture incoterms / delivery terms, " +
         "shipping_method and the buyer's own order reference when stated. For each line capture the " +
         "manufacturer/vendor part number, any customer part number, discount %, UNSPSC, per-line " +
