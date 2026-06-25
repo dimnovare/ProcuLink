@@ -270,6 +270,72 @@ public class JsonTransformServiceTests
         doc.RootElement.GetProperty("buyerName").GetString().Should().Be("Column Buyer");
     }
 
+    // ── Address + contact blocks (mirrors cXML; reuses canonical fields) ────────
+
+    private static PurchaseOrderEntity BuildAddressedOrder()
+    {
+        var order = BuildOrder();
+        order.ContactName      = "REDACTED-NAME";
+        order.ContactEmail     = "redacted@example.invalid";
+        order.ContactPhone     = "REDACTED-PHONE";
+        order.ShipToName       = "REDACTED-PARTY";
+        order.ShipToDeliverTo  = "REDACTED-NAME";
+        order.ShipToStreet     = "REDACTED-ADDRESS)";
+        order.ShipToCity       = "REDACTED-ADDRESS";
+        order.ShipToPostalCode = "63040";
+        order.ShipToCountry    = "FRANCE";
+        order.ShipToEmail      = "redacted@example.invalid";
+        order.ShipToPhone      = "REDACTED-PHONE";
+        order.BillToName       = "REDACTED-PARTY";
+        order.BillToStreet     = "REDACTED-ADDRESS";
+        order.BillToCity       = "REDACTED-ADDRESS";
+        order.BillToPostalCode = "63000";
+        order.BillToCountry    = "FRANCE";
+        return order;
+    }
+
+    [Fact]
+    public async Task TransformAsync_NoAddressData_OmitsShipToBillToContact()
+    {
+        // BYTE-SAFETY LOCK: a default order (no address/contact fields) must NOT carry shipTo /
+        // billTo / contact keys at all — existing JSON suppliers see byte-identical payloads. The
+        // conditional-object strategy keeps existing always-emitted null fields (currency) intact.
+        var svc = new JsonTransformService();
+        var doc = await ReadJson(await svc.TransformAsync(BuildOrder(), OutputFormat.Json, CancellationToken.None));
+
+        doc.RootElement.TryGetProperty("shipTo", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("billTo", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("contact", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TransformAsync_WithAddresses_EmitsNestedShipToBillToContact()
+    {
+        var svc = new JsonTransformService();
+        var doc = await ReadJson(await svc.TransformAsync(BuildAddressedOrder(), OutputFormat.Json, CancellationToken.None));
+        var root = doc.RootElement;
+
+        var shipTo = root.GetProperty("shipTo");
+        shipTo.GetProperty("name").GetString().Should().Be("REDACTED-PARTY");
+        shipTo.GetProperty("deliverTo").GetString().Should().Be("REDACTED-NAME");
+        shipTo.GetProperty("street").GetString().Should().Be("REDACTED-ADDRESS)");
+        shipTo.GetProperty("city").GetString().Should().Be("REDACTED-ADDRESS");
+        shipTo.GetProperty("postalCode").GetString().Should().Be("63040");
+        shipTo.GetProperty("country").GetString().Should().Be("FRANCE");
+        shipTo.GetProperty("email").GetString().Should().Be("redacted@example.invalid");
+        shipTo.GetProperty("phone").GetString().Should().Be("REDACTED-PHONE");
+
+        var billTo = root.GetProperty("billTo");
+        billTo.GetProperty("name").GetString().Should().Be("REDACTED-PARTY");
+        billTo.GetProperty("street").GetString().Should().Be("REDACTED-ADDRESS");
+        billTo.GetProperty("postalCode").GetString().Should().Be("63000");
+
+        var contact = root.GetProperty("contact");
+        contact.GetProperty("name").GetString().Should().Be("REDACTED-NAME");
+        contact.GetProperty("email").GetString().Should().Be("redacted@example.invalid");
+        contact.GetProperty("phone").GetString().Should().Be("REDACTED-PHONE");
+    }
+
     // ── Validation errors ─────────────────────────────────────────────────────
 
     [Fact]

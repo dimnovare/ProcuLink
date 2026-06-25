@@ -12,6 +12,7 @@ namespace ProcuLink.Transform.Output;
 /// &lt;PurchaseOrder&gt;
 ///   &lt;Header&gt;
 ///     &lt;PoNumber/&gt; &lt;OrderDate/&gt; &lt;Currency/&gt; &lt;SupplierName/&gt;
+///     &lt;ShipTo&gt;…&lt;/ShipTo&gt; &lt;BillTo&gt;…&lt;/BillTo&gt; &lt;Contact&gt;…&lt;/Contact&gt;   (optional)
 ///   &lt;/Header&gt;
 ///   &lt;Lines&gt;
 ///     &lt;Line&gt;
@@ -21,6 +22,11 @@ namespace ProcuLink.Transform.Output;
 ///   &lt;/Lines&gt;
 /// &lt;/PurchaseOrder&gt;
 /// </code>
+/// <para>ShipTo / BillTo / Contact carry the canonical address + ordering-contact fields the other
+/// output formats already emit. Each block is gated on its NAME (Contact on any of name/email/phone),
+/// so an order with no address data emits NONE of them and stays BYTE-IDENTICAL to the pre-feature
+/// output (a null returned by the builder is dropped by the parent XElement). The buyer remains
+/// name-only everywhere (the canonical model carries no buyer postal address).</para>
 /// </summary>
 public sealed class XmlTransformService : ITransformService
 {
@@ -45,7 +51,15 @@ public sealed class XmlTransformService : ITransformService
                     new XElement("PoNumber",     order.PoNumber),
                     new XElement("OrderDate",    order.OrderDate.ToString("yyyy-MM-dd")),
                     new XElement("Currency",     order.Currency),
-                    new XElement("SupplierName", order.Supplier?.Name ?? string.Empty)
+                    new XElement("SupplierName", order.Supplier?.Name ?? string.Empty),
+                    // Null-gated address + contact blocks (dropped by XElement when null).
+                    BuildAddress("ShipTo", order.ShipToName, order.ShipToDeliverTo, order.ShipToStreet,
+                        order.ShipToCity, order.ShipToPostalCode, order.ShipToCountry,
+                        order.ShipToEmail, order.ShipToPhone),
+                    BuildAddress("BillTo", order.BillToName, order.BillToDeliverTo, order.BillToStreet,
+                        order.BillToCity, order.BillToPostalCode, order.BillToCountry,
+                        order.BillToEmail, order.BillToPhone),
+                    BuildContact(order)
                 ),
                 new XElement("Lines",
                     order.Lines
@@ -83,5 +97,48 @@ public sealed class XmlTransformService : ITransformService
 
         if (unresolved.Count > 0)
             throw new TransformValidationException(unresolved);
+    }
+
+    // ── Address / contact blocks ───────────────────────────────────────────────
+
+    private static bool IsBlank(string? s) => string.IsNullOrWhiteSpace(s);
+
+    /// <summary>
+    /// Builds a <c>&lt;ShipTo&gt;</c> / <c>&lt;BillTo&gt;</c> block with null-gated leaf elements, or
+    /// null when the NAME is blank (→ no node → byte-identical for orders without that address). A
+    /// null returned here is dropped by the parent <c>Header</c> XElement. Per-leaf null-drop keeps
+    /// each emitted block to exactly the populated fields.
+    /// </summary>
+    private static XElement? BuildAddress(
+        string elementName, string? name, string? deliverTo, string? street, string? city,
+        string? postal, string? country, string? email, string? phone)
+    {
+        if (IsBlank(name))
+            return null;
+
+        return new XElement(elementName,
+            new XElement("Name", name),
+            IsBlank(deliverTo)  ? null : new XElement("DeliverTo",  deliverTo),
+            IsBlank(street)     ? null : new XElement("Street",     street),
+            IsBlank(city)       ? null : new XElement("City",       city),
+            IsBlank(postal)     ? null : new XElement("PostalCode", postal),
+            IsBlank(country)    ? null : new XElement("Country",    country),
+            IsBlank(email)      ? null : new XElement("Email",      email),
+            IsBlank(phone)      ? null : new XElement("Phone",      phone));
+    }
+
+    /// <summary>
+    /// <c>&lt;Contact&gt;</c> with the order's ordering-contact name/email/phone, or null when all
+    /// three are blank (→ no node → byte-identical for orders with no contact).
+    /// </summary>
+    private static XElement? BuildContact(PurchaseOrderEntity o)
+    {
+        if (IsBlank(o.ContactName) && IsBlank(o.ContactEmail) && IsBlank(o.ContactPhone))
+            return null;
+
+        return new XElement("Contact",
+            IsBlank(o.ContactName)  ? null : new XElement("Name",  o.ContactName),
+            IsBlank(o.ContactEmail) ? null : new XElement("Email", o.ContactEmail),
+            IsBlank(o.ContactPhone) ? null : new XElement("Phone", o.ContactPhone));
     }
 }

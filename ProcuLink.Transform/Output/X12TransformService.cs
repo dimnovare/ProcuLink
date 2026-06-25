@@ -19,6 +19,10 @@ namespace ProcuLink.Transform.Output;
 /// ST*850*0001~
 /// BEG*00*NE*{poNumber}**{CCYYMMDD}~
 /// CUR*BY*{currency}~
+/// N1*ST*{shipToName}~ N3*{street}~ N4*{city}**{postal}*{country}~ PER*OC*…~   (ship-to, optional)
+/// N1*BT*{billToName}~ N3*{street}~ N4*{city}**{postal}*{country}~              (bill-to, optional)
+/// N1*BY*{buyerName}~                                                            (buyer, name-only, optional)
+/// PER*BD*{contactName}*EM*{email}*TE*{phone}~                                   (order contact, optional)
 /// PO1*1*{qty}*{uom}*{price}*PE*BP*{buyerItemCode}*VP*{supplierItemCode}~
 /// PID*F****{description}~
 /// CTT*{lineCount}~
@@ -135,6 +139,35 @@ public sealed class X12TransformService : ITransformService
         // CUR*BY*{currency} — buying party currency.
         tx.Add(Segment(elementSep, "CUR", "BY", currency));
 
+        // ── N1 loop (ship-to / bill-to / buyer) + order contact ────────────────
+        // Inserted AFTER CUR and BEFORE the first PO1 (the X12 850 heading area). Every block is
+        // gated on its source NAME (contact on any of its 3 fields), so an order with no address /
+        // contact / buyer data appends ZERO segments here — SE/CTT stay byte-identical to the
+        // pre-feature baseline. Every free-text value is delimiter-sanitized (Sanitize); X12 has no
+        // escape mechanism so a delimiter must be space-substituted, never allowed into the structure.
+        AppendN1Address(tx, elementSep, "ST",
+            order.ShipToName, order.ShipToStreet, order.ShipToCity, order.ShipToPostalCode,
+            order.ShipToCountry, order.ShipToDeliverTo, order.ShipToEmail, order.ShipToPhone);
+        AppendN1Address(tx, elementSep, "BT",
+            order.BillToName, order.BillToStreet, order.BillToCity, order.BillToPostalCode,
+            order.BillToCountry, order.BillToDeliverTo, order.BillToEmail, order.BillToPhone);
+
+        // Buyer N1*BY is name-only (the canonical model carries no buyer postal address).
+        var buyerName = OrderHeaderReader.ExtractBuyerName(order);
+        if (!string.IsNullOrWhiteSpace(buyerName))
+            tx.Add(Segment(elementSep, "N1", "BY", Sanitize(buyerName)));
+
+        // Order-level ordering contact: PER*BD (buyer-department contact). Gated on any of the 3.
+        if (!string.IsNullOrWhiteSpace(order.ContactName)
+            || !string.IsNullOrWhiteSpace(order.ContactEmail)
+            || !string.IsNullOrWhiteSpace(order.ContactPhone))
+        {
+            tx.Add(Segment(elementSep, "PER", "BD",
+                Sanitize(order.ContactName ?? string.Empty),
+                "EM", Sanitize(order.ContactEmail ?? string.Empty),
+                "TE", Sanitize(order.ContactPhone ?? string.Empty)));
+        }
+
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
             // PO1*{n}*{qty}*{uom}*{price}*PE*BP*{buyer}*VP*{supplier}
@@ -172,6 +205,52 @@ public sealed class X12TransformService : ITransformService
             Content:       stream,
             ContentType:   "application/edi-x12",
             FileExtension: ".x12"));
+    }
+
+    // ── N1 address loop ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Appends one X12 N1 loop (party + address + per-party contact) to <paramref name="tx"/>, gated
+    /// on a non-blank <paramref name="name"/> (a name-less party emits NOTHING → byte-identical when
+    /// absent). Segments: <c>N1*{qual}*{name}</c>; <c>N3*{street}</c> when a street is present;
+    /// <c>N4*{city}**{postal}*{country}</c> when any of city/postal/country is present (the empty
+    /// element is N402, the state/province — left blank); and a <c>PER*OC</c> (order contact) carrying
+    /// the per-party deliver-to + email + phone when an email or phone is present. Every free-text
+    /// element is delimiter-sanitized — X12 has no escape, so a stray delimiter is space-substituted.
+    /// </summary>
+    private static void AppendN1Address(
+        List<string> tx, char elementSep, string qualifier,
+        string? name, string? street, string? city, string? postal, string? country,
+        string? deliverTo, string? email, string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return;
+
+        tx.Add(Segment(elementSep, "N1", qualifier, Sanitize(name)));
+
+        if (!string.IsNullOrWhiteSpace(street))
+            tx.Add(Segment(elementSep, "N3", Sanitize(street)));
+
+        if (!string.IsNullOrWhiteSpace(city)
+            || !string.IsNullOrWhiteSpace(postal)
+            || !string.IsNullOrWhiteSpace(country))
+        {
+            // N4*{city}*{state}*{postal}*{country} — state (N402) intentionally left empty.
+            tx.Add(Segment(elementSep, "N4",
+                Sanitize(city ?? string.Empty),
+                string.Empty,
+                Sanitize(postal ?? string.Empty),
+                Sanitize(country ?? string.Empty)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(email) || !string.IsNullOrWhiteSpace(phone))
+        {
+            // PER*OC (order contact) — carries the per-party deliver-to contact + email + phone.
+            tx.Add(Segment(elementSep, "PER", "OC",
+                Sanitize(deliverTo ?? string.Empty),
+                "EM", Sanitize(email ?? string.Empty),
+                "TE", Sanitize(phone ?? string.Empty)));
+        }
     }
 
     // ── Segment builders ─────────────────────────────────────────────────────

@@ -218,6 +218,105 @@ public class X12TransformServiceTests
         second.UnitPrice.Should().Be(0.45m);
     }
 
+    // ── Address (N1 loop) + contact (PER) + buyer party ─────────────────────────
+
+    private static PurchaseOrderEntity BuildAddressedOrder()
+    {
+        var order = BuildOrder();
+        order.BuyerName        = "REDACTED-PARTY";
+        order.ContactName      = "REDACTED-NAME";
+        order.ContactEmail     = "redacted@example.invalid";
+        order.ContactPhone     = "REDACTED-PHONE";
+        order.ShipToName       = "REDACTED-PARTY";
+        order.ShipToDeliverTo  = "REDACTED-NAME";
+        order.ShipToStreet     = "REDACTED-ADDRESS";
+        order.ShipToCity       = "REDACTED-ADDRESS";
+        order.ShipToPostalCode = "63040";
+        order.ShipToCountry    = "FR";
+        order.ShipToEmail      = "redacted@example.invalid";
+        order.ShipToPhone      = "REDACTED-PHONE";
+        order.BillToName       = "REDACTED-PARTY";
+        order.BillToStreet     = "REDACTED-ADDRESS";
+        order.BillToCity       = "REDACTED-ADDRESS";
+        order.BillToPostalCode = "63000";
+        order.BillToCountry    = "FR";
+        return order;
+    }
+
+    [Fact]
+    public async Task TransformAsync_NoAddressData_EmitsNoN1Segments_AndCountsUnchanged()
+    {
+        // BYTE-SAFETY LOCK: a 2-line order with NO address/contact/buyer-name data must emit zero
+        // N1/N3/N4/PER segments, so SE/CTT match the pre-feature baseline exactly (SE*9 for 2 lines
+        // with PID — same as TransformAsync_ComputesCorrectSeAndCttCounts).
+        var lines = new[]
+        {
+            new PurchaseOrderLineEntity { LineNumber = 1, BuyerItemCode = "B1", SupplierItemCode = "S1", Description = "First",  Quantity = 1m, Unit = "EA", UnitPrice = 1m },
+            new PurchaseOrderLineEntity { LineNumber = 2, BuyerItemCode = "B2", SupplierItemCode = "S2", Description = "Second", Quantity = 2m, Unit = "EA", UnitPrice = 2m },
+        };
+
+        var svc  = new X12TransformService();
+        var segs = SplitSegments(await ReadContentAsString(
+            await svc.TransformAsync(BuildOrder(lines: lines), OutputFormat.X12, CancellationToken.None)));
+
+        segs.Should().NotContain(s => s.StartsWith("N1*"));
+        segs.Should().NotContain(s => s.StartsWith("PER*"));
+        segs.Should().Contain("CTT*2");
+        segs.Single(s => s.StartsWith("SE*")).Should().Be("SE*9*0001");
+    }
+
+    [Fact]
+    public async Task TransformAsync_WithAddresses_EmitsN1Loop_BetweenCurAndPo1()
+    {
+        var svc  = new X12TransformService();
+        var edi  = await ReadContentAsString(
+            await svc.TransformAsync(BuildAddressedOrder(), OutputFormat.X12, CancellationToken.None));
+        var segs = SplitSegments(edi);
+
+        // Ship-to N1*ST + N3 (street) + N4 (city**postal*country) + PER*OC (ship contact).
+        segs.Should().Contain(s => s.StartsWith("REDACTED-PARTY"));
+        segs.Should().Contain(s => s.StartsWith("REDACTED-ADDRESS"));
+        segs.Should().Contain("REDACTED-ADDRESS");
+        segs.Should().Contain(s => s.StartsWith("REDACTED-TEST-DATA"));
+
+        // Bill-to N1*BT + N3 + N4 (no bill contact → no PER for BT).
+        segs.Should().Contain(s => s.StartsWith("REDACTED-PARTY"));
+        segs.Should().Contain("REDACTED-ADDRESS");
+
+        // Buyer N1*BY, name-only — no N3/N4 immediately after a BY (buyer has no postal address).
+        segs.Should().Contain(s => s.StartsWith("REDACTED-PARTY"));
+
+        // Order-level contact PER*BD from Contact*.
+        segs.Should().Contain(s => s.StartsWith("REDACTED-TEST-DATA"));
+
+        // The N1 loop sits AFTER CUR and BEFORE the first PO1.
+        var curIdx = edi.IndexOf("CUR*", StringComparison.Ordinal);
+        var n1Idx  = edi.IndexOf("N1*",  StringComparison.Ordinal);
+        var po1Idx = edi.IndexOf("PO1*", StringComparison.Ordinal);
+        curIdx.Should().BeGreaterThanOrEqualTo(0);
+        n1Idx.Should().BeGreaterThan(curIdx);
+        po1Idx.Should().BeGreaterThan(n1Idx);
+    }
+
+    [Fact]
+    public async Task TransformAsync_AddressFreeText_IsSanitizedOfDelimiters()
+    {
+        // A delimiter in a free-text address field has no X12 escape; it must be space-substituted
+        // (Sanitize), never allowed to corrupt the segment structure.
+        var order = BuildOrder();
+        order.ShipToName   = "ACME*Logistics>Hub";
+        order.ShipToStreet = "1 Main~Road";
+
+        var svc  = new X12TransformService();
+        var edi  = await ReadContentAsString(
+            await svc.TransformAsync(order, OutputFormat.X12, CancellationToken.None));
+        var segs = SplitSegments(edi);
+
+        // No raw delimiter leaked into the N1/N3 content.
+        segs.Should().Contain(s => s.StartsWith("N1*ST*ACME Logistics Hub"));
+        segs.Should().Contain(s => s.StartsWith("N3*1 Main Road"));
+    }
+
     // ── Required-field + delimiter-in-code hardening ────────────────────────────
 
     [Fact]
