@@ -460,6 +460,23 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Incoterms).HasColumnName("incoterms");
             b.Property(x => x.ShippingMethod).HasColumnName("shipping_method");
             b.Property(x => x.BuyerOrderRef).HasColumnName("buyer_order_ref");
+            // cXML address blocks (nullable; denormalised from shipTo/billTo OrderParty rows).
+            b.Property(x => x.ShipToName).HasColumnName("ship_to_name");
+            b.Property(x => x.ShipToDeliverTo).HasColumnName("ship_to_deliver_to");
+            b.Property(x => x.ShipToStreet).HasColumnName("ship_to_street");
+            b.Property(x => x.ShipToCity).HasColumnName("ship_to_city");
+            b.Property(x => x.ShipToPostalCode).HasColumnName("ship_to_postal_code");
+            b.Property(x => x.ShipToCountry).HasColumnName("ship_to_country");
+            b.Property(x => x.ShipToEmail).HasColumnName("ship_to_email");
+            b.Property(x => x.ShipToPhone).HasColumnName("ship_to_phone");
+            b.Property(x => x.BillToName).HasColumnName("bill_to_name");
+            b.Property(x => x.BillToDeliverTo).HasColumnName("bill_to_deliver_to");
+            b.Property(x => x.BillToStreet).HasColumnName("bill_to_street");
+            b.Property(x => x.BillToCity).HasColumnName("bill_to_city");
+            b.Property(x => x.BillToPostalCode).HasColumnName("bill_to_postal_code");
+            b.Property(x => x.BillToCountry).HasColumnName("bill_to_country");
+            b.Property(x => x.BillToEmail).HasColumnName("bill_to_email");
+            b.Property(x => x.BillToPhone).HasColumnName("bill_to_phone");
             // Blob retention: when the source-file blob was purged from R2 (row + key stay).
             b.Property(x => x.SourceFilePurgedAt)
              .HasColumnName("source_file_purged_at")

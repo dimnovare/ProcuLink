@@ -411,6 +411,12 @@ internal sealed class OrderIngestionService
         var orderId = Guid.NewGuid();
         var now     = DateTime.UtcNow;
 
+        // Denormalise the shipTo / billTo addresses onto the flat cXML address columns (the cXML
+        // writer reads the PurchaseOrderEntity directly, not the OrderParty rows). Mirrors the
+        // Contact* precedent; the party rows below remain the lossless source of truth.
+        var shipParty = PartyOf(order.Parties, "shipTo");
+        var billParty = PartyOf(order.Parties, "billTo");
+
         // Provenance tag stored on canonical JSON so the review UI can show
         // where the order came from. Mirrors the buyerName lookup pattern in
         // ListAsync — additional fields are surfaced via the same column.
@@ -475,6 +481,23 @@ internal sealed class OrderIngestionService
             Incoterms      = order.Incoterms,
             ShippingMethod = order.ShippingMethod,
             BuyerOrderRef  = order.BuyerOrderRef,
+            // cXML address blocks denormalised from the shipTo / billTo parties (DeliverTo ← party contact name).
+            ShipToName       = shipParty?.Name,
+            ShipToDeliverTo  = shipParty?.ContactName,
+            ShipToStreet     = shipParty?.Street,
+            ShipToCity       = shipParty?.City,
+            ShipToPostalCode = shipParty?.PostalCode,
+            ShipToCountry    = shipParty?.Country,
+            ShipToEmail      = shipParty?.Email,
+            ShipToPhone      = shipParty?.Phone,
+            BillToName       = billParty?.Name,
+            BillToDeliverTo  = billParty?.ContactName,
+            BillToStreet     = billParty?.Street,
+            BillToCity       = billParty?.City,
+            BillToPostalCode = billParty?.PostalCode,
+            BillToCountry    = billParty?.Country,
+            BillToEmail      = billParty?.Email,
+            BillToPhone      = billParty?.Phone,
             Parties        = (order.Parties ?? Array.Empty<ExtractedParty>()).Select(p => new OrderParty
             {
                 Id = Guid.NewGuid(), OrgId = organisationId, Role = p.Role,
@@ -794,6 +817,27 @@ internal sealed class OrderIngestionService
             var newIncoterms      = parsedOrder.Incoterms;
             var newShippingMethod = parsedOrder.ShippingMethod;
             var newBuyerOrderRef  = parsedOrder.BuyerOrderRef;
+            // cXML address blocks denormalised from the shipTo / billTo parties (DeliverTo ← party
+            // contact name). The cXML writer reads these flat columns directly; the OrderParty rows
+            // (written below) remain the lossless source of truth.
+            var shipParty = PartyOf(parsedOrder.Parties, "shipTo");
+            var billParty = PartyOf(parsedOrder.Parties, "billTo");
+            var newShipToName       = shipParty?.Name;
+            var newShipToDeliverTo  = shipParty?.ContactName;
+            var newShipToStreet     = shipParty?.Street;
+            var newShipToCity       = shipParty?.City;
+            var newShipToPostalCode = shipParty?.PostalCode;
+            var newShipToCountry    = shipParty?.Country;
+            var newShipToEmail      = shipParty?.Email;
+            var newShipToPhone      = shipParty?.Phone;
+            var newBillToName       = billParty?.Name;
+            var newBillToDeliverTo  = billParty?.ContactName;
+            var newBillToStreet     = billParty?.Street;
+            var newBillToCity       = billParty?.City;
+            var newBillToPostalCode = billParty?.PostalCode;
+            var newBillToCountry    = billParty?.Country;
+            var newBillToEmail      = billParty?.Email;
+            var newBillToPhone      = billParty?.Phone;
 
             // ── Atomic persist (all-or-nothing) ───────────────────────────────
             // The status flip below is an ExecuteUpdateAsync — it auto-commits its own SQL the
@@ -834,6 +878,23 @@ internal sealed class OrderIngestionService
                     .SetProperty(o => o.Incoterms,      newIncoterms)
                     .SetProperty(o => o.ShippingMethod, newShippingMethod)
                     .SetProperty(o => o.BuyerOrderRef,  newBuyerOrderRef)
+                    // cXML address blocks (denormalised shipTo / billTo).
+                    .SetProperty(o => o.ShipToName,       newShipToName)
+                    .SetProperty(o => o.ShipToDeliverTo,  newShipToDeliverTo)
+                    .SetProperty(o => o.ShipToStreet,     newShipToStreet)
+                    .SetProperty(o => o.ShipToCity,       newShipToCity)
+                    .SetProperty(o => o.ShipToPostalCode, newShipToPostalCode)
+                    .SetProperty(o => o.ShipToCountry,    newShipToCountry)
+                    .SetProperty(o => o.ShipToEmail,      newShipToEmail)
+                    .SetProperty(o => o.ShipToPhone,      newShipToPhone)
+                    .SetProperty(o => o.BillToName,       newBillToName)
+                    .SetProperty(o => o.BillToDeliverTo,  newBillToDeliverTo)
+                    .SetProperty(o => o.BillToStreet,     newBillToStreet)
+                    .SetProperty(o => o.BillToCity,       newBillToCity)
+                    .SetProperty(o => o.BillToPostalCode, newBillToPostalCode)
+                    .SetProperty(o => o.BillToCountry,    newBillToCountry)
+                    .SetProperty(o => o.BillToEmail,      newBillToEmail)
+                    .SetProperty(o => o.BillToPhone,      newBillToPhone)
                     .SetProperty(o => o.UpdatedAt,    now), ct);
 
             if (updated == 0)
@@ -933,6 +994,30 @@ internal sealed class OrderIngestionService
             entity.DocumentType          = newDocumentType;
             // V5: header-level requested delivery date — persisted via ExecuteUpdateAsync above.
             entity.RequestedDeliveryDate = newRequestedDeliveryDate;
+            // Phase 1 lossless capture header columns — reflect so an immediate transform sees them.
+            entity.ContactName    = newContactName;
+            entity.ContactEmail   = newContactEmail;
+            entity.ContactPhone   = newContactPhone;
+            entity.Incoterms      = newIncoterms;
+            entity.ShippingMethod = newShippingMethod;
+            entity.BuyerOrderRef  = newBuyerOrderRef;
+            // cXML address blocks — reflect so an immediate (same-request) cXML transform emits them.
+            entity.ShipToName       = newShipToName;
+            entity.ShipToDeliverTo  = newShipToDeliverTo;
+            entity.ShipToStreet     = newShipToStreet;
+            entity.ShipToCity       = newShipToCity;
+            entity.ShipToPostalCode = newShipToPostalCode;
+            entity.ShipToCountry    = newShipToCountry;
+            entity.ShipToEmail      = newShipToEmail;
+            entity.ShipToPhone      = newShipToPhone;
+            entity.BillToName       = newBillToName;
+            entity.BillToDeliverTo  = newBillToDeliverTo;
+            entity.BillToStreet     = newBillToStreet;
+            entity.BillToCity       = newBillToCity;
+            entity.BillToPostalCode = newBillToPostalCode;
+            entity.BillToCountry    = newBillToCountry;
+            entity.BillToEmail      = newBillToEmail;
+            entity.BillToPhone      = newBillToPhone;
             entity.UpdatedAt = now;
             entity.Lines = lineEntities;
 
@@ -1313,6 +1398,18 @@ internal sealed class OrderIngestionService
             TokensJson = JsonDocument.Parse(JsonSerializer.Serialize(bag)),
         };
     }
+
+    /// <summary>
+    /// First party whose <c>Role</c> matches <paramref name="role"/> (case-insensitive — the
+    /// canonical roles are "shipTo" / "billTo"), or null when none. Used to denormalise the
+    /// shipTo / billTo address onto the flat cXML address columns. Transform-layer overload.
+    /// </summary>
+    private static ParsedParty? PartyOf(IReadOnlyList<ParsedParty>? parties, string role) =>
+        parties?.FirstOrDefault(p => string.Equals(p.Role, role, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Core-layer (LLM/email) overload of <see cref="PartyOf(IReadOnlyList{ParsedParty}?,string)"/>.</summary>
+    private static ExtractedParty? PartyOf(IReadOnlyList<ExtractedParty>? parties, string role) =>
+        parties?.FirstOrDefault(p => string.Equals(p.Role, role, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Builds an inline <see cref="SourceCapture"/> nav row from an LLM/email raw-fields bag

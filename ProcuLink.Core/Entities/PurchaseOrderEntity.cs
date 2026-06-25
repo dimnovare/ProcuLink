@@ -125,6 +125,29 @@ public class PurchaseOrderEntity
     public string? ShippingMethod { get; set; }
     public string? BuyerOrderRef { get; set; }
 
+    // ── cXML address blocks (nullable; denormalised from the shipTo/billTo OrderParty rows) ──
+    // These mirror the Contact*/BuyerName precedent: the address data is also persisted as
+    // OrderParty child rows, but the cXML writer reads the PurchaseOrderEntity directly, so the
+    // ship-to / bill-to are denormalised onto these flat columns at ingest. All nullable — a
+    // document may carry only some, and an order with none stays byte-identical in the cXML output.
+    // Migration AddCxmlAddressBlocks.
+    public string? ShipToName { get; set; }
+    public string? ShipToDeliverTo { get; set; }
+    public string? ShipToStreet { get; set; }
+    public string? ShipToCity { get; set; }
+    public string? ShipToPostalCode { get; set; }
+    public string? ShipToCountry { get; set; }
+    public string? ShipToEmail { get; set; }
+    public string? ShipToPhone { get; set; }
+    public string? BillToName { get; set; }
+    public string? BillToDeliverTo { get; set; }
+    public string? BillToStreet { get; set; }
+    public string? BillToCity { get; set; }
+    public string? BillToPostalCode { get; set; }
+    public string? BillToCountry { get; set; }
+    public string? BillToEmail { get; set; }
+    public string? BillToPhone { get; set; }
+
     // Navigation
     public Organisation Organisation { get; set; } = null!;
     public Supplier Supplier { get; set; } = null!;

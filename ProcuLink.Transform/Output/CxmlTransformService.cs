@@ -152,15 +152,25 @@ public sealed class CxmlTransformService : ITransformService
 
                     new XElement("OrderRequest",
 
-                        // OrderRequestHeader
+                        // OrderRequestHeader. orderDate is an ISO-8601 dateTime (a DateOnly renders
+                        // at midnight); orderVersion="1" is constant for a freshly-issued order.
+                        // ShipTo/BillTo/Contact follow <Total> and are null-gated — when the order
+                        // carries no address data the helpers return null (ignored by XElement),
+                        // keeping the header byte-identical to the pre-feature output.
                         new XElement("OrderRequestHeader",
-                            new XAttribute("orderID",   order.PoNumber),
-                            new XAttribute("orderDate", order.OrderDate.ToString("yyyy-MM-dd")),
-                            new XAttribute("type",      "new"),
+                            new XAttribute("orderID",     order.PoNumber),
+                            new XAttribute("orderDate",
+                                order.OrderDate.ToDateTime(TimeOnly.MinValue)
+                                    .ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)),
+                            new XAttribute("type",        "new"),
+                            new XAttribute("orderVersion", "1"),
                             new XElement("Total",
                                 new XElement("Money",
                                     new XAttribute("currency", currency),
-                                    totalAmount))),
+                                    totalAmount)),
+                            BuildShipTo(order),
+                            BuildBillTo(order),
+                            BuildContact(order)),
 
                         // One ItemOut per line
                         order.Lines
@@ -284,6 +294,88 @@ public sealed class CxmlTransformService : ITransformService
 
         var domain = string.IsNullOrWhiteSpace(configDomain) ? DefaultConfiguredDomain : configDomain.Trim();
         return (domain, configIdentity.Trim());
+    }
+
+    // ── Address blocks (ShipTo / BillTo / Contact) ─────────────────────────────
+
+    private static bool IsBlank(string? s) => string.IsNullOrWhiteSpace(s);
+
+    /// <summary>
+    /// <c>&lt;ShipTo&gt;</c> wrapping the ship-to address, or null when there is no ship-to name
+    /// (→ no node → byte-identical output for orders without a ship-to address). A null returned
+    /// here is ignored by the parent <c>OrderRequestHeader</c> XElement (XLinq drops null content).
+    /// Gated on the NAME specifically: the cXML 1.2 DTD declares <c>Name+</c> (required) inside
+    /// <c>Address</c>, so a name-less address can never be a valid block — we drop it rather than
+    /// emit a DTD-invalid Name-less <c>&lt;Address&gt;</c>. (Realistic POs always carry a ship-to name.)
+    /// </summary>
+    private static XElement? BuildShipTo(PurchaseOrderEntity o)
+    {
+        if (IsBlank(o.ShipToName))
+            return null;
+
+        return new XElement("ShipTo",
+            BuildAddress(o.ShipToName, o.ShipToDeliverTo, o.ShipToStreet, o.ShipToCity,
+                o.ShipToPostalCode, o.ShipToCountry, o.ShipToEmail, o.ShipToPhone));
+    }
+
+    /// <summary>
+    /// <c>&lt;BillTo&gt;</c> wrapping the bill-to address, or null when there is no bill-to name
+    /// (→ no node → byte-identical for orders without a bill-to address). Gated on the NAME for the
+    /// same DTD reason as <see cref="BuildShipTo"/> (<c>Address</c> requires <c>Name+</c>).
+    /// </summary>
+    private static XElement? BuildBillTo(PurchaseOrderEntity o)
+    {
+        if (IsBlank(o.BillToName))
+            return null;
+
+        return new XElement("BillTo",
+            BuildAddress(o.BillToName, o.BillToDeliverTo, o.BillToStreet, o.BillToCity,
+                o.BillToPostalCode, o.BillToCountry, o.BillToEmail, o.BillToPhone));
+    }
+
+    /// <summary>
+    /// Builds the cXML <c>&lt;Address&gt;</c> sub-tree: a null-gated <c>&lt;Name xml:lang="en"&gt;</c>,
+    /// a <c>&lt;PostalAddress&gt;</c> with null-gated DeliverTo/Street/City/PostalCode/Country, an
+    /// ALWAYS-emitted <c>&lt;Email&gt;</c> (empty when blank — matches the MapForce reference output's
+    /// <c>&lt;Email/&gt;</c>), and a null-gated <c>&lt;Phone&gt;&lt;TelephoneNumber&gt;&lt;Number&gt;</c>.
+    /// </summary>
+    private static XElement BuildAddress(
+        string? name, string? deliverTo, string? street, string? city,
+        string? postal, string? country, string? email, string? phone)
+    {
+        return new XElement("Address",
+            IsBlank(name) ? null
+                : new XElement("Name", new XAttribute(Xml + "lang", "en"), name),
+            new XElement("PostalAddress",
+                IsBlank(deliverTo) ? null : new XElement("DeliverTo", deliverTo),
+                IsBlank(street)    ? null : new XElement("Street",    street),
+                IsBlank(city)      ? null : new XElement("City",      city),
+                IsBlank(postal)    ? null : new XElement("PostalCode", postal),
+                IsBlank(country)   ? null : new XElement("Country",   country)),
+            new XElement("Email", email ?? string.Empty),
+            IsBlank(phone) ? null
+                : new XElement("Phone",
+                    new XElement("TelephoneNumber",
+                        new XElement("Number", phone))));
+    }
+
+    /// <summary>
+    /// <c>&lt;Contact&gt;</c> with the order's ordering-contact name/email/phone, or null when all
+    /// three are blank (→ no node → byte-identical for orders with no contact).
+    /// </summary>
+    private static XElement? BuildContact(PurchaseOrderEntity o)
+    {
+        if (IsBlank(o.ContactName) && IsBlank(o.ContactEmail) && IsBlank(o.ContactPhone))
+            return null;
+
+        return new XElement("Contact",
+            IsBlank(o.ContactName) ? null
+                : new XElement("Name", new XAttribute(Xml + "lang", "en"), o.ContactName),
+            IsBlank(o.ContactEmail) ? null : new XElement("Email", o.ContactEmail),
+            IsBlank(o.ContactPhone) ? null
+                : new XElement("Phone",
+                    new XElement("TelephoneNumber",
+                        new XElement("Number", o.ContactPhone))));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

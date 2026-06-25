@@ -84,6 +84,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 "properties": {
                   "role":        { "type": "string", "enum": ["shipTo", "billTo", "remitTo"] },
                   "name":        { "type": "string" },
+                  "deliver_to":  { "type": "string", "description": "Per-address attention / care-of line (e.g. a named recipient at this address). Empty if none." },
                   "street":      { "type": "string" },
                   "city":        { "type": "string" },
                   "postal_code": { "type": "string" },
@@ -91,7 +92,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                   "vat":         { "type": "string" },
                   "reference":   { "type": "string" }
                 },
-                "required": ["role", "name", "street", "city", "postal_code", "country", "vat", "reference"],
+                "required": ["role", "name", "deliver_to", "street", "city", "postal_code", "country", "vat", "reference"],
                 "additionalProperties": false
               }
             },
@@ -602,7 +603,9 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             Parties: dto.Parties?.Select(p => new ExtractedParty(
                 p.Role, NullIfBlank(p.Name), NullIfBlank(p.Street), NullIfBlank(p.City),
                 NullIfBlank(p.PostalCode), NullIfBlank(p.Country), NullIfBlank(p.Vat),
-                Reference: NullIfBlank(p.Reference))).Where(p => HasAnyValue(p)).ToList(),
+                Reference: NullIfBlank(p.Reference),
+                // Per-address attention/care-of line → ExtractedParty.ContactName → cXML <DeliverTo>.
+                ContactName: NullIfBlank(p.DeliverTo))).Where(p => HasAnyValue(p)).ToList(),
             ContactName: NullIfBlank(dto.Contact?.Name),
             ContactEmail: NullIfBlank(dto.Contact?.Email),
             ContactPhone: NullIfBlank(dto.Contact?.Phone),
@@ -843,6 +846,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     internal sealed record ExtractionPartyDto(
         [property: JsonPropertyName("role")] string Role,
         [property: JsonPropertyName("name")] string? Name = null,
+        [property: JsonPropertyName("deliver_to")] string? DeliverTo = null,
         [property: JsonPropertyName("street")] string? Street = null,
         [property: JsonPropertyName("city")] string? City = null,
         [property: JsonPropertyName("postal_code")] string? PostalCode = null,

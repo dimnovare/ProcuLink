@@ -206,6 +206,134 @@ public class CxmlTransformServiceTests
         payloadId1.Should().NotBe(payloadId2, "each cXML document must have a unique payloadID");
     }
 
+    // ── Address blocks (ShipTo / BillTo / Contact) + header dateTime ──────────
+
+    [Fact]
+    public async Task TransformAsync_NoAddressData_EmitsNoAddressBlocks()
+    {
+        // BYTE-SAFETY LOCK: an order with no ShipTo*/BillTo*/Contact* fields set (the default
+        // BuildOrder()) must emit NO address blocks at all — existing cXML suppliers are unaffected.
+        var svc   = new CxmlTransformService();
+        var order = BuildOrder();
+
+        var xml = await ReadContentAsString(
+            await svc.TransformAsync(order, OutputFormat.CXml, CancellationToken.None));
+
+        xml.Should().NotContain("<ShipTo");
+        xml.Should().NotContain("<BillTo");
+        xml.Should().NotContain("<Contact");
+    }
+
+    [Fact]
+    public async Task TransformAsync_OrderDate_IsDateTimeMidnight()
+    {
+        // cXML orderDate is an ISO-8601 dateTime; a DateOnly renders at midnight.
+        var svc   = new CxmlTransformService();
+        var order = BuildOrder(); // OrderDate = 2024-01-15
+
+        var xml = await ReadContentAsString(
+            await svc.TransformAsync(order, OutputFormat.CXml, CancellationToken.None));
+        var doc = XDocument.Parse(xml);
+
+        var header = doc.Descendants()
+            .First(e => string.Equals(e.Name.LocalName, "OrderRequestHeader", StringComparison.OrdinalIgnoreCase));
+
+        header.Attribute("orderDate")?.Value.Should().Be("2024-01-15T00:00:00");
+    }
+
+    [Fact]
+    public async Task TransformAsync_Header_HasOrderVersion1()
+    {
+        var svc   = new CxmlTransformService();
+        var order = BuildOrder();
+
+        var xml = await ReadContentAsString(
+            await svc.TransformAsync(order, OutputFormat.CXml, CancellationToken.None));
+        var doc = XDocument.Parse(xml);
+
+        var header = doc.Descendants()
+            .First(e => string.Equals(e.Name.LocalName, "OrderRequestHeader", StringComparison.OrdinalIgnoreCase));
+
+        header.Attribute("orderVersion")?.Value.Should().Be("1");
+    }
+
+    [Fact]
+    public async Task TransformAsync_WithAddresses_EmitsShipToBillToContact()
+    {
+        var svc   = new CxmlTransformService();
+        var order = BuildOrder();
+        // REDACTED-PARTY-shaped address data.
+        order.ShipToName       = "REDACTED-PARTY";
+        order.ShipToDeliverTo  = "REDACTED-NAME";
+        order.ShipToStreet     = "REDACTED-ADDRESS)";
+        order.ShipToCity       = "REDACTED-ADDRESS";
+        order.ShipToPostalCode = "63040";
+        order.ShipToCountry    = "FRANCE";
+        order.ShipToPhone      = "REDACTED-PHONE";
+        order.BillToName       = "REDACTED-PARTY";
+        order.BillToDeliverTo  = "Service Comptable";
+        order.BillToStreet     = "REDACTED-ADDRESS";
+        order.BillToCity       = "REDACTED-ADDRESS";
+        order.BillToPostalCode = "63000";
+        order.BillToCountry    = "FRANCE";
+        order.BillToPhone      = "REDACTED-PHONE";
+        order.ContactName      = "REDACTED-NAME";
+        order.ContactEmail     = "redacted@example.invalid";
+        order.ContactPhone     = "REDACTED-PHONE";
+
+        var xml = await ReadContentAsString(
+            await svc.TransformAsync(order, OutputFormat.CXml, CancellationToken.None));
+        var doc = XDocument.Parse(xml);
+        XNamespace xmlNs = "http://www.w3.org/XML/1998/namespace";
+
+        var shipTo = doc.Descendants()
+            .First(e => string.Equals(e.Name.LocalName, "ShipTo", StringComparison.OrdinalIgnoreCase));
+        var shipAddress = shipTo.Elements().First(e => e.Name.LocalName == "Address");
+
+        // ShipTo/Address/Name with xml:lang="en".
+        var shipName = shipAddress.Elements().First(e => e.Name.LocalName == "Name");
+        shipName.Value.Should().Be("REDACTED-PARTY");
+        shipName.Attribute(xmlNs + "lang")?.Value.Should().Be("en");
+
+        // ShipTo/Address/PostalAddress/{DeliverTo,Street,City,PostalCode,Country}.
+        var postal = shipAddress.Elements().First(e => e.Name.LocalName == "PostalAddress");
+        postal.Elements().First(e => e.Name.LocalName == "DeliverTo").Value.Should().Be("REDACTED-NAME");
+        postal.Elements().First(e => e.Name.LocalName == "Street").Value.Should().Be("REDACTED-ADDRESS)");
+        postal.Elements().First(e => e.Name.LocalName == "City").Value.Should().Be("REDACTED-ADDRESS");
+        postal.Elements().First(e => e.Name.LocalName == "PostalCode").Value.Should().Be("63040");
+        postal.Elements().First(e => e.Name.LocalName == "Country").Value.Should().Be("FRANCE");
+
+        // ShipTo/Address/Phone/TelephoneNumber/Number.
+        var shipNumber = shipAddress.Descendants().First(e => e.Name.LocalName == "Number");
+        shipNumber.Value.Should().Be("REDACTED-PHONE");
+
+        // BillTo present with its own address name.
+        var billTo = doc.Descendants()
+            .First(e => string.Equals(e.Name.LocalName, "BillTo", StringComparison.OrdinalIgnoreCase));
+        billTo.Descendants().First(e => e.Name.LocalName == "Name").Value
+            .Should().Be("REDACTED-PARTY");
+
+        // Contact/{Name,Email,Phone}.
+        var contact = doc.Descendants()
+            .First(e => string.Equals(e.Name.LocalName, "Contact", StringComparison.OrdinalIgnoreCase));
+        contact.Elements().First(e => e.Name.LocalName == "Name").Value.Should().Be("REDACTED-NAME");
+        contact.Elements().First(e => e.Name.LocalName == "Email").Value.Should().Be("redacted@example.invalid");
+        contact.Descendants().First(e => e.Name.LocalName == "Number").Value.Should().Be("REDACTED-PHONE");
+
+        // Position: ShipTo / BillTo / Contact sit AFTER <Total> and BEFORE the first <ItemOut>.
+        var totalIdx   = xml.IndexOf("<Total", StringComparison.Ordinal);
+        var shipToIdx  = xml.IndexOf("<ShipTo", StringComparison.Ordinal);
+        var billToIdx  = xml.IndexOf("<BillTo", StringComparison.Ordinal);
+        var contactIdx = xml.IndexOf("<Contact", StringComparison.Ordinal);
+        var itemOutIdx = xml.IndexOf("<ItemOut", StringComparison.Ordinal);
+
+        totalIdx.Should().BeGreaterThanOrEqualTo(0);
+        shipToIdx.Should().BeGreaterThan(totalIdx);
+        billToIdx.Should().BeGreaterThan(shipToIdx);
+        contactIdx.Should().BeGreaterThan(billToIdx);
+        itemOutIdx.Should().BeGreaterThan(contactIdx);
+    }
+
     // ── Validation errors ─────────────────────────────────────────────────────
 
     [Fact]
