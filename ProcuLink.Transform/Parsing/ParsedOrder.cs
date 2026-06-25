@@ -12,6 +12,9 @@ public record ParsedOrder(
     IReadOnlyList<ParsedOrderLine> Lines,
     // Phase 4 enrichment + doc-type classification (additive, defaulted).
     string? SupplierName = null,
+    // The BUYER's VAT / org number. Additive, defaulted. Feeds the cXML From/Identity so a
+    // different buyer never emits the configured From credential's VatNr.
+    string? BuyerTaxId = null,
     decimal? SubTotal = null,
     decimal? TaxTotal = null,
     decimal? GrandTotal = null,

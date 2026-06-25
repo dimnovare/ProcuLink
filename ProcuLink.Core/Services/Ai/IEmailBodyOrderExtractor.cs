@@ -15,6 +15,9 @@ public sealed record ExtractedOrderLine(
     // Phase 4 enrichment (optional — additive, defaulted so existing callers are unaffected).
     decimal? LineAmount = null,
     decimal? TaxRate = null,
+    // Per-line VAT amount as printed (e.g. 25% VAT on an ex-VAT unit price). Additive, defaulted.
+    // Captured so the VAT-aware reconcile can tell a correctly-VAT'd line from a genuine mismatch.
+    decimal? TaxAmount = null,
     DateOnly? DeliveryDate = null,
     string? ManufacturerPartNumber = null,
     string? CustomerPartNumber = null,
@@ -58,6 +61,9 @@ public sealed record ExtractedOrder(
     IReadOnlyList<ExtractedOrderLine> Lines,
     // Phase 4 enrichment + doc-type classification (additive, defaulted).
     string? SupplierName = null,
+    // The BUYER's VAT / org number (e.g. a Norwegian org no or an EU VAT). Additive, defaulted.
+    // Used as the cXML From/Identity so a different buyer never inherits the configured From's VatNr.
+    string? BuyerTaxId = null,
     decimal? SubTotal = null,
     decimal? TaxTotal = null,
     decimal? GrandTotal = null,

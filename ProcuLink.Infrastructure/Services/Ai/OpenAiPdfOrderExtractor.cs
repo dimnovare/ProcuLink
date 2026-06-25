@@ -61,6 +61,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             "order_date":    { "type": "string" },
             "currency":      { "type": "string" },
             "buyer_name":    { "type": "string", "description": "The organisation that ISSUED/PLACED the order. On an invoice instead the bill-to customer. Assign from document labels, never from which name is familiar." },
+            "buyer_tax_id":  { "type": "string", "description": "The BUYER's own VAT / tax / organisation number (e.g. a Norwegian org number or an EU VAT id). The buyer's identifier, NOT the supplier's. Empty if not printed." },
             "supplier_name": { "type": "string", "description": "The party the order is ADDRESSED TO that will fulfil it. On an invoice instead the issuing seller. Must differ from buyer_name." },
             "payment_terms": { "type": "string" },
             "incoterms":     { "type": "string", "description": "Delivery/freight terms, e.g. DDP, EXW, DAP, FCA. Empty if none stated." },
@@ -128,18 +129,19 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                   "discount_percent":         { "type": "number" },
                   "line_amount":              { "type": "number" },
                   "net_amount":               { "type": "number" },
-                  "tax_rate":                 { "type": "number" },
+                  "tax_rate":                 { "type": "number", "description": "The line's VAT/tax rate as a percent (e.g. 25 for 25%). 0 if none stated. The unit price is usually EX-VAT and the line total may be VAT-INCLUSIVE — capture the rate faithfully; do NOT reconcile the numbers yourself." },
+                  "tax_amount":               { "type": "number", "description": "The line's VAT/tax amount in currency (e.g. 834.27). 0 if none stated. Capture it exactly as printed." },
                   "unspsc":                   { "type": "string" },
                   "recipient":                { "type": "string" },
                   "contract_number":          { "type": "string" },
                   "delivery_date":            { "type": "string" }
                 },
-                "required": ["line_number", "buyer_item_code", "manufacturer_part_number", "customer_part_number", "description", "quantity", "unit", "unit_price", "discount_percent", "line_amount", "net_amount", "tax_rate", "unspsc", "recipient", "contract_number", "delivery_date"],
+                "required": ["line_number", "buyer_item_code", "manufacturer_part_number", "customer_part_number", "description", "quantity", "unit", "unit_price", "discount_percent", "line_amount", "net_amount", "tax_rate", "tax_amount", "unspsc", "recipient", "contract_number", "delivery_date"],
                 "additionalProperties": false
               }
             }
           },
-          "required": ["confidence", "document_type", "po_number", "order_date", "currency", "buyer_name", "supplier_name", "payment_terms", "incoterms", "shipping_method", "buyer_order_ref", "contact", "parties", "raw_fields", "sub_total", "tax_total", "grand_total", "lines"],
+          "required": ["confidence", "document_type", "po_number", "order_date", "currency", "buyer_name", "buyer_tax_id", "supplier_name", "payment_terms", "incoterms", "shipping_method", "buyer_order_ref", "contact", "parties", "raw_fields", "sub_total", "tax_total", "grand_total", "lines"],
           "additionalProperties": false
         }
         """u8.ToArray());
@@ -166,6 +168,15 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         "Do NOT assume any particular company name is the buyer — a familiar name may be the " +
         "recipient OR the issuer, and a company name merely appearing in the header does not " +
         "make it the buyer. buyer_name and supplier_name MUST be two DIFFERENT parties. " +
+        "Capture the BUYER's own VAT / tax / organisation number as buyer_tax_id (the buyer's " +
+        "identifier — e.g. a Norwegian org number or an EU VAT id — NOT the supplier's). Leave it " +
+        "empty if not printed. " +
+        // ── Line VAT (capture faithfully; do not reconcile) ──
+        "For EACH line, capture the line's VAT/tax rate (tax_rate, as a percent e.g. 25) and/or VAT " +
+        "amount (tax_amount, in currency) when the document shows them. IMPORTANT: the unit price is " +
+        "usually stated EX-VAT while the line total may be VAT-INCLUSIVE — copy BOTH faithfully and " +
+        "do NOT adjust, reconcile, or recompute them to make quantity × unit price equal the line " +
+        "total; just report exactly what is printed. " +
         "sub_total/tax_total/grand_total = the document's stated totals when present, else 0. " +
         "delivery_date = the line's requested/printed delivery date as YYYY-MM-DD, else empty. " +
         "Classify document_type: 'invoice' if it is a bill/invoice (e.g. titled Invoice, has an " +
@@ -547,6 +558,12 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 else causes.Add("the extracted line amount was unreadable");
             }
 
+            // Per-line VAT (Phase 4 enrichment). Captured faithfully — NOT gated by the
+            // anti-hallucination presence check (a derived/printed VAT amount need not appear
+            // verbatim) — but USED below to reconcile a VAT-inclusive line total.
+            decimal? taxRate   = TryToDecimal(l.TaxRate, out var tr) ? tr : null;
+            decimal? taxAmount = TryToDecimal(l.TaxAmount, out var ta) ? ta : null;
+
             // Anti-hallucination: every emitted number must appear verbatim in the
             // source text. A zero quantity means "not stated" and is not checked.
             if (quantity != 0m && !NumberAppearsInSource(quantity, sourceNumbers))
@@ -557,11 +574,30 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 causes.Add("the extracted line amount does not appear in the source document");
 
             // Arithmetic: quantity × unit price must reconcile with the stated line amount.
+            //
+            // VAT-aware (the Gjensidige bug): a common, CORRECT shape is an ex-VAT unit price
+            // against a VAT-inclusive line total (e.g. 3337.08 × 1.25 = 4171.35 at 25% VAT). The
+            // plain qty×price check would wrongly flag that as a mismatch. So when the line carries a
+            // captured tax rate OR tax amount, reconcile against the VAT-grossed-up expected total
+            // (qty × unitPrice × (1 + rate/100), or qty × unitPrice + taxAmount); the line is suspect
+            // ONLY when it reconciles under NEITHER the net nor the VAT-inclusive reading. With no tax
+            // captured, the original ex-VAT reconcile is unchanged (no over-flagging of the happy path).
             if (unitPrice is { } u && lineAmount is { } amount && amount != 0m)
             {
-                var expected = quantity * u;
+                var netExpected = quantity * u;
                 var tolerance = Math.Max(0.02m * Math.Abs(amount), 0.05m);
-                if (Math.Abs(expected - amount) > tolerance)
+
+                bool Reconciles(decimal expected) => Math.Abs(expected - amount) <= tolerance;
+
+                var matches = Reconciles(netExpected);
+
+                // VAT-inclusive readings, only when tax was actually captured (rate or amount).
+                if (!matches && taxRate is { } rate && rate > 0m)
+                    matches = Reconciles(netExpected * (1m + rate / 100m));
+                if (!matches && taxAmount is { } vat && vat != 0m)
+                    matches = Reconciles(netExpected + vat);
+
+                if (!matches)
                     causes.Add("quantity × unit price does not match the stated line amount");
             }
 
@@ -572,7 +608,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             }
 
             // Phase 4 enrichment (captured as metadata; not gated by anti-hallucination).
-            decimal? taxRate = TryToDecimal(l.TaxRate, out var tr) ? tr : null;
+            // taxRate / taxAmount were computed above (used in the VAT-aware reconcile).
             DateOnly? deliveryDate = ParseDateOnly(l.DeliveryDate);
 
             lines.Add(new ExtractedOrderLine(
@@ -584,6 +620,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 UnitPrice: unitPrice,
                 LineAmount: lineAmount,
                 TaxRate: taxRate,
+                TaxAmount: taxAmount,
                 DeliveryDate: deliveryDate,
                 // Phase 1 lossless capture (advisory — not gated by anti-hallucination).
                 ManufacturerPartNumber: NullIfBlank(l.ManufacturerPartNumber),
@@ -609,6 +646,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             Currency: string.IsNullOrWhiteSpace(dto.Currency) ? null : dto.Currency.Trim(),
             Lines: lines,
             SupplierName: string.IsNullOrWhiteSpace(dto.SupplierName) ? null : dto.SupplierName.Trim(),
+            BuyerTaxId: NullIfBlank(dto.BuyerTaxId),
             SubTotal: TryToDecimal(dto.SubTotal, out var sub) ? sub : null,
             TaxTotal: TryToDecimal(dto.TaxTotal, out var tax) ? tax : null,
             GrandTotal: TryToDecimal(dto.GrandTotal, out var grand) ? grand : null,
@@ -887,6 +925,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         [property: JsonPropertyName("lines")] IReadOnlyList<ExtractionLineDto>? Lines,
         [property: JsonPropertyName("document_type")] string? DocumentType = null,
         [property: JsonPropertyName("supplier_name")] string? SupplierName = null,
+        [property: JsonPropertyName("buyer_tax_id")] string? BuyerTaxId = null,
         [property: JsonPropertyName("payment_terms")] string? PaymentTerms = null,
         [property: JsonPropertyName("sub_total")] double? SubTotal = null,
         [property: JsonPropertyName("tax_total")] double? TaxTotal = null,
@@ -907,6 +946,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         [property: JsonPropertyName("unit_price")] double? UnitPrice,
         [property: JsonPropertyName("line_amount")] double? LineAmount,
         [property: JsonPropertyName("tax_rate")] double? TaxRate = null,
+        [property: JsonPropertyName("tax_amount")] double? TaxAmount = null,
         [property: JsonPropertyName("delivery_date")] string? DeliveryDate = null,
         [property: JsonPropertyName("manufacturer_part_number")] string? ManufacturerPartNumber = null,
         [property: JsonPropertyName("customer_part_number")] string? CustomerPartNumber = null,

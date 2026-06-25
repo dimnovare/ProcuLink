@@ -2173,6 +2173,7 @@ public sealed class OrdersController : ControllerBase
                 // Phase 4 per-line enrichment (null for parsers that don't emit it).
                 LineAmount:   l.LineAmount,
                 TaxRate:      l.TaxRate,
+                TaxAmount:    l.TaxAmount,
                 DeliveryDate: l.DeliveryDate?.ToString("yyyy-MM-dd"),
                 // P2 hardening: why the line was flagged for review (null when never flagged).
                 ReviewReason: l.ReviewReason))
@@ -2190,7 +2191,29 @@ public sealed class OrdersController : ControllerBase
         GrandTotal:           e.GrandTotal,
         PaymentTerms:         e.PaymentTerms,
         DocumentType:         e.DocumentType,
-        DocumentSupplierName: e.SupplierName
+        DocumentSupplierName: e.SupplierName,
+        // Buyer tax id + extracted ship-to/bill-to/contact — surfaced for the order-review UI
+        // transparency feature. Nullable; additive — no behaviour change.
+        BuyerTaxId:           e.BuyerTaxId,
+        ShipToName:           e.ShipToName,
+        ShipToDeliverTo:      e.ShipToDeliverTo,
+        ShipToStreet:         e.ShipToStreet,
+        ShipToCity:           e.ShipToCity,
+        ShipToPostalCode:     e.ShipToPostalCode,
+        ShipToCountry:        e.ShipToCountry,
+        ShipToEmail:          e.ShipToEmail,
+        ShipToPhone:          e.ShipToPhone,
+        BillToName:           e.BillToName,
+        BillToDeliverTo:      e.BillToDeliverTo,
+        BillToStreet:         e.BillToStreet,
+        BillToCity:           e.BillToCity,
+        BillToPostalCode:     e.BillToPostalCode,
+        BillToCountry:        e.BillToCountry,
+        BillToEmail:          e.BillToEmail,
+        BillToPhone:          e.BillToPhone,
+        ContactName:          e.ContactName,
+        ContactEmail:         e.ContactEmail,
+        ContactPhone:         e.ContactPhone
     );
 
     /// <summary>

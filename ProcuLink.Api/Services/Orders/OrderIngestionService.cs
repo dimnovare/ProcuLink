@@ -383,6 +383,7 @@ internal sealed class OrderIngestionService
             UnitPrice:     l.UnitPrice,
             LineAmount:    l.LineAmount,
             TaxRate:       l.TaxRate,
+            TaxAmount:     l.TaxAmount,
             DeliveryDate:  l.DeliveryDate,
             // Phase 1 lossless capture — carry the new line fields so BuildLineEntitiesAsync persists them.
             ManufacturerPartNumber: l.ManufacturerPartNumber,
@@ -466,6 +467,8 @@ internal sealed class OrderIngestionService
             Lines         = lineEntities,
             // Phase 4 enrichment.
             SupplierName  = supplierName,
+            // Buyer tax id (drives the cXML From/Identity; null → configured/legacy From unchanged).
+            BuyerTaxId    = string.IsNullOrWhiteSpace(order.BuyerTaxId) ? null : order.BuyerTaxId.Trim(),
             SubTotal      = order.SubTotal,
             TaxTotal      = order.TaxTotal,
             GrandTotal    = order.GrandTotal,
@@ -817,6 +820,8 @@ internal sealed class OrderIngestionService
             var newIncoterms      = parsedOrder.Incoterms;
             var newShippingMethod = parsedOrder.ShippingMethod;
             var newBuyerOrderRef  = parsedOrder.BuyerOrderRef;
+            // Buyer tax id (drives the cXML From/Identity; null → configured/legacy From unchanged).
+            var newBuyerTaxId     = string.IsNullOrWhiteSpace(parsedOrder.BuyerTaxId) ? null : parsedOrder.BuyerTaxId.Trim();
             // cXML address blocks denormalised from the shipTo / billTo parties (DeliverTo ← party
             // contact name). The cXML writer reads these flat columns directly; the OrderParty rows
             // (written below) remain the lossless source of truth.
@@ -878,6 +883,7 @@ internal sealed class OrderIngestionService
                     .SetProperty(o => o.Incoterms,      newIncoterms)
                     .SetProperty(o => o.ShippingMethod, newShippingMethod)
                     .SetProperty(o => o.BuyerOrderRef,  newBuyerOrderRef)
+                    .SetProperty(o => o.BuyerTaxId,     newBuyerTaxId)
                     // cXML address blocks (denormalised shipTo / billTo).
                     .SetProperty(o => o.ShipToName,       newShipToName)
                     .SetProperty(o => o.ShipToDeliverTo,  newShipToDeliverTo)
@@ -1001,6 +1007,7 @@ internal sealed class OrderIngestionService
             entity.Incoterms      = newIncoterms;
             entity.ShippingMethod = newShippingMethod;
             entity.BuyerOrderRef  = newBuyerOrderRef;
+            entity.BuyerTaxId     = newBuyerTaxId;
             // cXML address blocks — reflect so an immediate (same-request) cXML transform emits them.
             entity.ShipToName       = newShipToName;
             entity.ShipToDeliverTo  = newShipToDeliverTo;
@@ -1167,6 +1174,7 @@ internal sealed class OrderIngestionService
                 l.UnitPrice,
                 LineAmount: l.LineAmount,
                 TaxRate: l.TaxRate,
+                TaxAmount: l.TaxAmount,
                 DeliveryDate: l.DeliveryDate,
                 // Phase 1 lossless capture (additive).
                 ManufacturerPartNumber: l.ManufacturerPartNumber,
@@ -1177,6 +1185,7 @@ internal sealed class OrderIngestionService
                 ContractNumber: l.ContractNumber,
                 NetAmount: l.NetAmount)).ToList(),
             SupplierName: o.SupplierName,
+            BuyerTaxId: o.BuyerTaxId,
             SubTotal: o.SubTotal,
             TaxTotal: o.TaxTotal,
             GrandTotal: o.GrandTotal,
@@ -1341,6 +1350,7 @@ internal sealed class OrderIngestionService
                 // Phase 4 enrichment (carried from the parsed line; null for parsers that don't emit it).
                 LineAmount = line.LineAmount,
                 TaxRate = line.TaxRate,
+                TaxAmount = line.TaxAmount,
                 DeliveryDate = line.DeliveryDate,
                 // Phase 1 lossless capture (carried from the parsed line; null for parsers that don't emit it).
                 ManufacturerPartNumber = line.ManufacturerPartNumber,

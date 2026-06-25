@@ -460,6 +460,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Incoterms).HasColumnName("incoterms");
             b.Property(x => x.ShippingMethod).HasColumnName("shipping_method");
             b.Property(x => x.BuyerOrderRef).HasColumnName("buyer_order_ref");
+            // Buyer tax id (nullable; feeds the cXML From/Identity). Migration AddBuyerTaxIdAndLineTax.
+            b.Property(x => x.BuyerTaxId).HasColumnName("buyer_tax_id");
             // cXML address blocks (nullable; denormalised from shipTo/billTo OrderParty rows).
             b.Property(x => x.ShipToName).HasColumnName("ship_to_name");
             b.Property(x => x.ShipToDeliverTo).HasColumnName("ship_to_deliver_to");
@@ -533,6 +535,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // Phase 4 enrichment (nullable).
             b.Property(x => x.LineAmount).HasColumnName("line_amount").HasColumnType("numeric(18,4)");
             b.Property(x => x.TaxRate).HasColumnName("tax_rate").HasColumnType("numeric(7,4)");
+            // Per-line VAT amount (nullable). Migration AddBuyerTaxIdAndLineTax.
+            b.Property(x => x.TaxAmount).HasColumnName("tax_amount").HasColumnType("numeric(18,4)");
             b.Property(x => x.DeliveryDate).HasColumnName("delivery_date");
             // Phase 1 lossless capture (nullable additive columns).
             b.Property(x => x.ManufacturerPartNumber).HasColumnName("manufacturer_part_number");

@@ -31,7 +31,32 @@ public record OrderDto(
     string?    DocumentType = null,
     /// <summary>Supplier name AS PRINTED ON THE DOCUMENT (extracted). Distinct from the resolved
     /// <see cref="SupplierName"/> (Supplier.Name). Null when not captured.</summary>
-    string?    DocumentSupplierName = null
+    string?    DocumentSupplierName = null,
+    // ── Buyer tax id + addresses/contact (nullable; additive — for order-review transparency) ──
+    /// <summary>The buyer's VAT / tax / org number as extracted; drives the cXML From identity. Null when not captured.</summary>
+    string?    BuyerTaxId = null,
+    /// <summary>Ship-to address (as extracted). All nullable.</summary>
+    string?    ShipToName = null,
+    string?    ShipToDeliverTo = null,
+    string?    ShipToStreet = null,
+    string?    ShipToCity = null,
+    string?    ShipToPostalCode = null,
+    string?    ShipToCountry = null,
+    string?    ShipToEmail = null,
+    string?    ShipToPhone = null,
+    /// <summary>Bill-to address (as extracted). All nullable.</summary>
+    string?    BillToName = null,
+    string?    BillToDeliverTo = null,
+    string?    BillToStreet = null,
+    string?    BillToCity = null,
+    string?    BillToPostalCode = null,
+    string?    BillToCountry = null,
+    string?    BillToEmail = null,
+    string?    BillToPhone = null,
+    /// <summary>Ordering contact (as extracted). All nullable.</summary>
+    string?    ContactName = null,
+    string?    ContactEmail = null,
+    string?    ContactPhone = null
 );
 
 /// <summary>Single purchase order line in the API response.</summary>
@@ -52,6 +77,8 @@ public record OrderLineDto(
     decimal? LineAmount = null,
     /// <summary>Per-line tax rate (percent) as extracted; null when not captured.</summary>
     decimal? TaxRate = null,
+    /// <summary>Per-line tax amount (currency) as extracted; null when not captured.</summary>
+    decimal? TaxAmount = null,
     /// <summary>Per-line delivery date as ISO yyyy-MM-dd; null when not captured.</summary>
     string?  DeliveryDate = null,
     /// <summary>Short human-readable explanation of why the line was flagged for review

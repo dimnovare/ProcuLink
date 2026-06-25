@@ -125,6 +125,16 @@ public class PurchaseOrderEntity
     public string? ShippingMethod { get; set; }
     public string? BuyerOrderRef { get; set; }
 
+    /// <summary>
+    /// The BUYER's tax / org identifier as printed on the document (e.g. a Norwegian org number
+    /// or an EU VAT number). Nullable; populated by the LLM PDF/email extractor when present.
+    /// Drives the cXML <c>From/Credential/Identity</c> so a PO from a different buyer never inherits
+    /// the supplier connection's configured From VatNr (the Gjensidige/REDACTED-PARTY bug). Null → the
+    /// configured / legacy From identity is used, so unconfigured orders stay byte-identical.
+    /// Migration <c>AddBuyerTaxIdAndLineTax</c>.
+    /// </summary>
+    public string? BuyerTaxId { get; set; }
+
     // ── cXML address blocks (nullable; denormalised from the shipTo/billTo OrderParty rows) ──
     // These mirror the Contact*/BuyerName precedent: the address data is also persisted as
     // OrderParty child rows, but the cXML writer reads the PurchaseOrderEntity directly, so the

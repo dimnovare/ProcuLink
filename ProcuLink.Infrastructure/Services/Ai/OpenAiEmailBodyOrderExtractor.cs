@@ -40,6 +40,7 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
             "order_date": { "type": "string" },
             "currency":   { "type": "string" },
             "buyer_name": { "type": "string" },
+            "buyer_tax_id": { "type": "string", "description": "The BUYER's own VAT / tax / organisation number (NOT the supplier's). Empty if not stated." },
             "parties": {
               "type": "array",
               "description": "Every named party with an address or tax id: ship-to, bill-to, remit-to. Empty array if none. Do NOT duplicate buyer_name unless it carries an address/VAT here.",
@@ -89,7 +90,7 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
               }
             }
           },
-          "required": ["confidence", "po_number", "order_date", "currency", "buyer_name", "parties", "raw_fields", "lines"],
+          "required": ["confidence", "po_number", "order_date", "currency", "buyer_name", "buyer_tax_id", "parties", "raw_fields", "lines"],
           "additionalProperties": false
         }
         """u8.ToArray());
@@ -357,6 +358,11 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
             BuyerName: dto.BuyerName,
             Currency:  dto.Currency,
             Lines:     lines,
+            // Buyer tax id — header parity with the PDF path (so a cXML From/Identity is correct on
+            // the email ingress path too). Per-line tax_amount on the email path is DEFERRED: the
+            // email line schema deliberately omits line_amount/tax (it's a minimal subset), so there
+            // is nothing to reconcile against — adding line tax there would be a non-trivial widening.
+            BuyerTaxId: NullIfBlank(dto.BuyerTaxId),
             // Phase 1 lossless capture — email parity (parties + raw_fields).
             // Email stays a subset of the PDF path: no contact object / incoterms.
             Parties: dto.Parties?.Select(p => new ExtractedParty(
@@ -399,6 +405,7 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
         [property: JsonPropertyName("currency")]   string?                           Currency,
         [property: JsonPropertyName("buyer_name")] string?                           BuyerName,
         [property: JsonPropertyName("lines")]      IReadOnlyList<ExtractionLineDto>? Lines,
+        [property: JsonPropertyName("buyer_tax_id")] string?                         BuyerTaxId = null,
         [property: JsonPropertyName("parties")]    IReadOnlyList<ExtractionPartyDto>? Parties = null,
         [property: JsonPropertyName("raw_fields")] IReadOnlyList<RawFieldDto>?       RawFields = null);
 

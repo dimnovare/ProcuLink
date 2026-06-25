@@ -101,6 +101,29 @@ public class EffectiveEntityResolverTests
         cxml.Should().Contain("REDACTED-PARTY").And.Contain("REDACTED-NAME");
     }
 
+    [Fact]
+    public void Resolve_PreservesBuyerTaxIdAndLineTaxAmount_OnTheClone()
+    {
+        // Regression (mirrors the address-block Clone bug): the cXML From identity is driven by
+        // BuyerTaxId and the per-line <Tax> by TaxAmount. Both are NOT override-targetable, so Clone
+        // must carry them verbatim — omitting them silently reverts the From identity and drops every
+        // line <Tax> on the structured preview + delivery path (which always goes through Resolve).
+        var order = BuildOrder();
+        order.BuyerTaxId = "REDACTED-TAXID";
+        order.Lines[0].TaxAmount = 834.27m;
+        order.Lines[0].TaxRate   = 25m;
+
+        var effective = EffectiveEntityResolver.Resolve(order, new OrderMappingOverride());
+
+        effective.BuyerTaxId.Should().Be("REDACTED-TAXID");
+        effective.Lines[0].TaxAmount.Should().Be(834.27m);
+        effective.Lines[0].TaxRate.Should().Be(25m);
+
+        // And the cXML run on the effective entity emits the dynamic From identity + the line <Tax>.
+        var cxml = Run(TransformerFor(OutputFormat.CXml), effective, OutputFormat.CXml);
+        cxml.Should().Contain("REDACTED-TAXID").And.Contain("<Tax>").And.Contain("834.27");
+    }
+
     // ── SupportsOverrideFormat ────────────────────────────────────────────────
 
     [Fact]

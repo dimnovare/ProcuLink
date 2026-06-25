@@ -185,6 +185,84 @@ public class OrdersControllerPhase4DtoTests
         var line = Assert.Single(dto.Lines);
         Assert.Null(line.LineAmount);
         Assert.Null(line.TaxRate);
+        Assert.Null(line.TaxAmount);
         Assert.Null(line.DeliveryDate);
+
+        // Buyer tax id + addresses/contact are also null on the no-enrichment path.
+        Assert.Null(dto.BuyerTaxId);
+        Assert.Null(dto.ShipToName);
+        Assert.Null(dto.BillToName);
+        Assert.Null(dto.ContactName);
+    }
+
+    [Fact]
+    public async Task Get_OrderWithBuyerTaxAddressesAndLineTax_MapsThemForReviewUi()
+    {
+        var orgId      = Guid.NewGuid();
+        var orderId    = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await using var db = NewDb();
+
+        var entity = new PurchaseOrderEntity
+        {
+            Id            = orderId,
+            OrgId         = orgId,
+            SupplierId    = supplierId,
+            Supplier      = new Supplier { Id = supplierId, OrgId = orgId, Name = "Resolved Supplier Ltd" },
+            PoNumber      = "REDACTED-ITEM",
+            OrderDate     = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency      = "NOK",
+            Status        = "pending_review",
+            CreatedAt     = DateTime.UtcNow,
+            UpdatedAt     = DateTime.UtcNow,
+            OutboundArtifacts = new List<OutboundArtifact>(),
+            // Buyer tax id + extracted ship-to / bill-to / contact.
+            BuyerTaxId       = "REDACTED-TAXID",
+            ShipToName       = "REDACTED-PARTY",
+            ShipToStreet     = "REDACTED-ADDRESS",
+            ShipToCity       = "REDACTED-ADDRESS",
+            ShipToPostalCode = "63040",
+            ShipToCountry    = "FRANCE",
+            BillToName       = "REDACTED-PARTY",
+            ContactName      = "REDACTED-NAME",
+            ContactEmail     = "redacted@example.invalid",
+            Lines = new List<PurchaseOrderLineEntity>
+            {
+                new()
+                {
+                    Id            = Guid.NewGuid(),
+                    LineNumber    = 1,
+                    BuyerItemCode = "B-1",
+                    Quantity      = 1m,
+                    UnitPrice     = 3337.08m,
+                    Confidence    = 1f,
+                    NeedsReview   = false,
+                    TaxRate       = 25m,
+                    TaxAmount     = 834.27m,
+                },
+            },
+        };
+
+        var ordersSvc = new Mock<IOrderService>();
+        ordersSvc.Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(entity));
+
+        var controller = BuildController(db, orgId, ordersSvc.Object);
+        var result = await controller.Get(orderId, CancellationToken.None);
+
+        var ok  = Assert.IsType<OkObjectResult>(result);
+        var dto = Assert.IsType<OrderDto>(ok.Value);
+
+        Assert.Equal("REDACTED-TAXID", dto.BuyerTaxId);
+        Assert.Equal("REDACTED-PARTY", dto.ShipToName);
+        Assert.Equal("REDACTED-ADDRESS", dto.ShipToCity);
+        Assert.Equal("REDACTED-PARTY", dto.BillToName);
+        Assert.Equal("REDACTED-NAME", dto.ContactName);
+        Assert.Equal("redacted@example.invalid", dto.ContactEmail);
+
+        var line = Assert.Single(dto.Lines);
+        Assert.Equal(25m, line.TaxRate);
+        Assert.Equal(834.27m, line.TaxAmount);
     }
 }

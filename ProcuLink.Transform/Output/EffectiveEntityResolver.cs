@@ -268,6 +268,10 @@ public static class EffectiveEntityResolver
             DocumentType          = src.DocumentType,
             // V5: requested delivery date (in-memory only; not a DB column).
             RequestedDeliveryDate = src.RequestedDeliveryDate,
+            // Buyer tax id: the cXML transform reads it for the From/Identity. NOT override-targetable,
+            // so carried through verbatim — omitting it here would silently revert the From identity to
+            // the configured/legacy value on the preview + delivery path (exactly the address-block bug).
+            BuyerTaxId        = src.BuyerTaxId,
             // Contact + ship-to/bill-to address columns: the structured transforms (cXML/UBL/X12/XML)
             // read these to emit <Contact>/<ShipTo>/<BillTo>. They are NOT override-targetable canonical
             // fields, so they're carried through verbatim — omitting them here silently drops every
@@ -321,6 +325,9 @@ public static class EffectiveEntityResolver
                 NeedsReview      = l.NeedsReview,
                 LineAmount       = l.LineAmount,
                 TaxRate          = l.TaxRate,
+                // Per-line VAT amount: the cXML transform emits <ItemDetail>/<Tax> from it. NOT
+                // override-targetable; carried verbatim so the structured preview + delivery path keeps it.
+                TaxAmount        = l.TaxAmount,
                 DeliveryDate     = l.DeliveryDate,
             })
             .ToList();

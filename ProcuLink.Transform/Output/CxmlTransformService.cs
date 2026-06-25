@@ -137,9 +137,7 @@ public sealed class CxmlTransformService : ITransformService
                 // network credentials when present, falling back per-credential to the legacy
                 // OrgId / SupplierId / NetworkUserId GUID identities (byte-identical when unset).
                 new XElement("Header",
-                    BuildCredentialBlock("From",
-                        cxmlCredentials?.FromDomain, cxmlCredentials?.FromIdentity,
-                        legacyDomain: "OrgId", legacyIdentity: order.OrgId.ToString()),
+                    BuildFrom(order, cxmlCredentials),
                     BuildCredentialBlock("To",
                         cxmlCredentials?.ToDomain, cxmlCredentials?.ToIdentity,
                         legacyDomain: "SupplierId", legacyIdentity: order.SupplierId.ToString()),
@@ -241,6 +239,35 @@ public sealed class CxmlTransformService : ITransformService
         !value.Any(c => c is '"' or '\'' or '<' or '>' || char.IsControl(c));
 
     // ── Header credential helpers ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the <c>&lt;From&gt;</c> credential. The cXML <c>From/Identity</c> is the BUYER's
+    /// identity, so when the order carries a <see cref="PurchaseOrderEntity.BuyerTaxId"/> it becomes
+    /// the From identity — KEEPING the configured From domain (or defaulting to
+    /// <see cref="DefaultConfiguredDomain"/> when none is configured). This stops a PO from one buyer
+    /// inheriting the supplier connection's configured From VatNr (the Gjensidige/REDACTED-PARTY bug). When
+    /// there is NO buyer tax id the result is byte-identical to the pre-feature output: the configured
+    /// From credential when set, else the legacy <c>OrgId</c>/orgId GUID identity.
+    /// </summary>
+    private static XElement BuildFrom(PurchaseOrderEntity order, CxmlCredentialConfig? cfg)
+    {
+        var buyerTaxId = order.BuyerTaxId?.Trim();
+        if (string.IsNullOrWhiteSpace(buyerTaxId))
+        {
+            // Unchanged legacy/configured path — byte-identical to before.
+            return BuildCredentialBlock("From",
+                cfg?.FromDomain, cfg?.FromIdentity,
+                legacyDomain: "OrgId", legacyIdentity: order.OrgId.ToString());
+        }
+
+        // Buyer tax id wins as the From identity; keep the configured From domain, defaulting to
+        // NetworkId (a tax id is a network identity, never the internal OrgId domain).
+        var domain = string.IsNullOrWhiteSpace(cfg?.FromDomain) ? DefaultConfiguredDomain : cfg!.FromDomain.Trim();
+        return new XElement("From",
+            new XElement("Credential",
+                new XAttribute("domain", domain),
+                new XElement("Identity", buyerTaxId)));
+    }
 
     /// <summary>
     /// Builds a <c>&lt;From&gt;</c> / <c>&lt;To&gt;</c> block wrapping a single
@@ -401,6 +428,33 @@ public sealed class CxmlTransformService : ITransformService
                     new XAttribute(Xml + "lang", "en"),
                     line.Description ?? string.Empty),
                 new XElement("UnitOfMeasure",
-                    line.Unit ?? string.Empty)));
+                    line.Unit ?? string.Empty),
+                // Per-line tax (null-gated): emit cXML <Tax> only when a tax AMOUNT was captured.
+                // No captured amount → null → ignored by XLinq → byte-identical to today's output.
+                BuildLineTax(line, currency)));
+    }
+
+    /// <summary>
+    /// Builds the optional cXML <c>&lt;Tax&gt;</c> sub-block for a line: a <c>&lt;Money&gt;</c> carrying
+    /// the captured VAT amount, plus a <c>&lt;Description&gt;</c> stating the rate when known. Returns
+    /// null when no tax AMOUNT was captured (→ no node → byte-identical to the pre-feature ItemDetail).
+    /// The cXML 1.2 ItemDetail allows an optional <c>Tax</c> (Money + Description) at this position.
+    /// </summary>
+    private static XElement? BuildLineTax(PurchaseOrderLineEntity line, string currency)
+    {
+        if (line.TaxAmount is not { } taxAmount)
+            return null;
+
+        var description = line.TaxRate is { } rate
+            ? $"VAT {rate.ToString("0.##", CultureInfo.InvariantCulture)}%"
+            : "Tax";
+
+        return new XElement("Tax",
+            new XElement("Money",
+                new XAttribute("currency", currency),
+                taxAmount.ToString("F2", CultureInfo.InvariantCulture)),
+            new XElement("Description",
+                new XAttribute(Xml + "lang", "en"),
+                description));
     }
 }

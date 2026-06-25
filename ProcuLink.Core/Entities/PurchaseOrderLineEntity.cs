@@ -34,6 +34,13 @@ public class PurchaseOrderLineEntity
     /// <summary>Printed extended line total (quantity × unit price), when stated.</summary>
     public decimal? LineAmount { get; set; }
     public decimal? TaxRate { get; set; }
+
+    /// <summary>
+    /// Per-line VAT amount as printed (distinct from <see cref="TaxRate"/>). Nullable; populated by
+    /// the LLM PDF/email extractor. Emitted in the cXML <c>ItemDetail/Tax/Money</c> when present.
+    /// Migration <c>AddBuyerTaxIdAndLineTax</c>.
+    /// </summary>
+    public decimal? TaxAmount { get; set; }
     public DateOnly? DeliveryDate { get; set; }
 
     // ── Phase 1 lossless capture (nullable). ManufacturerPartNumber = the catalog key (Phase 2). ──

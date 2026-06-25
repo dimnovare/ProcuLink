@@ -15,6 +15,9 @@ public record ParsedOrderLine(
     // Phase 4 enrichment (optional — additive, defaulted so existing parsers are unaffected).
     decimal? LineAmount = null,
     decimal? TaxRate = null,
+    // Per-line VAT amount as printed. Additive, defaulted. Carried so the VAT-aware reconcile
+    // and the cXML <ItemDetail>/<Tax> emit have a faithful per-line tax value.
+    decimal? TaxAmount = null,
     DateOnly? DeliveryDate = null,
     // Parser-level review flag: true when a numeric token (quantity / unit price) was
     // ambiguous or unparseable and the parser refused to emit a silently-wrong value
