@@ -428,17 +428,20 @@ public sealed class CxmlTransformService : ITransformService
                     new XAttribute(Xml + "lang", "en"),
                     line.Description ?? string.Empty),
                 new XElement("UnitOfMeasure",
-                    line.Unit ?? string.Empty),
-                // Per-line tax (null-gated): emit cXML <Tax> only when a tax AMOUNT was captured.
-                // No captured amount → null → ignored by XLinq → byte-identical to today's output.
-                BuildLineTax(line, currency)));
+                    line.Unit ?? string.Empty)),
+
+            // Per-line tax (null-gated): in cXML 1.2 <Tax> is a child of <ItemOut> — a SIBLING of
+            // <ItemDetail>, NOT nested inside it (ItemDetail's content model has no Tax). Emit it only
+            // when a tax AMOUNT was captured; no amount → null → ignored by XLinq → byte-identical.
+            BuildLineTax(line, currency));
     }
 
     /// <summary>
     /// Builds the optional cXML <c>&lt;Tax&gt;</c> sub-block for a line: a <c>&lt;Money&gt;</c> carrying
     /// the captured VAT amount, plus a <c>&lt;Description&gt;</c> stating the rate when known. Returns
-    /// null when no tax AMOUNT was captured (→ no node → byte-identical to the pre-feature ItemDetail).
-    /// The cXML 1.2 ItemDetail allows an optional <c>Tax</c> (Money + Description) at this position.
+    /// null when no tax AMOUNT was captured (→ no node → byte-identical to the pre-feature output).
+    /// In cXML 1.2 <c>Tax</c> (Money + Description) is a child of <c>ItemOut</c>, emitted after
+    /// <c>ItemDetail</c> — see the call site; it is NOT a member of ItemDetail's content model.
     /// </summary>
     private static XElement? BuildLineTax(PurchaseOrderLineEntity line, string currency)
     {

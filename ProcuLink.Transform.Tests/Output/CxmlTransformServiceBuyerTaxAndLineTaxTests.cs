@@ -15,7 +15,7 @@ namespace ProcuLink.Transform.Tests.Output;
 /// <list type="bullet">
 ///   <item>buyer tax id present → From/Identity = it, KEEPING the configured From domain.</item>
 ///   <item>buyer tax id absent → the configured (or legacy) From is byte-identical to today.</item>
-///   <item>line tax present → an ItemDetail/Tax/Money block is emitted; absent → byte-identical.</item>
+///   <item>line tax present → an ItemOut/Tax/Money block (sibling of ItemDetail) is emitted; absent → byte-identical.</item>
 /// </list>
 /// </summary>
 public class CxmlTransformServiceBuyerTaxAndLineTaxTests
@@ -126,10 +126,10 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
         ReadFrom(xml).Should().Be(("OrgId", OrgId.ToString()), "no buyer tax id + no config = legacy byte-identical output");
     }
 
-    // ── Line tax in ItemDetail ─────────────────────────────────────────────────
+    // ── Line tax in ItemOut (sibling of ItemDetail) ────────────────────────────
 
     [Fact]
-    public async Task LineTaxAmount_Present_EmitsItemDetailTaxMoney()
+    public async Task LineTaxAmount_Present_EmitsItemOutTaxMoney()
     {
         var order = BuildOrder();
         order.Lines[0].TaxAmount = 834.27m;
@@ -138,9 +138,12 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
         var xml = await RenderAsync(order);
         var doc = XDocument.Parse(xml);
 
-        var itemDetail = doc.Descendants("ItemDetail").Single();
-        var tax = itemDetail.Element("Tax");
+        // cXML 1.2: <Tax> is a child of <ItemOut> — a SIBLING of <ItemDetail>, not nested inside it.
+        var itemOut = doc.Descendants("ItemOut").Single();
+        var tax = itemOut.Element("Tax");
         tax.Should().NotBeNull("a captured per-line tax amount must produce a <Tax> block");
+        itemOut.Element("ItemDetail")!.Element("Tax")
+            .Should().BeNull("<Tax> must NOT be nested in ItemDetail (DTD-invalid)");
         var money = tax!.Element("Money")!;
         money.Attribute("currency")!.Value.Should().Be("NOK");
         money.Value.Should().Be("834.27");
@@ -159,19 +162,20 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
     }
 
     [Fact]
-    public async Task LineTax_PlacedInsideItemDetail_AfterUnitPrice()
+    public async Task LineTax_PlacedInItemOut_AfterItemDetail()
     {
         var order = BuildOrder();
         order.Lines[0].TaxAmount = 834.27m;
 
         var xml = await RenderAsync(order);
 
-        var unitPriceIdx = xml.IndexOf("<UnitPrice>", StringComparison.Ordinal);
-        var taxIdx       = xml.IndexOf("<Tax>", StringComparison.Ordinal);
         var itemDetailEndIdx = xml.IndexOf("</ItemDetail>", StringComparison.Ordinal);
+        var taxIdx           = xml.IndexOf("<Tax>", StringComparison.Ordinal);
+        var itemOutEndIdx    = xml.IndexOf("</ItemOut>", StringComparison.Ordinal);
 
-        unitPriceIdx.Should().BeGreaterThanOrEqualTo(0);
-        taxIdx.Should().BeGreaterThan(unitPriceIdx);
-        taxIdx.Should().BeLessThan(itemDetailEndIdx);
+        itemDetailEndIdx.Should().BeGreaterThanOrEqualTo(0);
+        // cXML 1.2: <Tax> is a sibling of ItemDetail inside ItemOut → after </ItemDetail>, before </ItemOut>.
+        taxIdx.Should().BeGreaterThan(itemDetailEndIdx);
+        taxIdx.Should().BeLessThan(itemOutEndIdx);
     }
 }

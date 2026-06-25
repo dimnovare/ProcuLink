@@ -594,7 +594,10 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 // VAT-inclusive readings, only when tax was actually captured (rate or amount).
                 if (!matches && taxRate is { } rate && rate > 0m)
                     matches = Reconciles(netExpected * (1m + rate / 100m));
-                if (!matches && taxAmount is { } vat && vat != 0m)
+                // The tax AMOUNT escape only counts when that amount appears verbatim in the source —
+                // otherwise a fabricated, precisely-compensating tax_amount could rescue a genuinely
+                // wrong line total. (The rate reading above is already self-limited to the captured rate.)
+                if (!matches && taxAmount is { } vat && vat != 0m && NumberAppearsInSource(vat, sourceNumbers))
                     matches = Reconciles(netExpected + vat);
 
                 if (!matches)
