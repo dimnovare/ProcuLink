@@ -522,6 +522,10 @@ public class SftpIngressServiceTests
             string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException("NoOpOrderService must not be called.");
 
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
+            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            => throw new NotImplementedException("NoOpOrderService must not be called.");
+
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid o, Guid s, Stream f, string fn, string ct2, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid o, Guid s, ExtractedOrder order, string source, CancellationToken ct)
@@ -571,6 +575,11 @@ public class SftpIngressServiceTests
             };
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
         }
+
+        // Unrouted hold path records a Guid.Empty supplier so tests can assert it was used.
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
+            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            => CreateStubAsync(organisationId, Guid.Empty, fileStream, filename, contentType, ct);
 
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid o, Guid s, Stream f, string fn, string ct2, CancellationToken ct)
             => throw new NotImplementedException();

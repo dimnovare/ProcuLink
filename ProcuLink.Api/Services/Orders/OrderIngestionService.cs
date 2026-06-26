@@ -4,6 +4,7 @@ using CsvHelper;
 using CsvHelper.Configuration;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Helpers;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -245,7 +246,7 @@ internal sealed class OrderIngestionService
 
     public async Task<Result<PurchaseOrderEntity>> CreateStubAsync(
         Guid organisationId,
-        Guid supplierId,
+        Guid? supplierId,
         Stream fileStream,
         string filename,
         string contentType,
@@ -288,23 +289,33 @@ internal sealed class OrderIngestionService
         // DeletedAt == null: never route a NEW order to a soft-deleted supplier
         // (it has disappeared from every list/picker; importing against it would
         // silently revive a destination the operator removed).
-        var supplier = await _db.Suppliers
-            .FirstOrDefaultAsync(s => s.Id == supplierId && s.OrgId == organisationId && s.DeletedAt == null, ct);
-        if (supplier is null)
-            return Result<PurchaseOrderEntity>.Fail("Supplier not found.");
+        // Phase 1 routing: supplierId may be null — the file arrived on a content-routed channel
+        // with no known supplier. Validate only when a supplier was supplied; a null supplier
+        // parks the order 'unrouted' (the parse job sets that status) until one is assigned.
+        Supplier? supplier = null;
+        if (supplierId is { } sid)
+        {
+            supplier = await _db.Suppliers
+                .FirstOrDefaultAsync(s => s.Id == sid && s.OrgId == organisationId && s.DeletedAt == null, ct);
+            if (supplier is null)
+                return Result<PurchaseOrderEntity>.Fail("Supplier not found.");
+        }
 
         // Create stub order — no lines yet, status = "parsing"
         var now = DateTime.UtcNow;
 
         // V1: pin the supplier's active connection revision now, so the async parse job inherits it.
-        var connectionRevisionId = await ResolveConnectionRevisionAsync(organisationId, supplierId, ct);
+        // No supplier => no revision to pin (assign-supplier pins it when a supplier is chosen).
+        var connectionRevisionId = supplierId is { } sidRev
+            ? await ResolveConnectionRevisionAsync(organisationId, sidRev, ct)
+            : (Guid?)null;
 
         var entity = new PurchaseOrderEntity
         {
             Id            = orderId,
             OrgId         = organisationId,
             SupplierId    = supplierId,
-            Supplier      = supplier,
+            Supplier      = supplier!,
             ConnectionRevisionId = connectionRevisionId,
             PoNumber      = $"PO-{now:yyyyMMddHHmmss}",
             OrderDate     = DateOnly.FromDateTime(now),
@@ -801,6 +812,13 @@ internal sealed class OrderIngestionService
             var newDocumentType = NormalizeDocumentType(parsedOrder.DocumentType);
             var isInvoice = newDocumentType == "invoice";
             var newStatus    = (anyUnresolved || isInvoice) ? "pending_review" : "ready";
+            // Phase 1 routing: a supplier-less order is PARKED 'unrouted' after extraction. Its
+            // header + parties + (unresolved) lines are persisted below so the triage queue shows
+            // what arrived, but it cannot reach 'ready' — there is no supplier to resolve item codes
+            // against. POST /orders/{id}/assign-supplier sets a supplier and re-enqueues this parse,
+            // which then resolves normally. (Overrides the line above only when no supplier is set.)
+            if (entity.SupplierId is null)
+                newStatus = OrderStatusConstants.Unrouted;
             // Denormalise buyer name for SQL search (avoid JSON parse at query time).
             var newBuyerName = string.IsNullOrWhiteSpace(parsedOrder.BuyerName)
                                 ? null
@@ -909,6 +927,16 @@ internal sealed class OrderIngestionService
                     "ParseStoredFileAsync: ExecuteUpdateAsync affected 0 rows for order {OrderId}", orderId);
                 return Result<ParsedFileOutput>.Fail("Order could not be updated — not found or already deleted.");
             }
+
+            // Idempotent line persist (delete-then-insert, mirroring the parties replace below):
+            // clear any lines from a PRIOR parse of this order before inserting the fresh set.
+            // The normal flow parses each order exactly once (the status!="parsing" guard blocks
+            // re-entry), but routing's assign-supplier flips an 'unrouted' order back to 'parsing'
+            // and re-parses it — without this, the unrouted hold's lines would be DUPLICATED on
+            // the resolving re-parse. ExecuteDeleteAsync is Npgsql-only, like the rest of this block.
+            await _db.PurchaseOrderLines
+                .Where(l => l.OrderId == orderId)
+                .ExecuteDeleteAsync(ct);
 
             // Set the FK on each line before inserting (EF relationship fixup
             // can't run because we detached the parent from tracking above).

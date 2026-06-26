@@ -36,6 +36,20 @@ public interface IOrderService
         CancellationToken ct);
 
     /// <summary>
+    /// Routing (Phase 1): upload a raw file and create an order stub with NO supplier yet.
+    /// Used by content-routed channels (SFTP/S3/email with <c>RouteByContent</c>) when no default
+    /// supplier is configured: the parse job parks the order <c>unrouted</c> instead of dropping the
+    /// file, and <c>POST /api/orders/{id}/assign-supplier</c> later assigns one and re-parses.
+    /// Like <see cref="CreateStubAsync"/>, does NOT parse inline — enqueue <c>ParseOrderJob</c> after.
+    /// </summary>
+    Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
+        Guid organisationId,
+        Stream fileStream,
+        string filename,
+        string contentType,
+        CancellationToken ct);
+
+    /// <summary>
     /// Create a purchase order directly from an already-parsed order (e.g. from
     /// the email-body NLP extractor). There is no source file — the order is
     /// persisted with lines populated, auto-resolved against item_mappings, and

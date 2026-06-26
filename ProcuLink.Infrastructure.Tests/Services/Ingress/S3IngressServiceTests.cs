@@ -569,6 +569,11 @@ public class S3IngressServiceTests
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
         }
 
+        // Unrouted hold path records a Guid.Empty supplier so tests can assert it was used.
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
+            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            => CreateStubAsync(organisationId, Guid.Empty, fileStream, filename, contentType, ct);
+
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)

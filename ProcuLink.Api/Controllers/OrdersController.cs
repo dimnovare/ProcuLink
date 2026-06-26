@@ -554,6 +554,68 @@ public sealed class OrdersController : ControllerBase
         return Ok(MapToDto(result.Value!));
     }
 
+    // ── POST /api/orders/{id}/assign-supplier ─────────────────────────────────
+
+    /// <summary>
+    /// Routing (Phase 1): assign a supplier to an order parked <c>unrouted</c> (ingested on a
+    /// content-routed channel with no known supplier). Atomically claims the order
+    /// (<c>unrouted</c> → <c>parsing</c>), pins the supplier's active connection revision, and
+    /// re-enqueues the parse job — which then resolves the lines against the chosen supplier through
+    /// the normal path. Only an <c>unrouted</c> order can be assigned; any other state returns 409.
+    /// Org-scoped; a cross-tenant / unknown order returns 404, an unknown supplier 400.
+    /// </summary>
+    [HttpPost("{id:guid}/assign-supplier")]
+    [ProducesResponseType(typeof(OrderDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> AssignSupplier(
+        Guid id, [FromBody] AssignSupplierRequest request, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        if (request is null || request.SupplierId == Guid.Empty)
+            return BadRequest(new { error = "A supplierId is required." });
+
+        // Validate the target supplier belongs to this org and is not soft-deleted.
+        var supplierOk = await _db.Suppliers.AsNoTracking()
+            .AnyAsync(s => s.Id == request.SupplierId && s.OrgId == orgId && s.DeletedAt == null, ct);
+        if (!supplierOk)
+            return BadRequest(new { error = "Supplier not found." });
+
+        // Pin the supplier's active connection revision (mirrors ingest-time pinning); null = live config.
+        var revisionId = await _db.SupplierConnections.AsNoTracking()
+            .Where(c => c.OrgId == orgId && c.SupplierId == request.SupplierId)
+            .Select(c => c.ActiveRevisionId)
+            .FirstOrDefaultAsync(ct);
+
+        // Atomic claim: only an UNROUTED order can be assigned (prevents racing / double-assign).
+        var now = DateTime.UtcNow;
+        var claimed = await _db.PurchaseOrders
+            .Where(o => o.Id == id && o.OrgId == orgId && o.Status == OrderStatusConstants.Unrouted)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(o => o.SupplierId, request.SupplierId)
+                .SetProperty(o => o.ConnectionRevisionId, revisionId)
+                .SetProperty(o => o.Status, OrderStatusConstants.Parsing)
+                .SetProperty(o => o.UpdatedAt, now), CancellationToken.None);
+
+        if (claimed == 0)
+        {
+            var exists = await _db.PurchaseOrders.AsNoTracking()
+                .AnyAsync(o => o.Id == id && o.OrgId == orgId, ct);
+            if (!exists)
+                return NotFound();
+            return Conflict(new { error = "Order is not awaiting routing (it already has a supplier or is in another state)." });
+        }
+
+        // Re-run the parse with the chosen supplier → resolves the lines through the normal path.
+        ParseOrderJob.Enqueue(_jobs, id, orgId);
+
+        var order = await _db.PurchaseOrders.AsNoTracking()
+            .Include(o => o.Supplier)
+            .FirstAsync(o => o.Id == id && o.OrgId == orgId, ct);
+        return Ok(MapToDto(order));
+    }
+
     // ── GET /api/orders/{id}/mapping-override ─────────────────────────────────
 
     /// <summary>
