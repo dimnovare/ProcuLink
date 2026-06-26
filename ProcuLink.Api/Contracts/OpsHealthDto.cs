@@ -25,6 +25,11 @@ namespace ProcuLink.Api.Contracts;
 /// for a human to resolve mappings/exceptions), NOT a system fault. Deliberately excluded from
 /// <paramref name="TotalProblemOrders"/>; surfaced so an operator can see a large review backlog.
 /// </param>
+/// <param name="PendingRouting">
+/// INFORMATIONAL count of orders in <c>unrouted</c> — a USER-action backlog (orders parked awaiting
+/// a supplier assignment), NOT a system fault. Like <paramref name="PendingReview"/>, excluded from
+/// <paramref name="TotalProblemOrders"/>.
+/// </param>
 public record OpsHealthDto(
     int ParsingStuck,
     int DeliveringStuck,
@@ -41,7 +46,8 @@ public record OpsHealthDto(
     DateTime?  LastWorkerHeartbeatUtc,
     double?    SecondsSinceWorkerHeartbeat,
     bool       WorkerHealthy,
-    int        PendingReview
+    int        PendingReview,
+    int        PendingRouting = 0
 );
 
 /// <summary>

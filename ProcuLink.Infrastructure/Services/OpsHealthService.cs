@@ -84,7 +84,10 @@ public sealed class OpsHealthService : IOpsHealthService
             WorkerHealthy:                workerHealthy,
             // INFORMATIONAL: manual-review backlog (user action pending), reused from the same
             // org-scoped GROUP BY — no extra round-trip. NOT a system fault → not in TotalProblemOrders.
-            PendingReview:                Count(OrderStatusConstants.PendingReview));
+            PendingReview:                Count(OrderStatusConstants.PendingReview),
+            // INFORMATIONAL: routing backlog (orders parked awaiting a supplier), same GROUP BY,
+            // no extra round-trip. Like PendingReview, a user-action backlog → not in TotalProblemOrders.
+            PendingRouting:               Count(OrderStatusConstants.Unrouted));
     }
 
     /// <summary>
@@ -222,8 +225,9 @@ public sealed class OpsHealthService : IOpsHealthService
             return new DeadLetterOrder(
                 OrderId:          o.Id,
                 PoNumber:         o.PoNumber,
-                SupplierId:       o.SupplierId,
-                SupplierName:     supplierNames.GetValueOrDefault(o.SupplierId, string.Empty),
+                // Dead-letter orders are post-delivery, so a supplier is always set; coalesce for the type.
+                SupplierId:       o.SupplierId ?? Guid.Empty,
+                SupplierName:     supplierNames.GetValueOrDefault(o.SupplierId ?? Guid.Empty, string.Empty),
                 Status:           o.Status,
                 DeliveryAttempts: att?.Count ?? 0,
                 LastError:        att?.Latest.RejectionReason ?? att?.Latest.ErrorMessage,

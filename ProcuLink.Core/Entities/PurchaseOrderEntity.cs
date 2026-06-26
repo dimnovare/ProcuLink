@@ -10,7 +10,15 @@ public class PurchaseOrderEntity
 {
     public Guid Id { get; set; }
     public Guid OrgId { get; set; }
-    public Guid SupplierId { get; set; }
+
+    /// <summary>
+    /// The resolved supplier this order is for. NULLABLE since the supplier-routing track (Phase 0):
+    /// an order can be ingested on a shared channel BEFORE its supplier is known, in which case it is
+    /// parked <see cref="OrderStatusConstants.Unrouted"/> with a null supplier until one is assigned.
+    /// Non-null for every order on the existing upload / channel-bound paths (unchanged). The FK is
+    /// <c>ON DELETE SET NULL</c> (migration <c>MakeOrderSupplierNullable</c>).
+    /// </summary>
+    public Guid? SupplierId { get; set; }
     public string PoNumber { get; set; } = string.Empty;
 
     /// <summary>

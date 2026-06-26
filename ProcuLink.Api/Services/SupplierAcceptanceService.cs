@@ -306,7 +306,7 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
             }
         }
 
-        return await GetActiveAsync(orgId, order.SupplierId, ct);
+        return await GetActiveAsync(orgId, order.SupplierId ?? Guid.Empty, ct);
     }
 
     /// <summary>

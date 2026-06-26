@@ -93,9 +93,9 @@ public sealed class MapperEnrichmentController : ControllerBase
         // The supplier's saved PO mapping is a LEARNED source→canonical map: each entry that
         // names a real source column is a high-confidence suggested wire. FixedValue-only
         // entries have no source column to wire and are skipped (nothing to suggest).
-        if (order.SupplierId != Guid.Empty)
+        if (order.SupplierId is { } supplierId && supplierId != Guid.Empty)
         {
-            var config = await _poMappings.GetAsync(orgId, order.SupplierId, ct);
+            var config = await _poMappings.GetAsync(orgId, supplierId, ct);
             if (config is not null)
             {
                 foreach (var (canonicalField, entry) in EnumerateMappingEntries(config))
@@ -184,8 +184,8 @@ public sealed class MapperEnrichmentController : ControllerBase
             return NotFound();
 
         var hints = new List<CatalogPriceHintDto>();
-        if (order.SupplierId == Guid.Empty)
-            return Ok(hints);
+        if (order.SupplierId is not { } supplierId || supplierId == Guid.Empty)
+            return Ok(hints);   // unrouted / supplier-less order → no catalog hints
 
         var lines = await _db.PurchaseOrderLines.AsNoTracking()
             .Where(l => l.OrderId == id)
@@ -195,7 +195,7 @@ public sealed class MapperEnrichmentController : ControllerBase
             return Ok(hints);
 
         // Batch-load the supplier's active catalog ONCE (keyed by code/barcode/MPN) — no N+1.
-        var catalog = await OrderServiceShared.BuildCatalogLookupAsync(_db, orgId, order.SupplierId, ct);
+        var catalog = await OrderServiceShared.BuildCatalogLookupAsync(_db, orgId, supplierId, ct);
         if (catalog.Count == 0)
             return Ok(hints);
 

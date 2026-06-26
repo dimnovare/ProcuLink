@@ -93,13 +93,20 @@ public sealed class PromoteMappingService : IPromoteMappingService
         if (orderRow is null)
             return null;
 
+        // Promotion writes the order's mapping back onto its SUPPLIER's reusable config, so it
+        // requires a routed order. An unrouted order (no supplier yet) has nothing to promote to —
+        // unreachable in Phase 0 (promotion is only offered post-resolution), guarded loudly so a
+        // future mis-wire surfaces instead of silently promoting to an empty supplier.
+        var supplierId = orderRow.SupplierId
+            ?? throw new InvalidOperationException("Cannot promote a mapping for an unrouted order (no supplier assigned).");
+
         // Read the stored override from canonical_json (null = no override set yet).
         var @override = OrderMappingOverrideReader.Read(orderRow.CanonicalJson);
         var sourceMap = @override?.SourceMap;
         var output    = @override?.Output;
 
         // Load the existing supplier mapping (or start from an empty config) so we can merge.
-        var existing = await _poMappingService.GetAsync(orgId, orderRow.SupplierId, ct)
+        var existing = await _poMappingService.GetAsync(orgId, supplierId, ct)
                        ?? new PoMappingConfig();
 
         // Copy the mutable dictionaries so we can merge without mutating the existing config in-place.
@@ -147,7 +154,7 @@ public sealed class PromoteMappingService : IPromoteMappingService
         if (inboundPromoted == 0 && !hasUsableOutput)
         {
             return new PromoteMappingResult(
-                SupplierId:                 orderRow.SupplierId,
+                SupplierId:                 supplierId,
                 HeaderFieldsPromoted:       0,
                 LineFieldsPromoted:         0,
                 OutputHeaderFieldsPromoted: 0,
@@ -167,10 +174,10 @@ public sealed class PromoteMappingService : IPromoteMappingService
         };
 
         // Upsert is idempotent (overwrites the existing mapping row — no duplication).
-        await _poMappingService.UpsertAsync(orgId, orderRow.SupplierId, merged, ct);
+        await _poMappingService.UpsertAsync(orgId, supplierId, merged, ct);
 
         return new PromoteMappingResult(
-            SupplierId:                 orderRow.SupplierId,
+            SupplierId:                 supplierId,
             HeaderFieldsPromoted:       headerCount,
             LineFieldsPromoted:         lineCount,
             OutputHeaderFieldsPromoted: hasUsableOutput ? outputHeaderCount : 0,

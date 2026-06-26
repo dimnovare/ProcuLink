@@ -189,7 +189,7 @@ public class DashboardController : ControllerBase
         foreach (var row in wireRows)
         {
             if (string.IsNullOrWhiteSpace(row.BuyerName)) continue; // defensive: write paths trim + nullify
-            Accumulate(row.BuyerName, row.SupplierId.ToString(), row.Total, row.Failed, row.Exceptions);
+            Accumulate(row.BuyerName, row.SupplierId?.ToString() ?? string.Empty, row.Total, row.Failed, row.Exceptions);
         }
 
         foreach (var row in legacyRows)
@@ -198,7 +198,7 @@ public class DashboardController : ControllerBase
             if (string.IsNullOrWhiteSpace(buyerName)) continue;
             Accumulate(
                 buyerName,
-                row.SupplierId.ToString(),
+                row.SupplierId?.ToString() ?? string.Empty,
                 1,
                 FailedStatuses.Contains(row.Status) ? 1 : 0,
                 ExceptionStatuses.Contains(row.Status) ? 1 : 0);
@@ -210,7 +210,7 @@ public class DashboardController : ControllerBase
             .ToList();
 
         var suppliers = supplierRows
-            .Select(s => (Id: s.SupplierId.ToString(), Name: s.SupplierName.Trim(), s.Total, s.Failed))
+            .Select(s => (Id: s.SupplierId?.ToString() ?? string.Empty, Name: s.SupplierName.Trim(), s.Total, s.Failed))
             .OrderByDescending(s => s.Total)
             .Select(s => new TopologySupplierDto(
                 s.Id, s.Name, CodeFor(s.Name), $"{s.Total} ord",

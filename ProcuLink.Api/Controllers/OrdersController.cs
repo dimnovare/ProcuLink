@@ -806,7 +806,7 @@ public sealed class OrdersController : ControllerBase
                 var treeTokens = ProcuLink.Transform.Output.SourceTokenSerialization
                     .FromTokensJson(order.SourceCapture?.TokensJson);
                 var treeCatalog = await ProcuLink.Api.Services.OrderServiceShared.BuildCatalogLookupAsync(
-                    _db, _tenant.OrganisationId, order.SupplierId, ct);
+                    _db, _tenant.OrganisationId, order.SupplierId ?? Guid.Empty, ct);
                 var treeResult = new OutputTemplateEmitter().Emit(
                     effectiveOverride.OutputTree, order, effectiveOverride, treeTokens, treeCatalog);
                 using var treeReader = new StreamReader(treeResult.Content);
@@ -866,7 +866,7 @@ public sealed class OrdersController : ControllerBase
         if (!OrderMappingOverrideReader.HasUsableOutput(effectiveOverride))
             configFallback = effectiveConfig.IsRevision
                 ? TryBuildPinnedRevisionOverride(effectiveConfig, effectiveOverride, id)
-                : await TryBuildSupplierPromotedOverrideAsync(order.SupplierId, effectiveOverride, ct);
+                : await TryBuildSupplierPromotedOverrideAsync(order.SupplierId ?? Guid.Empty, effectiveOverride, ct);
 
         // This path needs an override. Preserve the original contract: a request without a body (and
         // with no stored template/override AND no revision/supplier-promoted output mapping) still
@@ -990,7 +990,7 @@ public sealed class OrdersController : ControllerBase
                 // Phase 2: load the same supplier catalog the transform uses so a LoadCatalogProduct
                 // rule previews the REAL catalog value, not "" — otherwise preview ≠ delivered bytes.
                 var previewCatalog = await ProcuLink.Api.Services.OrderServiceShared.BuildCatalogLookupAsync(
-                    _db, _tenant.OrganisationId, order.SupplierId, ct);
+                    _db, _tenant.OrganisationId, order.SupplierId ?? Guid.Empty, ct);
                 result = new MappedTransformService().Build(
                     order, fieldOverride, fmt.Value, sourceTokens: previewTokens, catalogLookup: previewCatalog);
             }
@@ -1010,7 +1010,7 @@ public sealed class OrdersController : ControllerBase
                 // legacy OrgId/SupplierId GUIDs the preview showed before.
                 CxmlCredentialConfig? previewCxmlCreds = null;
                 if (fmt.Value == OutputFormat.CXml && _cxmlResolver is not null)
-                    previewCxmlCreds = await _cxmlResolver.ResolveAsync(_tenant.OrganisationId, order.SupplierId, ct);
+                    previewCxmlCreds = await _cxmlResolver.ResolveAsync(_tenant.OrganisationId, order.SupplierId ?? Guid.Empty, ct);
                 result = await transformer.TransformAsync(effective, fmt.Value, ct, previewCxmlCreds);
             }
 
@@ -1312,7 +1312,7 @@ public sealed class OrdersController : ControllerBase
             var supplierFormat = await (
                 from o in _db.PurchaseOrders.AsNoTracking()
                 join c in _db.SupplierDeliveryConfigs.AsNoTracking()
-                    on new { o.OrgId, o.SupplierId } equals new { c.OrgId, c.SupplierId }
+                    on new { o.OrgId, o.SupplierId } equals new { c.OrgId, SupplierId = (Guid?)c.SupplierId }
                 where o.Id == id && o.OrgId == _tenant.OrganisationId
                 select c.OutputFormat
             ).FirstOrDefaultAsync(ct);
@@ -1975,7 +1975,7 @@ public sealed class OrdersController : ControllerBase
             var supplierFormat = await (
                 from o in _db.PurchaseOrders.AsNoTracking()
                 join c in _db.SupplierDeliveryConfigs.AsNoTracking()
-                    on new { o.OrgId, o.SupplierId } equals new { c.OrgId, c.SupplierId }
+                    on new { o.OrgId, o.SupplierId } equals new { c.OrgId, SupplierId = (Guid?)c.SupplierId }
                 where o.Id == id && o.OrgId == orgId
                 select c.OutputFormat
             ).FirstOrDefaultAsync(ct);
@@ -2156,7 +2156,10 @@ public sealed class OrdersController : ControllerBase
         IReadOnlyDictionary<int, ProcuLink.Core.Services.CalibrationResult>? calibrations = null) => new(
         Id:            e.Id,
         PoNumber:      e.PoNumber,
-        SupplierId:    e.SupplierId,
+        // Phase-0 routing: SupplierId is nullable on the entity; an unrouted order has none yet.
+        // The DTO contract stays Guid for now (no FE change) — coalesced to Empty. Phase 1 makes the
+        // DTO nullable when the FE renders unrouted orders.
+        SupplierId:    e.SupplierId ?? Guid.Empty,
         SupplierName:  e.Supplier?.Name ?? string.Empty,
         OrderDate:     e.OrderDate.ToString("yyyy-MM-dd"),
         Currency:      e.Currency,

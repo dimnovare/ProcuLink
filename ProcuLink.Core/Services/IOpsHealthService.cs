@@ -71,7 +71,10 @@ public sealed record OpsHealthSummary(
     // INFORMATIONAL ONLY — orders awaiting a USER action (manual review), NOT a system fault.
     // Deliberately excluded from TotalProblemOrders so a normal review backlog is never
     // mislabelled as a fault; surfaced so an operator can still see a large backlog building up.
-    int       PendingReview             = 0)
+    int       PendingReview             = 0,
+    // INFORMATIONAL ONLY — orders parked unrouted, awaiting a USER action (assign a supplier).
+    // Like PendingReview, a backlog not a fault → excluded from TotalProblemOrders.
+    int       PendingRouting            = 0)
 {
     /// <summary>
     /// Sum of all problematic order counts (excludes OpenExceptions, which can overlap order

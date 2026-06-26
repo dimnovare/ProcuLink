@@ -32,6 +32,13 @@ public class OrderStatusMachineTests
     [InlineData(Delivered, DeliveryFailed)]      // webhook late-failure edge
     [InlineData(Ready, RejectedBySupplier)]      // mark-rejected (from any non-terminal)
     [InlineData(Delivering, RejectedBySupplier)]
+    // Routing (Phase 0): an order can be parked unrouted while it awaits a supplier, then
+    // re-enter the parse flow once one is assigned.
+    [InlineData(PendingParse, Unrouted)]         // extract found no supplier → hold
+    [InlineData(Parsing, Unrouted)]              // extract found no supplier → hold
+    [InlineData(Unrouted, Parsing)]              // assign-supplier re-enqueues parse
+    [InlineData(Unrouted, PendingParse)]
+    [InlineData(Unrouted, RejectedBySupplier)]   // operator discards an unrouted order
     public void IsAllowed_RealTransitions_AreAllowed(string from, string to)
         => OrderStatusMachine.IsAllowed(from, to).Should().BeTrue($"{from} -> {to} is a real flow");
 
@@ -82,7 +89,7 @@ public class OrderStatusMachineTests
         {
             PendingParse, Parsing, PendingReview, Ready, Transforming, ReadyToDeliver,
             Delivering, Delivered, DeliveryFailed, TransformFailed, RejectedBySupplier,
-            DeliveryDeadLetter, Failed,
+            DeliveryDeadLetter, Failed, Unrouted,
         };
         foreach (var s in declared)
             OrderStatusMachine.Transitions.Keys.Should().Contain(s);

@@ -138,7 +138,7 @@ internal sealed class OrderTransformService
         // LIVE delivery-config row, the same source the controller used to pick the cXML format.
         CxmlCredentialConfig? cxmlCredentials = null;
         if (effectiveFormat == OutputFormat.CXml && _cxmlResolver is not null)
-            cxmlCredentials = await _cxmlResolver.ResolveAsync(organisationId, entity.SupplierId, ct);
+            cxmlCredentials = await _cxmlResolver.ResolveAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
 
         // heart-piece-flex flexible mapping: SIX transform modes, in precedence order.
         //   1. TEMPLATE MODE — order carries a non-blank whole-document OutputTemplate → render the
@@ -197,7 +197,7 @@ internal sealed class OrderTransformService
                 revisionOverride = TryBuildRevisionOutputOverride(effective, mappingOverride, orderId);
             else
                 (supplierOverride, supplierOutputJson) =
-                    await TryReadSupplierPromotedOutputAsync(organisationId, entity.SupplierId, mappingOverride, ct);
+                    await TryReadSupplierPromotedOutputAsync(organisationId, entity.SupplierId ?? Guid.Empty, mappingOverride, ct);
         }
         var useRevisionOutput  = revisionOverride is not null;
         var useRevisionNative  = useRevisionOutput && MappedTransformService.SupportsOverride(effectiveFormat);
@@ -312,7 +312,7 @@ internal sealed class OrderTransformService
         // so the {{ catalog.* }} template accessor resolves without an N+1. Empty dict when the
         // supplier has no catalog → byte-identical to the no-catalog path (empty catalog object).
         var catalogLookup = await OrderServiceShared.BuildCatalogLookupAsync(
-            _db, organisationId, entity.SupplierId, ct);
+            _db, organisationId, entity.SupplierId ?? Guid.Empty, ct);
 
         TransformResult transformResult;
         try

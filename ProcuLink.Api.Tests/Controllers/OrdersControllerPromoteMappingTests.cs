@@ -540,7 +540,7 @@ public class OrdersControllerPromoteMappingTests
 
         // No supplier mapping row was written for this supplier (genuine no-op, not a silent save).
         var supplierId = await db.PurchaseOrders.Where(o => o.Id == orderId).Select(o => o.SupplierId).FirstAsync();
-        var saved = await poSvc.GetAsync(orgId, supplierId);
+        var saved = await poSvc.GetAsync(orgId, supplierId!.Value);
         Assert.Null(saved);
     }
 

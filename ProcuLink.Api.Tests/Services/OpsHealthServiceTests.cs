@@ -117,6 +117,31 @@ public class OpsHealthServiceTests
     }
 
     [Fact]
+    public async Task GetHealth_Unrouted_CountsPendingRouting_ButTotalProblemOrdersStaysZero()
+    {
+        // An unrouted order awaits a USER action (assign a supplier), exactly like pending_review.
+        // It must surface in PendingRouting WITHOUT inflating TotalProblemOrders (it is a backlog,
+        // not a system fault).
+        await using var db = NewDb();
+        var orgId      = Guid.NewGuid();
+        var otherOrg   = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.PurchaseOrders.AddRange(
+            Order(orgId, supplierId, OrderStatusConstants.Unrouted),
+            Order(orgId, supplierId, OrderStatusConstants.Unrouted),
+            // other org — must never be counted
+            Order(otherOrg, supplierId, OrderStatusConstants.Unrouted));
+        await db.SaveChangesAsync();
+
+        var svc = new OpsHealthService(db);
+        var s   = await svc.GetHealthAsync(orgId, CancellationToken.None);
+
+        s.PendingRouting.Should().Be(2, "org-scoped count of unrouted orders");
+        s.TotalProblemOrders.Should().Be(0, "unrouted is a user-action backlog, not a system fault");
+    }
+
+    [Fact]
     public async Task GetHealth_EmptyOrg_AllZero()
     {
         await using var db = NewDb();

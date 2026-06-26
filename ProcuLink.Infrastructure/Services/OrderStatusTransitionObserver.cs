@@ -48,10 +48,16 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             // requeue parsing back to pending_parse; a failed parse can be retried.
             [OrderStatusConstants.PendingParse] = Set(
                 OrderStatusConstants.Parsing, OrderStatusConstants.PendingReview,
-                OrderStatusConstants.Ready, OrderStatusConstants.Failed),
+                OrderStatusConstants.Ready, OrderStatusConstants.Failed,
+                OrderStatusConstants.Unrouted),
             [OrderStatusConstants.Parsing] = Set(
                 OrderStatusConstants.PendingParse, OrderStatusConstants.PendingReview,
-                OrderStatusConstants.Ready, OrderStatusConstants.Failed),
+                OrderStatusConstants.Ready, OrderStatusConstants.Failed,
+                OrderStatusConstants.Unrouted),
+            // Routing hold → re-enters the parse flow once a supplier is assigned, or is discarded.
+            [OrderStatusConstants.Unrouted] = Set(
+                OrderStatusConstants.Parsing, OrderStatusConstants.PendingParse,
+                OrderStatusConstants.Failed, OrderStatusConstants.RejectedBySupplier),
             // Review loop: resolving lines recomputes pending_review|ready; a reviewer can
             // also mark the order rejected.
             [OrderStatusConstants.PendingReview] = Set(

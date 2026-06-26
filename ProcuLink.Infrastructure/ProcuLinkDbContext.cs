@@ -505,9 +505,12 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.PurchaseOrders)
              .HasForeignKey(x => x.OrgId);
+            // SupplierId is nullable (Phase 0 routing): an unrouted order has no supplier yet, and
+            // deleting a supplier nulls the FK rather than cascade-deleting the order's history.
             b.HasOne(x => x.Supplier)
              .WithMany(x => x.PurchaseOrders)
-             .HasForeignKey(x => x.SupplierId);
+             .HasForeignKey(x => x.SupplierId)
+             .OnDelete(DeleteBehavior.SetNull);
         });
 
         // ── purchase_order_lines ───────────────────────────────────────

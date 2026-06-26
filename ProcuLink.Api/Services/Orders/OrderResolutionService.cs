@@ -100,7 +100,7 @@ internal sealed class OrderResolutionService
             if (saveMappings && !string.IsNullOrWhiteSpace(line.BuyerItemCode))
             {
                 await _mappings.UpsertAsync(
-                    organisationId, entity.SupplierId,
+                    organisationId, entity.SupplierId ?? Guid.Empty,
                     line.BuyerItemCode, line.SupplierItemCode,
                     MappingSource.Manual, ct);
             }
@@ -177,7 +177,7 @@ internal sealed class OrderResolutionService
         if (guardConnection is { PriceVarianceGuardEnabled: true })
         {
             var guard   = new PriceVarianceGuard(true, guardConnection.PriceVarianceThresholdPercent);
-            var catalog = await OrderServiceShared.BuildCatalogLookupAsync(_db, organisationId, entity.SupplierId, ct);
+            var catalog = await OrderServiceShared.BuildCatalogLookupAsync(_db, organisationId, entity.SupplierId ?? Guid.Empty, ct);
             foreach (var line in entity.Lines)
             {
                 var product =

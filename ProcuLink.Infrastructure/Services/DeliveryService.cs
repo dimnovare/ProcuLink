@@ -344,7 +344,9 @@ public sealed class DeliveryService : IDeliveryService
                     {
                         Id                   = Guid.Empty,
                         OrgId                = orgId,
-                        SupplierId           = order.SupplierId,
+                        // An order only reaches delivery once routed, so SupplierId is set here;
+                        // coalesce defensively so the delivery path can never NRE on the snapshot view.
+                        SupplierId           = order.SupplierId ?? Guid.Empty,
                         Protocol             = effective.DeliveryProtocol!,
                         AutoDeliver          = effective.DeliveryAutoDeliver,
                         ConfigJson           = string.IsNullOrWhiteSpace(effective.DeliveryConfigJson)

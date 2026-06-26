@@ -94,7 +94,7 @@ public sealed class PassportService : IPassportService
             OrderId:      order.Id,
             PoNumber:     order.PoNumber,
             Status:       order.Status,
-            SupplierId:   order.SupplierId,
+            SupplierId:   order.SupplierId ?? Guid.Empty,
             SupplierName: order.Supplier?.Name ?? "Unknown Supplier",
             BuyerName:    ExtractBuyerName(order),
             Currency:     order.Currency,

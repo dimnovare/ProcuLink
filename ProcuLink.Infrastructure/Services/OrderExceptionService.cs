@@ -31,6 +31,10 @@ public sealed class OrderExceptionService : IOrderExceptionService
     private static (string Code, string Stage, string Severity, string Message)? ProblemFor(
         string status, bool hasUnresolvedLines)
     {
+        // Unrouted takes PRECEDENCE over unresolved lines: with no supplier you cannot resolve
+        // item codes, so "assign a supplier" is the one actionable problem to surface.
+        if (status == OrderStatusConstants.Unrouted)
+            return ("unrouted_order", "Route", "warning", "Order needs a supplier before it can be routed.");
         if (status == OrderStatusConstants.PendingReview || hasUnresolvedLines)
             return ("unresolved_mapping", "Map", "warning", "Order has lines that need a supplier item code.");
         if (status == OrderStatusConstants.Failed)

@@ -122,6 +122,26 @@ public class OrderExceptionServiceTests
         Assert.Equal("parse_failed", ex.Code);
     }
 
+    /// <summary>
+    /// An unrouted order (parked awaiting a supplier) surfaces as a single warning-severity
+    /// "Route" exception. The unrouted condition takes PRECEDENCE over unresolved lines: with
+    /// no supplier you cannot resolve item codes, so "assign a supplier" is the actionable
+    /// problem — even though the order's lines are also flagged NeedsReview.
+    /// </summary>
+    [Fact]
+    public async Task Reconcile_Unrouted_OpensUnroutedOrderException_TakesPrecedenceOverUnresolvedLines()
+    {
+        var db = MakeDb();
+        var (orgId, orderId) = SeedOrder(db, "unrouted", unresolvedLine: true);
+        var svc = new OrderExceptionService(db);
+        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
+        var ex = await db.OrderExceptions.SingleAsync();
+        Assert.Equal("unrouted_order", ex.Code);
+        Assert.Equal("Route", ex.Stage);
+        Assert.Equal("warning", ex.Severity);
+        Assert.Equal("open", ex.State);
+    }
+
     [Fact]
     public async Task Ignore_ExcludedFromAutoResolve()
     {

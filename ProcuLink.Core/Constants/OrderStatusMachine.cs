@@ -25,8 +25,10 @@ public static class OrderStatusMachine
     public static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> Transitions =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
         {
-            [PendingParse]       = Set(Parsing, RejectedBySupplier),
-            [Parsing]            = Set(PendingReview, Ready, Failed, PendingParse, RejectedBySupplier),
+            [PendingParse]       = Set(Parsing, Unrouted, RejectedBySupplier),
+            [Parsing]            = Set(PendingReview, Ready, Failed, PendingParse, Unrouted, RejectedBySupplier),
+            // Routing hold: parked awaiting a supplier; assigning one re-enqueues parse.
+            [Unrouted]           = Set(Parsing, PendingParse, Failed, RejectedBySupplier),
             [PendingReview]      = Set(Ready, PendingReview, RejectedBySupplier),
             [Ready]              = Set(Transforming, PendingReview, RejectedBySupplier),
             [Transforming]       = Set(ReadyToDeliver, Ready, Failed, RejectedBySupplier),

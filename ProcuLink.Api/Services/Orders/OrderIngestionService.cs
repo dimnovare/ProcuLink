@@ -624,7 +624,7 @@ internal sealed class OrderIngestionService
             // Parse mapping: a usable revision snapshot governs; a null/empty/malformed
             // snapshot falls back to the LIVE supplier PO mapping (parse must never brick).
             var poMapping = ResolveSnapshotPoMapping(effective, orderId)
-                            ?? await _poMappingService.GetAsync(organisationId, entity.SupplierId, ct);
+                            ?? await _poMappingService.GetAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
 
             if (IsEmptyTemplate(poMapping))
                 poMapping = null;
@@ -748,10 +748,10 @@ internal sealed class OrderIngestionService
             }
 
             var supplierName = entity.Supplier?.Name
-                               ?? await GetSupplierNameAsync(organisationId, entity.SupplierId, ct);
-            var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, entity.SupplierId, ct);
+                               ?? await GetSupplierNameAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
+            var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
             var lineEntities = await BuildLineEntitiesAsync(
-                organisationId, entity.SupplierId, supplierName, parsedOrder.Lines, aiCandidates, ct,
+                organisationId, entity.SupplierId ?? Guid.Empty, supplierName, parsedOrder.Lines, aiCandidates, ct,
                 itemMappingSnapshot);
 
             // Overlay structured-extraction review flags so a numerically-suspect

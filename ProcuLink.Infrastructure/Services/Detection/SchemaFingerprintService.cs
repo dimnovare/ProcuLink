@@ -152,22 +152,23 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
             ColumnNameHash = hash,
             DetectedFormat = detectedFormat,
             SampleSupplierName = order.Supplier?.Name,
-            SupplierIdsCsv = order.SupplierId == Guid.Empty ? string.Empty : order.SupplierId.ToString(),
+            SupplierIdsCsv = order.SupplierId is { } sid && sid != Guid.Empty ? sid.ToString() : string.Empty,
             ParseSuccessCount = 1,
             LastSeenAt = now,
             CreatedAt = now,
         };
 
     /// <summary>Adds <paramref name="supplierId"/> to the tracked row's supplier set; returns true if it
-    /// was newly added (caller's SaveChanges persists it). Empty/duplicate → no change.</summary>
-    private static bool BindSupplier(SchemaFingerprint row, Guid supplierId)
+    /// was newly added (caller's SaveChanges persists it). Null/Empty/duplicate → no change (an unrouted
+    /// order has no supplier to bind — the layout is still recorded, just without a supplier).</summary>
+    private static bool BindSupplier(SchemaFingerprint row, Guid? supplierId)
     {
-        if (supplierId == Guid.Empty) return false;
+        if (supplierId is not { } sid || sid == Guid.Empty) return false;
         var ids = ParseSupplierIds(row.SupplierIdsCsv);
-        if (ids.Contains(supplierId)) return false;
+        if (ids.Contains(sid)) return false;
         row.SupplierIdsCsv = string.IsNullOrEmpty(row.SupplierIdsCsv)
-            ? supplierId.ToString()
-            : $"{row.SupplierIdsCsv},{supplierId}";
+            ? sid.ToString()
+            : $"{row.SupplierIdsCsv},{sid}";
         return true;
     }
 
