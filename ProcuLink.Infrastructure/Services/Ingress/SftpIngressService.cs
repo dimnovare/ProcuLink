@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
 
@@ -28,6 +29,7 @@ public sealed class SftpIngressService : ISftpIngressService
 
     private readonly ProcuLinkDbContext _db;
     private readonly IOrderService _orderService;
+    private readonly IParseJobEnqueuer _parseJobEnqueuer;
     private readonly DeliveryEncryptionService _encryption;
     private readonly ISftpClientFactory _sftpClientFactory;
     private readonly OutboundRequestGuard _guard;
@@ -36,6 +38,7 @@ public sealed class SftpIngressService : ISftpIngressService
     public SftpIngressService(
         ProcuLinkDbContext db,
         IOrderService orderService,
+        IParseJobEnqueuer parseJobEnqueuer,
         DeliveryEncryptionService encryption,
         ISftpClientFactory sftpClientFactory,
         OutboundRequestGuard guard,
@@ -43,6 +46,7 @@ public sealed class SftpIngressService : ISftpIngressService
     {
         _db = db;
         _orderService = orderService;
+        _parseJobEnqueuer = parseJobEnqueuer;
         _encryption = encryption;
         _sftpClientFactory = sftpClientFactory;
         _guard = guard;
@@ -225,6 +229,8 @@ public sealed class SftpIngressService : ISftpIngressService
             });
 
             await _db.SaveChangesAsync(ct);
+
+            await _parseJobEnqueuer.EnqueueAsync(stubResult.Value!.Id, organisationId, ct);
             imported++;
 
             _logger.LogInformation(

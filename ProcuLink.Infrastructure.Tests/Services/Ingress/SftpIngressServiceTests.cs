@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
+using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
@@ -193,7 +194,7 @@ public class SftpIngressServiceTests
         orders.CreateStubCalls.Should().Be(0, "the oversized file must never reach CreateStubAsync");
     }
 
-    // ── 5. Happy path: new CSV file → imported, dedupe record written ────────
+    // ── 5. Happy path: new CSV file → imported, dedupe record written, parse job enqueued ──
 
     [Fact]
     public async Task NewCsvFile_IsImported_DedupeRecordWrittenAndCountIsOne()
@@ -207,7 +208,8 @@ public class SftpIngressServiceTests
 
         var fakeSftp = new SingleFileFakeSftpFactory(remotePath, csvBytes);
         var orders = new RecordingOrderService();
-        var svc = MakeService(db, orders, fakeSftp);
+        var enqueuer = new FakeParseJobEnqueuer();
+        var svc = MakeService(db, orders, fakeSftp, enqueuer: enqueuer);
 
         var result = await svc.PollAsync(orgId, default);
 
@@ -216,6 +218,11 @@ public class SftpIngressServiceTests
         orders.SupplierIds.Should().ContainSingle().Which.Should().Be(
             supplierId!.Value,
             "SFTP pull imports must be assigned to the configured supplier, not Guid.Empty");
+
+        enqueuer.EnqueuedOrderIds.Should().ContainSingle(
+            "a parse job must be enqueued for the imported order");
+        enqueuer.EnqueuedOrgIds.Should().ContainSingle().Which.Should().Be(
+            orgId, "parse job must be scoped to the correct org");
 
         var dedupe = await db.Set<ImportedSftpFile>()
             .FirstOrDefaultAsync(f => f.OrgId == orgId && f.RemotePath == remotePath);
@@ -265,7 +272,7 @@ public class SftpIngressServiceTests
         await db.SaveChangesAsync();
 
         var orders = new RecordingOrderService();
-        var svc = MakeService(db, orders, new RenciSftpClientFactory());
+        var svc = MakeService(db, orders, new RenciSftpClientFactory(), enqueuer: new FakeParseJobEnqueuer());
 
         var imported = await svc.PollAsync(orgId, default);
 
@@ -280,7 +287,8 @@ public class SftpIngressServiceTests
         ProcuLinkDbContext db,
         IOrderService orders,
         ISftpClientFactory sftpFactory,
-        OutboundRequestGuard? guard = null)
+        OutboundRequestGuard? guard = null,
+        IParseJobEnqueuer? enqueuer = null)
     {
         // DeliveryEncryptionService requires a real 32-byte key.
         var config = new ConfigurationBuilder()
@@ -295,6 +303,7 @@ public class SftpIngressServiceTests
         return new SftpIngressService(
             db,
             orders,
+            enqueuer ?? new FakeParseJobEnqueuer(),
             encryption,
             sftpFactory,
             // Default guard allows private targets so the fixture host (sftp.example.com / a
@@ -511,6 +520,21 @@ public class SftpIngressServiceTests
             => new MemoryStream(_content);
 
         public void Dispose() { }
+    }
+
+    // ── Test-double parse-job enqueuer ────────────────────────────────────────
+
+    private sealed class FakeParseJobEnqueuer : IParseJobEnqueuer
+    {
+        public List<Guid> EnqueuedOrderIds { get; } = new();
+        public List<Guid> EnqueuedOrgIds   { get; } = new();
+
+        public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
+        {
+            EnqueuedOrderIds.Add(orderId);
+            EnqueuedOrgIds.Add(orgId);
+            return Task.CompletedTask;
+        }
     }
 
     // ── Test-double order service ─────────────────────────────────────────────

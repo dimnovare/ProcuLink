@@ -8,6 +8,7 @@ using Moq;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
+using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
@@ -285,7 +286,7 @@ public class S3IngressServiceTests
     }
 
     // ── 5. Happy path: 2 new objects → CreateStubAsync called twice, ─────────
-    //       ImportedS3Object rows inserted
+    //       ImportedS3Object rows inserted, parse jobs enqueued
 
     [Fact]
     public async Task TwoNewObjects_CreateStubCalledTwiceAndImportedRowsInserted()
@@ -319,7 +320,8 @@ public class S3IngressServiceTests
           });
 
         var orders = new FakeOrderService();
-        var svc = MakeService(db, s3.Object, orders);
+        var enqueuer = new FakeParseJobEnqueuer();
+        var svc = MakeService(db, s3.Object, orders, enqueuer: enqueuer);
 
         var count = await svc.PollAsync(orgId, CancellationToken.None);
 
@@ -331,6 +333,11 @@ public class S3IngressServiceTests
             "S3 pull imports must be assigned to the configured supplier");
         orders.CalledWith.Select(c => c.FileName).Should().BeEquivalentTo(
             new[] { "po-a.csv", "po-b.xlsx" });
+
+        enqueuer.EnqueuedOrderIds.Should().HaveCount(2,
+            "a parse job must be enqueued for each successfully imported S3 object");
+        enqueuer.EnqueuedOrgIds.Should().AllBeEquivalentTo(orgId,
+            "every parse job must be scoped to the correct org");
 
         // Two ImportedS3Object rows should be persisted.
         var imported = await db.Set<ImportedS3Object>()
@@ -382,7 +389,7 @@ public class S3IngressServiceTests
 
         var orders = new FakeOrderService();
         var svc = new S3IngressService(
-            db, orders, encryption, new AmazonS3ClientFactory(),
+            db, orders, new FakeParseJobEnqueuer(), encryption, new AmazonS3ClientFactory(),
             AllowPrivateGuard(),
             NullLogger<S3IngressService>.Instance);
 
@@ -401,12 +408,14 @@ public class S3IngressServiceTests
         ProcuLinkDbContext db,
         IAmazonS3 s3,
         IOrderService? orders = null,
-        OutboundRequestGuard? guard = null)
+        OutboundRequestGuard? guard = null,
+        IParseJobEnqueuer? enqueuer = null)
     {
         var encryption = MakeEncryption();
         return new S3IngressService(
             db,
             orders ?? new FakeOrderService(),
+            enqueuer ?? new FakeParseJobEnqueuer(),
             encryption,
             new FakeAmazonS3ClientFactory(s3),
             // Default guard allows private targets so the existing tests (no custom
@@ -514,6 +523,20 @@ public class S3IngressServiceTests
                 .Options);
 
     // ── Doubles ──────────────────────────────────────────────────────────────
+
+    /// <summary>Recording fake for <see cref="IParseJobEnqueuer"/>.</summary>
+    private sealed class FakeParseJobEnqueuer : IParseJobEnqueuer
+    {
+        public List<Guid> EnqueuedOrderIds { get; } = new();
+        public List<Guid> EnqueuedOrgIds   { get; } = new();
+
+        public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
+        {
+            EnqueuedOrderIds.Add(orderId);
+            EnqueuedOrgIds.Add(orgId);
+            return Task.CompletedTask;
+        }
+    }
 
     /// <summary>Forward-only read stream that produces <c>length</c> zero bytes; not seekable.</summary>
     private sealed class EndlessForwardStream : Stream

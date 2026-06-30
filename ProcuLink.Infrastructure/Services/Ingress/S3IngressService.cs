@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
 
@@ -34,6 +35,7 @@ public sealed class S3IngressService : IS3IngressService
 
     private readonly ProcuLinkDbContext _db;
     private readonly IOrderService _orderService;
+    private readonly IParseJobEnqueuer _parseJobEnqueuer;
     private readonly DeliveryEncryptionService _encryption;
     private readonly IAmazonS3ClientFactory _s3ClientFactory;
     private readonly OutboundRequestGuard _guard;
@@ -42,6 +44,7 @@ public sealed class S3IngressService : IS3IngressService
     public S3IngressService(
         ProcuLinkDbContext db,
         IOrderService orderService,
+        IParseJobEnqueuer parseJobEnqueuer,
         DeliveryEncryptionService encryption,
         IAmazonS3ClientFactory s3ClientFactory,
         OutboundRequestGuard guard,
@@ -49,6 +52,7 @@ public sealed class S3IngressService : IS3IngressService
     {
         _db = db;
         _orderService = orderService;
+        _parseJobEnqueuer = parseJobEnqueuer;
         _encryption = encryption;
         _s3ClientFactory = s3ClientFactory;
         _guard = guard;
@@ -263,6 +267,8 @@ public sealed class S3IngressService : IS3IngressService
                 }
 
                 await _db.SaveChangesAsync(ct);
+
+                await _parseJobEnqueuer.EnqueueAsync(stubResult.Value!.Id, organisationId, ct);
                 imported++;
 
                 _logger.LogInformation(
