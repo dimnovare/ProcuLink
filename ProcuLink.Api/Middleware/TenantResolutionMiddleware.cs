@@ -94,7 +94,6 @@ public sealed class TenantResolutionMiddleware
             // later created (data fragmentation). Such a request continues UNRESOLVED
             // and fails closed downstream (same as the throttle path). The frontend org
             // gate forces org creation before any tenant-scoped call is made.
-            // See docs/superpowers/plans/2026-06-30-force-org-creation.md.
             var clerkOrgId = context.User.FindFirst("org_id")?.Value;
             var orgSlug    = context.User.FindFirst("org_slug")?.Value;
 
