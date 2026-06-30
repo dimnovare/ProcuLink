@@ -53,7 +53,7 @@ public sealed class ConnectorManifestsControllerTests
             DeliveryProtocolConstants.Http,
             DeliveryProtocolConstants.Sftp,
             DeliveryProtocolConstants.Ftps,
-            DeliveryProtocolConstants.Smtp,
+            DeliveryProtocolConstants.Email,
             DeliveryProtocolConstants.ErpErply,
             DeliveryProtocolConstants.ErpDirecto,
         });
@@ -77,7 +77,7 @@ public sealed class ConnectorManifestsControllerTests
     [InlineData("http")]
     [InlineData("sftp")]
     [InlineData("ftps")]
-    [InlineData("smtp")]
+    [InlineData("email")]
     [InlineData("erp_erply")]
     [InlineData("erp_directo")]
     public void GetByKey_KnownKey_Returns200WithMatchingDto(string key)
@@ -97,7 +97,7 @@ public sealed class ConnectorManifestsControllerTests
     [Theory]
     [InlineData("HTTP")] // case-insensitive lookup
     [InlineData("SFTP")]
-    [InlineData("Smtp")]
+    [InlineData("Email")]
     [InlineData("ERP_ERPLY")]
     public void GetByKey_CaseInsensitive_Returns200(string key)
     {
@@ -281,18 +281,17 @@ public sealed class ConnectorManifestsControllerTests
         dto.Missing.Should().Contain("database");
     }
 
-    // ── validate-config — SMTP ───────────────────────────────────────────────
+    // ── validate-config — Email ──────────────────────────────────────────────
 
     [Fact]
-    public void ValidateConfig_Smtp_AllRequired_ReturnsValid()
+    public void ValidateConfig_Email_AllRequired_ReturnsValid()
     {
-        var result = MakeController().ValidateConfig("smtp",
+        // Mail is sent from ProcuLink's verified sender — the only required field is
+        // the recipient list. No host/credentials are needed.
+        var result = MakeController().ValidateConfig("email",
             new Dictionary<string, object?>
             {
-                ["host"]        = "mail.example.com",
-                ["fromAddress"] = "orders@example.com",
                 ["toAddresses"] = "supplier@example.com",
-                ["username"]    = "orders@example.com",  // secret / required
             });
 
         var ok = result.Should().BeOfType<OkObjectResult>().Subject;
@@ -300,6 +299,19 @@ public sealed class ConnectorManifestsControllerTests
 
         dto.Valid.Should().BeTrue();
         dto.Missing.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ValidateConfig_Email_MissingToAddresses_ReturnsInvalid()
+    {
+        var result = MakeController().ValidateConfig("email",
+            new Dictionary<string, object?> { ["subjectTemplate"] = "PO {{ orderNumber }}" });
+
+        var ok = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto = ok.Value.Should().BeOfType<ValidateConfigResultDto>().Subject;
+
+        dto.Valid.Should().BeFalse();
+        dto.Missing.Should().Contain("toAddresses");
     }
 
     // ── validate-config — case insensitivity ────────────────────────────────

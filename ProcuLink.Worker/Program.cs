@@ -16,6 +16,7 @@ using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ai;
 using ProcuLink.Infrastructure.Services.Dispatchers;
+using ProcuLink.Infrastructure.Services.Email;
 using ProcuLink.Infrastructure.Services.Erp;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Ocr;
@@ -240,10 +241,18 @@ builder.Services.AddScoped<BlobRetentionSweepJob>();
 
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
+// Email API (Postmark over HTTPS) — the Worker runs TransformOrderJob → DeliveryService, so the
+// email delivery dispatcher resolves IEmailApiClient HERE too (DI foot-gun precedent 4607d6d).
+builder.Services.AddHttpClient(PostmarkEmailApiClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<IEmailApiClient, PostmarkEmailApiClient>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, SftpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, FtpsDeliveryDispatcher>();
-builder.Services.AddScoped<IDeliveryDispatcher, SmtpDeliveryDispatcher>();
+// Email delivery via HTTP email API — works where outbound SMTP is blocked.
+builder.Services.AddScoped<IDeliveryDispatcher, EmailApiDeliveryDispatcher>();
+// Legacy raw-SMTP dispatcher: retired from offered channels; self-host opt-in only.
+if (builder.Configuration.GetValue<bool>("Delivery:EnableSmtp"))
+    builder.Services.AddScoped<IDeliveryDispatcher, SmtpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 

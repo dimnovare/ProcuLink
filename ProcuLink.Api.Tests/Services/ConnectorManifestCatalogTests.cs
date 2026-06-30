@@ -27,7 +27,7 @@ public sealed class ConnectorManifestCatalogTests
         DeliveryProtocolConstants.Http,
         DeliveryProtocolConstants.Sftp,
         DeliveryProtocolConstants.Ftps,
-        DeliveryProtocolConstants.Smtp,
+        DeliveryProtocolConstants.Email,
         DeliveryProtocolConstants.ErpErply,
         DeliveryProtocolConstants.ErpDirecto,
     ];
@@ -80,7 +80,7 @@ public sealed class ConnectorManifestCatalogTests
     [InlineData("http")]
     [InlineData("sftp")]
     [InlineData("ftps")]
-    [InlineData("smtp")]
+    [InlineData("email")]
     [InlineData("erp_erply")]
     [InlineData("erp_directo")]
     public void Manifest_HasRequiredScalarFields(string key)
@@ -98,7 +98,7 @@ public sealed class ConnectorManifestCatalogTests
     [InlineData("http")]
     [InlineData("sftp")]
     [InlineData("ftps")]
-    [InlineData("smtp")]
+    [InlineData("email")]
     [InlineData("erp_erply")]
     [InlineData("erp_directo")]
     public void Manifest_AllFieldTypesAreValid(string key)
@@ -116,7 +116,7 @@ public sealed class ConnectorManifestCatalogTests
     [InlineData("http")]
     [InlineData("sftp")]
     [InlineData("ftps")]
-    [InlineData("smtp")]
+    [InlineData("email")]
     [InlineData("erp_erply")]
     [InlineData("erp_directo")]
     public void Manifest_AllFieldsHaveNonEmptyNamesAndLabels(string key)
@@ -163,15 +163,13 @@ public sealed class ConnectorManifestCatalogTests
     }
 
     [Fact]
-    public void Smtp_RequiredFields_ContainsHostFromAddressToAddressesUsername()
+    public void Email_RequiredFields_ContainsToAddresses()
     {
-        var m = ConnectorManifestCatalog.ByKey[DeliveryProtocolConstants.Smtp];
+        var m = ConnectorManifestCatalog.ByKey[DeliveryProtocolConstants.Email];
 
         var required = m.Fields.Where(f => f.Required).Select(f => f.Name).ToList();
-        required.Should().Contain("host",        "SmtpDeliveryDispatcher validates Host");
-        required.Should().Contain("fromAddress", "SmtpDeliveryDispatcher validates FromAddress");
-        required.Should().Contain("toAddresses", "SmtpDeliveryDispatcher validates recipients");
-        required.Should().Contain("username",    "SmtpDeliveryDispatcher validates credentials Username");
+        required.Should().Contain("toAddresses",
+            "the email connector validates that at least one recipient is configured");
     }
 
     [Fact]
@@ -200,16 +198,28 @@ public sealed class ConnectorManifestCatalogTests
     [InlineData("http")]
     [InlineData("sftp")]
     [InlineData("ftps")]
-    [InlineData("smtp")]
     [InlineData("erp_erply")]
     [InlineData("erp_directo")]
     public void Manifest_HasAtLeastOneSecretField(string key)
     {
-        // Every connector has at least one credential field (even if optional)
+        // Every credentialed connector has at least one secret field (even if optional).
+        // The "email" connector is the documented exception — mail is sent from ProcuLink's
+        // own verified sender, so it has no per-supplier credentials.
         var m = ConnectorManifestCatalog.ByKey[key];
 
         m.Fields.Should().Contain(f => f.Secret,
             $"connector '{key}' must declare at least one secret credential field");
+    }
+
+    [Fact]
+    public void Email_HasNoSecretFields()
+    {
+        // Mail is sent from ProcuLink's verified sender — there are no per-supplier
+        // credentials, so the email manifest must declare no secret fields.
+        var m = ConnectorManifestCatalog.ByKey[DeliveryProtocolConstants.Email];
+
+        m.Fields.Should().NotContain(f => f.Secret,
+            "the email connector uses ProcuLink's verified sender and has no credentials");
     }
 
     [Fact]

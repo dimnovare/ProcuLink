@@ -22,12 +22,14 @@ namespace ProcuLink.Core.Connectors;
 ///   <item><c>http</c>     — <c>HttpDeliveryDispatcher</c> (Protocol = "http")</item>
 ///   <item><c>sftp</c>     — <c>SftpDeliveryDispatcher</c> (Protocol = "sftp")</item>
 ///   <item><c>ftps</c>     — <c>FtpsDeliveryDispatcher</c> (Protocol = "ftps")</item>
-///   <item><c>smtp</c>     — <c>SmtpDeliveryDispatcher</c> (Protocol = "smtp")</item>
+///   <item><c>email</c>    — <c>EmailApiDeliveryDispatcher</c> (Protocol = "email", HTTP email API)</item>
 ///   <item><c>erp_erply</c>   — <c>ErplyDeliveryDispatcher</c> → <c>ErplyConnector</c></item>
 ///   <item><c>erp_directo</c> — <c>DirectoDeliveryDispatcher</c> → <c>DirectoConnector</c></item>
 /// </list>
 /// NOTE: <c>ftp</c> is declared in <c>DeliveryProtocolConstants</c> but has NO registered
-/// dispatcher — it is intentionally omitted from this catalog.
+/// dispatcher — it is intentionally omitted from this catalog. <c>smtp</c> is likewise omitted:
+/// the legacy raw-SMTP dispatcher is RETIRED from offered channels (outbound SMTP ports are blocked
+/// on the cloud host) and superseded by <c>email</c>; it remains a self-host-only opt-in.
 /// </para>
 ///
 /// <para>
@@ -160,42 +162,33 @@ public static class ConnectorManifestCatalog
         DocsRef: "https://docs.proculink.eu/connectors/ftps");
 
     /// <summary>
-    /// SMTP email dispatcher (<c>SmtpDeliveryDispatcher</c>).
-    /// Config fields mirror the private <c>SmtpConfig</c> + <c>SmtpCredentials</c> records.
+    /// Email dispatcher via HTTP email API (<c>EmailApiDeliveryDispatcher</c>, Postmark over HTTPS).
+    /// Config fields mirror the private <c>EmailDeliveryConfig</c> record inside the dispatcher.
+    /// No credential fields: mail is sent FROM ProcuLink's provider-verified sender, not the
+    /// supplier's relay — so there is no host/port/SSL/username/password to configure.
     /// </summary>
-    private static readonly ConnectorManifest Smtp = new(
-        Key: DeliveryProtocolConstants.Smtp,
-        DisplayName: "SMTP (email with attachment)",
-        Transport: "smtp",
-        AuthType: "smtp_login",
+    private static readonly ConnectorManifest Email = new(
+        Key: DeliveryProtocolConstants.Email,
+        DisplayName: "Email",
+        Transport: "email",
+        AuthType: "none",
         Fields:
         [
-            Field("host",               "SMTP host",           "string", required: true,
-                help: "SMTP relay server hostname."),
-            Field("port",               "Port",                "number",
-                help: "SMTP port (default: 587 for STARTTLS)."),
-            Field("useSsl",             "Use SSL/TLS",         "bool",
-                help: "True for implicit TLS (port 465); false for STARTTLS (default)."),
-            Field("fromAddress",        "From address",        "string", required: true,
-                help: "The sender email address (must be authorised by the relay)."),
-            Field("toAddresses",        "To address(es)",      "string", required: true,
-                help: "Recipient email address(es) — JSON array or comma-separated string."),
+            Field("toAddresses",        "Recipient(s)",        "string", required: true,
+                help: "Supplier email address(es) — JSON array or comma-separated string."),
+            Field("replyTo",            "Reply-to",            "string",
+                help: "Buyer contact address set as Reply-To (optional)."),
+            Field("fromAddress",        "From address",        "string",
+                help: "Override the sender (optional; must be a provider-verified domain — defaults to ProcuLink's verified sender)."),
             Field("subjectTemplate",    "Subject template",    "string",
                 help: "Email subject; supports {poNumber} and {fileName} placeholders."),
             Field("bodyTemplate",       "Body template",       "string",
                 help: "Plain-text email body; supports {poNumber} and {fileName} placeholders."),
             Field("attachmentFileName", "Attachment name",     "string",
                 help: "Override the attachment filename (default: the generated artifact filename)."),
-            Field("timeoutSeconds",     "Timeout (s)",         "number",
-                help: "SMTP connection and send timeout in seconds (default: 30)."),
-            // ── Credentials (encrypted) ────────────────────────────────────────
-            Field("username",           "SMTP username",       "string", required: true, secret: true,
-                help: "SMTP authentication username."),
-            Field("password",           "SMTP password",       "secret", secret: true,
-                help: "SMTP authentication password."),
         ],
-        Capabilities: "Sends the artifact as an email attachment; STARTTLS and implicit-TLS; subject/body {poNumber} and {fileName} template placeholders; SSRF guard validates host before connection.",
-        DocsRef: "https://docs.proculink.eu/connectors/smtp");
+        Capabilities: "Sends the artifact as an email attachment via a managed HTTP email API (HTTPS/443 — works where outbound SMTP is blocked); SPF/DKIM/DMARC handled by the provider; {poNumber} and {fileName} template placeholders; no SMTP server or credentials required.",
+        DocsRef: "https://docs.proculink.eu/connectors/email");
 
     /// <summary>
     /// Erply ERP connector (<c>ErplyDeliveryDispatcher</c> → <c>ErplyConnector</c>).
@@ -269,7 +262,7 @@ public static class ConnectorManifestCatalog
             [DeliveryProtocolConstants.Http]        = Http,
             [DeliveryProtocolConstants.Sftp]        = Sftp,
             [DeliveryProtocolConstants.Ftps]        = Ftps,
-            [DeliveryProtocolConstants.Smtp]        = Smtp,
+            [DeliveryProtocolConstants.Email]       = Email,
             [DeliveryProtocolConstants.ErpErply]    = ErpErply,
             [DeliveryProtocolConstants.ErpDirecto]  = ErpDirecto,
         };
@@ -280,7 +273,7 @@ public static class ConnectorManifestCatalog
         Http,
         Sftp,
         Ftps,
-        Smtp,
+        Email,
         ErpErply,
         ErpDirecto,
     ];

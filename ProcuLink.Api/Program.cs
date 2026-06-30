@@ -524,10 +524,23 @@ builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>(
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 builder.Services.AddScoped<ISampleOrderService, SampleOrderService>();
 
+// ── Email API (Postmark over HTTPS) ──────────────────────────────────────
+// Sends mail via a managed HTTP API (port 443), so it works on hosts that block outbound SMTP
+// (e.g. Railway blocks 25/465/587). Registered ALWAYS so EmailApiDeliveryDispatcher can resolve
+// it; IsConfigured=false (no token) → safe no-op. Backs both the support form and email delivery.
+builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Email.PostmarkEmailApiClient.HttpClientName, c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddScoped<IEmailApiClient, PostmarkEmailApiClient>();
+
 // ── Support contact (Group L Wave 3) ─────────────────────────────────────
-// MailKitEmailSender when SMTP host configured; otherwise ConsoleEmailSender
-// logs the email (no-op delivery). Either way the support endpoint always 200s.
-if (!string.IsNullOrWhiteSpace(builder.Configuration["Smtp:Host"]))
+// Prefer the HTTP email API (Postmark). Fall back to legacy SMTP only for self-hosted deploys
+// that set Smtp:Host; otherwise ConsoleEmailSender logs the email (no-op). Either way the support
+// endpoint always 200s.
+if (!string.IsNullOrWhiteSpace(builder.Configuration["Email:Postmark:ServerToken"]))
+    builder.Services.AddScoped<IEmailSender, PostmarkEmailSender>();
+else if (!string.IsNullOrWhiteSpace(builder.Configuration["Smtp:Host"]))
     builder.Services.AddScoped<IEmailSender, MailKitEmailSender>();
 else
     builder.Services.AddScoped<IEmailSender, ConsoleEmailSender>();
@@ -613,7 +626,12 @@ builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, SftpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, FtpsDeliveryDispatcher>();
-builder.Services.AddScoped<IDeliveryDispatcher, SmtpDeliveryDispatcher>();
+// Email delivery via HTTP email API (Postmark) — works where outbound SMTP is blocked.
+builder.Services.AddScoped<IDeliveryDispatcher, EmailApiDeliveryDispatcher>();
+// Legacy raw-SMTP dispatcher: RETIRED from offered channels (blocked on the cloud host). Registered
+// only when a self-hosted operator opts in via Delivery:EnableSmtp=true (default off).
+if (builder.Configuration.GetValue<bool>("Delivery:EnableSmtp"))
+    builder.Services.AddScoped<IDeliveryDispatcher, SmtpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
