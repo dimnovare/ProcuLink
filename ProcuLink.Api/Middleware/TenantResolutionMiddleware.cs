@@ -87,88 +87,208 @@ public sealed class TenantResolutionMiddleware
 
         if (context.User.Identity?.IsAuthenticated == true)
         {
-            // Only a real Clerk ORGANISATION (org_…) resolves or provisions a tenant.
-            // A user with no active org carries no org_id. We deliberately do NOT fall
-            // back to the user's sub claim: that silently minted a per-user "Personal
-            // workspace" tenant which could never be merged into the team org the user
-            // later created (data fragmentation). Such a request continues UNRESOLVED
-            // and fails closed downstream (same as the throttle path). The frontend org
-            // gate forces org creation before any tenant-scoped call is made.
             var clerkOrgId = context.User.FindFirst("org_id")?.Value;
             var orgSlug    = context.User.FindFirst("org_slug")?.Value;
 
             if (!string.IsNullOrEmpty(clerkOrgId)
                 && clerkOrgId.StartsWith("org_", StringComparison.Ordinal))
             {
-                var org = await db.Organisations
-                    .AsNoTracking()
-                    .Where(o => o.ClerkOrgId == clerkOrgId)
-                    .Select(o => new { o.Id })
-                    .FirstOrDefaultAsync(context.RequestAborted);
-
-                if (org is null)
+                // A REAL Clerk organisation (org_…).
+                var existingId = await ResolveOrgIdByClerkKeyAsync(db, clerkOrgId, context.RequestAborted);
+                if (existingId is { } id)
                 {
-                    // Throttle auto-provisioning so a script minting fresh Clerk
-                    // identities cannot farm unlimited trials or amplify the hot-path
-                    // write. Legitimate first login provisions once and is unaffected.
-                    var throttleKey = BuildThrottleKey(context, clerkOrgId);
-                    if (!TryReserveProvision(throttleKey))
-                    {
-                        _logger.LogWarning(
-                            "Auto-provision throttled for TenantKey={ClerkOrgId} (ThrottleKey={ThrottleKey}); " +
-                            "more than {Max} new orgs from this key within {Minutes} min.",
-                            clerkOrgId, throttleKey, MaxProvisionsPerWindow, ProvisionWindow.TotalMinutes);
-
-                        // Fail closed: continue without a resolved tenant. Downstream
-                        // [Authorize] / tenant-scoped controllers will reject the call.
-                        await _next(context);
-                        return;
-                    }
-
-                    // Auto-provision: first time this tenant key contacts the API.
-                    var now = _utcNow();
-                    var orgName = orgSlug ?? clerkOrgId;
-                    var newOrg = new Organisation
-                    {
-                        Id             = Guid.NewGuid(),
-                        ClerkOrgId     = clerkOrgId,
-                        Name           = orgName,
-                        Slug           = GenerateSlug(orgName),
-                        Plan           = "pilot",
-                        AccountStatus  = "trialing",
-                        CreatedAt      = now,
-                        TrialStartedAt = now,
-                        TrialEndsAt    = now.AddDays(14),
-                    };
-
-                    db.Organisations.Add(newOrg);
-                    await db.SaveChangesAsync(context.RequestAborted);
-
-                    _logger.LogInformation(
-                        "Auto-provisioned organisation '{Name}' (TenantKey={ClerkOrgId}).",
-                        newOrg.Name, clerkOrgId);
-
-                    await analytics.CaptureAsync(
-                        organisationId: newOrg.Id,
-                        userId: sub,
-                        eventName: "org_created",
-                        properties: new Dictionary<string, object?>
-                        {
-                            ["plan"] = "pilot",
-                            ["created_via"] = "signup_flow",
-                        },
-                        ct: context.RequestAborted);
-
-                    context.Items[CurrentTenantService.Items.OrganisationId] = newOrg.Id;
+                    // (1a) Already provisioned/adopted → resolve.
+                    context.Items[CurrentTenantService.Items.OrganisationId] = id;
                 }
                 else
                 {
-                    context.Items[CurrentTenantService.Items.OrganisationId] = org.Id;
+                    // (1b) Not found → adopt-or-provision.
+                    await AdoptOrProvisionAsync(context, db, analytics, clerkOrgId, orgSlug, sub);
                 }
+            }
+            else if (!string.IsNullOrEmpty(sub))
+            {
+                // (2) Sub-only login — NO active Clerk org (legacy/transition window).
+                // The production base is 100% legacy "sub-keyed" orgs whose
+                // clerk_org_id is the user's own Clerk user id ("user_…"). We SOFTEN
+                // the resolve so those users keep working (no lockout) instead of a
+                // hard cutover that would lock out every existing customer. We resolve
+                // ONLY a pre-existing row keyed to this authenticated user's sub; we
+                // NEVER provision a new sub-keyed tenant here (fail closed otherwise),
+                // so this cannot mint per-user "Personal workspace" tenants.
+                var legacyId = await ResolveOrgIdByClerkKeyAsync(db, sub, context.RequestAborted);
+                if (legacyId is { } id)
+                    context.Items[CurrentTenantService.Items.OrganisationId] = id;
+                // No legacy org for this sub → leave UNRESOLVED (fail closed). The
+                // frontend org gate forces real org creation before tenant-scoped calls.
             }
         }
 
         await _next(context);
+    }
+
+    /// <summary>
+    /// Resolves the internal Organisation UUID for a Clerk key (org_… or, for legacy
+    /// rows, the user's user_… sub). Returns null when no row matches. AsNoTracking +
+    /// projection: read-only, so the AsNoTracking no-op-mutation trap does not apply.
+    /// </summary>
+    private static async Task<Guid?> ResolveOrgIdByClerkKeyAsync(
+        ProcuLinkDbContext db, string clerkKey, CancellationToken ct)
+    {
+        var org = await db.Organisations
+            .AsNoTracking()
+            .Where(o => o.ClerkOrgId == clerkKey)
+            .Select(o => new { o.Id })
+            .FirstOrDefaultAsync(ct);
+        return org?.Id;
+    }
+
+    /// <summary>
+    /// A real Clerk org id (org_…) with no matching row yet. Two paths:
+    ///   ADOPT — if the CURRENTLY authenticated user already owns a legacy personal
+    ///   tenant (ClerkOrgId == their own sub), re-key THAT row to the new org_ id
+    ///   (same row Id, data, plan, Stripe, slug). This is the production cutover:
+    ///   every legacy org is sub-keyed, so a user's first login under a real Clerk
+    ///   org adopts their existing data instead of stranding it. Not throttled — it
+    ///   only re-keys the user's OWN existing row (not trial-farming).
+    ///
+    ///   PROVISION — otherwise mint a fresh pilot trial org via the existing throttled
+    ///   path (org_created).
+    ///
+    /// SECURITY: adopt re-keys ONLY the row whose ClerkOrgId == sub of the validated
+    /// JWT. A user can therefore only adopt their OWN personal tenant; there is no way
+    /// to attach to another tenant by any other field.
+    /// </summary>
+    private async Task AdoptOrProvisionAsync(
+        HttpContext context, ProcuLinkDbContext db, IAnalyticsService analytics,
+        string clerkOrgId, string? orgSlug, string? sub)
+    {
+        var ct = context.RequestAborted;
+
+        // ADOPT: load the authenticated user's OWN legacy personal tenant as a TRACKED
+        // entity (NOT AsNoTracking — we are about to mutate + SaveChanges) and re-key it.
+        if (!string.IsNullOrEmpty(sub))
+        {
+            var personal = await db.Organisations
+                .FirstOrDefaultAsync(o => o.ClerkOrgId == sub, ct);
+            if (personal is not null)
+            {
+                personal.ClerkOrgId = clerkOrgId;
+                try
+                {
+                    await db.SaveChangesAsync(ct);
+                }
+                catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+                {
+                    // Race: the new org_ row was created concurrently (unique index on
+                    // clerk_org_id). Drop our re-key attempt and resolve the winner.
+                    db.Entry(personal).State = EntityState.Detached;
+                    var winnerId = await ResolveOrgIdByClerkKeyAsync(db, clerkOrgId, ct);
+                    if (winnerId is { } wid)
+                        context.Items[CurrentTenantService.Items.OrganisationId] = wid;
+                    return;
+                }
+
+                _logger.LogInformation(
+                    "Adopted legacy personal tenant (Sub={Sub}) into Clerk org {ClerkOrgId} (OrgId={OrgId}).",
+                    sub, clerkOrgId, personal.Id);
+
+                await analytics.CaptureAsync(
+                    organisationId: personal.Id,
+                    userId: sub,
+                    eventName: "org_adopted",
+                    properties: new Dictionary<string, object?>
+                    {
+                        ["from"] = "personal_workspace",
+                    },
+                    ct: ct);
+
+                context.Items[CurrentTenantService.Items.OrganisationId] = personal.Id;
+                return;
+            }
+        }
+
+        // PROVISION FRESH: throttle so a script minting fresh Clerk identities cannot
+        // farm unlimited trials or amplify the hot-path write. Legitimate first login
+        // provisions exactly once and is unaffected.
+        var throttleKey = BuildThrottleKey(context, clerkOrgId);
+        if (!TryReserveProvision(throttleKey))
+        {
+            _logger.LogWarning(
+                "Auto-provision throttled for TenantKey={ClerkOrgId} (ThrottleKey={ThrottleKey}); " +
+                "more than {Max} new orgs from this key within {Minutes} min.",
+                clerkOrgId, throttleKey, MaxProvisionsPerWindow, ProvisionWindow.TotalMinutes);
+            // Fail closed: downstream [Authorize] / tenant-scoped controllers reject it.
+            return;
+        }
+
+        var now = _utcNow();
+        var orgName = orgSlug ?? clerkOrgId;
+        var newOrg = new Organisation
+        {
+            Id             = Guid.NewGuid(),
+            ClerkOrgId     = clerkOrgId,
+            Name           = orgName,
+            Slug           = GenerateSlug(orgName),
+            Plan           = "pilot",
+            AccountStatus  = "trialing",
+            CreatedAt      = now,
+            TrialStartedAt = now,
+            TrialEndsAt    = now.AddDays(14),
+        };
+
+        db.Organisations.Add(newOrg);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // Race: a concurrent first-request for the same org_ won the unique index.
+            // Drop our insert and resolve the winning row.
+            db.Entry(newOrg).State = EntityState.Detached;
+            var winnerId = await ResolveOrgIdByClerkKeyAsync(db, clerkOrgId, ct);
+            if (winnerId is { } wid)
+                context.Items[CurrentTenantService.Items.OrganisationId] = wid;
+            return;
+        }
+
+        _logger.LogInformation(
+            "Auto-provisioned organisation '{Name}' (TenantKey={ClerkOrgId}).",
+            newOrg.Name, clerkOrgId);
+
+        await analytics.CaptureAsync(
+            organisationId: newOrg.Id,
+            userId: sub,
+            eventName: "org_created",
+            properties: new Dictionary<string, object?>
+            {
+                ["plan"] = "pilot",
+                ["created_via"] = "signup_flow",
+            },
+            ct: ct);
+
+        context.Items[CurrentTenantService.Items.OrganisationId] = newOrg.Id;
+    }
+
+    /// <summary>
+    /// True when a <see cref="DbUpdateException"/> was caused by a Postgres unique-index
+    /// violation (SQLSTATE 23505) — i.e. a concurrent request won the race for the same
+    /// clerk_org_id. We walk the inner-exception chain and duck-type the SqlState property
+    /// (Npgsql's <c>PostgresException.SqlState</c>) so this assembly takes no hard Npgsql
+    /// dependency. Any other DbUpdateException is genuine and must propagate.
+    /// </summary>
+    private static bool IsUniqueViolation(DbUpdateException ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            var sqlState = e.GetType()
+                .GetProperty("SqlState")?
+                .GetValue(e) as string;
+            if (sqlState == "23505")
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
