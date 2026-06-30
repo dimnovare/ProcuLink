@@ -70,10 +70,16 @@ public sealed class InboundEmailController : ControllerBase
             return Unauthorized(new { error = "Inbound webhook is not configured." });
         }
 
-        var presented = Request.Headers[TokenHeader].ToString();
+        // Postmark INBOUND webhooks cannot send a custom request header — inbound
+        // deliveries are authenticated by HTTP Basic-Auth or a token embedded in the
+        // configured webhook URL. Accept the token from (in priority order): the
+        // X-Postmark-Server-Token header (back-compat), a ?token= query param, or the
+        // password half of HTTP Basic-Auth. (X-Postmark-Server-Token is an outbound-API
+        // header and is never present on inbound POSTs.)
+        var presented = ResolvePresentedToken(Request);
         if (!CryptoEquals(expected, presented))
         {
-            _logger.LogWarning("Postmark inbound webhook rejected: bad or missing {Header}.", TokenHeader);
+            _logger.LogWarning("Postmark inbound webhook rejected: bad or missing token (header/query/basic-auth).");
             return Unauthorized(new { error = "Invalid webhook token." });
         }
 
@@ -182,6 +188,37 @@ public sealed class InboundEmailController : ControllerBase
         var stripped = HtmlTagRegex.Replace(noStyles, " ");
         var decoded = System.Net.WebUtility.HtmlDecode(stripped);
         return WhitespaceRegex.Replace(decoded, " ").Trim();
+    }
+
+    /// <summary>
+    /// Resolves the presented webhook token from (in priority order): the
+    /// <c>X-Postmark-Server-Token</c> header (back-compat), the <c>token</c>
+    /// query-string parameter, or the password half of HTTP Basic-Auth. Postmark
+    /// inbound webhooks cannot attach custom headers, so the URL-embedded token
+    /// (<c>?token=</c>) and Basic-Auth (<c>https://user:token@host/...</c>) paths
+    /// are what actually authenticate real inbound deliveries.
+    /// </summary>
+    private static string ResolvePresentedToken(HttpRequest request)
+    {
+        var header = request.Headers[TokenHeader].ToString();
+        if (!string.IsNullOrEmpty(header)) return header;
+
+        var query = request.Query["token"].ToString();
+        if (!string.IsNullOrEmpty(query)) return query;
+
+        var auth = request.Headers.Authorization.ToString();
+        if (auth.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var decoded = System.Text.Encoding.UTF8.GetString(
+                    Convert.FromBase64String(auth["Basic ".Length..].Trim()));
+                var sep = decoded.IndexOf(':');
+                return sep >= 0 ? decoded[(sep + 1)..] : decoded;
+            }
+            catch (FormatException) { /* malformed Basic-Auth — treated as no token */ }
+        }
+        return string.Empty;
     }
 
     /// <summary>
