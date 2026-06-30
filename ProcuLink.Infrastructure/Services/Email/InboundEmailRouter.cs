@@ -17,10 +17,12 @@ namespace ProcuLink.Infrastructure.Services.Email;
 /// </summary>
 /// <remarks>
 /// Tenant resolution routes on the organisation's own unique <c>Slug</c> (auto-generated
-/// at org creation), so any org can receive orders at <c>orders@{slug}.proculink.eu</c>
-/// with no per-org setup. An explicit <c>Inbound:Postmark:TenantMapping:{slug}</c> config
-/// entry is still honoured as an override/fallback. (Live receipt also needs the inbound
-/// MX + Postmark domain configured — that is one-time infra, not per-org.)
+/// at org creation), so any org can receive orders with no per-org setup. Two recipient
+/// schemes are supported: the preferred <c>{slug}@{InboundDomain}</c> (local-part; single
+/// MX, set <c>Inbound:Postmark:InboundDomain</c>) and the legacy <c>orders@{slug}.proculink.eu</c>
+/// (subdomain; needs a wildcard MX). An explicit <c>Inbound:Postmark:TenantMapping:{slug}</c>
+/// config entry is still honoured as an override/fallback. (Live receipt also needs the
+/// inbound MX + Postmark domain configured — that is one-time infra, not per-org.)
 /// </remarks>
 public sealed class InboundEmailRouter : IInboundEmailRouter
 {
@@ -310,12 +312,30 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             trimmed = trimmed.Substring(lt + 1, gt - lt - 1).Trim();
 
         var at = trimmed.IndexOf('@');
-        if (at < 0 || at == trimmed.Length - 1)
+        // Need a non-empty local part AND something after the '@'.
+        if (at <= 0 || at == trimmed.Length - 1)
             return null;
 
+        var local = trimmed[..at];
         var host = trimmed[(at + 1)..].ToLowerInvariant();
-        var suffix = GetHostSuffix().ToLowerInvariant();
 
+        // ── Scheme A: local-part addressing — {slug}@{InboundDomain} ─────────
+        // The slug is the mailbox name and the host is one fixed inbound domain
+        // (e.g. orders.proculink.eu). This needs only a SINGLE MX record on that
+        // domain → Postmark, and avoids a wildcard MX on the marketing apex
+        // (*.proculink.eu would otherwise swallow all subdomain mail). Preferred
+        // scheme; enabled when Inbound:Postmark:InboundDomain is configured.
+        var inboundDomain = GetInboundDomain();
+        if (!string.IsNullOrWhiteSpace(inboundDomain) &&
+            host.Equals(inboundDomain, StringComparison.OrdinalIgnoreCase))
+        {
+            return NormaliseLocalPartSlug(local);
+        }
+
+        // ── Scheme B: subdomain addressing — orders@{slug}{HostSuffix} ───────
+        // The slug is a subdomain label. Requires a wildcard MX (*.proculink.eu).
+        // Kept for back-compat with the original addressing scheme.
+        var suffix = GetHostSuffix().ToLowerInvariant();
         if (!host.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
             return null;
 
@@ -326,11 +346,37 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         return slug;
     }
 
+    /// <summary>
+    /// Normalises a local-part slug: lower-cases it and strips a <c>+tag</c>
+    /// (plus-addressing) suffix, so <c>acme+po@orders.proculink.eu</c> still
+    /// routes to org <c>acme</c>. Returns null for an empty result.
+    /// </summary>
+    private static string? NormaliseLocalPartSlug(string local)
+    {
+        var slug = local.Trim().ToLowerInvariant();
+        var plus = slug.IndexOf('+');
+        if (plus >= 0)
+            slug = slug[..plus];
+        // Reject structurally invalid slugs. Org slugs are kebab-case (no dots);
+        // this mirrors the subdomain scheme's dot-rejection so both schemes behave
+        // consistently and a "user.name@domain" address can't resolve a bogus slug.
+        if (string.IsNullOrWhiteSpace(slug) || slug.Contains('.'))
+            return null;
+        return slug;
+    }
+
     private string GetHostSuffix()
     {
         var configured = _config["Inbound:Postmark:HostSuffix"];
         return string.IsNullOrWhiteSpace(configured) ? DefaultHostSuffix : configured;
     }
+
+    /// <summary>
+    /// The single fixed inbound domain for local-part addressing
+    /// (<c>{slug}@{InboundDomain}</c>). Empty disables Scheme A and falls back to
+    /// the subdomain scheme. Config key <c>Inbound:Postmark:InboundDomain</c>.
+    /// </summary>
+    private string GetInboundDomain() => _config["Inbound:Postmark:InboundDomain"] ?? string.Empty;
 
     private async Task<Guid?> ResolveOrgIdFromSlugAsync(string slug, CancellationToken ct)
     {

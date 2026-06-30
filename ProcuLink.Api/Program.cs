@@ -48,6 +48,24 @@ builder.WebHost.UseSentry(o =>
     o.TracesSampleRate = 0.1; // 10 % of transactions
     o.MinimumBreadcrumbLevel = Microsoft.Extensions.Logging.LogLevel.Information;
     o.MinimumEventLevel = Microsoft.Extensions.Logging.LogLevel.Error;
+
+    // Scrub the inbound-email webhook's ?token= secret out of any captured
+    // request URL / query string before it leaves the process. Postmark can only
+    // pass the shared secret in the webhook URL, so a sampled transaction would
+    // otherwise persist it to Sentry. (Sentry already redacts the Authorization
+    // header used by the Basic-Auth alternative.)
+    o.SetBeforeSend((e, _) => { ScrubRequest(e.Request); return e; });
+    o.SetBeforeSendTransaction((t, _) => { ScrubRequest(t.Request); return t; });
+
+    static void ScrubRequest(SentryRequest? r)
+    {
+        if (r is null) return;
+        if (!string.IsNullOrEmpty(r.Url)) r.Url = ScrubToken(r.Url);
+        if (!string.IsNullOrEmpty(r.QueryString)) r.QueryString = ScrubToken(r.QueryString);
+    }
+
+    static string ScrubToken(string s) =>
+        System.Text.RegularExpressions.Regex.Replace(s, @"(?i)(token=)[^&\s]*", "$1[redacted]");
 });
 
 // ── Stripe SDK ────────────────────────────────────────────────────────────

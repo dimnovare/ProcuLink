@@ -115,30 +115,60 @@ files, and explain which supplier each file will route to.
 
 The hosted webhook flow is:
 
-1. Customer sends an email with PO attachments to a ProcuLink-managed address.
-   The intended pattern is `orders@{tenantSlug}.proculink.eu`.
+1. Customer sends an email with PO attachments to a ProcuLink-managed address
+   (see addressing schemes below).
 2. Postmark Inbound receives the email.
 3. Postmark calls `POST /api/inbound-email/postmark`.
-4. ProcuLink verifies `X-Postmark-Server-Token` against
-   `Inbound:Postmark:WebhookToken`.
+4. ProcuLink verifies the shared secret against `Inbound:Postmark:WebhookToken`.
 5. ProcuLink resolves the tenant slug from the recipient address.
 6. ProcuLink creates order stubs for supported attachments and enqueues parsing.
 
+### Webhook authentication
+
+> ⚠️ **Postmark Inbound does NOT send a custom auth header.** It only secures
+> inbound webhooks via credentials baked into the webhook URL. So the
+> webhook URL configured in Postmark must carry the token one of two ways:
+>
+> - **Query token (simplest):** set the Postmark webhook URL to
+>   `https://<api-host>/api/inbound-email/postmark?token=<WebhookToken>`.
+> - **HTTP Basic Auth:** set it to
+>   `https://anyuser:<WebhookToken>@<api-host>/api/inbound-email/postmark`
+>   (the token is the password component).
+>
+> The controller accepts the secret from `?token=`, the Basic-Auth password, or
+> a legacy `X-Postmark-Server-Token` header (synthetic/admin callers only), and
+> compares it constant-time against `Inbound:Postmark:WebhookToken`. If that
+> config is unset the webhook returns 401 (`Inbound webhook is not configured`).
+
+### Addressing schemes
+
+Two recipient patterns resolve the tenant. Pick one when you configure DNS:
+
+- **Local-part (preferred):** `{slug}@orders.proculink.eu`. Needs a **single MX
+  record** on `orders.proculink.eu` → Postmark, and the Postmark server's inbound
+  domain set to `orders.proculink.eu`. Enable by setting
+  `Inbound:Postmark:InboundDomain = "orders.proculink.eu"`. Plus-addressing tags
+  are stripped (`acme+po@…` → org `acme`). This avoids a wildcard MX on the apex.
+- **Subdomain (legacy):** `orders@{slug}.proculink.eu`. Needs a **wildcard MX**
+  (`*.proculink.eu` → Postmark), which also captures all other subdomain mail.
+  Used when `Inbound:Postmark:InboundDomain` is unset; suffix configurable via
+  `Inbound:Postmark:HostSuffix` (default `.proculink.eu`).
+
 Current backend assumptions:
 
-- Tenant mapping is config-driven:
-  `Inbound:Postmark:TenantMapping:{slug} = "{organisationGuid}"`.
-- Host suffix defaults to the configured inbound suffix in
-  `Inbound:Postmark:HostSuffix`.
+- Tenant resolution is primarily by the org's own unique `Slug`; an explicit
+  `Inbound:Postmark:TenantMapping:{slug} = "{organisationGuid}"` config entry is
+  honoured as an override/fallback.
 - The organisation must already have a supplier configured for inbound email.
 - Unsupported or empty attachments are skipped.
 
 Required assisted setup:
 
-- Postmark inbound server.
-- DNS/MX records for the inbound email domain.
-- `Inbound:Postmark:WebhookToken` in the API environment.
-- Tenant slug mapping in API configuration.
+- Postmark inbound server with its inbound domain set.
+- DNS/MX record(s) per the chosen addressing scheme above.
+- `Inbound:Postmark:WebhookToken` in the API environment, and the webhook URL in
+  Postmark carrying that token (`?token=` or Basic Auth).
+- `Inbound:Postmark:InboundDomain` set for the preferred local-part scheme.
 - A default supplier/routing rule for the organisation.
 
 ---

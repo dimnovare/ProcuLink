@@ -377,6 +377,135 @@ public class InboundEmailRouterTests
         extractor.Calls.Should().Be(1);
     }
 
+    // ── 10. Local-part addressing — {slug}@{InboundDomain} ───────────────────
+
+    [Fact]
+    public async Task LocalPartAddressing_RoutesToOrg_WhenInboundDomainConfigured()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        var supplierId = await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId,
+            inboundDomain: "orders.proculink.eu");
+
+        // Slug is the LOCAL part; host is the single fixed inbound domain.
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"{Slug}@orders.proculink.eu",
+            Subject:   "PO via local-part address",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeTrue();
+        result.OrgId.Should().Be(orgId);
+        result.CreatedOrderIds.Should().HaveCount(1);
+        orders.CalledWith.Should().HaveCount(1);
+        orders.CalledWith[0].SupplierId.Should().Be(supplierId);
+    }
+
+    // ── 10b. Plus-addressing tag is stripped from the local-part slug ────────
+
+    [Fact]
+    public async Task LocalPartAddressing_StripsPlusTag()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId,
+            inboundDomain: "orders.proculink.eu");
+
+        // "acme+urgent@orders.proculink.eu" must still resolve to org "acme".
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"{Slug}+urgent@orders.proculink.eu",
+            Subject:   "PO with plus-addressing",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeTrue();
+        result.OrgId.Should().Be(orgId);
+        result.CreatedOrderIds.Should().HaveCount(1);
+    }
+
+    // ── 10c. Subdomain scheme still works even when InboundDomain is set ─────
+
+    [Fact]
+    public async Task SubdomainAddressing_StillWorks_WhenInboundDomainConfigured()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        // InboundDomain configured, but the recipient uses the legacy subdomain
+        // scheme — it must still resolve (back-compat).
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId,
+            inboundDomain: "orders.proculink.eu");
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO via legacy subdomain address",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeTrue();
+        result.OrgId.Should().Be(orgId);
+        result.CreatedOrderIds.Should().HaveCount(1);
+    }
+
+    // ── 10d. Local-part rejection cases ──────────────────────────────────────
+
+    [Theory]
+    [InlineData("+@orders.proculink.eu")]        // empty slug after stripping the +tag
+    [InlineData("acme.corp@orders.proculink.eu")] // dots are not valid in a kebab-case slug
+    public async Task LocalPartAddressing_InvalidSlug_IsRejected(string toEmail)
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId,
+            inboundDomain: "orders.proculink.eu");
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   toEmail,
+            Subject:   "PO with an unroutable local part",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeFalse("the local part does not resolve to a valid tenant slug");
+        result.CreatedOrderIds.Should().BeEmpty();
+        orders.CalledWith.Should().BeEmpty();
+        enqueuer.Calls.Should().BeEmpty();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static InboundEmailRouter MakeRouter(
@@ -385,13 +514,18 @@ public class InboundEmailRouterTests
         IParseJobEnqueuer enqueuer,
         string slug,
         Guid orgId,
-        IEmailBodyOrderExtractor? extractor = null)
+        IEmailBodyOrderExtractor? extractor = null,
+        string? inboundDomain = null)
     {
+        var settings = new Dictionary<string, string?>
+        {
+            [$"Inbound:Postmark:TenantMapping:{slug}"] = orgId.ToString(),
+        };
+        if (inboundDomain is not null)
+            settings["Inbound:Postmark:InboundDomain"] = inboundDomain;
+
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [$"Inbound:Postmark:TenantMapping:{slug}"] = orgId.ToString(),
-            })
+            .AddInMemoryCollection(settings)
             .Build();
 
         return new InboundEmailRouter(
