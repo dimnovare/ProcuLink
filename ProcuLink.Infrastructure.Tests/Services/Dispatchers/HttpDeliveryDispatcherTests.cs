@@ -135,7 +135,11 @@ public class HttpDeliveryDispatcherTests
     [Fact]
     public async Task Dispatch_TimeoutSeconds_ReturnsTimeoutFailure()
     {
-        var handler = new DelayedHttpMessageHandler(TimeSpan.FromSeconds(2));
+        // The handler never completes on its own — it blocks until the request's
+        // CancellationToken fires. That makes the timeout *cancellation* (not a
+        // wall-clock delay-vs-timeout race) the sole driver of the result, so the
+        // assertion is deterministic regardless of CI runner scheduling jitter.
+        var handler = new BlockingHttpMessageHandler();
 
         var dispatcher = MakeDispatcher(handler);
         var config = MakeConfig("https://example.com/orders");
@@ -234,12 +238,19 @@ file sealed class CapturingHttpMessageHandler(Action<HttpRequestMessage> capture
     }
 }
 
-file sealed class DelayedHttpMessageHandler(TimeSpan delay) : HttpMessageHandler
+/// <summary>
+/// A transport that never produces a response on its own. It awaits indefinitely until the
+/// request's <see cref="CancellationToken"/> is cancelled (here, by the dispatcher's timeout
+/// CTS), then throws <see cref="OperationCanceledException"/> — exactly as a real socket read
+/// that outlives the configured timeout would. This removes the delay-vs-timeout wall-clock
+/// race that made the timeout test flaky on shared CI runners.
+/// </summary>
+file sealed class BlockingHttpMessageHandler : HttpMessageHandler
 {
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        await Task.Delay(delay, cancellationToken);
+        await Task.Delay(Timeout.Infinite, cancellationToken);
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("OK")
