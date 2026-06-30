@@ -1,3 +1,4 @@
+using ClosedXML.Excel;
 using SharpCompress.Archives.Zip;
 using SharpCompress.Common;
 using SharpCompress.Readers;
@@ -79,6 +80,41 @@ internal static class XlsxCompressionFallback
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Opens an .xlsx workbook from <paramref name="fileStream"/>, transparently repacking it
+    /// first when its zip parts use a compression method the BCL can't read. ClosedXML routes
+    /// through System.IO.Packaging, which masks such failures as
+    /// <c>FileFormatException("File contains corrupted data.")</c>, so the recovery triggers on
+    /// that broad signal (<see cref="ShouldAttemptRepack"/>) and falls back to the original error
+    /// when the repack can't help. The input is buffered to a seekable stream only when needed,
+    /// so the repacked bytes can be retried. Shared by <see cref="XlsxOrderParser"/> and
+    /// <see cref="XlsxTextExtractor"/> so both open workbooks identically.
+    /// </summary>
+    public static XLWorkbook OpenWorkbook(Stream fileStream)
+    {
+        // Need a rewindable stream to retry with the repacked bytes if the first open fails.
+        Stream seekable = fileStream;
+        if (!fileStream.CanSeek)
+        {
+            var buffered = new MemoryStream();
+            fileStream.CopyTo(buffered);
+            buffered.Position = 0;
+            seekable = buffered;
+        }
+
+        try
+        {
+            return new XLWorkbook(seekable);
+        }
+        catch (Exception ex) when (ShouldAttemptRepack(ex))
+        {
+            // RepackToStandardZip rewinds `seekable` internally before reading.
+            if (TryRepackToStandardZip(seekable, out var repacked))
+                return new XLWorkbook(repacked);
+            throw; // not a repackable zip — surface the original (honest) failure
+        }
     }
 
     /// <summary>

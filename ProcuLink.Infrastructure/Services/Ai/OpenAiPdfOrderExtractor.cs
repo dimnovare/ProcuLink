@@ -340,16 +340,60 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             return StructuredExtractionResult.Fail("PDF has no extractable text layer.");
         }
 
+        return await RunTextExtractionAsync(sourceText, organisationId, tracker, ct);
+    }
+
+    /// <summary>
+    /// Text-source entry point: structures ALREADY-EXTRACTED document text (e.g. an
+    /// .xlsx workbook rendered by <c>XlsxTextExtractor</c>) through the SAME strict-JSON
+    /// extraction + anti-hallucination validation as the PDF text path. Enforces the
+    /// per-org cap and is a safe no-op (Success=false) when no provider is configured,
+    /// so the orchestrator falls back to the deterministic parser. Never throws.
+    /// </summary>
+    public async Task<StructuredExtractionResult> ExtractFromTextAsync(
+        string sourceText,
+        Guid organisationId,
+        CancellationToken ct)
+    {
+        if (_client is null)
+            return StructuredExtractionResult.Fail("AI provider not configured.");
+
+        if (organisationId == Guid.Empty)
+            return StructuredExtractionResult.Fail("No organisation context for AI extraction.");
+
+        if (string.IsNullOrWhiteSpace(sourceText))
+            return StructuredExtractionResult.Fail("Document had no extractable text.");
+
+        await using var trackerScope = _scopeFactory?.CreateAsyncScope();
+        var tracker = trackerScope is not null
+            ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
+            : _trackerFactory?.Invoke();
+
+        if (await IsAtOrOverCapAsync(tracker, organisationId, ct))
+            return StructuredExtractionResult.Fail(StructuredExtractionResult.UsageCapFailureReason);
+
+        return await RunTextExtractionAsync(sourceText, organisationId, tracker, ct);
+    }
+
+    /// <summary>
+    /// Shared OpenAI strict-JSON structured extraction over a text source. Bounds the
+    /// input to the token-cap-safe window, runs the call, records usage, and maps via
+    /// <see cref="ValidateAndMap"/> (the anti-hallucination net runs against the same
+    /// <paramref name="sourceText"/>). Used by both the PDF text path and the
+    /// text-source (XLSX) path. Never throws.
+    /// </summary>
+    private async Task<StructuredExtractionResult> RunTextExtractionAsync(
+        string sourceText, Guid organisationId, IAiUsageTracker? tracker, CancellationToken ct)
+    {
         // Bound the input so one oversized document can't overshoot the token cap.
         if (sourceText.Length > MaxSourceChars)
         {
             _logger.LogWarning(
-                "PDF extraction: source text {Len} chars exceeds {Max}; truncating before the LLM call (org {OrgId}).",
+                "Structured extraction: source text {Len} chars exceeds {Max}; truncating before the LLM call (org {OrgId}).",
                 sourceText.Length, MaxSourceChars, organisationId);
             sourceText = sourceText[..MaxSourceChars];
         }
 
-        // ── OpenAI strict-JSON structured extraction ─────────────────────────
         try
         {
             var messages = new List<ChatMessage>
@@ -375,14 +419,14 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             var json = completion.Content.FirstOrDefault()?.Text;
             if (string.IsNullOrWhiteSpace(json))
             {
-                _logger.LogWarning("PDF extraction returned empty content (org {OrgId}).", organisationId);
+                _logger.LogWarning("Structured extraction returned empty content (org {OrgId}).", organisationId);
                 return StructuredExtractionResult.Fail("AI returned empty response.");
             }
 
             var dto = JsonSerializer.Deserialize<ExtractionDto>(json, JsonOptions);
             if (dto is null)
             {
-                _logger.LogWarning("PDF extraction response could not be deserialised (org {OrgId}).", organisationId);
+                _logger.LogWarning("Structured extraction response could not be deserialised (org {OrgId}).", organisationId);
                 return StructuredExtractionResult.Fail("AI response could not be parsed.");
             }
 
@@ -390,12 +434,12 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            _logger.LogWarning("PDF extraction timed out (org {OrgId}).", organisationId);
+            _logger.LogWarning("Structured extraction timed out (org {OrgId}).", organisationId);
             return StructuredExtractionResult.Fail("AI request timed out.");
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "PDF extraction failed (org {OrgId}).", organisationId);
+            _logger.LogWarning(ex, "Structured extraction failed (org {OrgId}).", organisationId);
             return StructuredExtractionResult.Fail("AI request failed.");
         }
     }

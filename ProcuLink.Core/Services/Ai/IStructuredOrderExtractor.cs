@@ -96,4 +96,23 @@ public interface IStructuredOrderExtractor
         string contentType,
         Guid organisationId,
         CancellationToken ct);
+
+    /// <summary>
+    /// Attempts to extract a structured purchase order from ALREADY-EXTRACTED source
+    /// text (e.g. an .xlsx workbook rendered to a faithful text layout by
+    /// <c>XlsxTextExtractor</c>, where the table-shaped <see cref="ExtractAsync"/>
+    /// stream path doesn't apply). Runs the SAME strict-JSON structured extraction and
+    /// anti-hallucination validation as the PDF text path, so labelled/sectioned XLSX
+    /// schemas are extracted with the same trust contract. Never throws — returns
+    /// <see cref="StructuredExtractionResult.Success"/> = false on every failure path
+    /// (empty text, no key, over cap, low confidence, zero lines), so the caller can
+    /// fall back to the deterministic parser.
+    /// </summary>
+    /// <param name="sourceText">The document rendered to plain text.</param>
+    /// <param name="organisationId">Tenant whose monthly token cap applies.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<StructuredExtractionResult> ExtractFromTextAsync(
+        string sourceText,
+        Guid organisationId,
+        CancellationToken ct);
 }

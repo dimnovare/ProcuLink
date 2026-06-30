@@ -148,6 +148,13 @@ public sealed class OrderService : IOrderService
         byte[] bytes, Guid organisationId, Guid orderId, CancellationToken ct)
         => _ingestion.ParsePdfAsync(bytes, organisationId, orderId, ct);
 
+    internal Task<(ParsedOrder parsed,
+                   IReadOnlyCollection<int> reviewLineNumbers,
+                   IReadOnlyDictionary<int, string>? reviewReasons,
+                   string? extractionFailureReason)> ParseXlsxAsync(
+        byte[] bytes, Guid organisationId, Guid orderId, CancellationToken ct)
+        => _ingestion.ParseXlsxAsync(bytes, organisationId, orderId, ct);
+
     internal static void ApplyExtractionReviewFlags(
         IReadOnlyList<PurchaseOrderLineEntity> lines,
         IReadOnlyCollection<int> reviewLineNumbers,

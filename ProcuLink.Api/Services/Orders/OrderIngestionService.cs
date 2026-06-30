@@ -671,6 +671,17 @@ internal sealed class OrderIngestionService
                     (parsedOrder, structuredReviewLineNumbers, structuredReviewReasons, pdfExtractionFailureReason) =
                         await ParsePdfAsync(buffer.ToArray(), organisationId, orderId, ct);
                 }
+                else if (extension == ".xlsx")
+                {
+                    // Primary XLSX path: render the workbook to faithful text → SAME LLM
+                    // structured extraction the PDF path uses, with the deterministic
+                    // XlsxOrderParser as the fallback. Real-world labelled/sectioned PO
+                    // workbooks (PurchaseOrderNr/Currency + a Lines section) defeat the
+                    // row1=headers deterministic parser, so the LLM is preferred when
+                    // available. See ParseXlsxAsync.
+                    (parsedOrder, structuredReviewLineNumbers, structuredReviewReasons, pdfExtractionFailureReason) =
+                        await ParseXlsxAsync(buffer.ToArray(), organisationId, orderId, ct);
+                }
                 else if (poMapping is not null && extension == ".csv")
                 {
                     parsedOrder = await ParseWithMappingTemplateAsync(buffer.ToArray(), poMapping, ct);
@@ -1158,6 +1169,90 @@ internal sealed class OrderIngestionService
         using var stream = new MemoryStream(bytes);
         var parsed = await parser.ParseAsync(stream, ct);
         return (parsed, Array.Empty<int>(), null, extractionFailureReason);
+    }
+
+    /// <summary>
+    /// Routes an XLSX to the LLM structured extractor when one is available — by
+    /// rendering the workbook to faithful text (<see cref="XlsxTextExtractor"/>) and
+    /// running it through the SAME text-source extraction the PDF text path uses —
+    /// otherwise falls back to the deterministic <c>XlsxOrderParser</c>. This is the
+    /// XLSX analogue of <see cref="ParsePdfAsync"/>: real-world labelled/sectioned PO
+    /// workbooks (PurchaseOrderNr / Currency header cells + a Lines section) extract
+    /// ZERO line data through the row1=headers deterministic parser, so the LLM is
+    /// preferred when available. Returns the parsed order plus the extractor's
+    /// review-line flags (empty for the fallback), the per-line reasons (null for the
+    /// fallback), and the extractor's failure reason when it was AVAILABLE but failed
+    /// (so the caller can explain an empty result honestly, e.g. the AI usage cap).
+    /// Never sends a no-egress org's data to OpenAI — same gate as the PDF path.
+    /// </summary>
+    internal async Task<(ParsedOrder parsed,
+                         IReadOnlyCollection<int> reviewLineNumbers,
+                         IReadOnlyDictionary<int, string>? reviewReasons,
+                         string? extractionFailureReason)> ParseXlsxAsync(
+        byte[] bytes, Guid organisationId, Guid orderId, CancellationToken ct)
+    {
+        // No-egress orgs: never send workbook data to OpenAI — deterministic parser only.
+        var selfHostedOcr = await _db.Organisations
+            .AsNoTracking()
+            .Where(o => o.Id == organisationId)
+            .Select(o => o.SelfHostedOcr)
+            .FirstOrDefaultAsync(ct);
+
+        if (selfHostedOcr)
+        {
+            _logger.LogInformation(
+                "Order {OrderId}: org {OrgId} is no-egress — parsing XLSX deterministically.",
+                orderId, organisationId);
+            return (await ParseXlsxDeterministicAsync(bytes, ct), Array.Empty<int>(), null, null);
+        }
+
+        string? extractionFailureReason = null;
+        if (_structuredExtractor is { IsAvailable: true })
+        {
+            // Render the workbook to faithful text. A render failure (corrupt/unreadable
+            // workbook) is non-fatal here: fall through to the deterministic parser, which
+            // surfaces the honest error via the 0-lines / parse-failure path.
+            string? sourceText = null;
+            try
+            {
+                using var renderStream = new MemoryStream(bytes);
+                sourceText = XlsxTextExtractor.ExtractText(renderStream);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Order {OrderId}: could not render XLSX to text for structured extraction; falling back to deterministic parser.",
+                    orderId);
+            }
+
+            if (!string.IsNullOrWhiteSpace(sourceText))
+            {
+                var extraction = await _structuredExtractor.ExtractFromTextAsync(sourceText, organisationId, ct);
+
+                if (extraction is { Success: true, Order: { Lines.Count: > 0 } extractedOrder })
+                {
+                    _logger.LogInformation(
+                        "Order {OrderId}: XLSX parsed via structured extractor — {Lines} lines, {Review} flagged for review.",
+                        orderId, extractedOrder.Lines.Count, extraction.ReviewLineNumbers.Count);
+                    return (MapExtractedToParsed(extractedOrder), extraction.ReviewLineNumbers, extraction.ReviewReasons, null);
+                }
+
+                extractionFailureReason = extraction.FailureReason;
+                _logger.LogInformation(
+                    "Order {OrderId}: structured XLSX extraction failed ({Reason}); falling back to deterministic parser.",
+                    orderId, extraction.FailureReason ?? "unknown");
+            }
+        }
+
+        return (await ParseXlsxDeterministicAsync(bytes, ct), Array.Empty<int>(), null, extractionFailureReason);
+    }
+
+    /// <summary>Deterministic <c>XlsxOrderParser</c> fallback over the in-memory bytes.</summary>
+    private async Task<ParsedOrder> ParseXlsxDeterministicAsync(byte[] bytes, CancellationToken ct)
+    {
+        var parser = _parserFactory.GetParser(".xlsx");
+        using var stream = new MemoryStream(bytes);
+        return await parser.ParseAsync(stream, ct);
     }
 
     /// <summary>

@@ -18,7 +18,7 @@ public sealed class XlsxOrderParser : IPurchaseOrderParser
 
     public Task<ParsedOrder> ParseAsync(Stream fileStream, CancellationToken ct)
     {
-        using var workbook   = OpenWorkbook(fileStream);
+        using var workbook   = XlsxCompressionFallback.OpenWorkbook(fileStream);
         var worksheet        = workbook.Worksheets.First();
         var rows             = worksheet.RangeUsed()?.RowsUsed().ToList();
 
@@ -94,39 +94,6 @@ public sealed class XlsxOrderParser : IPurchaseOrderParser
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Opens the workbook, transparently repacking it first when its zip parts use a
-    /// compression method the BCL can't read. ClosedXML routes through System.IO.Packaging,
-    /// which masks such failures as <c>FileFormatException("File contains corrupted data.")</c>,
-    /// so the recovery triggers on that broad signal and falls back to the original error when
-    /// the repack can't help. See <see cref="XlsxCompressionFallback"/>. The input is buffered
-    /// to a seekable stream only when needed, so the repacked bytes can be retried.
-    /// </summary>
-    private static XLWorkbook OpenWorkbook(Stream fileStream)
-    {
-        // Need a rewindable stream to retry with the repacked bytes if the first open fails.
-        Stream seekable = fileStream;
-        if (!fileStream.CanSeek)
-        {
-            var buffered = new MemoryStream();
-            fileStream.CopyTo(buffered);
-            buffered.Position = 0;
-            seekable = buffered;
-        }
-
-        try
-        {
-            return new XLWorkbook(seekable);
-        }
-        catch (Exception ex) when (XlsxCompressionFallback.ShouldAttemptRepack(ex))
-        {
-            // RepackToStandardZip rewinds `seekable` internally before reading.
-            if (XlsxCompressionFallback.TryRepackToStandardZip(seekable, out var repacked))
-                return new XLWorkbook(repacked);
-            throw; // not a repackable zip — surface the original (honest) failure
-        }
-    }
 
     /// <summary>
     /// Returns the trimmed cell value for the first alias column found in the header map.
