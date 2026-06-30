@@ -8,7 +8,8 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Api.Middleware;
 
 /// <summary>
-/// Runs after authentication. For authenticated requests that carry an org_id claim,
+/// Runs after authentication. For authenticated requests that carry a Clerk org id
+/// (legacy v1 org_id claim, OR the v2 compact "o" object claim — see InvokeAsync),
 /// looks up the internal Organisation UUID and stores it in HttpContext.Items so that
 /// CurrentTenantService can serve it synchronously throughout the rest of the pipeline.
 ///
@@ -89,6 +90,32 @@ public sealed class TenantResolutionMiddleware
         {
             var clerkOrgId = context.User.FindFirst("org_id")?.Value;
             var orgSlug    = context.User.FindFirst("org_slug")?.Value;
+
+            // Clerk v2 session tokens (claim "v":2) carry org info in a compact "o" claim
+            // (a JSON object: { "id": "org_…", "rol": "...", "slg": "..." }) instead of the
+            // legacy top-level org_id/org_slug. Fall back to it so org resolution works
+            // against real prod tokens. (The .NET JWT handler stores an object claim as its
+            // JSON string value.)
+            if (string.IsNullOrEmpty(clerkOrgId))
+            {
+                var o = context.User.FindFirst("o")?.Value;
+                if (!string.IsNullOrEmpty(o))
+                {
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(o);
+                        var root = doc.RootElement;
+                        if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            if (string.IsNullOrEmpty(clerkOrgId) && root.TryGetProperty("id", out var idEl) && idEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                                clerkOrgId = idEl.GetString();
+                            if (string.IsNullOrEmpty(orgSlug) && root.TryGetProperty("slg", out var slgEl) && slgEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                                orgSlug = slgEl.GetString();
+                        }
+                    }
+                    catch (System.Text.Json.JsonException) { /* malformed o claim → treat as no org */ }
+                }
+            }
 
             if (!string.IsNullOrEmpty(clerkOrgId)
                 && clerkOrgId.StartsWith("org_", StringComparison.Ordinal))
