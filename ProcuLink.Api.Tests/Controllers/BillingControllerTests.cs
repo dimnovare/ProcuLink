@@ -224,6 +224,46 @@ public class BillingControllerTests
             "an invalid Stripe signature must return 400");
     }
 
+    [Fact]
+    public async Task Webhook_ApiVersionMismatch_WithValidSignature_DoesNotReturn400()
+    {
+        // Stripe.net 51.1.0 pins the SDK to API version 2026-04-22.dahlia. If the
+        // Stripe dashboard endpoint (or the account default) is ever on a DIFFERENT
+        // version, every delivered event carries that other api_version. With the
+        // EventUtility.ConstructEvent default (throwOnApiVersionMismatch:true) a
+        // mismatch throws StripeException → the controller returns 400 → Stripe
+        // retries forever → plans never unlock (silent billing failure). The fix
+        // passes throwOnApiVersionMismatch:false so version drift no longer drops
+        // events. Signature verification is UNAFFECTED (still fully enforced — see
+        // Webhook_InvalidStripeSignature_Returns400 above).
+        const string secret = "whsec_version_mismatch_test";
+        var (ctrl, _, _, _, _) = Build(webhookSecret: secret);
+
+        // An event stamped with an OLD api_version and an UNHANDLED type (the
+        // dispatcher no-ops on it) so this test isolates the version-gate behavior.
+        const string body =
+            "{\"id\":\"evt_versiontest\",\"object\":\"event\",\"api_version\":\"2020-08-27\"," +
+            "\"type\":\"customer.created\",\"data\":{\"object\":{\"id\":\"cus_x\",\"object\":\"customer\"}}}";
+
+        // Build a cryptographically VALID Stripe signature for this exact body.
+        // Stripe's scheme: signed payload = "{timestamp}.{body}", HMAC-SHA256 with
+        // the webhook secret as the key, hex-encoded → the v1 component.
+        var ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        using var hmac = new System.Security.Cryptography.HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{ts}.{body}"));
+        var header = $"t={ts},v1={Convert.ToHexString(hash).ToLowerInvariant()}";
+
+        SetHttpContext(ctrl, body: body, stripeHeader: header);
+
+        var result = await ctrl.Webhook(CancellationToken.None);
+
+        // With throwOnApiVersionMismatch:false the event parses despite the version
+        // mismatch; the unhandled type falls through the dispatcher → 200 OK.
+        result.Should().BeOfType<OkResult>(
+            "a valid-signature event with a mismatched api_version must NOT 400 — " +
+            "ConstructEvent must use throwOnApiVersionMismatch:false");
+    }
+
     // ── POST /api/billing/checkout ────────────────────────────────────────────
 
     [Fact]

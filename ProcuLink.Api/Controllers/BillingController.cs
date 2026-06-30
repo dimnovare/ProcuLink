@@ -175,12 +175,42 @@ public sealed class BillingController : ControllerBase
         Stripe.Event stripeEvent;
         try
         {
-            stripeEvent = Stripe.EventUtility.ConstructEvent(json, signature, secret);
+            // throwOnApiVersionMismatch:false — decouple webhook ingest from the exact
+            // Stripe API version the dashboard endpoint emits. Stripe.net pins the SDK to
+            // a specific API version (51.1.0 → 2026-04-22.dahlia); the default (true) makes
+            // ConstructEvent THROW when a delivered event's api_version differs, which the
+            // catch below turns into a 400 → Stripe retries forever → plans never unlock
+            // (silent billing failure) if the endpoint/account version ever drifts off the
+            // SDK pin. The version string check is a separate step DOWNSTREAM of HMAC +
+            // timestamp signature verification, so disabling it does NOT weaken signature
+            // security — forged/mistimed events are still rejected (400). The fields we read
+            // (session/subscription/invoice primitives + our own metadata) are stable across
+            // dahlia versions; the one structurally-sensitive field
+            // (invoice.Parent.SubscriptionDetails.SubscriptionId) is already null-guarded.
+            stripeEvent = Stripe.EventUtility.ConstructEvent(
+                json, signature, secret, throwOnApiVersionMismatch: false);
         }
         catch (Stripe.StripeException ex)
         {
             _logger.LogWarning("Stripe webhook signature validation failed: {Msg}", ex.Message);
             return BadRequest(new { error = "Invalid signature." });
+        }
+
+        // We no longer 400 on an api_version mismatch (see above), but a drift off the
+        // SDK pin still signals a real misconfiguration (the dashboard endpoint or the
+        // account-default API version moved away from what this build deserializes
+        // against). Surface it as an actionable warning instead of swallowing it, so a
+        // version drift is visible BEFORE some future nested-field shape change silently
+        // breaks a handler. Events keep flowing either way.
+        if (!string.Equals(stripeEvent.ApiVersion, Stripe.StripeConfiguration.ApiVersion,
+                StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Stripe event {EventId} ({Type}) api_version {EventVersion} differs from the SDK " +
+                "pin {SdkVersion} — the webhook endpoint/account API version has drifted; verify " +
+                "handler field compatibility and realign the dashboard endpoint version.",
+                stripeEvent.Id, stripeEvent.Type, stripeEvent.ApiVersion,
+                Stripe.StripeConfiguration.ApiVersion);
         }
 
         try
