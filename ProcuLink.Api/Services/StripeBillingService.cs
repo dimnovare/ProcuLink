@@ -532,51 +532,81 @@ public sealed class StripeBillingService : IBillingService
         if (clamped == 0 || amountCents == 0)
             return new OverageBillingResult(orgId, billingKey, 0, 0, AlreadyBilled: false, StripeItemId: null);
 
-        // ── Idempotency guard: claim the (orgId, billingKey) slot FIRST ──────
-        // If a row already exists, a prior call billed this period — no-op.
+        // ── Is Stripe the billing authority for this org right now? ──────────
+        // Only when Stripe is configured AND the org has a Stripe customer do we
+        // expect a real invoice item to be created. Otherwise the ledger row is the
+        // ONLY record (auditable number, no Stripe side), and a missing
+        // StripeInvoiceItemId is the expected terminal state — NOT a failure to retry.
+        var org = await LoadOrgAsync(orgId, asTracking: true, ct);
+        var stripeIsAuthority = IsStripeConfigured() && !string.IsNullOrWhiteSpace(org.StripeCustomerId);
+
+        // ── Idempotency guard: examine any existing (orgId, billingKey) row ──
+        // Terminal (idempotent no-op) when EITHER:
+        //   • the row already carries a Stripe invoice-item id (fully billed), OR
+        //   • Stripe is not the authority here (unconfigured / no customer) — the row
+        //     is the only intended record, so a NULL item id is expected, not a retry.
+        // A NULL-item row WHILE Stripe IS the authority is the poison case: a prior
+        // attempt committed the ledger row (the row + SaveChanges happen BEFORE the
+        // Stripe call) and then the Stripe call failed (transient 5xx / rate-limit /
+        // network) → the webhook 500'd and Stripe will retry. Returning AlreadyBilled
+        // there would let the NULL-item row permanently suppress the charge → silent
+        // revenue loss. So in that case we DON'T early-return: we fall through and
+        // (re)attempt the Stripe call. The Stripe Idempotency-Key (= billingKey)
+        // makes the retry safe — if a prior attempt did secretly create the item,
+        // Stripe returns the SAME item (never a duplicate).
+        static bool IsTerminal(OverageBillingRecord r, bool stripeAuthority) =>
+            !string.IsNullOrEmpty(r.StripeInvoiceItemId) || !stripeAuthority;
+
         var existing = await _db.OverageBillingRecords
             .AsNoTracking()
             .FirstOrDefaultAsync(r => r.OrgId == orgId && r.BillingKey == billingKey, ct);
-        if (existing is not null)
+        if (existing is not null && IsTerminal(existing, stripeIsAuthority))
             return new OverageBillingResult(
                 orgId, billingKey, existing.OverageOrders, existing.AmountCents,
                 AlreadyBilled: true, StripeItemId: existing.StripeInvoiceItemId);
 
-        var record = new OverageBillingRecord
+        // Claim the slot only when there is no row yet. When a NULL-item row already
+        // exists (and Stripe is the authority) we reuse it — skip the insert and go
+        // straight to the Stripe (re)attempt below.
+        if (existing is null)
         {
-            Id            = Guid.NewGuid(),
-            OrgId         = orgId,
-            BillingKey    = billingKey,
-            OverageOrders = clamped,
-            AmountCents   = amountCents,
-            CreatedAt     = DateTimeOffset.UtcNow,
-        };
-        _db.OverageBillingRecords.Add(record);
-        try
-        {
-            await _db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException)
-        {
-            // Lost the race — another worker already inserted this (orgId, billingKey).
-            // Detach our attempt and treat as already billed (no double charge).
-            _db.Entry(record).State = EntityState.Detached;
-            var winner = await _db.OverageBillingRecords
-                .AsNoTracking()
-                .FirstOrDefaultAsync(r => r.OrgId == orgId && r.BillingKey == billingKey, ct);
-            return new OverageBillingResult(
-                orgId, billingKey, winner?.OverageOrders ?? clamped, winner?.AmountCents ?? amountCents,
-                AlreadyBilled: true, StripeItemId: winner?.StripeInvoiceItemId);
+            var record = new OverageBillingRecord
+            {
+                Id            = Guid.NewGuid(),
+                OrgId         = orgId,
+                BillingKey    = billingKey,
+                OverageOrders = clamped,
+                AmountCents   = amountCents,
+                CreatedAt     = DateTimeOffset.UtcNow,
+            };
+            _db.OverageBillingRecords.Add(record);
+            try
+            {
+                await _db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException)
+            {
+                // Lost the race — another worker already inserted this (orgId, billingKey).
+                // Detach our attempt and re-read the winner.
+                _db.Entry(record).State = EntityState.Detached;
+                var winner = await _db.OverageBillingRecords
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(r => r.OrgId == orgId && r.BillingKey == billingKey, ct);
+                // Same terminal rule on the race-loser path: treat as already billed only
+                // when the winner is terminal (has a Stripe item id, or Stripe is not the
+                // authority); otherwise fall through and (re)attempt Stripe on the shared
+                // period key (idempotent via the Stripe Idempotency-Key).
+                if (winner is not null && IsTerminal(winner, stripeIsAuthority))
+                    return new OverageBillingResult(
+                        orgId, billingKey, winner.OverageOrders, winner.AmountCents,
+                        AlreadyBilled: true, StripeItemId: winner.StripeInvoiceItemId);
+            }
         }
 
-        // We own the slot. If Stripe is not configured, we still recorded the
-        // number (auditable) but create no item and never throw.
-        if (!IsStripeConfigured())
-            return new OverageBillingResult(orgId, billingKey, clamped, amountCents, AlreadyBilled: false, StripeItemId: null);
-
-        var org = await LoadOrgAsync(orgId, asTracking: true, ct);
-        if (string.IsNullOrWhiteSpace(org.StripeCustomerId))
-            // No Stripe customer to bill — keep the auditable record, skip Stripe.
+        // We own the slot (or are recovering a prior NULL-item row). If Stripe is not
+        // the authority (unconfigured / no customer) we still recorded the number
+        // (auditable) but create no item and never throw.
+        if (!stripeIsAuthority)
             return new OverageBillingResult(orgId, billingKey, clamped, amountCents, AlreadyBilled: false, StripeItemId: null);
 
         // The injected client exists only in tests; production always takes the

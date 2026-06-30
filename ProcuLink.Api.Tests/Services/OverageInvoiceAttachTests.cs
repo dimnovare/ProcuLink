@@ -67,7 +67,7 @@ public class OverageInvoiceAttachTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private static StripeBillingService MakeService(ProcuLinkDbContext db, CapturingStripeClient stripe) =>
+    private static StripeBillingService MakeService(ProcuLinkDbContext db, IStripeClient stripe) =>
         new(db,
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -175,5 +175,82 @@ public class OverageInvoiceAttachTests
         options.Customer.Should().Be("cus_attach_test");
         req.RequestOptions.IdempotencyKey.Should().Be(key);
         result.AmountCents.Should().Be(200);
+    }
+
+    // ── poison-ledger recovery: a Stripe failure AFTER the ledger row is ─────
+    // committed must NOT permanently suppress the charge on a later retry ─────
+
+    /// <summary>
+    /// A Stripe transport that throws on its FIRST request (simulating a transient
+    /// 5xx / rate-limit / network error at period close) and succeeds on every
+    /// request after that.
+    /// </summary>
+    private sealed class FailThenSucceedStripeClient : IStripeClient
+    {
+        private int _calls;
+        public int CallCount => _calls;
+
+        public string ApiBase         => "https://api.stripe.invalid";
+        public string ApiKey          => "sk_test_fake";
+        public string ClientId        => "ca_fake";
+        public string ConnectBase     => "https://connect.stripe.invalid";
+        public string FilesBase       => "https://files.stripe.invalid";
+        public string MeterEventsBase => "https://meter-events.stripe.invalid";
+
+        public Task<T> RequestAsync<T>(
+            HttpMethod method, string path, BaseOptions options,
+            RequestOptions requestOptions, CancellationToken cancellationToken = default)
+            where T : IStripeEntity
+        {
+            _calls++;
+            if (_calls == 1)
+                throw new StripeException("Simulated transient Stripe failure at period close.");
+            var entity = Activator.CreateInstance<T>();
+            typeof(T).GetProperty("Id")?.SetValue(entity, "ii_recovered_1");
+            return Task.FromResult(entity);
+        }
+
+        public Task<System.IO.Stream> RequestStreamingAsync(
+            HttpMethod method, string path, BaseOptions options,
+            RequestOptions requestOptions, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Not used by these tests.");
+    }
+
+    [Fact]
+    public async Task StripeFailsAfterLedgerCommit_RetryRecovers_AndBillsExactlyOnce()
+    {
+        var db = MakeDb();
+        var org = await AddPaidOrgAsync(db);
+        var stripe = new FailThenSucceedStripeClient();
+        var svc = MakeService(db, stripe);
+        var key = $"{org.Id}:2026-04-01T00:00:00.0000000Z";
+
+        // ── Attempt 1: ledger row commits, then the Stripe call throws ──────
+        var attempt1 = async () => await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_poison");
+        await attempt1.Should().ThrowAsync<StripeException>(
+            "the Stripe call fails AFTER the ledger row is committed — the webhook would 500 and Stripe retries");
+
+        var afterFail = await db.OverageBillingRecords.SingleAsync(r => r.OrgId == org.Id && r.BillingKey == key);
+        afterFail.StripeInvoiceItemId.Should().BeNull(
+            "the slot was claimed but no Stripe item exists yet — this is the poison-ledger state");
+        afterFail.AmountCents.Should().Be(500);
+
+        // ── Attempt 2 (Stripe healthy): the retry MUST re-attempt Stripe ─────
+        // and NOT report AlreadyBilled — otherwise the €5.00 is lost forever.
+        var attempt2 = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_poison");
+        attempt2.AlreadyBilled.Should().BeFalse(
+            "a NULL-item ledger row must not suppress the retry while Stripe is the billing authority");
+        attempt2.StripeItemId.Should().Be("ii_recovered_1", "the retry created the real Stripe item");
+
+        stripe.CallCount.Should().Be(2, "exactly one failed attempt + one successful retry");
+        (await db.OverageBillingRecords.SingleAsync(r => r.OrgId == org.Id && r.BillingKey == key))
+            .StripeInvoiceItemId.Should().Be("ii_recovered_1", "the recovered item id is persisted onto the same single row");
+        db.OverageBillingRecords.Count(r => r.OrgId == org.Id && r.BillingKey == key)
+            .Should().Be(1, "still exactly one ledger row — no duplicate, no double-bill");
+
+        // ── Attempt 3: a normal replay (row now HAS an item id) is a no-op ───
+        var attempt3 = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_poison");
+        attempt3.AlreadyBilled.Should().BeTrue("once the item id is set, replays are clean idempotent no-ops");
+        stripe.CallCount.Should().Be(2, "the no-op replay must not make a third Stripe call");
     }
 }
