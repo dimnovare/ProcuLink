@@ -184,9 +184,9 @@ else
     authBuilder.AddJwtBearer(options =>
     {
         options.Authority = builder.Configuration["Clerk:Authority"];
-        // Disable legacy claim-type mapping. Without this, JwtBearer renames "sub"
-        // to ClaimTypes.NameIdentifier before claims reach HttpContext.User, which
-        // breaks TenantResolutionMiddleware's `FindFirst("sub")` fallback.
+        // Keep the raw "sub" claim: without MapInboundClaims=false it is renamed to
+        // ClaimTypes.NameIdentifier before reaching HttpContext.User, which would break
+        // the analytics userId (and any sub-based lookup).
         options.MapInboundClaims = false;
         options.TokenValidationParameters = new TokenValidationParameters
         {
