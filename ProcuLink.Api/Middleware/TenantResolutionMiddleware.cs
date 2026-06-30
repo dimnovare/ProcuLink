@@ -87,23 +87,19 @@ public sealed class TenantResolutionMiddleware
 
         if (context.User.Identity?.IsAuthenticated == true)
         {
-            // Prefer the Clerk org_id claim. When no Clerk organisation is active in
-            // the session (e.g. personal account, or the session hasn't activated the
-            // org yet) fall back to the user's sub claim so each user still maps to a
-            // tenant. Clerk user IDs start with "user_" and org IDs with "org_", so
-            // they share no namespace and won't collide.
+            // Only a real Clerk ORGANISATION (org_…) resolves or provisions a tenant.
+            // A user with no active org carries no org_id. We deliberately do NOT fall
+            // back to the user's sub claim: that silently minted a per-user "Personal
+            // workspace" tenant which could never be merged into the team org the user
+            // later created (data fragmentation). Such a request continues UNRESOLVED
+            // and fails closed downstream (same as the throttle path). The frontend org
+            // gate forces org creation before any tenant-scoped call is made.
+            // See docs/superpowers/plans/2026-06-30-force-org-creation.md.
             var clerkOrgId = context.User.FindFirst("org_id")?.Value;
             var orgSlug    = context.User.FindFirst("org_slug")?.Value;
-            var fellBackToUser = false;
 
-            if (string.IsNullOrEmpty(clerkOrgId) && !string.IsNullOrEmpty(sub))
-            {
-                clerkOrgId     = sub;
-                orgSlug        = "Personal workspace";
-                fellBackToUser = true;
-            }
-
-            if (!string.IsNullOrEmpty(clerkOrgId))
+            if (!string.IsNullOrEmpty(clerkOrgId)
+                && clerkOrgId.StartsWith("org_", StringComparison.Ordinal))
             {
                 var org = await db.Organisations
                     .AsNoTracking()
@@ -150,8 +146,8 @@ public sealed class TenantResolutionMiddleware
                     await db.SaveChangesAsync(context.RequestAborted);
 
                     _logger.LogInformation(
-                        "Auto-provisioned organisation '{Name}' (TenantKey={ClerkOrgId}, FellBackToUser={Fallback}).",
-                        newOrg.Name, clerkOrgId, fellBackToUser);
+                        "Auto-provisioned organisation '{Name}' (TenantKey={ClerkOrgId}).",
+                        newOrg.Name, clerkOrgId);
 
                     await analytics.CaptureAsync(
                         organisationId: newOrg.Id,
