@@ -1,0 +1,2060 @@
+[
+  {
+    "order": "00",
+    "slug": "global-shell",
+    "route": "(app) layout / shell",
+    "plans": [
+      {
+        "label": "command-palette-open",
+        "viewport": "desktop-1440",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "press",
+            "value": "Meta+k"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "command-palette-query-results",
+        "viewport": "desktop-1440",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "press",
+            "value": "Meta+k"
+          },
+          {
+            "do": "wait",
+            "value": "200"
+          },
+          {
+            "do": "fill",
+            "target": "textbox: Search orders, suppliers, buyers, actions…",
+            "value": "sup"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "notifications-popover-open",
+        "viewport": "desktop-1440",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button[aria-label^='Notifications']"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "help-slideover-open",
+        "viewport": "desktop-1440",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button[aria-label='Help']"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "sidebar-collapsed-rail",
+        "viewport": "desktop-1440",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button[aria-label='Collapse sidebar']"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "mobile-nav-drawer-open",
+        "viewport": "mobile-390",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button[aria-label='Open navigation']"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "account-menu-open",
+        "viewport": "desktop-1440",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button[aria-label*='account' i]"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "01",
+    "slug": "dashboard-bridge",
+    "route": "/bridge",
+    "plans": [
+      {
+        "label": "system-map-tab",
+        "viewport": "desktop-1440",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button[role=\"tab\"]:has-text(\"System map\")"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      },
+      {
+        "label": "lane-drawer-open",
+        "viewport": "desktop-1440",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button[role=\"tab\"]:has-text(\"System map\")"
+          },
+          {
+            "do": "wait",
+            "value": "600"
+          },
+          {
+            "do": "click",
+            "target": "svg[aria-label=\"Order routing map\"] g[opacity]"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "onboarding-wizard-modal",
+        "viewport": "desktop-1440",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          },
+          {
+            "do": "wait",
+            "target": "[role=\"dialog\"][aria-label=\"Onboarding wizard\"]"
+          }
+        ]
+      },
+      {
+        "label": "system-map-mobile-lane-list",
+        "viewport": "mobile-390",
+        "url": "/bridge",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button[role=\"tab\"]:has-text(\"System map\")"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "02",
+    "slug": "inbox-list",
+    "route": "/inbox",
+    "plans": [
+      {
+        "label": "columns-menu-open",
+        "viewport": "desktop-1440",
+        "url": "/inbox",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Columns\")"
+          }
+        ]
+      },
+      {
+        "label": "filter-failed-active",
+        "viewport": "desktop-1440",
+        "url": "/inbox",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Failed\")"
+          }
+        ]
+      },
+      {
+        "label": "bulk-send-bar",
+        "viewport": "desktop-1440",
+        "url": "/inbox",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Ready to send\")"
+          },
+          {
+            "do": "click",
+            "target": "thead input[type=checkbox]:not([disabled])"
+          }
+        ]
+      },
+      {
+        "label": "empty-filtered-no-results",
+        "viewport": "desktop-1440",
+        "url": "/inbox",
+        "steps": [
+          {
+            "do": "fill",
+            "target": "input[aria-label=\"Search orders\"]",
+            "value": "zzzznomatch"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      },
+      {
+        "label": "mobile-route-cards",
+        "viewport": "mobile-390",
+        "url": "/inbox",
+        "steps": []
+      }
+    ]
+  },
+  {
+    "order": "03",
+    "slug": "order-review-mapper",
+    "route": "/inbox/[orderId]",
+    "plans": [
+      {
+        "label": "issues-panel-with-unresolved-lines",
+        "viewport": "desktop-1440",
+        "url": "/inbox/ord-002",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          },
+          {
+            "do": "scroll",
+            "target": "page top"
+          }
+        ]
+      },
+      {
+        "label": "source-picker-dropdown-open",
+        "viewport": "desktop-1440",
+        "url": "/inbox/ord-002",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          },
+          {
+            "do": "click",
+            "target": "button containing text 'pick a field' (first output row source picker chip)"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "transform-edit-value-popover",
+        "viewport": "desktop-1440",
+        "url": "/inbox/ord-002",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          },
+          {
+            "do": "hover",
+            "target": "first output row in the 'What we'll send' column"
+          },
+          {
+            "do": "click",
+            "target": "button with text 'Edit value'"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "add-output-field-combobox",
+        "viewport": "desktop-1440",
+        "url": "/inbox/ord-002",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          },
+          {
+            "do": "click",
+            "target": "button with text 'Add output field'"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "send-confirmation-modal",
+        "viewport": "desktop-1440",
+        "url": "/inbox/ord-001",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          },
+          {
+            "do": "click",
+            "target": "header Send button (role button, green primary)"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "order-details-drawer-audit-trail",
+        "viewport": "desktop-1440",
+        "url": "/inbox/ord-002?tab=passport",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          }
+        ]
+      },
+      {
+        "label": "order-details-drawer-standards-check",
+        "viewport": "desktop-1440",
+        "url": "/inbox/ord-002?tab=conformance",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          }
+        ]
+      },
+      {
+        "label": "output-structure-designer",
+        "viewport": "desktop-1440",
+        "url": "/inbox/ord-002",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          },
+          {
+            "do": "click",
+            "target": "button with text 'Customize output layout'"
+          },
+          {
+            "do": "wait",
+            "value": "600"
+          }
+        ]
+      },
+      {
+        "label": "ready-to-send-clean-order",
+        "viewport": "desktop-1440",
+        "url": "/inbox/ord-001",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          }
+        ]
+      },
+      {
+        "label": "delivered-order-state",
+        "viewport": "desktop-1440",
+        "url": "/inbox/ord-003",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          }
+        ]
+      },
+      {
+        "label": "mobile-triage-review-and-send",
+        "viewport": "mobile-390",
+        "url": "/inbox/ord-002",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "2000"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "04",
+    "slug": "upload",
+    "route": "/upload",
+    "plans": [
+      {
+        "label": "detection-reasoning-popover",
+        "viewport": "desktop-1440",
+        "url": "/upload",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          },
+          {
+            "do": "click",
+            "target": "[role=button][aria-label^=\"Upload a purchase order\"]"
+          },
+          {
+            "do": "wait",
+            "value": "600"
+          },
+          {
+            "do": "click",
+            "target": "button[aria-label=\"Why this format was detected\"]"
+          }
+        ]
+      },
+      {
+        "label": "recent-uploads-table",
+        "viewport": "desktop-1440",
+        "url": "/upload",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "600"
+          },
+          {
+            "do": "scroll",
+            "target": "text=Recent uploads"
+          }
+        ]
+      },
+      {
+        "label": "recent-uploads-mobile-cards",
+        "viewport": "mobile-390",
+        "url": "/upload",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "600"
+          },
+          {
+            "do": "scroll",
+            "target": "text=Recent uploads"
+          }
+        ]
+      },
+      {
+        "label": "tip-card",
+        "viewport": "desktop-1440",
+        "url": "/upload",
+        "steps": [
+          {
+            "do": "scroll",
+            "target": "text=AI extraction"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "05",
+    "slug": "suppliers-list",
+    "route": "/library/suppliers",
+    "plans": [
+      {
+        "label": "add-supplier-inline-panel",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"New supplier\")"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "add-supplier-panel-validation-error",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"New supplier\")"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          },
+          {
+            "do": "fill",
+            "target": "input[aria-label=\"Supplier name\"]",
+            "value": "FastParts Inc"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text(\"Save supplier\")"
+          },
+          {
+            "do": "wait",
+            "value": "600"
+          }
+        ]
+      },
+      {
+        "label": "add-supplier-panel-mobile",
+        "viewport": "mobile-390",
+        "url": "/library/suppliers",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"New supplier\")"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "06",
+    "slug": "supplier-detail",
+    "route": "/library/suppliers/[id]",
+    "plans": [
+      {
+        "label": "tab-mappings",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=mappings",
+        "steps": []
+      },
+      {
+        "label": "tab-catalog",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=catalog",
+        "steps": []
+      },
+      {
+        "label": "tab-catalog-autosync-expanded",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=catalog",
+        "steps": [
+          {
+            "do": "click",
+            "target": "summary:has-text(\"Keep the catalog in sync automatically\")"
+          }
+        ]
+      },
+      {
+        "label": "tab-po-mapping",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=po-mapping",
+        "steps": []
+      },
+      {
+        "label": "tab-po-mapping-template-dropdown",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=po-mapping",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Apply starter template\")"
+          }
+        ]
+      },
+      {
+        "label": "tab-po-mapping-standards-popover",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=po-mapping",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button[aria-label^=\"Standards mapping for\"]"
+          }
+        ]
+      },
+      {
+        "label": "tab-delivery",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=delivery",
+        "steps": []
+      },
+      {
+        "label": "tab-delivery-cxml-credentials",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=delivery",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "600"
+          }
+        ]
+      },
+      {
+        "label": "tab-validation-rules",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=acceptance",
+        "steps": []
+      },
+      {
+        "label": "tab-validation-rules-editing",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=acceptance",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Edit rules\")"
+          }
+        ]
+      },
+      {
+        "label": "tab-history",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=history",
+        "steps": []
+      },
+      {
+        "label": "delete-supplier-modal",
+        "viewport": "desktop-1440",
+        "url": "/library/suppliers/s1?tab=overview",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Delete supplier\")"
+          }
+        ]
+      },
+      {
+        "label": "tab-po-mapping-mobile-triage",
+        "viewport": "mobile-390",
+        "url": "/library/suppliers/s1?tab=po-mapping",
+        "steps": []
+      },
+      {
+        "label": "tab-delivery-mobile",
+        "viewport": "mobile-390",
+        "url": "/library/suppliers/s1?tab=delivery",
+        "steps": []
+      }
+    ]
+  },
+  {
+    "order": "07",
+    "slug": "connections-list",
+    "route": "/connections",
+    "plans": [
+      {
+        "label": "row-link-detail-confirm-make-live",
+        "viewport": "desktop-1440",
+        "url": "/connections/conn-11111111-1111-1111-1111-111111111111",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text(\"Make live\")"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "08",
+    "slug": "connection-detail",
+    "route": "/connections/[connectionId]",
+    "plans": [
+      {
+        "label": "history-advanced-drawer",
+        "viewport": "desktop-1440",
+        "url": "/connections/conn-11111111-1111-1111-1111-111111111111",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"History & advanced\")"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "discard-confirm-dialog",
+        "viewport": "desktop-1440",
+        "url": "/connections/conn-11111111-1111-1111-1111-111111111111",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"History & advanced\")"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text(\"Discard\")"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "make-live-confirm-dialog",
+        "viewport": "desktop-1440",
+        "url": "/connections/conn-11111111-1111-1111-1111-111111111111",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"History & advanced\")"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text(\"Test\")"
+          },
+          {
+            "do": "wait",
+            "value": "600"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text(\"Make live\")"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "mapper-edit-overlay",
+        "viewport": "desktop-1440",
+        "url": "/connections/conn-11111111-1111-1111-1111-111111111111",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "600"
+          },
+          {
+            "do": "scroll",
+            "target": "text=Mapping"
+          }
+        ]
+      },
+      {
+        "label": "history-drawer-mobile",
+        "viewport": "mobile-390",
+        "url": "/connections/conn-11111111-1111-1111-1111-111111111111",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"History & advanced\")"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "09",
+    "slug": "drafts",
+    "route": "/drafts",
+    "plans": []
+  },
+  {
+    "order": "10",
+    "slug": "inbound-invoices",
+    "route": "/inbound/invoices",
+    "plans": [
+      {
+        "label": "approve-success-notice",
+        "viewport": "desktop-1440",
+        "url": "/inbound/invoices",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1200"
+          },
+          {
+            "do": "click",
+            "target": "button with text 'Approve'"
+          },
+          {
+            "do": "wait",
+            "value": "1000"
+          }
+        ]
+      },
+      {
+        "label": "download-preview-notice",
+        "viewport": "desktop-1440",
+        "url": "/inbound/invoices",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1200"
+          },
+          {
+            "do": "click",
+            "target": "button with text '↓ CSV' (first row Download)"
+          },
+          {
+            "do": "wait",
+            "value": "800"
+          }
+        ]
+      },
+      {
+        "label": "mobile-stacked-cards",
+        "viewport": "mobile-390",
+        "url": "/inbound/invoices",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1200"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "11",
+    "slug": "inbound-asns",
+    "route": "/inbound/asns",
+    "plans": []
+  },
+  {
+    "order": "12",
+    "slug": "library-mappings",
+    "route": "/library/mappings",
+    "plans": [
+      {
+        "label": "add-mapping-modal",
+        "viewport": "desktop-1440",
+        "url": "/library/mappings",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Add mapping\")"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "edit-mapping-modal",
+        "viewport": "desktop-1440",
+        "url": "/library/mappings",
+        "steps": [
+          {
+            "do": "click",
+            "target": "td:has-text(\"HX-4410\")"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "import-mappings-modal",
+        "viewport": "desktop-1440",
+        "url": "/library/mappings",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Import\")"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "export-mappings-modal",
+        "viewport": "desktop-1440",
+        "url": "/library/mappings",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Export\")"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "source-filter-ai-active",
+        "viewport": "desktop-1440",
+        "url": "/library/mappings",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"AI\")"
+          },
+          {
+            "do": "wait",
+            "value": "200"
+          }
+        ]
+      },
+      {
+        "label": "mobile-card-list",
+        "viewport": "mobile-390",
+        "url": "/library/mappings",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "mobile-edit-sheet",
+        "viewport": "mobile-390",
+        "url": "/library/mappings",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"HX-4410\")"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "13",
+    "slug": "library-rules",
+    "route": "/library/rules",
+    "plans": [
+      {
+        "label": "new-rule-editor-blank",
+        "viewport": "desktop-1440",
+        "url": "/library/rules",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('New rule')"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "rule-selected-editor",
+        "viewport": "desktop-1440",
+        "url": "/library/rules",
+        "steps": [
+          {
+            "do": "click",
+            "target": "text=All line items need supplier codes"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "mobile-edit-bottom-sheet",
+        "viewport": "mobile-390",
+        "url": "/library/rules",
+        "steps": [
+          {
+            "do": "click",
+            "target": "text=Currency must be EUR"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      },
+      {
+        "label": "mobile-new-rule-sheet",
+        "viewport": "mobile-390",
+        "url": "/library/rules",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('New rule')"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "14",
+    "slug": "library-rule-definitions",
+    "route": "/library/rule-definitions",
+    "plans": [
+      {
+        "label": "standards-panel-expanded",
+        "viewport": "desktop-1440",
+        "url": "/library/rule-definitions",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          },
+          {
+            "do": "click",
+            "target": "button[aria-label='Show standards mapping']"
+          }
+        ]
+      },
+      {
+        "label": "standards-panel-mobile",
+        "viewport": "mobile-390",
+        "url": "/library/rule-definitions",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          },
+          {
+            "do": "click",
+            "target": "button[aria-label='Show standards mapping']"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "15",
+    "slug": "library-templates",
+    "route": "/library/templates",
+    "plans": [
+      {
+        "label": "template-body-editor-modal-edit",
+        "viewport": "desktop-1440",
+        "url": "/library/templates",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Edit template\")"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      },
+      {
+        "label": "template-body-editor-modal-new",
+        "viewport": "desktop-1440",
+        "url": "/library/templates",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"New template\")"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      },
+      {
+        "label": "template-body-editor-modal-mobile-sheet",
+        "viewport": "mobile-390",
+        "url": "/library/templates",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"New template\")"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      },
+      {
+        "label": "template-export-success-notice",
+        "viewport": "desktop-1440",
+        "url": "/library/templates",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"Export\")"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "16",
+    "slug": "library-buyers",
+    "route": "/library/buyers",
+    "plans": [
+      {
+        "label": "create-buyer-panel",
+        "viewport": "desktop-1440",
+        "url": "/library/buyers",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"New buyer\")"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "create-buyer-panel-validation-error",
+        "viewport": "desktop-1440",
+        "url": "/library/buyers",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"New buyer\")"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text(\"Create buyer\")"
+          },
+          {
+            "do": "wait",
+            "value": "200"
+          }
+        ]
+      },
+      {
+        "label": "row-hover-delete-reveal",
+        "viewport": "desktop-1440",
+        "url": "/library/buyers",
+        "steps": [
+          {
+            "do": "hover",
+            "target": "td:has-text(\"Example Buyer 1\")"
+          },
+          {
+            "do": "wait",
+            "value": "200"
+          }
+        ]
+      },
+      {
+        "label": "create-buyer-panel-mobile",
+        "viewport": "mobile-390",
+        "url": "/library/buyers",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text(\"New buyer\")"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "17",
+    "slug": "library-standards",
+    "route": "/library/standards",
+    "plans": [
+      {
+        "label": "no-match-empty-state",
+        "viewport": "desktop-1440",
+        "url": "/library/standards",
+        "steps": [
+          {
+            "do": "fill",
+            "target": "input[aria-label='Search fields or paths']",
+            "value": "zzznomatch"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "filtered-table-quantity",
+        "viewport": "desktop-1440",
+        "url": "/library/standards",
+        "steps": [
+          {
+            "do": "fill",
+            "target": "input[aria-label='Search fields or paths']",
+            "value": "quantity"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "mobile-horizontal-scroll-table",
+        "viewport": "mobile-390",
+        "url": "/library/standards",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "18",
+    "slug": "operations-exceptions",
+    "route": "/operations/exceptions",
+    "plans": [
+      {
+        "label": "row-detail-expanded",
+        "viewport": "desktop-1440",
+        "url": "/operations/exceptions",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button[aria-label='Expand details']"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "tab-resolved",
+        "viewport": "desktop-1440",
+        "url": "/operations/exceptions",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Resolved')"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "tab-ignored",
+        "viewport": "desktop-1440",
+        "url": "/operations/exceptions",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Ignored')"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "open-order-disabled-tooltip",
+        "viewport": "desktop-1440",
+        "url": "/operations/exceptions",
+        "steps": [
+          {
+            "do": "hover",
+            "target": "button:has-text('Open order')"
+          },
+          {
+            "do": "wait",
+            "value": "600"
+          }
+        ]
+      },
+      {
+        "label": "mobile-card-expanded",
+        "viewport": "mobile-390",
+        "url": "/operations/exceptions",
+        "steps": [
+          {
+            "do": "click",
+            "target": "text=has no confirmed supplier item code"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "19",
+    "slug": "operations-health",
+    "route": "/operations/health",
+    "plans": [
+      {
+        "label": "requeue-notice-after-try-again",
+        "viewport": "desktop-1440",
+        "url": "/operations/health",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1500"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text(\"Try sending again\")"
+          },
+          {
+            "do": "wait",
+            "value": "1200"
+          }
+        ]
+      },
+      {
+        "label": "dead-letter-toggle-off-narrowed",
+        "viewport": "desktop-1440",
+        "url": "/operations/health",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1500"
+          },
+          {
+            "do": "click",
+            "target": "text=Include delivery-failed"
+          },
+          {
+            "do": "wait",
+            "value": "800"
+          }
+        ]
+      },
+      {
+        "label": "mobile-dead-letter-cards",
+        "viewport": "mobile-390",
+        "url": "/operations/health",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1500"
+          },
+          {
+            "do": "scroll",
+            "target": "text=Orders we couldn't deliver"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "20",
+    "slug": "operations-log",
+    "route": "/operations/log",
+    "plans": [
+      {
+        "label": "row-detail-delivered-expanded",
+        "viewport": "desktop-1440",
+        "url": "/operations/log",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button containing text 'Delivered'"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "row-detail-failed-error-banner",
+        "viewport": "desktop-1440",
+        "url": "/operations/log",
+        "steps": [
+          {
+            "do": "click",
+            "target": "filter chip button with text 'Failed'"
+          },
+          {
+            "do": "wait",
+            "value": "200"
+          },
+          {
+            "do": "click",
+            "target": "button containing text '850-99201'"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "filter-active-failed",
+        "viewport": "desktop-1440",
+        "url": "/operations/log",
+        "steps": [
+          {
+            "do": "click",
+            "target": "filter chip button with text 'Failed'"
+          },
+          {
+            "do": "wait",
+            "value": "200"
+          }
+        ]
+      },
+      {
+        "label": "filter-empty-no-matching-events",
+        "viewport": "desktop-1440",
+        "url": "/operations/log",
+        "steps": [
+          {
+            "do": "fill",
+            "target": "input[placeholder='Filter by PO…']",
+            "value": "ZZZ-NO-MATCH"
+          },
+          {
+            "do": "wait",
+            "value": "200"
+          }
+        ]
+      },
+      {
+        "label": "mobile-stacked-row-expanded",
+        "viewport": "mobile-390",
+        "url": "/operations/log",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button containing text 'Failed'"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "21",
+    "slug": "operations-connectors",
+    "route": "/operations/connectors",
+    "plans": [
+      {
+        "label": "connector-panel-manage-connected",
+        "viewport": "desktop-1440",
+        "url": "/operations/connectors",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Connect') >> nth=0"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      },
+      {
+        "label": "add-connector-panel",
+        "viewport": "desktop-1440",
+        "url": "/operations/connectors",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Add connector')"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      },
+      {
+        "label": "connector-panel-test-fire-result",
+        "viewport": "desktop-1440",
+        "url": "/operations/connectors",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Connect') >> nth=0"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text('Test fire')"
+          },
+          {
+            "do": "wait",
+            "value": "1200"
+          }
+        ]
+      },
+      {
+        "label": "connector-panel-mobile-sheet",
+        "viewport": "mobile-390",
+        "url": "/operations/connectors",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Add connector')"
+          },
+          {
+            "do": "wait",
+            "value": "500"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "22",
+    "slug": "operations-webhooks",
+    "route": "/operations/webhooks",
+    "plans": [
+      {
+        "label": "add-webhook-modal-open",
+        "viewport": "desktop-1440",
+        "url": "/operations/webhooks",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Add endpoint')"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "add-webhook-modal-filled",
+        "viewport": "desktop-1440",
+        "url": "/operations/webhooks",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Add endpoint')"
+          },
+          {
+            "do": "fill",
+            "target": "input[placeholder='https://erp.example/hooks/proculink']",
+            "value": "https://erp.example/hooks/proculink"
+          },
+          {
+            "do": "fill",
+            "target": "input[placeholder='whsec_••••••••']",
+            "value": "whsec_test_secret_123"
+          }
+        ]
+      },
+      {
+        "label": "edit-webhook-modal-open",
+        "viewport": "desktop-1440",
+        "url": "/operations/webhooks",
+        "steps": [
+          {
+            "do": "hover",
+            "target": "text=https://erp.company.com/hooks/proculink"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text('Edit')"
+          }
+        ]
+      },
+      {
+        "label": "row-actions-revealed-on-hover",
+        "viewport": "desktop-1440",
+        "url": "/operations/webhooks",
+        "steps": [
+          {
+            "do": "hover",
+            "target": "text=https://legacy.example/cb"
+          }
+        ]
+      },
+      {
+        "label": "add-webhook-bottom-sheet-mobile",
+        "viewport": "mobile-390",
+        "url": "/operations/webhooks",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Add endpoint')"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "23",
+    "slug": "settings",
+    "route": "/settings",
+    "plans": [
+      {
+        "label": "tab-billing",
+        "viewport": "desktop-1440",
+        "url": "/settings?tab=billing",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1000"
+          }
+        ]
+      },
+      {
+        "label": "tab-email-intake-form",
+        "viewport": "desktop-1440",
+        "url": "/settings?tab=email",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1000"
+          }
+        ]
+      },
+      {
+        "label": "tab-sftp-pull",
+        "viewport": "desktop-1440",
+        "url": "/settings?tab=sftp",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          }
+        ]
+      },
+      {
+        "label": "tab-s3-pull",
+        "viewport": "desktop-1440",
+        "url": "/settings?tab=s3",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          }
+        ]
+      },
+      {
+        "label": "tab-api-keys-empty",
+        "viewport": "desktop-1440",
+        "url": "/settings?tab=api",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          }
+        ]
+      },
+      {
+        "label": "api-keys-create-form-open",
+        "viewport": "desktop-1440",
+        "url": "/settings?tab=api",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text('Create key')"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "api-key-one-time-reveal-banner",
+        "viewport": "desktop-1440",
+        "url": "/settings?tab=api",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text('Create key')"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          },
+          {
+            "do": "fill",
+            "target": "input[placeholder*='Production integration']",
+            "value": "Production integration"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text('Create key')"
+          },
+          {
+            "do": "wait",
+            "value": "900"
+          }
+        ]
+      },
+      {
+        "label": "tab-connectors-empty",
+        "viewport": "desktop-1440",
+        "url": "/settings?tab=connectors",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          }
+        ]
+      },
+      {
+        "label": "connectors-add-webhook-form-open",
+        "viewport": "desktop-1440",
+        "url": "/settings?tab=connectors",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text('Add webhook')"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "mobile-nav-command-grid",
+        "viewport": "mobile-390",
+        "url": "/settings?tab=api",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "800"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "24",
+    "slug": "admin",
+    "route": "/admin",
+    "plans": [
+      {
+        "label": "create-invoice-modal-empty",
+        "viewport": "desktop-1440",
+        "url": "/admin",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Create invoice')"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "create-invoice-modal-multiline",
+        "viewport": "desktop-1440",
+        "url": "/admin",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Create invoice')"
+          },
+          {
+            "do": "fill",
+            "target": "input[placeholder='Description']",
+            "value": "Onboarding fee"
+          },
+          {
+            "do": "fill",
+            "target": "input[aria-label='Line 1 amount in EUR']",
+            "value": "500"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text('Add line item')"
+          },
+          {
+            "do": "wait",
+            "value": "200"
+          }
+        ]
+      },
+      {
+        "label": "create-invoice-validation-error",
+        "viewport": "desktop-1440",
+        "url": "/admin",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Create invoice')"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text('Create invoice'):below(:text('Total'))"
+          },
+          {
+            "do": "wait",
+            "value": "200"
+          }
+        ]
+      },
+      {
+        "label": "adjust-limits-modal",
+        "viewport": "desktop-1440",
+        "url": "/admin",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Adjust limits')"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "adjust-limits-extend-trial",
+        "viewport": "desktop-1440",
+        "url": "/admin",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Adjust limits')"
+          },
+          {
+            "do": "fill",
+            "target": "select[aria-label='Pilot / trial window'], select:near(:text('Pilot / trial window'))",
+            "value": "extend"
+          },
+          {
+            "do": "wait",
+            "value": "200"
+          }
+        ]
+      },
+      {
+        "label": "create-invoice-modal-mobile",
+        "viewport": "mobile-390",
+        "url": "/admin",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Create invoice')"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      },
+      {
+        "label": "adjust-limits-modal-mobile",
+        "viewport": "mobile-390",
+        "url": "/admin",
+        "steps": [
+          {
+            "do": "click",
+            "target": "button:has-text('Adjust limits')"
+          },
+          {
+            "do": "wait",
+            "value": "400"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "order": "25",
+    "slug": "upload-preview",
+    "route": "/upload/preview/[orderId]",
+    "plans": [
+      {
+        "label": "ai-provenance-popover-open",
+        "viewport": "desktop-1440",
+        "url": "/upload/preview/ord-002",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1500"
+          },
+          {
+            "do": "click",
+            "target": "button[aria-label='Why this code was suggested']"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "row-inline-edit-input",
+        "viewport": "desktop-1440",
+        "url": "/upload/preview/ord-002",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1500"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text('Edit')"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "row-accepted-state",
+        "viewport": "desktop-1440",
+        "url": "/upload/preview/ord-002",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1500"
+          },
+          {
+            "do": "click",
+            "target": "button:has-text('Accept')"
+          },
+          {
+            "do": "wait",
+            "value": "300"
+          }
+        ]
+      },
+      {
+        "label": "fully-mapped-variant",
+        "viewport": "desktop-1440",
+        "url": "/upload/preview/ord-001",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1500"
+          }
+        ]
+      },
+      {
+        "label": "mobile-stacked-cards",
+        "viewport": "mobile-390",
+        "url": "/upload/preview/ord-002",
+        "steps": [
+          {
+            "do": "wait",
+            "value": "1500"
+          }
+        ]
+      }
+    ]
+  }
+]

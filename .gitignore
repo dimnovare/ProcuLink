@@ -69,3 +69,7 @@ docs/design_handoff_proculink_redesign/
 
 # Live prod-test scratch fixtures (uncommitted working harness)
 .live-fixtures/
+
+# Design-system screenshot captures (large binaries — keep specs, not PNGs)
+docs/design-system/**/*.png
+docs/design-system/current-ui-screenshots-*/
