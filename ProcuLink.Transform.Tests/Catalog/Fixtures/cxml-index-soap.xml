@@ -1,0 +1,64 @@
+<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://schemas.xmlsoap.org/soap/envelope/ file:///C:/Users/Dmitri/REDACTED/Product%20-%20EDI/Catalogue/REDACTED">
+  <Body>
+    <Index xmlns="">
+      <CatalogHead>
+        <CatalogId>2026070203003979169213068</CatalogId>
+        <UpdatedDate>2026-07-02</UpdatedDate>
+        <UpdatedTime>03:00</UpdatedTime>
+        <Currency>EUR</Currency>
+        <UnspscVersion>20.0601</UnspscVersion>
+        <CountryCode>DE</CountryCode>
+      </CatalogHead>
+<IndexItem>
+        <ItemID>
+          <SupplierPartID>34762852</SupplierPartID>
+          <SupplierPartAuxiliaryID>175452982</SupplierPartAuxiliaryID>
+        </ItemID>
+        <ItemDetail>
+          <UnitPrice>
+            <Money currency="EUR">1.84</Money>
+          </UnitPrice>
+          <Description lang="en">REDACTED-ORDER-DATA (Packung mit 3) - für Poly Voyager 5200, 5200 Office, 5200 UC, 5200-M Office</Description>
+          <ShortDescription lang="en">REDACTED-ORDER-DATA</ShortDescription>
+          <URL>https://example.invalid/redacted</URL>
+          <UnitOfMeasure>EA</UnitOfMeasure>
+          <Classification domain="UNSPSC">52161600</Classification>
+          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
+          <ManufacturerName>REDACTED-PARTY</ManufacturerName>
+          <CustomerId>REDACTED</CustomerId>
+          <SupplierId>REDACTED</SupplierId>
+          <CountryCode>DE</CountryCode>
+          <LeadTime>14</LeadTime>
+          <Extrinsic name="ListName">REDACTED</Extrinsic>
+          <Extrinsic name="Image">https://example.invalid/redacted</Extrinsic>
+          <Extrinsic name="Thumbnail">https://example.invalid/redacted</Extrinsic>
+        </ItemDetail>
+      </IndexItem>
+<IndexItem>
+        <ItemID>
+          <SupplierPartID>34763402</SupplierPartID>
+          <SupplierPartAuxiliaryID>175452986</SupplierPartAuxiliaryID>
+        </ItemID>
+        <ItemDetail>
+          <UnitPrice>
+            <Money currency="EUR">1.84</Money>
+          </UnitPrice>
+          <Description lang="en">REDACTED-ORDER-DATA</Description>
+          <ShortDescription lang="en">REDACTED-ORDER-DATA</ShortDescription>
+          <URL>https://example.invalid/redacted</URL>
+          <UnitOfMeasure>EA</UnitOfMeasure>
+          <Classification domain="UNSPSC">52161600</Classification>
+          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
+          <ManufacturerName>REDACTED-PARTY</ManufacturerName>
+          <CustomerId>REDACTED</CustomerId>
+          <SupplierId>REDACTED</SupplierId>
+          <CountryCode>DE</CountryCode>
+          <LeadTime>14</LeadTime>
+          <Extrinsic name="ListName">REDACTED</Extrinsic>
+          <Extrinsic name="Image">https://example.invalid/redacted</Extrinsic>
+          <Extrinsic name="Thumbnail">https://example.invalid/redacted</Extrinsic>
+        </ItemDetail>
+      </IndexItem>
+    </Index>
+  </Body>
+</Envelope>

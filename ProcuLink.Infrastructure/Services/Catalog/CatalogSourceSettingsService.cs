@@ -69,13 +69,37 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
 
         var protocol = request.Protocol.Trim().ToLowerInvariant();
         var isHttp = protocol is "http" or "https";
+        var isVendor = protocol is "logicom"; // vendor-fetcher protocols (URL + encrypted vendor creds)
+        var isUrlBased = isHttp || isVendor;
 
         source.Protocol = protocol;
         source.FileFormat = string.IsNullOrWhiteSpace(request.FileFormat) ? "auto" : request.FileFormat.Trim().ToLowerInvariant();
         source.SyncIntervalHours = Math.Clamp(request.SyncIntervalHours ?? source.SyncIntervalHours, 1, 336);
         source.IsEnabled = request.IsEnabled;
 
-        if (isHttp)
+        // Per-source column mapping (D3) — not a secret; null = keep, empty = clear, value = set.
+        if (request.ColumnMapping is not null)
+            source.ColumnMappingJson = NormalizeColumnMapping(request.ColumnMapping);
+
+        if (isVendor)
+        {
+            // Vendor fetcher (e.g. logicom): URL + encrypted vendor-credential envelope. Clears
+            // the file-channel columns and the http auth-method (auth is inside the vendor creds).
+            source.Url = request.Url?.Trim();
+            source.Host = string.Empty;
+            source.Port = 0;
+            source.Username = null;
+            source.RemotePath = string.Empty;
+            source.EncryptedPassword = null;
+            source.HttpMethod = "GET";
+            source.AuthMethod = null;
+
+            // Write-only vendor creds: null = keep, no-usable-fields = clear, value = re-encrypt.
+            var vendorJson = BuildVendorConfigJson(protocol, request.VendorConfig);
+            if (vendorJson is not null)
+                source.AuthConfigEncrypted = vendorJson.Length == 0 ? null : _encryption.Encrypt(vendorJson);
+        }
+        else if (isHttp)
         {
             // http/https: the full URL carries scheme+host+path+query; host/port/username/
             // remote-path are unused (cleared so a protocol switch leaves no stale values).
@@ -164,7 +188,16 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
             s.UpdatedAt,
             // http/https: surface the URL (no secrets) + the auth method + whether auth secrets
             // are stored. The ciphertext (AuthConfigEncrypted) and any plaintext NEVER leave here.
-            s.Url, s.AuthMethod, hasAuthConfig, s.HttpMethod);
+            s.Url, s.AuthMethod, hasAuthConfig, s.HttpMethod,
+            // Column mapping is NOT a secret — echoed back so the editor can show/edit it.
+            DecodeMapping(s.ColumnMappingJson));
+    }
+
+    private static IReadOnlyDictionary<string, string>? DecodeMapping(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json); }
+        catch (System.Text.Json.JsonException) { return null; }
     }
 
     /// <summary>Normalizes the http auth method; unknown/empty → 'none'.</summary>
@@ -217,5 +250,62 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
         return payload is null ? string.Empty : System.Text.Json.JsonSerializer.Serialize(payload);
 
         static bool NotBlank(string? v) => !string.IsNullOrWhiteSpace(v);
+    }
+
+    /// <summary>Canonical catalog fields a mapping value may target.</summary>
+    private static readonly HashSet<string> CanonicalFields =
+        new(StringComparer.OrdinalIgnoreCase) { "code", "name", "unit", "price", "currency", "barcode", "external_id" };
+
+    /// <summary>
+    /// Normalizes a per-source column mapping (plan 2026-07-02 D3) to storable JSON: trims keys,
+    /// keeps only canonical targets plus the recognized directives (<c>__noheader__</c>,
+    /// <c>__encoding__</c>), caps at 100 entries. Returns <c>""</c> (clear) when nothing usable
+    /// remains, else the serialized JSON. Not a secret.
+    /// </summary>
+    private static string NormalizeColumnMapping(IReadOnlyDictionary<string, string> mapping)
+    {
+        var clean = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (rawKey, rawVal) in mapping)
+        {
+            if (clean.Count >= 100) break;
+            var key = rawKey?.Trim();
+            var val = rawVal?.Trim();
+            if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(val)) continue;
+
+            if (key is "__noheader__" or "__encoding__") { clean[key] = val!; continue; }
+            if (CanonicalFields.Contains(val!)) clean[key!] = val!.ToLowerInvariant();
+        }
+        return clean.Count == 0 ? string.Empty : System.Text.Json.JsonSerializer.Serialize(clean);
+    }
+
+    /// <summary>
+    /// Builds the write-only vendor-credential JSON for a vendor-fetcher protocol (plan 2026-07-02
+    /// D4). null = keep stored, "" = clear (no usable fields), value = re-encrypt. Carries a
+    /// <c>type</c> discriminator so the fetcher can validate the envelope shape.
+    /// </summary>
+    private static string? BuildVendorConfigJson(string protocol, CatalogVendorConfig? cfg)
+    {
+        if (cfg is null) return null; // keep whatever is stored
+
+        if (protocol == "logicom")
+        {
+            var complete = !string.IsNullOrWhiteSpace(cfg.CustomerId)
+                && !string.IsNullOrWhiteSpace(cfg.ConsumerKey)
+                && !string.IsNullOrWhiteSpace(cfg.ConsumerSecret)
+                && !string.IsNullOrWhiteSpace(cfg.AccessTokenKey);
+            if (!complete) return string.Empty; // partial → clear
+
+            return System.Text.Json.JsonSerializer.Serialize(new
+            {
+                type = "logicom_quickconnect",
+                customerId = cfg.CustomerId!.Trim(),
+                consumerKey = cfg.ConsumerKey!.Trim(),
+                consumerSecret = cfg.ConsumerSecret!.Trim(),
+                accessTokenKey = cfg.AccessTokenKey!.Trim(),
+                currency = string.IsNullOrWhiteSpace(cfg.Currency) ? "EUR" : cfg.Currency!.Trim(),
+            });
+        }
+
+        return string.Empty; // unknown vendor protocol → no secret
     }
 }

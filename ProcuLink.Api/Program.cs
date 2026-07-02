@@ -582,6 +582,9 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,
                            ProcuLink.Infrastructure.Services.Catalog.CatalogPullService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogSourceSettingsService,
                            ProcuLink.Infrastructure.Services.Catalog.CatalogSourceSettingsService>();
+// Vendor catalog fetchers (plan 2026-07-02 D4) — resolved by protocol inside CatalogPullService.
+builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogVendorFetcher,
+                           ProcuLink.Infrastructure.Services.Catalog.LogicomQuickConnectFetcher>();
 
 // PDF rasterizer for the vision fallback (scanned/no-text PDFs). Self-contained
 // PDFium + SkiaSharp natives — no extra system packages on the Debian base.

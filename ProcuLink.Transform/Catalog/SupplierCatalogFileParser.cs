@@ -23,10 +23,14 @@ namespace ProcuLink.Transform.Catalog;
 ///  • After workbook load, the used-range row count is checked again before any cell is
 ///    read, and rows are counted during iteration as a backstop.
 /// </summary>
-public static class SupplierCatalogFileParser
+public static partial class SupplierCatalogFileParser
 {
-    /// <summary>Maximum accepted DATA rows (excluding the header) per catalog file.</summary>
-    public const int MaxCatalogRows = 50_000;
+    /// <summary>
+    /// Maximum accepted DATA rows (excluding the header) per catalog file. Raised
+    /// 50k → 200k (plan 2026-07-02 P0.8) to admit real distributor feeds: REDACTED-NAME
+    /// ships 72,349 lines and 100MEGA 33,633; 200k covers every measured feed with headroom.
+    /// </summary>
+    public const int MaxCatalogRows = 200_000;
 
     /// <summary>Culture-invariant user-facing row-cap message (used in errors + sync status).</summary>
     internal static readonly string RowCapMessage =
@@ -59,7 +63,17 @@ public static class SupplierCatalogFileParser
             ["barcode"] = "barcode", ["gtin"] = "barcode", ["ean"] = "barcode", ["upc"] = "barcode", ["code2"] = "barcode",
             ["external_id"] = "external_id", ["externalid"] = "external_id", ["product_id"] = "external_id",
             ["productid"] = "external_id", ["erp_id"] = "external_id",
+            // CIF 3.0 spaced field names (plan 2026-07-02 D2/3.4). CIF ships FIELDNAMES like
+            // "Supplier Part ID" / "Item Description" — alias them so the standard mapping picks
+            // them up with zero per-source config.
+            ["supplier part id"] = "code", ["item description"] = "name",
+            ["unit price"] = "price", ["unit of measure"] = "unit",
+            ["manufacturer part id"] = "external_id",
         };
+
+    /// <summary>Canonical catalog fields a per-source mapping may target.</summary>
+    public static readonly IReadOnlyCollection<string> CanonicalFields =
+        new[] { "code", "name", "unit", "price", "currency", "barcode", "external_id" };
 
     /// <summary>
     /// Routes on the file extension exactly like the original upload endpoint:
@@ -67,15 +81,18 @@ public static class SupplierCatalogFileParser
     /// (including a missing name) falls back to CSV parsing.
     /// </summary>
     public static async Task<CatalogFileParseResult> ParseByFileNameAsync(
-        Stream stream, string? fileName, CancellationToken ct)
+        Stream stream, string? fileName, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? overrides = null)
     {
         var ext = Path.GetExtension(fileName ?? string.Empty)?.ToLowerInvariant();
         return ext switch
         {
-            ".xlsx" or ".xls" => ParseXlsx(stream),
-            ".json"           => await ParseJsonAsync(stream, ct),
-            ".csv"            => await ParseCsvAsync(stream, ct),
-            _                 => await ParseCsvAsync(stream, ct),
+            ".xlsx" or ".xls" => ParseXlsx(stream, overrides),
+            ".json"           => await ParseJsonAsync(stream, ct, overrides),
+            ".xml"            => await ParseXmlAsync(stream, ct, overrides),
+            ".cif"            => await ParseCifAsync(stream, ct, overrides),
+            ".csv"            => await ParseCsvAsync(stream, ct, overrides, null),
+            _                 => await ParseAutoAsync(stream, contentType: null, fileName, ct, overrides),
         };
     }
 
@@ -87,17 +104,68 @@ public static class SupplierCatalogFileParser
     /// content-type is present.
     /// </summary>
     public static async Task<CatalogFileParseResult> ParseByContentTypeAsync(
-        Stream stream, string? contentType, string? fileName, CancellationToken ct)
+        Stream stream, string? contentType, string? fileName, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? overrides = null)
     {
         var ct0 = contentType?.ToLowerInvariant() ?? string.Empty;
         if (ct0.Contains("json"))
-            return await ParseJsonAsync(stream, ct);
+            return await ParseJsonAsync(stream, ct, overrides);
         if (ct0.Contains("spreadsheet") || ct0.Contains("xlsx") || ct0.Contains("excel"))
-            return ParseXlsx(stream);
+            return ParseXlsx(stream, overrides);
         if (ct0.Contains("csv"))
-            return await ParseCsvAsync(stream, ct);
-        // No decisive content-type — fall back to extension routing (then CSV).
-        return await ParseByFileNameAsync(stream, fileName, ct);
+            return await ParseCsvAsync(stream, ct, overrides, null);
+        if (ct0.Contains("xml"))
+            return await ParseXmlAsync(stream, ct, overrides);
+        // No decisive content-type — content sniff (then extension routing, then CSV).
+        return await ParseAutoAsync(stream, contentType, fileName, ct, overrides);
+    }
+
+    /// <summary>
+    /// Content-sniffing router for 'auto' (plan 2026-07-2 4.2). Inspects the leading bytes AFTER
+    /// any zip unwrap: <c>CIF_I_V</c> → CIF; a leading <c>&lt;</c> → XML (cXML Index by LocalName
+    /// → dedicated parser, else generic repeating-element XML); <c>[</c>/<c>{</c> → JSON; anything
+    /// else → extension routing then CSV. The saint-gobain case (a CIF file named <c>.xml</c>) is
+    /// why we sniff CONTENT, not the extension.
+    /// </summary>
+    public static async Task<CatalogFileParseResult> ParseAutoAsync(
+        Stream stream, string? contentType, string? fileName, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? overrides = null)
+    {
+        // Buffer so we can peek without consuming (network streams are forward-only).
+        Stream seekable = stream;
+        if (!stream.CanSeek)
+        {
+            var buf = new MemoryStream();
+            await stream.CopyToAsync(buf, ct);
+            buf.Position = 0;
+            seekable = buf;
+        }
+
+        var peek = new byte[64];
+        var read = await seekable.ReadAsync(peek.AsMemory(0, peek.Length), ct);
+        seekable.Position = 0;
+
+        // Skip a UTF-8 BOM + leading whitespace when classifying the first meaningful char.
+        var start = 0;
+        if (read >= 3 && peek[0] == 0xEF && peek[1] == 0xBB && peek[2] == 0xBF) start = 3;
+        while (start < read && (peek[start] == (byte)' ' || peek[start] == (byte)'\t'
+               || peek[start] == (byte)'\r' || peek[start] == (byte)'\n')) start++;
+
+        var headText = System.Text.Encoding.ASCII.GetString(peek, 0, read);
+        if (headText.Contains("CIF_I_V", StringComparison.OrdinalIgnoreCase))
+            return await ParseCifAsync(seekable, ct, overrides);
+
+        if (start < read)
+        {
+            var c = (char)peek[start];
+            if (c == '<') return await ParseXmlAsync(seekable, ct, overrides);
+            if (c == '[' || c == '{') return await ParseJsonAsync(seekable, ct, overrides);
+        }
+
+        // Not decisively CIF/XML/JSON → extension routing (xlsx/csv), then CSV fallback.
+        var ext = Path.GetExtension(fileName ?? string.Empty)?.ToLowerInvariant();
+        if (ext is ".xlsx" or ".xls") return ParseXlsx(seekable, overrides);
+        return await ParseCsvAsync(seekable, ct, overrides, null);
     }
 
     private static SupplierProduct? RowToDraft(IReadOnlyDictionary<string, string?> fields)
@@ -105,12 +173,7 @@ public static class SupplierCatalogFileParser
         var code = Pick(fields, "code");
         if (string.IsNullOrWhiteSpace(code)) return null;
 
-        decimal? price = null;
-        var priceStr = Pick(fields, "price");
-        if (!string.IsNullOrWhiteSpace(priceStr)
-            && decimal.TryParse(priceStr, System.Globalization.NumberStyles.Any,
-                                System.Globalization.CultureInfo.InvariantCulture, out var p))
-            price = p;
+        var price = ParseCatalogDecimal(Pick(fields, "price"));
 
         return new SupplierProduct
         {
@@ -127,39 +190,257 @@ public static class SupplierCatalogFileParser
             f.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v) ? v.Trim() : null;
     }
 
-    /// <summary>Builds header-index → canonical-field map from a header row's cell names.</summary>
-    public static Dictionary<int, string> MapHeaderColumns(IReadOnlyList<string> header)
+    /// <summary>
+    /// Locale-tolerant decimal parse for catalog prices (plan 2026-07-02, locale-bug memory).
+    /// Real EU distributor feeds ship comma decimals (REDACTED-PARTY <c>674,68</c>); invariant
+    /// <see cref="System.Globalization.NumberStyles.Any"/> would read that as <c>67468</c>
+    /// (comma = thousands). Heuristic: the LAST of <c>. ,</c> is the decimal separator, the
+    /// other is grouping — so <c>1.234,56</c>→1234.56, <c>1,234.56</c>→1234.56,
+    /// <c>674,68</c>→674.68, <c>9,99</c>→9.99, <c>0.04</c>→0.04. A single separator with ≤2
+    /// trailing digits is treated as a decimal (money), otherwise as grouping.
+    /// </summary>
+    public static decimal? ParseCatalogDecimal(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var s = raw.Trim();
+
+        var lastDot = s.LastIndexOf('.');
+        var lastComma = s.LastIndexOf(',');
+
+        char? decimalSep;
+        if (lastDot >= 0 && lastComma >= 0)
+            decimalSep = lastDot > lastComma ? '.' : ','; // both present → the later one is the decimal
+        else if (lastComma >= 0)
+        {
+            // Only commas: a lone comma with 1-2 trailing digits is a decimal comma (674,68);
+            // "1,234" (exactly 3 trailing, no other separators) is an ambiguous thousands group
+            // — keep it as an integer to avoid inventing decimals.
+            var after = s.Length - lastComma - 1;
+            var single = s.IndexOf(',') == lastComma;
+            decimalSep = single && after is >= 1 and <= 2 ? ',' : (char?)null;
+            if (decimalSep is null && single) { /* "1,234" → strip as grouping below */ }
+        }
+        else if (lastDot >= 0)
+        {
+            var after = s.Length - lastDot - 1;
+            var single = s.IndexOf('.') == lastDot;
+            decimalSep = (single && after == 3) ? (char?)null : '.'; // "1.234" ambiguous → grouping
+        }
+        else decimalSep = null;
+
+        // Normalize to invariant: drop the grouping separator, force '.' as the decimal point,
+        // and strip any stray currency/space characters.
+        var normalized = new System.Text.StringBuilder(s.Length);
+        foreach (var ch in s)
+        {
+            if (char.IsDigit(ch) || ch == '-' || ch == '+') normalized.Append(ch);
+            else if ((ch == '.' || ch == ',') && decimalSep.HasValue && ch == decimalSep.Value) normalized.Append('.');
+            // any other '.'/','/currency/space is grouping/noise → dropped
+        }
+
+        return decimal.TryParse(normalized.ToString(), System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out var p)
+            ? p : (decimal?)null;
+    }
+
+    /// <summary>Sentinel keys in the per-source mapping that are directives, not column mappings.</summary>
+    internal static bool IsMappingDirective(string key) =>
+        key.StartsWith("__", StringComparison.Ordinal) && key.EndsWith("__", StringComparison.Ordinal);
+
+    private static bool _codePagesRegistered;
+
+    /// <summary>
+    /// Resolves the per-source <c>__encoding__</c> sentinel (e.g. <c>windows-1252</c>) to an
+    /// <see cref="System.Text.Encoding"/>, registering the CodePages provider on first use
+    /// (legacy code pages are not in the default .NET Core provider). Returns null when no
+    /// sentinel is set or the name is unknown (caller defaults to UTF-8).
+    /// </summary>
+    private static System.Text.Encoding? ResolveEncoding(IReadOnlyDictionary<string, string>? overrides)
+    {
+        if (overrides is null || !overrides.TryGetValue("__encoding__", out var name) || string.IsNullOrWhiteSpace(name))
+            return null;
+        try
+        {
+            if (!_codePagesRegistered)
+            {
+                System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+                _codePagesRegistered = true;
+            }
+            return System.Text.Encoding.GetEncoding(name.Trim());
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return null; // unknown code page → default UTF-8
+        }
+    }
+
+    /// <summary>
+    /// Picks the delimiter for a CSV line by counting <c>; \t ,</c> OUTSIDE quoted fields and
+    /// choosing the most frequent (tab &gt; semicolon &gt; comma on ties, favouring the less
+    /// ambiguous separators). Counting outside quotes fixes the Also/Actebis case: a tab-delimited
+    /// line whose data contains a stray comma no longer mis-detects as comma-delimited. A line with
+    /// none of them → comma (a single-column file).
+    /// </summary>
+    internal static char DetectDelimiter(string line)
+    {
+        int semis = 0, tabs = 0, commas = 0;
+        var inQuotes = false;
+        foreach (var c in line)
+        {
+            if (c == '"') inQuotes = !inQuotes;
+            else if (inQuotes) continue;
+            else if (c == ';') semis++;
+            else if (c == '\t') tabs++;
+            else if (c == ',') commas++;
+        }
+        if (tabs >= semis && tabs >= commas && tabs > 0) return '\t';
+        if (semis >= commas && semis > 0) return ';';
+        return ',';
+    }
+
+    /// <summary>
+    /// RFC-4180-ish delimited-line splitter (plan 2026-07-02 D6): quoted fields may contain the
+    /// delimiter, newlines are already stripped by the line reader, and a doubled quote
+    /// (<c>""</c>) inside a quoted field is an escaped quote. Used by the CSV path (bug fix:
+    /// naive <c>line.Split(delimiter)</c> shredded quoted fields containing the delimiter) and
+    /// the CIF path (mandatory — descriptions embed commas).
+    /// </summary>
+    public static List<string> SplitDelimitedLine(string line, char delimiter)
+    {
+        var fields = new List<string>();
+        var sb = new System.Text.StringBuilder();
+        var inQuotes = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (inQuotes)
+            {
+                if (c == '"')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; } // escaped quote
+                    else inQuotes = false;
+                }
+                else sb.Append(c);
+            }
+            else if (c == '"') inQuotes = true;
+            else if (c == delimiter) { fields.Add(sb.ToString()); sb.Clear(); }
+            else sb.Append(c);
+        }
+        fields.Add(sb.ToString());
+        return fields;
+    }
+
+    /// <summary>
+    /// Builds header-index → canonical-field map from a header row's cell names, honoring an
+    /// optional per-source <paramref name="overrides"/> map (plan 2026-07-02 D3). The overrides
+    /// map keys are matched against a column two ways so the SAME map serves headered AND
+    /// headerless feeds:
+    ///  • by header NAME (case-insensitive, trimmed) — for feeds with a header row;
+    ///  • by 0-based column INDEX (a numeric key, e.g. <c>"3"</c>) — for the headerless feeds
+    ///    (Ingram, Also) whose columns are positional. A numeric override key wins for that index.
+    /// Only canonical targets (<see cref="CanonicalFields"/>) are honored; the first mapping to a
+    /// given canonical field wins (so an explicit override still can't double-map).
+    /// </summary>
+    public static Dictionary<int, string> MapHeaderColumns(
+        IReadOnlyList<string> header, IReadOnlyDictionary<string, string>? overrides = null)
     {
         var map = new Dictionary<int, string>();
+
+        // Positional overrides first (numeric keys) — they address indexes, valid with or without a header.
+        if (overrides is not null)
+        {
+            foreach (var (key, target) in overrides)
+            {
+                if (!CanonicalFields.Contains(target)) continue;
+                if (int.TryParse(key.Trim(), out var idx) && idx >= 0
+                    && !map.ContainsKey(idx) && !map.ContainsValue(target))
+                    map[idx] = target;
+            }
+        }
+
         for (var i = 0; i < header.Count; i++)
         {
+            if (map.ContainsKey(i)) continue; // a positional override already claimed this index
             var name = header[i]?.Trim().Trim('"') ?? string.Empty;
             if (name.Length == 0) continue;
+
+            // Name override wins over the global aliases.
+            if (overrides is not null
+                && overrides.TryGetValue(name, out var overrideTarget)
+                && CanonicalFields.Contains(overrideTarget))
+            {
+                if (!map.ContainsValue(overrideTarget)) map[i] = overrideTarget;
+                continue;
+            }
+
             if (CatalogColumnAliases.TryGetValue(name, out var canonical) && !map.ContainsValue(canonical))
                 map[i] = canonical;
         }
         return map;
     }
 
-    public static async Task<CatalogFileParseResult> ParseCsvAsync(Stream stream, CancellationToken ct)
+    public static Task<CatalogFileParseResult> ParseCsvAsync(Stream stream, CancellationToken ct)
+        => ParseCsvAsync(stream, ct, overrides: null, encoding: null);
+
+    /// <summary>
+    /// CSV parser with an optional per-source column mapping and encoding (plan 2026-07-02).
+    /// Quoted-field aware (<see cref="SplitDelimitedLine"/> — D6 bug fix). Headerless feeds:
+    /// when <paramref name="overrides"/> carries the sentinel <c>__noheader__=true</c>, the
+    /// first line is treated as DATA (positional mapping only) — for the Ingram/Also feeds that
+    /// ship no header row. Otherwise the first line is the header (existing contract).
+    /// </summary>
+    public static async Task<CatalogFileParseResult> ParseCsvAsync(
+        Stream stream, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? overrides, System.Text.Encoding? encoding)
     {
         var drafts = new List<SupplierProduct>();
-        using var reader = new StreamReader(stream);
 
-        var headerLine = await reader.ReadLineAsync(ct);
-        if (headerLine is null)
+        // Per-source encoding hint (__encoding__ sentinel) — e.g. Also/Actebis ships cp1252.
+        // Explicit `encoding` argument wins; otherwise resolve the sentinel; default UTF-8.
+        var effectiveEncoding = encoding ?? ResolveEncoding(overrides) ?? System.Text.Encoding.UTF8;
+        using var reader = new StreamReader(stream, effectiveEncoding,
+                                            detectEncodingFromByteOrderMarks: true);
+
+        var noHeader = overrides is not null
+            && overrides.TryGetValue("__noheader__", out var nh)
+            && string.Equals(nh, "true", StringComparison.OrdinalIgnoreCase);
+
+        var firstLine = await reader.ReadLineAsync(ct);
+        if (firstLine is null)
             return new CatalogFileParseResult(drafts, Array.Empty<string>(), "csv");
 
-        var delimiter = headerLine.Contains(';') && !headerLine.Contains(',') ? ';'
-                      : headerLine.Contains('\t') && !headerLine.Contains(',') ? '\t'
-                      : ',';
+        var delimiter = DetectDelimiter(firstLine);
 
-        var header = headerLine.Split(delimiter).Select(h => h.Trim().Trim('"')).ToList();
-        var colMap = MapHeaderColumns(header);
+        List<string> header;
+        var dataRows = 0;
+
+        if (noHeader)
+        {
+            // Positional feed: synthesize an index header ("col0","col1"…) for the honesty report
+            // and parse the first line as data.
+            var firstParts = SplitDelimitedLine(firstLine, delimiter);
+            header = Enumerable.Range(0, firstParts.Count).Select(i => "col" + i).ToList();
+            var colMapNh = MapHeaderColumns(header, overrides);
+            if (!colMapNh.ContainsValue("code"))
+                return new CatalogFileParseResult(drafts, header, "csv");
+            AddRow(firstParts, colMapNh, drafts);
+            dataRows = 1;
+
+            while (!reader.EndOfStream)
+            {
+                var line = await reader.ReadLineAsync(ct);
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                if (++dataRows > MaxCatalogRows) throw new CatalogTooLargeException(RowCapMessage);
+                AddRow(SplitDelimitedLine(line, delimiter), colMapNh, drafts);
+            }
+            return new CatalogFileParseResult(drafts, header, "csv");
+        }
+
+        header = SplitDelimitedLine(firstLine, delimiter).Select(h => h.Trim().Trim('"')).ToList();
+        var colMap = MapHeaderColumns(header, overrides);
         if (!colMap.ContainsValue("code"))
             return new CatalogFileParseResult(drafts, header, "csv"); // no code column → nothing usable
 
-        var dataRows = 0;
         while (!reader.EndOfStream)
         {
             var line = await reader.ReadLineAsync(ct);
@@ -167,22 +448,25 @@ public static class SupplierCatalogFileParser
 
             // H4 row cap: abort instead of materializing an unbounded draft list.
             if (++dataRows > MaxCatalogRows)
-                throw new CatalogTooLargeException(
-                    RowCapMessage);
+                throw new CatalogTooLargeException(RowCapMessage);
 
-            var parts = line.Split(delimiter);
-            var fields = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (idx, canonical) in colMap)
-                fields[canonical] = idx < parts.Length ? parts[idx].Trim().Trim('"') : null;
-
-            var draft = RowToDraft(fields);
-            if (draft is not null) drafts.Add(draft);
+            AddRow(SplitDelimitedLine(line, delimiter), colMap, drafts);
         }
 
         return new CatalogFileParseResult(drafts, header, "csv");
+
+        static void AddRow(List<string> parts, Dictionary<int, string> map, List<SupplierProduct> sink)
+        {
+            var fields = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (idx, canonical) in map)
+                fields[canonical] = idx < parts.Count ? parts[idx].Trim().Trim('"') : null;
+            var draft = RowToDraft(fields);
+            if (draft is not null) sink.Add(draft);
+        }
     }
 
-    public static CatalogFileParseResult ParseXlsx(Stream stream)
+    public static CatalogFileParseResult ParseXlsx(
+        Stream stream, IReadOnlyDictionary<string, string>? overrides = null)
     {
         // Both the zip pre-guard and ClosedXML need a seekable stream; buffer when it is not
         // (e.g. a raw network stream). The browser-upload form-file streams are seekable, so
@@ -197,7 +481,7 @@ public static class SupplierCatalogFileParser
 
         try
         {
-            return ParseXlsxCore(stream);
+            return ParseXlsxCore(stream, overrides);
         }
         catch (Exception ex) when (XlsxCompressionFallback.ShouldAttemptRepack(ex))
         {
@@ -210,13 +494,14 @@ public static class SupplierCatalogFileParser
             if (XlsxCompressionFallback.TryRepackToStandardZip(stream, out var repacked))
             {
                 using (repacked)
-                    return ParseXlsxCore(repacked);
+                    return ParseXlsxCore(repacked, overrides);
             }
             throw;
         }
     }
 
-    private static CatalogFileParseResult ParseXlsxCore(Stream stream)
+    private static CatalogFileParseResult ParseXlsxCore(
+        Stream stream, IReadOnlyDictionary<string, string>? overrides)
     {
         // ── H4 zip-bomb pre-guard — runs BEFORE XLWorkbook touches the stream ────
         GuardXlsxZipArchive(stream);
@@ -244,7 +529,7 @@ public static class SupplierCatalogFileParser
         foreach (var cell in headerCells)
             header[cell.Address.ColumnNumber - 1] = cell.GetString().Trim();
 
-        var colMap = MapHeaderColumns(header); // 0-based index → canonical
+        var colMap = MapHeaderColumns(header, overrides); // 0-based index → canonical
         if (!colMap.ContainsValue("code"))
             return new CatalogFileParseResult(drafts, header, "xlsx");
 
@@ -293,7 +578,8 @@ public static class SupplierCatalogFileParser
     /// no recognizable array, yields an empty result (no code column → nothing usable), exactly
     /// like a CSV without a code column.
     /// </summary>
-    public static async Task<CatalogFileParseResult> ParseJsonAsync(Stream stream, CancellationToken ct)
+    public static async Task<CatalogFileParseResult> ParseJsonAsync(
+        Stream stream, CancellationToken ct, IReadOnlyDictionary<string, string>? overrides = null)
     {
         var drafts = new List<SupplierProduct>();
 
@@ -332,11 +618,16 @@ public static class SupplierCatalogFileParser
                     if (name.Length == 0) continue;
                     if (headerSeen.Add(name)) headerOrder.Add(name);
 
-                    if (CatalogColumnAliases.TryGetValue(name, out var canonical)
-                        && !fields.ContainsKey(canonical)) // first matching alias wins, like the tabular paths
-                    {
+                    // Per-source override wins over the global aliases (REDACTED-PARTY enabler: {"Id":"code",…}).
+                    string? canonical = null;
+                    if (overrides is not null && overrides.TryGetValue(name, out var ov)
+                        && CanonicalFields.Contains(ov))
+                        canonical = ov;
+                    else if (CatalogColumnAliases.TryGetValue(name, out var aliased))
+                        canonical = aliased;
+
+                    if (canonical is not null && !fields.ContainsKey(canonical)) // first match wins, like the tabular paths
                         fields[canonical] = JsonValueToString(prop.Value);
-                    }
                 }
 
                 var draft = RowToDraft(fields);
