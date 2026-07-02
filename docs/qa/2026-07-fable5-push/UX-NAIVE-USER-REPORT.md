@@ -55,3 +55,20 @@ The founder's instinct is right: the product doesn't need a redesign, it needs *
 
 ## Live loop proven this pass
 Created "Nordic Office Supplies AS" from scratch in the UI → configured HTTP delivery to a real receiver → **test-fire 200, payload verified at the receiver**. The naive-user setup path works end to end.
+
+---
+
+## Guidance-gap sweep + fixes SHIPPED (2026-07-02)
+
+A 7-reviewer parallel sweep (non-technical-user lens, ui-ux-pro-max + web-design-guidelines) found **111 raw findings**; ~40% were already covered by the existing section-guide/help-article system. The genuinely-missing additive fixes were implemented copy-only (no redesign, layout locked) across 6 batches and merged to `main`:
+
+- **Setup forms (top-3):** delivery config — raw JSON behind "Advanced" disclosure, example placeholders per auth type, "which channel/format do I pick?" helpers; catalog — "Download CSV template" + canonical-field explainer; output override — "Formula help" popover with copyable Scriban examples.
+- **Order Workshop (A1-A8):** "Review and send this order"; plain parsing copy; send-disabled + delivery-failed messages that name the action; invoice-badge consequence; "Before you send" + AI bulk-accept safety tooltip; plain stepper labels (Read/Check/Verify/Prepare/Send) with technical tooltips; mobile advanced-editing note. (Kept locked-test labels; added tooltips instead.)
+- **Mapper workbench (B1-B4):** dismissible one-line orientation helper above the 3 columns (layout unshifted); incoming/outgoing/preview pane sub-headers; unmapped-required-field how-to-fix tooltip.
+- **Connections lifecycle (C1-C7):** humanized the whole draft→test→publish→rollback vocabulary — read-only overlay, bundle-summary tooltips, HistoryDrawer ("Use this version"), plain publish/rollback/discard dialog bodies, per-status badge tooltips, replay pass/change summary + red/yellow legend. This was the highest-jargon area.
+- **Library + upload (D1-D5):** mapping import CSV example + constraints, "why mappings exist" copy, Source-column legend; upload file-type error grouped by purpose, sample-order reword, multi-file hint.
+- **Supplier tabs + settings + ops (E1-E6):** catalog empty-state explainer, mappings-tab eyebrow, PO-mapping order-file example; email intake host/app-password/folder helpers; connectors read-only clarification; webhooks signing-secret plain helper + status tooltips.
+
+Also fixed a latent tsc error (`catalogSourceHelpers.test.ts` missing `columnMapping`) and a merge-time agent-collision artifact in `MapperWorkbench.tsx`. Full plan: `docs/qa/2026-07-fable5-push/guidance-gap-plan.md`.
+
+Verification: `bunx tsc --noEmit` clean, `bun run build` green (62 pages), unit suites green per batch.
