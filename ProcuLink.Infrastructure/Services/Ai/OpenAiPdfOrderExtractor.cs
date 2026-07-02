@@ -58,7 +58,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             "confidence":    { "type": "number" },
             "document_type": { "type": "string", "enum": ["purchase_order", "invoice", "other"] },
             "po_number":     { "type": "string" },
-            "order_date":    { "type": "string" },
+            "order_date":    { "type": "string", "description": "The order date normalised to ISO YYYY-MM-DD. Interpret an ambiguous numeric date (dd/mm/yyyy vs mm/dd/yyyy) using the document's language/country/currency; European documents are day-first. Empty if not stated." },
+            "order_date_raw": { "type": "string", "description": "The order date EXACTLY as printed on the document (e.g. '12.06.2026', '12 Jun 2026', '06/12/2026'), copied verbatim with its original separators — do NOT reformat or reorder it. Empty if not stated. This is the authoritative source for date interpretation." },
             "currency":      { "type": "string" },
             "buyer_name":    { "type": "string", "description": "The organisation that ISSUED/PLACED the order. On an invoice instead the bill-to customer. Assign from document labels, never from which name is familiar." },
             "buyer_tax_id":  { "type": "string", "description": "The BUYER's own VAT / tax / organisation number (e.g. a Norwegian org number or an EU VAT id). The buyer's identifier, NOT the supplier's. Empty if not printed." },
@@ -119,7 +120,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 "type": "object",
                 "properties": {
                   "line_number":              { "type": "integer" },
-                  "buyer_item_code":          { "type": "string" },
+                  "buyer_item_code":          { "type": "string", "description": "The line's real PRODUCT / PART / material number (e.g. a manufacturer or vendor item code like 'REDACTED-ITEM', 'SM-A576BZABEEE', or a 'your material number' / 'Numer materiału' value). NEVER the positional 'Pos.' / 'Position' / line-counter index (e.g. '0001', '0010', '1') — leave this empty if the only code on the line is that positional counter." },
                   "manufacturer_part_number": { "type": "string", "description": "The manufacturer/vendor product number (e.g. 'Ihre Materialnr', ManufPN). Empty if none." },
                   "customer_part_number":     { "type": "string" },
                   "description":              { "type": "string" },
@@ -141,7 +142,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
               }
             }
           },
-          "required": ["confidence", "document_type", "po_number", "order_date", "currency", "buyer_name", "buyer_tax_id", "supplier_name", "payment_terms", "incoterms", "shipping_method", "buyer_order_ref", "contact", "parties", "raw_fields", "sub_total", "tax_total", "grand_total", "lines"],
+          "required": ["confidence", "document_type", "po_number", "order_date", "order_date_raw", "currency", "buyer_name", "buyer_tax_id", "supplier_name", "payment_terms", "incoterms", "shipping_method", "buyer_order_ref", "contact", "parties", "raw_fields", "sub_total", "tax_total", "grand_total", "lines"],
           "additionalProperties": false
         }
         """u8.ToArray());
@@ -153,7 +154,14 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         "text, or a scanned image of it. " +
         "Return ONLY structured data matching the schema. Copy numbers and codes " +
         "EXACTLY as printed — never invent, round, or compute a value that is not " +
-        "in the document. Use the document's own line/item codes as buyer_item_code. " +
+        "in the document. " +
+        // ── Item code (buyer_item_code) — the real part number, never the position ──
+        "buyer_item_code is the line's real PRODUCT / PART / material number (a manufacturer or " +
+        "vendor item code such as 'REDACTED-ITEM', 'SM-A576BZABEEE', or a 'your material number' / " +
+        "'Numer materiału dostawcy' / 'Ihre Materialnummer' value). It is NEVER the positional " +
+        "line index from a 'Pos.' / 'Position' / 'Pozycja' counter column (e.g. '0001', '0010', " +
+        "'1', '2') — that counter is just the row number. If the ONLY code on a line is that " +
+        "positional counter, leave buyer_item_code empty. " +
         "Leave a string field empty and a number 0 when the document does not state it. " +
         "Set line_amount to the printed line total (quantity x unit price) when shown, else 0. " +
         // ── Party-role assignment (deterministic, document-driven) ──
@@ -166,8 +174,15 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         "For an INVOICE the roles INVERT: supplier_name = the issuing seller; " +
         "buyer_name = the bill-to customer. " +
         "Do NOT assume any particular company name is the buyer — a familiar name may be the " +
-        "recipient OR the issuer, and a company name merely appearing in the header does not " +
-        "make it the buyer. buyer_name and supplier_name MUST be two DIFFERENT parties. " +
+        "recipient OR the issuer, and a company name merely appearing in the header or the top " +
+        "address block does not make it the buyer. " +
+        // The single strongest structural signal in these documents:
+        "STRONG SIGNAL: the party the document identifies with a SUPPLIER NUMBER / VENDOR NUMBER " +
+        "('Vendor No.', 'Supplier:', 'Numer dostawcy', 'Lieferant', 'Leverandør') is the SUPPLIER " +
+        "(the recipient who fulfils the order) — put that party in supplier_name, NEVER in " +
+        "buyer_name. The buyer is the OTHER party: the issuer that raised the order (its own name " +
+        "usually matches the document's letterhead, its contact-email domain, and its bank/legal " +
+        "footer). buyer_name and supplier_name MUST be two DIFFERENT parties. " +
         "Capture the BUYER's own VAT / tax / organisation number as buyer_tax_id (the buyer's " +
         "identifier — e.g. a Norwegian org number or an EU VAT id — NOT the supplier's). Leave it " +
         "empty if not printed. " +
@@ -178,6 +193,12 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         "do NOT adjust, reconcile, or recompute them to make quantity × unit price equal the line " +
         "total; just report exactly what is printed. " +
         "sub_total/tax_total/grand_total = the document's stated totals when present, else 0. " +
+        // ── Dates (locale-aware; capture the verbatim printed form) ──
+        "For the order date, set order_date_raw to the date EXACTLY as printed (verbatim, with its " +
+        "original separators and order — e.g. '12.06.2026', '12 Jun 2026', '06/12/2026') and set " +
+        "order_date to the same date normalised to ISO YYYY-MM-DD. When a numeric date is ambiguous " +
+        "(dd/mm/yyyy vs mm/dd/yyyy), interpret it using the document's language/country/currency; " +
+        "European documents are DAY-FIRST, so '12.06.2026' is 12 June, not 6 December. " +
         "delivery_date = the line's requested/printed delivery date as YYYY-MM-DD, else empty. " +
         "Classify document_type: 'invoice' if it is a bill/invoice (e.g. titled Invoice, has an " +
         "invoice number / amount due), 'purchase_order' if it is an order being placed, else 'other'. " +
@@ -648,6 +669,17 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                     causes.Add("quantity × unit price does not match the stated line amount");
             }
 
+            // ── F-14: never emit a positional line index as the item code ──
+            // When the model put the "Pos."/"Position" counter (e.g. "0001", "0010", "1")
+            // into buyer_item_code, prefer a genuine manufacturer/customer part number if one
+            // was captured; if none exists, keep the token but flag the line so a human resolves
+            // it rather than shipping a row counter as if it were a product code.
+            var manufacturerPartNumber = NullIfBlank(l.ManufacturerPartNumber);
+            var customerPartNumber = NullIfBlank(l.CustomerPartNumber);
+            var buyerItemCode = ResolveBuyerItemCode(
+                l.BuyerItemCode?.Trim(), l.LineNumber, lineNumber,
+                manufacturerPartNumber, customerPartNumber, causes);
+
             if (causes.Count > 0)
             {
                 reviewLineNumbers.Add(lineNumber);
@@ -660,7 +692,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 
             lines.Add(new ExtractedOrderLine(
                 LineNumber: lineNumber,
-                BuyerItemCode: l.BuyerItemCode?.Trim() ?? string.Empty,
+                BuyerItemCode: buyerItemCode,
                 Description: string.IsNullOrWhiteSpace(l.Description) ? null : l.Description.Trim(),
                 Quantity: quantity,
                 Unit: string.IsNullOrWhiteSpace(l.Unit) ? null : l.Unit.Trim(),
@@ -670,8 +702,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 TaxAmount: taxAmount,
                 DeliveryDate: deliveryDate,
                 // Phase 1 lossless capture (advisory — not gated by anti-hallucination).
-                ManufacturerPartNumber: NullIfBlank(l.ManufacturerPartNumber),
-                CustomerPartNumber: NullIfBlank(l.CustomerPartNumber),
+                ManufacturerPartNumber: manufacturerPartNumber,
+                CustomerPartNumber: customerPartNumber,
                 DiscountPercent: TryToDecimal(l.DiscountPercent, out var disc) ? disc : null,
                 Unspsc: NullIfBlank(l.Unspsc),
                 Recipient: NullIfBlank(l.Recipient),
@@ -679,20 +711,35 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 NetAmount: TryToDecimal(l.NetAmount, out var net) ? net : null));
         }
 
-        DateTime? orderDate = null;
-        if (!string.IsNullOrWhiteSpace(dto.OrderDate)
-            && DateTime.TryParse(dto.OrderDate, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        // ── F-13: the buyer and supplier MUST be distinct parties ──
+        // If the model collapsed both roles onto the same party (a strong signal it
+        // mis-attributed the buyer to the recipient), we cannot trust the buyer name —
+        // drop it so the order surfaces for a human rather than presenting the recipient
+        // as the buyer. The supplier (the party the doc addresses) is kept.
+        var buyerNameRaw = string.IsNullOrWhiteSpace(dto.BuyerName) ? null : dto.BuyerName.Trim();
+        var supplierNameRaw = string.IsNullOrWhiteSpace(dto.SupplierName) ? null : dto.SupplierName.Trim();
+        if (buyerNameRaw is not null && supplierNameRaw is not null
+            && SamePartyName(buyerNameRaw, supplierNameRaw))
         {
-            orderDate = parsed;
+            buyerNameRaw = null;
         }
+
+        // ── F-21: locale-aware order date ──
+        // The model's own order_date can silently invert an ambiguous numeric date
+        // (e.g. it read the EU "12.06.2026" as 2026-12-06 / 6 December). When it also
+        // returned the date EXACTLY as printed (order_date_raw), re-interpret THAT with the
+        // shared locale-aware reader — day-first for a European document, month-first for a
+        // clearly-US one — and prefer it. Fall back to the model's ISO order_date only when
+        // no verbatim date is available (never a silent swap).
+        var orderDate = ResolveOrderDate(dto.OrderDateRaw, dto.OrderDate, dto);
 
         var order = new ExtractedOrder(
             PoNumber: string.IsNullOrWhiteSpace(dto.PoNumber) ? null : dto.PoNumber.Trim(),
             OrderDate: orderDate,
-            BuyerName: string.IsNullOrWhiteSpace(dto.BuyerName) ? null : dto.BuyerName.Trim(),
+            BuyerName: buyerNameRaw,
             Currency: string.IsNullOrWhiteSpace(dto.Currency) ? null : dto.Currency.Trim(),
             Lines: lines,
-            SupplierName: string.IsNullOrWhiteSpace(dto.SupplierName) ? null : dto.SupplierName.Trim(),
+            SupplierName: supplierNameRaw,
             BuyerTaxId: NullIfBlank(dto.BuyerTaxId),
             SubTotal: TryToDecimal(dto.SubTotal, out var sub) ? sub : null,
             TaxTotal: TryToDecimal(dto.TaxTotal, out var tax) ? tax : null,
@@ -744,6 +791,147 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             "purchase_order" or "purchase order" or "po" or "order" => "purchase_order",
             _ => "other",
         };
+    }
+
+    // ─── F-14: item-code resolution (positional index → real part number) ────
+
+    /// <summary>
+    /// Resolves the canonical buyer item code for a line. When the model emitted the
+    /// positional "Pos."/"Position" counter instead of a real product code, prefer a
+    /// captured manufacturer or customer part number; when NO genuine code exists, keep
+    /// the token but add a review cause so it surfaces for a human rather than shipping a
+    /// row counter as a product code. A code that is not positional is returned unchanged.
+    /// </summary>
+    private static string ResolveBuyerItemCode(
+        string? rawCode, int modelLineNumber, int positionalLineNumber,
+        string? manufacturerPartNumber, string? customerPartNumber, List<string> causes)
+    {
+        var code = rawCode ?? string.Empty;
+
+        if (!LooksPositional(code, modelLineNumber, positionalLineNumber))
+            return code; // a real code (numeric or otherwise) — keep it.
+
+        // The code is just the row counter. Prefer a genuine part number if we captured one.
+        var real = manufacturerPartNumber ?? customerPartNumber;
+        if (!string.IsNullOrWhiteSpace(real))
+            return real.Trim();
+
+        // No real code anywhere → don't silently ship the counter as a code.
+        causes.Add("the line's item code looks like a positional row number, not a real product code");
+        return code;
+    }
+
+    /// <summary>
+    /// True when a code is (narrowly) a positional line counter. Two conservative shapes,
+    /// both requiring pure digits and at most 5 characters so a genuine long numeric part
+    /// number (e.g. "43469659") is never caught:
+    ///   • the integer value equals the line's position or the model's echoed line number
+    ///     (e.g. "1", "2"); OR
+    ///   • a zero-padded short counter (leading '0', length ≥ 3 — e.g. "0001", "0010",
+    ///     "00010"), the ubiquitous ERP "Pos." step-of-ten form. Real part numbers do not
+    ///     start with a zero pad.
+    /// </summary>
+    private static bool LooksPositional(string code, int modelLineNumber, int positionalLineNumber)
+    {
+        if (string.IsNullOrEmpty(code) || code.Length > 5) return false;
+        if (!code.All(char.IsDigit)) return false;
+        if (!int.TryParse(code, NumberStyles.None, CultureInfo.InvariantCulture, out var value)) return false;
+
+        if (value == positionalLineNumber || value == modelLineNumber) return true;
+
+        // Zero-padded short counter: a leading zero on a 3–5 digit all-numeric token.
+        return code.Length >= 3 && code[0] == '0';
+    }
+
+    // ─── F-21: locale-aware order-date resolution ────────────────────────────
+
+    /// <summary>
+    /// Resolves the header order date. Prefers the verbatim printed date
+    /// (<paramref name="rawOrderDate"/>) re-interpreted by the shared locale-aware
+    /// <see cref="DateParsing"/> reader (day-first for a European document, month-first for a
+    /// clearly-US one), so an ambiguous "12.06.2026" is never silently inverted. Falls back to
+    /// the model's already-ISO <paramref name="isoOrderDate"/> only when no verbatim date is
+    /// available.
+    /// </summary>
+    private static DateTime? ResolveOrderDate(string? rawOrderDate, string? isoOrderDate, ExtractionDto dto)
+    {
+        if (!string.IsNullOrWhiteSpace(rawOrderDate))
+        {
+            var (value, _) = DateParsing.TryParseFlexibleDate(rawOrderDate, PrefersDayFirst(dto));
+            if (value is { } d) return d.ToDateTime(TimeOnly.MinValue);
+        }
+
+        if (!string.IsNullOrWhiteSpace(isoOrderDate)
+            && DateTime.TryParse(isoOrderDate, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    // Locale signal for ambiguous numeric dates. EU-first product ⇒ day-first is the default;
+    // flip to month-first ONLY on a clear US signal (USD currency or a US country on a party),
+    // and only when there is no competing European signal.
+    private static bool PrefersDayFirst(ExtractionDto dto)
+    {
+        var currency = dto.Currency?.Trim();
+        var countries = dto.Parties?.Select(p => p.Country).Where(c => !string.IsNullOrWhiteSpace(c)) ?? Enumerable.Empty<string>();
+
+        var hasUsSignal =
+            string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase)
+            || countries.Any(IsUnitedStates);
+        var hasEuSignal =
+            IsEuropeanCurrency(currency)
+            || countries.Any(c => !IsUnitedStates(c));
+
+        // Clear US and no European counter-signal → month-first. Otherwise day-first (EU default).
+        return !(hasUsSignal && !hasEuSignal);
+    }
+
+    private static bool IsUnitedStates(string? country)
+    {
+        var c = country?.Trim();
+        return string.Equals(c, "US", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c, "USA", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c, "United States", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsEuropeanCurrency(string? currency)
+    {
+        var c = currency?.Trim();
+        return c is not null && (
+            string.Equals(c, "EUR", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c, "GBP", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c, "NOK", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c, "SEK", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c, "DKK", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c, "PLN", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c, "CHF", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ─── F-13: party-name equality (buyer/supplier collapse guard) ───────────
+
+    /// <summary>
+    /// True when two party names denote the same organisation for the purpose of the
+    /// buyer≠supplier invariant — a case-insensitive comparison after collapsing whitespace
+    /// and stripping trailing legal-form suffixes (ApS / AS / GmbH / etc.) so "REDACTED-PARTY"
+    /// and "REDACTED-PARTY" are recognised as one party.
+    /// </summary>
+    private static bool SamePartyName(string a, string b) =>
+        string.Equals(NormalizePartyName(a), NormalizePartyName(b), StringComparison.OrdinalIgnoreCase);
+
+    private static readonly Regex WhitespaceRun = new(@"\s+", RegexOptions.Compiled);
+    private static readonly Regex LegalFormSuffix = new(
+        @"[\s,]+(?:ap/?s|a/?s|as|oü|ou|sp\.?\s*z\s*o\.?\s*o\.?|gmbh|ag|ltd\.?|limited|inc\.?|llc|s\.?a\.?|s\.?r\.?l\.?|b\.?v\.?|oy|ab|plc|kg|se)\.?$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static string NormalizePartyName(string name)
+    {
+        var collapsed = WhitespaceRun.Replace(name.Trim(), " ");
+        // Strip a single trailing legal-form token so the core name is compared.
+        collapsed = LegalFormSuffix.Replace(collapsed, string.Empty).Trim();
+        return collapsed;
     }
 
     // ─── Anti-hallucination number matching ──────────────────────────────────
@@ -982,7 +1170,10 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         [property: JsonPropertyName("buyer_order_ref")] string? BuyerOrderRef = null,
         [property: JsonPropertyName("contact")] ContactDto? Contact = null,
         [property: JsonPropertyName("parties")] IReadOnlyList<ExtractionPartyDto>? Parties = null,
-        [property: JsonPropertyName("raw_fields")] IReadOnlyList<RawFieldDto>? RawFields = null);
+        [property: JsonPropertyName("raw_fields")] IReadOnlyList<RawFieldDto>? RawFields = null,
+        // The order date exactly as printed (verbatim) — the authoritative source for
+        // locale-aware date interpretation (F-21). Defaulted so existing construction sites compile.
+        [property: JsonPropertyName("order_date_raw")] string? OrderDateRaw = null);
 
     internal sealed record ExtractionLineDto(
         [property: JsonPropertyName("line_number")] int LineNumber,

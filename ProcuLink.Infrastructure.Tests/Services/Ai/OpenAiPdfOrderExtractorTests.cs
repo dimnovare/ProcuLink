@@ -94,6 +94,193 @@ public class OpenAiPdfOrderExtractorTests
         prompt.Should().NotContain("supplier_name = the issuing vendor/seller");
     }
 
+    // ── F-14: positional line index must not be emitted as the item code ─────
+
+    [Fact]
+    public void ValidateAndMap_PositionalIndexCode_WithRealMpn_PromotesTheRealCode()
+    {
+        // Danfoss/Siemens/EXEMPLAR SEAFOOD shape: the model put the positional "Pos." index ("0001")
+        // into buyer_item_code while the genuine part number sits in manufacturer_part_number.
+        // The real code must win — a positional counter is not an item code.
+        const string source = "0001 Samsung Galaxy A57 1 PC 1469,00 1469,00 SM-A576BZABEEE";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "PLN", BuyerName: "Siemens",
+            Lines: new[]
+            {
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(
+                    1, "0001", "Samsung Galaxy A57", 1, "PC", 1469.00, 1469.00,
+                    ManufacturerPartNumber: "SM-A576BZABEEE"),
+            });
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Success.Should().BeTrue();
+        result.Order!.Lines[0].BuyerItemCode.Should().Be("SM-A576BZABEEE",
+            "the positional index 0001 must be replaced by the genuine part number");
+        result.Order.Lines[0].ManufacturerPartNumber.Should().Be("SM-A576BZABEEE");
+    }
+
+    [Fact]
+    public void ValidateAndMap_PositionalIndexCode_WithCustomerPartNumber_PromotesIt()
+    {
+        // EXEMPLAR SEAFOOD shape: "Pos. Part No." — model echoes the position ("1"); the real "Part No."
+        // (43469659) landed in customer_part_number. Promote the real code.
+        const string source = "1 43469659 Lenovo ThinkPad L14 1 Piece 12157,84 12157,84";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "NOK", BuyerName: "EXEMPLAR SEAFOOD",
+            Lines: new[]
+            {
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(
+                    1, "1", "Lenovo ThinkPad L14", 1, "Piece", 12157.84, 12157.84,
+                    CustomerPartNumber: "43469659"),
+            });
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Order!.Lines[0].BuyerItemCode.Should().Be("43469659");
+    }
+
+    [Fact]
+    public void ValidateAndMap_PositionalIndexCode_NoRealCode_FlagsLineForReview()
+    {
+        // Only a positional counter and no genuine part number anywhere → do NOT silently
+        // deliver "0010" as if it were a code; leave it but flag the line for review.
+        const string source = "0010 Some service 2 ST 376,20 752,40";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR", BuyerName: "Rheinbahn",
+            Lines: new[]
+            {
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "0010", "Some service", 2, "ST", 376.20, 752.40),
+            });
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Success.Should().BeTrue();
+        result.ReviewLineNumbers.Should().Contain(1,
+            "a positional index with no real part number must surface for a human, not ship as a code");
+    }
+
+    [Fact]
+    public void ValidateAndMap_GenuineNumericPartNumber_IsNotTreatedAsPositional()
+    {
+        // A real 8-digit part number that is not the line position must be kept as-is —
+        // the positional guard must be narrow enough not to clobber legitimate codes.
+        const string source = "1 43469659 Lenovo ThinkPad 1 Piece 12157,84 12157,84";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "NOK", BuyerName: "EXEMPLAR SEAFOOD",
+            Lines: new[]
+            {
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "43469659", "Lenovo ThinkPad", 1, "Piece", 12157.84, 12157.84),
+            });
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Order!.Lines[0].BuyerItemCode.Should().Be("43469659");
+        result.ReviewLineNumbers.Should().NotContain(1);
+    }
+
+    // ── F-21: locale-aware order-date interpretation (verbatim raw date) ──────
+
+    [Fact]
+    public void ValidateAndMap_EuropeanRawOrderDate_IsReadDayFirst_NotMonthFirst()
+    {
+        // The Rheinbahn/Siemens/REDACTED-PARTY bug: printed "12.06.2026" (12 June) but the model
+        // returned an inverted ISO order_date of 2026-12-06 (6 December). When the verbatim
+        // printed date is supplied it must be re-interpreted day-first for the EU document.
+        const string source = "Bestelldatum 12.06.2026 Currency EUR";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1",
+            OrderDate: "2026-12-06",          // the model's WRONG month-first reading
+            Currency: "EUR", BuyerName: "Rheinbahn",
+            Lines: new[] { new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "X", "Y", 1, "PCS", 0, 0) },
+            OrderDateRaw: "12.06.2026");      // the date exactly as printed
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Order!.OrderDate.Should().Be(new DateTime(2026, 6, 12),
+            "an EU document's 12.06.2026 is 12 June, re-derived from the verbatim printed date");
+    }
+
+    [Fact]
+    public void ValidateAndMap_UsdRawOrderDate_IsReadMonthFirst()
+    {
+        // A clearly-US document (USD) keeps month-first for the same ambiguous shape.
+        const string source = "Order date 12/06/2026 Currency USD";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "",
+            Currency: "USD", BuyerName: "US Buyer Inc",
+            Lines: new[] { new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "X", "Y", 1, "PCS", 0, 0) },
+            OrderDateRaw: "12/06/2026");
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Order!.OrderDate.Should().Be(new DateTime(2026, 12, 6));
+    }
+
+    [Fact]
+    public void ValidateAndMap_NoRawDate_FallsBackToModelInterpretedIso()
+    {
+        // Back-compat: with no verbatim raw date the model's own ISO order_date is used.
+        const string source = "1 X Y 1 PCS";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "2026-05-20", Currency: "EUR", BuyerName: "Acme",
+            Lines: new[] { new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "X", "Y", 1, "PCS", 0, 0) });
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Order!.OrderDate.Should().Be(new DateTime(2026, 5, 20));
+    }
+
+    // ── F-13: buyer/supplier collapse guard ──────────────────────────────────
+
+    [Fact]
+    public void ValidateAndMap_BuyerEqualsSupplier_DropsBuyerRatherThanShowingBothAsSame()
+    {
+        // The two roles MUST be distinct. If the model collapses them onto the same party
+        // we cannot trust the buyer attribution, so drop it (→ human review) rather than
+        // present the recipient as the buyer.
+        const string source = "1 X Y 1 PCS";
+
+        var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR",
+            BuyerName: "REDACTED-PARTY",
+            Lines: new[] { new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "X", "Y", 1, "PCS", 0, 0) },
+            SupplierName: "REDACTED-PARTY");
+
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
+
+        result.Order!.BuyerName.Should().BeNull(
+            "buyer and supplier are the same party → the buyer cannot be trusted, leave it for review");
+        result.Order.SupplierName.Should().Be("REDACTED-PARTY");
+    }
+
+    [Fact]
+    public void SystemPrompt_TellsModel_SupplierNumberIdentifiesTheRecipient()
+    {
+        // F-13 hardening: the recipient (supplier) in these POs is the party the document
+        // labels with a supplier/vendor number ("Vendor No.", "Lieferant", "Numer dostawcy",
+        // "Supplier:"). Assert the load-bearing guidance stays present.
+        var prompt = OpenAiPdfOrderExtractor.SystemPrompt;
+        prompt.Should().Contain("SUPPLIER NUMBER");
+        prompt.Should().Contain("is the SUPPLIER");
+    }
+
+    [Fact]
+    public void SystemPrompt_TellsModel_PositionalIndexIsNotAnItemCode()
+    {
+        // F-14 hardening: buyer_item_code must be a real product/part number, never the
+        // positional "Pos."/"Position" line counter.
+        var prompt = OpenAiPdfOrderExtractor.SystemPrompt;
+        prompt.Should().Contain("positional");
+    }
+
     // ── ValidateAndMap: anti-hallucination (number not in source) ────────────
 
     [Fact]
