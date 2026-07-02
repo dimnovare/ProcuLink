@@ -19,7 +19,7 @@ public class SupplierCatalogSource
     public Guid OrgId { get; set; }
     public Guid SupplierId { get; set; }
 
-    /// <summary>'sftp' | 'ftp' | 'ftps' | 'http' | 'https'.</summary>
+    /// <summary>'sftp' | 'ftp' | 'ftps' | 'http' | 'https' | 'logicom' (vendor fetcher).</summary>
     public string Protocol { get; set; } = "sftp";
 
     /// <summary>Host for sftp/ftp/ftps. Unused for http/https (the full URL is in <see cref="Url"/>).</summary>
@@ -62,8 +62,20 @@ public class SupplierCatalogSource
     /// <summary>HTTP method for http/https sources — 'GET' only in v2 (default). Null for sftp/ftp.</summary>
     public string? HttpMethod { get; set; }
 
-    /// <summary>'auto' | 'csv' | 'xlsx'. 'auto' routes on the remote file extension.</summary>
+    /// <summary>
+    /// 'auto' | 'csv' | 'xlsx' | 'json' | 'xml' | 'cif'. 'auto' content-sniffs (then routes on
+    /// the remote file extension). ZIP archives are transparently unwrapped before this routing.
+    /// </summary>
     public string FileFormat { get; set; } = "auto";
+
+    /// <summary>
+    /// Optional per-source column mapping (plan 2026-07-02 D3): a flat JSON object
+    /// <c>{"sourceColumn":"canonicalField"}</c> checked BEFORE the global aliases. Enables feeds
+    /// whose headers don't alias-match (REDACTED-PARTY <c>{"Id":"code",…}</c>, REDACTED-PARTY named columns) and
+    /// headerless feeds via numeric keys + the <c>"__noheader__":"true"</c> / <c>"__encoding__"</c>
+    /// directives (Ingram/Also positional, cp1252). Not a secret — echoed back in responses.
+    /// </summary>
+    public string? ColumnMappingJson { get; set; }
 
     /// <summary>Server-clamped to [1, 336] hours (14 days).</summary>
     public int SyncIntervalHours { get; set; } = 24;

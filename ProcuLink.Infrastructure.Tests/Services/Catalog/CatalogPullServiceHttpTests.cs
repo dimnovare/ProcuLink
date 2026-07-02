@@ -204,7 +204,7 @@ public class CatalogPullServiceHttpTests
         var act = () => h.Service.PullAsync(h.OrgId, h.SourceId, CancellationToken.None);
 
         (await act.Should().ThrowAsync<CatalogSyncException>())
-            .Which.Message.Should().Be("Catalog file exceeds 10 MB.");
+            .Which.Message.Should().Be("Catalog file exceeds 256 MB.");
         h.Sink.UpsertCalls.Should().Be(0);
     }
 

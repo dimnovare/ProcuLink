@@ -105,15 +105,17 @@ public class SupplierCatalogFileParserTests
         result.HeaderColumns.Should().Equal("name", "price");
     }
 
-    // ── EU comma-decimal regression (locale-bug memory) ───────────────────────
-    // Parity gate: prices parse with NumberStyles.Any + InvariantCulture exactly as the
-    // original controller code did — including the invariant thousands-separator quirk.
+    // ── EU comma-decimal handling (locale-bug fix, plan 2026-07-02) ────────────
+    // The price parse is now locale-tolerant (last of '.'/',' is the decimal separator).
+    // This CORRECTS the earlier invariant-only behaviour that silently turned the EU
+    // comma-decimal "9,99" into 999 — a real data-integrity bug for distributor feeds
+    // (REDACTED-PARTY ships prices like "674,68"). Full coverage in CatalogFormatAndMappingTests.
 
     [Theory]
     [InlineData("0.04", "0.04")]
-    [InlineData("1,234.56", "1234.56")] // invariant thousands separator
-    [InlineData("9,99", "999")]         // invariant treats ',' as a group separator (original behaviour kept)
-    public async Task ParseCsv_PriceParsing_MatchesOriginalInvariantBehaviour(string raw, string expected)
+    [InlineData("1,234.56", "1234.56")] // US thousands.decimal
+    [InlineData("9,99", "9.99")]         // EU comma decimal — now correct (was 999)
+    public async Task ParseCsv_PriceParsing_IsLocaleTolerant(string raw, string expected)
     {
         var csv = $"code;name;price\nA-1;Widget;{raw}\n"; // ';' delimiter so ',' stays inside the cell
 
@@ -150,7 +152,7 @@ public class SupplierCatalogFileParserTests
     // ── H4: row cap ───────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task ParseCsv_RowCap_AbortsAt50001Rows()
+    public async Task ParseCsv_RowCap_AbortsOverCap()
     {
         var sb = new StringBuilder("code\n");
         for (var i = 0; i < SupplierCatalogFileParser.MaxCatalogRows + 1; i++)
@@ -159,14 +161,13 @@ public class SupplierCatalogFileParserTests
         var act = () => SupplierCatalogFileParser.ParseCsvAsync(Csv(sb.ToString()), CancellationToken.None);
 
         await act.Should().ThrowAsync<CatalogTooLargeException>()
-            .WithMessage("*50,000 row limit*");
+            .WithMessage("*row limit*");
     }
 
     [Fact]
     public async Task ParseCsv_ExactlyAtRowCap_Parses()
     {
-        // 3 rows with a tiny pretend-cap is not possible (cap is const), so prove the
-        // boundary the cheap way: cap rows exactly must NOT throw. 50k rows is ~400 KB.
+        // Boundary: cap rows exactly must NOT throw.
         var sb = new StringBuilder("code\n");
         for (var i = 0; i < SupplierCatalogFileParser.MaxCatalogRows; i++)
             sb.Append("C-").Append(i).Append('\n');

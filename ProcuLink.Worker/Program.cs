@@ -289,6 +289,10 @@ builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
 builder.Services.AddSingleton<IFtpFetchClientFactory, FluentFtpFetchClientFactory>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,
                            ProcuLink.Infrastructure.Services.Catalog.CatalogPullService>();
+// Vendor catalog fetchers (plan 2026-07-02 D4) — the Worker runs the sync jobs, so the fetcher
+// must resolve here too (DI foot-gun precedent 4607d6d).
+builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogVendorFetcher,
+                           ProcuLink.Infrastructure.Services.Catalog.LogicomQuickConnectFetcher>();
 builder.Services.AddScoped<CatalogSyncDispatcherJob>();
 builder.Services.AddScoped<CatalogSyncSourceJob>();
 // IEmailBodyOrderExtractor intentionally NOT registered here: OpenAiEmailBodyOrderExtractor

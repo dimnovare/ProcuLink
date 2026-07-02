@@ -689,6 +689,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.AuthConfigEncrypted).HasColumnName("auth_config_encrypted");
             b.Property(x => x.HttpMethod).HasColumnName("http_method").HasDefaultValue("GET");
             b.Property(x => x.FileFormat).HasColumnName("file_format").IsRequired().HasDefaultValue("auto");
+            // Per-source column mapping (plan 2026-07-02 D3). Nullable text — flat JSON object.
+            b.Property(x => x.ColumnMappingJson).HasColumnName("column_mapping_json");
             b.Property(x => x.SyncIntervalHours).HasColumnName("sync_interval_hours").HasDefaultValue(24);
             b.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(false);
             b.Property(x => x.LastSyncAt).HasColumnName("last_sync_at");

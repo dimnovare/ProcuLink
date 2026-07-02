@@ -1,0 +1,73 @@
+<Index xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <CatalogHead>
+    <CatalogId>2026070203000627543751594</CatalogId>
+    <CustomerId>REDACTED-NETWORK-ID</CustomerId>
+    <UpdatedDate>2026-07-02</UpdatedDate>
+    <UpdatedTime>03:00</UpdatedTime>
+    <Currency>EUR</Currency>
+    <UnspscVersion>20.0601</UnspscVersion>
+  </CatalogHead>
+<IndexItem>
+    <ItemID>
+      <SupplierPartID>2403916</SupplierPartID>
+      <SupplierPartAuxiliaryID>30670483</SupplierPartAuxiliaryID>
+    </ItemID>
+    <ItemDetail>
+      <UnitPrice>
+        <Money currency="EUR">7.01</Money>
+      </UnitPrice>
+      <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
+      <URL>https://example.invalid/redacted</URL>
+      <UnitOfMeasure>EA</UnitOfMeasure>
+      <Classification domain="UNSPSC">43211600</Classification>
+      <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
+      <ManufacturerName>REDACTED-ORDER-DATA</ManufacturerName>
+      <LeadTime>4</LeadTime>
+      <Extrinsic name="ListName">Self-service portal</Extrinsic>
+      <Extrinsic name="Image">https://example.invalid/redacted</Extrinsic>
+      <Extrinsic name="Thumbnail">https://example.invalid/redacted</Extrinsic>
+    </ItemDetail>
+  </IndexItem>
+<IndexItem>
+    <ItemID>
+      <SupplierPartID>39962336</SupplierPartID>
+      <SupplierPartAuxiliaryID>185353545</SupplierPartAuxiliaryID>
+    </ItemID>
+    <ItemDetail>
+      <UnitPrice>
+        <Money currency="EUR">7.69</Money>
+      </UnitPrice>
+      <Description xml:lang="en">REDACTED-PARTY - Screen protector for mobile phone - full coverage - 2.5D - glass - frame colour black - for Apple iPhone 16 Pro</Description>
+      <URL>https://example.invalid/redacted</URL>
+      <UnitOfMeasure>EA</UnitOfMeasure>
+      <Classification domain="UNSPSC">43191600</Classification>
+      <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
+      <ManufacturerName>Deltaco</ManufacturerName>
+      <LeadTime>5</LeadTime>
+      <Extrinsic name="ListName">Self-service portal</Extrinsic>
+      <Extrinsic name="Image">https://example.invalid/redacted</Extrinsic>
+      <Extrinsic name="Thumbnail">https://example.invalid/redacted</Extrinsic>
+    </ItemDetail>
+  </IndexItem>
+<IndexItem>
+    <ItemID>
+      <SupplierPartID>37865558</SupplierPartID>
+      <SupplierPartAuxiliaryID>178354862</SupplierPartAuxiliaryID>
+    </ItemID>
+    <ItemDetail>
+      <UnitPrice>
+        <Money currency="EUR">8.02</Money>
+      </UnitPrice>
+      <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
+      <URL>https://example.invalid/redacted</URL>
+      <UnitOfMeasure>EA</UnitOfMeasure>
+      <Classification domain="UNSPSC">43211609</Classification>
+      <ManufacturerPartID>REDACTED-ITEM</ManufacturerPartID>
+      <ManufacturerName>Gembird</ManufacturerName>
+      <LeadTime>28</LeadTime>
+      <Extrinsic name="ListName">Self-service portal</Extrinsic>
+      <Extrinsic name="Image">https://example.invalid/redacted</Extrinsic>
+      <Extrinsic name="Thumbnail">https://example.invalid/redacted</Extrinsic>
+    </ItemDetail>
+  </IndexItem>
+</Index>

@@ -1,0 +1,17 @@
+CIF_I_V3.0
+CHARSET:UTF-8
+LOADMODE:F
+CODEFORMAT:UNSPSC
+CURRENCY:EUR
+SUPPLIERID_DOMAIN:networkid
+ITEMCOUNT:3
+TIMESTAMP:02/07/2026
+UNUOM:TRUE
+COMMENTS:
+FIELDNAMES: Supplier ID,Supplier Part ID,Manufacturer Part ID,Item Description,SPSC Code,Unit Price,Unit of Measure,Lead Time,Manufacturer Name,Supplier URL,Manufacturer URL,Market Price,Price Unit Quantity,Currency,Language,Supplier Part Auxiliary ID,Short Name,Expiration Date,Effective Date,Parametric Name,Parametric Data,Image,Thumbnail,hazardousmaterials,Keywords,minimumquantity,QuantityInterval,Tier,Classification Codes,Price Segment,PunchOut Enabled,PunchoutLevel,IsPartial,IsInternalPartId,Delete,InKitOnly,PriceUnitQuantity,PriceUnit,UnitConversion,PriceUnitQuantityDescription,cus_materialnumber,z_remark,Packing Quantity,Content Unit
+DATA
+REDACTED-NETWORK-ID,13080788,REDACTED-ORDER-DATA,"REDACTED-ORDER-DATAn de raccordement - RJ-45 (M) pour RJ-45 (M) - 50 cm - UTP - CAT 5e - sans crochet. bloqué - rouge",43223303,4.24,EA,5,StarTech,https://example.invalid/redacted,,0,1,EUR,en_US,51582090,"REDACTED-ORDER-DATA",,,,,https://example.invalid/redacted,https://example.invalid/redacted,FALSE,Câbles à paire torsadée,1,1,,,,TRUE,product,,,,,,,,,,,1,EA
+REDACTED-NETWORK-ID,13080785,REDACTED-ORDER-DATA,"REDACTED-ORDER-DATA de raccordement - RJ-45 (M) pour RJ-45 (M) - 50 cm - UTP - CAT 5e - sans crochet. bloqué - vert",43223303,4.24,EA,5,StarTech,https://example.invalid/redacted,,0,1,EUR,en_US,51582088,"REDACTED-ORDER-DATA",,,,,https://example.invalid/redacted,https://example.invalid/redacted,FALSE,Câbles à paire torsadée,1,1,,,,TRUE,product,,,,,,,,,,,1,EA
+REDACTED-NETWORK-ID,11886280,REDACTED-ITEM,"REDACTED-ORDER-DATA",43223303,4.28,EA,5,REDACTED-ORDER-DATA,https://example.invalid/redacted,,0,1,EUR,en_US,46026150,"REDACTED-ORDER-DATA",,,,,https://example.invalid/redacted,https://example.invalid/redacted,FALSE,Câbles à paire torsadée,1,1,,,,TRUE,product,,,,,,,,,,,1,EA
+
+ENDOFDATA

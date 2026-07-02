@@ -787,7 +787,7 @@ public class SuppliersController : ControllerBase
         }
         catch (Exception)
         {
-            return BadRequest("Could not read the catalog file. Provide a CSV or XLSX with a 'code' column.");
+            return BadRequest("Could not read the catalog file. Provide a CSV, XLSX, JSON, XML, or CIF catalog with a 'code' column.");
         }
 
         var parsed   = drafts.Count;
@@ -868,22 +868,40 @@ public class SuppliersController : ControllerBase
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
 
         var protocol = request.Protocol?.Trim().ToLowerInvariant();
-        if (protocol is not ("sftp" or "ftp" or "ftps" or "http" or "https"))
-            return BadRequest(new { error = "Protocol must be one of: sftp, ftp, ftps, http, https." });
+        if (protocol is not ("sftp" or "ftp" or "ftps" or "http" or "https" or "logicom"))
+            return BadRequest(new { error = "Protocol must be one of: sftp, ftp, ftps, http, https, logicom." });
 
+        var isVendor = protocol is "logicom";
         var isHttp = protocol is "http" or "https";
+        var isUrlBased = isHttp || isVendor;
 
         var fileFormat = string.IsNullOrWhiteSpace(request.FileFormat)
             ? "auto"
             : request.FileFormat.Trim().ToLowerInvariant();
-        if (fileFormat is not ("auto" or "csv" or "xlsx" or "json"))
-            return BadRequest(new { error = "File format must be one of: auto, csv, xlsx, json." });
+        if (fileFormat is not ("auto" or "csv" or "xlsx" or "json" or "xml" or "cif"))
+            return BadRequest(new { error = "File format must be one of: auto, csv, xlsx, json, xml, cif." });
 
-        // ── http/https branch — URL-based, auth in auth_config (never in the URL) ──
-        if (isHttp)
+        // Per-source column mapping (plan 2026-07-02 D3): values must be canonical fields
+        // (plus the __noheader__ / __encoding__ directives). Reject unknown targets early.
+        if (request.ColumnMapping is not null)
+        {
+            var validTargets = new[] { "code", "name", "unit", "price", "currency", "barcode", "external_id" };
+            foreach (var (key, value) in request.ColumnMapping)
+            {
+                if (key is "__noheader__" or "__encoding__") continue;
+                if (!validTargets.Contains(value?.Trim().ToLowerInvariant()))
+                    return BadRequest(new
+                    {
+                        error = $"Column mapping target '{value}' is not valid. Valid targets: {string.Join(", ", validTargets)}.",
+                    });
+            }
+        }
+
+        // ── URL-based branches — auth never in the URL ─────────────────────────────
+        if (isUrlBased)
         {
             if (string.IsNullOrWhiteSpace(request.Url))
-                return BadRequest(new { error = "URL is required for http and https." });
+                return BadRequest(new { error = "URL is required for http, https, and vendor connectors." });
             if (!Uri.TryCreate(request.Url.Trim(), UriKind.Absolute, out var url)
                 || (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))
                 return BadRequest(new { error = "URL must be an absolute http or https URL." });
@@ -891,13 +909,29 @@ public class SuppliersController : ControllerBase
             if (!string.IsNullOrEmpty(url.UserInfo))
                 return BadRequest(new { error = "credentials_in_url_not_allowed" });
 
-            var authMethod = request.AuthMethod?.Trim().ToLowerInvariant();
-            if (authMethod is not (null or "" or "none" or "apikey" or "bearer" or "basic" or "oauth2_client_credentials"))
-                return BadRequest(new { error = "Auth method must be one of: none, apikey, bearer, basic, oauth2_client_credentials." });
-            // v2: GET only (POST-with-body is out of scope).
-            var httpMethod = request.HttpMethod?.Trim().ToUpperInvariant();
-            if (httpMethod is not (null or "" or "GET"))
-                return BadRequest(new { error = "Only the GET http method is supported." });
+            if (isHttp)
+            {
+                var authMethod = request.AuthMethod?.Trim().ToLowerInvariant();
+                if (authMethod is not (null or "" or "none" or "apikey" or "bearer" or "basic" or "oauth2_client_credentials"))
+                    return BadRequest(new { error = "Auth method must be one of: none, apikey, bearer, basic, oauth2_client_credentials." });
+                // v2: GET only (POST-with-body is out of scope).
+                var httpMethod = request.HttpMethod?.Trim().ToUpperInvariant();
+                if (httpMethod is not (null or "" or "GET"))
+                    return BadRequest(new { error = "Only the GET http method is supported." });
+            }
+            else if (protocol == "logicom")
+            {
+                // Vendor creds required — either provided now, or kept from a previous save.
+                var current = await settings.GetAsync(orgId, id, ct);
+                var provided = request.VendorConfig is { } vc
+                    && !string.IsNullOrWhiteSpace(vc.CustomerId)
+                    && !string.IsNullOrWhiteSpace(vc.ConsumerKey)
+                    && !string.IsNullOrWhiteSpace(vc.ConsumerSecret)
+                    && !string.IsNullOrWhiteSpace(vc.AccessTokenKey);
+                var kept = request.VendorConfig is null && current?.HasAuthConfig == true;
+                if (!provided && !kept)
+                    return BadRequest(new { error = "Logicom requires CustomerID, ConsumerKey, ConsumerSecret, and AccessTokenKey." });
+            }
         }
         else
         {
@@ -926,7 +960,7 @@ public class SuppliersController : ControllerBase
 
         // Save-time SSRF pre-check — fail fast in the UI instead of at the first poll.
         // The pull pipeline re-validates immediately before EVERY connect regardless.
-        if (isHttp)
+        if (isUrlBased)
         {
             var urlGuard = await guard.ValidateAsync(request.Url!.Trim(), ct);
             if (!urlGuard.Allowed)

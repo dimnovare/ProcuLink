@@ -43,11 +43,16 @@ public sealed record UpsertCatalogSourceRequest(
     string? FileFormat,
     int? SyncIntervalHours,
     bool IsEnabled,
-    // http/https only (null/ignored for sftp/ftp):
+    // http/https/logicom only (null/ignored for sftp/ftp):
     string? Url = null,
     string? AuthMethod = null,
     CatalogHttpAuthConfig? AuthConfig = null,
-    string? HttpMethod = null);
+    string? HttpMethod = null,
+    // Per-source column mapping (plan 2026-07-02 D3): {"sourceColumn":"canonicalField"} plus the
+    // "__noheader__"/"__encoding__" directives. null = keep stored, {} = clear. Not a secret.
+    IReadOnlyDictionary<string, string>? ColumnMapping = null,
+    // Logicom vendor-fetcher credentials (plan 2026-07-02 D4/6.4), write-only like AuthConfig.
+    CatalogVendorConfig? VendorConfig = null);
 
 /// <summary>
 /// HTTP auth secrets supplied on PUT (write-only). The exact field set used depends on
@@ -69,6 +74,19 @@ public sealed record CatalogHttpAuthConfig(
     string? ClientId = null,
     string? ClientSecret = null,
     string? Scope = null);
+
+/// <summary>
+/// Write-only vendor-fetcher credentials for the <c>logicom</c> protocol (plan 2026-07-02 D4).
+/// Logicom's exotic 2FA AES auth deliberately bypasses <c>HttpAuthApplier</c> via the vendor
+/// fetcher seam, so its secrets ride the same AES-GCM <c>AuthConfigEncrypted</c> envelope under a
+/// <c>type="logicom_quickconnect"</c> discriminator. Never echoed back.
+/// </summary>
+public sealed record CatalogVendorConfig(
+    string? CustomerId = null,
+    string? ConsumerKey = null,
+    string? ConsumerSecret = null,
+    string? AccessTokenKey = null,
+    string? Currency = null);
 
 /// <summary>Masked GET/PUT response — never carries ciphertext or plaintext secrets.</summary>
 public sealed record CatalogSourceResponse(
@@ -95,7 +113,9 @@ public sealed record CatalogSourceResponse(
     string? Url = null,
     string? AuthMethod = null,
     bool HasAuthConfig = false,
-    string? HttpMethod = null);
+    string? HttpMethod = null,
+    // Per-source column mapping — NOT a secret, echoed back so the editor can show/edit it.
+    IReadOnlyDictionary<string, string>? ColumnMapping = null);
 
 /// <summary>Upsert outcome: the masked state + whether an immediate first sync was enqueued.</summary>
 public sealed record CatalogSourceUpsertResult(CatalogSourceResponse Source, bool SyncEnqueued);

@@ -47,6 +47,8 @@ public class CatalogPullService : ICatalogPullService
     internal const string ErrAuthConfigUnreadable = "Stored authentication settings could not be read — re-enter the credentials.";
     internal const string ErrHttpAuthFailed   = "Authentication failed.";
     internal const string ErrHttpStatus       = "The catalog server returned an error response.";
+    internal const string ErrArchiveUnreadable = "The catalog archive could not be read.";
+    internal const string ErrVendorUnavailable = "No fetcher is configured for this catalog source.";
 
     private readonly ProcuLinkDbContext        _db;
     private readonly DeliveryEncryptionService _encryption;
@@ -57,6 +59,7 @@ public class CatalogPullService : ICatalogPullService
     private readonly HttpAuthApplier           _auth;
     private readonly ISupplierCatalogService   _catalog;
     private readonly ILogger<CatalogPullService> _logger;
+    private readonly IReadOnlyDictionary<string, ICatalogVendorFetcher> _vendorFetchers;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -67,6 +70,13 @@ public class CatalogPullService : ICatalogPullService
     /// <summary>H3 — overall per-pull deadline (linked CTS over the caller token). Internal test seam.</summary>
     internal TimeSpan OverallDeadline { get; set; } = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// Widened deadline for slow vendor / http feeds (plan 2026-07-02 5.3): Logicom's paginated
+    /// crawl (fresh token per page) and 100MEGA's ~160 s server-side generation both need well
+    /// over the 5-minute default. Internal test seam.
+    /// </summary>
+    internal TimeSpan VendorDeadline { get; set; } = TimeSpan.FromMinutes(15);
+
     public CatalogPullService(
         ProcuLinkDbContext          db,
         DeliveryEncryptionService   encryption,
@@ -75,7 +85,8 @@ public class CatalogPullService : ICatalogPullService
         IFtpFetchClientFactory      ftpFactory,
         IHttpClientFactory          httpClientFactory,
         ISupplierCatalogService     catalog,
-        ILogger<CatalogPullService> logger)
+        ILogger<CatalogPullService> logger,
+        IEnumerable<ICatalogVendorFetcher>? vendorFetchers = null)
     {
         _db                = db;
         _encryption        = encryption;
@@ -88,6 +99,10 @@ public class CatalogPullService : ICatalogPullService
         _auth              = new HttpAuthApplier(guard, logger);
         _catalog           = catalog;
         _logger            = logger;
+        // Vendor fetchers (plan 2026-07-02 D4) keyed by protocol — optional so existing tests that
+        // build the service with the original ctor still compile.
+        _vendorFetchers    = (vendorFetchers ?? Enumerable.Empty<ICatalogVendorFetcher>())
+            .ToDictionary(f => f.Protocol, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -180,7 +195,8 @@ public class CatalogPullService : ICatalogPullService
 
         var parse = fetched.Parse!;
         var headers = parse.HeaderColumns;
-        var colMap = SupplierCatalogFileParser.MapHeaderColumns(headers);
+        var overrides = DecodeColumnMapping(source.ColumnMappingJson);
+        var colMap = SupplierCatalogFileParser.MapHeaderColumns(headers, overrides);
 
         var mapped = new Dictionary<string, string>();
         var unmapped = new List<string>();
@@ -235,11 +251,13 @@ public class CatalogPullService : ICatalogPullService
             throw new CatalogSyncException(ErrSupplierGone);
 
         var isHttp = source.Protocol is "http" or "https";
+        var isVendor = _vendorFetchers.ContainsKey(source.Protocol);
+        var isFileChannel = source.Protocol is "sftp" or "ftp" or "ftps";
 
         // Credentials: write-only AES-GCM envelope. Decrypt returns null on any error
         // (wrong key, corrupt envelope) — surface that honestly instead of an auth error.
         var password = string.Empty;
-        if (!isHttp && !string.IsNullOrEmpty(source.EncryptedPassword))
+        if (isFileChannel && !string.IsNullOrEmpty(source.EncryptedPassword))
         {
             password = _encryption.Decrypt(source.EncryptedPassword)
                 ?? throw new CatalogSyncException(ErrCredentialsUnreadable);
@@ -250,14 +268,19 @@ public class CatalogPullService : ICatalogPullService
             throw new CatalogSyncException(ErrCredentialsUnreadable);
         }
 
-        // H3: one overall deadline for guard + connect + download + parse.
-        using var deadlineCts = new CancellationTokenSource(OverallDeadline);
+        // H3: one overall deadline for guard + connect + download + parse. Vendor fetchers (slow
+        // paginated APIs like Logicom / a slow-generating https feed like 100MEGA) get a widened
+        // deadline (plan 2026-07-02 5.3) since a full-catalog crawl legitimately takes longer.
+        var deadline = (isVendor || isHttp) && OverallDeadline < VendorDeadline ? VendorDeadline : OverallDeadline;
+        using var deadlineCts = new CancellationTokenSource(deadline);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, deadlineCts.Token);
         var token = linkedCts.Token;
 
-        var downloaded = isHttp
-            ? await DownloadHttpAsync(source, token)
-            : await DownloadFileChannelAsync(source, password, token);
+        var downloaded = isVendor
+            ? await DownloadVendorAsync(source, token)
+            : isHttp
+                ? await DownloadHttpAsync(source, token)
+                : await DownloadFileChannelAsync(source, password, token);
 
         string fileHash;
         using (downloaded.Data)
@@ -271,6 +294,8 @@ public class CatalogPullService : ICatalogPullService
             // Unchanged-skip: same bytes as the last completed import AND no failure since
             // (LastSyncError == null distinguishes "last completed fine" even while the
             // job's soft lock has already flipped LastSyncStatus to 'running').
+            // NB: the hash is over the TRANSPORTED bytes (before any zip unwrap), so the skip key
+            // stays stable and cheap regardless of the inner payload (plan 2026-07-02 D1/anchor).
             if (!skipUnchangedShortCircuit
                 && !string.IsNullOrEmpty(source.LastFileHash)
                 && string.Equals(fileHash, source.LastFileHash, StringComparison.OrdinalIgnoreCase)
@@ -280,20 +305,50 @@ public class CatalogPullService : ICatalogPullService
                 return new FetchOutcome(UnchangedSkip: true, fileHash, fileName, byteCount, Parse: null);
             }
 
-            data.Position = 0;
-            var parse = source.FileFormat switch
+            // Transparent ZIP unwrap (plan 2026-07-02 D1) — AFTER the hash (skip semantics
+            // preserved), BEFORE parsing. xlsx (an OPC zip) is left intact; the inner entry name
+            // replaces fileName for extension routing. Non-zip → passthrough (null).
+            var parseData = data;
+            var parseFileName = fileName;
+            CatalogArchiveUnwrapper.UnwrappedEntry? unwrapped = null;
+            try
             {
-                "csv"  => await SupplierCatalogFileParser.ParseCsvAsync(data, token),
-                "xlsx" => SupplierCatalogFileParser.ParseXlsx(data),
-                "json" => await SupplierCatalogFileParser.ParseJsonAsync(data, token),
-                // 'auto': http uses the server's Content-Type first (then filename, then CSV);
-                // the file channels route on the remote file extension.
-                _ when isHttp => await SupplierCatalogFileParser.ParseByContentTypeAsync(
-                                     data, downloaded.ContentType, fileName, token),
-                _      => await SupplierCatalogFileParser.ParseByFileNameAsync(data, fileName, token),
-            };
+                unwrapped = CatalogArchiveUnwrapper.TryUnwrap(data, CatalogLimits.MaxUncompressedBytes);
+            }
+            catch (CatalogTooLargeException) { throw; }
+            catch (Exception ex) when (ex is InvalidDataException or IOException)
+            {
+                throw new CatalogSyncException(ErrArchiveUnreadable);
+            }
+            if (unwrapped is not null)
+            {
+                parseData = unwrapped.Data;
+                parseFileName = unwrapped.EntryName;
+            }
 
-            return new FetchOutcome(UnchangedSkip: false, fileHash, fileName, byteCount, parse);
+            // Per-source column mapping (plan 2026-07-02 D3) — decoded once, passed to every parse
+            // path so overrides + the honesty report reflect the same mapping.
+            var overrides = DecodeColumnMapping(source.ColumnMappingJson);
+
+            using (unwrapped?.Data)
+            {
+                parseData.Position = 0;
+                var parse = source.FileFormat switch
+                {
+                    "csv"  => await SupplierCatalogFileParser.ParseCsvAsync(parseData, token, overrides, null),
+                    "xlsx" => SupplierCatalogFileParser.ParseXlsx(parseData, overrides),
+                    "json" => await SupplierCatalogFileParser.ParseJsonAsync(parseData, token, overrides),
+                    "xml"  => await SupplierCatalogFileParser.ParseXmlAsync(parseData, token, overrides),
+                    "cif"  => await SupplierCatalogFileParser.ParseCifAsync(parseData, token, overrides),
+                    // 'auto': content-sniff first (then Content-Type / extension). Vendor + http
+                    // supply a Content-Type; file channels route on the remote/inner file name.
+                    _ when isVendor || isHttp => await SupplierCatalogFileParser.ParseByContentTypeAsync(
+                                         parseData, downloaded.ContentType, parseFileName, token, overrides),
+                    _      => await SupplierCatalogFileParser.ParseByFileNameAsync(parseData, parseFileName, token, overrides),
+                };
+
+                return new FetchOutcome(UnchangedSkip: false, fileHash, parseFileName, byteCount, parse);
+            }
         }
     }
 
@@ -325,7 +380,7 @@ public class CatalogPullService : ICatalogPullService
                     using var session = _sftpFactory.Connect(
                         source.Host, source.Port, source.Username ?? string.Empty, password);
                     using var remote = session.OpenRead(source.RemotePath);
-                    return await BoundedRead.CopyAsync(remote, IngressLimits.MaxFileBytes, token);
+                    return await BoundedRead.CopyAsync(remote, CatalogLimits.MaxCatalogFileBytes, token);
                 }, CancellationToken.None).WaitAsync(token);
                 return new DownloadOutcome(sftpData, fileName, ContentType: null);
 
@@ -336,7 +391,7 @@ public class CatalogPullService : ICatalogPullService
                            string.IsNullOrWhiteSpace(source.Username) ? "anonymous" : source.Username,
                            password, explicitTls: source.Protocol == "ftps"))
                 {
-                    var ftpData = await ftp.DownloadAsync(source.RemotePath, IngressLimits.MaxFileBytes, token);
+                    var ftpData = await ftp.DownloadAsync(source.RemotePath, CatalogLimits.MaxCatalogFileBytes, token);
                     return new DownloadOutcome(ftpData, fileName, ContentType: null);
                 }
 
@@ -399,7 +454,7 @@ public class CatalogPullService : ICatalogPullService
 
         // (3) Bounded streamed read — at most cap+1 bytes ever buffered.
         await using var responseStream = await response.Content.ReadAsStreamAsync(token);
-        var data = await BoundedRead.CopyAsync(responseStream, IngressLimits.MaxFileBytes, token);
+        var data = await BoundedRead.CopyAsync(responseStream, CatalogLimits.MaxCatalogFileBytes, token);
 
         var contentType = response.Content.Headers.ContentType?.MediaType;
         // Filename hint: the URL's last path segment (drives 'auto' extension routing as a
@@ -409,6 +464,61 @@ public class CatalogPullService : ICatalogPullService
             : null;
 
         return new DownloadOutcome(data, string.IsNullOrWhiteSpace(fileName) ? null : fileName, contentType);
+    }
+
+    // ── Vendor fetcher channel (plan 2026-07-02 D4/6.2) ────────────────────────
+
+    /// <summary>
+    /// Runs a registered <see cref="ICatalogVendorFetcher"/> (e.g. Logicom). Same security
+    /// controls as the http path: SSRF-validate the source URL up front, decrypt the write-only
+    /// vendor-credential envelope, hand the fetcher the SSRF-guarded <c>delivery</c> client. The
+    /// fetcher returns the SAME byte shape as the file/http channels, so hash-skip, unwrap, caps,
+    /// parsing, and error sanitisation apply unchanged.
+    /// </summary>
+    private async Task<DownloadOutcome> DownloadVendorAsync(SupplierCatalogSource source, CancellationToken token)
+    {
+        var fetcher = _vendorFetchers[source.Protocol];
+
+        // Vendor fetchers are URL-based; the (SSRF pre-validated at save) URL is re-validated here.
+        var url = source.Url;
+        if (string.IsNullOrWhiteSpace(url))
+            throw new CatalogSyncException(ErrUnexpected);
+        var guardResult = await _guard.ValidateAsync(url, token);
+        if (!guardResult.Allowed)
+            throw new CatalogSyncException(ErrUrlNotAllowed);
+
+        // Decrypt the write-only vendor-credential envelope (decrypt returns null on any error).
+        JsonElement creds = default;
+        if (!string.IsNullOrEmpty(source.AuthConfigEncrypted))
+        {
+            var json = _encryption.Decrypt(source.AuthConfigEncrypted)
+                ?? throw new CatalogSyncException(ErrAuthConfigUnreadable);
+            try { creds = JsonSerializer.Deserialize<JsonElement>(json, JsonOpts); }
+            catch (JsonException) { throw new CatalogSyncException(ErrAuthConfigUnreadable); }
+        }
+
+        var client = CreateHttpClient();
+        var ctx = new VendorFetchContext(url, creds, client, CatalogLimits.MaxCatalogFileBytes);
+        var result = await fetcher.FetchAsync(ctx, token);
+        return new DownloadOutcome(result.Data, result.FileName, result.ContentType);
+    }
+
+    // ── Per-source column mapping (plan 2026-07-02 D3) ─────────────────────────
+
+    /// <summary>
+    /// Decodes the flat <c>{"sourceColumn":"canonicalField"}</c> mapping JSON (plus the
+    /// <c>__noheader__</c>/<c>__encoding__</c> directives) into the dictionary the parser reads.
+    /// Returns null on absent/blank/malformed JSON — the parser then uses the global aliases.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? DecodeColumnMapping(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            var map = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+            return map is { Count: > 0 } ? map : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     // ── M4 — sanitized error mapping ───────────────────────────────────────────
