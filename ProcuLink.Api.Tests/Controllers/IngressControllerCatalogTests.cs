@@ -13,6 +13,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Transform.Catalog;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Controllers;
@@ -23,7 +24,7 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// replay is a no-op (0 created — natural-key idempotency, no Idempotency-Key needed);
 /// slug mismatch → 403; unknown/foreign/soft-deleted supplier → 404; the supplier segment
 /// is route-constrained to GUID-only; the body cap and rate-limit policy are pinned by
-/// attribute (enforced by the server pipeline); >50k rows → 400.
+/// attribute (enforced by the server pipeline); a body over the catalog row cap → 400.
 /// </summary>
 public class IngressControllerCatalogTests
 {
@@ -236,18 +237,21 @@ public class IngressControllerCatalogTests
     }
 
     [Fact]
-    public async Task Push_Over50kRows_Returns400()
+    public async Task Push_OverRowCap_Returns400()
     {
+        // Cap-agnostic: reference SupplierCatalogFileParser.MaxCatalogRows so this test tracks
+        // the real limit (raised 50k → 200k in plan 2026-07-02 P0.8 for real distributor feeds)
+        // instead of a hardcoded threshold that silently rots when the cap moves.
         var h = Build();
-        var sb = new StringBuilder("code\n");
-        for (var i = 0; i < 50_001; i++) sb.Append("C-").Append(i).Append('\n');
+        var sb = new StringBuilder("code\n", capacity: (SupplierCatalogFileParser.MaxCatalogRows + 1) * 8);
+        for (var i = 0; i <= SupplierCatalogFileParser.MaxCatalogRows; i++) sb.Append("C-").Append(i).Append('\n');
         SetRawCsvBody(h.Http, sb.ToString());
 
         var result = await h.Controller.PushCatalog(Slug, h.SupplierId, h.Catalog, CancellationToken.None);
 
         var bad = result.Should().BeOfType<BadRequestObjectResult>().Subject;
         string error = ((dynamic)bad.Value!).error;
-        error.Should().Contain("50,000 row limit");
+        error.Should().Contain("row limit");
         (await h.Db.SupplierProducts.CountAsync()).Should().Be(0, "the cap aborts before any upsert");
     }
 
