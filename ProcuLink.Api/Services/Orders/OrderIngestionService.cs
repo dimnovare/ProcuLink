@@ -482,7 +482,10 @@ internal sealed class OrderIngestionService
             BuyerTaxId    = string.IsNullOrWhiteSpace(order.BuyerTaxId) ? null : order.BuyerTaxId.Trim(),
             SubTotal      = order.SubTotal,
             TaxTotal      = order.TaxTotal,
-            GrandTotal    = order.GrandTotal,
+            // Normalize an uncaptured/non-positive extracted grand total to NULL so downstream
+            // derivation (sum Qty*UnitPrice) takes over — a stored 0 would otherwise be emitted
+            // verbatim into delivered supplier documents. See NormalizeExtractedGrandTotal.
+            GrandTotal    = NormalizeExtractedGrandTotal(order.GrandTotal),
             PaymentTerms  = paymentTerms,
             DocumentType  = documentType,
             // V5: header-level requested delivery date — real persisted column (requested_delivery_date).
@@ -839,7 +842,10 @@ internal sealed class OrderIngestionService
             var newPaymentTerms = string.IsNullOrWhiteSpace(parsedOrder.PaymentTerms) ? null : parsedOrder.PaymentTerms.Trim();
             var newSubTotal   = parsedOrder.SubTotal;
             var newTaxTotal   = parsedOrder.TaxTotal;
-            var newGrandTotal = parsedOrder.GrandTotal;
+            // Normalize an uncaptured/non-positive extracted grand total to NULL (see the sync
+            // ingest seam above and NormalizeExtractedGrandTotal). This value flows to BOTH the
+            // ExecuteUpdateAsync below and the InMemory entity-setter fallback further down.
+            var newGrandTotal = NormalizeExtractedGrandTotal(parsedOrder.GrandTotal);
             // V5: header-level requested delivery date — real persisted column (requested_delivery_date).
             var newRequestedDeliveryDate = parsedOrder.RequestedDeliveryDate;
             // Phase 1 lossless capture header fields (nullable; only the LLM/email path populates these).
@@ -1278,6 +1284,24 @@ internal sealed class OrderIngestionService
             _ => "other",
         };
     }
+
+    /// <summary>
+    /// Normalises an extracted header grand total to NULL when it was not genuinely captured.
+    ///
+    /// PDF/XLSX extraction can emit <c>0</c> (the LLM's default) — or a bogus non-positive value —
+    /// when it cannot read an order total. A persisted <c>0</c> is NOT harmless: downstream
+    /// <c>MappedTransformService.DeriveGrandTotal</c> derives <c>sum(Qty*UnitPrice)</c> ONLY when
+    /// the stored value is NULL, so a stored <c>0</c> is emitted verbatim into delivered supplier
+    /// documents (wrong data) and drove the "€ 0.00" display bug (FE fix cf0ad05). Collapsing any
+    /// non-positive extracted total to NULL hands the total to line-sum derivation instead.
+    ///
+    /// A genuine zero-value order (all lines price to 0) is handled sanely: it becomes NULL here,
+    /// then derives back to 0 downstream — same emitted total, no special case. Only the reported
+    /// GrandTotal field is normalised; SubTotal has the same latent pattern but is out of scope
+    /// for this fix (TaxTotal is unaffected — it derives to 0 whether stored 0 or NULL).
+    /// </summary>
+    internal static decimal? NormalizeExtractedGrandTotal(decimal? extracted) =>
+        extracted is > 0m ? extracted : null;
 
     /// <summary>Test-only seam onto <see cref="MapExtractedToParsed"/> (which is private static).</summary>
     internal static ParsedOrder MapExtractedToParsedForTest(ExtractedOrder o) => MapExtractedToParsed(o);
