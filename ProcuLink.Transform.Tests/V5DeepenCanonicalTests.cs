@@ -145,6 +145,39 @@ public class V5DeepenCanonicalTests
     }
 
     [Fact]
+    public void BuildHeaderRow_GenuineZeroValueOrder_EmitsZeroSanely()
+    {
+        // Genuine zero-value order: GrandTotal unstated AND every line prices to 0. Derivation
+        // (sum Qty*UnitPrice) yields 0, which is the correct total to emit — not a bug.
+        var order = BuildOrder(grandTotal: null);
+        order.Lines = new List<PurchaseOrderLineEntity>
+        {
+            new() { LineNumber = 1, BuyerItemCode = "Z", SupplierItemCode = "SZ",
+                    Quantity = 0m, UnitPrice = 0m, NeedsReview = false },
+        };
+        var ov = new OrderMappingOverride();
+
+        var row = MappedTransformService.BuildHeaderRow(order, ov);
+
+        row["GrandTotal"].Should().Be("0");
+    }
+
+    [Fact]
+    public void BuildHeaderRow_TrustsStatedZero_HenceUpstreamMustNormalize()
+    {
+        // Characterization pin: a STORED 0 is trusted verbatim — DeriveGrandTotal derives only
+        // when GrandTotal is NULL. So a bogus extracted 0 emits "0" despite priced lines summing
+        // to 100. This is exactly why OrderIngestionService normalizes an uncaptured/non-positive
+        // extracted grand total to NULL at persistence (see OrderGrandTotalNormalizationTests).
+        var order = BuildOrder(grandTotal: 0m);   // default line: Qty 2 * UnitPrice 50 = 100
+        var ov = new OrderMappingOverride();
+
+        var row = MappedTransformService.BuildHeaderRow(order, ov);
+
+        row["GrandTotal"].Should().Be("0");        // stated 0 wins — derivation is skipped
+    }
+
+    [Fact]
     public void BuildHeaderRow_RequestedDeliveryDateIsEmptyWhenNull()
     {
         var order = BuildOrder();  // no requestedDeliveryDate
