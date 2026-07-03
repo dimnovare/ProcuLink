@@ -53,7 +53,7 @@ public class OutputNodeTemplateInferrerTests
         // Common PO-number aliases must pre-bind to PoNumber so paste-sample lands close to correct.
         var sample = $"{{\"{poFieldName}\":\"PO-1\",\"items\":[{{\"sku\":\"S-1\"}}]}}";
         var t = OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Json);
-        var field = Assert.Single(t.Root.Children.Where(c => c.Name == poFieldName));
+        var field = Assert.Single(t.Root.Children, c => c.Name == poFieldName);
         Assert.Equal("PoNumber", field.Rule!.CanonicalField);
     }
 
@@ -64,7 +64,7 @@ public class OutputNodeTemplateInferrerTests
         var t = OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Csv);
 
         Assert.Equal(OutputFormat.Csv, t.Format);
-        var arr = Assert.Single(t.Root.Children.Where(c => c.NodeType == OutputNodeType.Array));
+        var arr = Assert.Single(t.Root.Children, c => c.NodeType == OutputNodeType.Array);
         var fields = arr.Children[0].Children.ToDictionary(c => c.Name);
         Assert.Equal("PoNumber", fields["OrderRef"].Rule!.CanonicalField);          // header-y column → PoNumber
         Assert.Equal("SupplierItemCode", fields["ItemCode"].Rule!.CanonicalField);
@@ -84,16 +84,16 @@ public class OutputNodeTemplateInferrerTests
         Assert.Equal(OutputNodeType.Object, t.Root.NodeType);
 
         // orderRef attribute → Attribute node bound to PoNumber by name
-        var refAttr = Assert.Single(t.Root.Children.Where(c => c.NodeType == OutputNodeType.Attribute));
+        var refAttr = Assert.Single(t.Root.Children, c => c.NodeType == OutputNodeType.Attribute);
         Assert.Equal("orderRef", refAttr.Name);
         Assert.Equal("PoNumber", refAttr.Rule!.CanonicalField);
 
         // Header object with a Currency field
-        var header = Assert.Single(t.Root.Children.Where(c => c.Name == "Header"));
+        var header = Assert.Single(t.Root.Children, c => c.Name == "Header");
         Assert.Equal("Currency", header.Children[0].Name);
 
         // Lines wrapper → Array of Line items
-        var lines = Assert.Single(t.Root.Children.Where(c => c.Name == "Lines"));
+        var lines = Assert.Single(t.Root.Children, c => c.Name == "Lines");
         Assert.Equal(OutputNodeType.Array, lines.NodeType);
         var lineItem = lines.Children[0];
         Assert.Equal("Line", lineItem.Name);
@@ -115,17 +115,17 @@ public class OutputNodeTemplateInferrerTests
         """;
         var t = OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Json);
 
-        var ean = Assert.Single(t.Root.Children.Where(c => c.Name == "EANCode"));
+        var ean = Assert.Single(t.Root.Children, c => c.Name == "EANCode");
         Assert.Null(ean.Rule!.CanonicalField);
         Assert.Null(ean.Rule!.FixedValue);   // F-2: UNBOUND, not ""
 
-        var item = Assert.Single(t.Root.Children.Where(c => c.NodeType == OutputNodeType.Array)).Children[0];
-        var extra = Assert.Single(item.Children.Where(c => c.Name == "extraThing"));
+        var item = Assert.Single(t.Root.Children, c => c.NodeType == OutputNodeType.Array).Children[0];
+        var extra = Assert.Single(item.Children, c => c.Name == "extraThing");
         Assert.Null(extra.Rule!.CanonicalField);
         Assert.Null(extra.Rule!.FixedValue);
 
         // A MAPPABLE column is still bound (unchanged).
-        var po = Assert.Single(t.Root.Children.Where(c => c.Name == "orderNumber"));
+        var po = Assert.Single(t.Root.Children, c => c.Name == "orderNumber");
         Assert.Equal("PoNumber", po.Rule!.CanonicalField);
     }
 
@@ -134,8 +134,8 @@ public class OutputNodeTemplateInferrerTests
     public void Csv_UnmappableColumn_InfersUnboundRule(OutputFormat format, string sample)
     {
         var t = OutputNodeTemplateInferrer.FromSample(sample, format);
-        var arr = Assert.Single(t.Root.Children.Where(c => c.NodeType == OutputNodeType.Array));
-        var ean = Assert.Single(arr.Children[0].Children.Where(c => c.Name == "EANCode"));
+        var arr = Assert.Single(t.Root.Children, c => c.NodeType == OutputNodeType.Array);
+        var ean = Assert.Single(arr.Children[0].Children, c => c.Name == "EANCode");
         Assert.Null(ean.Rule!.CanonicalField);
         Assert.Null(ean.Rule!.FixedValue);   // F-2
     }
