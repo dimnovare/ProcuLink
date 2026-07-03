@@ -480,8 +480,10 @@ internal sealed class OrderIngestionService
             SupplierName  = supplierName,
             // Buyer tax id (drives the cXML From/Identity; null → configured/legacy From unchanged).
             BuyerTaxId    = string.IsNullOrWhiteSpace(order.BuyerTaxId) ? null : order.BuyerTaxId.Trim(),
-            SubTotal      = order.SubTotal,
-            TaxTotal      = order.TaxTotal,
+            // Same uncaptured-0 normalization as GrandTotal below (SubTotal), plus a negative-tax
+            // guard — see NormalizeExtractedSubTotal / NormalizeExtractedTaxTotal.
+            SubTotal      = NormalizeExtractedSubTotal(order.SubTotal),
+            TaxTotal      = NormalizeExtractedTaxTotal(order.TaxTotal),
             // Normalize an uncaptured/non-positive extracted grand total to NULL so downstream
             // derivation (sum Qty*UnitPrice) takes over — a stored 0 would otherwise be emitted
             // verbatim into delivered supplier documents. See NormalizeExtractedGrandTotal.
@@ -840,8 +842,9 @@ internal sealed class OrderIngestionService
             // Phase 4 enrichment header fields (nullable; only the LLM PDF path populates these).
             var newSupplierName = string.IsNullOrWhiteSpace(parsedOrder.SupplierName) ? null : parsedOrder.SupplierName.Trim();
             var newPaymentTerms = string.IsNullOrWhiteSpace(parsedOrder.PaymentTerms) ? null : parsedOrder.PaymentTerms.Trim();
-            var newSubTotal   = parsedOrder.SubTotal;
-            var newTaxTotal   = parsedOrder.TaxTotal;
+            // Normalize uncaptured/non-positive SubTotal (mirrors GrandTotal) + scrub negative tax.
+            var newSubTotal   = NormalizeExtractedSubTotal(parsedOrder.SubTotal);
+            var newTaxTotal   = NormalizeExtractedTaxTotal(parsedOrder.TaxTotal);
             // Normalize an uncaptured/non-positive extracted grand total to NULL (see the sync
             // ingest seam above and NormalizeExtractedGrandTotal). This value flows to BOTH the
             // ExecuteUpdateAsync below and the InMemory entity-setter fallback further down.
@@ -1302,6 +1305,25 @@ internal sealed class OrderIngestionService
     /// </summary>
     internal static decimal? NormalizeExtractedGrandTotal(decimal? extracted) =>
         extracted is > 0m ? extracted : null;
+
+    /// <summary>
+    /// SubTotal companion to <see cref="NormalizeExtractedGrandTotal"/> — same latent bug the
+    /// GrandTotal fix (#19) deferred. An uncaptured/non-positive extracted SubTotal is collapsed to
+    /// NULL so <c>MappedTransformService.DeriveSubTotal</c> takes over (sum Qty*UnitPrice); a stored
+    /// 0 would otherwise be delivered verbatim as the SubTotal header field. A genuine zero-value
+    /// order becomes NULL then derives back to 0 downstream — same emitted total, no special case.
+    /// </summary>
+    internal static decimal? NormalizeExtractedSubTotal(decimal? extracted) =>
+        extracted is > 0m ? extracted : null;
+
+    /// <summary>
+    /// TaxTotal guard: a NEGATIVE extracted tax is never legitimate → NULL. Unlike Sub/Grand, a
+    /// stated <b>0</b> tax IS legitimate (tax-free / intra-EU reverse charge) and is preserved —
+    /// nulling it would flip a genuine "0.00" tax to an empty field in the Scriban output path
+    /// (<c>NumberOrEmpty</c>). Only bogus negatives are scrubbed.
+    /// </summary>
+    internal static decimal? NormalizeExtractedTaxTotal(decimal? extracted) =>
+        extracted is < 0m ? null : extracted;
 
     /// <summary>Test-only seam onto <see cref="MapExtractedToParsed"/> (which is private static).</summary>
     internal static ParsedOrder MapExtractedToParsedForTest(ExtractedOrder o) => MapExtractedToParsed(o);
