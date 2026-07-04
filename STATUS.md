@@ -155,7 +155,7 @@ enforced by `StartupConfigurationValidator` + `appsettings.Production.json` — 
 
 | Area | Action | Where | Effect when missing |
 |---|---|---|---|
-| Clerk post-signup redirect | Set post-sign-up redirect to `/welcome` | Clerk dashboard (production instance) | New sign-ups skip the welcome funnel |
+| ~~Clerk post-signup redirect~~ | **Resolved — no change.** Redirect is code-controlled (SignUp `fallbackRedirectUrl` → `/onboarding/select-organization` → `/bridge`). New sign-ups correctly land on `/bridge`, which hosts the onboarding checklist. `/welcome` is the **post-checkout** (paid) confirmation page, not the signup landing — routing new (unpaid) signups there would be wrong. | — | — |
 | Status page | Host a status board, set the URL | `NEXT_PUBLIC_STATUS_URL` (Vercel + `.env`) | Footer link hidden |
 | Book-a-demo CTA | Create Cal.com/Calendly slot | `NEXT_PUBLIC_BOOK_DEMO_URL` | Pilot book-a-demo cards hidden |
 | ~~Support-form delivery~~ | **Resolved** — `IEmailSender` resolves to `PostmarkEmailSender` whenever `Email:Postmark:ServerToken` is set (it is, in prod), so the support form now delivers via Postmark (approved). Optional: send one real test to confirm the ops mailbox receives it. | — | — |
