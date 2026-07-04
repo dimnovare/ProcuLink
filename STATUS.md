@@ -11,19 +11,22 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
-## Snapshot (2026-07-02)
+## Snapshot (2026-07-04)
 
 - **Production is LIVE** at `proculink.eu` + `api.proculink.eu` (launched 2026-06-09 window).
   Live QA 2026-06-29/30 verdict: **CONDITIONAL GO** — 7 inbound formats, 6 outbound formats,
-  and HTTP delivery proven live on prod (locale-safe).
+  and HTTP delivery proven live on prod (locale-safe). `/health/ready` green 2026-07-04
+  (DB + migrations + storage + worker all Healthy).
 - **Active work:** the Fable-5 production-hardening push (master prompt above) — prove every
   advertised capability live from a clean slate, click-audit the entire UI, consolidate
   design drift, make marketing truthful, fix everything found.
 - **Billing:** Stripe is **LIVE** (verified 2026-07-02 via API: `sk_live` key in Railway;
   Growth €149 / Operations €399 / Integration €999 / Distributor €1,499 monthly + all 4
   yearly prices, all active in live mode). Real-money infrastructure — no test checkouts
-  against prod. Frontend annual-billing toggle is still gated off; yearly price IDs exist
-  and are live (wire-up is a pending task).
+  against prod. **Annual billing is LIVE** (`ANNUAL_BILLING_ENABLED` defaults ON; verified
+  on prod 2026-07-04: pricing toggle Monthly/Annual·save-17% switches to live Stripe yearly
+  prices). Remaining billing to-do: verify the live webhook end-to-end on a real subscription
+  event (founder — real money).
 
 ## Durable identity rule (2026-06-09)
 
@@ -45,7 +48,7 @@ registry email or invent a VAT number.
 | Storage | Cloudflare R2: `proculink` (private order data — pre-signed URL GETs only; SDK chunked GET signing is rejected by R2) + `proculink-public` (marketing assets, `assets.proculink.eu`) |
 | Auth | Clerk **production** instance (`clerk.proculink.eu`, `pk_live_…`); org id/slug read from the Clerk v2 `o` claim; force-org-creation (adopt-on-create + softened-resolve) deployed + live-verified 2026-06-30 |
 | Inbound email | `{slug}@orders.proculink.eu`: CF Email Routing MX → Postmark → `POST /api/inbound-email/postmark` — proven live with a real email |
-| Outbound email | Postmark HTTPS is the **canonical** email delivery path (SMTP is dead on Railway); domain verified (SPF/Return-Path/DKIM via CF API); **Postmark approved — DeliveryType Live** (verified 2026-07-02 via server API) |
+| Outbound email | Postmark HTTPS is the **canonical** email delivery path (SMTP is dead on Railway); domain verified (SPF/Return-Path/DKIM via CF API); **Postmark ACCOUNT APPROVED + cross-domain send LIVE-VERIFIED 2026-07-04** (test-fired the `email` delivery channel on prod → clean `{success:true,200}` to an external recipient; the prior 412 gate is cleared). Powers 3 roles single-vendor: outbound `email` delivery, transactional (support/notifications), inbound parse. |
 | DNS | Cloudflare — edit **only** via scoped API token (the dashboard SPA won't render in the browser tool) |
 | Observability | Sentry capturing (API + Worker + frontend); PostHog EU ingesting; `/health` (liveness) + `/health/ready` (DB + storage + migration checks); Worker heartbeat alert |
 | Email auth | SPF + DKIM + DMARC (`p=none`) complete on `proculink.eu` |
@@ -102,8 +105,9 @@ enforced by `StartupConfigurationValidator` + `appsettings.Production.json` — 
   verify numbers against); illegible scans fail with an honest message. Assisted, not silent.
 - **Postgres RLS not implemented** — final-deferred by design (post-revenue redesign);
   app-level `.Where(OrganisationId == …)` scoping enforces isolation everywhere.
-- **Postmark:** approved and Live (verified 2026-07-02); inbound webhook signature
-  verification deferred (needs a CF Worker).
+- **Postmark:** account APPROVED 2026-07-04 — outbound customer email delivery is unblocked
+  and live-verified (cross-domain send returns 200). Inbound webhook signature verification
+  is still deferred (needs a CF Worker).
 - Design-system drift (duplicate primitives, e.g. `UnifiedStatusBadge` ×2) — inventory in
   master prompt Appendix C; fix in the push's Phase 3.
 
@@ -154,7 +158,7 @@ enforced by `StartupConfigurationValidator` + `appsettings.Production.json` — 
 | Clerk post-signup redirect | Set post-sign-up redirect to `/welcome` | Clerk dashboard (production instance) | New sign-ups skip the welcome funnel |
 | Status page | Host a status board, set the URL | `NEXT_PUBLIC_STATUS_URL` (Vercel + `.env`) | Footer link hidden |
 | Book-a-demo CTA | Create Cal.com/Calendly slot | `NEXT_PUBLIC_BOOK_DEMO_URL` | Pilot book-a-demo cards hidden |
-| Support-form delivery | Verify the support form actually delivers email (SMTP config or rewire to Postmark) | Railway `Smtp:*` keys | Form returns 200 but mail goes to console log |
+| ~~Support-form delivery~~ | **Resolved** — `IEmailSender` resolves to `PostmarkEmailSender` whenever `Email:Postmark:ServerToken` is set (it is, in prod), so the support form now delivers via Postmark (approved). Optional: send one real test to confirm the ops mailbox receives it. | — | — |
 | DPA counter-signature | Staff `legal@proculink.eu`, sign DPAs within 5 business days as committed on `/dpa` | Operational | Trust commitment becomes false |
 | Subprocessor notifications | Maintain the subscriber list; 30-day advance notice per `/subprocessors` | Operational | Trust commitment becomes false |
 | Cookie banner copy | Review live banner tone (incognito) | Browser smoke test | Cosmetic |
