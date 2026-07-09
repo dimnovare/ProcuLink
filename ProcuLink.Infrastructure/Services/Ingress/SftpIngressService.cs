@@ -13,7 +13,9 @@ namespace ProcuLink.Infrastructure.Services.Ingress;
 /// <summary>
 /// Production implementation of <see cref="ISftpIngressService"/>.
 /// Polls an SFTP server, downloads unseen files, and creates order stubs
-/// via <see cref="IOrderService.CreateStubAsync"/>.
+/// via <see cref="IOrderService.CreateStubAsync"/> (routed to the configured
+/// default supplier) or <see cref="IOrderService.CreateUnroutedStubAsync"/>
+/// (unrouted hold, when no valid default supplier is configured).
 /// </summary>
 public sealed class SftpIngressService : ISftpIngressService
 {
@@ -77,12 +79,24 @@ public sealed class SftpIngressService : ISftpIngressService
             config.DefaultSupplierId,
             ct);
 
+        // Phase 1b routing: a missing (or stale/soft-deleted) default supplier no longer
+        // blocks the poll. Files are imported UNROUTED (SupplierId = null) via
+        // CreateUnroutedStubAsync — the parse job parks them 'unrouted' and
+        // POST /api/orders/{id}/assign-supplier routes + re-parses them later.
         if (supplierId is null)
         {
-            _logger.LogWarning(
-                "SFTP ingress: org {OrgId} has no valid default supplier. Skipping poll.",
-                organisationId);
-            return 0;
+            if (config.DefaultSupplierId is null)
+            {
+                _logger.LogInformation(
+                    "SFTP ingress: org {OrgId} has no default supplier configured — new files will be imported unrouted.",
+                    organisationId);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "SFTP ingress: org {OrgId} default supplier {SupplierId} no longer exists — new files will be imported unrouted.",
+                    organisationId, config.DefaultSupplierId);
+            }
         }
 
         var password = _encryption.Decrypt(config.EncryptedPassword);
@@ -130,7 +144,7 @@ public sealed class SftpIngressService : ISftpIngressService
 
         using (session)
         {
-            return await PollSessionAsync(organisationId, supplierId.Value, config.RemoteDirectory, session, ct);
+            return await PollSessionAsync(organisationId, supplierId, config.RemoteDirectory, session, ct);
         }
     }
 
@@ -138,7 +152,7 @@ public sealed class SftpIngressService : ISftpIngressService
 
     private async Task<int> PollSessionAsync(
         Guid organisationId,
-        Guid supplierId,
+        Guid? supplierId,
         string remoteDirectory,
         ISftpSession session,
         CancellationToken ct)
@@ -203,13 +217,22 @@ public sealed class SftpIngressService : ISftpIngressService
             var fileName = Path.GetFileName(remotePath);
             var contentType = ExtensionToContentType(extension);
 
-            var stubResult = await _orderService.CreateStubAsync(
-                organisationId,
-                supplierId,
-                fileBytes,
-                fileName,
-                contentType,
-                ct);
+            // Routed when a valid default supplier exists; UNROUTED hold otherwise —
+            // same creation path browser upload and inbound email use for supplier-less files.
+            var stubResult = supplierId is { } routedSupplierId
+                ? await _orderService.CreateStubAsync(
+                    organisationId,
+                    routedSupplierId,
+                    fileBytes,
+                    fileName,
+                    contentType,
+                    ct)
+                : await _orderService.CreateUnroutedStubAsync(
+                    organisationId,
+                    fileBytes,
+                    fileName,
+                    contentType,
+                    ct);
 
             if (!stubResult.IsSuccess)
             {

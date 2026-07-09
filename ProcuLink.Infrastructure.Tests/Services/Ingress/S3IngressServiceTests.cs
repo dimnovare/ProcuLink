@@ -254,10 +254,10 @@ public class S3IngressServiceTests
             Times.Never);
     }
 
-    // ── 5. Enabled config without supplier → skipped before S3 calls ────────
+    // ── 5. Phase 1b: no default supplier → object imported UNROUTED, not dropped ──
 
     [Fact]
-    public async Task EnabledConfigWithoutDefaultSupplier_Returns0AndMakesNoS3Calls()
+    public async Task NoDefaultSupplier_NewObject_IsImportedUnrouted_AndParseEnqueued()
     {
         await using var db = CreateDb();
         var orgId = await SeedConfigAsync(
@@ -266,23 +266,88 @@ public class S3IngressServiceTests
             bucket: "my-bucket",
             createDefaultSupplier: false);
 
-        var s3 = new Mock<IAmazonS3>(MockBehavior.Strict);
-        var orders = new Mock<IOrderService>(MockBehavior.Strict);
+        var s3 = new Mock<IAmazonS3>(MockBehavior.Loose);
+        s3.Setup(c => c.ListObjectsV2Async(
+                It.IsAny<ListObjectsV2Request>(),
+                It.IsAny<CancellationToken>()))
+          .ReturnsAsync(new ListObjectsV2Response
+          {
+              S3Objects = new List<S3Object>
+              {
+                  new() { Key = "incoming/po-unrouted.csv", ETag = "\"unrouted-etag\"" },
+              },
+              IsTruncated = false,
+          });
+        s3.Setup(c => c.GetObjectAsync("my-bucket", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+          .ReturnsAsync(() => new GetObjectResponse
+          {
+              ResponseStream = new MemoryStream(new byte[] { 1, 2, 3 }),
+          });
 
-        var svc = MakeService(db, s3.Object, orders.Object);
+        var orders = new FakeOrderService();
+        var enqueuer = new FakeParseJobEnqueuer();
+        var svc = MakeService(db, s3.Object, orders, enqueuer: enqueuer);
 
         var count = await svc.PollAsync(orgId, CancellationToken.None);
 
-        count.Should().Be(0, "pull ingress must not create org-scoped orders without a supplier route");
-        orders.Verify(o =>
-            o.CreateStubAsync(
-                It.IsAny<Guid>(),
-                It.IsAny<Guid>(),
-                It.IsAny<Stream>(),
-                It.IsAny<string>(),
-                It.IsAny<string>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
+        count.Should().Be(1, "an object arriving with no default supplier must be imported unrouted, not dropped");
+        orders.UnroutedCalls.Should().Be(1,
+            "the unrouted creation path (CreateUnroutedStubAsync) must be used when no supplier is configured");
+        orders.CalledWith.Should().ContainSingle();
+        orders.CalledWith[0].OrgId.Should().Be(orgId);
+        orders.CalledWith[0].SupplierId.Should().Be(Guid.Empty, "the fake tags unrouted stubs with Guid.Empty");
+        orders.CalledWith[0].FileName.Should().Be("po-unrouted.csv");
+
+        enqueuer.EnqueuedOrderIds.Should().ContainSingle(
+            "the unrouted order must still get a parse job — the parse parks it 'unrouted' for later assignment");
+        enqueuer.EnqueuedOrgIds.Should().ContainSingle().Which.Should().Be(orgId);
+
+        var imported = await db.Set<ImportedS3Object>()
+            .Where(x => x.OrgId == orgId)
+            .ToListAsync();
+        imported.Should().ContainSingle(
+            "the processed-object record must be written for unrouted imports too, so re-polls stay idempotent");
+        imported[0].ObjectKey.Should().Be("incoming/po-unrouted.csv");
+    }
+
+    // ── 5b. Phase 1b: configured supplier soft-deleted → imported UNROUTED ──
+
+    [Fact]
+    public async Task SoftDeletedDefaultSupplier_NewObject_IsImportedUnrouted()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedConfigAsync(
+            db,
+            isEnabled: true,
+            bucket: "my-bucket",
+            softDeleteSupplier: true);
+
+        var s3 = new Mock<IAmazonS3>(MockBehavior.Loose);
+        s3.Setup(c => c.ListObjectsV2Async(
+                It.IsAny<ListObjectsV2Request>(),
+                It.IsAny<CancellationToken>()))
+          .ReturnsAsync(new ListObjectsV2Response
+          {
+              S3Objects = new List<S3Object>
+              {
+                  new() { Key = "incoming/po-stale.csv", ETag = "\"stale-etag\"" },
+              },
+              IsTruncated = false,
+          });
+        s3.Setup(c => c.GetObjectAsync("my-bucket", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+          .ReturnsAsync(() => new GetObjectResponse
+          {
+              ResponseStream = new MemoryStream(new byte[] { 1, 2, 3 }),
+          });
+
+        var orders = new FakeOrderService();
+        var svc = MakeService(db, s3.Object, orders);
+
+        var count = await svc.PollAsync(orgId, CancellationToken.None);
+
+        count.Should().Be(1, "a stale (soft-deleted) default supplier must not drop incoming objects");
+        orders.UnroutedCalls.Should().Be(1,
+            "an order must never be routed to a soft-deleted supplier — it goes to the unrouted hold instead");
     }
 
     // ── 5. Happy path: 2 new objects → CreateStubAsync called twice, ─────────
@@ -478,7 +543,8 @@ public class S3IngressServiceTests
         bool isEnabled,
         string bucket = "test-bucket",
         bool createDefaultSupplier = true,
-        string? serviceUrl = null)
+        string? serviceUrl = null,
+        bool softDeleteSupplier = false)
     {
         var encryption = MakeEncryption();
         var orgId = Guid.NewGuid();
@@ -493,6 +559,7 @@ public class S3IngressServiceTests
                 OrgId = orgId,
                 Name = "S3 supplier",
                 CreatedAt = DateTime.UtcNow,
+                DeletedAt = softDeleteSupplier ? DateTime.UtcNow.AddMinutes(-5) : null,
             });
         }
 
@@ -570,6 +637,7 @@ public class S3IngressServiceTests
     private sealed class FakeOrderService : IOrderService
     {
         public List<(Guid OrgId, Guid SupplierId, string FileName, string ContentType)> CalledWith { get; } = new();
+        public int UnroutedCalls { get; private set; }
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
             Guid organisationId, Guid supplierId, Stream fileStream,
@@ -592,10 +660,28 @@ public class S3IngressServiceTests
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
         }
 
-        // Unrouted hold path records a Guid.Empty supplier so tests can assert it was used.
+        // Unrouted hold path — counted separately, and recorded in CalledWith with a
+        // Guid.Empty supplier so tests can assert which path was used.
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
             Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
-            => CreateStubAsync(organisationId, Guid.Empty, fileStream, filename, contentType, ct);
+        {
+            UnroutedCalls++;
+            using var ms = new MemoryStream();
+            fileStream.CopyTo(ms);
+            CalledWith.Add((organisationId, Guid.Empty, filename, contentType));
+
+            var stub = new PurchaseOrderEntity
+            {
+                Id        = Guid.NewGuid(),
+                OrgId     = organisationId,
+                SupplierId = null,
+                Status    = "parsing",
+                SourceFileKey = $"{organisationId}/{Guid.NewGuid()}/{filename}",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            };
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
+        }
 
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException();
