@@ -87,23 +87,87 @@ public class SftpIngressServiceTests
         orders.CreateStubCalls.Should().Be(0);
     }
 
-    // ── 4. Enabled config without supplier → skipped before connecting ──────
+    // ── 4. Phase 1b: no default supplier → file imported UNROUTED, not dropped ──
 
     [Fact]
-    public async Task EnabledConfigWithoutDefaultSupplier_ReturnsZero_NoConnectionAttempted()
+    public async Task NoDefaultSupplier_NewFile_IsImportedUnrouted_AndParseEnqueued()
     {
         await using var db = CreateDb();
         var orgId = Guid.NewGuid();
         await SeedConfigAsync(db, orgId, isEnabled: true, createDefaultSupplier: false);
 
-        var sftpFactory = new RecordingFakeSftpFactory();
+        const string remotePath = "/incoming/po-unrouted.csv";
+        var fakeSftp = new SingleFileFakeSftpFactory(remotePath, "header1,header2\r\nval1,val2"u8.ToArray());
         var orders = new RecordingOrderService();
-        var svc = MakeService(db, orders, sftpFactory);
+        var enqueuer = new FakeParseJobEnqueuer();
+        var svc = MakeService(db, orders, fakeSftp, enqueuer: enqueuer);
 
         var result = await svc.PollAsync(orgId, default);
 
-        result.Should().Be(0, "pull ingress must not create org-scoped orders without a supplier route");
-        sftpFactory.ConnectCalls.Should().Be(0, "unsafe config must stop before touching the external SFTP server");
+        result.Should().Be(1, "a file arriving with no default supplier must be imported unrouted, not dropped");
+        orders.UnroutedStubCalls.Should().Be(1,
+            "the unrouted creation path (CreateUnroutedStubAsync) must be used when no supplier is configured");
+        orders.SupplierIds.Should().ContainSingle().Which.Should().Be(
+            Guid.Empty, "the recording fake tags unrouted stubs with Guid.Empty");
+
+        enqueuer.EnqueuedOrderIds.Should().ContainSingle(
+            "the unrouted order must still get a parse job — the parse parks it 'unrouted' for later assignment");
+        enqueuer.EnqueuedOrgIds.Should().ContainSingle().Which.Should().Be(orgId);
+
+        var dedupe = await db.Set<ImportedSftpFile>()
+            .FirstOrDefaultAsync(f => f.OrgId == orgId && f.RemotePath == remotePath);
+        dedupe.Should().NotBeNull("dedupe record must be written for unrouted imports too, so re-polls stay idempotent");
+    }
+
+    // ── 4b. Phase 1b: configured supplier soft-deleted → imported UNROUTED ──
+
+    [Fact]
+    public async Task SoftDeletedDefaultSupplier_NewFile_IsImportedUnrouted()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(db, orgId, isEnabled: true, softDeleteSupplier: true);
+
+        const string remotePath = "/incoming/po-stale-supplier.csv";
+        var fakeSftp = new SingleFileFakeSftpFactory(remotePath, "header1,header2\r\nval1,val2"u8.ToArray());
+        var orders = new RecordingOrderService();
+        var svc = MakeService(db, orders, fakeSftp);
+
+        var result = await svc.PollAsync(orgId, default);
+
+        result.Should().Be(1, "a stale (soft-deleted) default supplier must not drop incoming files");
+        orders.UnroutedStubCalls.Should().Be(1,
+            "an order must never be routed to a soft-deleted supplier — it goes to the unrouted hold instead");
+    }
+
+    // ── 4c. Phase 1b: unrouted mode still respects the dedupe record ────────
+
+    [Fact]
+    public async Task NoDefaultSupplier_AlreadyImportedFile_IsSkipped()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(db, orgId, isEnabled: true, createDefaultSupplier: false);
+
+        const string remotePath = "/incoming/po-dup.csv";
+        db.Set<ImportedSftpFile>().Add(new ImportedSftpFile
+        {
+            Id = Guid.NewGuid(),
+            OrgId = orgId,
+            RemotePath = remotePath,
+            FileHash = "ddeeff",
+            ImportedAt = DateTime.UtcNow.AddHours(-1),
+        });
+        await db.SaveChangesAsync();
+
+        var fakeSftp = new SingleFileFakeSftpFactory(remotePath, "header1,header2\r\nval1,val2"u8.ToArray());
+        var orders = new RecordingOrderService();
+        var svc = MakeService(db, orders, fakeSftp);
+
+        var result = await svc.PollAsync(orgId, default);
+
+        result.Should().Be(0, "re-polling the same file in unrouted mode must not duplicate the order");
+        orders.UnroutedStubCalls.Should().Be(0);
         orders.CreateStubCalls.Should().Be(0);
     }
 
@@ -334,7 +398,8 @@ public class SftpIngressServiceTests
         Guid orgId,
         bool isEnabled,
         bool createDefaultSupplier = true,
-        string host = "sftp.example.com")
+        string host = "sftp.example.com",
+        bool softDeleteSupplier = false)
     {
         // The password is the empty string encrypted with the all-zero 32-byte key.
         var config = new ConfigurationBuilder()
@@ -356,6 +421,7 @@ public class SftpIngressServiceTests
                 OrgId = orgId,
                 Name = "SFTP supplier",
                 CreatedAt = DateTime.UtcNow,
+                DeletedAt = softDeleteSupplier ? DateTime.UtcNow.AddMinutes(-5) : null,
             });
         }
 
@@ -579,6 +645,7 @@ public class SftpIngressServiceTests
     private sealed class RecordingOrderService : IOrderService
     {
         public int CreateStubCalls { get; private set; }
+        public int UnroutedStubCalls { get; private set; }
         public List<Guid> SupplierIds { get; } = new();
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
@@ -600,10 +667,25 @@ public class SftpIngressServiceTests
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
         }
 
-        // Unrouted hold path records a Guid.Empty supplier so tests can assert it was used.
+        // Unrouted hold path — counted separately, and records a Guid.Empty supplier
+        // in SupplierIds so tests can assert which path was used.
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
             Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
-            => CreateStubAsync(organisationId, Guid.Empty, fileStream, filename, contentType, ct);
+        {
+            UnroutedStubCalls++;
+            SupplierIds.Add(Guid.Empty);
+            var stub = new PurchaseOrderEntity
+            {
+                Id = Guid.NewGuid(),
+                OrgId = organisationId,
+                SupplierId = null,
+                Status = "parsing",
+                SourceFileKey = $"{organisationId}/{Guid.NewGuid()}/{filename}",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            };
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
+        }
 
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid o, Guid s, Stream f, string fn, string ct2, CancellationToken ct)
             => throw new NotImplementedException();

@@ -14,7 +14,10 @@ namespace ProcuLink.Infrastructure.Services.Ingress;
 /// <summary>
 /// Production implementation of <see cref="IS3IngressService"/>.
 /// Polls an S3 or Cloudflare R2 bucket for new purchase-order files and feeds
-/// them into the order-ingestion pipeline via <see cref="IOrderService.CreateStubAsync"/>.
+/// them into the order-ingestion pipeline via <see cref="IOrderService.CreateStubAsync"/>
+/// (routed to the configured default supplier) or
+/// <see cref="IOrderService.CreateUnroutedStubAsync"/> (unrouted hold, when no valid
+/// default supplier is configured).
 /// </summary>
 /// <remarks>
 /// A per-org <see cref="IAmazonS3"/> is built inside <see cref="PollAsync"/> from
@@ -83,12 +86,24 @@ public sealed class S3IngressService : IS3IngressService
             config.DefaultSupplierId,
             ct);
 
+        // Phase 1b routing: a missing (or stale/soft-deleted) default supplier no longer
+        // blocks the poll. Objects are imported UNROUTED (SupplierId = null) via
+        // CreateUnroutedStubAsync — the parse job parks them 'unrouted' and
+        // POST /api/orders/{id}/assign-supplier routes + re-parses them later.
         if (supplierId is null)
         {
-            _logger.LogWarning(
-                "S3 ingress: org {OrgId} has no valid default supplier. Skipping poll.",
-                organisationId);
-            return 0;
+            if (config.DefaultSupplierId is null)
+            {
+                _logger.LogInformation(
+                    "S3 ingress: org {OrgId} has no default supplier configured — new objects will be imported unrouted.",
+                    organisationId);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "S3 ingress: org {OrgId} default supplier {SupplierId} no longer exists — new objects will be imported unrouted.",
+                    organisationId, config.DefaultSupplierId);
+            }
         }
 
         var secretKey = _encryption.Decrypt(config.EncryptedSecretKey);
@@ -226,13 +241,22 @@ public sealed class S3IngressService : IS3IngressService
                 var fileName = Path.GetFileName(s3Object.Key);
                 var contentType = ExtensionToContentType(extension);
 
-                var stubResult = await _orderService.CreateStubAsync(
-                    organisationId,
-                    supplierId.Value,
-                    fileBytes,
-                    fileName,
-                    contentType,
-                    ct);
+                // Routed when a valid default supplier exists; UNROUTED hold otherwise —
+                // same creation path browser upload and inbound email use for supplier-less files.
+                var stubResult = supplierId is { } routedSupplierId
+                    ? await _orderService.CreateStubAsync(
+                        organisationId,
+                        routedSupplierId,
+                        fileBytes,
+                        fileName,
+                        contentType,
+                        ct)
+                    : await _orderService.CreateUnroutedStubAsync(
+                        organisationId,
+                        fileBytes,
+                        fileName,
+                        contentType,
+                        ct);
 
                 if (!stubResult.IsSuccess)
                 {
