@@ -160,13 +160,81 @@ public class InboundEmailControllerAuthTests
         Assert.Equal(0, router.Calls);
     }
 
+    // ── Proxy-secret gate (opt-in; set by the CF inbound-verify Worker) ───────
+    //
+    // When Inbound:Postmark:ProxySecret is configured, the webhook additionally
+    // requires the X-Inbound-Proxy-Secret header injected by the edge Worker
+    // (docs/infra/postmark-inbound-verify-worker). Unset = inert (today's
+    // behavior), so every rollout step ships dark until the env var lands.
+
+    private const string ProxySecret = "edge-proxy-secret-456";
+
+    [Fact]
+    public async Task ProxySecretConfigured_CorrectHeader_Returns200()
+    {
+        var (controller, router) = BuildController(configuredToken: Secret, proxySecret: ProxySecret);
+        controller.HttpContext.Request.Query =
+            new QueryCollection(new Dictionary<string, StringValues> { ["token"] = Secret });
+        controller.HttpContext.Request.Headers["X-Inbound-Proxy-Secret"] = ProxySecret;
+
+        var result = await controller.Postmark(ValidBody(), CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(1, router.Calls);
+    }
+
+    [Fact]
+    public async Task ProxySecretConfigured_MissingHeader_Returns401_EvenWithValidToken()
+    {
+        var (controller, router) = BuildController(configuredToken: Secret, proxySecret: ProxySecret);
+        controller.HttpContext.Request.Query =
+            new QueryCollection(new Dictionary<string, StringValues> { ["token"] = Secret });
+
+        var result = await controller.Postmark(ValidBody(), CancellationToken.None);
+
+        Assert.IsType<UnauthorizedObjectResult>(result);
+        Assert.Equal(0, router.Calls);
+    }
+
+    [Fact]
+    public async Task ProxySecretConfigured_WrongHeader_Returns401_EvenWithValidToken()
+    {
+        var (controller, router) = BuildController(configuredToken: Secret, proxySecret: ProxySecret);
+        controller.HttpContext.Request.Query =
+            new QueryCollection(new Dictionary<string, StringValues> { ["token"] = Secret });
+        controller.HttpContext.Request.Headers["X-Inbound-Proxy-Secret"] = "not-the-proxy-secret";
+
+        var result = await controller.Postmark(ValidBody(), CancellationToken.None);
+
+        Assert.IsType<UnauthorizedObjectResult>(result);
+        Assert.Equal(0, router.Calls);
+    }
+
+    [Fact]
+    public async Task ProxySecretNotConfigured_HeaderNotRequired_Returns200()
+    {
+        // Inert-by-default: without the config the gate must not engage —
+        // pins that shipping the code changes nothing until the env var is set.
+        var (controller, router) = BuildController(configuredToken: Secret, proxySecret: null);
+        controller.HttpContext.Request.Query =
+            new QueryCollection(new Dictionary<string, StringValues> { ["token"] = Secret });
+
+        var result = await controller.Postmark(ValidBody(), CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(1, router.Calls);
+    }
+
     // ── Harness ─────────────────────────────────────────────────────────────
 
-    private static (InboundEmailController Controller, RecordingRouter Router) BuildController(string? configuredToken)
+    private static (InboundEmailController Controller, RecordingRouter Router) BuildController(
+        string? configuredToken, string? proxySecret = null)
     {
         var settings = new Dictionary<string, string?>();
         if (configuredToken is not null)
             settings["Inbound:Postmark:WebhookToken"] = configuredToken;
+        if (proxySecret is not null)
+            settings["Inbound:Postmark:ProxySecret"] = proxySecret;
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var router = new RecordingRouter();

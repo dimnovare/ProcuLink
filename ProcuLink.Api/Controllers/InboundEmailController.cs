@@ -83,6 +83,22 @@ public sealed class InboundEmailController : ControllerBase
             return Unauthorized(new { error = "Invalid webhook token." });
         }
 
+        // ── 1b. Edge-proxy secret (opt-in) ───────────────────────────────────
+        // When Inbound:Postmark:ProxySecret is set, requests must also carry the
+        // X-Inbound-Proxy-Secret header injected by the Cloudflare inbound-verify
+        // Worker (docs/infra/postmark-inbound-verify-worker) — closing the direct
+        // door to this endpoint so only Worker-vetted traffic (Postmark source IPs)
+        // gets through. Unset = inert, so the code ships dark until the operator
+        // deploys the Worker and sets the env var. Same 401 shape as a token
+        // failure to keep the reject surface uniform.
+        var proxySecret = _config["Inbound:Postmark:ProxySecret"];
+        if (!string.IsNullOrWhiteSpace(proxySecret)
+            && !CryptoEquals(proxySecret, Request.Headers["X-Inbound-Proxy-Secret"].FirstOrDefault() ?? string.Empty))
+        {
+            _logger.LogWarning("Postmark inbound webhook rejected: bad or missing X-Inbound-Proxy-Secret (edge proxy gate).");
+            return Unauthorized(new { error = "Invalid webhook token." });
+        }
+
         // ── 2. Payload validation ────────────────────────────────────────────
         if (body is null)
         {
