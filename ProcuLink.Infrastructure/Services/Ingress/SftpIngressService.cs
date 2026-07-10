@@ -237,8 +237,8 @@ public sealed class SftpIngressService : ISftpIngressService
             if (!stubResult.IsSuccess)
             {
                 _logger.LogWarning(
-                    "SFTP ingress: org {OrgId} — CreateStubAsync failed for {Path}: {Error}",
-                    organisationId, remotePath, stubResult.Error);
+                    "SFTP ingress: org {OrgId} — {Mode} order stub creation failed for {Path}: {Error}",
+                    organisationId, supplierId is null ? "unrouted" : "routed", remotePath, stubResult.Error);
                 continue;
             }
 

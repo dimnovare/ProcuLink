@@ -261,8 +261,8 @@ public sealed class S3IngressService : IS3IngressService
                 if (!stubResult.IsSuccess)
                 {
                     _logger.LogWarning(
-                        "S3 ingress: org {OrgId} — CreateStubAsync failed for key={Key}: {Error}",
-                        organisationId, s3Object.Key, stubResult.Error);
+                        "S3 ingress: org {OrgId} — {Mode} order stub creation failed for key={Key}: {Error}",
+                        organisationId, supplierId is null ? "unrouted" : "routed", s3Object.Key, stubResult.Error);
                     continue;
                 }
 
