@@ -127,7 +127,7 @@ public class EmailSettingsServiceTests
     }
 
     [Fact]
-    public async Task UpdateAsync_SetsEmailPollingEnabledFlag_MirroringConfigPresence()
+    public async Task UpdateAsync_SetsEmailPollingEnabledFlag_FromEnabled()
     {
         await using var db = CreateDb();
         var orgId = await SeedOrgAsync(db);
@@ -142,12 +142,70 @@ public class EmailSettingsServiceTests
             Username: "orders@example.com", Password: "secret", Folder: "INBOX",
             DefaultSupplierId: supplierId), default);
 
-        // The indexed poller-candidate flag now mirrors the non-empty email config —
-        // the same set the legacy "email_config <> '{}'" predicate enqueued, so the
-        // EmailPollingJob behaviour is preserved while filtering on an index.
+        // The indexed poller-candidate flag mirrors the JSON's Enabled — this is what
+        // the dispatcher (EmailPollingJob) filters on and the child job (EmailPollOrgJob)
+        // re-checks, so the two must agree.
         var org = await db.Organisations.SingleAsync(x => x.Id == orgId);
         org.EmailPollingEnabled.Should().BeTrue();
-        org.EmailConfigJson.Should().NotBe("{}");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_Disable_ClearsEmailPollingEnabledFlag()
+    {
+        // Regression: the flag used to be derived from config PRESENCE
+        // (email_config <> '{}'), which is always true after any update — so
+        // disabling polling left the column true while the JSON said Enabled:false.
+        // That divergence made the dispatcher enqueue a no-op EmailPollOrgJob every
+        // cycle forever. The column must track the actual Enabled flag.
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db);
+        var supplierId = await SeedSupplierAsync(db, orgId);
+        var service = new EmailSettingsService(db, CreateEncryption());
+
+        await service.UpdateAsync(orgId, new UpdateEmailSettingsRequest(
+            Enabled: true, Host: "imap.example.com", Port: 993, UseSsl: true,
+            Username: "orders@example.com", Password: "secret", Folder: "INBOX",
+            DefaultSupplierId: supplierId), default);
+        (await db.Organisations.SingleAsync(x => x.Id == orgId)).EmailPollingEnabled.Should().BeTrue();
+
+        // A fully-populated disable request (Enabled:false, config otherwise intact).
+        await service.UpdateAsync(orgId, new UpdateEmailSettingsRequest(
+            Enabled: false, Host: "imap.example.com", Port: 993, UseSsl: true,
+            Username: "orders@example.com", Password: null, Folder: "INBOX",
+            DefaultSupplierId: supplierId), default);
+
+        var org = await db.Organisations.SingleAsync(x => x.Id == orgId);
+        org.EmailPollingEnabled.Should().BeFalse("disabling polling must clear the dispatcher-candidate column, not just the JSON flag");
+        EmailPollingConfig.FromJson(org.EmailConfigJson).Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MarkPolledAsync_PreservesEmailPollingEnabledFlag()
+    {
+        // MarkPolledAsync re-serializes the config with a new LastPolledAt; it must
+        // keep the poller-candidate column equal to the config's Enabled flag, not
+        // flip it back to "presence == true".
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db);
+        var supplierId = await SeedSupplierAsync(db, orgId);
+        var service = new EmailSettingsService(db, CreateEncryption());
+
+        await service.UpdateAsync(orgId, new UpdateEmailSettingsRequest(
+            Enabled: true, Host: "imap.example.com", Port: 993, UseSsl: true,
+            Username: "orders@example.com", Password: "secret", Folder: "INBOX",
+            DefaultSupplierId: supplierId), default);
+
+        await service.MarkPolledAsync(orgId, DateTime.UtcNow, default);
+        (await db.Organisations.SingleAsync(x => x.Id == orgId)).EmailPollingEnabled.Should().BeTrue();
+
+        // Disable, then mark polled — the column must stay false.
+        await service.UpdateAsync(orgId, new UpdateEmailSettingsRequest(
+            Enabled: false, Host: "imap.example.com", Port: 993, UseSsl: true,
+            Username: "orders@example.com", Password: null, Folder: "INBOX",
+            DefaultSupplierId: supplierId), default);
+        await service.MarkPolledAsync(orgId, DateTime.UtcNow, default);
+
+        (await db.Organisations.SingleAsync(x => x.Id == orgId)).EmailPollingEnabled.Should().BeFalse();
     }
 
     private static async Task<Guid> SeedOrgAsync(ProcuLinkDbContext db)

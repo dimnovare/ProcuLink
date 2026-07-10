@@ -60,9 +60,12 @@ public sealed class EmailSettingsService : IEmailSettingsService
             UpdatedAt: DateTime.UtcNow);
 
         org.EmailConfigJson = updated.ToJson();
-        // Keep the indexed poller-candidate flag in lock-step with the jsonb config
-        // (same set as the legacy "email_config <> '{}'" predicate).
-        org.EmailPollingEnabled = org.EmailConfigJson != "{}";
+        // Keep the indexed poller-candidate column equal to the config's Enabled flag.
+        // The dispatcher (EmailPollingJob) filters on this column and the child job
+        // (EmailPollOrgJob) re-checks config.Enabled — deriving the column from config
+        // PRESENCE instead (the old "email_config <> '{}'" predicate) left it stuck true
+        // after a disable, so the dispatcher enqueued a no-op job every cycle forever.
+        org.EmailPollingEnabled = updated.Enabled;
         await _db.SaveChangesAsync(ct);
 
         return ToResponse(updated);
@@ -82,7 +85,8 @@ public sealed class EmailSettingsService : IEmailSettingsService
             LastPolledAt = polledAt,
             UpdatedAt = current.UpdatedAt ?? polledAt
         }).ToJson();
-        org.EmailPollingEnabled = org.EmailConfigJson != "{}";
+        // Marking a poll must not resurrect a disabled org into the candidate set.
+        org.EmailPollingEnabled = current.Enabled;
         await _db.SaveChangesAsync(ct);
     }
 
