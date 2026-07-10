@@ -164,4 +164,31 @@ public class CxmlTransformServiceCredentialTests
 
         ReadCredential(xml, "From").Should().Be(("NetworkId", "REDACTED-NETWORK-ID", (string?)null));
     }
+
+    // ── Unrouted order (null SupplierId) — preview must stay DTD-valid ──────────
+
+    /// <summary>
+    /// An order ingested on a shared channel before its supplier is known is parked
+    /// <c>unrouted</c> with a NULL SupplierId (routing Phase 0). It can never DELIVER while
+    /// unrouted, but the Order Workshop live preview can render it in cXML. A null
+    /// <c>Guid?.ToString()</c> is <c>""</c>, which would emit a DTD-invalid empty
+    /// <c>&lt;Identity/&gt;</c>; coalescing to the zero GUID keeps the To credential non-empty.
+    /// </summary>
+    [Fact]
+    public async Task NullSupplier_ToIdentityFallsBackToZeroGuid_NotEmpty()
+    {
+        var order = BuildOrder();
+        order.SupplierId = null;
+
+        var result = await new CxmlTransformService()
+            .TransformAsync(order, OutputFormat.CXml, CancellationToken.None, (CxmlCredentialConfig?)null);
+        result.Content.Position = 0;
+        using var reader = new StreamReader(result.Content);
+        var xml = await reader.ReadToEndAsync();
+
+        var to = ReadCredential(xml, "To");
+        to.Domain.Should().Be("SupplierId");
+        to.Identity.Should().Be(Guid.Empty.ToString());
+        to.Identity.Should().NotBeNullOrEmpty("an empty <Identity/> is DTD-invalid");
+    }
 }
