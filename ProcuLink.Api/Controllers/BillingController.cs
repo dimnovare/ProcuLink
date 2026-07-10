@@ -283,7 +283,7 @@ public sealed class BillingController : ControllerBase
         var priceId = string.IsNullOrWhiteSpace(session.SubscriptionId)
             ? null
             : await GetSubscriptionPriceIdAsync(session.SubscriptionId, ct);
-        var mappedPlan = MapPriceIdToPlan(priceId) ?? plan;
+        var mappedPlan = StripeBillingMapping.MapPriceIdToPlan(_config, priceId) ?? plan;
 
         var fromPlan = org.Plan; // capture before mutation for analytics
         org.Plan = mappedPlan;
@@ -318,7 +318,7 @@ public sealed class BillingController : ControllerBase
         if (org is null) return;
 
         var priceId = sub.Items.Data.FirstOrDefault()?.Price?.Id;
-        var mappedPlan = MapPriceIdToPlan(priceId);
+        var mappedPlan = StripeBillingMapping.MapPriceIdToPlan(_config, priceId);
 
         var fromPlan = org.Plan; // capture before mutation for analytics
         if (!string.IsNullOrEmpty(mappedPlan))
@@ -327,14 +327,7 @@ public sealed class BillingController : ControllerBase
         org.StripeSubscriptionId = sub.Id;
         org.StripePriceId = priceId;
         org.StripeSubscriptionStatus = sub.Status;
-        org.AccountStatus = sub.Status switch
-        {
-            "trialing" => AccountStatusConstants.Trialing,
-            "active" => AccountStatusConstants.Active,
-            "past_due" or "unpaid" => AccountStatusConstants.PastDue,
-            "canceled" => AccountStatusConstants.ReadOnly,
-            _ => org.AccountStatus,
-        };
+        org.AccountStatus = StripeBillingMapping.MapStatusToAccountStatus(sub.Status, org.AccountStatus);
         org.BillingUpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
@@ -528,20 +521,6 @@ public sealed class BillingController : ControllerBase
         var service = new Stripe.SubscriptionService();
         var subscription = await service.GetAsync(subscriptionId, cancellationToken: ct);
         return subscription.Status;
-    }
-
-    private string? MapPriceIdToPlan(string? priceId)
-    {
-        if (string.IsNullOrWhiteSpace(priceId)) return null;
-        if (priceId == _config["Stripe:GrowthPriceId"]) return PlanConstants.Growth;
-        if (priceId == _config["Stripe:GrowthYearlyPriceId"]) return PlanConstants.Growth;
-        if (priceId == _config["Stripe:OperationsPriceId"]) return PlanConstants.Operations;
-        if (priceId == _config["Stripe:OperationsYearlyPriceId"]) return PlanConstants.Operations;
-        if (priceId == _config["Stripe:IntegrationPriceId"]) return PlanConstants.Integration;
-        if (priceId == _config["Stripe:IntegrationYearlyPriceId"]) return PlanConstants.Integration;
-        if (priceId == _config["Stripe:DistributorPriceId"]) return PlanConstants.Distributor;
-        if (priceId == _config["Stripe:DistributorYearlyPriceId"]) return PlanConstants.Distributor;
-        return null;
     }
 
     private static string NormalizeBillingInterval(string? billingInterval)
