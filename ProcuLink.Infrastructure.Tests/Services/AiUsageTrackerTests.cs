@@ -269,6 +269,151 @@ public class AiUsageTrackerTests
         }
     }
 
+    // ── Account-status clamp on the AI budget (audit 2026-07-10 P2) ─────────
+    // A read-only / delinquent org must not keep spending real OpenAI tokens at
+    // its old paid ceiling. Founder decision (2026-07-10): past_due keeps the
+    // Pilot GRACE budget through Stripe dunning (recoverable); read_only,
+    // cancelled and trial_expired get ZERO. Good-standing orgs are untouched.
+
+    [Fact]
+    public async Task Snapshot_PastDuePaidOrg_ClampedToPilotGraceBudget()
+    {
+        await using var db = CreateFullDb();
+        var orgId = await SeedOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.PastDue);
+        var tracker = CreatePlanAwareTracker(db);
+
+        (await tracker.GetCurrentAsync(orgId)).TokensLimit.Should().Be(200_000,
+            "a past_due paid org keeps only the Pilot grace budget during dunning, not its 1M Growth ceiling");
+    }
+
+    [Theory]
+    [InlineData(AccountStatusConstants.ReadOnly)]
+    [InlineData(AccountStatusConstants.Cancelled)]
+    [InlineData(AccountStatusConstants.TrialExpired)]
+    public async Task Snapshot_NonRecoverableReadOnlyStatus_ClampedToZero(string status)
+    {
+        await using var db = CreateFullDb();
+        var orgId = await SeedOrgAsync(db, PlanConstants.Operations, status);
+        var tracker = CreatePlanAwareTracker(db);
+
+        (await tracker.GetCurrentAsync(orgId)).TokensLimit.Should().Be(0,
+            $"a {status} org must not spend any paid AI budget (2.5M Operations ceiling is revoked)");
+    }
+
+    [Theory]
+    [InlineData(AccountStatusConstants.Active)]
+    [InlineData(AccountStatusConstants.Trialing)]
+    public async Task Snapshot_GoodStandingOrg_KeepsFullPlanBudget(string status)
+    {
+        await using var db = CreateFullDb();
+        var orgId = await SeedOrgAsync(db, PlanConstants.Growth, status);
+        var tracker = CreatePlanAwareTracker(db);
+
+        (await tracker.GetCurrentAsync(orgId)).TokensLimit.Should().Be(1_000_000,
+            $"an org in good standing ({status}) keeps its full plan budget — the clamp must not touch it");
+    }
+
+    [Fact]
+    public async Task Snapshot_PastDuePilotOrg_StaysAtPilotBudget()
+    {
+        // past_due on Pilot: the grace budget equals the plan budget — no reduction.
+        await using var db = CreateFullDb();
+        var orgId = await SeedOrgAsync(db, PlanConstants.Pilot, AccountStatusConstants.PastDue);
+        var tracker = CreatePlanAwareTracker(db);
+
+        (await tracker.GetCurrentAsync(orgId)).TokensLimit.Should().Be(200_000);
+    }
+
+    [Fact]
+    public async Task IsAtOrOverLimitAsync_CancelledOrg_BlocksAfterAnyUsage()
+    {
+        await using var db = CreateFullDb();
+        var orgId = await SeedOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Cancelled);
+        var tracker = CreatePlanAwareTracker(db);
+
+        await tracker.IncrementAsync(orgId, 1);
+        (await tracker.IsAtOrOverLimitAsync(orgId)).Should().BeTrue(
+            "a cancelled org has a zero budget, so any recorded usage is already at/over the cap");
+    }
+
+    [Fact]
+    public async Task IsAtOrOverLimitAsync_PastDuePaidOrg_BlocksAtPilotGraceBudget()
+    {
+        await using var db = CreateFullDb();
+        var orgId = await SeedOrgAsync(db, PlanConstants.Integration, AccountStatusConstants.PastDue);
+        var tracker = CreatePlanAwareTracker(db);
+
+        await tracker.IncrementAsync(orgId, 199_999);
+        (await tracker.IsAtOrOverLimitAsync(orgId)).Should().BeFalse(
+            "just under the 200k grace budget is still allowed");
+
+        await tracker.IncrementAsync(orgId, 1);
+        (await tracker.IsAtOrOverLimitAsync(orgId)).Should().BeTrue(
+            "at the 200k grace budget a past_due org is blocked, not at its 5M Integration ceiling");
+    }
+
+    [Fact]
+    public async Task ConfigOverride_BeatsAccountStatusClamp()
+    {
+        // The global emergency lever short-circuits BEFORE any org query, so it
+        // applies uniformly — even to a cancelled org. Documents the precedence.
+        await using var db = CreateFullDb();
+        var orgId = await SeedOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Cancelled);
+        var tracker = CreatePlanAwareTracker(db, configOverride: 500);
+
+        (await tracker.GetCurrentAsync(orgId)).TokensLimit.Should().Be(500,
+            "the explicit global config override is the emergency lever and beats the delinquency clamp");
+    }
+
+    // ── Delinquency clamp: pure policy function ─────────────────────────────
+
+    [Theory]
+    [InlineData(PlanConstants.Pilot)]
+    [InlineData(PlanConstants.Growth)]
+    [InlineData(PlanConstants.Operations)]
+    [InlineData(PlanConstants.Integration)]
+    [InlineData(PlanConstants.Distributor)]
+    [InlineData(PlanConstants.Enterprise)]
+    public void GetDelinquentAiMonthlyTokenLimit_PastDue_IsPilotGraceBudget(string plan)
+    {
+        PlanConstants.GetDelinquentAiMonthlyTokenLimit(plan, AccountStatusConstants.PastDue)
+            .Should().Be(PlanConstants.AiMonthlyTokenLimits[PlanConstants.Pilot],
+                "past_due keeps the Pilot grace budget regardless of the paid tier it fell from");
+    }
+
+    [Theory]
+    [InlineData(AccountStatusConstants.ReadOnly)]
+    [InlineData(AccountStatusConstants.Cancelled)]
+    [InlineData(AccountStatusConstants.TrialExpired)]
+    public void GetDelinquentAiMonthlyTokenLimit_NonRecoverableStatus_IsZero(string status)
+    {
+        PlanConstants.GetDelinquentAiMonthlyTokenLimit(PlanConstants.Enterprise, status)
+            .Should().Be(0, $"{status} is not a recoverable state and gets no AI budget");
+    }
+
+    // ── AccountStatusConstants.IsReadOnly: shared read-only status set ───────
+
+    [Theory]
+    [InlineData(AccountStatusConstants.TrialExpired)]
+    [InlineData(AccountStatusConstants.PastDue)]
+    [InlineData(AccountStatusConstants.ReadOnly)]
+    [InlineData(AccountStatusConstants.Cancelled)]
+    public void IsReadOnly_TrueForDelinquentStatuses(string status)
+    {
+        AccountStatusConstants.IsReadOnly(status).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(AccountStatusConstants.Active)]
+    [InlineData(AccountStatusConstants.Trialing)]
+    [InlineData("some-unknown-status")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void IsReadOnly_FalseForGoodStandingOrUnknown(string? status)
+    {
+        AccountStatusConstants.IsReadOnly(status).Should().BeFalse();
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private static AiUsageTracker CreateTracker(
@@ -310,15 +455,19 @@ public class AiUsageTrackerTests
         return new AiUsageTracker(db, config, clock ?? (() => DateTimeOffset.UtcNow));
     }
 
-    private static async Task<Guid> SeedOrgAsync(ProcuLinkDbContext db, string plan)
+    private static async Task<Guid> SeedOrgAsync(
+        ProcuLinkDbContext db,
+        string plan,
+        string accountStatus = AccountStatusConstants.Trialing)
     {
         var org = new Organisation
         {
-            Id         = Guid.NewGuid(),
-            ClerkOrgId = $"org_{Guid.NewGuid():N}",
-            Name       = "AI Cap Test Org",
-            Slug       = $"ai-cap-{Guid.NewGuid():N}",
-            Plan       = plan,
+            Id            = Guid.NewGuid(),
+            ClerkOrgId    = $"org_{Guid.NewGuid():N}",
+            Name          = "AI Cap Test Org",
+            Slug          = $"ai-cap-{Guid.NewGuid():N}",
+            Plan          = plan,
+            AccountStatus = accountStatus,
         };
         db.Organisations.Add(org);
         await db.SaveChangesAsync();
