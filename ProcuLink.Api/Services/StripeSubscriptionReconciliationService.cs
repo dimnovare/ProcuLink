@@ -16,10 +16,17 @@ namespace ProcuLink.Api.Services;
 /// <para><b>Safety.</b> The only access-REMOVING path (downgrade to frozen Pilot + read_only)
 /// is triple-guarded: (1) a configured Stripe key is required; (2) a "missing" verdict requires
 /// a 404 <c>resource_missing</c> SPECIFICALLY — a 401/429/5xx never downgrades; (3) a vanished
-/// (404) subscription serves a 3-day confirmed-missing grace before downgrade, so a transient
-/// misread or a live-vs-test key slip cannot strip a real customer's access. A resolving sub
-/// whose status is authoritatively <c>canceled</c>/<c>incomplete_expired</c> downgrades
-/// immediately (no grace — that is not a transient misread).</para>
+/// (404) subscription serves a 3-day confirmed-missing grace before downgrade, so a TRANSIENT
+/// misread cannot strip a real customer's access. A resolving sub whose status is authoritatively
+/// <c>canceled</c>/<c>incomplete_expired</c> downgrades immediately (no grace — that is not a
+/// transient misread).</para>
+///
+/// <para><b>Systemic-fault guard.</b> The grace above only covers a TRANSIENT slip. A PERSISTENT
+/// valid-but-wrong key (wrong live/test mode, or a live key on the wrong connected account)
+/// authenticates (no 401) yet 404s EVERY live subscription, which would mass-downgrade the paying
+/// base ~3 days later. That systemic case is caught by <c>BillingReconciliationJob</c>'s
+/// mass-downgrade circuit breaker (it aborts + alerts when an abnormal number of orgs are
+/// simultaneously past the grace window), NOT by this per-org service.</para>
 ///
 /// <para><b>Worker-safe Stripe client.</b> The Worker process never sets
 /// <c>StripeConfiguration.ApiKey</c>, so this service builds its OWN <see cref="StripeClient"/>
@@ -28,8 +35,12 @@ namespace ProcuLink.Api.Services;
 /// </summary>
 public sealed class StripeSubscriptionReconciliationService : IBillingReconciliationService
 {
-    /// <summary>Confirmed-missing grace before a vanished (404) subscription is downgraded.</summary>
-    private static readonly TimeSpan GracePeriod = TimeSpan.FromDays(3);
+    /// <summary>
+    /// Confirmed-missing grace before a vanished (404) subscription is downgraded. Public so the
+    /// job's mass-downgrade circuit breaker can count orgs that are past this same window without
+    /// duplicating the constant.
+    /// </summary>
+    public static readonly TimeSpan GracePeriod = TimeSpan.FromDays(3);
 
     private readonly ProcuLinkDbContext _db;
     private readonly IConfiguration _config;
@@ -55,6 +66,12 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
     {
         var secret = _config["Stripe:SecretKey"];
         if (string.IsNullOrWhiteSpace(secret)) return; // never touch state without a configured key
+
+        // The sweep shares ONE scoped DbContext across every org. Clear any entity left tracked by a
+        // prior org whose SaveChanges threw — otherwise EF would batch that poisoned change into THIS
+        // org's SaveChanges (cross-org contamination / cascade). Each org is loaded fresh below, so
+        // starting from an empty tracker is always correct and also bounds change-tracker growth.
+        _db.ChangeTracker.Clear();
 
         var org = await _db.Organisations.FirstOrDefaultAsync(o => o.Id == orgId, ct);
         if (org is null || string.IsNullOrWhiteSpace(org.StripeSubscriptionId)) return;
@@ -188,6 +205,16 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var hadOrders = await _db.PurchaseOrders
             .AnyAsync(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= monthStart, ct);
-        await _billing.EmitBillingCancelledAsync(org.Id, previousPlan, hadOrders, ct);
+        try
+        {
+            await _billing.EmitBillingCancelledAsync(org.Id, previousPlan, hadOrders, ct);
+        }
+        catch (Exception ex)
+        {
+            // Analytics is best-effort — a PostHog hiccup must never fail (or roll back) the
+            // already-committed downgrade, nor propagate out of the per-org sweep step.
+            _logger.LogError(ex,
+                "Reconcile: billing_cancelled analytics emit failed for org {OrgId} (downgrade already persisted).", org.Id);
+        }
     }
 }

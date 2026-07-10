@@ -91,7 +91,8 @@ public class StripeSubscriptionReconciliationServiceTests
     }
 
     private static async Task<Organisation> AddOrgAsync(ProcuLinkDbContext db, string plan, string status,
-        string? subId = "sub_123", string? priceId = "price_growth_m", DateTime? missingSince = null)
+        string? subId = "sub_123", string? priceId = "price_growth_m", DateTime? missingSince = null,
+        string? subStatus = null, DateTime? billingUpdatedAt = null)
     {
         var id = Guid.NewGuid();
         var org = new Organisation
@@ -99,7 +100,8 @@ public class StripeSubscriptionReconciliationServiceTests
             Id = id, ClerkOrgId = $"org_{id:N}", Name = "Recon Org", Slug = $"recon-{id:N}",
             Plan = plan, AccountStatus = status, StripeCustomerId = "cus_keep",
             StripeSubscriptionId = subId, StripePriceId = priceId,
-            StripeReconciliationMissingSince = missingSince,
+            StripeSubscriptionStatus = subStatus, StripeReconciliationMissingSince = missingSince,
+            BillingUpdatedAt = billingUpdatedAt,
             CreatedAt = DateTime.UtcNow.AddDays(-30), TrialStartedAt = DateTime.UtcNow.AddDays(-30),
         };
         db.Organisations.Add(org);
@@ -295,5 +297,119 @@ public class StripeSubscriptionReconciliationServiceTests
         var after = await Reload(db, org.Id);
         after.Plan.Should().Be(PlanConstants.Pilot);
         after.StripeSubscriptionId.Should().BeNull();
+    }
+
+    // ── Review coverage gaps (T1–T8) ─────────────────────────────────────────
+
+    // T1: incomplete_expired (a never-activated sub) → immediate downgrade like canceled.
+    [Fact]
+    public async Task IncompleteExpired_ImmediateDowngrade()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Active);
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(Sub("incomplete_expired", "price_growth_m")), out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.Plan.Should().Be(PlanConstants.Pilot);
+        after.AccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
+        after.StripeSubscriptionId.Should().BeNull();
+    }
+
+    // T3: unpaid → PastDue, plan kept (dunning, not downgrade).
+    [Fact]
+    public async Task Unpaid_KeepsPlan_SetsPastDue()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Operations, AccountStatusConstants.Active, priceId: "price_ops_m");
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(Sub("unpaid", "price_ops_m")), out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.Plan.Should().Be(PlanConstants.Operations);
+        after.AccountStatus.Should().Be(AccountStatusConstants.PastDue);
+    }
+
+    // T4: an unmapped resolving status (e.g. 'incomplete') leaves plan+status unchanged
+    // but STILL self-heals a stale missing marker (the sub resolves, so it is not missing).
+    [Fact]
+    public async Task UnmappedStatus_KeepsPlanAndStatus_ButClearsMissingMarker()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Active,
+            missingSince: DateTime.UtcNow.AddDays(-1));
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(Sub("incomplete", "price_growth_m")), out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.Plan.Should().Be(PlanConstants.Growth);
+        after.AccountStatus.Should().Be(AccountStatusConstants.Active);
+        after.StripeReconciliationMissingSince.Should().BeNull("a resolving sub is not missing");
+    }
+
+    // T2: a healthy sub returning a null price id must NOT null out the stored StripePriceId.
+    [Fact]
+    public async Task HealthyActive_NullPriceId_DoesNotClearStoredPrice()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Active, priceId: "price_growth_m");
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(Sub("active", priceId: null)), out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.StripePriceId.Should().Be("price_growth_m", "a live sub with no price must never null out the stored price");
+        after.Plan.Should().Be(PlanConstants.Growth, "no mapped price → keep existing plan");
+        after.AccountStatus.Should().Be(AccountStatusConstants.Active);
+    }
+
+    // T5: when nothing drifted, the no-write path must not bump BillingUpdatedAt.
+    [Fact]
+    public async Task NoDrift_DoesNotBumpBillingUpdatedAt()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Active,
+            priceId: "price_growth_m", subStatus: "active", billingUpdatedAt: null);
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(Sub("active", "price_growth_m")), out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.BillingUpdatedAt.Should().BeNull("nothing changed, so no write and no timestamp bump");
+    }
+
+    // T6: the billing_cancelled payload carries the pre-downgrade plan and the had-orders flag.
+    [Fact]
+    public async Task Downgrade_EmitsBillingCancelled_WithPreviousPlanAndHadOrders()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Integration, AccountStatusConstants.Active,
+            missingSince: DateTime.UtcNow.AddDays(-4));
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(NotFound()), out var analytics);
+        await svc.ReconcileOrgAsync(org.Id);
+        var ev = analytics.CapturedEvents.Should().ContainSingle(e => e.EventName == "billing_cancelled").Subject;
+        ev.OrgId.Should().Be(org.Id);
+        ev.Properties["previous_plan"].Should().Be(PlanConstants.Integration);
+        ev.Properties["had_orders_this_month"].Should().Be(false);
+    }
+
+    // T7: the grace boundary is inclusive ('>= 3 days') — exactly 3 days past → downgrade.
+    [Fact]
+    public async Task Missing_ExactlyAtGraceBoundary_Downgrades()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Active,
+            missingSince: DateTime.UtcNow - StripeSubscriptionReconciliationService.GracePeriod - TimeSpan.FromSeconds(1));
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(NotFound()), out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.Plan.Should().Be(PlanConstants.Pilot);
+        after.StripeSubscriptionId.Should().BeNull();
+    }
+
+    // T8: a resolving 'trialing' sub sets AccountStatus=Trialing through the service.
+    [Fact]
+    public async Task HealthyTrialing_SetsTrialing()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Active, priceId: "price_growth_m");
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(Sub("trialing", "price_growth_m")), out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.Plan.Should().Be(PlanConstants.Growth);
+        after.AccountStatus.Should().Be(AccountStatusConstants.Trialing);
     }
 }
