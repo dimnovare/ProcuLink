@@ -214,3 +214,27 @@ Fake transport returns a canned `Subscription` (status + price id) or throws a c
   double-guarded: (1) requires a configured key, (2) 404 must be `resource_missing` specifically
   (never a 401/5xx), (3) 3-day grace. Everything else only grants/keeps access or no-ops.
 - Merge/deploy requires the founder present (per CLAUDE.md billing rule).
+
+## Post-review additions (2026-07-11)
+
+A 5-lens adversarial review (14 findings, 0 rejected) drove the following, all implemented + tested:
+
+- **Shared-DbContext poisoning (HIGH):** the sweep shares one scoped `DbContext`; a failed
+  `SaveChanges` left an org tracked and could batch into the next org's save. Fix: `ChangeTracker.Clear()`
+  at the start of each `ReconcileOrgAsync`.
+- **Mass-downgrade circuit breaker:** a persistent valid-but-wrong key (wrong mode/account) 404s
+  every live sub and would downgrade the whole paying base after grace. `BillingReconciliationJob`
+  now aborts + `LogCritical` when more than `Billing:ReconciliationMassDowngradeThreshold` (default 10)
+  orgs are simultaneously past grace.
+- **Concurrency:** `[DisableConcurrentExecution(600)]` on the job (no optimistic-concurrency token
+  on `Organisation`).
+- **Analytics resilience:** the `billing_cancelled` emit is wrapped in try/catch so a PostHog hiccup
+  cannot fail or roll back the committed downgrade.
+- **Re-subscribe adoption (founder decision B2):** before ANY downgrade (dead-status or
+  past-grace-missing), `SubscriptionService.List(customer)` is consulted; a newer active/trialing
+  subscription is ADOPTED (reconcile to it, replacing the stored dead id) instead of freezing a
+  customer who is paying again.
+- **`paused` → read_only (founder decision B3):** added to the shared `StripeBillingMapping`, so
+  BOTH the webhook (`HandleSubscriptionUpdatedAsync`) and reconciliation treat a paused subscription
+  as read_only. This is an intentional webhook behaviour change (no prior webhook test covered
+  `paused`).
