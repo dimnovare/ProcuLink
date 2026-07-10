@@ -21,6 +21,10 @@ namespace ProcuLink.Worker.Jobs;
 /// <summary>
 /// Per-organisation child job: opens the IMAP connection, imports unseen attachments,
 /// and enqueues parse jobs for one organisation. Scheduled by <see cref="EmailPollingJob"/>.
+/// Attachments are routed to the configured default supplier via
+/// <see cref="IOrderService.CreateStubAsync"/>, or imported UNROUTED via
+/// <see cref="IOrderService.CreateUnroutedStubAsync"/> when no valid default supplier is
+/// configured (the parse job parks them 'unrouted' for later supplier assignment).
 /// </summary>
 public sealed class EmailPollOrgJob
 {
@@ -96,12 +100,32 @@ public sealed class EmailPollOrgJob
             return;
         }
 
-        if (config.DefaultSupplierId is null
-            || string.IsNullOrWhiteSpace(config.Host)
+        if (string.IsNullOrWhiteSpace(config.Host)
             || string.IsNullOrWhiteSpace(config.Username))
         {
-            _logger.LogWarning("EmailPollOrgJob: incomplete config (host/username/supplierId missing) for org {OrgId}.", orgId);
+            _logger.LogWarning("EmailPollOrgJob: incomplete config (host/username missing) for org {OrgId}.", orgId);
             return;
+        }
+
+        // Phase 1b routing: a missing (or stale/soft-deleted) default supplier no longer
+        // blocks the poll. Attachments are imported UNROUTED (SupplierId = null) via
+        // CreateUnroutedStubAsync — the parse job parks them 'unrouted' and
+        // POST /api/orders/{id}/assign-supplier routes + re-parses them later.
+        var supplierId = await ResolveDefaultSupplierIdAsync(orgId, config.DefaultSupplierId, ct);
+        if (supplierId is null)
+        {
+            if (config.DefaultSupplierId is null)
+            {
+                _logger.LogInformation(
+                    "EmailPollOrgJob: org {OrgId} has no default supplier configured — new attachments will be imported unrouted.",
+                    orgId);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "EmailPollOrgJob: org {OrgId} default supplier {SupplierId} no longer exists — new attachments will be imported unrouted.",
+                    orgId, config.DefaultSupplierId);
+            }
         }
 
         var password = string.IsNullOrWhiteSpace(config.PasswordCiphertext)
@@ -150,7 +174,7 @@ public sealed class EmailPollOrgJob
         foreach (var uid in unseen)
         {
             var message = await folder.GetMessageAsync(uid, ct);
-            var processed = await ProcessMessageAsync(orgId, config.DefaultSupplierId.Value, message, ct);
+            var processed = await ProcessMessageAsync(orgId, supplierId, message, ct);
             // Flag SEEN whenever the message was fully handled — including the case where every
             // attachment was a duplicate already imported (processed == true via the dedupe path).
             // Only an empty/unsupported message (processed == false) is left unseen for retry.
@@ -172,13 +196,15 @@ public sealed class EmailPollOrgJob
 
     /// <summary>
     /// Imports each supported, non-duplicate attachment of one message into an order stub and
-    /// enqueues a parse job. Returns true when the message was fully handled (imported at least one
-    /// attachment OR found every attachment already imported) so the caller may flag it SEEN.
-    /// <c>public</c> for direct unit testing of the (OrgId, Message-Id, AttachmentHash) dedupe
-    /// without a live IMAP server (exposing it via InternalsVisibleTo would surface the Worker's
-    /// top-level <c>Program</c> and clash with the API's in WebApplicationFactory tests).
+    /// enqueues a parse job. <paramref name="supplierId"/> is the RESOLVED default supplier
+    /// (validated org-scoped + not-deleted): non-null routes the stub to it, null imports it
+    /// UNROUTED for later assignment. Returns true when the message was fully handled (imported
+    /// at least one attachment OR found every attachment already imported) so the caller may flag
+    /// it SEEN. <c>public</c> for direct unit testing of the (OrgId, Message-Id, AttachmentHash)
+    /// dedupe without a live IMAP server (exposing it via InternalsVisibleTo would surface the
+    /// Worker's top-level <c>Program</c> and clash with the API's in WebApplicationFactory tests).
     /// </summary>
-    public async Task<bool> ProcessMessageAsync(Guid orgId, Guid supplierId, MimeMessage message, CancellationToken ct)
+    public async Task<bool> ProcessMessageAsync(Guid orgId, Guid? supplierId, MimeMessage message, CancellationToken ct)
     {
         var processedAny = false;
 
@@ -240,12 +266,16 @@ public sealed class EmailPollOrgJob
                 ? "application/octet-stream"
                 : part.ContentType.MimeType;
 
-            var result = await _orders.CreateStubAsync(orgId, supplierId, stream, fileName, contentType, ct);
+            // Routed when a valid default supplier exists; UNROUTED hold otherwise —
+            // same creation path browser upload and inbound email use for supplier-less files.
+            var result = supplierId is { } routedSupplierId
+                ? await _orders.CreateStubAsync(orgId, routedSupplierId, stream, fileName, contentType, ct)
+                : await _orders.CreateUnroutedStubAsync(orgId, stream, fileName, contentType, ct);
             if (!result.IsSuccess)
             {
                 _logger.LogWarning(
-                    "EmailPollOrgJob: attachment {FileName} for org {OrgId} could not create order: {Error}",
-                    fileName, orgId, result.Error);
+                    "EmailPollOrgJob: {Mode} order stub creation failed for attachment {FileName} (org {OrgId}): {Error}",
+                    supplierId is null ? "unrouted" : "routed", fileName, orgId, result.Error);
                 continue;
             }
 
@@ -286,5 +316,33 @@ public sealed class EmailPollOrgJob
         }
 
         return processedAny;
+    }
+
+    /// <summary>
+    /// Resolves the configured default supplier to a routable supplier id, or null when the
+    /// attachments must be imported unrouted. Org-scoped + not-deleted — a wrong-org or
+    /// soft-deleted id resolves to unrouted, never cross-tenant (same contract as the SFTP/S3
+    /// pull-ingress resolvers). <c>public</c> for direct unit testing without a live IMAP server,
+    /// same rationale as <see cref="ProcessMessageAsync"/>.
+    /// </summary>
+    public async Task<Guid?> ResolveDefaultSupplierIdAsync(
+        Guid orgId,
+        Guid? defaultSupplierId,
+        CancellationToken ct)
+    {
+        if (defaultSupplierId is null || defaultSupplierId == Guid.Empty)
+        {
+            return null;
+        }
+
+        var exists = await _db.Suppliers
+            .AsNoTracking()
+            .AnyAsync(
+                s => s.OrgId == orgId
+                  && s.Id == defaultSupplierId
+                  && s.DeletedAt == null,
+                ct);
+
+        return exists ? defaultSupplierId.Value : null;
     }
 }
