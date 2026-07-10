@@ -44,6 +44,16 @@ public class Organisation
     public string? StripeSubscriptionStatus { get; set; }
     public string? BillingEmail          { get; set; }
     public DateTime? BillingUpdatedAt    { get; set; }
+
+    /// <summary>
+    /// UTC instant the reconciliation job FIRST observed this org's Stripe subscription missing
+    /// (Stripe GetAsync 404 resource_missing). NULL = not currently observed missing. Drives the
+    /// 3-day grace window before a vanished subscription is downgraded to frozen Pilot + read_only,
+    /// protecting a real paying customer from a transient 404 / live-vs-test key slip. Cleared when
+    /// the subscription reappears healthy (self-heal) or once the downgrade is applied.
+    /// </summary>
+    public DateTime? StripeReconciliationMissingSince { get; set; }
+
     public string EmailConfigJson        { get; set; } = "{}";
 
     /// <summary>
