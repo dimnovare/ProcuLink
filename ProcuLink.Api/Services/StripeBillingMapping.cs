@@ -38,14 +38,19 @@ public static class StripeBillingMapping
 
     /// <summary>
     /// Maps a Stripe subscription status to an <see cref="AccountStatusConstants"/> value.
-    /// Mirrors the switch in <c>BillingController.HandleSubscriptionUpdatedAsync</c> exactly;
-    /// an unknown/null status keeps the caller's <paramref name="currentStatus"/>.
+    /// An unknown/null status keeps the caller's <paramref name="currentStatus"/>.
+    ///
+    /// <para>Used by BOTH the webhook (<c>BillingController.HandleSubscriptionUpdatedAsync</c>) and
+    /// the reconciliation service, so they stay in lock-step. <c>paused</c> → read_only (a paused
+    /// subscription blocks new processing until it resumes) is a founder-approved 2026-07-11
+    /// addition applied uniformly to both paths.</para>
     /// </summary>
     public static string MapStatusToAccountStatus(string? stripeStatus, string currentStatus) => stripeStatus switch
     {
         "trialing"             => AccountStatusConstants.Trialing,
         "active"               => AccountStatusConstants.Active,
         "past_due" or "unpaid" => AccountStatusConstants.PastDue,
+        "paused"               => AccountStatusConstants.ReadOnly,
         "canceled"             => AccountStatusConstants.ReadOnly,
         _                      => currentStatus,
     };

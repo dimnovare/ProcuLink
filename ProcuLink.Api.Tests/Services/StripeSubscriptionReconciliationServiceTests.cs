@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -21,12 +22,20 @@ namespace ProcuLink.Api.Tests.Services;
 /// </summary>
 public class StripeSubscriptionReconciliationServiceTests
 {
-    // ── faked Stripe transport: returns a canned Subscription or throws ─────
+    // ── faked Stripe transport ──────────────────────────────────────────────
+    // GetAsync(id) → the canned _getResponse (a Subscription or an Exception to throw);
+    // ListAsync(customer) → a StripeList of _customerSubs (the re-subscribe adoption probe).
     private sealed class FakeStripeClient : IStripeClient
     {
-        private readonly object _response; // a Stripe.Subscription to return, or an Exception to throw
-        public int Calls { get; private set; }
-        public FakeStripeClient(object response) => _response = response;
+        private readonly object _getResponse;
+        private readonly List<Subscription> _customerSubs;
+        public int Calls { get; private set; }      // GET /v1/subscriptions/{id}
+        public int ListCalls { get; private set; }  // GET /v1/subscriptions (list by customer)
+        public FakeStripeClient(object getResponse, IEnumerable<Subscription>? customerSubs = null)
+        {
+            _getResponse = getResponse;
+            _customerSubs = customerSubs?.ToList() ?? new List<Subscription>();
+        }
 
         public string ApiBase => "https://api.stripe.invalid";
         public string ApiKey => "sk_test_fake";
@@ -38,9 +47,15 @@ public class StripeSubscriptionReconciliationServiceTests
         public Task<T> RequestAsync<T>(HttpMethod method, string path, BaseOptions options,
             RequestOptions requestOptions, CancellationToken cancellationToken = default) where T : IStripeEntity
         {
+            if (typeof(T) == typeof(StripeList<Subscription>))
+            {
+                ListCalls++;
+                var list = new StripeList<Subscription> { Data = _customerSubs };
+                return Task.FromResult((T)(IStripeEntity)list);
+            }
             Calls++;
-            if (_response is Exception ex) throw ex;
-            return Task.FromResult((T)(IStripeEntity)_response);
+            if (_getResponse is Exception ex) throw ex;
+            return Task.FromResult((T)(IStripeEntity)_getResponse);
         }
 
         public Task<System.IO.Stream> RequestStreamingAsync(HttpMethod method, string path,
@@ -48,15 +63,17 @@ public class StripeSubscriptionReconciliationServiceTests
             throw new NotSupportedException();
     }
 
-    private static Subscription Sub(string status, string? priceId) => new()
+    private static Subscription SubOf(string id, string status, string? priceId) => new()
     {
-        Id = "sub_123",
+        Id = id,
         Status = status,
         Items = new StripeList<SubscriptionItem>
         {
             Data = new List<SubscriptionItem> { new() { Id = "si_1", Price = priceId is null ? null : new Price { Id = priceId } } }
         }
     };
+
+    private static Subscription Sub(string status, string? priceId) => SubOf("sub_123", status, priceId);
 
     // Stripe.net 51.1.0 ctor: StripeException(HttpStatusCode, StripeError, string) — verified.
     private static StripeException NotFound() =>
@@ -411,5 +428,74 @@ public class StripeSubscriptionReconciliationServiceTests
         var after = await Reload(db, org.Id);
         after.Plan.Should().Be(PlanConstants.Growth);
         after.AccountStatus.Should().Be(AccountStatusConstants.Trialing);
+    }
+
+    // ── Founder follow-ups: re-subscribe adoption (B2) + paused→read_only (B3) ─
+
+    // B2: a dead (canceled) stored sub, but the CUSTOMER has a newer active sub → adopt it,
+    // do NOT downgrade. Restores a re-subscribed customer even though the checkout webhook was missed.
+    [Fact]
+    public async Task DeadSub_CustomerHasActiveSub_AdoptsInsteadOfDowngrade()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Pilot, AccountStatusConstants.ReadOnly, subId: "sub_old", priceId: null);
+        var fake = new FakeStripeClient(
+            SubOf("sub_old", "canceled", "price_growth_m"),
+            customerSubs: new[] { SubOf("sub_new", "active", "price_ops_m") });
+        var svc = MakeSvc(db, Config(), fake, out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.StripeSubscriptionId.Should().Be("sub_new", "adopt the re-subscribe rather than freeze a paying customer");
+        after.Plan.Should().Be(PlanConstants.Operations);
+        after.AccountStatus.Should().Be(AccountStatusConstants.Active);
+        after.StripePriceId.Should().Be("price_ops_m");
+        fake.ListCalls.Should().Be(1);
+    }
+
+    // B2: a past-grace MISSING (404) sub, but the customer has a newer active sub → adopt.
+    [Fact]
+    public async Task MissingPastGrace_CustomerHasActiveSub_AdoptsInsteadOfDowngrade()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Active,
+            subId: "sub_old", missingSince: DateTime.UtcNow.AddDays(-4));
+        var fake = new FakeStripeClient(NotFound(), customerSubs: new[] { SubOf("sub_new", "active", "price_growth_m") });
+        var svc = MakeSvc(db, Config(), fake, out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.StripeSubscriptionId.Should().Be("sub_new");
+        after.AccountStatus.Should().Be(AccountStatusConstants.Active);
+        after.StripeReconciliationMissingSince.Should().BeNull();
+    }
+
+    // B2: a dead sub and the customer has ONLY non-active subs → adoption declines, downgrade proceeds.
+    [Fact]
+    public async Task DeadSub_CustomerHasNoActiveSub_StillDowngrades()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Active, subId: "sub_old");
+        var fake = new FakeStripeClient(
+            SubOf("sub_old", "canceled", "price_growth_m"),
+            customerSubs: new[] { SubOf("sub_dead2", "canceled", "price_growth_m") });
+        var svc = MakeSvc(db, Config(), fake, out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.Plan.Should().Be(PlanConstants.Pilot);
+        after.AccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
+        after.StripeSubscriptionId.Should().BeNull();
+        fake.ListCalls.Should().Be(1, "adoption is attempted before downgrading");
+    }
+
+    // B3: a resolving 'paused' sub → account_status read_only, plan kept.
+    [Fact]
+    public async Task PausedStatus_SetsReadOnly_KeepsPlan()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Active, priceId: "price_growth_m");
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(Sub("paused", "price_growth_m")), out _);
+        await svc.ReconcileOrgAsync(org.Id);
+        var after = await Reload(db, org.Id);
+        after.Plan.Should().Be(PlanConstants.Growth, "paused keeps the plan");
+        after.AccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
     }
 }

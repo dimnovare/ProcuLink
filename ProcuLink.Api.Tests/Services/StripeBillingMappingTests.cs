@@ -52,6 +52,7 @@ public class StripeBillingMappingTests
     [InlineData("active",   AccountStatusConstants.Active)]
     [InlineData("past_due", AccountStatusConstants.PastDue)]
     [InlineData("unpaid",   AccountStatusConstants.PastDue)]
+    [InlineData("paused",   AccountStatusConstants.ReadOnly)]
     [InlineData("canceled", AccountStatusConstants.ReadOnly)]
     public void MapStatusToAccountStatus_MapsKnownStatuses(string stripeStatus, string expected) =>
         StripeBillingMapping.MapStatusToAccountStatus(stripeStatus, "current").Should().Be(expected);
@@ -60,7 +61,6 @@ public class StripeBillingMappingTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("incomplete")]
-    [InlineData("paused")]
     public void MapStatusToAccountStatus_UnknownOrNull_KeepsCurrent(string? stripeStatus) =>
         StripeBillingMapping.MapStatusToAccountStatus(stripeStatus, AccountStatusConstants.Active)
             .Should().Be(AccountStatusConstants.Active);

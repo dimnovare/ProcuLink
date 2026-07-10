@@ -88,7 +88,7 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
         }
         catch (StripeException ex) when (IsResourceMissing(ex))
         {
-            await HandleMissingAsync(org, ct);
+            await HandleMissingAsync(org, subscriptions, ct);
             return;
         }
         catch (StripeException ex)
@@ -101,7 +101,7 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
             return;
         }
 
-        await ApplyResolvedAsync(org, sub, ct);
+        await ApplyResolvedAsync(org, sub, subscriptions, ct);
     }
 
     /// <summary>True only for a 404 that Stripe attributes to a missing object (not a 401/5xx).</summary>
@@ -109,15 +109,19 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
         ex.HttpStatusCode == HttpStatusCode.NotFound
         && string.Equals(ex.StripeError?.Code, "resource_missing", StringComparison.Ordinal);
 
-    private async Task ApplyResolvedAsync(Organisation org, Subscription sub, CancellationToken ct)
+    private async Task ApplyResolvedAsync(Organisation org, Subscription sub, SubscriptionService subscriptions, CancellationToken ct)
     {
         var status = sub.Status ?? string.Empty;
         var priceId = sub.Items?.Data?.FirstOrDefault()?.Price?.Id;
 
-        // DEAD — the subscription resolves but is authoritatively over. Immediate downgrade,
-        // no grace (a resolving GetAsync returning 'canceled' is not a transient misread).
+        // DEAD — the subscription resolves but is authoritatively over. Before downgrading, check
+        // whether the customer has a NEWER active/trialing subscription (a re-subscribe whose
+        // checkout webhook we also missed): adopt it rather than freezing a paying customer. Only
+        // when there is none do we downgrade — immediately (a resolving 'canceled' is not a
+        // transient misread, so no grace).
         if (status is "canceled" or "incomplete_expired")
         {
+            if (await TryAdoptActiveSubscriptionAsync(org, subscriptions, ct)) return;
             await DowngradeAsync(org, org.StripeSubscriptionId!, ct);
             return;
         }
@@ -131,18 +135,23 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
             if (!string.IsNullOrEmpty(mapped)) targetPlan = mapped; // keep existing when unrecognised (manual Enterprise)
             targetStatus = StripeBillingMapping.MapStatusToAccountStatus(status, org.AccountStatus);
         }
-        else if (status is "past_due" or "unpaid")
+        else if (status is "past_due" or "unpaid" or "paused")
         {
-            targetStatus = StripeBillingMapping.MapStatusToAccountStatus(status, org.AccountStatus); // plan kept
+            // Dunning (past_due/unpaid → past_due) or paused billing (paused → read_only): plan kept,
+            // account_status re-derived via the shared mapping so the webhook and reconciliation agree.
+            targetStatus = StripeBillingMapping.MapStatusToAccountStatus(status, org.AccountStatus);
         }
         else
         {
-            // incomplete / paused / unknown — resolves but no actionable mapping. Leave plan+status;
-            // the sub is present, so any stale missing marker is cleared below.
+            // incomplete / unknown — resolves but no actionable mapping. Leave plan+status; the sub
+            // is present, so any stale missing marker is cleared below.
             _logger.LogInformation("Reconcile: org {OrgId} sub status '{Status}' unmapped — plan/status unchanged.", org.Id, status);
         }
 
         var changed = false;
+        // Adopting a re-subscribe replaces the stored (dead) id with the live one; a no-op in the
+        // normal path where sub.Id already equals the stored id.
+        if (!string.IsNullOrEmpty(sub.Id) && org.StripeSubscriptionId != sub.Id) { org.StripeSubscriptionId = sub.Id; changed = true; }
         if (org.Plan != targetPlan) { org.Plan = targetPlan; changed = true; }
         if (org.AccountStatus != targetStatus) { org.AccountStatus = targetStatus; changed = true; }
         // Only ever overwrite the price id with a real value — never null out a live sub's price.
@@ -159,7 +168,7 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
         }
     }
 
-    private async Task HandleMissingAsync(Organisation org, CancellationToken ct)
+    private async Task HandleMissingAsync(Organisation org, SubscriptionService subscriptions, CancellationToken ct)
     {
         var deadSubId = org.StripeSubscriptionId;
 
@@ -177,6 +186,9 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
 
         if (DateTime.UtcNow - org.StripeReconciliationMissingSince.Value >= GracePeriod)
         {
+            // Past grace — but a customer who re-subscribed (with a webhook we also missed) has a
+            // NEW active sub under the same customer; adopt it rather than freeze them.
+            if (await TryAdoptActiveSubscriptionAsync(org, subscriptions, ct)) return;
             await DowngradeAsync(org, deadSubId!, ct);
         }
         else
@@ -184,6 +196,49 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
             _logger.LogInformation("Reconcile: org {OrgId} subscription still missing but within grace (since {Since:o}).",
                 org.Id, org.StripeReconciliationMissingSince);
         }
+    }
+
+    /// <summary>
+    /// Before downgrading a dead/vanished subscription, check whether the customer has a NEWER
+    /// active/trialing subscription (a re-subscribe whose <c>checkout.completed</c> webhook we also
+    /// missed). If so, adopt it — reconcile the org to that live sub, replacing the stored dead id —
+    /// and return true, so a customer who is actually paying again is never frozen. Returns false
+    /// (caller then downgrades) when there is no customer id on file, the list call fails, or the
+    /// customer has no active/trialing subscription.
+    /// </summary>
+    private async Task<bool> TryAdoptActiveSubscriptionAsync(Organisation org, SubscriptionService subscriptions, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(org.StripeCustomerId)) return false;
+
+        StripeList<Subscription> subs;
+        try
+        {
+            subs = await subscriptions.ListAsync(new SubscriptionListOptions
+            {
+                Customer = org.StripeCustomerId,
+                Limit = 10,
+            }, cancellationToken: ct);
+        }
+        catch (StripeException ex)
+        {
+            // Cannot confirm the customer's subscriptions — do NOT adopt, and do not let this throw
+            // out of the per-org step; the caller proceeds to downgrade the confirmed-dead sub.
+            _logger.LogError(ex,
+                "Reconcile: could not list subscriptions for org {OrgId} customer {Cus}; skipping re-subscribe adoption.",
+                org.Id, org.StripeCustomerId);
+            return false;
+        }
+
+        var live = subs?.Data?.FirstOrDefault(s => s.Status is "active" or "trialing");
+        if (live is null) return false;
+
+        _logger.LogWarning(
+            "Reconcile: org {OrgId} had a dead/missing subscription but customer {Cus} has an ACTIVE subscription {NewSub} — adopting it instead of downgrading.",
+            org.Id, org.StripeCustomerId, live.Id);
+        // Reconcile to the live sub — ApplyResolvedAsync writes the new id (its change detection),
+        // plan, status, and clears the missing marker. A live sub can never re-enter this method.
+        await ApplyResolvedAsync(org, live, subscriptions, ct);
+        return true;
     }
 
     private async Task DowngradeAsync(Organisation org, string deadSubId, CancellationToken ct)
