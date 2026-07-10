@@ -140,7 +140,11 @@ public sealed class CxmlTransformService : ITransformService
                     BuildFrom(order, cxmlCredentials),
                     BuildCredentialBlock("To",
                         cxmlCredentials?.ToDomain, cxmlCredentials?.ToIdentity,
-                        legacyDomain: "SupplierId", legacyIdentity: order.SupplierId.ToString()),
+                        // Coalesce an unrouted (null) supplier to the zero GUID — matches the
+                        // preview pipeline's `SupplierId ?? Guid.Empty` and keeps <Identity>
+                        // non-empty (the DTD requires a value). Byte-identical for every routed
+                        // order (non-null → the supplier GUID exactly as before).
+                        legacyDomain: "SupplierId", legacyIdentity: (order.SupplierId ?? Guid.Empty).ToString()),
                     BuildSender(cxmlCredentials)
                 ),
 

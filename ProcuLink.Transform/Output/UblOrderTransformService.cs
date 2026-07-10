@@ -87,7 +87,10 @@ public sealed class UblOrderTransformService : ITransformService
         // PartyLegalEntity is absent). Supplier name remains the supplier id (placeholder).
         var resolvedBuyer = OrderHeaderReader.ExtractBuyerName(order);
         var buyerName     = string.IsNullOrWhiteSpace(resolvedBuyer) ? "ProcuLink Buyer" : resolvedBuyer;
-        var supplierName  = order.SupplierId.ToString();
+        // Supplier name is the supplier id (placeholder). Coalesce an unrouted (null) supplier to
+        // the zero GUID so PartyName/Name is never empty (Peppol BIS 3.0 requires it). Byte-identical
+        // for every routed order — this only affects the read-only preview of an unrouted order.
+        var supplierName  = (order.SupplierId ?? Guid.Empty).ToString();
 
         var root = new XElement(UblOrder + "Order",
             new XAttribute(XNamespace.Xmlns + "cac", Cac.NamespaceName),
