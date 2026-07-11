@@ -54,7 +54,8 @@ public class OverageInvoiceAttachDispatchTests
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build(),
             NullLogger<BillingController>.Instance,
             db,
-            new Mock<IAiUsageTracker>().Object);
+            new Mock<IAiUsageTracker>().Object,
+            new Mock<ProcuLink.Core.Services.Delivery.IDeliveryService>().Object);
         return (ctrl, billing, org, db);
     }
 

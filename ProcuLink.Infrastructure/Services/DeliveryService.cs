@@ -33,6 +33,12 @@ public sealed class DeliveryService : IDeliveryService
     private readonly DeliveryReliabilityOptions _reliability;
     private readonly ILogger<DeliveryService> _logger;
     private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
+    // Optional re-drive seam: ReleaseBillingHeldOrdersAsync re-enqueues a delivery retry per
+    // released order. Registered in BOTH the Api (reactivation webhook) and Worker hosts. Null in
+    // older positional test ctors — release still moves orders back to ready_to_deliver (visible +
+    // operator-re-drivable), it just doesn't auto-enqueue. Mirrors StuckOrderDetectionService's
+    // optional IParseJobEnqueuer pattern.
+    private readonly IRetryDeliveryEnqueuer? _retryEnqueuer;
 
     public DeliveryService(
         ProcuLinkDbContext db,
@@ -44,7 +50,8 @@ public sealed class DeliveryService : IDeliveryService
         IOrderExceptionService exceptions,
         ILogger<DeliveryService> logger,
         DeliveryReliabilityOptions? reliability = null,
-        IEffectiveConnectionConfigResolver? effectiveConfig = null)
+        IEffectiveConnectionConfigResolver? effectiveConfig = null,
+        IRetryDeliveryEnqueuer? retryEnqueuer = null)
     {
         _db = db;
         _fileStorage = fileStorage;
@@ -58,6 +65,7 @@ public sealed class DeliveryService : IDeliveryService
         // Launch batch 7 — revision authority. Null (older positional test ctors / unregistered
         // hosts) behaves exactly like flag-OFF: the live supplier delivery config drives dispatch.
         _effectiveConfig = effectiveConfig;
+        _retryEnqueuer = retryEnqueuer;
     }
 
     /// <summary>
@@ -806,6 +814,114 @@ public sealed class DeliveryService : IDeliveryService
 
     public Task<int> CountDeliveryAttemptsAsync(Guid orgId, Guid orderId, CancellationToken ct) =>
         _db.DeliveryAttempts.CountAsync(a => a.OrderId == orderId && a.OrgId == orgId, ct);
+
+    public async Task<bool> HoldForBillingAsync(Guid orgId, Guid orderId, CancellationToken ct)
+    {
+        var order = await _db.PurchaseOrders
+            .Where(o => o.Id == orderId && o.OrgId == orgId)
+            .FirstOrDefaultAsync(ct);
+
+        // Only a transform-ready order is held. Any other status (already delivering/delivered/
+        // failed/held) is a benign no-op — the billing guard just skips those.
+        if (order is null || order.Status != OrderStatusConstants.ReadyToDeliver)
+            return false;
+
+        var now = DateTime.UtcNow;
+        order.Status = OrderStatusConstants.DeliveryHeld;
+        order.UpdatedAt = now;
+        // Pause the SLA window while held so the SLA sweep never flags an order that is
+        // deliberately waiting on billing (not a delivery failure).
+        order.DeliveryDueAt = null;
+        order.SlaBreached = false;
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            reason = "DeliveryHeldForBilling",
+            fromStatus = OrderStatusConstants.ReadyToDeliver,
+            toStatus = OrderStatusConstants.DeliveryHeld,
+            heldAt = now,
+            detail = "Org cannot process orders (billing) at delivery time — delivery paused, artifact intact; auto-released when the org returns to good standing.",
+        });
+
+        _db.AuditEvents.Add(new AuditEvent
+        {
+            Id = Guid.NewGuid(),
+            OrgId = orgId,
+            UserId = null,
+            EntityType = "Order",
+            EntityId = orderId,
+            Action = "DeliveryHeldForBilling",
+            Payload = System.Text.Json.JsonDocument.Parse(payload),
+            CreatedAt = now,
+        });
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogWarning(
+            "DeliveryHeldForBilling: order {OrderId} (org {OrgId}) held in 'delivery_held' — org cannot process orders at delivery time. Will auto-release on reactivation.",
+            orderId, orgId);
+        return true;
+    }
+
+    public async Task<int> ReleaseBillingHeldOrdersAsync(Guid orgId, CancellationToken ct)
+    {
+        var held = await _db.PurchaseOrders
+            .Where(o => o.OrgId == orgId && o.Status == OrderStatusConstants.DeliveryHeld)
+            .ToListAsync(ct);
+
+        if (held.Count == 0)
+            return 0;
+
+        var now = DateTime.UtcNow;
+        foreach (var order in held)
+        {
+            order.Status = OrderStatusConstants.ReadyToDeliver;
+            order.UpdatedAt = now;
+
+            var payload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                reason = "DeliveryHoldReleased",
+                fromStatus = OrderStatusConstants.DeliveryHeld,
+                toStatus = OrderStatusConstants.ReadyToDeliver,
+                releasedAt = now,
+                detail = "Org returned to a processing state — delivery hold released and re-driven.",
+            });
+
+            _db.AuditEvents.Add(new AuditEvent
+            {
+                Id = Guid.NewGuid(),
+                OrgId = orgId,
+                UserId = null,
+                EntityType = "Order",
+                EntityId = order.Id,
+                Action = "DeliveryHoldReleased",
+                Payload = System.Text.Json.JsonDocument.Parse(payload),
+                CreatedAt = now,
+            });
+        }
+
+        // Commit the ready_to_deliver resets BEFORE enqueuing re-drives, so a retry job can't
+        // start on a still-'delivery_held' row and bow out (RetryDeliveryAsync claims from
+        // ready_to_deliver, not delivery_held).
+        await _db.SaveChangesAsync(ct);
+
+        if (_retryEnqueuer is null)
+        {
+            _logger.LogWarning(
+                "DeliveryHoldReleased: {Count} order(s) reset to 'ready_to_deliver' for org {OrgId} but no IRetryDeliveryEnqueuer is registered in this process — they will re-drive once an enqueuer is available (or via an operator Retry).",
+                held.Count, orgId);
+        }
+        else
+        {
+            foreach (var order in held)
+                await _retryEnqueuer.EnqueueAsync(order.Id, orgId, ct);
+        }
+
+        _logger.LogWarning(
+            "DeliveryHoldReleased: released {Count} billing-held order(s) for org {OrgId} back into delivery.",
+            held.Count, orgId);
+        return held.Count;
+    }
 
     private async Task DeadLetterAsync(
         PurchaseOrderEntity order,

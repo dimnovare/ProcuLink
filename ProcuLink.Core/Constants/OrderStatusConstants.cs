@@ -10,6 +10,16 @@ public static class OrderStatusConstants
     public const string ReadyToDeliver = "ready_to_deliver";
     public const string Delivering = "delivering";
     public const string Delivered = "delivered";
+
+    /// <summary>
+    /// Delivery paused because the org cannot currently process orders (billing: past_due /
+    /// read_only / trial_expired / cancelled) at the moment its transform-ready order reached the
+    /// delivery job. NOT a failure and NOT lost: the transformed artifact is intact. The order is
+    /// automatically released back to <see cref="ReadyToDeliver"/> and re-driven when the org
+    /// returns to good standing (see <c>IDeliveryService.ReleaseBillingHeldOrdersAsync</c>), so a
+    /// mid-pipeline billing flip can never SILENTLY strand a paid, transformed order.
+    /// </summary>
+    public const string DeliveryHeld = "delivery_held";
     public const string DeliveryFailed = "delivery_failed";
     public const string TransformFailed = "transform_failed";
     public const string RejectedBySupplier = "rejected_by_supplier";

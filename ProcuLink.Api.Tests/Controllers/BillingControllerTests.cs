@@ -67,6 +67,7 @@ public class BillingControllerTests
 
         var billing = new Mock<IBillingService>();
         var aiUsage = new Mock<IAiUsageTracker>();
+        var delivery = new Mock<ProcuLink.Core.Services.Delivery.IDeliveryService>();
 
         var ctrl = new BillingController(
             billing.Object,
@@ -74,7 +75,8 @@ public class BillingControllerTests
             MakeConfig(webhookSecret),
             NullLogger<BillingController>.Instance,
             db,
-            aiUsage.Object);
+            aiUsage.Object,
+            delivery.Object);
 
         return (ctrl, billing, aiUsage, orgId, db);
     }

@@ -34,7 +34,10 @@ public static class OrderStatusMachine
             [Transforming]       = Set(ReadyToDeliver, Ready, Failed, RejectedBySupplier),
             // ready_to_deliver/delivered → ready: a mapping edit after transform (MV-1) invalidates
             // the artifact and resets the order so the next Send re-transforms.
-            [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
+            // ready_to_deliver → delivery_held: a mid-pipeline billing flip pauses (not fails) delivery.
+            [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier),
+            // Billing hold → released back to ready_to_deliver when the org returns to good standing.
+            [DeliveryHeld]       = Set(ReadyToDeliver, Ready, RejectedBySupplier),
             [Delivering]         = Set(Delivered, DeliveryFailed, RejectedBySupplier),
             [Delivered]          = Set(DeliveryFailed, Ready, RejectedBySupplier),
             // delivery_failed/delivery_dead_letter → ready: the MV-1 sibling — a mapping edit after a

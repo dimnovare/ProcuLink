@@ -66,9 +66,8 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
         var now = DateTime.UtcNow;
         var actedOn = 0;
 
-        // Collect parse-job requeues to fire AFTER the status changes are committed —
-        // an enqueued job could otherwise start before its 'pending_parse' status is
-        // persisted and exit early on a stale 'parsing' read.
+        // Collect parse-job requeues to fire AFTER the bookkeeping (RequeueCount/UpdatedAt)
+        // is committed — a re-enqueued job must not run before this sweep's write lands.
         var parseRequeues = new List<(Guid OrderId, Guid OrgId)>();
 
         foreach (var order in stuck)
@@ -90,8 +89,16 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
 
                 if (fromStatus == OrderStatusConstants.Parsing)
                 {
-                    // Reset to the pre-parse state and re-drive the parse job.
-                    order.Status = OrderStatusConstants.PendingParse;
+                    // KEEP the order in 'parsing' and re-drive a fresh parse job. The parse
+                    // guard (OrderIngestionService.ParseStoredFileAsync) only does work when
+                    // Status == "parsing"; resetting to 'pending_parse' here made the
+                    // re-enqueued job log "already processed, skipping parse" and return WITHOUT
+                    // parsing — silently stranding the order forever. 'parsing' is the same
+                    // status the normal ingest and the unrouted→re-parse flow re-parse from, and
+                    // the parse's atomic ExecuteUpdate is itself keyed on 'parsing', so a stray
+                    // concurrent job cannot double-write. UpdatedAt is bumped below, so the order
+                    // leaves the stuck window until it stalls again.
+                    order.Status = OrderStatusConstants.Parsing;
                     parseRequeues.Add((order.Id, order.OrgId));
                 }
                 else // Transforming
@@ -223,14 +230,14 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
 
         await _db.SaveChangesAsync(ct);
 
-        // Fire parse requeues only after the 'pending_parse' resets are committed.
+        // Fire parse requeues only after the requeue bookkeeping is committed.
         if (parseRequeues.Count > 0)
         {
             if (_parseEnqueuer is null)
             {
                 _logger.LogWarning(
-                    "StuckOrderDetection: {Count} parse requeue(s) reset to '{PendingParse}' but no IParseJobEnqueuer is registered in this process — orders will be re-driven once an enqueuer is available.",
-                    parseRequeues.Count, OrderStatusConstants.PendingParse);
+                    "StuckOrderDetection: {Count} parse requeue(s) kept in '{Parsing}' but no IParseJobEnqueuer is registered in this process — orders will be re-driven once an enqueuer is available.",
+                    parseRequeues.Count, OrderStatusConstants.Parsing);
             }
             else
             {

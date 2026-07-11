@@ -74,11 +74,16 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             [OrderStatusConstants.TransformFailed] = Set(
                 OrderStatusConstants.Ready, OrderStatusConstants.Transforming,
                 OrderStatusConstants.PendingReview),
-            // Delivery: manual/automatic dispatch, re-transform, and supplier status
-            // webhooks (which may report a terminal state straight from ready_to_deliver).
+            // Delivery: manual/automatic dispatch, re-transform, supplier status webhooks
+            // (which may report a terminal state straight from ready_to_deliver), and a
+            // billing hold (delivery_held) when the org can't process orders at delivery time.
             [OrderStatusConstants.ReadyToDeliver] = Set(
                 OrderStatusConstants.Delivering, OrderStatusConstants.Transforming,
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
+                OrderStatusConstants.DeliveryHeld, OrderStatusConstants.RejectedBySupplier),
+            // Billing hold → released back to ready_to_deliver (re-driven) on reactivation.
+            [OrderStatusConstants.DeliveryHeld] = Set(
+                OrderStatusConstants.ReadyToDeliver, OrderStatusConstants.Ready,
                 OrderStatusConstants.RejectedBySupplier),
             [OrderStatusConstants.Delivering] = Set(
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,

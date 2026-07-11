@@ -34,8 +34,10 @@ public class StuckOrderDetectionServiceTests
         acted.Should().Be(1);
 
         var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
-        // Reset to its pre-parse state — NOT failed.
-        order.Status.Should().Be(OrderStatusConstants.PendingParse);
+        // Kept in 'parsing' — the ONLY status the parse guard (ParseStoredFileAsync)
+        // actually re-parses. Resetting to 'pending_parse' would make the re-enqueued
+        // job skip it as "already processed" and strand it. NOT failed.
+        order.Status.Should().Be(OrderStatusConstants.Parsing);
         order.RequeueCount.Should().Be(1);
 
         // The parse job was actually re-enqueued through the seam.
@@ -46,6 +48,28 @@ public class StuckOrderDetectionServiceTests
         var audit = await db.AuditEvents.SingleAsync(e => e.EntityId == orderId);
         audit.Action.Should().Be("StuckRequeued");
         audit.EntityType.Should().Be("Order");
+    }
+
+    [Fact]
+    public async Task RunAsync_StuckParsingOrder_StaysPickupEligibleAndReEnqueued_NotStranded()
+    {
+        // Regression (audit FINDING 2): a stuck 'parsing' order must be recovered to a status
+        // the parse guard ACTUALLY picks up. ParseStoredFileAsync only re-parses when
+        // Status == "parsing"; resetting to "pending_parse" made the re-enqueued job log
+        // "already processed, skipping parse" and return Ok WITHOUT parsing — a silent strand.
+        await using var db = CreateDb();
+        var orderId = await SeedOrderAsync(db, OrderStatusConstants.Parsing, updatedMinutesAgo: 45);
+        var enqueuer = new RecordingParseEnqueuer();
+
+        await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        // Pickup-eligible: exactly the literal the parse guard compares against ("parsing").
+        order.Status.Should().Be(OrderStatusConstants.Parsing);
+        // A fresh parse job was enqueued to actually drive the re-parse.
+        enqueuer.Calls.Should().ContainSingle().Which.Should().Be((orderId, order.OrgId));
+        // UpdatedAt was bumped out of the stuck window so the next sweep won't double-act.
+        order.UpdatedAt.Should().BeAfter(DateTime.UtcNow.AddMinutes(-Threshold.TotalMinutes));
     }
 
     [Fact]
@@ -149,11 +173,11 @@ public class StuckOrderDetectionServiceTests
             (await service.RunAsync(Threshold, default)).Should().Be(1);
 
             var o = await db.PurchaseOrders.SingleAsync(x => x.Id == orderId);
-            o.Status.Should().Be(OrderStatusConstants.PendingParse, "requeue {0} should not fail the order", attempt);
+            // Requeue keeps it in 'parsing' (pickup-eligible), never failed, until the cap.
+            o.Status.Should().Be(OrderStatusConstants.Parsing, "requeue {0} should not fail the order", attempt);
             o.RequeueCount.Should().Be(attempt);
 
-            // Re-stall: put it back in 'parsing', aged past the threshold.
-            o.Status = OrderStatusConstants.Parsing;
+            // Re-stall: it is already 'parsing'; just age it past the threshold again.
             o.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
             await db.SaveChangesAsync();
         }
@@ -206,10 +230,11 @@ public class StuckOrderDetectionServiceTests
         var orderId = await SeedOrderAsync(db, OrderStatusConstants.Parsing, updatedMinutesAgo: 45);
         var service = CreateService(db, new RecordingParseEnqueuer());
 
-        // First run requeues (status leaves the transient set).
+        // First run requeues (bumps UpdatedAt = now, keeps status 'parsing').
         (await service.RunAsync(Threshold, default)).Should().Be(1);
-        // Second run: the order is now 'pending_parse', not in a transient status,
-        // so it is not acted on again — no double-processing.
+        // Second run: the order is still 'parsing' but its UpdatedAt was just bumped, so it
+        // is OUTSIDE the stuck window (recency guard) and is not acted on again — no
+        // double-processing. It re-enters the sweep only if it stalls past the threshold again.
         (await service.RunAsync(Threshold, default)).Should().Be(0);
 
         (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).RequeueCount.Should().Be(1);
@@ -217,10 +242,12 @@ public class StuckOrderDetectionServiceTests
     }
 
     [Fact]
-    public async Task RunAsync_NoEnqueuerRegistered_ParsingOrderStillResetAndCountedNotPermanentlyFailed()
+    public async Task RunAsync_NoEnqueuerRegistered_ParsingOrderStillRequeuedAndCountedNotPermanentlyFailed()
     {
-        // The Worker that runs the sweep may not have IParseJobEnqueuer registered.
-        // A transient stall must still NOT become a permanent failure on the first blip.
+        // The process that runs the sweep may not have IParseJobEnqueuer registered.
+        // A transient stall must still NOT become a permanent failure on the first blip, and
+        // must stay in the pickup-eligible 'parsing' status so a later run (or a process that
+        // DOES have the enqueuer) can re-drive it.
         await using var db = CreateDb();
         var orderId = await SeedOrderAsync(db, OrderStatusConstants.Parsing, updatedMinutesAgo: 45);
 
@@ -230,7 +257,7 @@ public class StuckOrderDetectionServiceTests
 
         acted.Should().Be(1);
         var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
-        order.Status.Should().Be(OrderStatusConstants.PendingParse);
+        order.Status.Should().Be(OrderStatusConstants.Parsing);
         order.RequeueCount.Should().Be(1);
         (await db.AuditEvents.SingleAsync(e => e.EntityId == orderId)).Action
             .Should().Be("StuckRequeued");

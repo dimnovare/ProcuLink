@@ -22,6 +22,8 @@ public class OrderStatusMachineTests
     [InlineData(Transforming, Failed)]
     [InlineData(ReadyToDeliver, Delivering)]
     [InlineData(ReadyToDeliver, DeliveryFailed)] // missing config
+    [InlineData(ReadyToDeliver, DeliveryHeld)]   // mid-pipeline billing flip pauses delivery
+    [InlineData(DeliveryHeld, ReadyToDeliver)]   // reactivation releases the hold and re-drives
     [InlineData(Delivering, Delivered)]
     [InlineData(Delivering, DeliveryFailed)]
     [InlineData(DeliveryFailed, Delivering)]     // retry / redeliver
@@ -89,7 +91,7 @@ public class OrderStatusMachineTests
         {
             PendingParse, Parsing, PendingReview, Ready, Transforming, ReadyToDeliver,
             Delivering, Delivered, DeliveryFailed, TransformFailed, RejectedBySupplier,
-            DeliveryDeadLetter, Failed, Unrouted,
+            DeliveryDeadLetter, Failed, Unrouted, DeliveryHeld,
         };
         foreach (var s in declared)
             OrderStatusMachine.Transitions.Keys.Should().Contain(s);

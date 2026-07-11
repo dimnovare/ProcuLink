@@ -20,6 +20,7 @@ public sealed class BillingController : ControllerBase
     private readonly ILogger<BillingController>         _logger;
     private readonly ProcuLinkDbContext                 _db;
     private readonly IAiUsageTracker                    _aiUsage;
+    private readonly Core.Services.Delivery.IDeliveryService _delivery;
 
     public BillingController(
         IBillingService            billing,
@@ -27,7 +28,8 @@ public sealed class BillingController : ControllerBase
         IConfiguration             config,
         ILogger<BillingController> logger,
         ProcuLinkDbContext         db,
-        IAiUsageTracker            aiUsage)
+        IAiUsageTracker            aiUsage,
+        Core.Services.Delivery.IDeliveryService delivery)
     {
         _billing = billing;
         _tenant  = tenant;
@@ -35,6 +37,30 @@ public sealed class BillingController : ControllerBase
         _logger  = logger;
         _db      = db;
         _aiUsage = aiUsage;
+        _delivery = delivery;
+    }
+
+    /// <summary>
+    /// When an org transitions from a read-only/delinquent state back into a processing state
+    /// (payment recovered, re-subscribed), release any orders that were billing-held at delivery
+    /// time back into delivery. Best-effort: a release failure must never fail the webhook (Stripe
+    /// would retry the whole event and re-run the billing mutation).
+    /// </summary>
+    private async Task ReleaseHeldOrdersIfReactivatedAsync(Guid orgId, bool wasReadOnly, string? newStatus, CancellationToken ct)
+    {
+        if (!wasReadOnly || AccountStatusConstants.IsReadOnly(newStatus))
+            return;
+
+        try
+        {
+            var released = await _delivery.ReleaseBillingHeldOrdersAsync(orgId, ct);
+            if (released > 0)
+                _logger.LogInformation("Org {OrgId} reactivated — released {Count} billing-held order(s) into delivery.", orgId, released);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Org {OrgId} reactivated but releasing billing-held orders failed (non-fatal).", orgId);
+        }
     }
 
     // ── Plan rank — used to detect downgrades in HandleSubscriptionUpdatedAsync ───────────
@@ -288,6 +314,7 @@ public sealed class BillingController : ControllerBase
         var mappedPlan = StripeBillingMapping.MapPriceIdToPlan(_config, priceId) ?? plan;
 
         var fromPlan = org.Plan; // capture before mutation for analytics
+        var wasReadOnly = AccountStatusConstants.IsReadOnly(org.AccountStatus); // capture for held-order release
         org.Plan = mappedPlan;
         org.AccountStatus = subscriptionStatus == "trialing"
             ? AccountStatusConstants.Trialing
@@ -302,6 +329,8 @@ public sealed class BillingController : ControllerBase
 
         _logger.LogInformation("Org {OrgId} upgraded to {Plan} via Stripe checkout {SessionId}",
             orgId, mappedPlan, session.Id);
+
+        await ReleaseHeldOrdersIfReactivatedAsync(orgId, wasReadOnly, org.AccountStatus, ct);
 
         await _billing.EmitBillingUpgradedAsync(
             orgId:           orgId,
@@ -340,6 +369,7 @@ public sealed class BillingController : ControllerBase
         var mappedPlan = StripeBillingMapping.MapPriceIdToPlan(_config, priceId);
 
         var fromPlan = org.Plan; // capture before mutation for analytics
+        var wasReadOnly = AccountStatusConstants.IsReadOnly(org.AccountStatus); // capture for held-order release
         if (!string.IsNullOrEmpty(mappedPlan))
             org.Plan = mappedPlan;
 
@@ -353,6 +383,9 @@ public sealed class BillingController : ControllerBase
 
         _logger.LogInformation("Org {OrgId} subscription {SubId} updated: status={Status}, plan={Plan}",
             org.Id, sub.Id, sub.Status, org.Plan);
+
+        // Payment recovered (past_due → active) or re-subscribed: re-drive any billing-held orders.
+        await ReleaseHeldOrdersIfReactivatedAsync(org.Id, wasReadOnly, org.AccountStatus, ct);
 
         if (!string.IsNullOrEmpty(mappedPlan) && IsPlanDowngrade(fromPlan, mappedPlan))
         {

@@ -69,9 +69,14 @@ public class DeliverOrderJob
 
         if (!await _billingService.CanProcessOrdersAsync(organisationId, ct))
         {
+            // Correct NOT to deliver for a non-paying org — but do NOT silently strand the order
+            // in ready_to_deliver (invisible, never re-driven). Move it to the explicit
+            // 'delivery_held' status; it is auto-released + re-driven when the org returns to
+            // good standing (BillingController reactivation → ReleaseBillingHeldOrdersAsync).
+            var held = await _deliveryService.HoldForBillingAsync(organisationId, orderId, ct);
             _logger.LogWarning(
-                "DeliverOrderJob skipped for order {OrderId}: billing account cannot process orders",
-                orderId);
+                "DeliverOrderJob held order {OrderId}: billing account cannot process orders (held={Held}).",
+                orderId, held);
             return;
         }
 

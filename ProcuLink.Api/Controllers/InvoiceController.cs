@@ -47,8 +47,22 @@ public sealed class InvoiceController : ControllerBase
         if (file is null || file.Length == 0)
             return BadRequest(new { error = "No file provided." });
 
-        var allowedExtensions = new[] { ".xml", ".edi" };
         var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+
+        // EDIFACT INVOIC is a stub (the parser throws NotImplementedException). Accepting a
+        // .edi invoice would create a stub that parse-fails in the background and lands in
+        // "failed" — an error the user never asked for. Reject it UP-FRONT as "coming soon"
+        // (offer ⇔ works). NOTE: this is the INVOICE path only; EDIFACT ORDERS parses and is
+        // handled by the separate order-upload path — untouched here.
+        if (ext == ".edi")
+            return BadRequest(new
+            {
+                error = "EDIFACT (.edi) invoices aren't supported yet — support is coming soon. "
+                      + "For now, upload a UBL 2.1 XML invoice (.xml).",
+            });
+
+        // UBL 2.1 Invoice (.xml) is the working invoice parser.
+        var allowedExtensions = new[] { ".xml" };
         if (!allowedExtensions.Contains(ext))
             return BadRequest(new { error = $"Unsupported file type '{ext}'. Supported: {string.Join(", ", allowedExtensions)}" });
 
