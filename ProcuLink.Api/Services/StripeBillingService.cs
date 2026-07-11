@@ -565,6 +565,15 @@ public sealed class StripeBillingService : IBillingService
                 orgId, billingKey, existing.OverageOrders, existing.AmountCents,
                 AlreadyBilled: true, StripeItemId: existing.StripeInvoiceItemId);
 
+        // A pre-existing NULL-item row (or a lost insert race below) means a PRIOR attempt
+        // reached at least the ledger-commit stage. That prior attempt's Stripe create may
+        // have SUCCEEDED with only the id-persist failing (finding #9) — leaving an orphan
+        // item in Stripe. When that is possible we must look Stripe up by the stable
+        // billing_key metadata before creating, or a retry past the 24h idempotency-key
+        // window would mint a DUPLICATE. A fresh insert (no prior row) can have no orphan,
+        // so the happy path skips the lookup entirely and stays byte-identical.
+        var mayHaveOrphanStripeItem = existing is not null;
+
         // Claim the slot only when there is no row yet. When a NULL-item row already
         // exists (and Stripe is the authority) we reuse it — skip the insert and go
         // straight to the Stripe (re)attempt below.
@@ -600,6 +609,10 @@ public sealed class StripeBillingService : IBillingService
                     return new OverageBillingResult(
                         orgId, billingKey, winner.OverageOrders, winner.AmountCents,
                         AlreadyBilled: true, StripeItemId: winner.StripeInvoiceItemId);
+                // We lost the race and the winner is NOT terminal: the winning attempt is
+                // in flight and may already have created the Stripe item — treat as a
+                // possible-orphan recovery so the lookup below runs before we create.
+                mayHaveOrphanStripeItem = true;
             }
         }
 
@@ -608,6 +621,35 @@ public sealed class StripeBillingService : IBillingService
         // (auditable) but create no item and never throw.
         if (!stripeIsAuthority)
             return new OverageBillingResult(orgId, billingKey, clamped, amountCents, AlreadyBilled: false, StripeItemId: null);
+
+        // ── Finding #9: adopt an orphan item from a prior attempt, never re-create ──
+        // If a prior attempt created the Stripe item but failed to persist its id, the
+        // ledger row is NULL-item — indistinguishable from a Stripe-create failure. The
+        // Stripe Idempotency-Key only dedupes a re-create for 24h; a webhook retry after
+        // that window would create a SECOND item (double charge). The stable billing_key
+        // metadata we stamp on every item is idempotent for all time, so look the item up
+        // and adopt it instead of creating a duplicate.
+        if (mayHaveOrphanStripeItem)
+        {
+            var orphan = await TryFindExistingOverageItemAsync(org, billingKey, stripeInvoiceId, ct);
+            if (orphan is not null)
+            {
+                var row = await _db.OverageBillingRecords
+                    .FirstOrDefaultAsync(r => r.OrgId == orgId && r.BillingKey == billingKey, ct);
+                if (row is not null)
+                {
+                    row.StripeInvoiceItemId = orphan.Id;
+                    await _db.SaveChangesAsync(ct);
+                }
+                _logger.LogWarning(
+                    "Recovered orphan overage item {ItemId} for org {OrgId} key {Key} via billing_key metadata — " +
+                    "a prior attempt created the Stripe item but failed to persist its id; adopted, not re-created.",
+                    orphan.Id, orgId, billingKey);
+                return new OverageBillingResult(
+                    orgId, billingKey, row?.OverageOrders ?? clamped, row?.AmountCents ?? amountCents,
+                    AlreadyBilled: true, StripeItemId: orphan.Id);
+            }
+        }
 
         // The injected client exists only in tests; production always takes the
         // parameterless path (global Stripe client) — byte-identical behaviour.
@@ -650,6 +692,35 @@ public sealed class StripeBillingService : IBillingService
             orgId, clamped, amountCents, item.Id, billingKey);
 
         return new OverageBillingResult(orgId, billingKey, clamped, amountCents, AlreadyBilled: false, StripeItemId: item.Id);
+    }
+
+    /// <summary>
+    /// Finding #9: locate an overage invoice item this org already has for the given period
+    /// billing key, identified by the stable <c>billing_key</c>/<c>kind</c> metadata stamped
+    /// on every item we create. Unlike the 24h Stripe Idempotency-Key, a metadata lookup is
+    /// idempotent for ALL time, so a webhook retry landing after the idempotency window still
+    /// finds (and reuses) an orphan item instead of minting a duplicate. Attach-path items
+    /// live ON the draft invoice (scoped by <paramref name="stripeInvoiceId"/>); customer-sweep
+    /// items are pending on the customer. Returns null when no matching item exists.
+    /// </summary>
+    private async Task<InvoiceItem?> TryFindExistingOverageItemAsync(
+        Core.Entities.Organisation org,
+        string billingKey,
+        string? stripeInvoiceId,
+        CancellationToken ct)
+    {
+        var listService = _stripeClient is null ? new InvoiceItemService() : new InvoiceItemService(_stripeClient);
+        var options = new InvoiceItemListOptions { Customer = org.StripeCustomerId, Limit = 100 };
+        // Attach-path items are pinned to the draft period-close invoice, so they do not
+        // appear in the default (pending-only) list — scope the query to that invoice.
+        if (!string.IsNullOrWhiteSpace(stripeInvoiceId))
+            options.Invoice = stripeInvoiceId;
+
+        var list = await listService.ListAsync(options, cancellationToken: ct);
+        return list?.Data?.FirstOrDefault(i =>
+            i.Metadata != null
+            && i.Metadata.TryGetValue("billing_key", out var k) && k == billingKey
+            && i.Metadata.TryGetValue("kind", out var kind) && kind == "order_overage");
     }
 
     private bool IsStripeConfigured() =>

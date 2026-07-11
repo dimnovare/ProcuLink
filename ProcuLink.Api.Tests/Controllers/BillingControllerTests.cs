@@ -901,22 +901,34 @@ public class BillingControllerTests
     }
 
     [Fact]
-    public void SplitBillingPeriod_YearlyPeriod_SplitsIntoContiguousCalendarMonths()
+    public void SplitBillingPeriod_YearlyMidMonthAnchor_IsTwelveAnchorAlignedWindows()
     {
-        // Mid-month annual anchor: Jun 15 2026 → Jun 15 2027.
+        // Finding #10: mid-month annual anchor (Jun 15 2026 → Jun 15 2027). The order
+        // quota is a MONTHLY allowance, so a 12-month period must decompose into EXACTLY
+        // 12 windows — one anchor-to-anchor month each, metered against ONE monthly cap.
+        // The OLD calendar-month split fragmented the anchor month into two partial
+        // windows (Jun 15→Jul 1 and Jun 1→Jun 15), yielding 13 windows and granting a
+        // 13th full monthly cap of overage headroom across a 12-month year — a silent
+        // ~€1250/yr revenue under-charge per affected yearly org.
         var start = new DateTime(2026, 6, 15, 0, 0, 0, DateTimeKind.Utc);
         var end   = new DateTime(2027, 6, 15, 0, 0, 0, DateTimeKind.Utc);
 
         var windows = BillingController.SplitBillingPeriodIntoMonthlyWindows(start, end);
 
-        // Partial first month + 11 full months + partial last month = 13 windows.
-        windows.Should().HaveCount(13);
-        windows[0].Should().Be((start, new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc)),
-            "the first window runs from the anchor day to the next calendar-month boundary");
-        windows[^1].Should().Be((new DateTime(2027, 6, 1, 0, 0, 0, DateTimeKind.Utc), end),
-            "the last window runs from the final month boundary to the anchor day");
+        windows.Should().HaveCount(12, "a 12-month period is exactly 12 anchor-aligned windows, never 13");
+        windows[0].Should().Be((start, new DateTime(2026, 7, 15, 0, 0, 0, DateTimeKind.Utc)),
+            "the first window runs anchor-day → anchor-day (Jun 15 → Jul 15), NOT anchor-day → the 1st");
+        windows[^1].Should().Be((new DateTime(2027, 5, 15, 0, 0, 0, DateTimeKind.Utc), end),
+            "the final window runs anchor-day → anchor-day (May 15 → Jun 15)");
 
-        // Contiguity: no gaps, no overlaps, every window ≤ 1 calendar month.
+        // Every window starts on the anchor day (15th) — proof the anchor month was NOT
+        // fragmented into two partial windows.
+        windows.Should().OnlyContain(w => w.Start.Day == 15,
+            "anchor-aligned windows all start on the subscription anchor day");
+
+        // Contiguity: no gaps, no overlaps, exactly covers [start, end].
+        windows[0].Start.Should().Be(start);
+        windows[^1].End.Should().Be(end);
         for (var i = 1; i < windows.Count; i++)
             windows[i].Start.Should().Be(windows[i - 1].End, "windows must be contiguous");
         foreach (var (s, e) in windows)
@@ -924,6 +936,34 @@ public class BillingControllerTests
             e.Should().BeAfter(s);
             (e - s).TotalDays.Should().BeLessThanOrEqualTo(31);
         }
+    }
+
+    [Fact]
+    public void SplitBillingPeriod_YearlyAnchorDay31_IsTwelveWindows_NoDroppedOrDoubledMonth()
+    {
+        // Finding #10 edge: anchor day 31 across months that have no 31st (Feb, Apr, Jun,
+        // Sep, Nov). Each boundary is computed from the ORIGINAL anchor via AddMonths, which
+        // clamps to the month's last valid day WITHOUT accumulating drift, so the year is
+        // still EXACTLY 12 windows — no month dropped, none doubled.
+        var start = new DateTime(2027, 1, 31, 0, 0, 0, DateTimeKind.Utc);
+        var end   = new DateTime(2028, 1, 31, 0, 0, 0, DateTimeKind.Utc);
+
+        var windows = BillingController.SplitBillingPeriodIntoMonthlyWindows(start, end);
+
+        windows.Should().HaveCount(12, "anchor-day 31 still yields exactly 12 windows across short months");
+        windows[0].Start.Should().Be(start);
+        windows[^1].End.Should().Be(end);
+        windows[0].End.Should().Be(new DateTime(2027, 2, 28, 0, 0, 0, DateTimeKind.Utc),
+            "Jan 31 + 1 month clamps to Feb 28 (2027 is not a leap year) — no phantom Feb 31");
+        // Boundaries are computed from the original anchor, so a short month never causes
+        // drift: the March boundary is back on the 31st, not Feb-28 + 1 month = Mar 28.
+        windows[1].End.Should().Be(new DateTime(2027, 3, 31, 0, 0, 0, DateTimeKind.Utc),
+            "the next boundary returns to the 31st (no drift) — Jan 31 + 2 months = Mar 31");
+
+        for (var i = 1; i < windows.Count; i++)
+            windows[i].Start.Should().Be(windows[i - 1].End, "contiguous — no gap, no overlap");
+        foreach (var (s, e) in windows)
+            e.Should().BeAfter(s, "no zero-length or reversed window");
     }
 
     [Fact]
@@ -1010,6 +1050,66 @@ public class BillingControllerTests
         billing.Verify(b => b.BillOverageForInvoiceAsync(
             It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
             Times.Once, "under-cap months must not be billed at all");
+    }
+
+    [Fact]
+    public async Task HandleInvoiceCreated_YearlyMidMonthAnchor_MetersExactlyTwelveWindows_NotThirteen()
+    {
+        // Finding #10 at the webhook level: a yearly subscription whose anchor day is NOT
+        // the 1st (here the 15th) must meter EXACTLY 12 monthly windows. The old calendar-
+        // month split fragmented the anchor month into two partial windows → 13 windows,
+        // each metered against the FULL monthly cap → a 13th cap of overage headroom.
+        var (ctrl, billing, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id               = orgId,
+            Plan             = PlanConstants.Operations,
+            AccountStatus    = AccountStatusConstants.Active,
+            StripeCustomerId = "cus_yearly_midmonth",
+            ClerkOrgId       = "org_yearly_midmonth",
+            Name             = "Yearly Mid-Month Org",
+            Slug             = "yearly-midmonth-org",
+        });
+        await db.SaveChangesAsync();
+
+        var periodStart = new DateTime(2026, 6, 15, 0, 0, 0, DateTimeKind.Utc);
+        var periodEnd   = new DateTime(2027, 6, 15, 0, 0, 0, DateTimeKind.Utc);
+
+        var seenWindows = new List<(DateTime Start, DateTime End)>();
+        billing
+            .Setup(b => b.ComputePeriodOverageOrdersAsync(
+                orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .Callback((Guid _, DateTime s, DateTime e, CancellationToken _) => seenWindows.Add((s, e)))
+            .ReturnsAsync(0);
+
+        var invoice = new Stripe.Invoice
+        {
+            Id          = "in_yearly_midmonth",
+            CustomerId  = "cus_yearly_midmonth",
+            PeriodStart = periodStart,
+            PeriodEnd   = periodEnd,
+            Parent      = new Stripe.InvoiceParent
+            {
+                SubscriptionDetails = new Stripe.InvoiceParentSubscriptionDetails
+                {
+                    SubscriptionId = "sub_yearly_mm",
+                },
+            },
+        };
+
+        await ctrl.HandleInvoiceCreatedAsync(invoice, CancellationToken.None);
+
+        // EXACTLY 12 metered windows — one monthly cap each — never 13.
+        billing.Verify(b => b.ComputePeriodOverageOrdersAsync(
+            orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(12), "a 12-month yearly period must meter exactly 12 monthly caps, not 13");
+
+        seenWindows.Should().HaveCount(12);
+        seenWindows[0].Start.Should().Be(periodStart, "the first window starts at the period start (anchor day)");
+        seenWindows[^1].End.Should().Be(periodEnd, "the last window ends at the period end (anchor day)");
+        seenWindows.Should().OnlyContain(w => w.Start.Day == 15,
+            "every window starts on the anchor day (15th) — the anchor month is NOT fragmented onto the 1st");
     }
 
     // ── Minimal in-memory DbContext ──────────────────────────────────────────

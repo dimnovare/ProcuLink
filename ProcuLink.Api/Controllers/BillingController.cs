@@ -473,8 +473,8 @@ public sealed class BillingController : ControllerBase
         // the pre-yearly behaviour. A YEARLY subscription's renewal invoice spans ~12
         // months; counting the whole year's orders against the MONTHLY cap would
         // grotesquely over-bill, so multi-month periods are decomposed into
-        // calendar-month windows and each month is computed + billed separately, each
-        // with its own period-based idempotency key.
+        // anchor-to-anchor month windows (exactly 12 for a yearly period) and each month
+        // is computed + billed separately, each with its own period-based idempotency key.
         var windows = SplitBillingPeriodIntoMonthlyWindows(periodStart, periodEnd);
 
         // ── Attach overage items to THIS invoice when it is still a draft ────
@@ -526,15 +526,29 @@ public sealed class BillingController : ControllerBase
     }
 
     /// <summary>
-    /// Splits an invoice billing period into per-calendar-month windows for overage
-    /// metering. A period no longer than a single month (≤ 32 days — every monthly
-    /// Stripe anchor period) is returned UNCHANGED as one window, keeping the monthly
-    /// billing path byte-identical. Longer periods (yearly/quarterly subscriptions)
-    /// are cut on UTC calendar-month boundaries: the first/last windows may be partial
-    /// (anchor day → month end, month start → anchor day); each full month in between
-    /// is its own window. Each window's start feeds <see cref="BuildPeriodBillingKey"/>,
-    /// so every month gets its own idempotency ledger row and a webhook replay (or a
-    /// re-issued invoice for the same period) can never double-bill any month.
+    /// Splits an invoice billing period into per-month windows for overage metering,
+    /// anchored on the subscription's ANCHOR DAY (the period start), not on calendar-month
+    /// boundaries. A period no longer than a single month (≤ 32 days — every monthly Stripe
+    /// anchor period) is returned UNCHANGED as one window, keeping the monthly billing path
+    /// byte-identical. A longer period (a yearly/quarterly subscription) is cut into
+    /// anchor-to-anchor months: each boundary is <c>periodStart.AddMonths(N)</c>, so a
+    /// 12-month yearly period yields EXACTLY 12 windows.
+    ///
+    /// <para><b>Finding #10.</b> The prior implementation cut on UTC calendar-month
+    /// boundaries; when the anchor day was not the 1st, it FRAGMENTED the anchor month into
+    /// two partial windows (anchor-day → month-start, and month-start → anchor-day), giving
+    /// 13 windows for a 12-month year. Because each window is metered against the FULL
+    /// effective MONTHLY cap (independent of window length), those 13 windows granted 13
+    /// monthly caps of overage headroom across a 12-month period — a silent revenue
+    /// under-charge. Anchoring on the anchor day merges the two fragments into one window.</para>
+    ///
+    /// <para>Boundaries are computed from the ORIGINAL <paramref name="periodStart"/> (never
+    /// incrementally) so an anchor day with no counterpart in a shorter month (e.g. the 31st
+    /// in February) clamps via <see cref="DateTime.AddMonths"/> to that month's last valid day
+    /// WITHOUT accumulating drift, and the next boundary returns to the anchor day. Each
+    /// window's start feeds <see cref="BuildPeriodBillingKey"/>, so every month gets its own
+    /// idempotency ledger row and a webhook replay (or a re-issued invoice for the same
+    /// period) can never double-bill any month.</para>
     /// </summary>
     internal static IReadOnlyList<(DateTime Start, DateTime End)> SplitBillingPeriodIntoMonthlyWindows(
         DateTime periodStart,
@@ -547,13 +561,15 @@ public sealed class BillingController : ControllerBase
 
         var windows = new List<(DateTime Start, DateTime End)>();
         var cursor = periodStart;
+        var monthsFromAnchor = 1;
         while (cursor < periodEnd)
         {
-            var nextMonthBoundary = new DateTime(cursor.Year, cursor.Month, 1, 0, 0, 0, DateTimeKind.Utc)
-                .AddMonths(1);
-            var windowEnd = nextMonthBoundary < periodEnd ? nextMonthBoundary : periodEnd;
+            // Next anchor-day boundary, computed from the ORIGINAL anchor (no drift).
+            var nextAnchorBoundary = periodStart.AddMonths(monthsFromAnchor);
+            var windowEnd = nextAnchorBoundary < periodEnd ? nextAnchorBoundary : periodEnd;
             windows.Add((cursor, windowEnd));
             cursor = windowEnd;
+            monthsFromAnchor++;
         }
         return windows;
     }

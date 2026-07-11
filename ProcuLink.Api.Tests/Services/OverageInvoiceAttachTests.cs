@@ -6,6 +6,7 @@ using ProcuLink.Api.Services;
 using ProcuLink.Api.Tests.TestDoubles;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 using Stripe;
 using Xunit;
@@ -242,7 +243,11 @@ public class OverageInvoiceAttachTests
             "a NULL-item ledger row must not suppress the retry while Stripe is the billing authority");
         attempt2.StripeItemId.Should().Be("ii_recovered_1", "the retry created the real Stripe item");
 
-        stripe.CallCount.Should().Be(2, "exactly one failed attempt + one successful retry");
+        // Finding #9 changed the recovery path: before re-creating, the retry now looks up
+        // any orphan item by billing_key metadata (idempotent past Stripe's 24h key window).
+        // Here the prior CREATE failed, so no orphan exists → the lookup finds nothing and
+        // the retry legitimately creates. Calls: failed create + recovery lookup + create.
+        stripe.CallCount.Should().Be(3, "failed create + recovery metadata lookup + successful retry create");
         (await db.OverageBillingRecords.SingleAsync(r => r.OrgId == org.Id && r.BillingKey == key))
             .StripeInvoiceItemId.Should().Be("ii_recovered_1", "the recovered item id is persisted onto the same single row");
         db.OverageBillingRecords.Count(r => r.OrgId == org.Id && r.BillingKey == key)
@@ -251,6 +256,161 @@ public class OverageInvoiceAttachTests
         // ── Attempt 3: a normal replay (row now HAS an item id) is a no-op ───
         var attempt3 = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_poison");
         attempt3.AlreadyBilled.Should().BeTrue("once the item id is set, replays are clean idempotent no-ops");
-        stripe.CallCount.Should().Be(2, "the no-op replay must not make a third Stripe call");
+        stripe.CallCount.Should().Be(3, "the no-op replay makes no further Stripe call (terminal ledger row)");
+    }
+
+    // ── Finding #9: persist-fails-AFTER-create must not double-charge past 24h ─
+    // A Stripe transport that records every CREATE (never deduping on the idempotency
+    // key — modelling the EXPIRED >24h window) and answers LIST invoice-item queries
+    // with the items it has created. A naive retry that re-creates would therefore mint
+    // a DUPLICATE; the fix looks the item up by stable billing_key metadata first.
+
+    private sealed class RecordingStripeClient : IStripeClient
+    {
+        public int CreateCount { get; private set; }
+        public int ListCount { get; private set; }
+        private readonly List<InvoiceItem> _created = new();
+        private int _seq;
+
+        public string ApiBase         => "https://api.stripe.invalid";
+        public string ApiKey          => "sk_test_fake";
+        public string ClientId        => "ca_fake";
+        public string ConnectBase     => "https://connect.stripe.invalid";
+        public string FilesBase       => "https://files.stripe.invalid";
+        public string MeterEventsBase => "https://meter-events.stripe.invalid";
+
+        public Task<T> RequestAsync<T>(
+            HttpMethod method, string path, BaseOptions options,
+            RequestOptions requestOptions, CancellationToken cancellationToken = default)
+            where T : IStripeEntity
+        {
+            // LIST invoice items — return every item created so far (the retry's
+            // billing_key-metadata lookup can find the orphan created before the crash).
+            if (typeof(T) == typeof(StripeList<InvoiceItem>))
+            {
+                ListCount++;
+                var list = new StripeList<InvoiceItem> { Data = _created.ToList() };
+                return Task.FromResult((T)(object)list);
+            }
+
+            // CREATE invoice item — mint a fresh id EVERY time (no idempotency dedupe:
+            // this is what a retry past the 24h key window sees). Copy the metadata so
+            // the lookup can match on billing_key/kind.
+            if (options is InvoiceItemCreateOptions createOpts)
+            {
+                CreateCount++;
+                var item = new InvoiceItem
+                {
+                    Id       = $"ii_{++_seq}",
+                    Metadata = createOpts.Metadata is null
+                        ? new Dictionary<string, string>()
+                        : new Dictionary<string, string>(createOpts.Metadata),
+                };
+                _created.Add(item);
+                return Task.FromResult((T)(object)item);
+            }
+
+            throw new NotSupportedException($"Unexpected Stripe call for {typeof(T).Name}.");
+        }
+
+        public Task<System.IO.Stream> RequestStreamingAsync(
+            HttpMethod method, string path, BaseOptions options,
+            RequestOptions requestOptions, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Not used by these tests.");
+    }
+
+    /// <summary>Shared "fail exactly once" latch across per-attempt DbContexts.</summary>
+    private sealed class FailOnce { public bool Tripped; }
+
+    /// <summary>
+    /// A DbContext that throws on the FIRST SaveChanges which persists a Stripe invoice-item
+    /// id onto an <see cref="OverageBillingRecord"/> (a Modified row with a non-null
+    /// StripeInvoiceItemId) — simulating the finding #9 crash: the Stripe item is created,
+    /// but the id-persist fails. The initial NULL-item insert (Added state) is unaffected.
+    /// </summary>
+    private sealed class FailItemPersistOnceDbContext : ProcuLinkDbContext
+    {
+        private readonly FailOnce _fail;
+        public FailItemPersistOnceDbContext(DbContextOptions<ProcuLinkDbContext> options, FailOnce fail)
+            : base(options) => _fail = fail;
+
+        public override Task<int> SaveChangesAsync(
+            bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+        {
+            if (!_fail.Tripped)
+            {
+                var persistingItemId = ChangeTracker.Entries<OverageBillingRecord>()
+                    .Any(e => e.State == EntityState.Modified
+                              && !string.IsNullOrEmpty(e.Entity.StripeInvoiceItemId));
+                if (persistingItemId)
+                {
+                    _fail.Tripped = true;
+                    throw new DbUpdateException("Simulated item-id persist failure after Stripe create (finding #9).");
+                }
+            }
+            return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task PersistFailsAfterStripeCreate_RetryPastIdempotencyWindow_ReusesExistingItem_NeverDoubleCharges()
+    {
+        // Finding #9: the Stripe overage item is created, but the SECOND SaveChanges that
+        // persists its id fails → the webhook 500s and Stripe retries. If the retry lands
+        // AFTER Stripe's 24h idempotency-key window, the key no longer dedupes the create,
+        // so a blind re-create mints a DUPLICATE overage item (customer charged twice). The
+        // fix looks the item up by its stable billing_key metadata BEFORE creating, so the
+        // retry adopts the existing item instead of creating a second one.
+        var dbName = Guid.NewGuid().ToString();
+        DbContextOptions<ProcuLinkDbContext> Opts() =>
+            new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(dbName).Options;
+
+        Organisation org;
+        using (var seed = new ProcuLinkDbContext(Opts()))
+            org = await AddPaidOrgAsync(seed);
+
+        var stripe   = new RecordingStripeClient(); // shared across attempts (Stripe is durable)
+        var failOnce = new FailOnce();
+        var key      = $"{org.Id}:2026-05-01T00:00:00.0000000Z";
+
+        // ── Attempt 1: Stripe create succeeds; the item-id persist SaveChanges fails ──
+        var attempt1 = async () =>
+        {
+            using var ctx1 = new FailItemPersistOnceDbContext(Opts(), failOnce);
+            var svc1 = MakeService(ctx1, stripe);
+            await svc1.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_persistfail");
+        };
+        await attempt1.Should().ThrowAsync<DbUpdateException>(
+            "the item-id persist fails AFTER the Stripe item is created — the webhook 500s and Stripe retries");
+
+        stripe.CreateCount.Should().Be(1, "attempt 1 created exactly one Stripe invoice item");
+        using (var check = new ProcuLinkDbContext(Opts()))
+        {
+            (await check.OverageBillingRecords.SingleAsync(r => r.OrgId == org.Id && r.BillingKey == key))
+                .StripeInvoiceItemId.Should().BeNull(
+                    "the persist failed — the item exists in Stripe but not in our DB (the double-charge window)");
+        }
+
+        // ── Attempt 2: retry past the 24h window (failOnce tripped → persist now succeeds) ──
+        OverageBillingResult result;
+        using (var ctx2 = new FailItemPersistOnceDbContext(Opts(), failOnce))
+        {
+            var svc2 = MakeService(ctx2, stripe);
+            result = await svc2.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_persistfail");
+        }
+
+        // THE FINDING: no duplicate — the retry reused the item created in attempt 1.
+        stripe.CreateCount.Should().Be(1, "the retry must NOT create a second invoice item — no double charge");
+        stripe.ListCount.Should().BeGreaterThan(0, "the retry looks the item up by billing_key metadata before creating");
+        result.StripeItemId.Should().Be("ii_1", "the retry adopted the existing Stripe item");
+        result.AlreadyBilled.Should().BeTrue("the orphan item is recovered, not re-billed");
+
+        using (var check = new ProcuLinkDbContext(Opts()))
+        {
+            check.OverageBillingRecords.Count(r => r.OrgId == org.Id && r.BillingKey == key)
+                .Should().Be(1, "still exactly one ledger row — no duplicate");
+            (await check.OverageBillingRecords.SingleAsync(r => r.OrgId == org.Id && r.BillingKey == key))
+                .StripeInvoiceItemId.Should().Be("ii_1", "the recovered item id is now persisted");
+        }
     }
 }
