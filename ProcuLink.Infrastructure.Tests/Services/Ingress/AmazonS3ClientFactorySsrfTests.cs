@@ -122,6 +122,68 @@ public class AmazonS3ClientFactorySsrfTests
             "the dev/test escape hatch must skip the range block");
     }
 
+    // ── 5. Regression: the shared guarded transport survives multiple requests on one client ─
+
+    [Fact]
+    public void CreateHttpClient_ReturnsSameSharedInstanceAcrossCalls()
+    {
+        var factory = new GuardedAwsHttpClientFactory(StrictGuard());
+
+        var first  = factory.CreateHttpClient(new AmazonS3Config());
+        var second = factory.CreateHttpClient(new AmazonS3Config());
+
+        second.Should().BeSameAs(first,
+            "one shared, connection-pooling guarded transport must be reused, not rebuilt (or disposed) per request");
+    }
+
+    [Fact]
+    public async Task AwsSdk_TwoRequestsOnOneClient_BothRoutedThroughGuardedTransport()
+    {
+        // Production S3IngressService.PollAsync issues MANY requests (list → get → paginate) on
+        // ONE AmazonS3Client per poll. If the factory's UseSDKHttpClientCaching /
+        // DisposeHttpClientsAfterUse booleans were ever flipped so the SDK disposed the shared
+        // transport after request #1, the single-request test above would still pass but request
+        // #2+ would break (ObjectDisposedException, not the SSRF block). This asserts BOTH
+        // requests on one client are still routed through the guard and blocked at the metadata IP.
+        var config = new AmazonS3Config
+        {
+            ServiceURL        = "http://169.254.169.254",
+            ForcePathStyle    = true,
+            HttpClientFactory = new GuardedAwsHttpClientFactory(StrictGuard()),
+            MaxErrorRetry     = 0,
+        };
+        using var client = new AmazonS3Client("ak", "sk", config);
+
+        var first  = async () => await client.ListObjectsV2Async(new ListObjectsV2Request { BucketName = "bucket-1" });
+        var second = async () => await client.ListObjectsV2Async(new ListObjectsV2Request { BucketName = "bucket-2" });
+
+        FlattenMessages((await first.Should().ThrowAsync<Exception>()).Which)
+            .Should().Contain("SSRF guard", "request #1 must be blocked by the guarded ConnectCallback");
+
+        FlattenMessages((await second.Should().ThrowAsync<Exception>()).Which)
+            .Should().Contain("SSRF guard",
+                "the shared guarded transport must survive request #1 and still guard request #2 " +
+                "(the list→get→paginate sequence a real poll runs on one client)");
+    }
+
+    [Fact]
+    public void GuardedTransport_OwnsSharedClientLifetime_SdkMustNotCacheOrDisposeIt()
+    {
+        // The shared guarded HttpClient must outlive any single request / AmazonS3Client. The SDK
+        // disposes injected clients on its "dispose after use" path (which fires on a SUCCESSFUL
+        // response — not observable via the metadata-block integration tests, since a failed
+        // connect never reaches it). So pin the contract directly: if either flag were flipped,
+        // production PollAsync (list→get→paginate on one client) could get a disposed transport
+        // mid-poll. This assertion bites that flip deterministically.
+        var factory = new GuardedAwsHttpClientFactory(StrictGuard());
+        var cfg = new AmazonS3Config();
+
+        factory.DisposeHttpClientsAfterUse(cfg).Should().BeFalse(
+            "we own the shared transport's lifetime — the SDK must never dispose it after a request");
+        factory.UseSDKHttpClientCaching(cfg).Should().BeFalse(
+            "the shared instance is managed here, not stored in the SDK's static client cache");
+    }
+
     private static string FlattenMessages(Exception ex)
     {
         var sb = new StringBuilder();

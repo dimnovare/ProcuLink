@@ -34,7 +34,10 @@ internal sealed class GuardedAwsHttpClientFactory : HttpClientFactory
 {
     private readonly OutboundRequestGuard _guard;
     private readonly object _lock = new();
-    private System.Net.Http.HttpClient? _client;
+    // volatile so the double-checked lazy-init below is correct on weak-memory architectures
+    // (e.g. ARM): guarantees a reader that sees a non-null _client also sees the fully
+    // constructed HttpClient, never a partially-published instance.
+    private volatile System.Net.Http.HttpClient? _client;
 
     public GuardedAwsHttpClientFactory(OutboundRequestGuard guard)
     {
