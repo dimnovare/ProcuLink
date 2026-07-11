@@ -45,6 +45,7 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
     private readonly ProcuLinkDbContext _db;
     private readonly IConfiguration _config;
     private readonly IBillingService _billing;   // EmitBillingCancelledAsync on downgrade
+    private readonly Core.Services.Delivery.IDeliveryService _delivery; // release billing-held orders on heal
     private readonly ILogger<StripeSubscriptionReconciliationService> _logger;
     private readonly IStripeClient? _stripeClient; // test seam; null in prod → built from config
 
@@ -52,12 +53,14 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
         ProcuLinkDbContext db,
         IConfiguration config,
         IBillingService billing,
+        Core.Services.Delivery.IDeliveryService delivery,
         ILogger<StripeSubscriptionReconciliationService> logger,
         IStripeClient? stripeClient = null)
     {
         _db = db;
         _config = config;
         _billing = billing;
+        _delivery = delivery;
         _logger = logger;
         _stripeClient = stripeClient;
     }
@@ -111,6 +114,11 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
 
     private async Task ApplyResolvedAsync(Organisation org, Subscription sub, SubscriptionService subscriptions, CancellationToken ct)
     {
+        // Capture BEFORE any mutation so we can release billing-held orders when a MISSED
+        // reactivation webhook is healed here (read_only/past_due → active/trialing). Also covers
+        // the re-subscribe adoption path, which recurses into this method with the live sub.
+        var wasReadOnly = AccountStatusConstants.IsReadOnly(org.AccountStatus);
+
         var status = sub.Status ?? string.Empty;
         var priceId = sub.Items?.Data?.FirstOrDefault()?.Price?.Id;
 
@@ -165,6 +173,39 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
             await _db.SaveChangesAsync(ct);
             _logger.LogInformation("Reconcile: org {OrgId} → plan={Plan}, status={AccountStatus} (stripe {SubStatus}).",
                 org.Id, org.Plan, org.AccountStatus, status);
+        }
+
+        // A MISSED reactivation webhook is exactly why this service exists — so it, too, must
+        // re-drive orders that were billing-held at delivery time. Without this, an org healed
+        // read_only→active here (not via the live webhook) would strand its delivery_held orders
+        // FOREVER (no sweep watches delivery_held; RetryDeliveryAsync rejects it). Mirrors
+        // BillingController's reactivation gate.
+        await ReleaseHeldOrdersIfReactivatedAsync(org, wasReadOnly, ct);
+    }
+
+    /// <summary>
+    /// When reconciliation heals an org from a read-only/delinquent status back into a processing
+    /// status, release any billing-held orders back into delivery. Best-effort: a release failure
+    /// must never fail the reconcile (which would leave the org's billing state un-reconciled).
+    /// </summary>
+    private async Task ReleaseHeldOrdersIfReactivatedAsync(Organisation org, bool wasReadOnly, CancellationToken ct)
+    {
+        if (!wasReadOnly || AccountStatusConstants.IsReadOnly(org.AccountStatus))
+            return;
+
+        try
+        {
+            var released = await _delivery.ReleaseBillingHeldOrdersAsync(org.Id, ct);
+            if (released > 0)
+                _logger.LogInformation(
+                    "Reconcile: org {OrgId} healed read_only→processing — released {Count} billing-held order(s) into delivery.",
+                    org.Id, released);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Reconcile: org {OrgId} healed to processing but releasing billing-held orders failed (non-fatal).",
+                org.Id);
         }
     }
 

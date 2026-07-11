@@ -900,7 +900,14 @@ internal sealed class OrderIngestionService
             await using var persistTx = await _db.Database.BeginTransactionAsync(ct);
 
             var updated = await _db.PurchaseOrders
-                .Where(o => o.Id == orderId && o.OrgId == organisationId)
+                // Status guard makes this claim atomic: only overwrite a row STILL in 'parsing'.
+                // The status!="parsing" read-guard at the top of this method is advisory (TOCTOU) —
+                // between it and here a concurrent user edit or a stray duplicate parse job could
+                // move the order (e.g. to pending_review/ready/unrouted). Without this predicate
+                // that concurrent write would be clobbered by this parse's stale bundle. 0 rows ⇒
+                // the order left 'parsing' under us ⇒ we do NOT clobber (handled below).
+                .Where(o => o.Id == orderId && o.OrgId == organisationId
+                         && o.Status == OrderStatusConstants.Parsing)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.PoNumber,     newPoNumber)
                     .SetProperty(o => o.OrderDate,    newOrderDate)
@@ -943,9 +950,14 @@ internal sealed class OrderIngestionService
 
             if (updated == 0)
             {
-                _logger.LogError(
-                    "ParseStoredFileAsync: ExecuteUpdateAsync affected 0 rows for order {OrderId}", orderId);
-                return Result<ParsedFileOutput>.Fail("Order could not be updated — not found or already deleted.");
+                // 0 rows ⇒ the order left 'parsing' between the read-guard and this atomic claim
+                // (a concurrent write advanced it, or the row was deleted). We deliberately do NOT
+                // clobber it with this parse's stale bundle. Failing here makes ParseOrderJob retry;
+                // the status!="parsing" read-guard at the top then no-ops the retry (self-healing).
+                _logger.LogWarning(
+                    "ParseStoredFileAsync: order {OrderId} left 'parsing' before the parse claim (concurrent update or deletion) — not overwriting.",
+                    orderId);
+                return Result<ParsedFileOutput>.Fail("Order is no longer parsing — a concurrent update took precedence.");
             }
 
             // Idempotent line persist (delete-then-insert, mirroring the parties replace below):

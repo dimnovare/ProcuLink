@@ -99,12 +99,36 @@ public class StripeSubscriptionReconciliationServiceTests
         }).Build();
 
     private static StripeSubscriptionReconciliationService MakeSvc(
-        ProcuLinkDbContext db, IConfiguration config, IStripeClient? stripe, out FakeAnalyticsService analytics)
+        ProcuLinkDbContext db, IConfiguration config, IStripeClient? stripe, out FakeAnalyticsService analytics,
+        ProcuLink.Core.Services.Delivery.IDeliveryService? delivery = null)
     {
         analytics = new FakeAnalyticsService();
         var billing = new StripeBillingService(db, config, NullLogger<StripeBillingService>.Instance, analytics);
         return new StripeSubscriptionReconciliationService(
-            db, config, billing, NullLogger<StripeSubscriptionReconciliationService>.Instance, stripe);
+            db, config, billing, delivery ?? new NoOpDeliveryService(),
+            NullLogger<StripeSubscriptionReconciliationService>.Instance, stripe);
+    }
+
+    /// <summary>Records ReleaseBillingHeldOrdersAsync calls; every other member no-ops.</summary>
+    private sealed class NoOpDeliveryService : ProcuLink.Core.Services.Delivery.IDeliveryService
+    {
+        public List<Guid> ReleaseCalls { get; } = new();
+        public int ReleaseReturns { get; set; }
+
+        public Task<int> ReleaseBillingHeldOrdersAsync(Guid orgId, CancellationToken ct)
+        {
+            ReleaseCalls.Add(orgId);
+            return Task.FromResult(ReleaseReturns);
+        }
+
+        public Task<ProcuLink.Core.Services.Delivery.DeliveryResult> DispatchArtifactAsync(Guid orgId, Guid orderId, Guid artifactId, bool requireAutoDeliver, CancellationToken ct)
+            => Task.FromResult(new ProcuLink.Core.Services.Delivery.DeliveryResult(true, null));
+        public Task<ProcuLink.Core.Services.Delivery.DeliveryTestResult> TestFireAsync(Guid orgId, Guid supplierId, CancellationToken ct)
+            => throw new NotSupportedException();
+        public Task<ProcuLink.Core.Services.Delivery.DeliveryResult> RetryDeliveryAsync(Guid orgId, Guid orderId, int maxAttempts, CancellationToken ct)
+            => Task.FromResult(new ProcuLink.Core.Services.Delivery.DeliveryResult(true, null));
+        public Task<int> CountDeliveryAttemptsAsync(Guid orgId, Guid orderId, CancellationToken ct) => Task.FromResult(0);
+        public Task<bool> HoldForBillingAsync(Guid orgId, Guid orderId, CancellationToken ct) => Task.FromResult(false);
     }
 
     private static async Task<Organisation> AddOrgAsync(ProcuLinkDbContext db, string plan, string status,
@@ -497,5 +521,92 @@ public class StripeSubscriptionReconciliationServiceTests
         var after = await Reload(db, org.Id);
         after.Plan.Should().Be(PlanConstants.Growth, "paused keeps the plan");
         after.AccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
+    }
+
+    // Audit FINDING 5 (review HIGH): a MISSED reactivation webhook healed here (read_only → active)
+    // must release billing-held orders — otherwise they strand in delivery_held forever. Uses the
+    // REAL DeliveryService so the release + re-enqueue is proven end-to-end via the reconcile path.
+    [Fact]
+    public async Task Heal_ReadOnlyToActive_ReleasesBillingHeldOrders_EndToEnd()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.ReadOnly, priceId: "price_growth_m");
+
+        // A transformed order that was billing-held while the org was delinquent.
+        var heldOrderId = Guid.NewGuid();
+        db.PurchaseOrders.Add(new ProcuLink.Core.Entities.PurchaseOrderEntity
+        {
+            Id = heldOrderId,
+            OrgId = org.Id,
+            SupplierId = Guid.NewGuid(),
+            PoNumber = "PO-HELD",
+            OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency = "EUR",
+            Status = OrderStatusConstants.DeliveryHeld,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var enqueuer = new RecordingRetryEnqueuer();
+        var delivery = MakeRealDelivery(db, enqueuer);
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(Sub("active", "price_growth_m")), out _, delivery);
+
+        await svc.ReconcileOrgAsync(org.Id);
+
+        // Org healed to a processing status …
+        (await Reload(db, org.Id)).AccountStatus.Should().Be(AccountStatusConstants.Active);
+        // … and the held order was released back to a deliverable status …
+        (await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == heldOrderId)).Status
+            .Should().Be(OrderStatusConstants.ReadyToDeliver);
+        // … and actually re-enqueued for delivery.
+        enqueuer.Calls.Should().ContainSingle().Which.Should().Be((heldOrderId, org.Id));
+    }
+
+    private static ProcuLink.Infrastructure.Services.DeliveryService MakeRealDelivery(
+        ProcuLinkDbContext db, ProcuLink.Core.Services.Delivery.IRetryDeliveryEnqueuer enqueuer)
+    {
+        var encConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Delivery:EncryptionKey"] = Convert.ToBase64String(new byte[32]),
+            })
+            .Build();
+        return new ProcuLink.Infrastructure.Services.DeliveryService(
+            db,
+            new NoOpFileStorage(),
+            new ProcuLink.Infrastructure.Services.DeliveryEncryptionService(encConfig),
+            Array.Empty<ProcuLink.Core.Services.Delivery.IDeliveryDispatcher>(),
+            new NoOpIntegrationTrigger(),
+            new FakeAnalyticsService(),
+            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
+            NullLogger<ProcuLink.Infrastructure.Services.DeliveryService>.Instance,
+            reliability: null,
+            effectiveConfig: null,
+            retryEnqueuer: enqueuer);
+    }
+
+    private sealed class RecordingRetryEnqueuer : ProcuLink.Core.Services.Delivery.IRetryDeliveryEnqueuer
+    {
+        public List<(Guid OrderId, Guid OrgId)> Calls { get; } = new();
+        public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
+        {
+            Calls.Add((orderId, orgId));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoOpIntegrationTrigger : ProcuLink.Core.Services.IIntegrationTriggerService
+    {
+        public Task EnqueueAsync(Guid organisationId, string eventType, object payload, CancellationToken ct)
+            => Task.CompletedTask;
+    }
+
+    private sealed class NoOpFileStorage : ProcuLink.Core.Services.IFileStorageService
+    {
+        public Task<string> UploadAsync(Stream content, string key, string contentType, CancellationToken ct) => Task.FromResult(key);
+        public Task<string> GetSignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct) => Task.FromResult($"https://f/{key}");
+        public Task<Stream> DownloadAsync(string key, CancellationToken ct) => Task.FromResult<Stream>(new MemoryStream());
+        public Task DeleteAsync(string key, CancellationToken ct) => Task.CompletedTask;
     }
 }
