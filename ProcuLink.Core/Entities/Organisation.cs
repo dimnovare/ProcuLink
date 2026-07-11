@@ -54,6 +54,18 @@ public class Organisation
     /// </summary>
     public DateTime? StripeReconciliationMissingSince { get; set; }
 
+    /// <summary>
+    /// UTC <c>created</c> timestamp of the last <c>customer.subscription.updated</c> webhook event
+    /// APPLIED to this org — the ordering watermark for out-of-order webhook delivery. Stripe does
+    /// not guarantee delivery order, so a STALE updated event (e.g. an older <c>past_due</c>)
+    /// delivered after a newer <c>active</c> one would otherwise overwrite the fresh state and freeze
+    /// a paying, now-current customer. The webhook handler ignores any updated event whose
+    /// <c>created</c> is STRICTLY older than this value (equal = idempotent re-apply). NULL = no
+    /// updated event applied yet. Compared in Stripe's own clock (event.created vs event.created),
+    /// never against wall-clock processing time, so it is distinct from <see cref="BillingUpdatedAt"/>.
+    /// </summary>
+    public DateTime? LastStripeEventAt { get; set; }
+
     public string EmailConfigJson        { get; set; } = "{}";
 
     /// <summary>

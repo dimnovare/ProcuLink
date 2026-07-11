@@ -238,7 +238,9 @@ public sealed class BillingController : ControllerBase
                 break;
 
             case "customer.subscription.updated":
-                await HandleSubscriptionUpdatedAsync(e.Data.Object as Stripe.Subscription, ct);
+                // e.Created (Stripe's clock) is the event-ordering key: a stale updated event
+                // delivered out of order must not overwrite fresher state — see the handler.
+                await HandleSubscriptionUpdatedAsync(e.Data.Object as Stripe.Subscription, e.Created, ct);
                 break;
 
             case "customer.subscription.deleted":
@@ -309,13 +311,30 @@ public sealed class BillingController : ControllerBase
             ct:              ct);
     }
 
-    internal async Task HandleSubscriptionUpdatedAsync(Stripe.Subscription? sub, CancellationToken ct)
+    internal async Task HandleSubscriptionUpdatedAsync(Stripe.Subscription? sub, DateTime eventCreatedUtc, CancellationToken ct)
     {
         if (sub is null) return;
 
         var org = await _db.Organisations
             .FirstOrDefaultAsync(o => o.StripeCustomerId == sub.CustomerId, ct);
         if (org is null) return;
+
+        // ── Event-ordering guard ─────────────────────────────────────────────
+        // Stripe does not guarantee webhook delivery order. Ignore any updated event whose
+        // Stripe `created` is STRICTLY older than the last-applied one — otherwise a stale
+        // past_due delivered after a newer active would overwrite Active with read-only
+        // PastDue, freezing a paying, now-current customer until the daily reconcile heals
+        // it (~24h). Equal timestamps (a redelivery of the SAME event) fall through and
+        // re-apply idempotently. Compared in Stripe's clock (created vs created), so this is
+        // orthogonal to signature-based webhook idempotency, which stays intact.
+        if (org.LastStripeEventAt is DateTime lastApplied && eventCreatedUtc < lastApplied)
+        {
+            _logger.LogInformation(
+                "Org {OrgId} subscription {SubId} update IGNORED: event created {EventCreated:o} predates last-applied " +
+                "{LastApplied:o} (out-of-order Stripe delivery) — fresher state preserved.",
+                org.Id, sub.Id, eventCreatedUtc, lastApplied);
+            return;
+        }
 
         var priceId = sub.Items.Data.FirstOrDefault()?.Price?.Id;
         var mappedPlan = StripeBillingMapping.MapPriceIdToPlan(_config, priceId);
@@ -328,6 +347,7 @@ public sealed class BillingController : ControllerBase
         org.StripePriceId = priceId;
         org.StripeSubscriptionStatus = sub.Status;
         org.AccountStatus = StripeBillingMapping.MapStatusToAccountStatus(sub.Status, org.AccountStatus);
+        org.LastStripeEventAt = eventCreatedUtc; // advance the ordering watermark to this applied event
         org.BillingUpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 

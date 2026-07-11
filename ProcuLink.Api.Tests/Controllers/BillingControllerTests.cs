@@ -495,11 +495,103 @@ public class BillingControllerTests
             },
         };
 
-        await ctrl.HandleSubscriptionUpdatedAsync(sub, CancellationToken.None);
+        await ctrl.HandleSubscriptionUpdatedAsync(sub, DateTime.UtcNow, CancellationToken.None);
 
         var updated = await db.Organisations.FindAsync(orgId);
         updated!.AccountStatus.Should().Be(AccountStatusConstants.PastDue);
         updated.Plan.Should().Be(PlanConstants.Growth, "plan must be unchanged when no price mapping is found");
+    }
+
+    // ── Webhook event-ordering guard (Finding 3) ─────────────────────────────
+    // Stripe does not guarantee webhook delivery order. A STALE customer.subscription.
+    // updated (past_due) delivered AFTER a newer (active) event must not overwrite the
+    // fresh Active state with PastDue (read-only) — that would freeze a paying, now-current
+    // customer until the daily reconcile heals it ~24h later. The handler stamps the org
+    // with each applied event's Stripe `created` timestamp and ignores any updated event
+    // whose `created` predates the last-applied one.
+
+    private static Stripe.Subscription UpdatedSub(string status) => new()
+    {
+        Id         = "sub_order_guard",
+        CustomerId = "cus_order_guard",
+        Status     = status,
+        Items      = new Stripe.StripeList<Stripe.SubscriptionItem>
+        {
+            Data = new List<Stripe.SubscriptionItem>(), // no price → plan unchanged; status drives account_status
+        },
+    };
+
+    private static Organisation OrderGuardOrg(Guid orgId) => new()
+    {
+        Id                   = orgId,
+        Plan                 = PlanConstants.Growth,
+        AccountStatus        = AccountStatusConstants.Active,
+        StripeCustomerId     = "cus_order_guard",
+        StripeSubscriptionId = "sub_order_guard",
+        ClerkOrgId           = "org_order_guard",
+        Name                 = "Order Guard Org",
+        Slug                 = "order-guard-org",
+    };
+
+    [Fact]
+    public async Task HandleSubscriptionUpdated_StalePastDueDeliveredAfterActive_DoesNotFreezeActivePayer()
+    {
+        var (ctrl, _, _, orgId, db) = Build();
+        db.Organisations.Add(OrderGuardOrg(orgId));
+        await db.SaveChangesAsync();
+
+        var activeCreated  = new DateTime(2026, 7, 11, 10, 05, 0, DateTimeKind.Utc); // newer
+        var pastDueCreated = new DateTime(2026, 7, 11, 10, 00, 0, DateTimeKind.Utc); // older — generated first, delivered second
+
+        // Delivery is out of order: the NEWER 'active' event arrives first…
+        await ctrl.HandleSubscriptionUpdatedAsync(UpdatedSub("active"), activeCreated, CancellationToken.None);
+        // …then the STALE 'past_due' event (older created) arrives second.
+        await ctrl.HandleSubscriptionUpdatedAsync(UpdatedSub("past_due"), pastDueCreated, CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+        updated!.AccountStatus.Should().Be(AccountStatusConstants.Active,
+            "a stale past_due event delivered after a newer active event must NOT overwrite Active with read-only PastDue");
+        updated.StripeSubscriptionStatus.Should().Be("active",
+            "the authoritative stored Stripe status must remain the newer 'active'");
+    }
+
+    [Fact]
+    public async Task HandleSubscriptionUpdated_InOrderPastDueAfterActive_StillApplies()
+    {
+        var (ctrl, _, _, orgId, db) = Build();
+        db.Organisations.Add(OrderGuardOrg(orgId));
+        await db.SaveChangesAsync();
+
+        var activeCreated  = new DateTime(2026, 7, 11, 10, 00, 0, DateTimeKind.Utc); // older
+        var pastDueCreated = new DateTime(2026, 7, 11, 10, 05, 0, DateTimeKind.Utc); // newer
+
+        // In-order delivery: active first, then a genuinely newer past_due.
+        await ctrl.HandleSubscriptionUpdatedAsync(UpdatedSub("active"), activeCreated, CancellationToken.None);
+        await ctrl.HandleSubscriptionUpdatedAsync(UpdatedSub("past_due"), pastDueCreated, CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+        updated!.AccountStatus.Should().Be(AccountStatusConstants.PastDue,
+            "a genuinely newer past_due event must still apply — the guard blocks only out-of-order (older) events");
+        updated.StripeSubscriptionStatus.Should().Be("past_due");
+    }
+
+    [Fact]
+    public async Task HandleSubscriptionUpdated_RedeliveredSameEvent_IsIdempotent()
+    {
+        var (ctrl, _, _, orgId, db) = Build();
+        db.Organisations.Add(OrderGuardOrg(orgId));
+        await db.SaveChangesAsync();
+
+        var created = new DateTime(2026, 7, 11, 10, 00, 0, DateTimeKind.Utc);
+
+        // The SAME event redelivered (equal created) must re-apply idempotently, not be
+        // dropped — the guard blocks only STRICTLY older events.
+        await ctrl.HandleSubscriptionUpdatedAsync(UpdatedSub("past_due"), created, CancellationToken.None);
+        await ctrl.HandleSubscriptionUpdatedAsync(UpdatedSub("past_due"), created, CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+        updated!.AccountStatus.Should().Be(AccountStatusConstants.PastDue,
+            "a redelivered event with an equal created timestamp must still apply (idempotent re-apply)");
     }
 
     // ── Webhook calls billing events THROUGH the IBillingService interface ────
@@ -731,7 +823,7 @@ public class BillingControllerTests
             },
         };
 
-        await ctrl.HandleSubscriptionUpdatedAsync(sub, CancellationToken.None);
+        await ctrl.HandleSubscriptionUpdatedAsync(sub, DateTime.UtcNow, CancellationToken.None);
 
         var updated = await db.Organisations.FindAsync(orgId);
         updated!.Plan.Should().Be(expectedPlan,

@@ -144,7 +144,7 @@ public class OrgPlanHistoryWritePointTests
             },
         };
 
-        await ctrl.HandleSubscriptionUpdatedAsync(sub, CancellationToken.None);
+        await ctrl.HandleSubscriptionUpdatedAsync(sub, DateTime.UtcNow, CancellationToken.None);
 
         var rows = await HistoryAsync(db, org.Id);
         rows.Should().HaveCount(2, "creation baseline + the downgrade row");
@@ -171,7 +171,7 @@ public class OrgPlanHistoryWritePointTests
             },
         };
 
-        await ctrl.HandleSubscriptionUpdatedAsync(sub, CancellationToken.None);
+        await ctrl.HandleSubscriptionUpdatedAsync(sub, DateTime.UtcNow, CancellationToken.None);
 
         (await HistoryAsync(db, org.Id)).Should().HaveCount(1,
             "a status-only subscription update does not change the plan, so no history row");
