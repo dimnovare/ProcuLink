@@ -522,6 +522,9 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IPassportService, PassportService>();
 builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
+// Parity with the Worker (which runs the daily reconciliation sweep); keeps Development DI
+// validation consistent across both hosts even though only the Worker executes the job.
+builder.Services.AddScoped<IBillingReconciliationService, StripeSubscriptionReconciliationService>();
 builder.Services.AddScoped<ISampleOrderService, SampleOrderService>();
 
 // ── Email API (Postmark over HTTPS) ──────────────────────────────────────

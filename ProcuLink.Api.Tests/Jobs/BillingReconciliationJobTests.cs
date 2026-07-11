@@ -1,0 +1,126 @@
+using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using ProcuLink.Core.Constants;
+using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
+using ProcuLink.Infrastructure;
+using ProcuLink.Worker.Jobs;
+using Xunit;
+
+namespace ProcuLink.Api.Tests.Jobs;
+
+/// <summary>
+/// Tests the <see cref="BillingReconciliationJob"/> sweep: it reconciles only orgs that carry a
+/// Stripe subscription id, a per-org failure never aborts the rest (try/catch isolation), and the
+/// mass-downgrade circuit breaker aborts the whole sweep when an abnormal number of orgs are past
+/// the missing-grace window. The per-org reconciliation logic itself is covered by
+/// StripeSubscriptionReconciliationServiceTests.
+/// </summary>
+public class BillingReconciliationJobTests
+{
+    private sealed class RecordingReconciler : IBillingReconciliationService
+    {
+        public List<Guid> Reconciled { get; } = new();
+        public HashSet<Guid> Throw { get; } = new();
+        public Task ReconcileOrgAsync(Guid orgId, CancellationToken ct = default)
+        {
+            Reconciled.Add(orgId);
+            if (Throw.Contains(orgId)) throw new InvalidOperationException("boom");
+            return Task.CompletedTask;
+        }
+    }
+
+    private static ProcuLinkDbContext MakeDb() =>
+        new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+
+    private static IConfiguration Config(int? massDowngradeThreshold = null) =>
+        new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Billing:ReconciliationMassDowngradeThreshold"] = massDowngradeThreshold?.ToString(),
+        }).Build();
+
+    private static Organisation Org(string? subId, DateTime? missingSince = null)
+    {
+        var id = Guid.NewGuid();
+        return new Organisation
+        {
+            Id = id, ClerkOrgId = $"org_{id:N}", Name = "n", Slug = $"s-{id:N}",
+            Plan = PlanConstants.Growth, AccountStatus = AccountStatusConstants.Active,
+            StripeSubscriptionId = subId, StripeReconciliationMissingSince = missingSince,
+            CreatedAt = DateTime.UtcNow, TrialStartedAt = DateTime.UtcNow,
+        };
+    }
+
+    private static BillingReconciliationJob Job(ProcuLinkDbContext db, RecordingReconciler r, IConfiguration config) =>
+        new(db, r, config, NullLogger<BillingReconciliationJob>.Instance);
+
+    [Fact]
+    public async Task Sweep_OnlyReconcilesOrgsWithASubscriptionId()
+    {
+        var db = MakeDb();
+        var withSub = Org("sub_a");
+        var blankSub = Org("");
+        var noSub = Org(null);
+        db.Organisations.AddRange(withSub, blankSub, noSub);
+        await db.SaveChangesAsync();
+        var reconciler = new RecordingReconciler();
+
+        await Job(db, reconciler, Config()).ExecuteAsync(CancellationToken.None);
+
+        reconciler.Reconciled.Should().ContainSingle().Which.Should().Be(withSub.Id);
+    }
+
+    [Fact]
+    public async Task Sweep_OneOrgThrowing_DoesNotAbortTheRest()
+    {
+        var db = MakeDb();
+        var a = Org("sub_a");
+        var b = Org("sub_b");
+        var c = Org("sub_c");
+        db.Organisations.AddRange(a, b, c);
+        await db.SaveChangesAsync();
+        var reconciler = new RecordingReconciler();
+        reconciler.Throw.Add(b.Id);
+
+        await Job(db, reconciler, Config()).ExecuteAsync(CancellationToken.None);
+
+        reconciler.Reconciled.Should().BeEquivalentTo(new[] { a.Id, b.Id, c.Id },
+            "every org is attempted even though one threw (per-org try/catch isolation)");
+    }
+
+    [Fact]
+    public async Task CircuitBreaker_AbortsWhenTooManyOrgsPastGrace()
+    {
+        var db = MakeDb();
+        var pastGrace = DateTime.UtcNow.AddDays(-4); // beyond the 3-day grace
+        // 3 orgs simultaneously past grace, threshold 2 → systemic-fault suspicion → abort.
+        db.Organisations.AddRange(
+            Org("sub_a", pastGrace), Org("sub_b", pastGrace), Org("sub_c", pastGrace));
+        await db.SaveChangesAsync();
+        var reconciler = new RecordingReconciler();
+
+        await Job(db, reconciler, Config(massDowngradeThreshold: 2)).ExecuteAsync(CancellationToken.None);
+
+        reconciler.Reconciled.Should().BeEmpty("the mass-downgrade circuit breaker must abort the whole sweep");
+    }
+
+    [Fact]
+    public async Task CircuitBreaker_ProceedsWhenPastGraceAtOrUnderThreshold()
+    {
+        var db = MakeDb();
+        var pastGrace = DateTime.UtcNow.AddDays(-4);
+        // 2 orgs past grace, threshold 2 → 2 is NOT > 2 → proceed normally.
+        var a = Org("sub_a", pastGrace);
+        var b = Org("sub_b", pastGrace);
+        db.Organisations.AddRange(a, b);
+        await db.SaveChangesAsync();
+        var reconciler = new RecordingReconciler();
+
+        await Job(db, reconciler, Config(massDowngradeThreshold: 2)).ExecuteAsync(CancellationToken.None);
+
+        reconciler.Reconciled.Should().BeEquivalentTo(new[] { a.Id, b.Id });
+    }
+}

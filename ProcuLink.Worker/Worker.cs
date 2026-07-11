@@ -91,7 +91,16 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "15 4 * * *");
 
-        _logger.LogInformation("Registered recurring jobs: worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection (every 15 min), catalog-sync (hourly), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
+        // Billing safety net: reconcile every org's plan/account_status against Stripe as source
+        // of truth (daily 02:00 UTC). Backstops missed customer.subscription.* webhooks and stale/
+        // test-mode subscription ids; downgrades a vanished subscription to frozen Pilot + read_only
+        // only after a 3-day confirmed-missing grace. Idempotent; no-op without a configured Stripe key.
+        _recurringJobs.AddOrUpdate<BillingReconciliationJob>(
+            "billing-reconciliation",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "0 2 * * *");
+
+        _logger.LogInformation("Registered recurring jobs: worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection (every 15 min), catalog-sync (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

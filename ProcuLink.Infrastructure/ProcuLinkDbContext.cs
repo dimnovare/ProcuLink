@@ -248,6 +248,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.BillingUpdatedAt)
              .HasColumnName("billing_updated_at")
              .HasColumnType("timestamptz");
+            b.Property(x => x.StripeReconciliationMissingSince)
+             .HasColumnName("stripe_reconciliation_missing_since")
+             .HasColumnType("timestamptz");
             b.Property(x => x.EmailConfigJson)
              .HasColumnName("email_config")
              .HasColumnType("jsonb")

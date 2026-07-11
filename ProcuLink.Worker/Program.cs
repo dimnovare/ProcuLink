@@ -174,6 +174,10 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 // so the resolve/accept paths persist history when driven from the Worker too.
 builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
+// Billing safety net: reconciles plan/account_status against Stripe as source of truth
+// (driven by the daily BillingReconciliationJob). Registered here because the Worker is the
+// sole Hangfire executor and Development DI validation constructs the job's dependency graph.
+builder.Services.AddScoped<IBillingReconciliationService, StripeSubscriptionReconciliationService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 // T4 — external web/product-code grounding (no-op unless Ai:OpenAI:ProductSearch:Enabled=true).
@@ -351,6 +355,7 @@ builder.Services.AddScoped<DeliverySlaSweepJob>();
 builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
 builder.Services.AddScoped<IStuckDeliveryDetectionService, StuckDeliveryDetectionService>();
 builder.Services.AddScoped<StuckDeliveryDetectionJob>();
+builder.Services.AddScoped<BillingReconciliationJob>();
 // ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
 // ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
