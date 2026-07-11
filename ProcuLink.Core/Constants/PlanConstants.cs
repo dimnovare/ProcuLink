@@ -74,6 +74,35 @@ public static class PlanConstants
             : AiMonthlyTokenLimits[Pilot];
 
     /// <summary>
+    /// AI monthly token budget for a READ-ONLY / delinquent org, overriding the
+    /// paid-plan ceiling so a correct downgrade actually STOPS the OpenAI spend
+    /// (audit 2026-07-10 P2). Founder decision 2026-07-10:
+    /// <list type="bullet">
+    ///   <item><c>past_due</c> keeps the Pilot GRACE budget (a transient Stripe
+    ///   dunning state the customer usually recovers from) — but never MORE than
+    ///   its own plan budget, so a past_due Pilot stays at Pilot.</item>
+    ///   <item><c>read_only</c>, <c>cancelled</c>, <c>trial_expired</c> get ZERO —
+    ///   these are non-recoverable / terminated states, and the org already cannot
+    ///   process orders or use gated features, so any AI spend is pure cost leak.</item>
+    /// </list>
+    /// Intended for statuses where <see cref="AccountStatusConstants.IsReadOnly"/> is
+    /// true; a good-standing status defensively returns the full plan budget (no clamp).
+    /// </summary>
+    public static long GetDelinquentAiMonthlyTokenLimit(string? plan, string accountStatus)
+    {
+        if (!AccountStatusConstants.IsReadOnly(accountStatus))
+            return GetAiMonthlyTokenLimit(plan); // not delinquent — no clamp
+
+        // past_due: Pilot grace, capped at the plan's own budget (Math.Min so a
+        // sub-Pilot tier, should one ever exist, is never raised to Pilot).
+        if (string.Equals(accountStatus, AccountStatusConstants.PastDue, StringComparison.OrdinalIgnoreCase))
+            return Math.Min(GetAiMonthlyTokenLimit(plan), AiMonthlyTokenLimits[Pilot]);
+
+        // read_only / cancelled / trial_expired: no AI budget at all.
+        return 0L;
+    }
+
+    /// <summary>
     /// Per-order overage fee (EUR) charged on every order an active paid
     /// self-serve plan processes ABOVE its monthly order limit. Billed via a
     /// Stripe invoice item at the period boundary — going over the cap is always

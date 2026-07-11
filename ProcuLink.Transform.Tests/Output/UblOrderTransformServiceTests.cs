@@ -343,6 +343,30 @@ public class UblOrderTransformServiceTests
         svc.CanTransform(OutputFormat.Json).Should().BeFalse();
     }
 
+    // ── Unrouted order (null SupplierId) — preview must stay valid UBL ──────────
+
+    /// <summary>
+    /// An order parked <c>unrouted</c> (routing Phase 0) carries a NULL SupplierId. It can never
+    /// DELIVER while unrouted, but the Order Workshop live preview can render it in UBL. The
+    /// supplier name is the supplier id placeholder; a null <c>Guid?.ToString()</c> is <c>""</c>,
+    /// which would emit an empty <c>SellerSupplierParty/Party/PartyName/Name</c> — invalid Peppol
+    /// BIS 3.0 (PartyName/Name is required). Coalescing to the zero GUID keeps it non-empty.
+    /// </summary>
+    [Fact]
+    public async Task TransformAsync_NullSupplier_SellerNameFallsBackToZeroGuid_NotEmpty()
+    {
+        var order = BuildOrder();
+        order.SupplierId = null;
+
+        var result = await new UblOrderTransformService().TransformAsync(order, OutputFormat.Ubl, CancellationToken.None);
+        var doc    = XDocument.Parse(await ReadContentAsString(result));
+
+        var sellerName = doc.Descendants(Cac + "SellerSupplierParty").Single()
+            .Element(Cac + "Party")!.Element(Cac + "PartyName")!.Element(Cbc + "Name")!;
+        sellerName.Value.Should().Be(Guid.Empty.ToString());
+        sellerName.Value.Should().NotBeNullOrEmpty("an empty PartyName/Name is invalid Peppol BIS 3.0");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static async Task<string> ReadContentAsString(TransformResult result)

@@ -874,11 +874,11 @@ public sealed class StripeBillingService : IBillingService
         return value == "yearly" ? "yearly" : "monthly";
     }
 
+    // Single source of truth for the read-only status set (shared with the AI
+    // token-budget clamp in AiUsageTracker) so the two never drift — the drift
+    // between them was the AI cost-leak the 2026-07-10 audit flagged.
     private static bool IsReadOnlyStatus(string status) =>
-        status is AccountStatusConstants.TrialExpired
-            or AccountStatusConstants.ReadOnly
-            or AccountStatusConstants.PastDue
-            or AccountStatusConstants.Cancelled;
+        AccountStatusConstants.IsReadOnly(status);
 }
 
 /// <summary>One line of a manual admin invoice. Amount is in the smallest currency unit (cents).</summary>

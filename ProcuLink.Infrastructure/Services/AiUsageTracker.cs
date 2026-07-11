@@ -165,22 +165,35 @@ public sealed class AiUsageTracker : IAiUsageTracker
     }
 
     /// <summary>
-    /// Resolves the org's monthly token limit. PRECEDENCE: the explicit config
-    /// override (set and &gt; 0) beats ALL plans; otherwise the org's plan
-    /// default. A missing org row or unknown plan resolves to the Pilot value
-    /// (fail-safe).
+    /// Resolves the org's monthly token limit. PRECEDENCE:
+    /// <list type="number">
+    ///   <item>the explicit config override (set and &gt; 0) beats EVERYTHING — the
+    ///   production emergency lever; it short-circuits BEFORE any org query.</item>
+    ///   <item>a READ-ONLY / delinquent account status clamps the budget below the
+    ///   paid ceiling so a correct downgrade actually stops the OpenAI spend
+    ///   (past_due → Pilot grace; read_only/cancelled/trial_expired → 0). See
+    ///   <see cref="PlanConstants.GetDelinquentAiMonthlyTokenLimit"/> (audit 2026-07-10 P2).</item>
+    ///   <item>otherwise the org's plan default.</item>
+    /// </list>
+    /// A missing org row or unknown plan resolves to the Pilot value (fail-safe).
     /// </summary>
     private async Task<long> ResolveLimitAsync(Guid organisationId, CancellationToken ct)
     {
+        // The global emergency override wins over the status clamp too — and some
+        // callers run without an Organisations set, so it MUST short-circuit here.
         if (_configOverrideLimit is { } configured) return configured;
 
-        var plan = await _db.Organisations
+        var org = await _db.Organisations
             .AsNoTracking()
             .Where(o => o.Id == organisationId)
-            .Select(o => o.Plan)
+            .Select(o => new { o.Plan, o.AccountStatus })
             .FirstOrDefaultAsync(ct);
 
-        return PlanConstants.GetAiMonthlyTokenLimit(plan);
+        // Read-only / delinquent orgs get the clamped budget (never their old paid
+        // ceiling); everyone else gets the plan default. Missing org → Pilot fail-safe.
+        return org is not null && AccountStatusConstants.IsReadOnly(org.AccountStatus)
+            ? PlanConstants.GetDelinquentAiMonthlyTokenLimit(org.Plan, org.AccountStatus)
+            : PlanConstants.GetAiMonthlyTokenLimit(org?.Plan);
     }
 
     private (int year, int month) CurrentYearMonth()
