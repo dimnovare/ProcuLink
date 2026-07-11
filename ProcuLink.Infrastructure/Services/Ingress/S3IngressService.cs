@@ -121,6 +121,16 @@ public sealed class S3IngressService : IS3IngressService
         // standard AWS endpoint (ServiceUrl null) resolves to public AWS infra and is
         // not tenant-controlled, so it is not guarded. ValidateAsync runs the same
         // DNS-resolve + IP-range check as the delivery dispatchers.
+        //
+        // Defense-in-depth (audit finding #6, DNS-rebind TOCTOU): this up-front check is
+        // NOT the last line. The AmazonS3ClientFactory wires a GuardedAwsHttpClientFactory
+        // so every S3 request (list + download, both control- and data-plane) also connects
+        // through the guard's connect-time re-resolve + re-validate + IP-pin — the same
+        // ConnectCallback defence the HTTP delivery path uses. So a rebind that flips from
+        // public (here) to private/metadata (at the SDK's connect) is still blocked. Unlike
+        // this S3-over-HTTP path, the raw-TCP pull/delivery paths (SFTP/FTPS/IMAP) cannot
+        // IP-pin without breaking SSH host-key / TLS-certificate-hostname identity, so they
+        // retain the up-front re-validate mitigation with a documented residual.
         if (!string.IsNullOrWhiteSpace(config.ServiceUrl))
         {
             var guardResult = await _guard.ValidateAsync(config.ServiceUrl, ct);

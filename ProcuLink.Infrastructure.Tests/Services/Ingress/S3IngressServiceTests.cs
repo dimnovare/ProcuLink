@@ -454,7 +454,7 @@ public class S3IngressServiceTests
 
         var orders = new FakeOrderService();
         var svc = new S3IngressService(
-            db, orders, new FakeParseJobEnqueuer(), encryption, new AmazonS3ClientFactory(),
+            db, orders, new FakeParseJobEnqueuer(), encryption, new AmazonS3ClientFactory(AllowPrivateGuard()),
             AllowPrivateGuard(),
             NullLogger<S3IngressService>.Instance);
 
