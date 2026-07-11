@@ -506,6 +506,67 @@ public class InboundEmailRouterTests
         enqueuer.Calls.Should().BeEmpty();
     }
 
+    // ── 11. GDPR: the processed audit row is keyed to the created order ──────
+    // Finding #8: the inbound-email audit must be erasable via the per-order erase
+    // path, which finds audit rows by EntityId == orderId. A single-attachment email
+    // creates exactly one order, so the "processed" audit MUST carry EntityId == that
+    // order id (previously it was Guid.Empty and survived erasure forever).
+    [Fact]
+    public async Task ProcessedAudit_IsKeyedToCreatedOrder_SoErasureRemovesIt()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO #12345 — confidential pricing",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.CreatedOrderIds.Should().HaveCount(1);
+        var orderId = result.CreatedOrderIds[0];
+
+        var processed = await db.AuditEvents
+            .SingleAsync(e => e.Action == "inbound_email.processed");
+        processed.EntityId.Should().Be(orderId,
+            "the processed audit must be keyed to the order so the erase path removes it");
+        processed.OrgId.Should().Be(orgId);
+    }
+
+    // ── 11b. GDPR: the audit payload omits raw sender email + subject ────────
+    // Finding #8: the audit payload previously stored the raw sender address and
+    // subject line (third-party PII) verbatim. The summary must now hash the sender
+    // and drop the subject entirely.
+    [Fact]
+    public void BuildAuditSummary_HashesSender_AndOmitsRawSenderAndSubject()
+    {
+        const string sender = "buyer@example.com";
+        const string subject = "PO #12345 — confidential pricing";
+        var payload = new InboundEmailPayload(
+            FromEmail: sender,
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   subject,
+            Attachments: Array.Empty<InboundAttachment>());
+
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            InboundEmailRouter.BuildAuditSummary(payload, extra: null));
+
+        json.Should().NotContain(sender, "the raw sender address is third-party PII and must not be persisted");
+        json.Should().NotContain(subject, "the raw subject line is PII and must not be persisted");
+        json.Should().Contain(InboundEmailRouter.Sha256Hex(sender),
+            "the sender is stored only as a one-way hash for correlation/diagnostics");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static InboundEmailRouter MakeRouter(

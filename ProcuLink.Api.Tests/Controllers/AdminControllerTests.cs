@@ -1,4 +1,6 @@
+using System.Security.Claims;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -59,6 +61,34 @@ public class AdminControllerTests
         public Task<ProcuLink.Core.Services.BulkOrderErasureResult> BulkEraseOrdersAsync(
             Guid org, ProcuLink.Core.Services.BulkEraseFilter filter, CancellationToken ct)
             => Task.FromResult(new ProcuLink.Core.Services.BulkOrderErasureResult(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+    }
+
+    /// <summary>Erasure double that reports the order was found + erased (Found=true),
+    /// so the controller reaches its durable-audit write.</summary>
+    private sealed class FoundErasureService : ProcuLink.Core.Services.IDataErasureService
+    {
+        public Task<ProcuLink.Core.Services.OrderErasureResult> EraseOrderAsync(Guid org, Guid orderId, CancellationToken ct)
+            => Task.FromResult(new ProcuLink.Core.Services.OrderErasureResult(true, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1));
+
+        public Task<ProcuLink.Core.Services.BulkOrderErasureResult> BulkEraseOrdersAsync(
+            Guid org, ProcuLink.Core.Services.BulkEraseFilter filter, CancellationToken ct)
+            => Task.FromResult(new ProcuLink.Core.Services.BulkOrderErasureResult(3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3));
+    }
+
+    /// <summary>Attaches an authenticated admin principal (sub + email claims) so the
+    /// controller can capture the actor identity in the audit payload.</summary>
+    private static AdminController WithAdmin(AdminController ctrl, string sub, string email)
+    {
+        var identity = new ClaimsIdentity(new[]
+        {
+            new Claim("sub", sub),
+            new Claim("email", email),
+        }, authenticationType: "Test");
+        ctrl.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) },
+        };
+        return ctrl;
     }
 
     /// <summary>Captures the org id + filter the controller forwards, returns a canned result.</summary>
@@ -569,6 +599,107 @@ public class AdminControllerTests
             Guid.NewGuid(), new SetOrgRetentionRequest(RetentionDays: 30), CancellationToken.None);
 
         result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    // ── GDPR accountability: durable audit for destructive/credential actions ──
+    // Finding #7: destructive/credential admin actions were logged only to ephemeral
+    // stdout. Each must now write a durable, queryable AuditEvent capturing WHO did
+    // WHAT to WHICH org/entity — with the admin identity recorded (never a secret).
+
+    [Fact]
+    public async Task EraseOrder_WritesDurableAuditEvent_WithActorAndTarget()
+    {
+        var db = MakeDb();
+        var org = Org("Acme", PlanConstants.Operations, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var orderId = Guid.NewGuid();
+        var ctrl = WithAdmin(Build(db, new FoundErasureService()), "user_admin_1", "founder@proculink.eu");
+        var result = await ctrl.EraseOrder(org.Id, orderId, CancellationToken.None);
+        result.Should().BeOfType<OkObjectResult>();
+
+        var audit = await db.AuditEvents.SingleAsync(e => e.Action == "admin.order.erased");
+        audit.OrgId.Should().Be(org.Id);
+        audit.EntityId.Should().Be(orderId, "the audit is keyed to the erased order");
+        audit.UserId.Should().BeNull("the platform admin is cross-tenant, not an org AppUser");
+        audit.Payload.Should().NotBeNull();
+        audit.Payload!.RootElement.GetProperty("actor").GetProperty("sub").GetString()
+            .Should().Be("user_admin_1");
+        audit.Payload!.RootElement.GetProperty("actor").GetProperty("email").GetString()
+            .Should().Be("founder@proculink.eu");
+    }
+
+    [Fact]
+    public async Task BulkEraseOrders_WritesDurableAuditEvent()
+    {
+        var db = MakeDb();
+        var org = Org("Acme", PlanConstants.Operations, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = WithAdmin(Build(db, new FoundErasureService()), "user_admin_1", "founder@proculink.eu");
+        var result = await ctrl.BulkEraseOrders(
+            org.Id, new ProcuLink.Core.Services.BulkEraseFilter(PoNumberPrefix: "TEST-"), CancellationToken.None);
+        result.Should().BeOfType<OkObjectResult>();
+
+        var audit = await db.AuditEvents.SingleAsync(e => e.Action == "admin.orders.bulk_erased");
+        audit.OrgId.Should().Be(org.Id);
+        audit.Payload!.RootElement.GetProperty("actor").GetProperty("sub").GetString()
+            .Should().Be("user_admin_1");
+    }
+
+    [Fact]
+    public async Task SetOrganisationRetention_WritesDurableAuditEvent()
+    {
+        var db = MakeDb();
+        var org = Org("Retention Co", PlanConstants.Operations, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = WithAdmin(Build(db), "user_admin_1", "founder@proculink.eu");
+        var result = await ctrl.SetOrganisationRetention(
+            org.Id, new SetOrgRetentionRequest(RetentionDays: 90), CancellationToken.None);
+        result.Should().BeOfType<OkObjectResult>();
+
+        var audit = await db.AuditEvents.SingleAsync(e => e.Action == "admin.org.retention_changed");
+        audit.OrgId.Should().Be(org.Id);
+        audit.EntityId.Should().Be(org.Id);
+    }
+
+    [Fact]
+    public async Task SetOrganisationLimits_WritesDurableAuditEvent()
+    {
+        var db = MakeDb();
+        var org = Org("Acme", PlanConstants.Growth, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = WithAdmin(Build(db), "user_admin_1", "founder@proculink.eu");
+        var result = await ctrl.SetOrganisationLimits(
+            org.Id, new SetOrgLimitsRequest(OrderLimitOverride: 1000, SupplierLimitOverride: 30),
+            CancellationToken.None);
+        result.Should().BeOfType<OkObjectResult>();
+
+        var audit = await db.AuditEvents.SingleAsync(e => e.Action == "admin.org.limits_changed");
+        audit.OrgId.Should().Be(org.Id);
+        audit.EntityId.Should().Be(org.Id);
+    }
+
+    [Fact]
+    public async Task EraseOrder_NotFound_WritesNoAuditEvent()
+    {
+        // The no-op erase (order already gone / wrong org) must NOT fabricate an audit row.
+        var db = MakeDb();
+        var org = Org("Acme", PlanConstants.Operations, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = WithAdmin(Build(db, new NoopErasureService()), "user_admin_1", "founder@proculink.eu");
+        var result = await ctrl.EraseOrder(org.Id, Guid.NewGuid(), CancellationToken.None);
+        result.Should().BeOfType<NotFoundObjectResult>();
+
+        (await db.AuditEvents.AnyAsync()).Should().BeFalse("a not-found erase changed nothing to audit");
     }
 
     // ── helper ────────────────────────────────────────────────────────────

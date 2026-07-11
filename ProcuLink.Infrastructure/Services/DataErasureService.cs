@@ -77,6 +77,10 @@ public sealed class DataErasureService : IDataErasureService
         var confirmationLines = await _db.OrderConfirmationLines
             .Where(cl => cl.OrgId == organisationId && confirmationIds.Contains(cl.OrderConfirmationId))
             .ToListAsync(ct);
+        // IMAP-ingest ledger rows for this order carry the attachment file name +
+        // IMAP Message-Id — orphan PII if left behind after the order is erased.
+        var emailImportRecords = await _db.EmailImportRecords
+            .Where(r => r.OrderId == orderId && r.OrgId == organisationId).ToListAsync(ct);
 
         // ── 1. Delete the sensitive R2 blobs first (idempotent; best-effort) ──────
         var r2Keys = new List<string>();
@@ -120,6 +124,7 @@ public sealed class DataErasureService : IDataErasureService
         _db.AuditEvents.RemoveRange(audits);
         _db.AiSuggestionDecisions.RemoveRange(aiDecisions);
         _db.IdempotencyKeys.RemoveRange(idempotencyKeys);
+        _db.EmailImportRecords.RemoveRange(emailImportRecords);
         _db.PurchaseOrders.Remove(order);
         await _db.SaveChangesAsync(ct);
 
@@ -127,10 +132,11 @@ public sealed class DataErasureService : IDataErasureService
             "Erased order {OrderId} (org {OrgId}): R2={R2} lines={Lines} artifacts={Artifacts} " +
             "attempts={Attempts} exceptions={Exceptions} validations={Validations} passport={Passport} " +
             "audit={Audit} confirmations={Confirmations} confirmationLines={ConfirmationLines} " +
-            "aiDecisions={AiDecisions} idempotencyKeys={IdempotencyKeys}.",
+            "aiDecisions={AiDecisions} idempotencyKeys={IdempotencyKeys} emailImportRecords={EmailImportRecords}.",
             orderId, organisationId, r2Deleted, lines.Count, artifacts.Count, attempts.Count,
             exceptions.Count, validations.Count, passport.Count, audits.Count,
-            confirmations.Count, confirmationLines.Count, aiDecisions.Count, idempotencyKeys.Count);
+            confirmations.Count, confirmationLines.Count, aiDecisions.Count, idempotencyKeys.Count,
+            emailImportRecords.Count);
 
         return new OrderErasureResult(
             Found: true,
@@ -145,7 +151,8 @@ public sealed class DataErasureService : IDataErasureService
             ConfirmationsDeleted: confirmations.Count,
             ConfirmationLinesDeleted: confirmationLines.Count,
             AiSuggestionDecisionsDeleted: aiDecisions.Count,
-            IdempotencyKeysDeleted: idempotencyKeys.Count);
+            IdempotencyKeysDeleted: idempotencyKeys.Count,
+            EmailImportRecordsDeleted: emailImportRecords.Count);
     }
 
     public async Task<BulkOrderErasureResult> BulkEraseOrdersAsync(
@@ -214,6 +221,7 @@ public sealed class DataErasureService : IDataErasureService
                 ConfirmationLinesDeleted = result.ConfirmationLinesDeleted + r.ConfirmationLinesDeleted,
                 AiSuggestionDecisionsDeleted = result.AiSuggestionDecisionsDeleted + r.AiSuggestionDecisionsDeleted,
                 IdempotencyKeysDeleted       = result.IdempotencyKeysDeleted + r.IdempotencyKeysDeleted,
+                EmailImportRecordsDeleted    = result.EmailImportRecordsDeleted + r.EmailImportRecordsDeleted,
             };
         }
 

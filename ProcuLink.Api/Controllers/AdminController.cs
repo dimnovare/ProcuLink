@@ -1,9 +1,12 @@
+using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 
@@ -267,6 +270,20 @@ public sealed class AdminController : ControllerBase
             var result = await Stripe.CreateInvoiceAsync(
                 request.OrganisationId, lineItems, request.Currency, ct);
 
+            // Durable accountability trail (GDPR Art.5(2)) — creating a real-money
+            // Stripe invoice is a privileged billing action. Record ids + total only,
+            // never any Stripe key/secret.
+            await WriteAdminAuditAsync(request.OrganisationId, request.OrganisationId, "Organisation",
+                "admin.invoice.created",
+                new
+                {
+                    invoiceId = result.InvoiceId,
+                    status = result.Status,
+                    currency = request.Currency,
+                    totalCents = request.LineItems.Sum(li => (long)li.AmountCents * Math.Max(li.Quantity, 1)),
+                },
+                ct);
+
             return Ok(new CreateInvoiceResponse(
                 InvoiceId:        result.InvoiceId,
                 HostedInvoiceUrl: result.HostedInvoiceUrl,
@@ -355,6 +372,16 @@ public sealed class AdminController : ControllerBase
         _logger.LogInformation(
             "Admin set limits for org {OrgId}: orderOverride={OrderOverride}, supplierOverride={SupplierOverride}, trialEndOverride={TrialEnd}",
             org.Id, org.OrderLimitOverride, org.SupplierLimitOverride, org.TrialEndsAtOverride);
+        // Durable accountability trail (GDPR Art.5(2)) — plan/limit/trial overrides are
+        // privileged changes to a tenant's entitlements; capture who set what.
+        await WriteAdminAuditAsync(org.Id, org.Id, "Organisation", "admin.org.limits_changed",
+            new
+            {
+                orderLimitOverride = org.OrderLimitOverride,
+                supplierLimitOverride = org.SupplierLimitOverride,
+                trialEndsAtOverride = org.TrialEndsAtOverride,
+            },
+            ct);
 
         return Ok(new OrgLimitsResponse(
             Id:                     org.Id,
@@ -408,6 +435,10 @@ public sealed class AdminController : ControllerBase
         _logger.LogWarning(
             "Admin set blob retention for org {OrgId}: retentionDays={RetentionDays} (null = disabled).",
             org.Id, org.RetentionDays);
+        // Durable accountability trail (GDPR Art.5(2)) — a retention window enables
+        // the destructive blob-purge sweep, so who changed it must be queryable.
+        await WriteAdminAuditAsync(org.Id, org.Id, "Organisation", "admin.org.retention_changed",
+            new { retentionDays = org.RetentionDays, enabled = org.RetentionDays is not null }, ct);
 
         return Ok(new OrgRetentionResponse(
             Id:               org.Id,
@@ -431,6 +462,8 @@ public sealed class AdminController : ControllerBase
         _logger.LogWarning(
             "ADMIN ERASE: order {OrderId} (org {OrgId}) hard-deleted by admin — {@Result}.",
             orderId, orgId, result);
+        // Durable accountability trail (GDPR Art.5(2)) — keyed to the erased order.
+        await WriteAdminAuditAsync(orgId, orderId, "Order", "admin.order.erased", result, ct);
         return Ok(result);
     }
 
@@ -474,6 +507,63 @@ public sealed class AdminController : ControllerBase
         _logger.LogWarning(
             "ADMIN BULK ERASE: org {OrgId} — {Count} orders hard-deleted by admin — {@Result}.",
             orgId, result.OrdersErased, result);
+        // Durable accountability trail (GDPR Art.5(2)) — captures the filter + result.
+        await WriteAdminAuditAsync(orgId, orgId, "Organisation", "admin.orders.bulk_erased",
+            new
+            {
+                filter = new { filter!.PoNumberPrefix, filter.Status, idCount = filter.Ids?.Count, filter.OlderThan },
+                result,
+            },
+            ct);
         return Ok(result);
+    }
+
+    // ── Durable admin audit (GDPR Art.5(2) accountability) ────────────────────
+
+    /// <summary>
+    /// Writes a durable, queryable <see cref="AuditEvent"/> for a destructive or
+    /// credential/billing admin action so there is a tamper-evident record of WHO
+    /// (the platform admin identity) did WHAT to WHICH org/entity — not just an
+    /// ephemeral stdout line. The actor's Clerk <c>sub</c> + email are read from the
+    /// caller's claims (the same identity the <see cref="AdminOnlyAttribute"/> gate
+    /// matched) and stored in the payload; <see cref="AuditEvent.UserId"/> stays NULL
+    /// because a platform admin is cross-tenant, not an org <c>AppUser</c> (an FK to a
+    /// non-existent org user would fail). NEVER pass secret values in
+    /// <paramref name="detail"/> — record that a thing changed, never the plaintext.
+    /// Best-effort: an audit-write failure is logged at Error but never fails the
+    /// already-completed action (Error, not Warning, because a missing accountability
+    /// record is a compliance gap worth surfacing).
+    /// </summary>
+    private async Task WriteAdminAuditAsync(
+        Guid orgId, Guid entityId, string entityType, string action, object detail, CancellationToken ct)
+    {
+        try
+        {
+            var sub = User.FindFirst("sub")?.Value;
+            var email = new[] { "email", "email_address", ClaimTypes.Email }
+                .Select(t => User.FindFirst(t)?.Value)
+                .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+
+            var payload = new { actor = new { sub, email }, detail };
+            _db.AuditEvents.Add(new AuditEvent
+            {
+                Id         = Guid.NewGuid(),
+                OrgId      = orgId,
+                UserId     = null,
+                EntityType = entityType,
+                EntityId   = entityId,
+                Action     = action,
+                Payload    = JsonDocument.Parse(JsonSerializer.Serialize(payload)),
+                CreatedAt  = DateTime.UtcNow,
+            });
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to write durable admin audit {Action} for org {OrgId} (entity {EntityId}). "
+                + "The action itself already completed; this is an accountability-log gap.",
+                action, orgId, entityId);
+        }
     }
 }

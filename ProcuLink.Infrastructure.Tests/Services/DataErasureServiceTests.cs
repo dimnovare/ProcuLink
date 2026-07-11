@@ -54,6 +54,16 @@ public class DataErasureServiceTests
         {
             Key = $"idem-{orderId:N}", OrgId = orgId, OrderId = orderId, CreatedAt = DateTimeOffset.UtcNow,
         });
+        // IMAP-ingest ledger row for this order: carries the attachment file name +
+        // IMAP Message-Id (orphan PII if left behind). Must die with the order.
+        db.EmailImportRecords.Add(new EmailImportRecord
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, OrderId = orderId,
+            ImapMessageId = $"<msg-{orderId:N}@supplier.example>",
+            AttachmentHash = "deadbeefdeadbeef",
+            FileName = $"PO_{prefix.Replace('/', '_')}_12345.pdf",
+            ImportedAt = DateTime.UtcNow,
+        });
     }
 
     [Fact]
@@ -84,6 +94,7 @@ public class DataErasureServiceTests
         result.ConfirmationLinesDeleted.Should().Be(1);
         result.AiSuggestionDecisionsDeleted.Should().Be(1);
         result.IdempotencyKeysDeleted.Should().Be(1);
+        result.EmailImportRecordsDeleted.Should().Be(1);
 
         storage.Deleted.Should().BeEquivalentTo(new[]
         {
@@ -105,6 +116,9 @@ public class DataErasureServiceTests
         // these carried real item codes / the order id and previously survived the erase.
         (await db.AiSuggestionDecisions.AnyAsync(d => d.OrderId == order1)).Should().BeFalse();
         (await db.IdempotencyKeys.AnyAsync(k => k.OrderId == order1)).Should().BeFalse();
+        // The IMAP-ingest ledger row (attachment file name + Message-Id) is gone too —
+        // no orphan PII survives the erase.
+        (await db.EmailImportRecords.AnyAsync(r => r.OrderId == order1)).Should().BeFalse();
 
         // Tenant isolation: org 2's graph is completely untouched.
         (await db.PurchaseOrders.AnyAsync(o => o.Id == order2)).Should().BeTrue();
@@ -112,7 +126,34 @@ public class DataErasureServiceTests
         (await db.AuditEvents.AnyAsync(e => e.EntityId == order2)).Should().BeTrue();
         (await db.AiSuggestionDecisions.AnyAsync(d => d.OrderId == order2)).Should().BeTrue();
         (await db.IdempotencyKeys.AnyAsync(k => k.OrderId == order2)).Should().BeTrue();
+        (await db.EmailImportRecords.AnyAsync(r => r.OrderId == order2)).Should().BeTrue();
         storage.Deleted.Should().NotContain(k => k.StartsWith("org2/"));
+    }
+
+    [Fact]
+    public async Task EraseOrderAsync_RemovesEmailImportRecords_ForImapIngestedOrder_OrgScoped()
+    {
+        await using var db = CreateDb();
+        var storage = new RecordingFileStorage();
+
+        var org1 = Guid.NewGuid(); var order1 = Guid.NewGuid();
+        var org2 = Guid.NewGuid(); var order2 = Guid.NewGuid();
+        SeedOrderGraph(db, org1, order1, "org1/order1");
+        SeedOrderGraph(db, org2, order2, "org2/order2");
+        await db.SaveChangesAsync();
+
+        // Pre-condition: the IMAP-ingest ledger row exists (attachment file name + Message-Id PII).
+        (await db.EmailImportRecords.AnyAsync(r => r.OrderId == order1 && r.OrgId == org1)).Should().BeTrue();
+
+        var service = new DataErasureService(db, storage, NullLogger<DataErasureService>.Instance);
+        var result = await service.EraseOrderAsync(org1, order1, default);
+
+        result.Found.Should().BeTrue();
+        result.EmailImportRecordsDeleted.Should().Be(1);
+        // The erased order's ledger row (with its PO_*.pdf file name) is gone …
+        (await db.EmailImportRecords.AnyAsync(r => r.OrderId == order1)).Should().BeFalse();
+        // … and org2's row is untouched (org-scoped).
+        (await db.EmailImportRecords.AnyAsync(r => r.OrderId == order2)).Should().BeTrue();
     }
 
     [Fact]
@@ -343,6 +384,8 @@ public class DataErasureServiceTests
             // Same composite key as the real model (the client-supplied key is only
             // unique per org).
             modelBuilder.Entity<IdempotencyKey>(b => b.HasKey(x => new { x.OrgId, x.Key }));
+            // IMAP-ingest ledger — the erase service now removes these per-order.
+            modelBuilder.Entity<EmailImportRecord>(b => b.HasKey(x => x.Id));
         }
     }
 }

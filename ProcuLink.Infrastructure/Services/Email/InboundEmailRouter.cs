@@ -289,9 +289,14 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             }
         }
 
+        // Key the processed-audit row to the created order when exactly one was created
+        // (the dominant single-attachment case) so the per-order GDPR erase removes it.
+        // For 0 or multiple orders the row stays message-level (EntityId=Guid.Empty), but
+        // it carries no raw sender/subject PII either way (see BuildAuditSummary).
         await WriteAuditAsync(org.Id, "inbound_email.processed",
             payload with { Attachments = payload.Attachments.Select(Strip).ToList() }, ct,
-            extra: new { createdOrderIds = created });
+            extra: new { createdOrderIds = created },
+            entityId: created.Count == 1 ? created[0] : (Guid?)null);
 
         return new InboundEmailResult(true, OrgId: orgId, CreatedOrderIds: created, Error: null);
     }
@@ -422,38 +427,30 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
 
     // ── Audit logging ────────────────────────────────────────────────────────
 
+    /// <param name="entityId">
+    /// When the audit row concerns a single created order, pass its id so the row is
+    /// keyed to the order (<c>EntityId == orderId</c>) and the per-order GDPR erase
+    /// path removes it. Message-level rows that map to no single order leave this null
+    /// (<c>Guid.Empty</c>) — but the payload still carries no raw sender/subject PII.
+    /// </param>
     private async Task WriteAuditAsync(
         Guid orgId,
         string action,
         InboundEmailPayload payload,
         CancellationToken ct,
-        object? extra = null)
+        object? extra = null,
+        Guid? entityId = null)
     {
         try
         {
-            var summary = new
-            {
-                from = payload.FromEmail,
-                to = payload.ToEmail,
-                subject = payload.Subject,
-                attachmentCount = payload.Attachments.Count,
-                attachments = payload.Attachments.Select(a => new
-                {
-                    fileName = a.FileName,
-                    contentType = a.ContentType,
-                    size = a.Content?.Length ?? 0,
-                }),
-                extra,
-            };
-
-            var json = JsonSerializer.Serialize(summary);
+            var json = JsonSerializer.Serialize(BuildAuditSummary(payload, extra));
             _db.AuditEvents.Add(new AuditEvent
             {
                 Id = Guid.NewGuid(),
                 OrgId = orgId,
                 UserId = null,
                 EntityType = "InboundEmail",
-                EntityId = Guid.Empty,
+                EntityId = entityId ?? Guid.Empty,
                 Action = action,
                 Payload = JsonDocument.Parse(json),
                 CreatedAt = DateTime.UtcNow,
@@ -467,6 +464,40 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             _logger.LogWarning(ex,
                 "Failed to write inbound-email audit event {Action} for org {OrgId}.", action, orgId);
         }
+    }
+
+    /// <summary>
+    /// Builds the PII-safe audit payload for an inbound email. GDPR: the raw sender
+    /// address is stored only as a one-way SHA-256 hash (for correlation/dedup
+    /// diagnostics) and the free-text subject line is NOT persisted at all — both are
+    /// third-party PII. The recipient (the org's own inbound address), attachment
+    /// metadata (file name, type, size) and the caller-supplied <paramref name="extra"/>
+    /// are retained. <c>internal</c> so it is unit-testable via InternalsVisibleTo.
+    /// </summary>
+    internal static object BuildAuditSummary(InboundEmailPayload payload, object? extra) => new
+    {
+        fromSha256 = Sha256Hex(payload.FromEmail),
+        to = payload.ToEmail,
+        attachmentCount = payload.Attachments.Count,
+        attachments = payload.Attachments.Select(a => new
+        {
+            fileName = a.FileName,
+            contentType = a.ContentType,
+            size = a.Content?.Length ?? 0,
+        }),
+        extra,
+    };
+
+    /// <summary>
+    /// Lower-case hex SHA-256 of <paramref name="value"/>; null/blank ⇒ null. Used to
+    /// pseudonymise the sender address in audit payloads. <c>internal</c> for testing.
+    /// </summary>
+    internal static string? Sha256Hex(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
     private static InboundAttachment Strip(InboundAttachment a) =>
