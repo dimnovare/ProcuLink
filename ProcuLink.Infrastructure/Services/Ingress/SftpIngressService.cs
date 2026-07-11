@@ -217,6 +217,37 @@ public sealed class SftpIngressService : ISftpIngressService
             var fileName = Path.GetFileName(remotePath);
             var contentType = ExtensionToContentType(extension);
 
+            // ── CLAIM-FIRST (idempotency) ────────────────────────────────────
+            // Insert + commit the dedupe-ledger row BEFORE creating the order. The unique index
+            // on (OrgId, RemotePath) is the real guard: a Hangfire retry (transient Neon error,
+            // Railway SIGTERM, OOM) OR a concurrent same-org poll that got past the AnyAsync
+            // fast-path above hits a 23505 here and SKIPS — so the file can never be imported as
+            // a DUPLICATE order (with a duplicate supplier delivery + duplicate €0.50 overage).
+            // Only AFTER this row commits do we create the order stub + enqueue parse.
+            var claim = new ImportedSftpFile
+            {
+                Id = Guid.NewGuid(),
+                OrgId = organisationId,
+                RemotePath = remotePath,
+                FileHash = hash,
+                ImportedAt = DateTime.UtcNow,
+            };
+            _db.Set<ImportedSftpFile>().Add(claim);
+            try
+            {
+                await _db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
+            {
+                // A concurrent poll or a job retry already claimed this file — its order stub is the
+                // canonical one. Detach our losing row and skip WITHOUT creating a duplicate order.
+                _db.Entry(claim).State = EntityState.Detached;
+                _logger.LogInformation(
+                    "SFTP ingress: org {OrgId} — {Path} claimed concurrently (unique violation); skipping duplicate import.",
+                    organisationId, remotePath);
+                continue;
+            }
+
             // Routed when a valid default supplier exists; UNROUTED hold otherwise —
             // same creation path browser upload and inbound email use for supplier-less files.
             var stubResult = supplierId is { } routedSupplierId
@@ -236,22 +267,15 @@ public sealed class SftpIngressService : ISftpIngressService
 
             if (!stubResult.IsSuccess)
             {
+                // The claim is already committed. A stub failure here is either a permanently bad
+                // file (empty / unsupported content) or a transient infra error; in both cases we
+                // deliberately leave the claim in place so the file is treated as SEEN and never
+                // re-imported as a duplicate — the guaranteed-no-duplicate trade the fix makes.
                 _logger.LogWarning(
-                    "SFTP ingress: org {OrgId} — {Mode} order stub creation failed for {Path}: {Error}",
+                    "SFTP ingress: org {OrgId} — {Mode} order stub creation failed for {Path} after claim: {Error}",
                     organisationId, supplierId is null ? "unrouted" : "routed", remotePath, stubResult.Error);
                 continue;
             }
-
-            _db.Set<ImportedSftpFile>().Add(new ImportedSftpFile
-            {
-                Id = Guid.NewGuid(),
-                OrgId = organisationId,
-                RemotePath = remotePath,
-                FileHash = hash,
-                ImportedAt = DateTime.UtcNow,
-            });
-
-            await _db.SaveChangesAsync(ct);
 
             await _parseJobEnqueuer.EnqueueAsync(stubResult.Value!.Id, organisationId, ct);
             imported++;

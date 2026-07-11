@@ -251,6 +251,64 @@ public sealed class S3IngressService : IS3IngressService
                 var fileName = Path.GetFileName(s3Object.Key);
                 var contentType = ExtensionToContentType(extension);
 
+                // ── CLAIM-FIRST (idempotency) ────────────────────────────────
+                // Commit the processed-object ledger row BEFORE creating the order. The unique
+                // index on (OrgId, BucketName, ObjectKey) is the real guard: a Hangfire retry
+                // (transient Neon error, Railway SIGTERM, OOM) OR a concurrent same-org poll that
+                // got past the fast-path check above hits a 23505 here and SKIPS — so the object
+                // can never be imported as a DUPLICATE order (with a duplicate supplier delivery +
+                // duplicate €0.50 overage). Only AFTER this row commits do we create the stub.
+                if (existing is null)
+                {
+                    // First import of this key — INSERT the claim. A concurrent first-import loses
+                    // on the unique index (23505) and skips without creating a duplicate order.
+                    _db.Set<ImportedS3Object>().Add(new ImportedS3Object
+                    {
+                        Id         = Guid.NewGuid(),
+                        OrgId      = organisationId,
+                        BucketName = config.BucketName,
+                        ObjectKey  = s3Object.Key,
+                        ETag       = s3Object.ETag,
+                        ImportedAt = DateTime.UtcNow,
+                    });
+                    try
+                    {
+                        await _db.SaveChangesAsync(ct);
+                    }
+                    catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
+                    {
+                        _db.ChangeTracker.Clear();
+                        _logger.LogInformation(
+                            "S3 ingress: org {OrgId} — key={Key} claimed concurrently (unique violation); skipping duplicate import.",
+                            organisationId, s3Object.Key);
+                        continue;
+                    }
+                }
+                else
+                {
+                    // Object was re-uploaded (ETag changed) — claim it with an ATOMIC conditional
+                    // update guarded by the OLD ETag. Two concurrent polls of the same re-upload
+                    // both read the old ETag; only the one whose UPDATE ... WHERE etag = old affects
+                    // a row (rows == 1) proceeds — the loser (rows == 0) skips. This closes the
+                    // re-upload duplicate that the unique index (key-only) cannot. Npgsql-only, like
+                    // the atomic claims elsewhere in the codebase.
+                    var claimed = await _db.Set<ImportedS3Object>()
+                        .Where(f => f.OrgId == organisationId
+                                 && f.BucketName == config.BucketName
+                                 && f.ObjectKey == s3Object.Key
+                                 && f.ETag == existing.ETag)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(f => f.ETag, s3Object.ETag)
+                            .SetProperty(f => f.ImportedAt, DateTime.UtcNow), ct);
+                    if (claimed == 0)
+                    {
+                        _logger.LogInformation(
+                            "S3 ingress: org {OrgId} — re-upload of key={Key} claimed concurrently; skipping duplicate import.",
+                            organisationId, s3Object.Key);
+                        continue;
+                    }
+                }
+
                 // Routed when a valid default supplier exists; UNROUTED hold otherwise —
                 // same creation path browser upload and inbound email use for supplier-less files.
                 var stubResult = supplierId is { } routedSupplierId
@@ -270,37 +328,15 @@ public sealed class S3IngressService : IS3IngressService
 
                 if (!stubResult.IsSuccess)
                 {
+                    // The claim is already committed. A stub failure here is either a permanently bad
+                    // object (empty / unsupported content) or a transient infra error; in both cases
+                    // we deliberately leave the claim in place so the object is treated as SEEN and
+                    // never re-imported as a duplicate — the guaranteed-no-duplicate trade the fix makes.
                     _logger.LogWarning(
-                        "S3 ingress: org {OrgId} — {Mode} order stub creation failed for key={Key}: {Error}",
+                        "S3 ingress: org {OrgId} — {Mode} order stub creation failed for key={Key} after claim: {Error}",
                         organisationId, supplierId is null ? "unrouted" : "routed", s3Object.Key, stubResult.Error);
                     continue;
                 }
-
-                // ── record import ────────────────────────────────────────────
-                if (existing is not null)
-                {
-                    // Object was re-uploaded (ETag changed) — update the record.
-                    var tracked = await _db.Set<ImportedS3Object>()
-                        .FirstAsync(f => f.OrgId == organisationId
-                                      && f.BucketName == config.BucketName
-                                      && f.ObjectKey == s3Object.Key, ct);
-                    tracked.ETag = s3Object.ETag;
-                    tracked.ImportedAt = DateTime.UtcNow;
-                }
-                else
-                {
-                    _db.Set<ImportedS3Object>().Add(new ImportedS3Object
-                    {
-                        Id         = Guid.NewGuid(),
-                        OrgId      = organisationId,
-                        BucketName = config.BucketName,
-                        ObjectKey  = s3Object.Key,
-                        ETag       = s3Object.ETag,
-                        ImportedAt = DateTime.UtcNow,
-                    });
-                }
-
-                await _db.SaveChangesAsync(ct);
 
                 await _parseJobEnqueuer.EnqueueAsync(stubResult.Value!.Id, organisationId, ct);
                 imported++;

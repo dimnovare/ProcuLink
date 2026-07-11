@@ -14,6 +14,7 @@ using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Worker.Jobs;
@@ -71,6 +72,10 @@ public sealed class EmailPollOrgJob
     /// </summary>
     [Queue("polling")]
     [AutomaticRetry(Attempts = 2)]
+    // Per-org lock: DisableConcurrentExecution keys on the method + args, and this child takes
+    // orgId as its argument, so two IMAP polls for the SAME org can never overlap. With the
+    // claim-first ledger insert in ProcessMessageAsync this closes the concurrent-duplicate window.
+    [DisableConcurrentExecution(300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
         // Re-read config inside the child job so the child is self-contained.
@@ -260,6 +265,40 @@ public sealed class EmailPollOrgJob
                 continue;
             }
 
+            // ── CLAIM-FIRST (idempotency) ────────────────────────────────────────────────────
+            // Insert + commit the (OrgId, ImapMessageId, AttachmentHash) ledger row BEFORE creating
+            // the order stub. The message is flagged SEEN only after the whole loop, so a crash /
+            // Hangfire retry re-presents this unseen message; and two concurrent polls of the same
+            // mailbox both pass the AnyAsync fast-path above. The unique index is the real guard —
+            // the retry / losing poll hits a 23505 here and skips WITHOUT creating a duplicate order.
+            // OrderId is a sentinel (Guid.Empty) at claim time and is backfilled once the stub exists.
+            var record = new EmailImportRecord
+            {
+                Id             = Guid.NewGuid(),
+                OrgId          = orgId,
+                ImapMessageId  = messageId,
+                AttachmentHash = attachmentHash,
+                OrderId        = Guid.Empty,
+                FileName       = fileName,
+                ImportedAt     = DateTime.UtcNow,
+            };
+            _db.EmailImportRecords.Add(record);
+            try
+            {
+                await _db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
+            {
+                // A concurrent poll or a job retry already claimed this exact attachment. The other
+                // run owns the canonical order stub; do not create a duplicate order or parse job.
+                _db.Entry(record).State = EntityState.Detached;
+                _logger.LogInformation(
+                    "EmailPollOrgJob: attachment {FileName} for org {OrgId} claimed concurrently (message {MessageId}); skipping duplicate.",
+                    fileName, orgId, messageId);
+                processedAny = true;
+                continue;
+            }
+
             stream.Position = 0;
 
             var contentType = string.IsNullOrWhiteSpace(part.ContentType.MimeType)
@@ -273,43 +312,19 @@ public sealed class EmailPollOrgJob
                 : await _orders.CreateUnroutedStubAsync(orgId, stream, fileName, contentType, ct);
             if (!result.IsSuccess)
             {
+                // The claim is already committed. A stub failure here (permanently bad attachment or a
+                // transient infra error) deliberately leaves the claim in place so the attachment is
+                // treated as SEEN and never re-imported as a duplicate — the no-duplicate trade the fix makes.
                 _logger.LogWarning(
-                    "EmailPollOrgJob: {Mode} order stub creation failed for attachment {FileName} (org {OrgId}): {Error}",
+                    "EmailPollOrgJob: {Mode} order stub creation failed for attachment {FileName} (org {OrgId}) after claim: {Error}",
                     supplierId is null ? "unrouted" : "routed", fileName, orgId, result.Error);
                 continue;
             }
 
-            // Record the import BEFORE enqueuing the parse job. The unique index on
-            // (OrgId, ImapMessageId, AttachmentHash) wins the race between two concurrent polls of
-            // the same mailbox: the loser's insert throws and we treat the attachment as already
-            // imported (its order stub from the winner is the canonical one).
-            var record = new EmailImportRecord
-            {
-                Id             = Guid.NewGuid(),
-                OrgId          = orgId,
-                ImapMessageId  = messageId,
-                AttachmentHash = attachmentHash,
-                OrderId        = result.Value!.Id,
-                FileName       = fileName,
-                ImportedAt     = DateTime.UtcNow,
-            };
-            _db.EmailImportRecords.Add(record);
-
-            try
-            {
-                await _db.SaveChangesAsync(ct);
-            }
-            catch (DbUpdateException)
-            {
-                // A concurrent poll already imported this exact attachment (unique-index violation).
-                // The other poll owns the canonical order stub; do not enqueue a second parse job.
-                _logger.LogInformation(
-                    "EmailPollOrgJob: attachment {FileName} for org {OrgId} imported concurrently (message {MessageId}); skipping duplicate parse.",
-                    fileName, orgId, messageId);
-                _db.Entry(record).State = EntityState.Detached;
-                processedAny = true;
-                continue;
-            }
+            // Backfill the claim's order id now that the stub exists (traceability only; dedupe
+            // relies on the unique index, not this column).
+            record.OrderId = result.Value!.Id;
+            await _db.SaveChangesAsync(ct);
 
             ParseOrderJob.Enqueue(_jobs, result.Value!.Id, orgId);
             processedAny = true;

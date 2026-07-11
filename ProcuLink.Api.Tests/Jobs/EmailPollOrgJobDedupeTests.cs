@@ -117,6 +117,46 @@ public class EmailPollOrgJobDedupeTests
     }
 
     [Fact]
+    public async Task ClaimLedgerRowIsCommittedBeforeCreateStub_AndOrderIdBackfilled()
+    {
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var stubId = Guid.NewGuid();
+        var bytes = Encoding.UTF8.GetBytes("po,qty\r\nCLAIM,1\r\n");
+        var message = MessageWithCsvAttachment("<claim-first@x>", "po.csv", bytes);
+
+        var presentAtStubTime = false;
+        var orders = new Mock<IOrderService>();
+        orders
+            .Setup(o => o.CreateStubAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            // At the instant the stub is created, the claim ledger row must already be committed.
+            .Callback(() => presentAtStubTime = db.EmailImportRecords.Any(r => r.OrgId == orgId))
+            .ReturnsAsync(() => Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
+            {
+                Id = stubId, OrgId = orgId, SupplierId = supplierId,
+                PoNumber = "PO-CLAIM", Currency = "EUR", Status = "parsing",
+            }));
+
+        var job = new EmailPollOrgJob(
+            db, Enc(), orders.Object, new Mock<IBackgroundJobClient>().Object,
+            new Mock<IBillingService>().Object, new Mock<IEmailSettingsService>().Object,
+            Guard(), NullLogger<EmailPollOrgJob>.Instance);
+
+        (await job.ProcessMessageAsync(orgId, supplierId, message, CancellationToken.None)).Should().BeTrue();
+
+        presentAtStubTime.Should().BeTrue(
+            "claim-first: the (OrgId, ImapMessageId, AttachmentHash) ledger row must be committed BEFORE " +
+            "CreateStubAsync so a retry or concurrent poll cannot create a duplicate order");
+
+        var record = await db.EmailImportRecords.AsNoTracking().SingleAsync(r => r.OrgId == orgId);
+        record.OrderId.Should().Be(stubId,
+            "the claim's order id must be backfilled to the created stub after a successful import");
+    }
+
+    [Fact]
     public async Task DifferentAttachmentContent_SameMessageId_BothImported()
     {
         await using var db = NewDb();

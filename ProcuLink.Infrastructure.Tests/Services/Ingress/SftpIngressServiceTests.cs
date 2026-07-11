@@ -295,6 +295,35 @@ public class SftpIngressServiceTests
         dedupe!.FileHash.Should().NotBeNullOrEmpty("SHA-256 hash must be stored");
     }
 
+    // ── Claim-first: the dedupe ledger row is committed BEFORE CreateStubAsync ──
+    // Regression guard for the duplicate-PO reliability class. The old order was
+    // CreateStub (self-commits the order + fires order.created) THEN write the ledger row,
+    // so a Hangfire retry / concurrent same-org poll landing in that window re-imported the
+    // file as a DUPLICATE order. Claim-first inverts it: the ledger row is the FIRST durable
+    // write. This probe asserts the ledger row is already committed at the instant
+    // CreateStubAsync is invoked.
+
+    [Fact]
+    public async Task NewFile_LedgerClaimIsCommittedBeforeCreateStub()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(db, orgId, isEnabled: true);
+
+        const string remotePath = "/incoming/po-claim-first.csv";
+        var fakeSftp = new SingleFileFakeSftpFactory(remotePath, "header1,header2\r\nval1,val2"u8.ToArray());
+        var probe = new LedgerProbingOrderService(db);
+        var svc = MakeService(db, probe, fakeSftp);
+
+        var result = await svc.PollAsync(orgId, default);
+
+        result.Should().Be(1);
+        probe.CreateStubCalls.Should().Be(1);
+        probe.LedgerRowPresentAtStubTime.Should().BeTrue(
+            "claim-first: the (OrgId, RemotePath) dedupe ledger row must be committed BEFORE CreateStubAsync " +
+            "so a retry or concurrent same-org poll cannot create a duplicate order");
+    }
+
     // ── LIVE: real SFTP poll against a real SFTP server ──────────────────────
     // Gated behind PROCULINK_LIVE_ENDPOINT_TESTS=1; connects to a real SFTP
     // server (env PROCULINK_LIVE_SFTP_*) with the PRODUCTION RenciSftpClientFactory,
@@ -615,6 +644,74 @@ public class SftpIngressServiceTests
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
             Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException("NoOpOrderService must not be called.");
+
+        public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid o, Guid s, Stream f, string fn, string ct2, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid o, Guid s, ExtractedOrder order, string source, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid o, Guid id, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid o, Guid id, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(Guid o, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(Guid organisationId, int page, int pageSize, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(Guid organisationId, int skip, int take, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<TransformResponse>> TransformAsync(Guid o, Guid id, OutputFormat fmt, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<DownloadUrl>> GetDownloadUrlAsync(Guid o, Guid id, Guid aid, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<PurchaseOrderEntity>> ResolveAsync(Guid o, Guid id, IReadOnlyList<LineResolution> r, bool s, CancellationToken ct, ResolveHeaderFields? header = null)
+            => throw new NotImplementedException();
+        public Task<Result<int>> AcceptAiSuggestionsAsync(Guid o, Guid id, double minConfidence, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<PurchaseOrderEntity>> MarkRejectedAsync(Guid organisationId, Guid orderId, string reason, CancellationToken ct)
+            => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Order service double that, at the moment CreateStub/CreateUnroutedStub is invoked,
+    /// records whether an <see cref="ImportedSftpFile"/> row for the org is already committed.
+    /// Proves the claim-first ordering (ledger committed BEFORE order creation).
+    /// </summary>
+    private sealed class LedgerProbingOrderService : IOrderService
+    {
+        private readonly ProcuLinkDbContext _db;
+        public LedgerProbingOrderService(ProcuLinkDbContext db) => _db = db;
+
+        public int CreateStubCalls { get; private set; }
+        public bool? LedgerRowPresentAtStubTime { get; private set; }
+
+        private void Probe(Guid orgId)
+        {
+            CreateStubCalls++;
+            LedgerRowPresentAtStubTime = _db.Set<ImportedSftpFile>().Any(f => f.OrgId == orgId);
+        }
+
+        public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
+            Guid organisationId, Guid supplierId, Stream fileStream,
+            string filename, string contentType, CancellationToken ct)
+        {
+            Probe(organisationId);
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
+            {
+                Id = Guid.NewGuid(), OrgId = organisationId, SupplierId = supplierId, Status = "parsing",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            }));
+        }
+
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
+            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+        {
+            Probe(organisationId);
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
+            {
+                Id = Guid.NewGuid(), OrgId = organisationId, SupplierId = null, Status = "parsing",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            }));
+        }
 
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid o, Guid s, Stream f, string fn, string ct2, CancellationToken ct)
             => throw new NotImplementedException();

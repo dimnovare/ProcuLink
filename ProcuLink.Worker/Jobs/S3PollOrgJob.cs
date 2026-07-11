@@ -22,6 +22,10 @@ public sealed class S3PollOrgJob
 
     [Queue("polling")]
     [AutomaticRetry(Attempts = 2)]
+    // Per-org lock: DisableConcurrentExecution keys on the method + args, and this child takes
+    // orgId as its argument, so two S3/R2 polls for the SAME org can never overlap. With the
+    // claim-first ledger insert in S3IngressService this closes the concurrent-duplicate window.
+    [DisableConcurrentExecution(300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
         _logger.LogInformation("S3PollOrgJob: starting S3/R2 poll for org {OrgId}.", orgId);

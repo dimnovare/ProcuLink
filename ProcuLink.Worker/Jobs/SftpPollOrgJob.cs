@@ -22,6 +22,10 @@ public sealed class SftpPollOrgJob
 
     [Queue("polling")]
     [AutomaticRetry(Attempts = 2)]
+    // Per-org lock: DisableConcurrentExecution keys on the method + args, and this child takes
+    // orgId as its argument, so two SFTP polls for the SAME org can never overlap. With the
+    // claim-first ledger insert in SftpIngressService this closes the concurrent-duplicate window.
+    [DisableConcurrentExecution(300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
         _logger.LogInformation("SftpPollOrgJob: starting SFTP poll for org {OrgId}.", orgId);

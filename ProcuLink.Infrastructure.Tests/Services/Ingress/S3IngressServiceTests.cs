@@ -414,6 +414,42 @@ public class S3IngressServiceTests
         imported.Select(x => x.BucketName).Should().AllBe("my-bucket");
     }
 
+    // ── Claim-first: the ImportedS3Object row is committed BEFORE CreateStubAsync ──
+    // Regression guard for the duplicate-PO reliability class. The old order was
+    // CreateStub (self-commits the order + fires order.created) THEN write the processed-object
+    // row, so a Hangfire retry / concurrent same-org poll landing in that window re-imported the
+    // object as a DUPLICATE order. Claim-first inverts it: the ledger row is the FIRST durable
+    // write. This probe asserts the ledger row is already committed at the instant
+    // CreateStubAsync is invoked.
+
+    [Fact]
+    public async Task NewObject_LedgerClaimIsCommittedBeforeCreateStub()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedConfigAsync(db, isEnabled: true, bucket: "my-bucket");
+
+        var s3 = new Mock<IAmazonS3>(MockBehavior.Loose);
+        s3.Setup(c => c.ListObjectsV2Async(It.IsAny<ListObjectsV2Request>(), It.IsAny<CancellationToken>()))
+          .ReturnsAsync(new ListObjectsV2Response
+          {
+              S3Objects = new List<S3Object> { new() { Key = "incoming/claim-first.csv", ETag = "\"cf-etag\"" } },
+              IsTruncated = false,
+          });
+        s3.Setup(c => c.GetObjectAsync("my-bucket", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+          .ReturnsAsync(() => new GetObjectResponse { ResponseStream = new MemoryStream(new byte[] { 1, 2, 3 }) });
+
+        var probe = new LedgerProbingOrderService(db);
+        var svc = MakeService(db, s3.Object, probe);
+
+        var count = await svc.PollAsync(orgId, CancellationToken.None);
+
+        count.Should().Be(1);
+        probe.CreateStubCalls.Should().Be(1);
+        probe.LedgerRowPresentAtStubTime.Should().BeTrue(
+            "claim-first: the (OrgId, BucketName, ObjectKey) processed-object row must be committed BEFORE " +
+            "CreateStubAsync so a retry or concurrent same-org poll cannot create a duplicate order");
+    }
+
     // ── LIVE: real S3/R2 poll against a real bucket ──────────────────────────
     // Gated behind PROCULINK_LIVE_ENDPOINT_TESTS=1; connects to a real
     // S3-compatible bucket (env PROCULINK_LIVE_S3_*) with the PRODUCTION
@@ -632,6 +668,74 @@ public class S3IngressServiceTests
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Order service double that, at the moment CreateStub/CreateUnroutedStub is invoked,
+    /// records whether an <see cref="ImportedS3Object"/> row for the org is already committed.
+    /// Proves the claim-first ordering (ledger committed BEFORE order creation).
+    /// </summary>
+    private sealed class LedgerProbingOrderService : IOrderService
+    {
+        private readonly ProcuLinkDbContext _db;
+        public LedgerProbingOrderService(ProcuLinkDbContext db) => _db = db;
+
+        public int CreateStubCalls { get; private set; }
+        public bool? LedgerRowPresentAtStubTime { get; private set; }
+
+        private void Probe(Guid orgId)
+        {
+            CreateStubCalls++;
+            LedgerRowPresentAtStubTime = _db.Set<ImportedS3Object>().Any(f => f.OrgId == orgId);
+        }
+
+        public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
+            Guid organisationId, Guid supplierId, Stream fileStream,
+            string filename, string contentType, CancellationToken ct)
+        {
+            Probe(organisationId);
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
+            {
+                Id = Guid.NewGuid(), OrgId = organisationId, SupplierId = supplierId, Status = "parsing",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            }));
+        }
+
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
+            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+        {
+            Probe(organisationId);
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
+            {
+                Id = Guid.NewGuid(), OrgId = organisationId, SupplierId = null, Status = "parsing",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            }));
+        }
+
+        public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid organisationId, Guid orderId, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid organisationId, Guid orderId, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(Guid organisationId, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(Guid organisationId, int page, int pageSize, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(Guid organisationId, int skip, int take, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<TransformResponse>> TransformAsync(Guid organisationId, Guid orderId, OutputFormat format, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<DownloadUrl>> GetDownloadUrlAsync(Guid organisationId, Guid orderId, Guid artifactId, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<PurchaseOrderEntity>> ResolveAsync(Guid organisationId, Guid orderId, IReadOnlyList<LineResolution> resolutions, bool saveMappings, CancellationToken ct, ResolveHeaderFields? header = null)
+            => throw new NotImplementedException();
+        public Task<Result<int>> AcceptAiSuggestionsAsync(Guid organisationId, Guid orderId, double minConfidence, CancellationToken ct)
+            => throw new NotImplementedException();
+        public Task<Result<PurchaseOrderEntity>> MarkRejectedAsync(Guid organisationId, Guid orderId, string reason, CancellationToken ct)
+            => throw new NotImplementedException();
     }
 
     private sealed class FakeOrderService : IOrderService
