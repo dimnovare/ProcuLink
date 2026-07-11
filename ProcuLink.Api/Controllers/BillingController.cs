@@ -379,6 +379,11 @@ public sealed class BillingController : ControllerBase
         org.AccountStatus = AccountStatusConstants.ReadOnly;
         org.StripeSubscriptionId = null;
         org.StripeSubscriptionStatus = "canceled";
+        // Clear any reconcile-404 grace marker in lock-step with nulling the subscription id
+        // (matches the reconciliation DowngradeAsync path). Leaving it set would create a
+        // "phantom" org — no subscription id yet a stale past-grace flag — that the mass-
+        // downgrade circuit breaker's numerator would keep counting every run.
+        org.StripeReconciliationMissingSince = null;
         org.BillingUpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 

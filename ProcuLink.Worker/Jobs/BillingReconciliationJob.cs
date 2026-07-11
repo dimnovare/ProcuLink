@@ -73,19 +73,28 @@ public sealed class BillingReconciliationJob
         var now = DateTime.UtcNow;
 
         // The population reconciled this run = every org carrying a Stripe subscription id.
-        // Computed up front so it doubles as the RELATIVE breaker's denominator below (a
-        // past-grace org always still has its subscription id — it is cleared only on the
-        // downgrade this breaker gates — so past-grace ⊆ this set and the fraction ≤ 1).
+        // Computed up front so it doubles as the RELATIVE breaker's denominator below; the
+        // past-grace numerator is filtered on the SAME subscription-id predicate, so past-grace
+        // ⊆ this set and the fraction ≤ 1 by construction.
         var ids = await _db.Organisations
             .AsNoTracking()
             .Where(o => o.StripeSubscriptionId != null && o.StripeSubscriptionId != "")
             .Select(o => o.Id)
             .ToListAsync(ct);
 
+        // Past-grace numerator for the RELATIVE breaker. It MUST carry the same subscription-id
+        // predicate as the denominator (ids) so it is a strict SUBSET and the fraction can never
+        // exceed 1. Without it a "phantom" org — one a reconcile-404 marked missing, then a
+        // late/missed customer.subscription.deleted downgraded (nulling the subscription id) —
+        // would be counted here yet absent from ids, letting a few phantoms trip the breaker
+        // every run and silently disable the reconciliation backstop. (The delete webhook now
+        // also clears the marker, so this predicate is belt-and-suspenders against any
+        // residual/legacy phantom rows.)
         var pastGraceCount = await _db.Organisations
             .AsNoTracking()
             .CountAsync(o => o.StripeReconciliationMissingSince != null
-                          && o.StripeReconciliationMissingSince <= now - StripeSubscriptionReconciliationService.GracePeriod, ct);
+                          && o.StripeReconciliationMissingSince <= now - StripeSubscriptionReconciliationService.GracePeriod
+                          && o.StripeSubscriptionId != null && o.StripeSubscriptionId != "", ct);
 
         var absoluteThreshold = _config.GetValue<int?>("Billing:ReconciliationMassDowngradeThreshold") ?? DefaultMassDowngradeThreshold;
         var floor             = _config.GetValue<int?>("Billing:ReconciliationMassDowngradeFloor")     ?? DefaultMassDowngradeFloor;

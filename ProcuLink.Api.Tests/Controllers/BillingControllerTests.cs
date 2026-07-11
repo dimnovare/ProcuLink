@@ -372,6 +372,39 @@ public class BillingControllerTests
     }
 
     [Fact]
+    public async Task HandleSubscriptionDeleted_ClearsStripeReconciliationMissingSince_NoPhantomFlag()
+    {
+        // A webhook-driven cancellation that nulls StripeSubscriptionId must ALSO clear
+        // StripeReconciliationMissingSince (matching the reconciliation DowngradeAsync path).
+        // Otherwise the org becomes a "phantom": no subscription id, yet a stale past-grace
+        // marker that the mass-downgrade circuit breaker keeps counting every run.
+        var (ctrl, _, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id                               = orgId,
+            Plan                             = PlanConstants.Growth,
+            AccountStatus                    = AccountStatusConstants.Active,
+            StripeCustomerId                 = "cus_phantom_clear",
+            StripeSubscriptionId             = "sub_phantom_clear",
+            StripeReconciliationMissingSince = DateTime.UtcNow.AddDays(-2), // a prior reconcile-404 grace flag
+            ClerkOrgId                       = "org_phantom_clear",
+            Name                             = "Phantom Clear Org",
+            Slug                             = "phantom-clear-org",
+        });
+        await db.SaveChangesAsync();
+
+        var sub = new Stripe.Subscription { Id = "sub_phantom_clear", CustomerId = "cus_phantom_clear" };
+
+        await ctrl.HandleSubscriptionDeletedAsync(sub, CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+        updated!.StripeSubscriptionId.Should().BeNull("the cancellation nulls the subscription id");
+        updated.StripeReconciliationMissingSince.Should().BeNull(
+            "a webhook cancellation must clear the reconcile grace flag too, so it never leaves a phantom counted by the mass-downgrade breaker");
+    }
+
+    [Fact]
     public async Task HandleCheckoutCompleted_WithOperationsPlanMetadata_UpgradesToOperationsPlan()
     {
         // Verifies that a checkout session with "plan"="operations" in the metadata

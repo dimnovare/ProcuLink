@@ -181,6 +181,31 @@ public class BillingReconciliationJobTests
     }
 
     [Fact]
+    public async Task CircuitBreaker_Relative_PhantomPastGraceOrgs_NotCountedInNumerator_HealthyBaseProceeds()
+    {
+        var db = MakeDb();
+        var pastGrace = DateTime.UtcNow.AddDays(-4);
+        // Phantom orgs: a reconcile-404 set StripeReconciliationMissingSince, then a late/missed
+        // customer.subscription.deleted downgraded the org — nulling StripeSubscriptionId but
+        // (historically) leaving the missing marker set forever. They have NO subscription id, so
+        // they are ABSENT from the reconcile population (ids) and must NOT count toward the
+        // relative breaker's numerator. If they did, a handful of phantoms would trip the breaker
+        // every run and silently disable the reconciliation backstop for a healthy base.
+        for (var i = 0; i < 4; i++)
+            db.Organisations.Add(Org(subId: null, missingSince: pastGrace)); // phantom: no sub id, stale flag
+        // A healthy small subscribed base, none past grace — must be reconciled normally.
+        var healthy = new[] { Org("sub_h0"), Org("sub_h1"), Org("sub_h2"), Org("sub_h3") };
+        db.Organisations.AddRange(healthy);
+        await db.SaveChangesAsync();
+        var reconciler = new RecordingReconciler();
+
+        await Job(db, reconciler, Config()).ExecuteAsync(CancellationToken.None);
+
+        reconciler.Reconciled.Should().BeEquivalentTo(healthy.Select(o => o.Id),
+            "phantom orgs (missing-since set but no subscription id) must not inflate the relative breaker numerator and wedge a healthy base");
+    }
+
+    [Fact]
     public async Task CircuitBreaker_Absolute_LargeBaseAllPastGrace_StillAborts()
     {
         var db = MakeDb();
