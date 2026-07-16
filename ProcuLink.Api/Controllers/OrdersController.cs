@@ -343,7 +343,12 @@ public sealed class OrdersController : ControllerBase
         var entity = result.Value!;
         string? errorMessage = null;
 
-        if (entity.Status is "failed" or "transform_failed" or "delivery_failed" or "rejected_by_supplier" or "delivery_dead_letter")
+        // delivery_unconfirmed included: a parked order must surface its explanation ("we sent this
+        // but never learned whether it arrived — send again or mark delivered"), or the operator
+        // gets a status with no sentence and no guidance.
+        if (entity.Status is "failed" or "transform_failed" or "delivery_failed"
+                          or "rejected_by_supplier" or "delivery_dead_letter"
+                          or OrderStatusConstants.DeliveryUnconfirmed)
         {
             var payload = await _db.AuditEvents
                 .AsNoTracking()
@@ -372,7 +377,11 @@ public sealed class OrdersController : ControllerBase
                 catch { /* malformed payload — ignore */ }
             }
 
-            if (errorMessage is null && entity.Status is "delivery_failed" or "delivery_dead_letter")
+            // The branch that actually carries the park sentence: ParkUnconfirmedAsync writes it to
+            // attempt.ErrorMessage, while its DeliveryUnconfirmed audit payload uses "detail" — a key
+            // the block above never looks for — so this fallback is the only path that reaches it.
+            if (errorMessage is null && entity.Status is "delivery_failed" or "delivery_dead_letter"
+                                                      or OrderStatusConstants.DeliveryUnconfirmed)
             {
                 errorMessage = await _db.DeliveryAttempts
                     .AsNoTracking()
