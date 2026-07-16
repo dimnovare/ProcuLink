@@ -8,6 +8,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using Testcontainers.PostgreSql;
@@ -27,6 +28,9 @@ namespace ProcuLink.Api.Tests.Integration;
 /// <item><b>B2</b> — the ops requeue-delivery escalation on a dead-lettered order leaves it in a
 /// CLAIMABLE status with the attempt cap reset, so the re-enqueued <c>DeliverOrderJob</c>'s claim
 /// SUCCEEDS and actually dispatches (not the benign no-op the old fresh-'delivering' pre-flip produced).</item>
+/// <item><b>B3</b> — the operator <c>retry-delivery</c> endpoint (the same pre-flip, missed when B2 was
+/// fixed) leaves the order CLAIMABLE, so the enqueued <c>RetryDeliveryJob</c>'s claim SUCCEEDS on its
+/// FIRST run and dispatches immediately — not after the ~30-minute backoff the pre-flip forced.</item>
 /// </list>
 /// Docker-gated; skips where Docker is absent.
 /// </summary>
@@ -189,6 +193,84 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
         await using (var verify = NewContext())
         {
             // Attempts were reset, so only the single new success attempt is on record.
+            var attempts = await verify.DeliveryAttempts.AsNoTracking()
+                .Where(a => a.OrderId == ids.OrderId && a.OrgId == ids.OrgId).ToListAsync();
+            Assert.Equal("success", Assert.Single(attempts).Status);
+            var status = await verify.PurchaseOrders.AsNoTracking()
+                .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
+            Assert.Equal(OrderStatusConstants.Delivered, status);
+        }
+    }
+
+    // ── B3: operator retry-delivery → claim SUCCEEDS immediately (no ~30-min dead window) ──────
+
+    [DockerRequiredFact]
+    public async Task B3_OperatorRetryDelivery_LeavesClaimableStatus_ClaimSucceedsImmediately_Dispatches()
+    {
+        var encryption = CreateEncryption();
+        // A JUST-failed order (UpdatedAt = now) — the real "Retry now" scenario and the strictest case:
+        // nothing here is stale, so ONLY a claimable idle status can carry the claim.
+        var ids = await SeedDeliverableOrderAsync(
+            encryption, status: OrderStatusConstants.DeliveryFailed, agedMinutes: 0);
+
+        // Drive the REAL OrdersController.RetryDelivery against Postgres.
+        await using (var db = NewContext())
+        {
+            var orderForValidation = await db.PurchaseOrders.AsNoTracking()
+                .Include(o => o.OutboundArtifacts)
+                .FirstAsync(o => o.Id == ids.OrderId);
+
+            var tenant = new Mock<ICurrentTenantService>();
+            tenant.SetupGet(t => t.OrganisationId).Returns(ids.OrgId);
+            var orders = new Mock<IOrderService>();
+            orders.Setup(o => o.GetByIdAsync(ids.OrgId, ids.OrderId, It.IsAny<CancellationToken>()))
+                  .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(orderForValidation));
+            var jobs = new Mock<Hangfire.IBackgroundJobClient>();
+            jobs.Setup(j => j.Create(It.IsAny<Hangfire.Common.Job>(), It.IsAny<Hangfire.States.IState>()))
+                .Returns(Guid.NewGuid().ToString());
+
+            var ctrl = new OrdersController(
+                orders.Object, tenant.Object, jobs.Object, db,
+                NullLogger<OrdersController>.Instance,
+                new Mock<IBillingService>().Object,
+                new Mock<IIdempotencyService>().Object,
+                new Mock<IOrderExceptionService>().Object,
+                new Mock<ISupplierAcceptanceService>().Object,
+                new Mock<IOrderMappingOverrideService>().Object,
+                new Mock<IPromoteMappingService>().Object,
+                new Mock<IFileStorageService>().Object,
+                new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
+                Array.Empty<ITransformService>());
+
+            var result = await ctrl.RetryDelivery(ids.OrderId, CancellationToken.None);
+            Assert.IsType<Microsoft.AspNetCore.Mvc.AcceptedResult>(result);
+        }
+
+        // Post-retry state: NOT the claim-defeating fresh 'delivering' — still the claimable idle status.
+        await using (var verify = NewContext())
+        {
+            var status = await verify.PurchaseOrders.AsNoTracking()
+                .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
+            Assert.NotEqual(OrderStatusConstants.Delivering, status);
+            Assert.Equal(OrderStatusConstants.DeliveryFailed, status);
+        }
+
+        // Simulate the enqueued RetryDeliveryJob running NOW (not after a ~30-min backoff): the claim
+        // must SUCCEED and dispatch. Under the OLD pre-flip this returned Success=false / "already in
+        // progress" and dispatcher.Calls would be 0 — the operator's click sent nothing for half an hour.
+        var dispatcher = new CountingDispatcher();
+        await using (var db = NewContext())
+        {
+            var svc = BuildService(db, dispatcher, encryption);
+            var result = await svc.RetryDeliveryAsync(
+                ids.OrgId, ids.OrderId,
+                ProcuLink.Infrastructure.Jobs.RetryDeliveryJob.MaxAttempts, CancellationToken.None);
+            Assert.True(result.Success, $"retry claim must succeed immediately; got: {result.ErrorMessage}");
+        }
+
+        Assert.Equal(1, dispatcher.Calls); // claim SUCCEEDED → dispatched now (not a no-op)
+        await using (var verify = NewContext())
+        {
             var attempts = await verify.DeliveryAttempts.AsNoTracking()
                 .Where(a => a.OrderId == ids.OrderId && a.OrgId == ids.OrgId).ToListAsync();
             Assert.Equal("success", Assert.Single(attempts).Status);
