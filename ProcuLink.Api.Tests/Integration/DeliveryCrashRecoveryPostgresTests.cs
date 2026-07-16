@@ -18,9 +18,18 @@ namespace ProcuLink.Api.Tests.Integration;
 /// order stuck in <c>delivering</c> (its <c>UpdatedAt</c> aged past the reclaim window, exactly as
 /// <c>StuckDeliveryDetectionService</c> would re-drive it) with a committed but never-finalised
 /// <c>dispatching</c> attempt row — the marker written just BEFORE the supplier ACK that the crash
-/// lost. The stuck re-drive must RE-ADOPT that in-flight row (re-send with the SAME idempotency key,
-/// which a supporting supplier de-duplicates) and finalise it — never manufacture a SECOND terminal
-/// attempt or a second delivery.
+/// lost. The stuck re-drive must RE-ADOPT that in-flight row and finalise it — never manufacture a
+/// SECOND terminal attempt row.
+///
+/// <para>READ THIS BEFORE TRUSTING THE NAME: the re-drive DOES send to the supplier again — this
+/// test asserts that it does (<c>dispatcher.Calls == 1</c> on the re-drive). What it pins is that
+/// the second WIRE SEND carries the SAME deterministic idempotency key and collapses back into the
+/// one in-flight row, so it can never become a second terminal attempt or a second billable
+/// delivery record. It does NOT establish that the SUPPLIER receives the PO only once: nothing here
+/// can distinguish "crashed before the send" from "supplier already ACKed", so delivery is
+/// AT-LEAST-ONCE and duplicate-order suppression rests on the supplier honouring the idempotency key
+/// (http), an overwriting upload (sftp/ftps), or the receiving MTA (email). The erp_* channels have
+/// no such mitigation. A green test here is NOT duplicate-PO safety.</para>
 ///
 /// <para>The stale-<c>delivering</c> reclaim is an atomic guarded <c>ExecuteUpdateAsync</c> that is
 /// untranslatable on EF InMemory, so this real-Postgres test is the one that exercises the actual
@@ -70,7 +79,7 @@ public sealed class DeliveryCrashRecoveryPostgresTests : IAsyncLifetime
     private ProcuLinkDbContext NewContext() => new(_options!);
 
     [DockerRequiredFact]
-    public async Task StuckDeliveringWithInFlightAttempt_ReDrive_ReAdoptsRow_NoSecondDelivery()
+    public async Task StuckDeliveringWithInFlightAttempt_ReDrive_ReAdoptsRow_NoSecondAttemptRow()
     {
         var encryption = CreateEncryption();
         var ids = await SeedStuckDeliveringOrderAsync(encryption);

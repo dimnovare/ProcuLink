@@ -44,6 +44,16 @@ public class DeliverOrderJob
     // A Hangfire-level retry would re-dispatch on top of that queue (double-delivery risk)
     // and double-count attempts past the dead-letter cap.
     //
+    // Attempts = 0 does NOT make this job run-once. It governs only the exception -> FailedState
+    // transition; process DEATH throws no exception, so it is not the path it covers. A dead
+    // Worker's in-flight job stays invisible for Hangfire.PostgreSql's InvisibilityTimeout
+    // (default 30 min — Program.cs configures a bare UseNpgsqlConnection, so the default stands,
+    // non-sliding) and is then REFETCHED and re-executed. The per-order mutex below does not stop
+    // that either: the dead process released its lock. Re-dispatch after a crash is therefore
+    // expected and by design — delivery here is AT-LEAST-ONCE, and duplicate-ORDER suppression
+    // rests on the deterministic idempotency key the re-send carries (see DispatchArtifactAsync)
+    // plus supplier-side de-duplication, NOT on this attribute.
+    //
     // PerOrderDistributedMutex (D-1) serialises activations PER ORDER (storage-backed distributed
     // lock keyed on the orderId argument, index 0). Two DeliverOrderJob activations for the SAME
     // order — a double-clicked Redeliver, a Redeliver racing an ops Requeue — cannot run this body
