@@ -10,9 +10,13 @@ namespace ProcuLink.Worker.Jobs;
 /// TERMINAL orders older than each opted-in org's <c>retention_days</c> window; DB rows,
 /// hashes, provenance and audit trail always stay. TWO safety latches, both default OFF:
 /// per-org <c>retention_days</c> (NULL = disabled) and global <c>Retention:DryRun</c>
-/// (true = audit-only). Idempotent — purged blobs are flag-marked, so a re-run (or an
-/// overlapping run after a missed save) matches nothing already purged, and storage deletes
-/// are idempotent on a missing key. No automatic retry: the next daily run IS the retry.
+/// (true = audit-only). Idempotent — purged blobs are flag-marked, so a SEQUENTIAL re-run
+/// matches nothing already purged. A genuinely OVERLAPPING run is not excluded by that flag
+/// (both runs select before either marks), and is deliberately left unguarded: every racing
+/// effect is benign — storage deletes are idempotent on a missing key and the purge flag is a
+/// constant write, not an increment, so last-write-wins loses nothing. Worst case is one audit
+/// row's FilesDeleted stat double-counting a blob. No automatic retry: the next daily run IS
+/// the retry.
 /// </summary>
 public sealed class BlobRetentionSweepJob
 {

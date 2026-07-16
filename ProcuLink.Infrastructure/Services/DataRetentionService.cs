@@ -134,8 +134,11 @@ public class DataRetentionService : IDataRetentionService
 
     /// <summary>
     /// Deletes up to <paramref name="batchSize"/> rows matched by <paramref name="query"/> using a
-    /// single set-based <c>ExecuteDeleteAsync</c> (the rows are ordered by primary key only to
-    /// bound the batch deterministically). Returns the number of rows deleted.
+    /// single set-based <c>ExecuteDeleteAsync</c>. No ordering is applied — <c>ExecuteDelete</c>
+    /// does not accept one — so WHICH expired rows a batch takes is undefined; that is fine
+    /// because <paramref name="query"/> already narrows to rows past the retention window, so
+    /// every candidate is equally deletable and the remainder is taken by the next run.
+    /// Returns the number of rows deleted.
     /// <para>
     /// Overridable so InMemory-backed unit tests can substitute a tracked delete; production uses
     /// the real bulk delete and materialises nothing.
