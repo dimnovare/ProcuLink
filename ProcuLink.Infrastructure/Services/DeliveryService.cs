@@ -312,7 +312,18 @@ public sealed class DeliveryService : IDeliveryService
         // retry budget — and it carries the SAME idempotency key, which a supporting supplier
         // de-duplicates (HTTP header / email Message-ID; SFTP/FTPS overwrite the deterministic file).
         var idempotencyKey = BuildIdempotencyKey(order.Id, artifact.Id);
-        var attempt = await OpenDispatchAttemptAsync(order, artifact, config, idempotencyKey, ct);
+        var (attempt, reAdopted) = await OpenDispatchAttemptAsync(order, artifact, config, idempotencyKey, ct);
+
+        // ── The unknown-outcome park ──────────────────────────────────────────────
+        // A re-adopted in-flight row means the previous activation SENT this artifact and died
+        // before learning whether the supplier accepted it. On a channel that cannot de-duplicate
+        // (ERP: no dedupe signal reaches the endpoint; email: caller-supplied Message-ID dedup is
+        // best-effort), re-sending would hand the supplier a duplicate PO. We cannot know whether
+        // the ACK happened — the crash destroyed the only transaction that could have recorded it —
+        // so we do not guess: park the order and let a human decide. Safe/BestEffort channels
+        // re-drive unchanged.
+        if (reAdopted && dispatcher.ResendSafety == ResendSafety.Unsafe)
+            return await ParkUnconfirmedAsync(order, attempt, config, ct);
 
         DeliveryResult result;
         try
@@ -354,8 +365,10 @@ public sealed class DeliveryService : IDeliveryService
     /// but died before finalising), it is REUSED — the re-send stays the same logical attempt (same
     /// attempt number, same key), so it neither duplicates a terminal row nor consumes a retry-budget
     /// slot. Otherwise a fresh row is inserted with the next attempt number.
+    /// <c>ReAdopted</c> tells the caller which case happened — a re-adopted row on a channel that
+    /// cannot de-duplicate a re-send must be PARKED, not re-sent (see the unknown-outcome park below).
     /// </summary>
-    private async Task<DeliveryAttempt> OpenDispatchAttemptAsync(
+    private async Task<(DeliveryAttempt Attempt, bool ReAdopted)> OpenDispatchAttemptAsync(
         PurchaseOrderEntity order,
         OutboundArtifact artifact,
         SupplierDeliveryConfig config,
@@ -369,8 +382,11 @@ public sealed class DeliveryService : IDeliveryService
             .OrderByDescending(a => a.AttemptedAt)
             .FirstOrDefaultAsync(ct);
 
+        // Re-adopting an in-flight row IS the "we already sent this artifact, and never learned
+        // the outcome" signal — the row was committed before the send, so its survival means the
+        // send was attempted and the process died before finalising it.
         if (existing is not null)
-            return existing;
+            return (existing, true);
 
         // Next 1-based attempt index. Only TERMINAL attempts count toward the number (a stale
         // 'dispatching' row for a DIFFERENT artifact must not inflate it) — consistent with the
@@ -398,8 +414,86 @@ public sealed class DeliveryService : IDeliveryService
         _db.DeliveryAttempts.Add(attempt);
         // COMMIT before the send — this is the crash-detectable marker.
         await _db.SaveChangesAsync(ct);
-        return attempt;
+        return (attempt, false);
     }
+
+    /// <summary>
+    /// The unknown-outcome park: finalise the re-adopted in-flight row as
+    /// <c>unconfirmed</c> and stop. NO send occurs, and NO retry is scheduled — the order waits
+    /// for an operator to either send it again or confirm the supplier received it.
+    /// <para>
+    /// The SLA timer is deliberately left running: a parked order SHOULD nag until a human
+    /// resolves it, so <c>DeliveryDueAt</c>/<c>SlaBreached</c> are untouched here.
+    /// </para>
+    /// </summary>
+    private async Task<DeliveryResult> ParkUnconfirmedAsync(
+        PurchaseOrderEntity order,
+        DeliveryAttempt attempt,
+        SupplierDeliveryConfig config,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var message = BuildUnconfirmedMessage(config.Protocol);
+
+        attempt.Status = DeliveryAttempt.StatusUnconfirmed;
+        attempt.AttemptedAt = now;
+        attempt.ErrorMessage = message;
+
+        order.Status = OrderStatusConstants.DeliveryUnconfirmed;
+        order.UpdatedAt = now;
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            orderId = order.Id,
+            fromStatus = OrderStatusConstants.Delivering,
+            toStatus = OrderStatusConstants.DeliveryUnconfirmed,
+            channel = config.Protocol,
+            idempotencyKey = attempt.IdempotencyKey,
+            parkedAt = now,
+            detail = "Crash-recovery re-drive on a channel that cannot de-duplicate a re-send. "
+                   + "The artifact was sent but the outcome was never observed; re-sending could "
+                   + "duplicate the PO, so the order is parked for an operator decision.",
+        });
+
+        _db.AuditEvents.Add(new AuditEvent
+        {
+            Id = Guid.NewGuid(),
+            OrgId = order.OrgId,
+            UserId = null,
+            EntityType = "Order",
+            EntityId = order.Id,
+            Action = "DeliveryUnconfirmed",
+            Payload = System.Text.Json.JsonDocument.Parse(payload),
+            CreatedAt = now,
+        });
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogWarning(
+            "DeliveryUnconfirmed: order {OrderId} (org {OrgId}) parked — a crash-recovery re-drive "
+            + "re-adopted an in-flight send on {Protocol}, which cannot de-duplicate a re-send. "
+            + "NOT re-sent; waiting for an operator to send again or mark delivered.",
+            order.Id, order.OrgId, config.Protocol);
+
+        return new DeliveryResult(false, message);
+    }
+
+    /// <summary>
+    /// The operator-facing park sentence. Plain language, one sentence of what happened plus what
+    /// to do — never internal vocabulary (no "idempotency", "re-adopt", "dispatching row").
+    /// </summary>
+    internal static string BuildUnconfirmedMessage(string protocol) =>
+        $"Delivery unconfirmed. We sent this order but lost the connection before the supplier "
+        + $"confirmed it, and {DescribeChannel(protocol)} cannot tell us whether it arrived. "
+        + $"Check with the supplier, then either send it again or mark it delivered.";
+
+    private static string DescribeChannel(string protocol) => protocol?.ToLowerInvariant() switch
+    {
+        "email" or "smtp" => "email",
+        "erp_erply" => "the Erply connection",
+        "erp_directo" => "the Directo connection",
+        _ => "this delivery channel",
+    };
 
     /// <summary>
     /// Launch batch 7 — the delivery config that GOVERNS this dispatch. When the
