@@ -18,6 +18,13 @@ namespace ProcuLink.Infrastructure.Jobs;
 /// Deactivates subscription after 3 consecutive logical failures.
 /// Idempotent: exits silently if subscription is inactive.
 ///
+/// <para><b>At-least-once + dedupe (finding A4):</b> every delivery carries a stable
+/// <c>X-ProcuLink-Delivery-Id</c> (and subscription-independent <c>X-ProcuLink-Event-Id</c>)
+/// derived from the immutable job arguments, so a Hangfire retry re-POSTs the SAME id and a
+/// subscriber can dedupe. A failure of the success-persist AFTER a 2xx is never recorded as a
+/// failed delivery and never rethrown (the webhook was already delivered), so a transient DB error
+/// can neither fabricate a false failure record nor trigger a duplicate POST.</para>
+///
 /// <para><b>Failure accounting (defer-list #5):</b> the persisted <c>FailureCount</c> tracks
 /// LOGICAL (consecutive) delivery failures, NOT Hangfire's per-job retry attempts. Hangfire
 /// re-runs the whole method on each <see cref="AutomaticRetryAttribute"/> retry; bumping
@@ -110,6 +117,16 @@ public class FireIntegrationTriggerJob
             return;
         }
 
+        // ── Stable delivery identity (finding A4) ─────────────────────────────
+        // Derived from the IMMUTABLE job inputs (subscription id + event type + payload bytes),
+        // so a Hangfire retry — which re-runs this method with the SAME arguments — re-POSTs the
+        // SAME X-ProcuLink-Delivery-Id and a well-behaved subscriber can dedupe a duplicate that
+        // a post-send persist failure + retry (or any at-least-once redelivery) may produce. The
+        // event id is subscription-independent, so one event fanned out to many subscribers
+        // shares a single X-ProcuLink-Event-Id.
+        var deliveryId = DeterministicId(subscriptionId.ToString("N"), sub.EventType, payloadJson);
+        var eventId    = DeterministicId(sub.EventType, payloadJson);
+
         string? sigHeader = null;
         if (!string.IsNullOrEmpty(sub.EncryptedSecret))
         {
@@ -136,6 +153,14 @@ public class FireIntegrationTriggerJob
                 $"Webhook delivery blocked: {guardResult.Reason}");
         }
 
+        // ── Fire the webhook ──────────────────────────────────────────────────
+        // The critical distinction (finding A4): a SEND failure (connection reset / DNS / TLS /
+        // client timeout / non-2xx) means the webhook was NEVER delivered — a genuine failure to
+        // record and retry. A failure of the SUCCESS-PERSIST *after* a 2xx means the subscriber
+        // ALREADY received the webhook — it must NOT be recorded as a failure and must NOT rethrow,
+        // because a Hangfire retry would re-POST the identical bytes with no way for the subscriber
+        // to know it is a duplicate (beyond the stable X-ProcuLink-Delivery-Id we now send).
+        HttpResponseMessage response;
         try
         {
             var client = CreateSendClient();
@@ -143,38 +168,84 @@ public class FireIntegrationTriggerJob
             {
                 Content = new StringContent(payloadJson, Encoding.UTF8, "application/json"),
             };
-            // sigHeader is server-computed hex (always safe). sub.EventType is a stored,
-            // tenant-influenced value flowing into a header VALUE — validate it for CR/LF/NUL
-            // injection before adding, dropping (and logging) on failure.
+            // sigHeader and the delivery/event ids are server-computed (hex / GUID) — inherently
+            // CR/LF/NUL-safe. sub.EventType is a stored, tenant-influenced value flowing into a
+            // header VALUE — validate it for CR/LF/NUL injection before adding, dropping (and
+            // logging) on failure.
             if (sigHeader is not null)
                 request.Headers.TryAddWithoutValidation("X-ProcuLink-Signature", sigHeader);
+            request.Headers.TryAddWithoutValidation("X-ProcuLink-Delivery-Id", deliveryId.ToString());
+            request.Headers.TryAddWithoutValidation("X-ProcuLink-Event-Id", eventId.ToString());
             if (!HttpHeaderGuard.TryAdd(request.Headers, "X-ProcuLink-Event", sub.EventType))
                 _logger.LogWarning(
                     "Skipping X-ProcuLink-Event header for sub {SubId} (event type failed CR/LF validation).",
                     subscriptionId);
 
-            var response = await client.SendAsync(request, ct);
-            if (response.IsSuccessStatusCode)
+            response = await client.SendAsync(request, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Host shutdown, not a subscriber failure — let Hangfire re-run without penalising the
+            // subscription (recording/deactivating on a worker restart would be wrong).
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // The SEND ITSELF failed (connection refused / DNS / TLS / client-side timeout). Nothing
+            // was delivered → a genuine delivery failure.
+            await RecordFailureAsync(sub, isFinalAttempt, ct);
+            throw new InvalidOperationException(
+                $"Webhook send to {sub.TargetUrl} failed: {ex.Message}", ex);
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
             {
-                sub.FailureCount = 0;
-                sub.UpdatedAt    = DateTime.UtcNow;
-                await _db.SaveChangesAsync(ct);
-                _logger.LogInformation(
-                    "FireIntegrationTriggerJob delivered to {Url}, status={Status}",
-                    sub.TargetUrl, response.StatusCode);
-            }
-            else
-            {
+                // Subscriber rejected the delivery (non-2xx) → a genuine delivery failure.
                 await RecordFailureAsync(sub, isFinalAttempt, ct);
                 throw new InvalidOperationException(
                     $"Delivery failed: HTTP {(int)response.StatusCode} from {sub.TargetUrl}");
             }
         }
-        catch (Exception ex) when (ex is not InvalidOperationException)
+
+        // ── Delivered (2xx) ───────────────────────────────────────────────────
+        // Persist the success (reset the consecutive-failure streak). A transient error HERE must
+        // NEVER be recorded as a failure and must NEVER rethrow: the subscriber already received the
+        // webhook, so failing the job would make Hangfire re-POST identical bytes. Worst case the
+        // streak stays stale until the next successful delivery clears it — a duplicate POST is the
+        // far more customer-visible harm.
+        try
         {
-            await RecordFailureAsync(sub, isFinalAttempt, ct);
-            throw;
+            sub.FailureCount = 0;
+            sub.UpdatedAt    = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            _logger.LogInformation(
+                "FireIntegrationTriggerJob delivered to {Url}, status={Status}, delivery={DeliveryId}",
+                sub.TargetUrl, response.StatusCode, deliveryId);
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "FireIntegrationTriggerJob: webhook to {Url} was DELIVERED (delivery={DeliveryId}) but the " +
+                "success-persist failed; NOT recording a failure and NOT retrying, to avoid a duplicate POST.",
+                sub.TargetUrl, deliveryId);
+            // Swallow — a delivered webhook is a success regardless of our bookkeeping write.
+        }
+    }
+
+    /// <summary>
+    /// Deterministic UUIDv5-style id over the given immutable parts: SHA-256 of the joined inputs,
+    /// first 16 bytes as a <see cref="Guid"/>. Identical inputs always yield the same id (so it is
+    /// stable across Hangfire retries, which re-run with the same job arguments) while distinct
+    /// events/subscriptions collide only with cryptographic improbability.
+    /// </summary>
+    private static Guid DeterministicId(params string[] parts)
+    {
+        var joined = string.Join('\n', parts);
+        Span<byte> hash = stackalloc byte[32];
+        SHA256.HashData(Encoding.UTF8.GetBytes(joined), hash);
+        return new Guid(hash[..16]);
     }
 
     /// <summary>
@@ -182,6 +253,15 @@ public class FireIntegrationTriggerJob
     /// left untouched (the failure throws and Hangfire retries); only the final attempt increments
     /// the consecutive-failure count and, at the threshold, deactivates the subscription. This
     /// decouples the persisted count from Hangfire's retry count so one failed webhook = one bump.
+    ///
+    /// <para><b>Concurrency + idempotency (finding A4b):</b> the increment is a single atomic
+    /// store-side statement (<c>FailureCount = FailureCount + 1</c>) rather than a
+    /// load-modify-save, so concurrent failures from parallel workers cannot lose an update, and
+    /// because it is one statement (and this method is called exactly once per failure path, with
+    /// no catch re-invoking it) a transient persist error cannot double-count the same failure.
+    /// Deactivation is a second conditional atomic update — it only flips an <em>active</em>
+    /// subscription that has reached the threshold, so it never resurrects a subscription and never
+    /// re-counts.</para>
     /// </summary>
     private async Task RecordFailureAsync(IntegrationSubscription sub, bool isFinalAttempt, CancellationToken ct)
     {
@@ -194,6 +274,35 @@ public class FireIntegrationTriggerJob
             return;
         }
 
+        if (_db.Database.IsRelational())
+        {
+            // Atomic, store-side increment (FailureCount = FailureCount + 1). A load-modify-save
+            // bump loses concurrent increments from parallel Hangfire workers (silently under-
+            // counting and resurrecting a should-be-dead subscription); the relative UPDATE does
+            // not. Because it is a single statement — called exactly once per failure path, with no
+            // catch re-invoking it — a transient persist error can never double-count one failure.
+            await _db.IntegrationSubscriptions
+                     .Where(s => s.Id == sub.Id)
+                     .ExecuteUpdateAsync(set => set
+                         .SetProperty(s => s.FailureCount, s => s.FailureCount + 1)
+                         .SetProperty(s => s.UpdatedAt, DateTime.UtcNow), ct);
+
+            // Deactivate atomically and idempotently — only an ACTIVE subscription that has reached
+            // the threshold, so this never resurrects a subscription and never re-counts.
+            var deactivated = await _db.IntegrationSubscriptions
+                .Where(s => s.Id == sub.Id && s.IsActive && s.FailureCount >= DeactivateAfterFailures)
+                .ExecuteUpdateAsync(set => set.SetProperty(s => s.IsActive, false), ct);
+
+            if (deactivated > 0)
+                _logger.LogWarning(
+                    "FireIntegrationTriggerJob: deactivated sub {SubId} after reaching {Threshold} consecutive failures.",
+                    sub.Id, DeactivateAfterFailures);
+            return;
+        }
+
+        // Non-relational (the InMemory test provider cannot translate a relative ExecuteUpdate) —
+        // emulate the same net effect through the change tracker. Tests are single-threaded, so the
+        // lost-update atomicity the relational path guarantees is not needed here.
         sub.FailureCount++;
         sub.UpdatedAt = DateTime.UtcNow;
         if (sub.FailureCount >= DeactivateAfterFailures)
