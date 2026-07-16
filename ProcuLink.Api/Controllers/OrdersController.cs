@@ -350,18 +350,25 @@ public sealed class OrdersController : ControllerBase
                           or "rejected_by_supplier" or "delivery_dead_letter"
                           or OrderStatusConstants.DeliveryUnconfirmed)
         {
-            var payload = await _db.AuditEvents
-                .AsNoTracking()
-                .Where(e => e.EntityId == id
-                         && e.OrgId == _tenant.OrganisationId
-                         && e.EntityType == "Order"
-                         && (e.Action == "ParseFailed"
-                          || e.Action == "TransformFailed"
-                          || e.Action == "DeliveryFailed"
-                          || e.Action == "DeliveryDeadLettered"))
-                .OrderByDescending(e => e.CreatedAt)
-                .Select(e => e.Payload)
-                .FirstOrDefaultAsync(ct);
+            // A parked order skips this branch entirely. None of these actions can carry the park
+            // sentence (the DeliveryUnconfirmed payload keys it "detail"), but a SURVIVING one from
+            // an unrelated earlier episode — a fixed-then-delivered ParseFailed, or a
+            // DeliveryDeadLettered from an ops requeue that crashed and parked — would win the
+            // assignment and show the operator a stale error instead of why the order is parked.
+            var payload = entity.Status == OrderStatusConstants.DeliveryUnconfirmed
+                ? null
+                : await _db.AuditEvents
+                    .AsNoTracking()
+                    .Where(e => e.EntityId == id
+                             && e.OrgId == _tenant.OrganisationId
+                             && e.EntityType == "Order"
+                             && (e.Action == "ParseFailed"
+                              || e.Action == "TransformFailed"
+                              || e.Action == "DeliveryFailed"
+                              || e.Action == "DeliveryDeadLettered"))
+                    .OrderByDescending(e => e.CreatedAt)
+                    .Select(e => e.Payload)
+                    .FirstOrDefaultAsync(ct);
 
             if (payload != null)
             {
@@ -378,8 +385,8 @@ public sealed class OrdersController : ControllerBase
             }
 
             // The branch that actually carries the park sentence: ParkUnconfirmedAsync writes it to
-            // attempt.ErrorMessage, while its DeliveryUnconfirmed audit payload uses "detail" — a key
-            // the block above never looks for — so this fallback is the only path that reaches it.
+            // attempt.ErrorMessage. For a parked order this is the ONLY path that can reach it —
+            // hence the skip above rather than a mere ordering preference.
             if (errorMessage is null && entity.Status is "delivery_failed" or "delivery_dead_letter"
                                                       or OrderStatusConstants.DeliveryUnconfirmed)
             {

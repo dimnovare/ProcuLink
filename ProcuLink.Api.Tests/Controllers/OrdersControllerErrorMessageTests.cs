@@ -302,6 +302,98 @@ public class OrdersControllerErrorMessageTests
         Assert.Contains("mark it delivered", dto.ErrorMessage); // names the action available to them
     }
 
+    // The park sentence must not be pre-empted by an unrelated earlier episode. An order can carry
+    // a surviving ParseFailed (or a DeliveryDeadLettered from an ops requeue → crash → park), and
+    // the audit-payload branch cannot supply the park sentence anyway — that payload uses key
+    // "detail", not "error"/"lastError" — but it CAN win the assignment and show the operator a
+    // stale parse error on a parked order.
+    [Fact]
+    public async Task Get_ParkedOrder_WithStaleParseFailedAudit_StillReturnsTheParkSentence()
+    {
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        const string parkMessage =
+            "Delivery unconfirmed. We may have sent this order, but lost the connection before the "
+          + "supplier confirmed it, and email cannot tell us whether it arrived. Check with the "
+          + "supplier, then either send it again or mark it delivered.";
+        const string staleParseError = "No line-table columns detected.";
+
+        await using var db = NewDb();
+
+        // A real earlier episode: this order failed to parse once, was fixed, and went on to be
+        // transformed and delivered. The audit row survives — it is an immutable log.
+        db.AuditEvents.Add(new AuditEvent
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            EntityType = "Order",
+            EntityId   = orderId,
+            Action     = "ParseFailed",
+            Payload    = JsonDocument.Parse($$$"""{"error":"{{{staleParseError}}}","stage":"parse"}"""),
+            CreatedAt  = DateTime.UtcNow.AddDays(-1),
+        });
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id            = Guid.NewGuid(),
+            OrgId         = orgId,
+            OrderId       = orderId,
+            AttemptNumber = 1,
+            Channel       = "email",
+            Destination   = "supplier@example.test",
+            Status        = DeliveryAttempt.StatusUnconfirmed,
+            AttemptedAt   = DateTime.UtcNow,
+            ErrorMessage  = parkMessage,
+        });
+        await db.SaveChangesAsync();
+
+        var parkedEntity = new PurchaseOrderEntity
+        {
+            Id                = orderId,
+            OrgId             = orgId,
+            SupplierId        = Guid.NewGuid(),
+            PoNumber          = "PO-PARKED-STALE",
+            OrderDate         = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency          = "EUR",
+            Status            = ProcuLink.Core.Constants.OrderStatusConstants.DeliveryUnconfirmed,
+            CreatedAt         = DateTime.UtcNow,
+            UpdatedAt         = DateTime.UtcNow,
+            Lines             = new List<PurchaseOrderLineEntity>(),
+            OutboundArtifacts = new List<OutboundArtifact>(),
+        };
+
+        var ordersSvc = new Mock<IOrderService>();
+        ordersSvc
+            .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(parkedEntity));
+
+        var tenant = new Mock<ICurrentTenantService>();
+        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
+
+        var controller = new OrdersController(
+            ordersSvc.Object,
+            tenant.Object,
+            new Mock<IBackgroundJobClient>().Object,
+            db,
+            NullLogger<OrdersController>.Instance,
+            new Mock<IBillingService>().Object,
+            new Mock<IIdempotencyService>().Object,
+            new Mock<IOrderExceptionService>().Object,
+            new Mock<ISupplierAcceptanceService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
+            new Mock<IFileStorageService>().Object,
+            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
+            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+
+        var result = await controller.Get(orderId, CancellationToken.None);
+
+        var ok  = Assert.IsType<OkObjectResult>(result);
+        var dto = Assert.IsType<OrderDto>(ok.Value);
+        Assert.NotNull(dto.ErrorMessage);
+        Assert.DoesNotContain(staleParseError, dto.ErrorMessage);
+        Assert.Contains("mark it delivered", dto.ErrorMessage);
+    }
+
     [Fact]
     public async Task Get_ReadyOrder_ReturnsNullErrorMessage()
     {
