@@ -40,8 +40,13 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
     /// WebhookIngressController). Self-transitions (from == to) are always allowed and
     /// are not listed. Generous by design: this map must stay SILENT for every legit
     /// flow — false-positive warnings would train operators to ignore it.
+    ///
+    /// <para><c>internal</c> (not private) so <c>OrderStatusMachineTests</c> can assert the
+    /// superset invariant <see cref="OrderStatusMachine.Transitions"/> documents — every edge
+    /// this map calls expected must be an edge the machine calls allowed. See that test for why
+    /// the invariant is enforced structurally rather than trusted to review.</para>
     /// </summary>
-    private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> AllowedTransitions =
+    internal static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> AllowedTransitions =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
         {
             // Stub created → parse job picks it up (or fails fast). Stuck-detection can
@@ -66,11 +71,14 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             [OrderStatusConstants.Ready] = Set(
                 OrderStatusConstants.PendingReview, OrderStatusConstants.Transforming,
                 OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.Failed),
-            // Transform: success → ready_to_deliver; validation/template failure reverts to
-            // ready; stuck-detection fails a hung transform.
+            // Transform: success → ready_to_deliver; a TERMINAL validation/template failure parks the
+            // order in transform_failed (visible), where it stays recoverable; stuck-detection fails a
+            // hung transform. ready: the compensating release when a re-transform enqueue fails.
             [OrderStatusConstants.Transforming] = Set(
                 OrderStatusConstants.Ready, OrderStatusConstants.ReadyToDeliver,
                 OrderStatusConstants.TransformFailed, OrderStatusConstants.Failed),
+            // Recovery out of a failed transform: fix the template/mapping and re-transform (the
+            // transform claim accepts transform_failed), or re-resolve back into the review loop.
             [OrderStatusConstants.TransformFailed] = Set(
                 OrderStatusConstants.Ready, OrderStatusConstants.Transforming,
                 OrderStatusConstants.PendingReview),

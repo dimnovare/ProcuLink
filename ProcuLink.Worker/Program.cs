@@ -366,6 +366,14 @@ builder.Services.AddScoped<StuckDeliveryDetectionJob>();
 builder.Services.AddScoped<IDeliveryDispatchEnqueuer, ProcuLink.Api.Jobs.HangfireDeliveryDispatchEnqueuer>();
 builder.Services.AddScoped<IStrandedReadyOrderDetectionService, StrandedReadyOrderDetectionService>();
 builder.Services.AddScoped<StrandedReadyDeliveryDetectionJob>();
+// B5 silent-no-more-retries backstop: recover orders stranded in 'delivery_failed' with attempts
+// remaining whose automatic next-retry was lost between the failed-attempt write and the backoff
+// BackgroundJob.Schedule (crash / lost enqueue). Re-drives them through RetryDeliveryJob via the same
+// IRetryDeliveryEnqueuer the stuck-delivery sweep uses; idempotent (RetryDeliveryAsync's atomic claim
+// + attempt-cap prevent any double-send). The aged threshold is set well past the max retry backoff
+// so a legitimately-scheduled retry is never raced.
+builder.Services.AddScoped<IStrandedFailedDeliveryDetectionService, StrandedFailedDeliveryDetectionService>();
+builder.Services.AddScoped<StrandedFailedDeliveryDetectionJob>();
 builder.Services.AddScoped<BillingReconciliationJob>();
 // ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();

@@ -22,6 +22,12 @@ public sealed class DeliverySlaSweepJob
 
     [Queue("background")]
     [AutomaticRetry(Attempts = 0)]
+    // DisableConcurrentExecution: two overlapping sweeps would both select the same unflagged
+    // overdue order and both insert a DeliverySlaBreached audit row. On OSS Hangfire this keys the
+    // lock on TYPE + METHOD only (never on args) — correct for this argument-less cross-tenant
+    // sweep. Defence-in-depth with the atomic claim inside DeliverySlaService.RunAsync, which also
+    // covers a direct (non-Hangfire) service call. Timeout < the 15-min recurrence.
+    [DisableConcurrentExecution(timeoutInSeconds: 300)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
         var flagged = await _service.RunAsync(ct);

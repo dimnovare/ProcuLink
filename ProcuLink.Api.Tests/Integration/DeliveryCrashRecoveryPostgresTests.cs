@@ -18,11 +18,23 @@ namespace ProcuLink.Api.Tests.Integration;
 /// order stuck in <c>delivering</c> (its <c>UpdatedAt</c> aged past the reclaim window, exactly as
 /// <c>StuckDeliveryDetectionService</c> would re-drive it) with a committed but never-finalised
 /// <c>dispatching</c> attempt row — the marker written just BEFORE the supplier ACK that the crash
-/// lost. The stuck re-drive must RE-ADOPT that in-flight row on a channel that CAN de-duplicate
-/// (re-send with the SAME idempotency key) and finalise it — never manufacture a SECOND terminal
-/// attempt or a second delivery. On a channel that CANNOT de-duplicate (ERP, email) the same
-/// re-adopt must instead PARK the order (<c>delivery_unconfirmed</c>) rather than risk a duplicate
-/// PO — see the ERP sibling test below.
+/// lost. The stuck re-drive must RE-ADOPT that in-flight row and finalise it — never manufacture a
+/// SECOND terminal attempt row.
+///
+/// <para>READ THIS BEFORE TRUSTING THE NAME: on a channel that CAN de-duplicate, the re-drive DOES
+/// send to the supplier again — this test asserts that it does (<c>dispatcher.Calls == 1</c> on the
+/// re-drive). What it pins is that the second WIRE SEND carries the SAME deterministic idempotency
+/// key and collapses back into the one in-flight row, so it can never become a second terminal
+/// attempt or a second billable delivery record. It does NOT establish that the SUPPLIER receives
+/// the PO only once: nothing here can distinguish "crashed before the send" from "supplier already
+/// ACKed", so delivery on these channels is AT-LEAST-ONCE and duplicate-order suppression rests on
+/// the supplier honouring the idempotency key (http) or an overwriting upload (sftp/ftps). A green
+/// test here is NOT duplicate-PO safety.</para>
+///
+/// <para>The channels with no such mitigation — <c>erp_erply</c>, <c>erp_directo</c>, and email —
+/// no longer take that bet at all: they declare <c>ResendSafety.Unsafe</c>, so the same re-adopt
+/// PARKS the order (<c>delivery_unconfirmed</c>) for a human instead of re-sending it. The ERP
+/// sibling test below pins that, and is the reason this class's caveat now stops at http/sftp/ftps.</para>
 ///
 /// <para>The stale-<c>delivering</c> reclaim is an atomic guarded <c>ExecuteUpdateAsync</c> that is
 /// untranslatable on EF InMemory, so this real-Postgres test is the one that exercises the actual
@@ -72,7 +84,7 @@ public sealed class DeliveryCrashRecoveryPostgresTests : IAsyncLifetime
     private ProcuLinkDbContext NewContext() => new(_options!);
 
     [DockerRequiredFact]
-    public async Task StuckDeliveringWithInFlightAttempt_ReDrive_ReAdoptsRow_NoSecondDelivery()
+    public async Task StuckDeliveringWithInFlightAttempt_ReDrive_ReAdoptsRow_NoSecondAttemptRow()
     {
         var encryption = CreateEncryption();
         var ids = await SeedStuckDeliveringOrderAsync(encryption);

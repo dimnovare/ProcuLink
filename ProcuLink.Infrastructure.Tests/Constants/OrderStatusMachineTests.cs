@@ -1,5 +1,6 @@
 using FluentAssertions;
 using ProcuLink.Core.Constants;
+using ProcuLink.Infrastructure.Services;
 using Xunit;
 using static ProcuLink.Core.Constants.OrderStatusConstants;
 
@@ -20,12 +21,20 @@ public class OrderStatusMachineTests
     [InlineData(Transforming, ReadyToDeliver)]
     [InlineData(Transforming, Ready)]            // transform validation revert / requeue
     [InlineData(Transforming, Failed)]
+    // A TERMINAL transform failure (broken template / unusable output mapping) parks the order
+    // VISIBLY instead of reverting it to 'ready', where it was indistinguishable from
+    // "never transformed" — see OrderTransformService.FailTransformAsync.
+    [InlineData(Transforming, TransformFailed)]
+    // ...and back OUT again: the user fixes the template/mapping and re-transforms. The transform
+    // claim accepts transform_failed precisely so this is not a dead end.
+    [InlineData(TransformFailed, Transforming)]
     [InlineData(ReadyToDeliver, Delivering)]
     [InlineData(ReadyToDeliver, DeliveryFailed)] // missing config
     [InlineData(ReadyToDeliver, DeliveryHeld)]   // mid-pipeline billing flip pauses delivery
     [InlineData(DeliveryHeld, ReadyToDeliver)]   // reactivation releases the hold and re-drives
     [InlineData(Delivering, Delivered)]
     [InlineData(Delivering, DeliveryFailed)]
+    [InlineData(Delivering, DeliveryDeadLetter)] // stuck delivery, re-drive budget spent (StuckDeliveryDetectionService)
     [InlineData(DeliveryFailed, Delivering)]     // retry / redeliver
     [InlineData(DeliveryFailed, DeliveryDeadLetter)]
     [InlineData(DeliveryFailed, Ready)]          // MV-1 sibling: mapping edit after a failed delivery
@@ -62,7 +71,6 @@ public class OrderStatusMachineTests
     [Theory]
     [InlineData(Failed)]
     [InlineData(RejectedBySupplier)]
-    [InlineData(TransformFailed)]
     public void IsTerminal_TrueForTerminalStates(string status)
         => OrderStatusMachine.IsTerminal(status).Should().BeTrue();
 
@@ -70,6 +78,10 @@ public class OrderStatusMachineTests
     [InlineData(Delivered)]            // a webhook can still flip it to delivery_failed
     [InlineData(DeliveryDeadLetter)]   // an ops requeue can still rescue it
     [InlineData(Ready)]
+    // transform_failed is a FAILURE state but NOT a terminal one: unlike 'failed' (a bad source file,
+    // where recovery means a NEW order row), the order itself is fine — its template/mapping is broken.
+    // Fixing that and re-transforming is the intended cure, so it must have a way out.
+    [InlineData(TransformFailed)]
     public void IsTerminal_FalseForNonTerminalStates(string status)
         => OrderStatusMachine.IsTerminal(status).Should().BeFalse();
 
@@ -91,6 +103,132 @@ public class OrderStatusMachineTests
         // the PO — a risk the automatic retry must never take on the operator's behalf.
         => OrderStatusMachine.RedeliverableFrom.Should()
             .BeEquivalentTo(new[] { DeliveryFailed, ReadyToDeliver, DeliveryUnconfirmed });
+
+    /// <summary>
+    /// Edges the observer calls "expected" that the machine deliberately does NOT allow.
+    ///
+    /// <para>The two maps are both supersets of the real flows, but for opposite reasons, so
+    /// neither strictly contains the other. The observer is generous ON PURPOSE — it only logs,
+    /// and a false-positive warning would train operators to ignore it, so it lists edges its
+    /// author merely believed possible. The machine is the stricter of the two: its whole value
+    /// is calling genuinely-impossible moves impossible. Blindly copying these edges into the
+    /// machine would empty it of meaning.</para>
+    ///
+    /// <para>Each edge below was checked against production code and is NOT performed by any
+    /// call site. Grouped by why the observer lists it anyway. This set may only ever SHRINK —
+    /// <see cref="Machine_Transitions_AreASupersetOf_ObserverAllowedTransitions"/> fails on a
+    /// stale entry, so reconciling an edge in either map forces its removal here.</para>
+    /// </summary>
+    private static readonly IReadOnlySet<string> KnownObserverOnlyEdges = new HashSet<string>(StringComparer.Ordinal)
+    {
+        // The observer's "a failed parse can be retried" comment is wrong: nothing re-parses an
+        // order whose status is 'failed'. ParseOrderJob calls it a terminal status and throws
+        // rather than re-driving it (ParseOrderJob.cs:67-74); elsewhere it only FILTERS on failed
+        // (:89-91). OrdersController rejects a transform of one outright ("Upload a corrected file
+        // before transforming", OrdersController.cs:1355). Recovery is a NEW order row, so
+        // 'failed' really is terminal, as the machine says.
+        Edge(Failed, PendingParse),
+        Edge(Failed, Parsing),
+        Edge(Failed, PendingReview),
+        Edge(Failed, Ready),
+
+        // Nothing WRITES 'pending_parse': every ingest path stamps 'parsing' straight onto
+        // the stub (OrderIngestionService.cs:343, SampleOrderService.cs:130), and the stuck-order
+        // requeue re-writes 'parsing' too (StuckOrderDetectionService.cs:101). No order is ever in
+        // pending_parse, so nothing can transition out of it. The status is declared but dead.
+        Edge(PendingParse, PendingReview),
+        Edge(PendingParse, Ready),
+        Edge(PendingParse, Failed),
+
+        // No call site fails an order from the review loop; a hard failure is only ever written
+        // from 'parsing' (StuckOrderDetectionService.cs:195).
+        Edge(PendingReview, Failed),
+        Edge(Ready, Failed),
+
+        // No re-transform path re-enters 'transforming' from these: the transform claim is keyed on
+        // ready|transforming|transform_failed (OrderTransformService.cs), and a mapping edit resets a
+        // post-artifact order to 'ready' first (the MV-1 edges the machine already allows).
+        Edge(ReadyToDeliver, Transforming),
+        Edge(DeliveryFailed, Transforming),
+        Edge(DeliveryFailed, PendingReview),
+
+        // Nothing moves an order OUT of 'rejected_by_supplier' under its own power: the ops
+        // requeue guards on dead_letter|delivery_failed (OpsController.cs:126) and dispatch/retry
+        // guard on ready_to_deliver|delivery_failed|stale-delivering.
+        Edge(RejectedBySupplier, PendingReview),
+        Edge(RejectedBySupplier, Ready),
+        Edge(RejectedBySupplier, Transforming),
+        Edge(RejectedBySupplier, Delivering),
+
+        // ── Reachable, but only through a gap — deliberately NOT blessed in the machine ──
+        // WebhookIngressController.Status (:157-175) loads the order by id with NO from-status
+        // predicate, then writes 'delivered' (or 'delivery_failed' on "rejected") to any order not
+        // already delivered. A supplier callback can therefore force these — and, in principle,
+        // 'delivered' onto an order still in pending_parse. That reads as a missing from-status
+        // guard on the webhook rather than an intended flow, so the machine keeps calling these
+        // impossible; teaching it to allow them would document the gap as design. If the guard is
+        // added, these exemptions go stale and the second assertion below will say so. If instead
+        // the unguarded write is judged intended, move them into Transitions.
+        Edge(ReadyToDeliver, Delivered),
+        Edge(DeliveryFailed, Delivered),
+        Edge(DeliveryDeadLetter, Delivered),
+        Edge(RejectedBySupplier, Delivered),
+        Edge(RejectedBySupplier, DeliveryFailed),
+    };
+
+    private static string Edge(string from, string to) => $"{from} -> {to}";
+
+    /// <summary>
+    /// The superset invariant, enforced STRUCTURALLY rather than trusted to review.
+    ///
+    /// <para><see cref="OrderStatusMachine.Transitions"/> is documented as a superset of every
+    /// transition the code actually performs, so <c>IsAllowed</c> never rejects a real flow.
+    /// <see cref="OrderStatusTransitionObserver"/>'s <c>AllowedTransitions</c> is the codebase's
+    /// other, independently hand-maintained inventory of the same flows. Where the two disagree,
+    /// one of them is wrong — either the machine is missing a real edge (and would reject a real
+    /// flow), or the observer is blessing an edge that cannot happen.</para>
+    ///
+    /// <para>Two hand-maintained maps drift, and this pair has drifted twice: the A5 delivery_held
+    /// work (d4d6eac) had to fix a transition registered in only one map, and delivering →
+    /// delivery_dead_letter (StuckDeliveryDetectionService.cs:122) sat in the observer but not the
+    /// machine. Pinning the invariant over BOTH maps catches the whole drift class at build time
+    /// instead of one entry at a time in review.</para>
+    ///
+    /// <para>The assertion is two-sided so <see cref="KnownObserverOnlyEdges"/> cannot rot: a new
+    /// unexempted disagreement fails, and so does an exemption that no longer disagrees.</para>
+    /// </summary>
+    [Fact]
+    public void Machine_Transitions_AreASupersetOf_ObserverAllowedTransitions()
+    {
+        var drift = new List<string>();
+
+        foreach (var (from, observerTargets) in OrderStatusTransitionObserver.AllowedTransitions)
+        {
+            var machineTargets = OrderStatusMachine.NextStatuses(from);
+
+            foreach (var to in observerTargets)
+            {
+                // Self-transitions are implicitly expected by the observer and are not
+                // required to appear in the machine's map.
+                if (string.Equals(from, to, StringComparison.Ordinal)) continue;
+
+                if (!machineTargets.Contains(to))
+                    drift.Add(Edge(from, to));
+            }
+        }
+
+        drift.Except(KnownObserverOnlyEdges).Should().BeEmpty(
+            "OrderStatusMachine.Transitions must allow every transition OrderStatusTransitionObserver " +
+            "treats as an expected, legitimate flow — otherwise OrderStatusMachine.IsAllowed reports a real " +
+            "flow as impossible. Add the missing target(s) to OrderStatusMachine.Transitions[from]; or, if the " +
+            "edge is not a real flow, exempt it in KnownObserverOnlyEdges with the call-site evidence that it " +
+            "cannot happen.");
+
+        KnownObserverOnlyEdges.Except(drift).Should().BeEmpty(
+            "every KnownObserverOnlyEdges entry must still be a live disagreement between the two maps. A stale " +
+            "entry means the edge was reconciled (or removed from the observer) without pruning the exemption, " +
+            "which would silently re-open the drift it was hiding. Delete the listed entries.");
+    }
 
     [Fact]
     public void Machine_KnowsEveryDeclaredStatusConstant()

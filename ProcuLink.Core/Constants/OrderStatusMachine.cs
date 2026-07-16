@@ -18,6 +18,16 @@ namespace ProcuLink.Core.Constants;
 /// Hard <i>operation</i> guards live in the named sets below (e.g.
 /// <see cref="RedeliverableFrom"/>) so a controller/service references one
 /// canonical set instead of a hand-written literal.</para>
+///
+/// <para><b>Relationship to <c>OrderStatusTransitionObserver.AllowedTransitions</c>:</b> that map
+/// is the codebase's other hand-maintained inventory of the same flows, and the two drift (the A5
+/// delivery_held work in d4d6eac, and delivering→delivery_dead_letter, were each registered in only
+/// one of them). Both maps are supersets of the real flows, but neither strictly contains the other:
+/// the observer only logs, so it is generous ON PURPOSE, and it lists edges no call site performs.
+/// This map is the stricter one — calling impossible moves impossible is its entire value, so it
+/// does NOT simply mirror the observer. <c>OrderStatusMachineTests</c> pins the overlap
+/// structurally: every observer edge must be allowed here unless it is exempted there with the
+/// call-site evidence that it cannot happen.</para>
 /// </summary>
 public static class OrderStatusMachine
 {
@@ -31,7 +41,10 @@ public static class OrderStatusMachine
             [Unrouted]           = Set(Parsing, PendingParse, Failed, RejectedBySupplier),
             [PendingReview]      = Set(Ready, PendingReview, RejectedBySupplier),
             [Ready]              = Set(Transforming, PendingReview, RejectedBySupplier),
-            [Transforming]       = Set(ReadyToDeliver, Ready, Failed, RejectedBySupplier),
+            // transforming → transform_failed: a TERMINAL transform failure (a template that would not
+            // render, or an output mapping that could not be applied) — neither is fixable by retrying
+            // the same inputs, so the order is parked visibly rather than reverted to 'ready'.
+            [Transforming]       = Set(ReadyToDeliver, Ready, TransformFailed, Failed, RejectedBySupplier),
             // ready_to_deliver/delivered → ready: a mapping edit after transform (MV-1) invalidates
             // the artifact and resets the order so the next Send re-transforms.
             // ready_to_deliver → delivery_held: a mid-pipeline billing flip pauses (not fails) delivery.
@@ -40,7 +53,9 @@ public static class OrderStatusMachine
             [DeliveryHeld]       = Set(ReadyToDeliver, Ready, RejectedBySupplier),
             // delivering → delivery_unconfirmed: the park — a crash-recovery re-drive on a channel
             // that cannot de-duplicate stops rather than risk a duplicate PO.
-            [Delivering]         = Set(Delivered, DeliveryFailed, DeliveryUnconfirmed, RejectedBySupplier),
+            // delivering → delivery_dead_letter: StuckDeliveryDetectionService dead-letters an order
+            // that kept stranding in 'delivering' after its re-drive budget was spent.
+            [Delivering]         = Set(Delivered, DeliveryFailed, DeliveryUnconfirmed, DeliveryDeadLetter, RejectedBySupplier),
             [Delivered]          = Set(DeliveryFailed, Ready, RejectedBySupplier),
             // delivery_failed/delivery_dead_letter → ready: the MV-1 sibling — a mapping edit after a
             // failed/dead-lettered delivery invalidates the stored artifact (Retry/requeue would ship it
@@ -54,13 +69,18 @@ public static class OrderStatusMachine
             // → delivery_held: the delivery_failed sibling — a "Send again" for an org that lapsed
             // since the park is held (not delivered) via HoldForBillingAsync.
             [DeliveryUnconfirmed] = Set(Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
-            // dead_letter → delivery_failed keeps this a superset of OrderStatusTransitionObserver's
-            // map (a requeued dead-letter that fails again, or a late failure webhook) so IsAllowed
-            // never rejects a transition the observer treats as expected.
+            // dead_letter → delivery_failed: an ops requeue that fails again, or a late failure webhook.
             [DeliveryDeadLetter] = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
             [RejectedBySupplier] = Set(),
             [Failed]             = Set(),
-            [TransformFailed]    = Set(),
+            // transform_failed is a FAILURE state, not a terminal one — unlike 'failed' (a bad source
+            // file: recovery is a new order row), a failed transform holds a perfectly good order whose
+            // TEMPLATE/MAPPING is broken. Fixing that and re-transforming is the intended cure, so the
+            // transform claim accepts transform_failed and re-enters 'transforming'
+            // (OrderTransformService / OrdersController.Transform). It also holds NO artifact, so
+            // nothing stale can be re-shipped. → ready: the compensating release when the re-transform
+            // enqueue itself fails. → pending_review: a re-resolve that reopens the review loop.
+            [TransformFailed]    = Set(Transforming, Ready, PendingReview, RejectedBySupplier),
         };
 
     /// <summary>Every known order status (the keys of the machine).</summary>

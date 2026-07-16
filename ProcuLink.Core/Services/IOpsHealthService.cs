@@ -75,15 +75,33 @@ public sealed record OpsHealthSummary(
     // INFORMATIONAL ONLY — orders parked unrouted, awaiting a USER action (assign a supplier).
     // Like PendingReview, a backlog not a fault → excluded from TotalProblemOrders.
     int       PendingRouting            = 0,
-    // Orders whose delivery outcome is unknown after a crash on a channel that cannot
-    // de-duplicate a re-send. Counted as a PROBLEM, not an informational backlog: unlike
-    // PendingReview/PendingRouting (normal workflow), this is a fault — a PO that may never
-    // have reached the supplier — and it stays parked until a human resolves it.
+    // NEEDS ATTENTION, NOT A FAULT — orders paused at the delivery step because the org could not
+    // process orders at that moment (billing lapsed: past_due / read_only / cancelled). The
+    // transformed artifact is intact and DeliveryService.ReleaseBillingHeldOrdersAsync re-drives
+    // delivery automatically on reactivation, so a hold is DELIBERATE and self-resolving.
+    //
+    // Deliberately EXCLUDED from TotalProblemOrders, like PendingReview / PendingRouting (founder
+    // call, 2026-07-16): that total is documented as "sum of all problematic order counts", and a
+    // deliberate, auto-releasing pause is not a problem order — counting it there would contradict
+    // the product rule that a hold is never rendered as a failure. It is surfaced as its own count
+    // so an operator sees it, and the operations/health "All clear" gate checks deliveryHeld
+    // DIRECTLY (opsHealthState.ts) rather than via this aggregate — so a paused PO still can never
+    // read as "All clear". The render layer tones held amber (attention), never red (failure).
+    int       DeliveryHeld              = 0,
+    // Orders whose delivery outcome is unknown after a crash on a channel that cannot de-duplicate
+    // a re-send. INCLUDED in TotalProblemOrders — the opposite call to DeliveryHeld above, and for
+    // the reason that founder call turns on: a hold is deliberate and self-releasing, whereas a
+    // park is a FAULT (a crash lost the outcome; the PO may never have reached the supplier) that
+    // stays parked until a human resolves it. It is neither deliberate nor self-resolving, so the
+    // PendingReview / PendingRouting backlog precedent does not cover it.
     int       DeliveryUnconfirmed       = 0)
 {
     /// <summary>
-    /// Sum of all problematic order counts (excludes OpenExceptions, which can overlap order
-    /// states, AND PendingReview, which is a user-action backlog, not a system fault).
+    /// Sum of the order counts meaning "something is WRONG and needs an operator" — one input to the
+    /// "All clear" gate. Excludes OpenExceptions (can overlap order states), PendingReview /
+    /// PendingRouting (normal user-action backlogs), and DeliveryHeld (a deliberate, self-releasing
+    /// billing pause — not a fault). The health gate must therefore check those counts directly and
+    /// must NOT treat this aggregate as the whole truth; see the DeliveryHeld remarks.
     /// </summary>
     public int TotalProblemOrders =>
         ParsingStuck + DeliveringStuck + TransformFailed + DeliveryFailed +

@@ -50,6 +50,7 @@ internal sealed class OrderTransformService
     private readonly IEnumerable<ITransformService>  _transformers;
     private readonly ILogger<OrderService>           _logger;
     private readonly IPoMappingService               _poMappings;
+    private readonly OrderServiceShared              _shared;
     private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
     private readonly ICxmlCredentialResolver?        _cxmlResolver;
 
@@ -59,6 +60,7 @@ internal sealed class OrderTransformService
         IEnumerable<ITransformService> transformers,
         ILogger<OrderService>          logger,
         IPoMappingService              poMappings,
+        OrderServiceShared             shared,
         IEffectiveConnectionConfigResolver? effectiveConfig = null,
         ICxmlCredentialResolver?       cxmlResolver = null)
     {
@@ -67,6 +69,9 @@ internal sealed class OrderTransformService
         _transformers = transformers;
         _logger       = logger;
         _poMappings   = poMappings;
+        // Best-effort exception reconcile — the terminal-failure path opens the operator-workable
+        // transform_failed exception through the SAME helper the parse-failure path uses.
+        _shared       = shared;
         // Launch batch 7 — revision authority. Null (older positional ctors / unregistered
         // hosts) behaves exactly like flag-OFF: the live path drives everything.
         _effectiveConfig = effectiveConfig;
@@ -235,6 +240,14 @@ internal sealed class OrderTransformService
         // attempt; a COMPLETED transform (ready_to_deliver and beyond) affects 0 rows
         // and short-circuits below — re-running it would upload a duplicate artifact
         // and re-enqueue delivery, double-sending the same PO to the supplier.
+        //
+        // "transform_failed" is claimable for the same reason "transforming" is — it is a
+        // failure state, not a completed transform, and it holds NO artifact. It is the
+        // RECOVERY door: the user fixes the broken template/mapping and re-transforms. A
+        // mapping edit does NOT reset the status for us here (OrderMappingOverrideService's
+        // MV-1 reset only fires for post-artifact states, which transform_failed is not), so
+        // if this claim rejected it the order would be permanently stuck — trading the silent
+        // strand this status exists to expose for a worse, louder one.
         var claimedAt = DateTime.UtcNow;
         int claimed;
         if (_db.Database.IsRelational())
@@ -242,7 +255,8 @@ internal sealed class OrderTransformService
             claimed = await _db.PurchaseOrders
                 .Where(x => x.Id == orderId && x.OrgId == organisationId
                          && (x.Status == OrderStatusConstants.Ready
-                          || x.Status == OrderStatusConstants.Transforming))
+                          || x.Status == OrderStatusConstants.Transforming
+                          || x.Status == OrderStatusConstants.TransformFailed))
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.Status, OrderStatusConstants.Transforming)
                     .SetProperty(o => o.UpdatedAt, claimedAt), ct);
@@ -251,7 +265,9 @@ internal sealed class OrderTransformService
         {
             // EF InMemory test provider cannot translate ExecuteUpdateAsync — emulate the
             // same transition through the change tracker (tests are single-threaded there).
-            claimed = entity.Status is OrderStatusConstants.Ready or OrderStatusConstants.Transforming ? 1 : 0;
+            claimed = entity.Status is OrderStatusConstants.Ready
+                                    or OrderStatusConstants.Transforming
+                                    or OrderStatusConstants.TransformFailed ? 1 : 0;
             if (claimed == 1)
             {
                 entity.Status    = OrderStatusConstants.Transforming;
@@ -402,21 +418,25 @@ internal sealed class OrderTransformService
                 transformResult = await RunFixedTransform(transformer!, entity, effectiveFormat, cxmlCredentials, envelope, ct);
             }
         }
-        catch (TransformTemplateException ex)
+        catch (Exception ex) when (ex is TransformTemplateException or TransformValidationException)
         {
-            // Broken template — revert status and surface the compile/render error. The order is
-            // never delivered from a template that did not render.
-            entity.Status    = "ready";
-            entity.UpdatedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync(ct);
-            return Result<TransformResponse>.Fail(ex.Message);
-        }
-        catch (TransformValidationException ex)
-        {
-            // Revert status on validation failure
-            entity.Status    = "ready";
-            entity.UpdatedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync(ct);
+            // TERMINAL transform failure — the order is never delivered from a template that did not
+            // render, or from an output mapping that could not be applied. Neither can be fixed by
+            // retrying the SAME inputs: the config itself is broken, so a Hangfire retry is hopeless
+            // and the only cure is a human editing the template/mapping.
+            //
+            // This lands in `transform_failed`, NOT back in `ready`. Reverting to `ready` (the old
+            // behaviour) is indistinguishable from "never transformed", which made the failure
+            // INVISIBLE: OpsHealthService's TransformFailed count was structurally always 0, so it
+            // contributed 0 to TotalProblemOrders and /operations/health showed a green "All clear"
+            // while a broken supplier template silently stranded every order for that supplier.
+            // Writing the real status lights up the plumbing that was already waiting for it — the
+            // health tile, the transform_failed exception row, and blob/data retention.
+            //
+            // Recovery is deliberate, not accidental: the claim above accepts transform_failed, so a
+            // re-transform after the fix works (see the transition maps, which document both the edge
+            // into this status and the edges back out).
+            await FailTransformAsync(entity, organisationId, orderId, ex.Message, ct);
             return Result<TransformResponse>.Fail(ex.Message);
         }
 
@@ -503,6 +523,56 @@ internal sealed class OrderTransformService
             orderId, effectiveFormat, artifactId);
 
         return Result<TransformResponse>.Ok(new TransformResponse(artifactId, artifact.Format, now));
+    }
+
+    // ── Terminal transform failure (visible, recoverable) ─────────────────────
+
+    /// <summary>
+    /// Commits a TERMINAL transform failure so it is VISIBLE to an operator, mirroring the shape of
+    /// the parse-failure path (status + audit event in one SaveChanges, then a best-effort exception
+    /// reconcile). Three surfaces depend on this and all three were dead while the failure reverted
+    /// to <c>ready</c>:
+    /// <list type="bullet">
+    ///   <item><description><c>OpsHealthService.TransformFailed</c> — counts the status, and feeds
+    ///     <c>TotalProblemOrders</c>, so a failed transform now breaks the "All clear" gate instead of
+    ///     hiding under it.</description></item>
+    ///   <item><description>The <c>"TransformFailed"</c> audit action, whose <c>error</c> payload key
+    ///     <c>OrdersController</c> reads to populate the order's <c>errorMessage</c> (the string the
+    ///     workshop shows the user).</description></item>
+    ///   <item><description><c>OrderExceptionService</c>'s <c>transform_failed</c> row, opened by the
+    ///     reconcile below — the operator-workable exception.</description></item>
+    /// </list>
+    ///
+    /// <para>The reconcile is best-effort ON PURPOSE (<c>SafeReconcileExceptionsAsync</c> swallows and
+    /// logs): the status + audit event are the durable record, and losing the derived exception row must
+    /// never turn a reported failure into an unhandled one. Nothing here re-resolves the exception on a
+    /// later success — a successful re-transform enqueues delivery, and DeliveryService reconciles on
+    /// every successful attempt, which auto-resolves the row once the condition no longer holds.</para>
+    /// </summary>
+    private async Task FailTransformAsync(
+        PurchaseOrderEntity entity,
+        Guid                organisationId,
+        Guid                orderId,
+        string              error,
+        CancellationToken   ct)
+    {
+        entity.Status    = OrderStatusConstants.TransformFailed;
+        entity.UpdatedAt = DateTime.UtcNow;
+
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "TransformFailed", new
+        {
+            error,
+            stage = "transform",
+        }));
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogError(
+            "Order {OrderId} (org {OrgId}) TRANSFORM FAILED terminally: {Error}. The order is marked transform_failed " +
+            "(visible in ops health + exceptions) and needs a template/mapping fix before it can be re-transformed.",
+            orderId, organisationId, error);
+
+        await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
     }
 
     // ── WS-12 — fixed-transformer call with the per-connection envelope ────────

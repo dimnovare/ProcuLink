@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Services;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
@@ -308,7 +309,10 @@ public class SupplierPromotedOutputTransformTests
         Assert.Contains("could not be applied", result.Error ?? ""); // honest reason
         Assert.Null(captured);                                    // nothing uploaded → NOT delivered
         var order = await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId);
-        Assert.Equal("ready", order.Status);                      // reverted to retryable, not stranded
+        // Failing LOUDLY means VISIBLY: not stranded in 'transforming', and not quietly back in
+        // 'ready' (which looks identical to "never transformed" and kept the failure out of ops
+        // health). transform_failed stays re-claimable, so fixing the mapping and re-transforming works.
+        Assert.Equal(OrderStatusConstants.TransformFailed, order.Status);
     }
 
     // ── (c) both present → the per-order override wins ────────────────────────────────────────

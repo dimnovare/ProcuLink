@@ -32,9 +32,14 @@ namespace ProcuLink.Api.Tests.Services;
 /// A NEGATIVE price and a zero/negative quantity remain hard holds. These tests drive a plain
 /// (no-override) order through <see cref="OrderService.TransformAsync"/>: a CSV/JSON order with a zero
 /// price now transforms successfully and produces an artifact; a negative price or negative quantity is
-/// HELD (<see cref="TransformValidationException"/> → status reverts to <c>ready</c>, NO artifact),
+/// HELD (<see cref="TransformValidationException"/> → status <c>transform_failed</c>, NO artifact),
 /// while a fully-valid order still transforms (no false positive — valid bytes unchanged). A regression
 /// pair confirms X12 is unchanged.</para>
+///
+/// <para>The hold lands in <c>transform_failed</c>, not <c>ready</c>: reverting to <c>ready</c> was
+/// indistinguishable from "never transformed", so every one of these holds was invisible to
+/// <c>OpsHealthService</c> (whose TransformFailed count was structurally always 0) and never opened an
+/// exception row. The status stays re-claimable, so correcting the line and re-transforming works.</para>
 /// </summary>
 public class OrderTransformServiceOutputInvariantTests
 {
@@ -130,13 +135,16 @@ public class OrderTransformServiceOutputInvariantTests
     {
         var result = await svc.TransformAsync(orgId, orderId, format, CancellationToken.None);
 
-        // Held: the central guard threw → the transform reverts and returns a failure (not a throw out).
+        // Held: the central guard threw → the transform fails cleanly and returns a failure (not a throw out).
         Assert.False(result.IsSuccess);
         Assert.Contains("Cannot transform", result.Error);
 
-        // Status reverted to ready (never stuck in "transforming", never advanced to ready_to_deliver).
+        // The hold is VISIBLE: never stuck in 'transforming', never advanced to ready_to_deliver, and
+        // never quietly back in 'ready' — a bad price/quantity is a genuine fault needing a human, and
+        // 'ready' is indistinguishable from "never transformed", which kept these holds out of ops
+        // health entirely. transform_failed counts on the health tile and opens an exception row.
         var reloaded = await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId);
-        Assert.Equal(OrderStatusConstants.Ready, reloaded.Status);
+        Assert.Equal(OrderStatusConstants.TransformFailed, reloaded.Status);
 
         // No artifact uploaded and no artifact row persisted — nothing was delivered.
         Assert.Equal(0, uploadCount());
@@ -167,7 +175,7 @@ public class OrderTransformServiceOutputInvariantTests
     }
 
     [Fact]
-    public async Task TransformAsync_Csv_NegativePriceLine_IsHeld_StatusRevertsToReady_NoArtifact()
+    public async Task TransformAsync_Csv_NegativePriceLine_IsHeld_MarksTransformFailed_NoArtifact()
     {
         await using var db = NewDb();
         var (orgId, orderId) = await SeedResolvedOrderAsync(db, line1Price: -5m);
@@ -177,7 +185,7 @@ public class OrderTransformServiceOutputInvariantTests
     }
 
     [Fact]
-    public async Task TransformAsync_Csv_NegativeQuantityLine_IsHeld_StatusRevertsToReady_NoArtifact()
+    public async Task TransformAsync_Csv_NegativeQuantityLine_IsHeld_MarksTransformFailed_NoArtifact()
     {
         await using var db = NewDb();
         var (orgId, orderId) = await SeedResolvedOrderAsync(db, line2Quantity: -1m);
@@ -204,7 +212,7 @@ public class OrderTransformServiceOutputInvariantTests
     }
 
     [Fact]
-    public async Task TransformAsync_Json_NegativeQuantityLine_IsHeld_StatusRevertsToReady_NoArtifact()
+    public async Task TransformAsync_Json_NegativeQuantityLine_IsHeld_MarksTransformFailed_NoArtifact()
     {
         await using var db = NewDb();
         var (orgId, orderId) = await SeedResolvedOrderAsync(db, line2Quantity: -1m);
@@ -283,7 +291,7 @@ public class OrderTransformServiceOutputInvariantTests
     }
 
     [Fact]
-    public async Task TransformAsync_X12_NegativePriceLine_StillHeld_StatusRevertsToReady_NoArtifact()
+    public async Task TransformAsync_X12_NegativePriceLine_StillHeld_MarksTransformFailed_NoArtifact()
     {
         await using var db = NewDb();
         var (orgId, orderId) = await SeedResolvedOrderAsync(db, line1Price: -5m);

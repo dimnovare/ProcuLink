@@ -24,9 +24,11 @@ namespace ProcuLink.Api.Tests.Integration;
 /// <list type="bullet">
 /// <item>a duplicated Hangfire run AFTER completion is a Skipped no-op — no second
 /// artifact, no re-enqueued delivery (the double-sent-PO bug);</item>
-/// <item>a failed template transform reverts the order to 'ready' IN THE DATABASE —
-/// pinning the change-tracker original-value sync after the claim (without it the revert
-/// diffs as a no-op and the order is stranded in 'transforming').</item>
+/// <item>a failed template transform writes 'transform_failed' IN THE DATABASE —
+/// pinning the change-tracker original-value sync after the claim (without it the write
+/// diffs as a no-op and the order is stranded in 'transforming');</item>
+/// <item>a 'transform_failed' order stays re-claimable, so the recovery path (fix the
+/// template, re-transform) is not a dead end.</item>
 /// </list>
 /// Docker-gated; skips where Docker is absent.
 /// </summary>
@@ -204,13 +206,16 @@ public sealed class TransformIdempotencyPostgresTests : IAsyncLifetime
     }
 
     [DockerRequiredFact]
-    public async Task TemplateFailure_RevertsStatusToReady_InTheDatabase()
+    public async Task TemplateFailure_WritesTransformFailed_InTheDatabase()
     {
         var (orgId, orderId) = await SeedResolvedOrderAsync();
 
         // A stored broken whole-document template makes the transform throw
         // TransformTemplateException AFTER the atomic claim flipped the row to
-        // 'transforming' — the revert must produce a REAL UPDATE back to 'ready'.
+        // 'transforming' — the failure must produce a REAL UPDATE to 'transform_failed'
+        // (pinning the change-tracker original-value sync after the claim: without it the
+        // write diffs as a no-op against a stale original and the order strands in
+        // 'transforming').
         await using (var db = NewContext())
         {
             var stored = await new OrderMappingOverrideService(db).UpsertAsync(
@@ -228,8 +233,41 @@ public sealed class TransformIdempotencyPostgresTests : IAsyncLifetime
         {
             var status = await db.PurchaseOrders.AsNoTracking()
                 .Where(o => o.Id == orderId).Select(o => o.Status).SingleAsync();
-            Assert.Equal(OrderStatusConstants.Ready, status); // NOT stranded in 'transforming'
+            // NOT 'transforming' (stranded) and NOT 'ready' (indistinguishable from
+            // "never transformed" — the silent strand that hid failures from ops health).
+            Assert.Equal(OrderStatusConstants.TransformFailed, status);
             Assert.Equal(0, await db.OutboundArtifacts.CountAsync(a => a.OrderId == orderId));
+        }
+    }
+
+    [DockerRequiredFact]
+    public async Task TransformFailedOrder_IsReclaimable_OnRealPostgres()
+    {
+        // The recovery half, proven against the REAL ExecuteUpdateAsync claim (the InMemory
+        // branch is covered by Services/TransformFailureVisibilityTests): a transform_failed
+        // order must be re-claimable once the template is fixed, or the visible-failure fix
+        // would trade a silent strand for a permanent one.
+        var (orgId, orderId) = await SeedResolvedOrderAsync();
+
+        await using (var db = NewContext())
+        {
+            await db.PurchaseOrders.Where(o => o.Id == orderId)
+                .ExecuteUpdateAsync(s => s.SetProperty(o => o.Status, OrderStatusConstants.TransformFailed));
+        }
+
+        await using (var db = NewContext())
+        {
+            var result = await Build(db).TransformAsync(orgId, orderId, OutputFormat.Csv, CancellationToken.None);
+            Assert.True(result.IsSuccess, result.Error);
+            Assert.False(result.Value!.Skipped); // re-claimed and genuinely re-run, not a no-op
+        }
+
+        await using (var db = NewContext())
+        {
+            Assert.Equal(1, await db.OutboundArtifacts.CountAsync(a => a.OrderId == orderId));
+            var status = await db.PurchaseOrders.AsNoTracking()
+                .Where(o => o.Id == orderId).Select(o => o.Status).SingleAsync();
+            Assert.Equal(OrderStatusConstants.ReadyToDeliver, status);
         }
     }
 }

@@ -180,6 +180,61 @@ public class OpsHealthServiceTests
     }
 
     [Fact]
+    public async Task GetHealth_DeliveryHeld_CountsHeld_AndNeverReadsAllClear_OrgScoped()
+    {
+        // TRUST BUG: orders in delivery_held are PAUSED — the PO is not going out to the supplier.
+        // The health surface counted every other problem state but was blind to this one, so an
+        // operator saw a green "All clear" while POs sat undelivered. A held order must be SURFACED
+        // as its own count so the operations/health gate (which checks deliveryHeld DIRECTLY, see
+        // opsHealthState.ts) breaks the green banner.
+        //
+        // It is deliberately NOT folded into TotalProblemOrders (founder call, 2026-07-16), exactly
+        // like PendingReview / PendingRouting: that total means "something is WRONG", and a
+        // deliberate, self-releasing billing pause is not a fault. Org-scoped like every other count.
+        await using var db = NewDb();
+        var orgId      = Guid.NewGuid();
+        var otherOrg   = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.PurchaseOrders.AddRange(
+            Order(orgId, supplierId, OrderStatusConstants.DeliveryHeld),
+            Order(orgId, supplierId, OrderStatusConstants.DeliveryHeld),
+            Order(orgId, supplierId, OrderStatusConstants.Delivered),
+            // other org — a held order there must never leak into this org's count
+            Order(otherOrg, supplierId, OrderStatusConstants.DeliveryHeld));
+        await db.SaveChangesAsync();
+
+        var svc = new OpsHealthService(db);
+        var s   = await svc.GetHealthAsync(orgId, CancellationToken.None);
+
+        s.DeliveryHeld.Should().Be(2, "org-scoped count of billing-held orders");
+        s.TotalProblemOrders.Should().Be(0,
+            "a billing pause is deliberate and self-releasing, not a fault — like pending_review it "
+            + "must not inflate TotalProblemOrders; the health gate checks deliveryHeld directly");
+    }
+
+    [Fact]
+    public async Task GetHealth_NoHeldOrders_StaysAllClear()
+    {
+        // The counterpart guard: adding DeliveryHeld to the health determination must NOT make a
+        // genuinely clean org report a problem. Delivered orders keep the green banner green.
+        await using var db = NewDb();
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.PurchaseOrders.AddRange(
+            Order(orgId, supplierId, OrderStatusConstants.Delivered),
+            Order(orgId, supplierId, OrderStatusConstants.Delivered));
+        await db.SaveChangesAsync();
+
+        var svc = new OpsHealthService(db);
+        var s   = await svc.GetHealthAsync(orgId, CancellationToken.None);
+
+        s.DeliveryHeld.Should().Be(0);
+        s.TotalProblemOrders.Should().Be(0, "a clean org must still read as All clear");
+    }
+
+    [Fact]
     public async Task GetHealth_EmptyOrg_AllZero()
     {
         await using var db = NewDb();

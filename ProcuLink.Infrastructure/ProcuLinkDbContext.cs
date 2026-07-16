@@ -447,6 +447,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.SlaBreached).HasColumnName("sla_breached").HasDefaultValue(false);
             // Bounded requeue counter for the stuck-order self-heal sweep (additive).
             b.Property(x => x.RequeueCount).HasColumnName("requeue_count").HasDefaultValue(0);
+            // Delivery-phase re-drive counter — SEPARATE budget from requeue_count so a parse/transform
+            // requeue never eats into the delivery stuck-recovery budget (StuckDeliveryDetectionService).
+            b.Property(x => x.DeliveryRequeueCount).HasColumnName("delivery_requeue_count").HasDefaultValue(0);
             // Phase 4 enrichment + doc-type classification (nullable).
             b.Property(x => x.SupplierName).HasColumnName("supplier_name");
             b.Property(x => x.SubTotal).HasColumnName("sub_total").HasColumnType("numeric(18,4)");

@@ -1,5 +1,6 @@
 using Hangfire;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Infrastructure.Jobs;
 
 namespace ProcuLink.Worker.Jobs;
 
@@ -22,10 +23,16 @@ public sealed class SftpPollOrgJob
 
     [Queue("polling")]
     [AutomaticRetry(Attempts = 2)]
-    // Per-org lock: DisableConcurrentExecution keys on the method + args, and this child takes
-    // orgId as its argument, so two SFTP polls for the SAME org can never overlap. With the
-    // claim-first ledger insert in SftpIngressService this closes the concurrent-duplicate window.
-    [DisableConcurrentExecution(300)]
+    // PER-ORG lock: PerOrgDistributedMutex acquires a storage-backed distributed lock keyed on the
+    // orgId ARGUMENT (resource "poll:SftpPollOrgJob.ExecuteAsync:{orgId}"), so two SFTP polls for
+    // the SAME org can never overlap, while two DIFFERENT orgs never contend and poll in parallel.
+    // NOT [DisableConcurrentExecution]: on OSS Hangfire that keys on job TYPE + METHOD ONLY (never
+    // the arguments), which serialised EVERY org's SFTP polling through one lock — one slow or hung
+    // tenant endpoint stalled all other tenants for up to the timeout.
+    // Per-org granularity is sufficient because the lock is only the OUTER guard: the claim-first
+    // ledger insert + unique index in SftpIngressService is what actually guarantees exactly-one
+    // order, and two different orgs share no state to race over.
+    [PerOrgDistributedMutex(orgArgumentIndex: 0, timeoutSeconds: 300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
         _logger.LogInformation("SftpPollOrgJob: starting SFTP poll for org {OrgId}.", orgId);

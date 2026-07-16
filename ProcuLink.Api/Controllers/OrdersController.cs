@@ -1328,8 +1328,10 @@ public sealed class OrdersController : ControllerBase
     /// Returns immediately with { status: "transforming" }.
     /// Poll GET /api/orders/{id}/status until status changes.
     /// All lines must have NeedsReview = false — returns 422 otherwise.
-    /// Only a 'ready' order can start a transform (atomic ready→transforming claim);
-    /// an in-flight order returns 202, any other state returns 409.
+    /// Only a 'ready' order — or one whose last transform FAILED — can start a transform (atomic
+    /// ready|transform_failed → transforming claim); an in-flight order returns 202, any other state
+    /// returns 409. Accepting <c>transform_failed</c> is what makes this endpoint the recovery door
+    /// after a broken template/mapping is fixed.
     /// </summary>
     [HttpPost("{id:guid}/transform")]
     [EnableRateLimiting("transform")]
@@ -1402,9 +1404,18 @@ public sealed class OrdersController : ControllerBase
         if (!AllowedTransformFormats.Contains(formatStr))
             return BadRequest(new { error = "Format must be one of: xml, csv, cxml, json, ubl, x12." });
 
-        // Atomically claim ready → transforming BEFORE enqueueing — the same transition
-        // TransformAsync enforces. A racy read-then-enqueue here let two concurrent requests
-        // both see "ready" and enqueue two transform jobs for the same order.
+        // Atomically claim ready|transform_failed → transforming BEFORE enqueueing — the same
+        // transition TransformAsync enforces. A racy read-then-enqueue here let two concurrent
+        // requests both see "ready" and enqueue two transform jobs for the same order.
+        //
+        // transform_failed is claimable so this endpoint IS the recovery door: a terminal transform
+        // failure (broken template/mapping) parks the order there, and the user's fix + re-transform
+        // must be able to re-drive it. A mapping edit does not reset the status for us
+        // (OrderMappingOverrideService's MV-1 reset only fires for post-artifact states, and a failed
+        // transform produced no artifact), so if this claim stayed keyed on 'ready' alone the order
+        // would answer 409 forever — permanently stuck, which is strictly worse than the silent
+        // strand transform_failed exists to expose. Kept in lockstep with the transform claim in
+        // OrderTransformService.
         //
         // CancellationToken.None (NOT the request ct) on purpose: there is no await between
         // this committed claim and the synchronous Enqueue below, so a client disconnect can
@@ -1412,10 +1423,11 @@ public sealed class OrdersController : ControllerBase
         // 'transforming' server-side but BEFORE this call returned, the method would unwind
         // without enqueuing — stranding the order in 'transforming' with no job. Making the
         // claim uninterruptible means it either fully happens (→ we enqueue) or never started
-        // (→ the order stays 'ready'); the rare strand window is closed.
+        // (→ the order keeps its prior status); the rare strand window is closed.
         var claimed = await _db.PurchaseOrders
             .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId
-                     && o.Status == OrderStatusConstants.Ready)
+                     && (o.Status == OrderStatusConstants.Ready
+                      || o.Status == OrderStatusConstants.TransformFailed))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(o => o.Status, OrderStatusConstants.Transforming)
                 .SetProperty(o => o.UpdatedAt, DateTime.UtcNow), CancellationToken.None);
@@ -1433,7 +1445,8 @@ public sealed class OrdersController : ControllerBase
             return Conflict(new
             {
                 error = $"Order is not ready to transform (status '{currentStatus}'). " +
-                        "Only a 'ready' order can start a transform; re-resolve its lines to return it to 'ready'."
+                        "Only a 'ready' order (or one whose last transform failed) can start a transform; " +
+                        "re-resolve its lines to return it to 'ready'."
             });
         }
 

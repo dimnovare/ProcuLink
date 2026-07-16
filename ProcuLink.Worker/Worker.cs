@@ -69,6 +69,16 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/15 * * * *");
 
+        // B5 silent-no-more-retries backstop: recover orders stranded in 'delivery_failed' whose
+        // automatic next-retry was lost between the failed-attempt write and the backoff schedule
+        // (crash / lost enqueue). Hourly with a 3-hour aged threshold — deliberately well past the
+        // max retry backoff (≤2h) so a legitimately-scheduled retry is never raced; only a genuinely
+        // lost reschedule ages this long. Re-drives via RetryDeliveryJob (idempotent).
+        _recurringJobs.AddOrUpdate<StrandedFailedDeliveryDetectionJob>(
+            "stranded-failed-delivery-detection",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "10 * * * *");
+
         // Reliability/observability: alert (Sentry) when no worker is beating or the dead-letter /
         // failed-delivery backlog spikes (every 5 min). No-op without a Sentry DSN; rate-limited.
         _recurringJobs.AddOrUpdate<WorkerHealthAlertJob>(
@@ -109,7 +119,7 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "0 2 * * *");
 
-        _logger.LogInformation("Registered recurring jobs: worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection + stranded-ready-delivery-detection (every 15 min), catalog-sync (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
+        _logger.LogInformation("Registered recurring jobs: worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection + stranded-ready-delivery-detection (every 15 min), catalog-sync + stranded-failed-delivery-detection (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

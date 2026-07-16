@@ -49,18 +49,52 @@ TransformOrderJob concurrent claim → orphan R2 blob; CatalogSyncSource child g
 first_upload_parsed re-fires on re-parse; ParseOrder failed→Succeeded hides failures; EmailPollOrg catch assumes
 23505 swallows transient; FireIntegrationTrigger FailureCount lost-update + double-increment.
 
-## STATUS (2026-07-11)
-- **A1/A2 (ingress claim-first + DisableConcurrentExecution): ATTEMPTED, HELD — NOT merged.** Branch
-  `fix/jobs-claim-first-ingress` implements claim-first + real-Postgres concurrency tests (all green), but
-  adversarial review found it trades the duplicate-order bug for a **silent lost-order** one: all 3 channels
-  "leave the claim as SEEN on stub failure", so a TRANSIENT `CreateStubAsync` failure (R2 blip / DB timeout /
-  SIGTERM after the claim commits) marks the file imported and the retry 23505-**skips** → the PO is never
-  imported, never retried, never surfaced. For procurement, silent-lost is worse than a detectable duplicate,
-  and `CreateStubAsync`'s window (R2 + commit + webhook) is larger than the original order-first ledger window.
-  The Email `OrderId=Guid.Empty` is traceability-only (no resume). **Correct fix = resume-on-conflict:** claim
-  carries a completion/OrderId marker; on 23505, look up whether an order actually exists for this source-ref →
-  skip only if it does, else RESUME (create the order). Rework needed before merge; the (tracked) duplicate bug
-  stays in prod meanwhile — do NOT ship the lost-order version to "close" the finding.
+## STATUS — FIX WAVE COMPLETE 2026-07-16 (all P1 + all P2 merged; each TDD + adversarially reviewed)
+Every fix went through a dedicated adversarial review that caught **4 additional real regressions** before
+merge (2 on ingress, the delivery-held-release gap, the transition-map warning). Merged to main:
+- **A1/A2 ingress duplicate-PO (3 P1)** — MERGED. Reworked to **resume-on-conflict**: claim row carries a
+  pre-generated OrderId, existence verified by PurchaseOrder PK, order created via IStubOrderCreator find-or-create.
+  Duplicate-safe (PK exists→skip) AND lost-order-safe (PK absent→resume). + [DisableConcurrentExecution(orgId)].
+  Review caught TWO regressions before merge: (1) the first version silent-lost orders on transient stub failure;
+  (2) erase-then-resurrect (erasing an SFTP/S3 order left the ledger row → next poll re-imported it) → fixed by
+  tombstoning the ledger OrderId=Guid.Empty in DataErasureService. Real-Postgres tests for all 3 modes.
+- **B1/B2 silent lost-order (2 P1)** — MERGED. TransformOrderJob re-enqueue-on-Skipped + StrandedReadyOrderDetection
+  sweep (hardened: in-DB filter + Take(200) + DisableConcurrentExecution); Ops requeue leaves a claimable status.
+- **C1/C2/C3 poisoned-DbContext (3 P2)** — MERGED. ChangeTracker.Clear() before failure/terminal writes.
+- **A4/A4b webhook double-POST (P2+P3)** — MERGED. Deterministic X-ProcuLink-Delivery-Id header (HMAC-compatible),
+  send-vs-persist failure split, atomic FailureCount ExecuteUpdate.
+- **A3/A5 delivery double-deliver + retry billing-gate (2 P2)** — MERGED. Attempt-started `dispatching` row +
+  re-adopt (no double attempt/lost delivery) + per-channel idempotency key (HTTP/SFTP/FTPS solid; ERP/email
+  best-effort — residual chipped); RetryDelivery gates on billing → delivery_held for lapsed orgs.
+- **B3/B4/B5 delivery/reconciliation edges (P2/P3)** — MERGED. Self-healing held-release (every processing reconcile);
+  dedicated DeliveryRequeueCount (delivery budget separate from parse/transform); StrandedFailedDelivery sweep.
+- **Tier-D P3 hygiene** — MERGED `db02350`. 4 of 6 were real: DisableConcurrentExecution added to StuckOrderDetection,
+  DeliverySlaSweep AND **StuckDelivery** (it did NOT already have it); ParseOrderJob no longer reports a terminal parse
+  failure as Hangfire `Succeeded` (the retry hit ParseStoredFileAsync's `status != "parsing"` re-entry guard → treated
+  the now-`failed` order as an already-processed skip → returned Ok, so failures never reached the Failed queue);
+  first_upload_parsed gated once per order (was per parse — assign-supplier's unrouted→parsing re-parse double-counted);
+  DeliverySla breach guard moved from the SELECT into an atomic per-order UPDATE claim in one txn with the audit inserts
+  (emergent win: also closes a cross-sweep race where a stale SLA sweep wrote SlaBreached back onto an order
+  StuckDelivery had just dead-lettered). TWO needed NO code change: EmailPollOrg transient-swallow (already fixed by the
+  claim-first rework — catch is narrowed to IsUniqueViolation and a transient error propagates before AddFlags(Seen));
+  FireIntegration FailureCount (already fixed in `0948a43`).
+  **OPS NOTE:** a terminally-failed parse now throws on all 4 Hangfire attempts instead of 1 → ~4x exception volume per
+  unparseable file, ~155s to land red, and a new nonzero Failed-queue baseline. Intended — not a regression.
+- **NEW FINDING (not in the original 31) — poll-children concurrency guard is GLOBAL, not per-org.** On OSS Hangfire,
+  `[DisableConcurrentExecution]` keys the lock on **type + method only, never on args** (per-arg needs paid
+  Hangfire.Pro `[Mutex]` — hence this repo's `PerOrderDistributedMutexAttribute`). The `[DisableConcurrentExecution(300)]`
+  added to Sftp/S3/EmailPollOrgJob by the ingress fix is therefore a GLOBAL lock: correctness is unaffected (a global
+  lock strictly contains a per-org one) but every org's polling for a channel serialises through one lock — one hung
+  SFTP/IMAP endpoint stalls all tenants for up to 300s. Multi-tenant throughput ceiling. FIX IN FLIGHT: per-org
+  distributed mutex (branch `fix/poll-per-org-mutex`), mirroring PerOrderDistributedMutex keyed on orgId.
+- ERP/email crash-after-ACK dedup — chipped. Ops-health blind to `delivery_held` (false "All clear") — fix in flight.
+  UI Order-Workshop h1 — open (a verify; grep shows one h1 already present).
+Migrations added (auto-apply on boot): ingress ledger order_id, delivery_attempts idempotency_key,
+purchase_orders delivery_requeue_count, organisations last_stripe_event_at.
+
+## STATUS (2026-07-11, superseded above)
+- **A1/A2 (ingress claim-first): ATTEMPTED, HELD** at that time (later reworked + merged — see above). Held because
+  the first version traded duplicate-order for silent lost-order (transient stub failure → 23505-skip → PO lost).
 - Remaining clusters (B1/B2 lost-order, A3/A5/B3/B4/B5 delivery-idempotency, C1/C2/C3 poisoned-DbContext,
   Tier-D) not yet started — pending agent budget.
 

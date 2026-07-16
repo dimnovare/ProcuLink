@@ -563,6 +563,85 @@ public class StripeSubscriptionReconciliationServiceTests
         enqueuer.Calls.Should().ContainSingle().Which.Should().Be((heldOrderId, org.Id));
     }
 
+    // B3 SELF-HEALING (missed-release-retry): an org ALREADY in a processing status — with NO
+    // read_only→processing transition THIS run — that still has a delivery_held order must get it
+    // released. This is exactly the stranded case a transition-edge-only gate misses: a prior
+    // reconcile healed the org's status but the best-effort release SaveChanges failed, so the
+    // transition edge is already consumed and never fires again. The self-healing gate (release on
+    // every processing-reconcile, idempotent) recovers it on the next daily sweep.
+    [Fact]
+    public async Task Heal_AlreadyProcessing_NoTransition_StillReleasesBillingHeldOrders_SelfHealing()
+    {
+        var db = MakeDb();
+        // Org is ALREADY active (good standing); Stripe also returns active → no status transition.
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.Active,
+            priceId: "price_growth_m", subStatus: "active");
+
+        // A billing-held order left stranded by a prior run whose release write failed.
+        var heldOrderId = Guid.NewGuid();
+        db.PurchaseOrders.Add(new ProcuLink.Core.Entities.PurchaseOrderEntity
+        {
+            Id = heldOrderId,
+            OrgId = org.Id,
+            SupplierId = Guid.NewGuid(),
+            PoNumber = "PO-HELD-STRANDED",
+            OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency = "EUR",
+            Status = OrderStatusConstants.DeliveryHeld,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var enqueuer = new RecordingRetryEnqueuer();
+        var delivery = MakeRealDelivery(db, enqueuer);
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(Sub("active", "price_growth_m")), out _, delivery);
+
+        await svc.ReconcileOrgAsync(org.Id);
+
+        // No read_only→processing transition happened this run, yet the held order was still released …
+        (await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == heldOrderId)).Status
+            .Should().Be(OrderStatusConstants.ReadyToDeliver);
+        // … and actually re-enqueued for delivery.
+        enqueuer.Calls.Should().ContainSingle().Which.Should().Be((heldOrderId, org.Id));
+    }
+
+    // B3: a reconcile that leaves the org READ-ONLY (e.g. paused → read_only) must NOT release
+    // held orders — they stay held until the org actually returns to good standing.
+    [Fact]
+    public async Task Reconcile_LeavesOrgReadOnly_DoesNotReleaseHeldOrders()
+    {
+        var db = MakeDb();
+        var org = await AddOrgAsync(db, PlanConstants.Growth, AccountStatusConstants.ReadOnly, priceId: "price_growth_m");
+
+        var heldOrderId = Guid.NewGuid();
+        db.PurchaseOrders.Add(new ProcuLink.Core.Entities.PurchaseOrderEntity
+        {
+            Id = heldOrderId,
+            OrgId = org.Id,
+            SupplierId = Guid.NewGuid(),
+            PoNumber = "PO-STILL-HELD",
+            OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency = "EUR",
+            Status = OrderStatusConstants.DeliveryHeld,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var enqueuer = new RecordingRetryEnqueuer();
+        var delivery = MakeRealDelivery(db, enqueuer);
+        // 'paused' resolves → read_only, plan kept — the org is NOT in good standing.
+        var svc = MakeSvc(db, Config(), new FakeStripeClient(Sub("paused", "price_growth_m")), out _, delivery);
+
+        await svc.ReconcileOrgAsync(org.Id);
+
+        (await Reload(db, org.Id)).AccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
+        (await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == heldOrderId)).Status
+            .Should().Be(OrderStatusConstants.DeliveryHeld, "a read-only org must keep its held orders held");
+        enqueuer.Calls.Should().BeEmpty();
+    }
+
     private static ProcuLink.Infrastructure.Services.DeliveryService MakeRealDelivery(
         ProcuLinkDbContext db, ProcuLink.Core.Services.Delivery.IRetryDeliveryEnqueuer enqueuer)
     {

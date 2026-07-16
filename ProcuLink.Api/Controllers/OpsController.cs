@@ -78,6 +78,7 @@ public sealed class OpsController : ControllerBase
             WorkerHealthy:                s.WorkerHealthy,
             PendingReview:                s.PendingReview,
             PendingRouting:               s.PendingRouting,
+            DeliveryHeld:                 s.DeliveryHeld,
             DeliveryUnconfirmed:          s.DeliveryUnconfirmed));
     }
 

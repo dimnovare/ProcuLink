@@ -70,7 +70,7 @@ public sealed class OrderService : IOrderService, IStubOrderCreator
 
         _resolution = new OrderResolutionService(db, mappings, logger, shared, decisions);
 
-        _transform = new OrderTransformService(db, fileStorage, transformers, logger, poMappingService, effectiveConfig, cxmlResolver);
+        _transform = new OrderTransformService(db, fileStorage, transformers, logger, poMappingService, shared, effectiveConfig, cxmlResolver);
     }
 
     // ── Ingestion ─────────────────────────────────────────────────────────────
