@@ -202,6 +202,56 @@ public class DeliveryServiceUnconfirmedParkTests
             "the audit trail must not fabricate a 'retries exhausted' event over an attempt row that says unconfirmed");
     }
 
+    // The other half of the park: the operator's "Send again" must REACH the supplier. The park is
+    // only honest if the human's decision is actually executed — an accepted 202 that dispatches
+    // nothing leaves the order parked forever while telling the operator it was sent.
+    // Drives the real DeliverOrderJob path (the public DispatchArtifactAsync, which makes its own
+    // claim), because the claim is exactly what was broken: a claim that excludes
+    // delivery_unconfirmed matches 0 rows and no-ops as a BENIGN success.
+    [Theory]
+    [InlineData("erp_erply")]
+    [InlineData("email")]
+    public async Task OperatorReSend_FromParkedOrder_ActuallyDispatches(string protocol)
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.DeliveryUnconfirmed);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol));
+
+        // The exact post-park state: the attempt row was finalised TERMINAL ('unconfirmed'), which
+        // is what lets this re-send open a fresh attempt instead of re-adopting an in-flight row
+        // and immediately re-parking.
+        var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+            Channel = protocol, Destination = "https://supplier.example/orders",
+            Status = DeliveryAttempt.StatusUnconfirmed, AttemptNumber = 1,
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-30), IdempotencyKey = key,
+            ErrorMessage = DeliveryService.BuildUnconfirmedMessage(protocol),
+        });
+        await db.SaveChangesAsync();
+
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 200), protocol, ResendSafety.Unsafe);
+        var service = CreateService(db, dispatcher, encryption);
+
+        // requireAutoDeliver: false — an explicit operator re-send bypasses the AutoDeliver flag,
+        // exactly as DeliverOrderJob.EnqueueRedeliver drives it.
+        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, false, default);
+
+        dispatcher.Calls.Should().Be(1, "the operator explicitly accepted the duplicate risk — their send must reach the supplier");
+        result.Success.Should().BeTrue();
+        result.Parked.Should().BeFalse("a fresh operator-driven send is not a re-adopted unknown outcome");
+
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId)).Status
+            .Should().Be(OrderStatusConstants.Delivered);
+
+        var attempts = await db.DeliveryAttempts.Where(a => a.OrderId == ids.OrderId).ToListAsync();
+        attempts.Should().HaveCount(2, "the re-send opens its own attempt row beside the parked one");
+        attempts.Single(a => a.Status == DeliveryAttempt.StatusUnconfirmed).AttemptNumber
+            .Should().Be(1, "the parked row records an outcome we never observed — a later send never rewrites it");
+    }
+
     // A parked order is not billable: the meter counts only delivered + rejected_by_supplier.
     [Fact]
     public async Task ParkedOrder_IsNotBillable()

@@ -183,9 +183,19 @@ public sealed class DeliveryService : IDeliveryService
         // already flipped the row to a FRESH 'delivering'), so it skips the claim and only stamps
         // the SLA window.
         //
-        // Claimable = ready_to_deliver / delivery_failed (idle, send-ready), OR a STALE 'delivering'
-        // (UpdatedAt older than the reclaim window — crash recovery). A 'delivered'/terminal order is
-        // NOT claimable, so a redeliver on an already-delivered order affects 0 rows and no-ops.
+        // Claimable = ready_to_deliver / delivery_failed (idle, send-ready), delivery_unconfirmed
+        // (parked — see below), OR a STALE 'delivering' (UpdatedAt older than the reclaim window —
+        // crash recovery). A 'delivered'/terminal order is NOT claimable, so a redeliver on an
+        // already-delivered order affects 0 rows and no-ops.
+        //
+        // delivery_unconfirmed is claimable ONLY because an operator's "Send again" arrives through
+        // this path, and a status missing here fails SILENTLY: the claim matches 0 rows and returns
+        // the benign no-op success below, so the job logs success having sent nothing and the order
+        // stays parked forever. This does NOT re-open the automatic-retry door — RetryDeliveryAsync
+        // still refuses the status, so only a human can re-drive a parked order.
+        // Safe against an immediate re-park: the park finalises its attempt row TERMINAL
+        // ('unconfirmed'), and OpenDispatchAttemptAsync only re-adopts a 'dispatching' row — so this
+        // re-send opens a FRESH attempt (reAdopted: false) and reaches the dispatcher.
         var dispatchStart = DateTime.UtcNow;
         var dueAt = dispatchStart + _reliability.SlaWindow;
 
@@ -201,6 +211,7 @@ public sealed class DeliveryService : IDeliveryService
                     .Where(x => x.Id == orderId && x.OrgId == orgId
                              && (x.Status == OrderStatusConstants.ReadyToDeliver
                               || x.Status == OrderStatusConstants.DeliveryFailed
+                              || x.Status == OrderStatusConstants.DeliveryUnconfirmed
                               || (x.Status == OrderStatusConstants.Delivering && x.UpdatedAt < staleBefore)))
                     .ExecuteUpdateAsync(s => s
                         .SetProperty(o => o.Status, OrderStatusConstants.Delivering)
@@ -244,6 +255,7 @@ public sealed class DeliveryService : IDeliveryService
                 // status (e.g. already delivered) still no-ops, matching the relational 0-rows branch.
                 if (order.Status is not (OrderStatusConstants.ReadyToDeliver
                                       or OrderStatusConstants.DeliveryFailed
+                                      or OrderStatusConstants.DeliveryUnconfirmed
                                       or OrderStatusConstants.Delivering))
                 {
                     _logger.LogInformation(
