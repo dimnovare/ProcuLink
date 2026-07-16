@@ -1809,6 +1809,93 @@ public sealed class OrdersController : ControllerBase
         return Accepted(new { status = "delivering" });
     }
 
+    // ── POST /api/orders/{id}/mark-delivered ─────────────────────────────────
+
+    /// <summary>
+    /// Operator confirmation that a parked (<c>delivery_unconfirmed</c>) order DID reach the
+    /// supplier — established out-of-band, e.g. the supplier confirmed by phone or the order is
+    /// visible in their portal. Closes the order truthfully without re-sending it.
+    /// <para>
+    /// The delivery ATTEMPT row stays <c>unconfirmed</c>: its outcome was never observed and this
+    /// endpoint does not change that. What is new is the operator's assertion, recorded as its own
+    /// audit event with the acting user. Only valid from <c>delivery_unconfirmed</c>.
+    /// </para>
+    /// <para>
+    /// Billing: metering counts <c>delivered</c>/<c>rejected_by_supplier</c> by query, so this is
+    /// the point at which the order becomes chargeable — correct, since the operator has just
+    /// confirmed the supplier received it. No metering call belongs here.
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/mark-delivered")]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MarkDelivered(Guid id, CancellationToken ct)
+    {
+        var orgId     = _tenant.OrganisationId;
+        var getResult = await _orders.GetByIdAsync(orgId, id, ct);
+
+        if (!getResult.IsSuccess)
+            return NotFound();
+
+        var order = getResult.Value!;
+
+        if (order.Status != OrderStatusConstants.DeliveryUnconfirmed)
+            return BadRequest(new
+            {
+                error = $"Only an order whose delivery is unconfirmed can be marked delivered "
+                      + $"(current: '{order.Status}')."
+            });
+
+        var now = DateTime.UtcNow;
+        order.Status = OrderStatusConstants.Delivered;
+        order.UpdatedAt = now;
+        // A confirmed delivery closes the SLA window — mirrors DeliveryService's success path.
+        order.DeliveryDueAt = null;
+        order.SlaBreached = false;
+
+        // ICurrentTenantService only exposes the Clerk "sub" string, never the internal Guid — the
+        // acting user's Guid FK (AuditEvent.UserId) has to be resolved via the AppUser row so the
+        // human who asserted delivery is genuinely on the record, not just implied.
+        var actingUserId = await _db.Users
+            .AsNoTracking()
+            .Where(u => u.ClerkUserId == _tenant.ClerkUserId)
+            .Select(u => (Guid?)u.Id)
+            .FirstOrDefaultAsync(ct);
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            orderId = id,
+            fromStatus = OrderStatusConstants.DeliveryUnconfirmed,
+            toStatus = OrderStatusConstants.Delivered,
+            confirmedAt = now,
+            detail = "Operator confirmed out-of-band that the supplier received this order. "
+                   + "The delivery attempt itself was never acknowledged; this records the "
+                   + "operator's assertion, not an observed supplier ACK.",
+        });
+
+        _db.AuditEvents.Add(new ProcuLink.Core.Entities.AuditEvent
+        {
+            Id = Guid.NewGuid(),
+            OrgId = orgId,
+            UserId = actingUserId,
+            EntityType = "Order",
+            EntityId = id,
+            Action = "DeliveryConfirmedManually",
+            Payload = System.Text.Json.JsonDocument.Parse(payload),
+            CreatedAt = now,
+        });
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "DeliveryConfirmedManually: order {OrderId} (org {OrgId}) marked delivered by operator {UserId} "
+            + "after an unconfirmed delivery.",
+            id, orgId, _tenant.ClerkUserId);
+
+        return Accepted(new { status = "delivered" });
+    }
+
     // ── POST /api/orders/{id}/retry-delivery ─────────────────────────────────
 
     /// <summary>
