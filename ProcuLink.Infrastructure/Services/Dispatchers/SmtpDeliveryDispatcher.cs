@@ -47,7 +47,8 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
         string contentType,
         SupplierDeliveryConfig config,
         string decryptedCredentials,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? idempotencyKey = null)
     {
         SmtpConfig? cfg;
         try
@@ -115,6 +116,11 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
         foreach (var addr in recipients)
             message.To.Add(MailboxAddress.Parse(addr));
         message.Subject = subject;
+        // A3 idempotency: a deterministic Message-ID (stable across a crash-recovery re-send of the
+        // same artifact) lets a receiving MTA de-duplicate. Best-effort — legacy channel, retired
+        // on the cloud host.
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            message.MessageId = $"{idempotencyKey}@proculink.eu";
 
         var builder = new BodyBuilder { TextBody = body };
         builder.Attachments.Add(attachmentName, content, ContentType.Parse(contentType));

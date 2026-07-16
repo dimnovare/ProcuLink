@@ -85,6 +85,10 @@ public sealed class PostmarkEmailApiClient : IEmailApiClient
                     ContentType = string.IsNullOrWhiteSpace(a.ContentType) ? "application/octet-stream" : a.ContentType,
                 }).ToList()
                 : null,
+            // A3 idempotency: custom headers (e.g. a deterministic Message-ID) passed through to Postmark.
+            Headers = message.Headers is { Count: > 0 }
+                ? message.Headers.Select(h => new PostmarkHeader { Name = h.Name, Value = h.Value }).ToList()
+                : null,
         };
 
         try
@@ -156,6 +160,7 @@ public sealed class PostmarkEmailApiClient : IEmailApiClient
         public string TextBody { get; set; } = "";
         public string MessageStream { get; set; } = "outbound";
         public List<PostmarkAttachment>? Attachments { get; set; }
+        public List<PostmarkHeader>? Headers { get; set; }
     }
 
     private sealed class PostmarkAttachment
@@ -163,5 +168,11 @@ public sealed class PostmarkEmailApiClient : IEmailApiClient
         public string Name { get; set; } = "";
         public string Content { get; set; } = "";
         public string ContentType { get; set; } = "";
+    }
+
+    private sealed class PostmarkHeader
+    {
+        public string Name { get; set; } = "";
+        public string Value { get; set; } = "";
     }
 }

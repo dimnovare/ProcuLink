@@ -183,7 +183,7 @@ public class DeliveryServiceEmitsFirstDeliverySucceededTests
             string contentType,
             SupplierDeliveryConfig config,
             string decryptedCredentials,
-            CancellationToken ct) => Task.FromResult(_result);
+            CancellationToken ct, string? idempotencyKey = null) => Task.FromResult(_result);
     }
 
     private sealed class FakeFileStorage : IFileStorageService

@@ -39,10 +39,17 @@ public sealed record EmailApiMessage(
     string Subject,
     string TextBody,
     IReadOnlyList<EmailApiAttachment>? Attachments = null,
-    string? ReplyTo = null);
+    string? ReplyTo = null,
+    IReadOnlyList<EmailApiHeader>? Headers = null);
 
 /// <summary>A single binary attachment (the generated artifact for delivery, etc.).</summary>
 public sealed record EmailApiAttachment(string FileName, string ContentType, byte[] Content);
+
+/// <summary>
+/// A custom message header passed through to the provider (e.g. a deterministic <c>Message-ID</c>
+/// for A3 delivery idempotency). Provider support is best-effort.
+/// </summary>
+public sealed record EmailApiHeader(string Name, string Value);
 
 /// <summary>
 /// Result of a single send attempt. <paramref name="StatusCode"/> is the provider's HTTP status

@@ -332,7 +332,7 @@ public class RevisionAuthorityDeliveryTests
 
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
-            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct)
+            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct, string? idempotencyKey = null)
         {
             Calls++;
             LastConfig = config;

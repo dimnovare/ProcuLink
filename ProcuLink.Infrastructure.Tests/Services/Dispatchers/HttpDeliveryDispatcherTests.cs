@@ -104,6 +104,47 @@ public class HttpDeliveryDispatcherTests
     }
 
     [Fact]
+    public async Task Dispatch_WithIdempotencyKey_SetsIdempotencyKeyHeader()
+    {
+        string? idemHeader = null;
+        string? msgIdHeader = null;
+        var handler = new CapturingHttpMessageHandler(req =>
+        {
+            req.Headers.TryGetValues("Idempotency-Key", out var v1);
+            idemHeader = v1?.FirstOrDefault();
+            req.Headers.TryGetValues("X-Message-Id", out var v2);
+            msgIdHeader = v2?.FirstOrDefault();
+        });
+
+        var dispatcher = MakeDispatcher(handler);
+        var config = MakeConfig("https://example.com/orders");
+        var creds = JsonSerializer.Serialize(new { type = "none" });
+        const string key = "plk-dlv-0123456789abcdef-fedcba9876543210";
+
+        await dispatcher.DispatchAsync(
+            Encoding.UTF8.GetBytes("data"), "order.csv", "text/csv", config, creds, default, key);
+
+        idemHeader.Should().Be(key, "the deterministic idempotency key is present on the outbound HTTP request");
+        msgIdHeader.Should().Be(key);
+    }
+
+    [Fact]
+    public async Task Dispatch_WithoutIdempotencyKey_DoesNotSetHeader()
+    {
+        var hasIdemHeader = true;
+        var handler = new CapturingHttpMessageHandler(req => hasIdemHeader = req.Headers.Contains("Idempotency-Key"));
+
+        var dispatcher = MakeDispatcher(handler);
+        var config = MakeConfig("https://example.com/orders");
+        var creds = JsonSerializer.Serialize(new { type = "none" });
+
+        await dispatcher.DispatchAsync(
+            Encoding.UTF8.GetBytes("data"), "order.csv", "text/csv", config, creds, default);
+
+        hasIdemHeader.Should().BeFalse("no Idempotency-Key header is added when the caller supplies none");
+    }
+
+    [Fact]
     public async Task Dispatch_InvalidUrl_ReturnsConfigError()
     {
         var dispatcher = MakeDispatcher(new FakeHttpMessageHandler(HttpStatusCode.OK, "OK"));

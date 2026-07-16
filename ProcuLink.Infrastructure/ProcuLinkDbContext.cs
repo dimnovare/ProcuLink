@@ -791,6 +791,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Channel).HasColumnName("channel").IsRequired();
             b.Property(x => x.Destination).HasColumnName("destination").IsRequired();
             b.Property(x => x.Status).HasColumnName("status").IsRequired();
+            // A3 — deterministic per-artifact delivery idempotency key (nullable; legacy/test-fire null).
+            b.Property(x => x.IdempotencyKey).HasColumnName("idempotency_key");
             b.Property(x => x.AttemptedAt)
              .HasColumnName("attempted_at")
              .HasColumnType("timestamptz");

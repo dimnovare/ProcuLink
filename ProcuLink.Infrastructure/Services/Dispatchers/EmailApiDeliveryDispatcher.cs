@@ -45,7 +45,8 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
         string contentType,
         SupplierDeliveryConfig config,
         string decryptedCredentials,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? idempotencyKey = null)
     {
         if (!_email.IsConfigured)
             return new DeliveryResult(false,
@@ -87,13 +88,21 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
         // provider rejects the send — surfaced as a delivery_failed with the provider's reason).
         var from = string.IsNullOrWhiteSpace(cfg.FromAddress) ? _email.DefaultFrom : cfg.FromAddress!;
 
+        // A3 idempotency: a deterministic Message-ID (stable across a crash-recovery re-send of the
+        // same artifact) lets a receiving MTA de-duplicate the re-send. Best-effort — provider
+        // support for a caller-supplied Message-ID varies.
+        var headers = string.IsNullOrWhiteSpace(idempotencyKey)
+            ? null
+            : new[] { new EmailApiHeader("Message-ID", $"<{idempotencyKey}@proculink.eu>") };
+
         var message = new EmailApiMessage(
             From: from,
             To: recipients,
             Subject: subject,
             TextBody: bodyText,
             Attachments: new[] { new EmailApiAttachment(attachmentName, contentType, content) },
-            ReplyTo: string.IsNullOrWhiteSpace(cfg.ReplyTo) ? null : cfg.ReplyTo);
+            ReplyTo: string.IsNullOrWhiteSpace(cfg.ReplyTo) ? null : cfg.ReplyTo,
+            Headers: headers);
 
         var result = await _email.SendAsync(message, ct);
         return result.Success

@@ -224,7 +224,7 @@ public sealed class DeliveryConcurrentRetryPostgresTests : IAsyncLifetime
             string contentType,
             SupplierDeliveryConfig config,
             string decryptedCredentials,
-            CancellationToken ct)
+            CancellationToken ct, string? idempotencyKey = null)
         {
             Interlocked.Increment(ref _calls);
             await Task.Delay(_holdFor, ct);

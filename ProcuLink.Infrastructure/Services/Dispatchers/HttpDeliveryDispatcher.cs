@@ -67,7 +67,8 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
         string contentType,
         SupplierDeliveryConfig config,
         string decryptedCredentials,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? idempotencyKey = null)
     {
         try
         {
@@ -107,6 +108,19 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
             var authError = await _auth.ApplyAsync(request, creds, client, requestCt);
             if (authError is not null)
                 return new DeliveryResult(false, authError);
+
+            // ── A3 idempotency ────────────────────────────────────────────────
+            // Carry the deterministic per-artifact idempotency key so a supplier that honours it
+            // treats a crash-recovery re-send (or a duplicated activation) as a no-op. The key is a
+            // ProcuLink-generated token (no CR/LF/control chars), added before the tenant-supplied
+            // extra headers so it cannot be silently overwritten by supplier config. Sent both as the
+            // conventional `Idempotency-Key` and a stable `X-Message-Id` for suppliers that key on the
+            // latter.
+            if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            {
+                request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
+                request.Headers.TryAddWithoutValidation("X-Message-Id", idempotencyKey);
+            }
 
             // Apply extra headers. Names+values are tenant-supplied, so each is validated for
             // CR/LF/NUL/control-char injection before it can reach the request — a header that

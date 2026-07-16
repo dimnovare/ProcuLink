@@ -16,11 +16,19 @@ public interface IDeliveryDispatcher
     /// Dispatches the artifact payload to the configured destination.
     /// Must not throw — return DeliveryResult(false, message) on failure.
     /// </summary>
+    /// <param name="idempotencyKey">
+    /// Deterministic per-artifact delivery idempotency key (A3). Stable across a legitimate retry
+    /// AND a crash-recovery re-send of the same artifact, so a channel that honours it lets the
+    /// supplier de-duplicate a re-send: HTTP sets it as the <c>Idempotency-Key</c> header, email
+    /// as a deterministic <c>Message-ID</c>. SFTP/FTPS ignore it (they are already idempotent via
+    /// the deterministic overwrite filename). Null for test-fire / callers that do not supply one.
+    /// </param>
     Task<DeliveryResult> DispatchAsync(
         byte[] content,
         string fileName,
         string contentType,
         SupplierDeliveryConfig config,
         string decryptedCredentials,
-        CancellationToken ct);
+        CancellationToken ct,
+        string? idempotencyKey = null);
 }

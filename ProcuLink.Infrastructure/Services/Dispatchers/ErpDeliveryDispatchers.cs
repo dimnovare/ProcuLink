@@ -39,8 +39,12 @@ public abstract class ErpDeliveryDispatcherBase : IDeliveryDispatcher
         string contentType,
         SupplierDeliveryConfig config,
         string decryptedCredentials,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? idempotencyKey = null)
     {
+        // A3 idempotency: the ERP connector contract does not currently accept an idempotency key;
+        // the attempt-started row (DeliveryService) remains the universal crash backstop for this
+        // channel. idempotencyKey is intentionally unused here.
         var result = await _connector.SendAsync(
             new ErpDeliveryRequest(content, fileName, contentType, config, decryptedCredentials),
             ct);

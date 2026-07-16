@@ -9,6 +9,17 @@ public class DeliveryAttempt
     public string Channel { get; set; } = string.Empty;
     public string Destination { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Deterministic per-artifact delivery idempotency key — a stable function of
+    /// (orderId, artifactId). The SAME key is (re)used for every dispatch of the same artifact:
+    /// a legitimate backoff retry, and crucially a crash-recovery re-send after a lost ACK. It is
+    /// carried on the outbound request per channel (HTTP <c>Idempotency-Key</c> header, email
+    /// <c>Message-ID</c>; SFTP/FTPS achieve the same effect via the deterministic overwrite
+    /// filename) so a supplier can de-duplicate a re-send. Null on legacy / test-fire rows.
+    /// </summary>
+    public string? IdempotencyKey { get; set; }
+
     public DateTime AttemptedAt { get; set; }
     public int? ResponseCode { get; set; }
     public string? ErrorMessage { get; set; }
@@ -49,6 +60,21 @@ public class DeliveryAttempt
 
     /// <summary>Upper bound on persisted <see cref="ResponseBody"/> length — keeps a hostile/huge supplier body from bloating the row.</summary>
     public const int MaxResponseBodyLength = 8_000;
+
+    // ── Status values ───────────────────────────────────────────────────────────
+    /// <summary>Terminal: the supplier accepted the payload (HTTP 2xx / successful upload / send).</summary>
+    public const string StatusSuccess = "success";
+    /// <summary>Terminal: the attempt failed (transient 5xx / network, or an explicit 4xx rejection).</summary>
+    public const string StatusFailed = "failed";
+    /// <summary>
+    /// In-flight marker (A3): persisted+committed BEFORE the actual send so a crash AFTER the
+    /// supplier accepts but BEFORE the terminal outcome commits is detectable on recovery. A stuck
+    /// re-drive reuses the matching <c>dispatching</c> row (same <see cref="IdempotencyKey"/>) rather
+    /// than opening a fresh attempt, so a lost-ACK re-send cannot create a second terminal attempt
+    /// row or silently consume the retry budget. Excluded from the retry attempt-cap count until it
+    /// is finalised to <see cref="StatusSuccess"/>/<see cref="StatusFailed"/>.
+    /// </summary>
+    public const string StatusDispatching = "dispatching";
 
     // Navigation — Order is optional (null for test-fire rows)
     public PurchaseOrderEntity? Order { get; set; }

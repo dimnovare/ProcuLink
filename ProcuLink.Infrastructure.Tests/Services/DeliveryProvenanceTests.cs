@@ -216,7 +216,7 @@ public class DeliveryProvenanceTests
 
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
-            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct) =>
+            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct, string? idempotencyKey = null) =>
             Task.FromResult(_result);
     }
 

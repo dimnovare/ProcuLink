@@ -41,8 +41,13 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         string contentType,
         SupplierDeliveryConfig config,
         string decryptedCredentials,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? idempotencyKey = null)
     {
+        // A3 idempotency: FTPS is already idempotent by construction. The remote filename is the
+        // deterministic sanitised PO filename and UploadStream below uses FtpRemoteExists.Overwrite,
+        // so a crash-recovery re-upload OVERWRITES the same path rather than creating a second file —
+        // no supplier idempotency key is needed (idempotencyKey is intentionally unused here).
         FtpsConfig? cfg;
         FtpsCredentials? creds;
 

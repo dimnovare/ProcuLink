@@ -39,6 +39,11 @@ public sealed class DeliveryService : IDeliveryService
     // operator-re-drivable), it just doesn't auto-enqueue. Mirrors StuckOrderDetectionService's
     // optional IParseJobEnqueuer pattern.
     private readonly IRetryDeliveryEnqueuer? _retryEnqueuer;
+    // A5 — billing gate on the retry path. Null in older positional test ctors / hosts that do not
+    // register a billing service behaves exactly like flag-OFF: the retry is NOT billing-gated
+    // (pre-A5 behaviour). Both live hosts (Api + Worker) register IBillingService, so production
+    // retries ARE gated. Mirrors the optional-seam pattern used for _effectiveConfig / _retryEnqueuer.
+    private readonly IBillingService? _billing;
 
     public DeliveryService(
         ProcuLinkDbContext db,
@@ -51,7 +56,8 @@ public sealed class DeliveryService : IDeliveryService
         ILogger<DeliveryService> logger,
         DeliveryReliabilityOptions? reliability = null,
         IEffectiveConnectionConfigResolver? effectiveConfig = null,
-        IRetryDeliveryEnqueuer? retryEnqueuer = null)
+        IRetryDeliveryEnqueuer? retryEnqueuer = null,
+        IBillingService? billing = null)
     {
         _db = db;
         _fileStorage = fileStorage;
@@ -66,7 +72,18 @@ public sealed class DeliveryService : IDeliveryService
         // hosts) behaves exactly like flag-OFF: the live supplier delivery config drives dispatch.
         _effectiveConfig = effectiveConfig;
         _retryEnqueuer = retryEnqueuer;
+        _billing = billing;
     }
+
+    /// <summary>
+    /// Deterministic per-artifact delivery idempotency key (A3): a stable function of
+    /// (orderId, artifactId). Every dispatch of the same artifact — a legitimate backoff retry AND a
+    /// crash-recovery re-send after a lost ACK — produces the SAME key, so a channel that honours it
+    /// lets the supplier de-duplicate the re-send. A re-transform mints a new artifactId → a new key
+    /// → a legitimately new delivery.
+    /// </summary>
+    internal static string BuildIdempotencyKey(Guid orderId, Guid artifactId)
+        => $"plk-dlv-{orderId:N}-{artifactId:N}";
 
     /// <summary>
     /// Best-effort exception reconciliation: exception generation is operational
@@ -286,6 +303,17 @@ public sealed class DeliveryService : IDeliveryService
         // comparing this to the artifact's stored ArtifactSha256 detects corruption in transit/storage.
         var dispatchedPayloadSha = ProvenanceHash.TrySha256Hex(content);
 
+        // ── A3: attempt-started marker (the universal crash backstop) ─────────────
+        // Persist + COMMIT a 'dispatching' attempt row (carrying the deterministic idempotency key)
+        // BEFORE the actual send, so a crash AFTER the supplier accepts but BEFORE the terminal
+        // outcome commits leaves a detectable in-flight row (the order stays 'delivering'). A later
+        // stuck re-drive REUSES that row (matched on the same key) instead of opening a fresh attempt,
+        // so the lost-ACK re-send cannot create a second terminal attempt row or silently burn the
+        // retry budget — and it carries the SAME idempotency key, which a supporting supplier
+        // de-duplicates (HTTP header / email Message-ID; SFTP/FTPS overwrite the deterministic file).
+        var idempotencyKey = BuildIdempotencyKey(order.Id, artifact.Id);
+        var attempt = await OpenDispatchAttemptAsync(order, artifact, config, idempotencyKey, ct);
+
         DeliveryResult result;
         try
         {
@@ -295,7 +323,8 @@ public sealed class DeliveryService : IDeliveryService
                 GetContentType(artifact.Format),
                 config,
                 credentials,
-                ct);
+                ct,
+                idempotencyKey);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -313,8 +342,63 @@ public sealed class DeliveryService : IDeliveryService
         await PersistAttemptAsync(
             order, artifact, config, result, ct,
             reconcile: reconcileFailedAttempt,
-            dispatchedPayloadSha256: dispatchedPayloadSha);
+            dispatchedPayloadSha256: dispatchedPayloadSha,
+            existingAttempt: attempt);
         return result;
+    }
+
+    /// <summary>
+    /// A3 — open (or, on crash recovery, re-adopt) the in-flight <c>dispatching</c> attempt row for a
+    /// send, committing it BEFORE the actual dispatch so the send is crash-detectable. If a
+    /// <c>dispatching</c> row already exists for this order+idempotency key (a prior activation sent
+    /// but died before finalising), it is REUSED — the re-send stays the same logical attempt (same
+    /// attempt number, same key), so it neither duplicates a terminal row nor consumes a retry-budget
+    /// slot. Otherwise a fresh row is inserted with the next attempt number.
+    /// </summary>
+    private async Task<DeliveryAttempt> OpenDispatchAttemptAsync(
+        PurchaseOrderEntity order,
+        OutboundArtifact artifact,
+        SupplierDeliveryConfig config,
+        string idempotencyKey,
+        CancellationToken ct)
+    {
+        var existing = await _db.DeliveryAttempts
+            .Where(a => a.OrderId == order.Id && a.OrgId == order.OrgId
+                     && a.Status == DeliveryAttempt.StatusDispatching
+                     && a.IdempotencyKey == idempotencyKey)
+            .OrderByDescending(a => a.AttemptedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (existing is not null)
+            return existing;
+
+        // Next 1-based attempt index. Only TERMINAL attempts count toward the number (a stale
+        // 'dispatching' row for a DIFFERENT artifact must not inflate it) — consistent with the
+        // retry attempt-cap count.
+        var attemptNumber = (await _db.DeliveryAttempts
+            .CountAsync(a => a.OrderId == order.Id && a.OrgId == order.OrgId
+                          && a.Status != DeliveryAttempt.StatusDispatching, ct)) + 1;
+
+        var attempt = new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            OrgId = order.OrgId,
+            Channel = config.Protocol,
+            Destination = GetDestination(config),
+            Status = DeliveryAttempt.StatusDispatching,
+            AttemptNumber = attemptNumber,
+            AttemptedAt = DateTime.UtcNow,
+            IdempotencyKey = idempotencyKey,
+            // Provenance stamped up-front so a crashed (never-finalised) row still records which
+            // revision/config produced the artifact it was sending.
+            ConnectionRevisionId = artifact.ConnectionRevisionId ?? order.ConnectionRevisionId,
+            ConfigDigest = artifact.ConfigDigest,
+        };
+        _db.DeliveryAttempts.Add(attempt);
+        // COMMIT before the send — this is the crash-detectable marker.
+        await _db.SaveChangesAsync(ct);
+        return attempt;
     }
 
     /// <summary>
@@ -497,7 +581,8 @@ public sealed class DeliveryService : IDeliveryService
         DeliveryResult result,
         CancellationToken ct,
         bool reconcile = true,
-        string? dispatchedPayloadSha256 = null)
+        string? dispatchedPayloadSha256 = null,
+        DeliveryAttempt? existingAttempt = null)
     {
         var now = DateTime.UtcNow;
 
@@ -523,34 +608,57 @@ public sealed class DeliveryService : IDeliveryService
             order.SlaBreached = false;
         }
 
-        // 1-based attempt index within this order's delivery retry sequence.
-        var attemptNumber = (await _db.DeliveryAttempts
-            .CountAsync(a => a.OrderId == order.Id && a.OrgId == order.OrgId, ct)) + 1;
+        var status = result.Success ? DeliveryAttempt.StatusSuccess : DeliveryAttempt.StatusFailed;
 
-        _db.DeliveryAttempts.Add(new DeliveryAttempt
+        if (existingAttempt is not null)
         {
-            Id = Guid.NewGuid(),
-            OrderId = order.Id,
-            OrgId = order.OrgId,
-            Channel = config.Protocol,
-            Destination = GetDestination(config),
-            Status = result.Success ? "success" : "failed",
-            AttemptNumber = attemptNumber,
-            AttemptedAt = now,
-            ResponseCode = result.ResponseCode,
-            ErrorMessage = result.Success ? null : result.ErrorMessage,
-            RejectionReason = isSupplierRejection ? result.ErrorMessage : null,
-            // Rejection capture: persist the supplier's raw NACK body verbatim (bounded).
-            ResponseBody = TruncateResponseBody(result.ResponseBody),
-            // ACK round-trip: stamp the confirmation time on a successful dispatch.
-            AcknowledgedAt = result.Success ? now : null,
-            // Provenance: which connection revision/config produced the artifact this attempt
-            // dispatched, plus the SHA-256 of the payload bytes actually sent (null when the
-            // attempt failed before the payload was downloaded).
-            ConnectionRevisionId = artifact.ConnectionRevisionId ?? order.ConnectionRevisionId,
-            ConfigDigest = artifact.ConfigDigest,
-            ArtifactSha256 = dispatchedPayloadSha256,
-        });
+            // A3 finalize path: flip the in-flight 'dispatching' row (opened + committed before the
+            // send) to its terminal outcome IN PLACE. Channel/Destination/AttemptNumber/IdempotencyKey
+            // and revision provenance were stamped at open; only the outcome fields change here. On a
+            // crash-recovery re-send this is the SAME row, so no second terminal attempt is created.
+            existingAttempt.Status = status;
+            existingAttempt.AttemptedAt = now;
+            existingAttempt.ResponseCode = result.ResponseCode;
+            existingAttempt.ErrorMessage = result.Success ? null : result.ErrorMessage;
+            existingAttempt.RejectionReason = isSupplierRejection ? result.ErrorMessage : null;
+            existingAttempt.ResponseBody = TruncateResponseBody(result.ResponseBody);
+            existingAttempt.AcknowledgedAt = result.Success ? now : null;
+            existingAttempt.ArtifactSha256 = dispatchedPayloadSha256 ?? existingAttempt.ArtifactSha256;
+        }
+        else
+        {
+            // Fresh terminal row — the pre-dispatch failure paths (no send happened, so no in-flight
+            // marker). 1-based index counts only TERMINAL attempts so a dangling 'dispatching' row
+            // never inflates the number.
+            var attemptNumber = (await _db.DeliveryAttempts
+                .CountAsync(a => a.OrderId == order.Id && a.OrgId == order.OrgId
+                              && a.Status != DeliveryAttempt.StatusDispatching, ct)) + 1;
+
+            _db.DeliveryAttempts.Add(new DeliveryAttempt
+            {
+                Id = Guid.NewGuid(),
+                OrderId = order.Id,
+                OrgId = order.OrgId,
+                Channel = config.Protocol,
+                Destination = GetDestination(config),
+                Status = status,
+                AttemptNumber = attemptNumber,
+                AttemptedAt = now,
+                ResponseCode = result.ResponseCode,
+                ErrorMessage = result.Success ? null : result.ErrorMessage,
+                RejectionReason = isSupplierRejection ? result.ErrorMessage : null,
+                // Rejection capture: persist the supplier's raw NACK body verbatim (bounded).
+                ResponseBody = TruncateResponseBody(result.ResponseBody),
+                // ACK round-trip: stamp the confirmation time on a successful dispatch.
+                AcknowledgedAt = result.Success ? now : null,
+                // Provenance: which connection revision/config produced the artifact this attempt
+                // dispatched, plus the SHA-256 of the payload bytes actually sent (null when the
+                // attempt failed before the payload was downloaded).
+                ConnectionRevisionId = artifact.ConnectionRevisionId ?? order.ConnectionRevisionId,
+                ConfigDigest = artifact.ConfigDigest,
+                ArtifactSha256 = dispatchedPayloadSha256,
+            });
+        }
 
         await _db.SaveChangesAsync(ct);
 
@@ -707,6 +815,27 @@ public sealed class DeliveryService : IDeliveryService
         if (artifact is null)
             return new DeliveryResult(false, "No outbound artifact found. Transform the order before retrying delivery.");
 
+        // ── A5: billing gate on the retry path ────────────────────────────────────
+        // A backoff retry can fire LONG after the first delivery attempt — by which time the org may
+        // have lapsed to read_only / past_due / cancelled / trial_expired. DeliverOrderJob gates the
+        // FIRST delivery on the same check; the retry path must mirror it exactly, or a lapsed org's
+        // order would deliver anyway and meter the €0.50 overage. Checked BEFORE the 'delivering'
+        // claim so HoldForBillingAsync can move the still-idle order straight to the explicit,
+        // auto-releasing 'delivery_held' state (re-driven on reactivation via
+        // ReleaseBillingHeldOrdersAsync) — never a silent strand, never a delivery.
+        //
+        // Returns a BENIGN success no-op (matching the already-delivered / claim-lost convention) so
+        // RetryDeliveryJob does NOT schedule another backoff attempt for a held order — the
+        // reactivation re-drive owns getting it moving again.
+        if (_billing is not null && !await _billing.CanProcessOrdersAsync(orgId, ct))
+        {
+            var held = await HoldForBillingAsync(orgId, orderId, ct);
+            _logger.LogWarning(
+                "RetryDeliveryAsync: order {OrderId} (org {OrgId}) NOT delivered — org cannot process orders (billing). Held={Held}; awaiting reactivation re-drive.",
+                orderId, orgId, held);
+            return new DeliveryResult(true, null);
+        }
+
         // ── Concurrency claim ──────────────────────────────────────────────────
         // The status/attempt-count reads above are advisory only: two concurrent retries
         // for the SAME order (a duplicated Hangfire activation racing the operator "Retry
@@ -757,9 +886,12 @@ public sealed class DeliveryService : IDeliveryService
             }
 
             // Count is read inside the SAME transaction as the claim, so the cap decision is
-            // made against the row this worker now exclusively holds.
+            // made against the row this worker now exclusively holds. Only TERMINAL attempts count:
+            // an in-flight 'dispatching' row (a crash-recovery re-adopt of THIS send) must not burn a
+            // retry-budget slot — it is the same logical attempt, not a new one.
             priorAttempts = await _db.DeliveryAttempts
-                .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId, ct);
+                .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId
+                              && a.Status != DeliveryAttempt.StatusDispatching, ct);
 
             await claimTx.CommitAsync(ct);
 
@@ -782,7 +914,8 @@ public sealed class DeliveryService : IDeliveryService
             await _db.SaveChangesAsync(ct);
 
             priorAttempts = await _db.DeliveryAttempts
-                .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId, ct);
+                .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId
+                              && a.Status != DeliveryAttempt.StatusDispatching, ct);
         }
 
         if (priorAttempts >= maxAttempts)
@@ -813,7 +946,10 @@ public sealed class DeliveryService : IDeliveryService
     }
 
     public Task<int> CountDeliveryAttemptsAsync(Guid orgId, Guid orderId, CancellationToken ct) =>
-        _db.DeliveryAttempts.CountAsync(a => a.OrderId == orderId && a.OrgId == orgId, ct);
+        // Only TERMINAL attempts (an in-flight 'dispatching' marker is not yet a completed attempt),
+        // so the retry-queue backoff step + cap detection agree with RetryDeliveryAsync's cap count.
+        _db.DeliveryAttempts.CountAsync(a => a.OrderId == orderId && a.OrgId == orgId
+                                          && a.Status != DeliveryAttempt.StatusDispatching, ct);
 
     public async Task<bool> HoldForBillingAsync(Guid orgId, Guid orderId, CancellationToken ct)
     {
@@ -821,11 +957,18 @@ public sealed class DeliveryService : IDeliveryService
             .Where(o => o.Id == orderId && o.OrgId == orgId)
             .FirstOrDefaultAsync(ct);
 
-        // Only a transform-ready order is held. Any other status (already delivering/delivered/
-        // failed/held) is a benign no-op — the billing guard just skips those.
-        if (order is null || order.Status != OrderStatusConstants.ReadyToDeliver)
+        // Holdable = an idle, send-ready order that has NOT yet been claimed for this dispatch:
+        //   • ready_to_deliver — DeliverOrderJob's first-delivery billing gate (transform just done).
+        //   • delivery_failed  — RetryDeliveryAsync's billing gate (A5): a backoff retry for an order
+        //                        that previously failed, now blocked because the org lapsed.
+        // Any other status (delivering / delivered / dead-letter / already held) is a benign no-op —
+        // the billing gate simply returns without holding, and never delivers.
+        if (order is null ||
+            order.Status is not (OrderStatusConstants.ReadyToDeliver
+                              or OrderStatusConstants.DeliveryFailed))
             return false;
 
+        var fromStatus = order.Status;
         var now = DateTime.UtcNow;
         order.Status = OrderStatusConstants.DeliveryHeld;
         order.UpdatedAt = now;
@@ -837,7 +980,7 @@ public sealed class DeliveryService : IDeliveryService
         var payload = System.Text.Json.JsonSerializer.Serialize(new
         {
             reason = "DeliveryHeldForBilling",
-            fromStatus = OrderStatusConstants.ReadyToDeliver,
+            fromStatus,
             toStatus = OrderStatusConstants.DeliveryHeld,
             heldAt = now,
             detail = "Org cannot process orders (billing) at delivery time — delivery paused, artifact intact; auto-released when the org returns to good standing.",
