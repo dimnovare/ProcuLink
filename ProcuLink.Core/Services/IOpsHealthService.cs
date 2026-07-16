@@ -80,24 +80,25 @@ public sealed record OpsHealthSummary(
     // transformed artifact is intact and DeliveryService.ReleaseBillingHeldOrdersAsync re-drives
     // delivery automatically on reactivation, so a hold is DELIBERATE and self-resolving.
     //
-    // UNLIKE PendingReview / PendingRouting it IS counted in TotalProblemOrders. Those are normal
-    // workflow states every order passes through; a hold only ever happens when something is wrong,
-    // and the PO is NOT going out. TotalProblemOrders is never displayed as a number — it is the
-    // input to the operations/health "All clear" gate — so counting a hold here says "not all
-    // clear", NOT "this failed". Severity stays honest at the render layer, which tones held amber
-    // (attention) rather than red (failure).
+    // Deliberately EXCLUDED from TotalProblemOrders, like PendingReview / PendingRouting (founder
+    // call, 2026-07-16): that total is documented as "sum of all problematic order counts", and a
+    // deliberate, auto-releasing pause is not a problem order — counting it there would contradict
+    // the product rule that a hold is never rendered as a failure. It is surfaced as its own count
+    // so an operator sees it, and the operations/health "All clear" gate checks deliveryHeld
+    // DIRECTLY (opsHealthState.ts) rather than via this aggregate — so a paused PO still can never
+    // read as "All clear". The render layer tones held amber (attention), never red (failure).
     int       DeliveryHeld              = 0)
 {
     /// <summary>
-    /// Sum of the order counts meaning "something needs an operator's attention right now" — the
-    /// input to the "All clear" gate. Excludes OpenExceptions (can overlap order states) and
-    /// PendingReview / PendingRouting (normal user-action backlogs, not a sign anything is wrong).
-    /// Includes DeliveryHeld: a paused PO is not going out, so it must never read as "All clear" —
-    /// see the DeliveryHeld remarks for why that is not a failure claim.
+    /// Sum of the order counts meaning "something is WRONG and needs an operator" — one input to the
+    /// "All clear" gate. Excludes OpenExceptions (can overlap order states), PendingReview /
+    /// PendingRouting (normal user-action backlogs), and DeliveryHeld (a deliberate, self-releasing
+    /// billing pause — not a fault). The health gate must therefore check those counts directly and
+    /// must NOT treat this aggregate as the whole truth; see the DeliveryHeld remarks.
     /// </summary>
     public int TotalProblemOrders =>
         ParsingStuck + DeliveringStuck + TransformFailed + DeliveryFailed +
-        DeliveryDeadLetter + RejectedBySupplier + Failed + DeliveryHeld;
+        DeliveryDeadLetter + RejectedBySupplier + Failed;
 }
 
 /// <summary>One row on the dead-letter / failed-delivery operator queue.</summary>

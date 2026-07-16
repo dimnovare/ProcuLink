@@ -68,8 +68,27 @@ merge (2 on ingress, the delivery-held-release gap, the transition-map warning).
   best-effort — residual chipped); RetryDelivery gates on billing → delivery_held for lapsed orgs.
 - **B3/B4/B5 delivery/reconciliation edges (P2/P3)** — MERGED. Self-healing held-release (every processing reconcile);
   dedicated DeliveryRequeueCount (delivery budget separate from parse/transform); StrandedFailedDelivery sweep.
-- **Tier-D P3 hygiene** — chipped (batch: sweep DisableConcurrentExecution, parse-failure visibility, analytics
-  double-count, EmailPollOrg transient-swallow). ERP/email crash-after-ACK dedup — chipped. UI Order-Workshop h1 — open.
+- **Tier-D P3 hygiene** — MERGED `db02350`. 4 of 6 were real: DisableConcurrentExecution added to StuckOrderDetection,
+  DeliverySlaSweep AND **StuckDelivery** (it did NOT already have it); ParseOrderJob no longer reports a terminal parse
+  failure as Hangfire `Succeeded` (the retry hit ParseStoredFileAsync's `status != "parsing"` re-entry guard → treated
+  the now-`failed` order as an already-processed skip → returned Ok, so failures never reached the Failed queue);
+  first_upload_parsed gated once per order (was per parse — assign-supplier's unrouted→parsing re-parse double-counted);
+  DeliverySla breach guard moved from the SELECT into an atomic per-order UPDATE claim in one txn with the audit inserts
+  (emergent win: also closes a cross-sweep race where a stale SLA sweep wrote SlaBreached back onto an order
+  StuckDelivery had just dead-lettered). TWO needed NO code change: EmailPollOrg transient-swallow (already fixed by the
+  claim-first rework — catch is narrowed to IsUniqueViolation and a transient error propagates before AddFlags(Seen));
+  FireIntegration FailureCount (already fixed in `0948a43`).
+  **OPS NOTE:** a terminally-failed parse now throws on all 4 Hangfire attempts instead of 1 → ~4x exception volume per
+  unparseable file, ~155s to land red, and a new nonzero Failed-queue baseline. Intended — not a regression.
+- **NEW FINDING (not in the original 31) — poll-children concurrency guard is GLOBAL, not per-org.** On OSS Hangfire,
+  `[DisableConcurrentExecution]` keys the lock on **type + method only, never on args** (per-arg needs paid
+  Hangfire.Pro `[Mutex]` — hence this repo's `PerOrderDistributedMutexAttribute`). The `[DisableConcurrentExecution(300)]`
+  added to Sftp/S3/EmailPollOrgJob by the ingress fix is therefore a GLOBAL lock: correctness is unaffected (a global
+  lock strictly contains a per-org one) but every org's polling for a channel serialises through one lock — one hung
+  SFTP/IMAP endpoint stalls all tenants for up to 300s. Multi-tenant throughput ceiling. FIX IN FLIGHT: per-org
+  distributed mutex (branch `fix/poll-per-org-mutex`), mirroring PerOrderDistributedMutex keyed on orgId.
+- ERP/email crash-after-ACK dedup — chipped. Ops-health blind to `delivery_held` (false "All clear") — fix in flight.
+  UI Order-Workshop h1 — open (a verify; grep shows one h1 already present).
 Migrations added (auto-apply on boot): ingress ledger order_id, delivery_attempts idempotency_key,
 purchase_orders delivery_requeue_count, organisations last_stripe_event_at.
 

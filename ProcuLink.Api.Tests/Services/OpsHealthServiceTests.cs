@@ -146,9 +146,13 @@ public class OpsHealthServiceTests
     {
         // TRUST BUG: orders in delivery_held are PAUSED — the PO is not going out to the supplier.
         // The health surface counted every other problem state but was blind to this one, so an
-        // operator saw a green "All clear" while POs sat undelivered. A held order must be counted
-        // AND must break all-clear (the operations/health page derives all-clear from
-        // TotalProblemOrders == 0). Org-scoped like every other count.
+        // operator saw a green "All clear" while POs sat undelivered. A held order must be SURFACED
+        // as its own count so the operations/health gate (which checks deliveryHeld DIRECTLY, see
+        // opsHealthState.ts) breaks the green banner.
+        //
+        // It is deliberately NOT folded into TotalProblemOrders (founder call, 2026-07-16), exactly
+        // like PendingReview / PendingRouting: that total means "something is WRONG", and a
+        // deliberate, self-releasing billing pause is not a fault. Org-scoped like every other count.
         await using var db = NewDb();
         var orgId      = Guid.NewGuid();
         var otherOrg   = Guid.NewGuid();
@@ -166,8 +170,9 @@ public class OpsHealthServiceTests
         var s   = await svc.GetHealthAsync(orgId, CancellationToken.None);
 
         s.DeliveryHeld.Should().Be(2, "org-scoped count of billing-held orders");
-        s.TotalProblemOrders.Should().BeGreaterThan(0,
-            "a paused PO is not 'All clear' — held orders must break the green banner");
+        s.TotalProblemOrders.Should().Be(0,
+            "a billing pause is deliberate and self-releasing, not a fault — like pending_review it "
+            + "must not inflate TotalProblemOrders; the health gate checks deliveryHeld directly");
     }
 
     [Fact]
