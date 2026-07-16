@@ -37,7 +37,7 @@ public sealed class S3IngressService : IS3IngressService
         };
 
     private readonly ProcuLinkDbContext _db;
-    private readonly IOrderService _orderService;
+    private readonly IStubOrderCreator _orderService;
     private readonly IParseJobEnqueuer _parseJobEnqueuer;
     private readonly DeliveryEncryptionService _encryption;
     private readonly IAmazonS3ClientFactory _s3ClientFactory;
@@ -46,7 +46,7 @@ public sealed class S3IngressService : IS3IngressService
 
     public S3IngressService(
         ProcuLinkDbContext db,
-        IOrderService orderService,
+        IStubOrderCreator orderService,
         IParseJobEnqueuer parseJobEnqueuer,
         DeliveryEncryptionService encryption,
         IAmazonS3ClientFactory s3ClientFactory,
@@ -182,16 +182,18 @@ public sealed class S3IngressService : IS3IngressService
                     continue;
                 }
 
-                // ── dedupe by (OrgId, BucketName, ObjectKey) + ETag ───────────
+                // ── dedupe / resume-on-conflict by (OrgId, BucketName, ObjectKey) + ETag ──
+                // Tracked (not AsNoTracking): the same-ETag resume path and the permanent-failure
+                // terminal marker both mutate this row.
                 var existing = await _db.Set<ImportedS3Object>()
-                    .AsNoTracking()
                     .FirstOrDefaultAsync(
                         f => f.OrgId == organisationId
                           && f.BucketName == config.BucketName
                           && f.ObjectKey == s3Object.Key,
                         ct);
 
-                if (existing is not null && existing.ETag == s3Object.ETag)
+                if (existing is not null && existing.ETag == s3Object.ETag &&
+                    await IngressDedupe.ClaimSatisfiedAsync(_db, organisationId, existing.OrderId, ct))
                 {
                     _logger.LogDebug(
                         "S3 ingress: org {OrgId} already imported {Key} (ETag={ETag}). Skipping.",
@@ -251,47 +253,31 @@ public sealed class S3IngressService : IS3IngressService
                 var fileName = Path.GetFileName(s3Object.Key);
                 var contentType = ExtensionToContentType(extension);
 
-                // ── CLAIM-FIRST (idempotency) ────────────────────────────────
-                // Commit the processed-object ledger row BEFORE creating the order. The unique
-                // index on (OrgId, BucketName, ObjectKey) is the real guard: a Hangfire retry
-                // (transient Neon error, Railway SIGTERM, OOM) OR a concurrent same-org poll that
-                // got past the fast-path check above hits a 23505 here and SKIPS — so the object
-                // can never be imported as a DUPLICATE order (with a duplicate supplier delivery +
-                // duplicate €0.50 overage). Only AFTER this row commits do we create the stub.
-                if (existing is null)
+                // ── CLAIM-FIRST + resume-on-conflict ─────────────────────────
+                // Pre-generate the order id and record it on the ledger row BEFORE creating the
+                // order, so a later retry can tell an abandoned claim (RESUME) from a completed one
+                // (SKIP). The unique index / atomic conditional update is the concurrency guard: a
+                // loser SKIPS instead of importing a duplicate. See IngressDedupe.
+                Guid orderId;
+                ImportedS3Object claim;
+                if (existing is not null && existing.ETag == s3Object.ETag)
                 {
-                    // First import of this key — INSERT the claim. A concurrent first-import loses
-                    // on the unique index (23505) and skips without creating a duplicate order.
-                    _db.Set<ImportedS3Object>().Add(new ImportedS3Object
-                    {
-                        Id         = Guid.NewGuid(),
-                        OrgId      = organisationId,
-                        BucketName = config.BucketName,
-                        ObjectKey  = s3Object.Key,
-                        ETag       = s3Object.ETag,
-                        ImportedAt = DateTime.UtcNow,
-                    });
-                    try
-                    {
-                        await _db.SaveChangesAsync(ct);
-                    }
-                    catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
-                    {
-                        _db.ChangeTracker.Clear();
-                        _logger.LogInformation(
-                            "S3 ingress: org {OrgId} — key={Key} claimed concurrently (unique violation); skipping duplicate import.",
-                            organisationId, s3Object.Key);
-                        continue;
-                    }
+                    // Same content, unsatisfied claim (transient failure earlier left no order) — RESUME
+                    // under the SAME pre-generated id (CreateStubAsync is a find-or-create on that key).
+                    claim = existing;
+                    orderId = existing.OrderId;
+                    _logger.LogInformation(
+                        "S3 ingress: org {OrgId} — resuming abandoned import of key={Key} (order {OrderId} was never created).",
+                        organisationId, s3Object.Key, orderId);
                 }
-                else
+                else if (existing is not null)
                 {
                     // Object was re-uploaded (ETag changed) — claim it with an ATOMIC conditional
-                    // update guarded by the OLD ETag. Two concurrent polls of the same re-upload
-                    // both read the old ETag; only the one whose UPDATE ... WHERE etag = old affects
-                    // a row (rows == 1) proceeds — the loser (rows == 0) skips. This closes the
-                    // re-upload duplicate that the unique index (key-only) cannot. Npgsql-only, like
-                    // the atomic claims elsewhere in the codebase.
+                    // update guarded by the OLD ETag, stamping a FRESH pre-generated order id. Two
+                    // concurrent polls of the same re-upload both read the old ETag; only the one
+                    // whose UPDATE ... WHERE etag = old affects a row (rows == 1) proceeds — the loser
+                    // (rows == 0) skips. Npgsql-only, like the atomic claims elsewhere.
+                    orderId = Guid.NewGuid();
                     var claimed = await _db.Set<ImportedS3Object>()
                         .Where(f => f.OrgId == organisationId
                                  && f.BucketName == config.BucketName
@@ -299,11 +285,46 @@ public sealed class S3IngressService : IS3IngressService
                                  && f.ETag == existing.ETag)
                         .ExecuteUpdateAsync(s => s
                             .SetProperty(f => f.ETag, s3Object.ETag)
+                            .SetProperty(f => f.OrderId, orderId)
                             .SetProperty(f => f.ImportedAt, DateTime.UtcNow), ct);
                     if (claimed == 0)
                     {
                         _logger.LogInformation(
                             "S3 ingress: org {OrgId} — re-upload of key={Key} claimed concurrently; skipping duplicate import.",
+                            organisationId, s3Object.Key);
+                        continue;
+                    }
+                    // ExecuteUpdate bypasses the tracker — re-read the tracked row so the terminal
+                    // marker below (on a permanent stub failure) mutates a fresh, consistent entity.
+                    _db.Entry(existing).State = EntityState.Detached;
+                    claim = await _db.Set<ImportedS3Object>().FirstAsync(
+                        f => f.OrgId == organisationId && f.BucketName == config.BucketName && f.ObjectKey == s3Object.Key, ct);
+                }
+                else
+                {
+                    // First import of this key — INSERT the claim with a fresh pre-generated order id.
+                    // A concurrent first-import loses on the unique index (23505) and SKIPS.
+                    orderId = Guid.NewGuid();
+                    claim = new ImportedS3Object
+                    {
+                        Id         = Guid.NewGuid(),
+                        OrgId      = organisationId,
+                        BucketName = config.BucketName,
+                        ObjectKey  = s3Object.Key,
+                        ETag       = s3Object.ETag,
+                        OrderId    = orderId,
+                        ImportedAt = DateTime.UtcNow,
+                    };
+                    _db.Set<ImportedS3Object>().Add(claim);
+                    try
+                    {
+                        await _db.SaveChangesAsync(ct);
+                    }
+                    catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
+                    {
+                        _db.Entry(claim).State = EntityState.Detached;
+                        _logger.LogInformation(
+                            "S3 ingress: org {OrgId} — key={Key} claimed concurrently (unique violation); skipping duplicate import.",
                             organisationId, s3Object.Key);
                         continue;
                     }
@@ -315,12 +336,14 @@ public sealed class S3IngressService : IS3IngressService
                     ? await _orderService.CreateStubAsync(
                         organisationId,
                         routedSupplierId,
+                        orderId,
                         fileBytes,
                         fileName,
                         contentType,
                         ct)
                     : await _orderService.CreateUnroutedStubAsync(
                         organisationId,
+                        orderId,
                         fileBytes,
                         fileName,
                         contentType,
@@ -328,22 +351,24 @@ public sealed class S3IngressService : IS3IngressService
 
                 if (!stubResult.IsSuccess)
                 {
-                    // The claim is already committed. A stub failure here is either a permanently bad
-                    // object (empty / unsupported content) or a transient infra error; in both cases
-                    // we deliberately leave the claim in place so the object is treated as SEEN and
-                    // never re-imported as a duplicate — the guaranteed-no-duplicate trade the fix makes.
+                    // Result.Fail is a PERMANENT content error (empty / unsupported): mark the claim
+                    // terminal so a genuinely-bad object is bounded (not retried forever). A TRANSIENT
+                    // infra failure instead THROWS out of CreateStubAsync and propagates — Hangfire
+                    // retries and the claim, still holding its real OrderId with no order, is RESUMED.
                     _logger.LogWarning(
-                        "S3 ingress: org {OrgId} — {Mode} order stub creation failed for key={Key} after claim: {Error}",
+                        "S3 ingress: org {OrgId} — {Mode} order stub creation permanently failed for key={Key}; marking claim terminal: {Error}",
                         organisationId, supplierId is null ? "unrouted" : "routed", s3Object.Key, stubResult.Error);
+                    claim.OrderId = IngressDedupe.TerminalOrderId;
+                    await _db.SaveChangesAsync(ct);
                     continue;
                 }
 
-                await _parseJobEnqueuer.EnqueueAsync(stubResult.Value!.Id, organisationId, ct);
+                await _parseJobEnqueuer.EnqueueAsync(orderId, organisationId, ct);
                 imported++;
 
                 _logger.LogInformation(
                     "S3 ingress: org {OrgId} — imported key={Key} → order {OrderId}.",
-                    organisationId, s3Object.Key, stubResult.Value!.Id);
+                    organisationId, s3Object.Key, orderId);
             }
 
             listRequest.ContinuationToken = listResponse.NextContinuationToken;

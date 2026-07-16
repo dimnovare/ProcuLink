@@ -18,7 +18,7 @@ namespace ProcuLink.Api.Services;
 /// now live in four cohesive internal sub-services constructed in the ctor below. Each public
 /// method delegates one-to-one to the matching sub-service; behaviour is unchanged.
 /// </summary>
-public sealed class OrderService : IOrderService
+public sealed class OrderService : IOrderService, IStubOrderCreator
 {
     private readonly OrderIngestionService  _ingestion;
     private readonly OrderQueryService      _query;
@@ -86,6 +86,16 @@ public sealed class OrderService : IOrderService
     public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
         Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
         => _ingestion.CreateStubAsync(organisationId, supplierId: null, fileStream, filename, contentType, ct);
+
+    // ── IStubOrderCreator (pull-ingress resume-on-conflict; explicit pre-generated order id) ──
+
+    Task<Result<PurchaseOrderEntity>> IStubOrderCreator.CreateStubAsync(
+        Guid organisationId, Guid supplierId, Guid orderId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+        => _ingestion.CreateStubAsync(organisationId, supplierId, fileStream, filename, contentType, ct, orderId);
+
+    Task<Result<PurchaseOrderEntity>> IStubOrderCreator.CreateUnroutedStubAsync(
+        Guid organisationId, Guid orderId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+        => _ingestion.CreateStubAsync(organisationId, supplierId: null, fileStream, filename, contentType, ct, orderId);
 
     public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
         Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)

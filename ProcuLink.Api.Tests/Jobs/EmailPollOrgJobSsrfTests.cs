@@ -66,7 +66,7 @@ public class EmailPollOrgJobSsrfTests
         });
         await db.SaveChangesAsync();
 
-        var orders = new Mock<IOrderService>(MockBehavior.Strict);
+        var orders = new Mock<IStubOrderCreator>(MockBehavior.Strict);
 
         var billing = new Mock<IBillingService>();
         billing.Setup(b => b.HasFeatureAsync(It.IsAny<Guid>(), BillingFeature.EmailIngestion, It.IsAny<CancellationToken>()))
@@ -89,7 +89,7 @@ public class EmailPollOrgJobSsrfTests
         await job.ExecuteAsync(orgId, CancellationToken.None);
 
         orders.Verify(o => o.CreateStubAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
         emailSettings.Verify(e => e.MarkPolledAsync(It.IsAny<Guid>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),

@@ -170,6 +170,8 @@ builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
+// Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
+builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
 // Durable AI-suggestion decision history — an optional OrderService dependency; register it
 // so the resolve/accept paths persist history when driven from the Worker too.
 builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();

@@ -69,36 +69,23 @@ public class EmailPollOrgJobUnroutedTests
         return msg;
     }
 
-    private static (EmailPollOrgJob Job, Mock<IOrderService> Orders, Mock<IBackgroundJobClient> Jobs)
+    private static (EmailPollOrgJob Job, Mock<IStubOrderCreator> Orders, Mock<IBackgroundJobClient> Jobs)
         BuildJob(ProcuLinkDbContext db)
     {
-        var orders = new Mock<IOrderService>();
+        var orders = new Mock<IStubOrderCreator>();
         orders
             .Setup(o => o.CreateStubAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
-            {
-                Id = Guid.NewGuid(),
-                OrgId = Guid.NewGuid(),
-                SupplierId = Guid.NewGuid(),
-                PoNumber = "PO-ROUTED",
-                Currency = "EUR",
-                Status = "parsing",
-            }));
+            // Self-commit the order under the pre-generated id so the poller's existence check works.
+            .ReturnsAsync((Guid org, Guid sup, Guid orderId, Stream s, string fn, string ctype, CancellationToken ct)
+                => EmailJobStub.CreateAndPersist(db, org, sup, orderId));
         orders
             .Setup(o => o.CreateUnroutedStubAsync(
-                It.IsAny<Guid>(), It.IsAny<Stream>(),
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
-            {
-                Id = Guid.NewGuid(),
-                OrgId = Guid.NewGuid(),
-                SupplierId = null,
-                PoNumber = "PO-UNROUTED",
-                Currency = "EUR",
-                Status = "parsing",
-            }));
+            .ReturnsAsync((Guid org, Guid orderId, Stream s, string fn, string ctype, CancellationToken ct)
+                => EmailJobStub.CreateAndPersist(db, org, null, orderId));
 
         var jobs = new Mock<IBackgroundJobClient>();
         var job = new EmailPollOrgJob(
@@ -123,10 +110,10 @@ public class EmailPollOrgJobUnroutedTests
 
         processed.Should().BeTrue("an unrouted import fully handles the message so it can be flagged SEEN");
         orders.Verify(o => o.CreateUnroutedStubAsync(
-                orgId, It.IsAny<Stream>(), "po.csv", It.IsAny<string>(), It.IsAny<CancellationToken>()),
+                orgId, It.IsAny<Guid>(), It.IsAny<Stream>(), "po.csv", It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Once, "with no default supplier the attachment must go through the unrouted hold path");
         orders.Verify(o => o.CreateStubAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never, "an order must never be routed to a supplier that does not exist");
         jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()),
@@ -153,7 +140,7 @@ public class EmailPollOrgJobUnroutedTests
         (await job.ProcessMessageAsync(orgId, supplierId: null, message, CancellationToken.None)).Should().BeTrue();
 
         orders.Verify(o => o.CreateUnroutedStubAsync(
-                It.IsAny<Guid>(), It.IsAny<Stream>(),
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Once, "re-polling the same attachment in unrouted mode must not duplicate the order");
         jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()),

@@ -250,7 +250,8 @@ internal sealed class OrderIngestionService
         Stream fileStream,
         string filename,
         string contentType,
-        CancellationToken ct)
+        CancellationToken ct,
+        Guid? orderId = null)
     {
         var safeFilename = FileNameSanitiser.Sanitise(filename);
         var extension    = FileNameSanitiser.GetExtension(filename);
@@ -260,6 +261,23 @@ internal sealed class OrderIngestionService
 
         if (buffer.Length == 0)
             return Result<PurchaseOrderEntity>.Fail("Uploaded file is empty.");
+
+        // Idempotency (pull-ingress resume-on-conflict): when the caller supplies a pre-generated
+        // order id and an order already exists under it, return that order instead of creating a
+        // second one. This makes a resume after a crash a find-or-create, and the order primary key
+        // is the last-line concurrency guard if two resumers ever race the same id.
+        if (orderId is { } providedId && providedId != Guid.Empty)
+        {
+            var existing = await _db.PurchaseOrders
+                .FirstOrDefaultAsync(o => o.Id == providedId && o.OrgId == organisationId, ct);
+            if (existing is not null)
+            {
+                _logger.LogInformation(
+                    "CreateStubAsync: order {OrderId} already exists for org {OrgId}; returning it (idempotent create).",
+                    providedId, organisationId);
+                return Result<PurchaseOrderEntity>.Ok(existing);
+            }
+        }
 
         // Validate parser exists before touching R2. Use the stream-aware factory
         // so ambiguous extensions (.xml, .edi, .txt) route to the real parser
@@ -275,9 +293,11 @@ internal sealed class OrderIngestionService
             return Result<PurchaseOrderEntity>.Fail(ex.Message);
         }
 
-        // Upload raw file to R2
-        var orderId       = Guid.NewGuid();
-        var sourceFileKey = $"{organisationId}/{orderId}/{safeFilename}";
+        // Upload raw file to R2. Honour a caller-supplied primary key (pull-ingress resume) so a
+        // recreated order lands under the SAME id the dedupe ledger already recorded; otherwise
+        // generate a fresh one (browser upload, inbound-email router, …).
+        var newOrderId    = orderId is { } pk && pk != Guid.Empty ? pk : Guid.NewGuid();
+        var sourceFileKey = $"{organisationId}/{newOrderId}/{safeFilename}";
 
         buffer.Position = 0;
         await _fileStorage.UploadAsync(buffer, sourceFileKey, contentType, ct);
@@ -312,7 +332,7 @@ internal sealed class OrderIngestionService
 
         var entity = new PurchaseOrderEntity
         {
-            Id            = orderId,
+            Id            = newOrderId,
             OrgId         = organisationId,
             SupplierId    = supplierId,
             Supplier      = supplier!,
@@ -327,7 +347,7 @@ internal sealed class OrderIngestionService
         };
 
         _db.PurchaseOrders.Add(entity);
-        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Created", new
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, newOrderId, "Created", new
         {
             sourceFileKey,
             mode = "async",
@@ -336,7 +356,7 @@ internal sealed class OrderIngestionService
 
         await _db.SaveChangesAsync(ct);
 
-        await _shared.EmitPassportEventAsync(organisationId, orderId, "Upload", "Created",
+        await _shared.EmitPassportEventAsync(organisationId, newOrderId, "Upload", "Created",
             payload: new { source = sourceFileKey }, ct: ct);
 
         // ── Wave 4: fire order.created trigger ───────────────────────────────────
@@ -357,7 +377,7 @@ internal sealed class OrderIngestionService
 
         _logger.LogInformation(
             "Order stub {OrderId} created for org {OrgId}, status=parsing",
-            orderId, organisationId);
+            newOrderId, organisationId);
 
         return Result<PurchaseOrderEntity>.Ok(entity);
     }

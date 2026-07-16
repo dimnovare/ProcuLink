@@ -944,6 +944,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.OrgId).HasColumnName("org_id");
             b.Property(x => x.RemotePath).HasColumnName("remote_path").IsRequired();
             b.Property(x => x.FileHash).HasColumnName("file_hash").IsRequired();
+            // Pre-generated order id for resume-on-conflict (Guid.Empty = skip: legacy/terminal).
+            b.Property(x => x.OrderId).HasColumnName("order_id").HasDefaultValue(Guid.Empty);
             b.Property(x => x.ImportedAt).HasColumnName("imported_at").HasColumnType("timestamptz");
             b.HasIndex(x => new { x.OrgId, x.RemotePath }).IsUnique();
         });
@@ -986,6 +988,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.BucketName).HasColumnName("bucket_name").IsRequired();
             b.Property(x => x.ObjectKey).HasColumnName("object_key").IsRequired();
             b.Property(x => x.ETag).HasColumnName("etag").IsRequired();
+            // Pre-generated order id for resume-on-conflict (Guid.Empty = skip: legacy/terminal).
+            b.Property(x => x.OrderId).HasColumnName("order_id").HasDefaultValue(Guid.Empty);
             b.Property(x => x.ImportedAt).HasColumnName("imported_at").HasColumnType("timestamptz");
             b.HasIndex(x => new { x.OrgId, x.BucketName, x.ObjectKey }).IsUnique();
         });

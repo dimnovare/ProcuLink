@@ -38,7 +38,7 @@ public sealed class EmailPollOrgJob
 
     private readonly ProcuLinkDbContext _db;
     private readonly DeliveryEncryptionService _encryption;
-    private readonly IOrderService _orders;
+    private readonly IStubOrderCreator _orders;
     private readonly IBackgroundJobClient _jobs;
     private readonly IBillingService _billing;
     private readonly IEmailSettingsService _emailSettings;
@@ -48,7 +48,7 @@ public sealed class EmailPollOrgJob
     public EmailPollOrgJob(
         ProcuLinkDbContext db,
         DeliveryEncryptionService encryption,
-        IOrderService orders,
+        IStubOrderCreator orders,
         IBackgroundJobClient jobs,
         IBillingService billing,
         IEmailSettingsService emailSettings,
@@ -244,17 +244,20 @@ public sealed class EmailPollOrgJob
                 continue;
             }
 
-            // ── Idempotency: dedupe on (OrgId, ImapMessageId, AttachmentHash) ─────────────────
+            // ── Idempotency / resume-on-conflict on (OrgId, ImapMessageId, AttachmentHash) ────
             // The message is flagged SEEN only after the whole loop succeeds, so a crash mid-poll
-            // re-presents this unseen message next time. Without this guard the same attachment is
-            // re-imported as a NEW order. Hash the decoded bytes and skip if we already imported it.
+            // re-presents this unseen message next time. A pre-existing claim is either satisfied
+            // (SKIP) or an abandoned claim whose order a transient failure never created (RESUME
+            // under the same pre-generated id). See IngressDedupe for the full contract.
             var attachmentHash = Convert.ToHexString(SHA256.HashData(stream.GetBuffer().AsSpan(0, (int)stream.Length)));
 
-            var alreadyImported = await _db.EmailImportRecords.AsNoTracking().AnyAsync(
+            var existingClaim = await _db.EmailImportRecords.FirstOrDefaultAsync(
                 r => r.OrgId == orgId
                   && r.ImapMessageId == messageId
                   && r.AttachmentHash == attachmentHash, ct);
-            if (alreadyImported)
+
+            if (existingClaim is not null &&
+                await IngressDedupe.ClaimSatisfiedAsync(_db, orgId, existingClaim.OrderId, ct))
             {
                 _logger.LogInformation(
                     "EmailPollOrgJob: attachment {FileName} for org {OrgId} already imported (message {MessageId}); skipping duplicate.",
@@ -265,68 +268,81 @@ public sealed class EmailPollOrgJob
                 continue;
             }
 
-            // ── CLAIM-FIRST (idempotency) ────────────────────────────────────────────────────
-            // Insert + commit the (OrgId, ImapMessageId, AttachmentHash) ledger row BEFORE creating
-            // the order stub. The message is flagged SEEN only after the whole loop, so a crash /
-            // Hangfire retry re-presents this unseen message; and two concurrent polls of the same
-            // mailbox both pass the AnyAsync fast-path above. The unique index is the real guard —
-            // the retry / losing poll hits a 23505 here and skips WITHOUT creating a duplicate order.
-            // OrderId is a sentinel (Guid.Empty) at claim time and is backfilled once the stub exists.
-            var record = new EmailImportRecord
-            {
-                Id             = Guid.NewGuid(),
-                OrgId          = orgId,
-                ImapMessageId  = messageId,
-                AttachmentHash = attachmentHash,
-                OrderId        = Guid.Empty,
-                FileName       = fileName,
-                ImportedAt     = DateTime.UtcNow,
-            };
-            _db.EmailImportRecords.Add(record);
-            try
-            {
-                await _db.SaveChangesAsync(ct);
-            }
-            catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
-            {
-                // A concurrent poll or a job retry already claimed this exact attachment. The other
-                // run owns the canonical order stub; do not create a duplicate order or parse job.
-                _db.Entry(record).State = EntityState.Detached;
-                _logger.LogInformation(
-                    "EmailPollOrgJob: attachment {FileName} for org {OrgId} claimed concurrently (message {MessageId}); skipping duplicate.",
-                    fileName, orgId, messageId);
-                processedAny = true;
-                continue;
-            }
-
-            stream.Position = 0;
-
             var contentType = string.IsNullOrWhiteSpace(part.ContentType.MimeType)
                 ? "application/octet-stream"
                 : part.ContentType.MimeType;
 
+            Guid orderId;
+            EmailImportRecord record;
+            if (existingClaim is not null)
+            {
+                // RESUME: the order under this pre-generated id was never created (transient failure).
+                // Recreate it under the SAME id (CreateStubAsync is a find-or-create on that key).
+                record = existingClaim;
+                orderId = existingClaim.OrderId;
+                _logger.LogInformation(
+                    "EmailPollOrgJob: resuming abandoned import of attachment {FileName} for org {OrgId} (order {OrderId} was never created).",
+                    fileName, orgId, orderId);
+            }
+            else
+            {
+                // ── CLAIM-FIRST (idempotency) ────────────────────────────────────────────────
+                // Pre-generate the order id, store it on the ledger row, and commit BEFORE creating
+                // the order stub. The unique index on (OrgId, ImapMessageId, AttachmentHash) is the
+                // real guard: a concurrent poll that got past the fast-path above hits a 23505 here
+                // and SKIPS (it must not resume — the winner is mid-flight). The stored OrderId lets
+                // a LATER retry tell a transient-abandoned claim (resume) from a completed one (skip).
+                orderId = Guid.NewGuid();
+                record = new EmailImportRecord
+                {
+                    Id             = Guid.NewGuid(),
+                    OrgId          = orgId,
+                    ImapMessageId  = messageId,
+                    AttachmentHash = attachmentHash,
+                    OrderId        = orderId,
+                    FileName       = fileName,
+                    ImportedAt     = DateTime.UtcNow,
+                };
+                _db.EmailImportRecords.Add(record);
+                try
+                {
+                    await _db.SaveChangesAsync(ct);
+                }
+                catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
+                {
+                    _db.Entry(record).State = EntityState.Detached;
+                    _logger.LogInformation(
+                        "EmailPollOrgJob: attachment {FileName} for org {OrgId} claimed concurrently (message {MessageId}); skipping duplicate.",
+                        fileName, orgId, messageId);
+                    processedAny = true;
+                    continue;
+                }
+            }
+
+            stream.Position = 0;
+
             // Routed when a valid default supplier exists; UNROUTED hold otherwise —
             // same creation path browser upload and inbound email use for supplier-less files.
             var result = supplierId is { } routedSupplierId
-                ? await _orders.CreateStubAsync(orgId, routedSupplierId, stream, fileName, contentType, ct)
-                : await _orders.CreateUnroutedStubAsync(orgId, stream, fileName, contentType, ct);
+                ? await _orders.CreateStubAsync(orgId, routedSupplierId, orderId, stream, fileName, contentType, ct)
+                : await _orders.CreateUnroutedStubAsync(orgId, orderId, stream, fileName, contentType, ct);
             if (!result.IsSuccess)
             {
-                // The claim is already committed. A stub failure here (permanently bad attachment or a
-                // transient infra error) deliberately leaves the claim in place so the attachment is
-                // treated as SEEN and never re-imported as a duplicate — the no-duplicate trade the fix makes.
+                // Result.Fail is a PERMANENT content error (empty / unsupported): mark the claim
+                // terminal so a genuinely-bad attachment is bounded (not retried forever), and count
+                // it processed so the message is flagged SEEN. A TRANSIENT infra failure instead
+                // THROWS out of CreateStubAsync and propagates — Hangfire retries the poll and the
+                // claim, still holding its real OrderId with no order, is RESUMED (no lost order).
                 _logger.LogWarning(
-                    "EmailPollOrgJob: {Mode} order stub creation failed for attachment {FileName} (org {OrgId}) after claim: {Error}",
+                    "EmailPollOrgJob: {Mode} order stub creation permanently failed for attachment {FileName} (org {OrgId}); marking claim terminal: {Error}",
                     supplierId is null ? "unrouted" : "routed", fileName, orgId, result.Error);
+                record.OrderId = IngressDedupe.TerminalOrderId;
+                await _db.SaveChangesAsync(ct);
+                processedAny = true;
                 continue;
             }
 
-            // Backfill the claim's order id now that the stub exists (traceability only; dedupe
-            // relies on the unique index, not this column).
-            record.OrderId = result.Value!.Id;
-            await _db.SaveChangesAsync(ct);
-
-            ParseOrderJob.Enqueue(_jobs, result.Value!.Id, orgId);
+            ParseOrderJob.Enqueue(_jobs, orderId, orgId);
             processedAny = true;
         }
 

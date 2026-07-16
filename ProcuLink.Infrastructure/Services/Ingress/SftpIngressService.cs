@@ -30,7 +30,7 @@ public sealed class SftpIngressService : ISftpIngressService
         };
 
     private readonly ProcuLinkDbContext _db;
-    private readonly IOrderService _orderService;
+    private readonly IStubOrderCreator _orderService;
     private readonly IParseJobEnqueuer _parseJobEnqueuer;
     private readonly DeliveryEncryptionService _encryption;
     private readonly ISftpClientFactory _sftpClientFactory;
@@ -39,7 +39,7 @@ public sealed class SftpIngressService : ISftpIngressService
 
     public SftpIngressService(
         ProcuLinkDbContext db,
-        IOrderService orderService,
+        IStubOrderCreator orderService,
         IParseJobEnqueuer parseJobEnqueuer,
         DeliveryEncryptionService encryption,
         ISftpClientFactory sftpClientFactory,
@@ -177,11 +177,15 @@ public sealed class SftpIngressService : ISftpIngressService
                 continue;
             }
 
-            // ── dedupe by (OrgId, RemotePath) ────────────────────────────────
-            var alreadyImported = await _db.Set<ImportedSftpFile>()
-                .AnyAsync(f => f.OrgId == organisationId && f.RemotePath == remotePath, ct);
+            // ── dedupe / resume-on-conflict by (OrgId, RemotePath) ───────────
+            // A pre-existing claim (a prior scheduled poll or a Hangfire retry) is either already
+            // satisfied (SKIP) or an abandoned claim whose order a transient failure never created
+            // (RESUME under the same pre-generated id). See IngressDedupe for the full contract.
+            var existingClaim = await _db.Set<ImportedSftpFile>()
+                .FirstOrDefaultAsync(f => f.OrgId == organisationId && f.RemotePath == remotePath, ct);
 
-            if (alreadyImported)
+            if (existingClaim is not null &&
+                await IngressDedupe.ClaimSatisfiedAsync(_db, organisationId, existingClaim.OrderId, ct))
             {
                 _logger.LogDebug(
                     "SFTP ingress: org {OrgId} already imported {Path}. Skipping.",
@@ -210,42 +214,56 @@ public sealed class SftpIngressService : ISftpIngressService
             }
 
             using var _fileBytes = fileBytes;
-
-            var hash = ComputeSha256Hex(fileBytes);
             fileBytes.Position = 0;
 
             var fileName = Path.GetFileName(remotePath);
             var contentType = ExtensionToContentType(extension);
 
-            // ── CLAIM-FIRST (idempotency) ────────────────────────────────────
-            // Insert + commit the dedupe-ledger row BEFORE creating the order. The unique index
-            // on (OrgId, RemotePath) is the real guard: a Hangfire retry (transient Neon error,
-            // Railway SIGTERM, OOM) OR a concurrent same-org poll that got past the AnyAsync
-            // fast-path above hits a 23505 here and SKIPS — so the file can never be imported as
-            // a DUPLICATE order (with a duplicate supplier delivery + duplicate €0.50 overage).
-            // Only AFTER this row commits do we create the order stub + enqueue parse.
-            var claim = new ImportedSftpFile
+            Guid orderId;
+            ImportedSftpFile claim;
+            if (existingClaim is not null)
             {
-                Id = Guid.NewGuid(),
-                OrgId = organisationId,
-                RemotePath = remotePath,
-                FileHash = hash,
-                ImportedAt = DateTime.UtcNow,
-            };
-            _db.Set<ImportedSftpFile>().Add(claim);
-            try
-            {
-                await _db.SaveChangesAsync(ct);
-            }
-            catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
-            {
-                // A concurrent poll or a job retry already claimed this file — its order stub is the
-                // canonical one. Detach our losing row and skip WITHOUT creating a duplicate order.
-                _db.Entry(claim).State = EntityState.Detached;
+                // RESUME: the order under this pre-generated id was never created (transient failure).
+                // Recreate it under the SAME id — CreateStubAsync is a find-or-create on that key.
+                claim = existingClaim;
+                orderId = existingClaim.OrderId;
                 _logger.LogInformation(
-                    "SFTP ingress: org {OrgId} — {Path} claimed concurrently (unique violation); skipping duplicate import.",
-                    organisationId, remotePath);
-                continue;
+                    "SFTP ingress: org {OrgId} — resuming abandoned import of {Path} (order {OrderId} was never created).",
+                    organisationId, remotePath, orderId);
+            }
+            else
+            {
+                // ── CLAIM-FIRST (idempotency) ────────────────────────────────
+                // Pre-generate the order id, store it on the claim, and commit the claim BEFORE
+                // creating the order. The unique index on (OrgId, RemotePath) is the real guard: a
+                // concurrent same-org poll that got past the fast-path above hits a 23505 here and
+                // SKIPS (it must not resume — the winner is mid-flight), so the file can never be
+                // imported as a DUPLICATE order. The stored OrderId lets a LATER retry tell a
+                // transient-abandoned claim (resume) from a completed one (skip).
+                orderId = Guid.NewGuid();
+                claim = new ImportedSftpFile
+                {
+                    Id = Guid.NewGuid(),
+                    OrgId = organisationId,
+                    RemotePath = remotePath,
+                    FileHash = ComputeSha256Hex(fileBytes),
+                    OrderId = orderId,
+                    ImportedAt = DateTime.UtcNow,
+                };
+                fileBytes.Position = 0;
+                _db.Set<ImportedSftpFile>().Add(claim);
+                try
+                {
+                    await _db.SaveChangesAsync(ct);
+                }
+                catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
+                {
+                    _db.Entry(claim).State = EntityState.Detached;
+                    _logger.LogInformation(
+                        "SFTP ingress: org {OrgId} — {Path} claimed concurrently (unique violation); skipping duplicate import.",
+                        organisationId, remotePath);
+                    continue;
+                }
             }
 
             // Routed when a valid default supplier exists; UNROUTED hold otherwise —
@@ -254,12 +272,14 @@ public sealed class SftpIngressService : ISftpIngressService
                 ? await _orderService.CreateStubAsync(
                     organisationId,
                     routedSupplierId,
+                    orderId,
                     fileBytes,
                     fileName,
                     contentType,
                     ct)
                 : await _orderService.CreateUnroutedStubAsync(
                     organisationId,
+                    orderId,
                     fileBytes,
                     fileName,
                     contentType,
@@ -267,22 +287,25 @@ public sealed class SftpIngressService : ISftpIngressService
 
             if (!stubResult.IsSuccess)
             {
-                // The claim is already committed. A stub failure here is either a permanently bad
-                // file (empty / unsupported content) or a transient infra error; in both cases we
-                // deliberately leave the claim in place so the file is treated as SEEN and never
-                // re-imported as a duplicate — the guaranteed-no-duplicate trade the fix makes.
+                // Result.Fail is a PERMANENT content error (empty / unsupported): mark the claim
+                // terminal so a genuinely-bad file is bounded (not retried forever). A TRANSIENT
+                // infra failure instead THROWS out of CreateStubAsync and propagates — Hangfire
+                // retries the job and the claim, still holding its real OrderId with no order,
+                // is RESUMED next run (no silent lost order).
                 _logger.LogWarning(
-                    "SFTP ingress: org {OrgId} — {Mode} order stub creation failed for {Path} after claim: {Error}",
+                    "SFTP ingress: org {OrgId} — {Mode} order stub creation permanently failed for {Path}; marking claim terminal: {Error}",
                     organisationId, supplierId is null ? "unrouted" : "routed", remotePath, stubResult.Error);
+                claim.OrderId = IngressDedupe.TerminalOrderId;
+                await _db.SaveChangesAsync(ct);
                 continue;
             }
 
-            await _parseJobEnqueuer.EnqueueAsync(stubResult.Value!.Id, organisationId, ct);
+            await _parseJobEnqueuer.EnqueueAsync(orderId, organisationId, ct);
             imported++;
 
             _logger.LogInformation(
                 "SFTP ingress: org {OrgId} — imported {Path} → order {OrderId}.",
-                organisationId, remotePath, stubResult.Value!.Id);
+                organisationId, remotePath, orderId);
         }
 
         _logger.LogInformation(

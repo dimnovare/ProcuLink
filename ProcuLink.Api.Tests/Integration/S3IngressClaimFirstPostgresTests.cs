@@ -6,6 +6,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
@@ -17,11 +19,11 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Integration;
 
 /// <summary>
-/// Proves the claim-first S3/R2 ingress on REAL Postgres, where the
+/// Proves the claim-first + resume-on-conflict S3/R2 ingress on REAL Postgres, where the
 /// (OrgId, BucketName, ObjectKey) unique index is actually enforced (EF InMemory ignores it):
-/// (a) a re-poll / retry of the same object creates NO second order; and
-/// (b) many concurrent same-org polls of the same object create EXACTLY ONE order — the losers hit
-///     the unique-index claim (23505) and skip. Docker-gated; skips cleanly where Docker is absent.
+/// re-poll creates no second order; concurrent polls create exactly one; a transient stub failure
+/// is RESUMED (not lost); an order whose post-step crashed is not re-created; and a permanently-bad
+/// object is bounded. Docker-gated; skips cleanly where Docker is absent.
 /// </summary>
 [Collection("postgres-container")]
 public sealed class S3IngressClaimFirstPostgresTests : IAsyncLifetime
@@ -108,15 +110,21 @@ public sealed class S3IngressClaimFirstPostgresTests : IAsyncLifetime
         return s3.Object;
     }
 
-    private S3IngressService NewService(ProcuLinkDbContext db, CountingOrderService orders, CountingParseEnqueuer enqueuer, IAmazonS3 s3) =>
+    private S3IngressService NewService(ProcuLinkDbContext db, CountingOrderService orders, IParseJobEnqueuer enqueuer, IAmazonS3 s3) =>
         new(db, orders, enqueuer, Enc(), new SingleClientFactory(s3), AllowPrivateGuard(), NullLogger<S3IngressService>.Instance);
+
+    private async Task<int> OrderCountAsync(Guid orgId)
+    {
+        await using var db = new ProcuLinkDbContext(_options!);
+        return await db.PurchaseOrders.CountAsync(o => o.OrgId == orgId);
+    }
 
     [DockerRequiredFact]
     public async Task RePoll_AfterImport_CreatesNoSecondOrder()
     {
         const string key = "incoming/po-retry.csv";
         var orgId = await SeedOrgSupplierConfigAsync();
-        var orders = new CountingOrderService();
+        var orders = new CountingOrderService(_options!);
         var enqueuer = new CountingParseEnqueuer();
         var s3 = OneObjectS3(key, "\"etag-1\"", new byte[] { 1, 2, 3 });
 
@@ -126,10 +134,11 @@ public sealed class S3IngressClaimFirstPostgresTests : IAsyncLifetime
 
         await using (var db2 = new ProcuLinkDbContext(_options!))
             (await NewService(db2, orders, enqueuer, s3).PollAsync(orgId, CancellationToken.None))
-                .Should().Be(0, "the committed claim from poll 1 (same ETag) must make the re-poll a no-op");
+                .Should().Be(0, "the committed claim's order (same ETag) must make the re-poll a no-op");
 
         orders.TotalCreates.Should().Be(1, "the object must produce exactly ONE order stub across re-polls");
         enqueuer.Count.Should().Be(1);
+        (await OrderCountAsync(orgId)).Should().Be(1, "exactly ONE purchase order exists across re-polls");
 
         await using var verify = new ProcuLinkDbContext(_options!);
         (await verify.Set<ImportedS3Object>().CountAsync(f => f.OrgId == orgId && f.ObjectKey == key))
@@ -142,7 +151,7 @@ public sealed class S3IngressClaimFirstPostgresTests : IAsyncLifetime
         const int workers = 8;
         const string key = "incoming/po-concurrent.csv";
         var orgId = await SeedOrgSupplierConfigAsync();
-        var orders = new CountingOrderService();
+        var orders = new CountingOrderService(_options!);
         var enqueuer = new CountingParseEnqueuer();
         var s3 = OneObjectS3(key, "\"etag-1\"", new byte[] { 1, 2, 3 });
 
@@ -153,14 +162,103 @@ public sealed class S3IngressClaimFirstPostgresTests : IAsyncLifetime
         });
         var results = await Task.WhenAll(tasks);
 
-        results.Sum().Should().Be(1,
-            "exactly one concurrent poll may import the object; the rest hit the unique-index claim and skip");
-        orders.TotalCreates.Should().Be(1, "concurrent polls of the same object must create exactly ONE order stub");
-        enqueuer.Count.Should().Be(1);
+        results.Sum().Should().BeGreaterThanOrEqualTo(1, "at least one concurrent poll imports the object");
+        (await OrderCountAsync(orgId)).Should().Be(1,
+            "concurrent polls of the same object must create EXACTLY ONE purchase order");
 
         await using var verify = new ProcuLinkDbContext(_options!);
         (await verify.Set<ImportedS3Object>().CountAsync(f => f.OrgId == orgId && f.ObjectKey == key))
             .Should().Be(1, "exactly one processed-object ledger row survives the concurrent race");
+    }
+
+    [DockerRequiredFact]
+    public async Task TransientStubFailure_ThenRetry_ImportsOrder_NotLost()
+    {
+        const string key = "incoming/po-transient.csv";
+        var orgId = await SeedOrgSupplierConfigAsync();
+        var s3 = OneObjectS3(key, "\"etag-1\"", new byte[] { 1, 2, 3 });
+
+        var attempt = 0;
+        var orders = new CountingOrderService(_options!,
+            () => Interlocked.Increment(ref attempt) == 1 ? StubBehavior.ThrowTransient : StubBehavior.Succeed);
+        var enqueuer = new CountingParseEnqueuer();
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+        {
+            var svc = NewService(db1, orders, enqueuer, s3);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => svc.PollAsync(orgId, CancellationToken.None));
+        }
+
+        await using (var afterFail = new ProcuLinkDbContext(_options!))
+        {
+            var claim = await afterFail.Set<ImportedS3Object>().SingleAsync(f => f.OrgId == orgId && f.ObjectKey == key);
+            claim.OrderId.Should().NotBe(Guid.Empty, "the claim carries a real pre-generated order id to resume under");
+            (await afterFail.PurchaseOrders.CountAsync(o => o.OrgId == orgId))
+                .Should().Be(0, "the transient failure means the order was never created");
+        }
+
+        await using (var db2 = new ProcuLinkDbContext(_options!))
+            (await NewService(db2, orders, enqueuer, s3).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(1, "the retry must RESUME the abandoned claim and import the order (never lost)");
+
+        (await OrderCountAsync(orgId)).Should().Be(1, "the order is eventually created exactly once — not lost");
+        enqueuer.Count.Should().Be(1, "the parse job is enqueued once, on the successful resume");
+    }
+
+    [DockerRequiredFact]
+    public async Task OrderCommittedButPostStepCrashed_Retry_CreatesNoSecondOrder()
+    {
+        const string key = "incoming/po-poststep.csv";
+        var orgId = await SeedOrgSupplierConfigAsync();
+        var s3 = OneObjectS3(key, "\"etag-1\"", new byte[] { 1, 2, 3 });
+        var orders = new CountingOrderService(_options!);
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+        {
+            var svc = NewService(db1, orders, new ThrowingParseEnqueuer(), s3);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => svc.PollAsync(orgId, CancellationToken.None));
+        }
+        (await OrderCountAsync(orgId)).Should().Be(1, "the order WAS committed before the post-step crashed");
+
+        var enqueuer = new CountingParseEnqueuer();
+        await using (var db2 = new ProcuLinkDbContext(_options!))
+            (await NewService(db2, orders, enqueuer, s3).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(0, "the existing order (by id) must make the retry a no-op — no duplicate");
+
+        (await OrderCountAsync(orgId)).Should().Be(1, "still exactly ONE order — the retry created no duplicate");
+        orders.TotalCreates.Should().Be(1, "the retry must not call stub creation again for the completed order");
+    }
+
+    [DockerRequiredFact]
+    public async Task PermanentlyBadObject_IsBounded_NotRetriedForever()
+    {
+        const string key = "incoming/po-bad.csv";
+        var orgId = await SeedOrgSupplierConfigAsync();
+        var s3 = OneObjectS3(key, "\"etag-1\"", new byte[] { 1, 2, 3 });
+        var orders = new CountingOrderService(_options!, () => StubBehavior.FailPermanent);
+        var enqueuer = new CountingParseEnqueuer();
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+            (await NewService(db1, orders, enqueuer, s3).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(0, "a permanently-bad object imports nothing");
+
+        await using (var db2 = new ProcuLinkDbContext(_options!))
+            (await NewService(db2, orders, enqueuer, s3).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(0);
+
+        orders.TotalCreates.Should().Be(1, "a genuinely-bad object is attempted ONCE, then bounded — never retried forever");
+        (await OrderCountAsync(orgId)).Should().Be(0, "no order is ever created for a permanently-bad object");
+
+        await using var verify = new ProcuLinkDbContext(_options!);
+        var claim = await verify.Set<ImportedS3Object>().SingleAsync(f => f.OrgId == orgId && f.ObjectKey == key);
+        claim.OrderId.Should().Be(Guid.Empty, "the claim is marked terminal (Guid.Empty) after the permanent failure");
+    }
+
+    /// <summary>Parse-job enqueuer that throws — models a crash in the post-order-commit step.</summary>
+    private sealed class ThrowingParseEnqueuer : IParseJobEnqueuer
+    {
+        public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
+            => throw new InvalidOperationException("parse-enqueue failure after order commit (test double)");
     }
 
     /// <summary>Factory that hands every caller the same pre-built <see cref="IAmazonS3"/>.</summary>

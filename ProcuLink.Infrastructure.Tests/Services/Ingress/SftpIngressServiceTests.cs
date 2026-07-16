@@ -378,7 +378,7 @@ public class SftpIngressServiceTests
 
     private static SftpIngressService MakeService(
         ProcuLinkDbContext db,
-        IOrderService orders,
+        IStubOrderCreator orders,
         ISftpClientFactory sftpFactory,
         OutboundRequestGuard? guard = null,
         IParseJobEnqueuer? enqueuer = null)
@@ -632,51 +632,26 @@ public class SftpIngressServiceTests
         }
     }
 
-    // ── Test-double order service ─────────────────────────────────────────────
+    // ── Test-double order-stub creators (IStubOrderCreator; explicit order id) ─────────────────
 
-    private sealed class NoOpOrderService : IOrderService
+    private sealed class NoOpOrderService : IStubOrderCreator
     {
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
-            Guid organisationId, Guid supplierId, Stream fileStream,
+            Guid organisationId, Guid supplierId, Guid orderId, Stream fileStream,
             string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException("NoOpOrderService must not be called.");
 
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
-            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            Guid organisationId, Guid orderId, Stream fileStream, string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException("NoOpOrderService must not be called.");
-
-        public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid o, Guid s, Stream f, string fn, string ct2, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid o, Guid s, ExtractedOrder order, string source, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid o, Guid id, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid o, Guid id, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(Guid o, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(Guid organisationId, int page, int pageSize, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(Guid organisationId, int skip, int take, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<TransformResponse>> TransformAsync(Guid o, Guid id, OutputFormat fmt, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<DownloadUrl>> GetDownloadUrlAsync(Guid o, Guid id, Guid aid, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> ResolveAsync(Guid o, Guid id, IReadOnlyList<LineResolution> r, bool s, CancellationToken ct, ResolveHeaderFields? header = null)
-            => throw new NotImplementedException();
-        public Task<Result<int>> AcceptAiSuggestionsAsync(Guid o, Guid id, double minConfidence, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> MarkRejectedAsync(Guid organisationId, Guid orderId, string reason, CancellationToken ct)
-            => throw new NotImplementedException();
     }
 
     /// <summary>
-    /// Order service double that, at the moment CreateStub/CreateUnroutedStub is invoked,
+    /// Order-stub creator double that, at the moment CreateStub/CreateUnroutedStub is invoked,
     /// records whether an <see cref="ImportedSftpFile"/> row for the org is already committed.
     /// Proves the claim-first ordering (ledger committed BEFORE order creation).
     /// </summary>
-    private sealed class LedgerProbingOrderService : IOrderService
+    private sealed class LedgerProbingOrderService : IStubOrderCreator
     {
         private readonly ProcuLinkDbContext _db;
         public LedgerProbingOrderService(ProcuLinkDbContext db) => _db = db;
@@ -691,73 +666,48 @@ public class SftpIngressServiceTests
         }
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
-            Guid organisationId, Guid supplierId, Stream fileStream,
+            Guid organisationId, Guid supplierId, Guid orderId, Stream fileStream,
             string filename, string contentType, CancellationToken ct)
         {
             Probe(organisationId);
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
             {
-                Id = Guid.NewGuid(), OrgId = organisationId, SupplierId = supplierId, Status = "parsing",
+                Id = orderId, OrgId = organisationId, SupplierId = supplierId, Status = "parsing",
                 CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             }));
         }
 
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
-            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            Guid organisationId, Guid orderId, Stream fileStream, string filename, string contentType, CancellationToken ct)
         {
             Probe(organisationId);
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
             {
-                Id = Guid.NewGuid(), OrgId = organisationId, SupplierId = null, Status = "parsing",
+                Id = orderId, OrgId = organisationId, SupplierId = null, Status = "parsing",
                 CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             }));
         }
-
-        public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid o, Guid s, Stream f, string fn, string ct2, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid o, Guid s, ExtractedOrder order, string source, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid o, Guid id, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid o, Guid id, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(Guid o, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(Guid organisationId, int page, int pageSize, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(Guid organisationId, int skip, int take, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<TransformResponse>> TransformAsync(Guid o, Guid id, OutputFormat fmt, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<DownloadUrl>> GetDownloadUrlAsync(Guid o, Guid id, Guid aid, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> ResolveAsync(Guid o, Guid id, IReadOnlyList<LineResolution> r, bool s, CancellationToken ct, ResolveHeaderFields? header = null)
-            => throw new NotImplementedException();
-        public Task<Result<int>> AcceptAiSuggestionsAsync(Guid o, Guid id, double minConfidence, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> MarkRejectedAsync(Guid organisationId, Guid orderId, string reason, CancellationToken ct)
-            => throw new NotImplementedException();
     }
 
-    private sealed class RecordingOrderService : IOrderService
+    private sealed class RecordingOrderService : IStubOrderCreator
     {
         public int CreateStubCalls { get; private set; }
         public int UnroutedStubCalls { get; private set; }
         public List<Guid> SupplierIds { get; } = new();
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
-            Guid organisationId, Guid supplierId, Stream fileStream,
+            Guid organisationId, Guid supplierId, Guid orderId, Stream fileStream,
             string filename, string contentType, CancellationToken ct)
         {
             CreateStubCalls++;
             SupplierIds.Add(supplierId);
             var stub = new PurchaseOrderEntity
             {
-                Id = Guid.NewGuid(),
+                Id = orderId,
                 OrgId = organisationId,
                 SupplierId = supplierId,
                 Status = "parsing",
-                SourceFileKey = $"{organisationId}/{Guid.NewGuid()}/{filename}",
+                SourceFileKey = $"{organisationId}/{orderId}/{filename}",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             };
@@ -767,47 +717,22 @@ public class SftpIngressServiceTests
         // Unrouted hold path — counted separately, and records a Guid.Empty supplier
         // in SupplierIds so tests can assert which path was used.
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
-            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            Guid organisationId, Guid orderId, Stream fileStream, string filename, string contentType, CancellationToken ct)
         {
             UnroutedStubCalls++;
             SupplierIds.Add(Guid.Empty);
             var stub = new PurchaseOrderEntity
             {
-                Id = Guid.NewGuid(),
+                Id = orderId,
                 OrgId = organisationId,
                 SupplierId = null,
                 Status = "parsing",
-                SourceFileKey = $"{organisationId}/{Guid.NewGuid()}/{filename}",
+                SourceFileKey = $"{organisationId}/{orderId}/{filename}",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             };
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
         }
-
-        public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid o, Guid s, Stream f, string fn, string ct2, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid o, Guid s, ExtractedOrder order, string source, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid o, Guid id, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid o, Guid id, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(Guid o, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(Guid organisationId, int page, int pageSize, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(Guid organisationId, int skip, int take, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<TransformResponse>> TransformAsync(Guid o, Guid id, OutputFormat fmt, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<DownloadUrl>> GetDownloadUrlAsync(Guid o, Guid id, Guid aid, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> ResolveAsync(Guid o, Guid id, IReadOnlyList<LineResolution> r, bool s, CancellationToken ct, ResolveHeaderFields? header = null)
-            => throw new NotImplementedException();
-        public Task<Result<int>> AcceptAiSuggestionsAsync(Guid o, Guid id, double minConfidence, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> MarkRejectedAsync(Guid organisationId, Guid orderId, string reason, CancellationToken ct)
-            => throw new NotImplementedException();
     }
 
     // ── In-memory DbContext ───────────────────────────────────────────────────

@@ -120,9 +120,9 @@ public class LiveImapIngressTests
             UpdatedAt = DateTime.UtcNow,
         };
 
-        var orders = new Mock<IOrderService>();
+        var orders = new Mock<IStubOrderCreator>();
         orders.Setup(o => o.CreateStubAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(stub));
 
@@ -148,7 +148,7 @@ public class LiveImapIngressTests
         await job.ExecuteAsync(orgId, CancellationToken.None);
 
         orders.Verify(o => o.CreateStubAsync(
-                orgId, supplierId, It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+                orgId, supplierId, It.IsAny<Guid>(), It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.AtLeastOnce,
             "the real IMAP poll should import at least one CSV/PDF/XLSX attachment from the mailbox");
     }

@@ -1,11 +1,14 @@
 using System.Text;
 using FluentAssertions;
 using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using MimeKit;
 using Moq;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Infrastructure;
@@ -18,11 +21,11 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Integration;
 
 /// <summary>
-/// Proves the claim-first IMAP attachment ingest on REAL Postgres, where the
+/// Proves the claim-first + resume-on-conflict IMAP attachment ingest on REAL Postgres, where the
 /// (OrgId, ImapMessageId, AttachmentHash) unique index is actually enforced (EF InMemory ignores
-/// it): (a) a re-poll / retry of the same message creates NO second order; and (b) many concurrent
-/// polls of the same mailbox message create EXACTLY ONE order — the losers hit the unique-index
-/// claim (23505) and skip. Docker-gated; skips cleanly where Docker is absent.
+/// it): re-poll creates no second order; concurrent polls create exactly one; a transient stub
+/// failure is RESUMED (not lost); an order whose parse-enqueue crashed is not re-created; and a
+/// permanently-bad attachment is bounded. Docker-gated; skips cleanly where Docker is absent.
 /// </summary>
 [Collection("postgres-container")]
 public sealed class EmailPollClaimFirstPostgresTests : IAsyncLifetime
@@ -85,18 +88,37 @@ public sealed class EmailPollClaimFirstPostgresTests : IAsyncLifetime
         return msg;
     }
 
-    private EmailPollOrgJob NewJob(ProcuLinkDbContext db, CountingOrderService orders) =>
-        new(db, Enc(), orders, new Mock<IBackgroundJobClient>().Object,
+    /// <summary>Seeds an organisation so the persisting stub double's purchase-order insert satisfies its FK.</summary>
+    private async Task SeedOrgAsync(Guid orgId)
+    {
+        await using var db = new ProcuLinkDbContext(_options!);
+        db.Organisations.Add(new Organisation
+        {
+            Id = orgId, ClerkOrgId = $"org_email_{orgId:N}", Name = "Email CF Org",
+            Slug = $"email-cf-{orgId:N}", Plan = "operations", AccountStatus = "active", CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private EmailPollOrgJob NewJob(ProcuLinkDbContext db, CountingOrderService orders, IBackgroundJobClient? jobs = null) =>
+        new(db, Enc(), orders, jobs ?? new Mock<IBackgroundJobClient>().Object,
             new Mock<IBillingService>().Object, new Mock<IEmailSettingsService>().Object,
             Guard(), NullLogger<EmailPollOrgJob>.Instance);
+
+    private async Task<int> OrderCountAsync(Guid orgId)
+    {
+        await using var db = new ProcuLinkDbContext(_options!);
+        return await db.PurchaseOrders.CountAsync(o => o.OrgId == orgId);
+    }
 
     [DockerRequiredFact]
     public async Task RePoll_OfSameMessage_CreatesNoSecondOrder()
     {
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
+        await SeedOrgAsync(orgId);
         var bytes = Encoding.UTF8.GetBytes("po,qty\r\nRETRY,1\r\n");
-        var orders = new CountingOrderService();
+        var orders = new CountingOrderService(_options!);
 
         await using (var db1 = new ProcuLinkDbContext(_options!))
             (await NewJob(db1, orders).ProcessMessageAsync(orgId, supplierId,
@@ -109,6 +131,7 @@ public sealed class EmailPollClaimFirstPostgresTests : IAsyncLifetime
                 .Should().BeTrue("a re-presented (unseen) message is still handled — but not re-imported");
 
         orders.TotalCreates.Should().Be(1, "the same attachment must create exactly ONE order stub across re-polls");
+        (await OrderCountAsync(orgId)).Should().Be(1, "exactly ONE purchase order exists across re-polls");
 
         await using var verify = new ProcuLinkDbContext(_options!);
         (await verify.EmailImportRecords.CountAsync(r => r.OrgId == orgId))
@@ -121,8 +144,9 @@ public sealed class EmailPollClaimFirstPostgresTests : IAsyncLifetime
         const int workers = 8;
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
+        await SeedOrgAsync(orgId);
         var bytes = Encoding.UTF8.GetBytes("po,qty\r\nCONC,1\r\n");
-        var orders = new CountingOrderService();   // shared across all polls
+        var orders = new CountingOrderService(_options!);   // shared across all polls
 
         var tasks = Enumerable.Range(0, workers).Select(async _ =>
         {
@@ -134,11 +158,105 @@ public sealed class EmailPollClaimFirstPostgresTests : IAsyncLifetime
         });
         await Task.WhenAll(tasks);
 
-        orders.TotalCreates.Should().Be(1,
-            "concurrent polls of the same mailbox message must create exactly ONE order stub");
+        (await OrderCountAsync(orgId)).Should().Be(1,
+            "concurrent polls of the same mailbox message must create EXACTLY ONE purchase order");
 
         await using var verify = new ProcuLinkDbContext(_options!);
         (await verify.EmailImportRecords.CountAsync(r => r.OrgId == orgId))
             .Should().Be(1, "exactly one ledger row survives the concurrent race");
+    }
+
+    [DockerRequiredFact]
+    public async Task TransientStubFailure_ThenRetry_ImportsOrder_NotLost()
+    {
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        await SeedOrgAsync(orgId);
+        var bytes = Encoding.UTF8.GetBytes("po,qty\r\nTRANS,1\r\n");
+
+        var attempt = 0;
+        var orders = new CountingOrderService(_options!,
+            () => Interlocked.Increment(ref attempt) == 1 ? StubBehavior.ThrowTransient : StubBehavior.Succeed);
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+        {
+            var job = NewJob(db1, orders);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => job.ProcessMessageAsync(orgId, supplierId,
+                MessageWithCsvAttachment("<trans@x>", "po.csv", bytes), CancellationToken.None));
+        }
+
+        await using (var afterFail = new ProcuLinkDbContext(_options!))
+        {
+            var claim = await afterFail.EmailImportRecords.SingleAsync(r => r.OrgId == orgId);
+            claim.OrderId.Should().NotBe(Guid.Empty, "the claim carries a real pre-generated order id to resume under");
+            (await afterFail.PurchaseOrders.CountAsync(o => o.OrgId == orgId))
+                .Should().Be(0, "the transient failure means the order was never created");
+        }
+
+        await using (var db2 = new ProcuLinkDbContext(_options!))
+            (await NewJob(db2, orders).ProcessMessageAsync(orgId, supplierId,
+                MessageWithCsvAttachment("<trans@x>", "po.csv", bytes), CancellationToken.None))
+                .Should().BeTrue("the retry RESUMES the abandoned claim and imports the order (never lost)");
+
+        (await OrderCountAsync(orgId)).Should().Be(1, "the order is eventually created exactly once — not lost");
+    }
+
+    [DockerRequiredFact]
+    public async Task OrderCommittedButEnqueueCrashed_Retry_CreatesNoSecondOrder()
+    {
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        await SeedOrgAsync(orgId);
+        var bytes = Encoding.UTF8.GetBytes("po,qty\r\nPOST,1\r\n");
+        var orders = new CountingOrderService(_options!);   // always commits the order
+
+        // A background-job client whose enqueue throws — models a crash AFTER the order committed
+        // but before the attachment was known complete.
+        var throwingJobs = new Mock<IBackgroundJobClient>();
+        throwingJobs.Setup(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()))
+                    .Throws(new InvalidOperationException("parse-enqueue failure after order commit (test double)"));
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+        {
+            var job = NewJob(db1, orders, throwingJobs.Object);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => job.ProcessMessageAsync(orgId, supplierId,
+                MessageWithCsvAttachment("<post@x>", "po.csv", bytes), CancellationToken.None));
+        }
+        (await OrderCountAsync(orgId)).Should().Be(1, "the order WAS committed before the enqueue crashed");
+
+        await using (var db2 = new ProcuLinkDbContext(_options!))
+            (await NewJob(db2, orders).ProcessMessageAsync(orgId, supplierId,
+                MessageWithCsvAttachment("<post@x>", "po.csv", bytes), CancellationToken.None))
+                .Should().BeTrue("the retry handles the message but the existing order (by id) makes it a no-op");
+
+        (await OrderCountAsync(orgId)).Should().Be(1, "still exactly ONE order — the retry created no duplicate");
+        orders.TotalCreates.Should().Be(1, "the retry must not call stub creation again for the completed order");
+    }
+
+    [DockerRequiredFact]
+    public async Task PermanentlyBadAttachment_IsBounded_NotRetriedForever()
+    {
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        await SeedOrgAsync(orgId);
+        var bytes = Encoding.UTF8.GetBytes("po,qty\r\nBAD,1\r\n");
+        var orders = new CountingOrderService(_options!, () => StubBehavior.FailPermanent);
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+            (await NewJob(db1, orders).ProcessMessageAsync(orgId, supplierId,
+                MessageWithCsvAttachment("<bad@x>", "po.csv", bytes), CancellationToken.None))
+                .Should().BeTrue("a permanently-bad attachment is handled (flagged SEEN) but imports nothing");
+
+        await using (var db2 = new ProcuLinkDbContext(_options!))
+            (await NewJob(db2, orders).ProcessMessageAsync(orgId, supplierId,
+                MessageWithCsvAttachment("<bad@x>", "po.csv", bytes), CancellationToken.None))
+                .Should().BeTrue();
+
+        orders.TotalCreates.Should().Be(1, "a genuinely-bad attachment is attempted ONCE, then bounded — never retried forever");
+        (await OrderCountAsync(orgId)).Should().Be(0, "no order is ever created for a permanently-bad attachment");
+
+        await using var verify = new ProcuLinkDbContext(_options!);
+        var claim = await verify.EmailImportRecords.SingleAsync(r => r.OrgId == orgId);
+        claim.OrderId.Should().Be(Guid.Empty, "the claim is marked terminal (Guid.Empty) after the permanent failure");
     }
 }

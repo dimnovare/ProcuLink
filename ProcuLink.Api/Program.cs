@@ -519,6 +519,8 @@ builder.Services.AddScoped<IEffectiveConnectionConfigResolver,
 // Group V2 — replay / impact testing (non-mutating; reuses the transform + acceptance engines).
 builder.Services.AddScoped<IReplayService, ReplayService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
+// Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
+builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
 builder.Services.AddScoped<IPassportService, PassportService>();
 builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
