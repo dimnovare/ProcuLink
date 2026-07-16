@@ -16,6 +16,12 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
     /// is recoverable; an order that keeps stranding in <c>delivering</c> after this many requeues
     /// is genuinely stuck, so we stop looping it and move it to <c>delivery_dead_letter</c> with a
     /// clear reason. Mirrors <c>StuckOrderDetectionService.MaxRequeues</c>.
+    ///
+    /// <para>Counted against <c>PurchaseOrderEntity.DeliveryRequeueCount</c> — the DELIVERY-phase
+    /// budget, DISTINCT from the parse/transform <c>RequeueCount</c> that
+    /// <c>StuckOrderDetectionService</c> spends. An order that already exhausted its parse/transform
+    /// requeues therefore reaches delivery with a FULL delivery budget and is never prematurely
+    /// dead-lettered on its first delivery stall.</para>
     /// </summary>
     private const int MaxRequeues = 2;
 
@@ -70,10 +76,10 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
 
             var stuckSince = order.UpdatedAt;
 
-            if (order.RequeueCount < MaxRequeues)
+            if (order.DeliveryRequeueCount < MaxRequeues)
             {
                 // ── Transient stall → re-drive delivery (do NOT fail) ─────────────
-                order.RequeueCount += 1;
+                order.DeliveryRequeueCount += 1;
                 // Bump UpdatedAt so this order leaves the stuck window: the retry job will move it
                 // to a terminal status, and a duplicate sweep before then won't re-act on it.
                 order.UpdatedAt = now;
@@ -87,7 +93,7 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
                     stuckSince,
                     detectedAt = now,
                     thresholdMinutes = stuckThreshold.TotalMinutes,
-                    requeueCount = order.RequeueCount,
+                    requeueCount = order.DeliveryRequeueCount,
                     maxRequeues = MaxRequeues,
                     retryReEnqueued = _retryEnqueuer is not null,
                 });
@@ -106,7 +112,7 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
 
                 _logger.LogWarning(
                     "StuckDeliveryDetection: order {OrderId} (org {OrgId}) stuck in 'delivering' since {StuckSince:o} — re-driving delivery (attempt {RequeueCount}/{MaxRequeues}).",
-                    order.Id, order.OrgId, stuckSince, order.RequeueCount, MaxRequeues);
+                    order.Id, order.OrgId, stuckSince, order.DeliveryRequeueCount, MaxRequeues);
             }
             else
             {
@@ -125,10 +131,10 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
                     stuckSince,
                     detectedAt = now,
                     thresholdMinutes = stuckThreshold.TotalMinutes,
-                    requeueCount = order.RequeueCount,
+                    requeueCount = order.DeliveryRequeueCount,
                     maxRequeues = MaxRequeues,
                     deadLettered = true,
-                    detail = $"Order re-driven {order.RequeueCount} time(s) and kept stranding in 'delivering' — dead-lettered.",
+                    detail = $"Order re-driven {order.DeliveryRequeueCount} time(s) and kept stranding in 'delivering' — dead-lettered.",
                 });
 
                 _db.AuditEvents.Add(new AuditEvent
@@ -145,7 +151,7 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
 
                 _logger.LogWarning(
                     "StuckDeliveryDetection: order {OrderId} (org {OrgId}) stuck in 'delivering' since {StuckSince:o} after {RequeueCount} re-drive(s) — dead-lettering.",
-                    order.Id, order.OrgId, stuckSince, order.RequeueCount);
+                    order.Id, order.OrgId, stuckSince, order.DeliveryRequeueCount);
             }
 
             actedOn++;

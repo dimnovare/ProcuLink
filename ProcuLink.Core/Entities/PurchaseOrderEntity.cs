@@ -59,6 +59,17 @@ public class PurchaseOrderEntity
     public int RequeueCount { get; set; }
 
     /// <summary>
+    /// DELIVERY-phase re-drive counter, SEPARATE from the parse/transform <see cref="RequeueCount"/>.
+    /// <c>StuckDeliveryDetectionService</c> increments this (not the shared counter) each time it
+    /// re-drives an order stranded in <c>delivering</c>, so the delivery phase gets its OWN bounded
+    /// budget: an order that already spent its <see cref="RequeueCount"/> recovering a stuck
+    /// parse/transform is NOT prematurely dead-lettered on its first delivery stall. Never reset (it
+    /// accumulates for the order's delivery lifetime, mirroring <see cref="RequeueCount"/>).
+    /// Default 0; additive column <c>delivery_requeue_count</c> (migration <c>AddDeliveryRequeueCount</c>).
+    /// </summary>
+    public int DeliveryRequeueCount { get; set; }
+
+    /// <summary>
     /// Column-layout hash recorded once this order's source file has been fingerprinted
     /// (see <c>ISchemaFingerprintService</c>). Non-null means the fingerprint upsert already
     /// counted this order — the guard that makes parse-time fingerprinting idempotent across

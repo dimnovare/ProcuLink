@@ -38,7 +38,7 @@ public class StuckDeliveryDetectionServiceTests
         // Still 'delivering' (the retry job owns the next terminal transition) but bumped out of
         // the stuck window and counted — NOT failed.
         order.Status.Should().Be(OrderStatusConstants.Delivering);
-        order.RequeueCount.Should().Be(1);
+        order.DeliveryRequeueCount.Should().Be(1);
         order.UpdatedAt.Should().BeAfter(DateTime.UtcNow.AddMinutes(-30));
 
         // The retry job was actually re-enqueued through the seam.
@@ -55,9 +55,9 @@ public class StuckDeliveryDetectionServiceTests
     public async Task RunAsync_StuckDeliveringPastRequeueCap_IsDeadLettered()
     {
         await using var db = CreateDb();
-        // Already re-driven up to the cap and stranded again.
+        // Already re-driven up to the cap and stranded again (delivery-phase budget exhausted).
         var orderId = await SeedOrderAsync(
-            db, OrderStatusConstants.Delivering, updatedMinutesAgo: 45, requeueCount: MaxRequeues,
+            db, OrderStatusConstants.Delivering, updatedMinutesAgo: 45, deliveryRequeueCount: MaxRequeues,
             deliveryDueAt: DateTime.UtcNow.AddMinutes(-10), slaBreached: true);
         var enqueuer = new RecordingRetryEnqueuer();
 
@@ -98,7 +98,7 @@ public class StuckDeliveryDetectionServiceTests
 
             var o = await db.PurchaseOrders.SingleAsync(x => x.Id == orderId);
             o.Status.Should().Be(OrderStatusConstants.Delivering, "re-drive {0} should not fail the order", attempt);
-            o.RequeueCount.Should().Be(attempt);
+            o.DeliveryRequeueCount.Should().Be(attempt);
 
             // Re-stall: age the 'delivering' row back past the threshold.
             o.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
@@ -113,6 +113,33 @@ public class StuckDeliveryDetectionServiceTests
         enqueuer.Calls.Should().HaveCount(MaxRequeues);
         (await db.AuditEvents.CountAsync(e => e.Action == "StuckDeliveryRequeued")).Should().Be(MaxRequeues);
         (await db.AuditEvents.CountAsync(e => e.Action == "StuckDeliveryDeadLettered")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RunAsync_DeliveryBudgetIsSeparateFromParseTransformBudget_NotPrematurelyDeadLettered()
+    {
+        // B4: an order that ALREADY spent its parse/transform requeue budget (RequeueCount == cap)
+        // must still get the FULL delivery re-drive budget when it later stalls in 'delivering'.
+        // With the OLD shared counter this order would be dead-lettered on its first delivery stall;
+        // with the dedicated DeliveryRequeueCount (0 here) it is correctly RE-DRIVEN, not failed.
+        await using var db = CreateDb();
+        var orderId = await SeedOrderAsync(
+            db, OrderStatusConstants.Delivering, updatedMinutesAgo: 45,
+            deliveryRequeueCount: 0, requeueCount: MaxRequeues);
+        var enqueuer = new RecordingRetryEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        acted.Should().Be(1);
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        // Re-driven (NOT dead-lettered) — the delivery phase had its own fresh budget.
+        order.Status.Should().Be(OrderStatusConstants.Delivering);
+        order.DeliveryRequeueCount.Should().Be(1);
+        // The parse/transform counter is untouched by the delivery sweep.
+        order.RequeueCount.Should().Be(MaxRequeues);
+        enqueuer.Calls.Should().ContainSingle().Which.Should().Be((orderId, order.OrgId));
+        (await db.AuditEvents.SingleAsync(e => e.EntityId == orderId)).Action
+            .Should().Be("StuckDeliveryRequeued");
     }
 
     [Fact]
@@ -164,7 +191,7 @@ public class StuckDeliveryDetectionServiceTests
         // no double-processing before the retry job moves it to a terminal state.
         (await service.RunAsync(Threshold, default)).Should().Be(0);
 
-        (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).RequeueCount.Should().Be(1);
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).DeliveryRequeueCount.Should().Be(1);
         (await db.AuditEvents.CountAsync(e => e.EntityId == orderId)).Should().Be(1);
     }
 
@@ -184,7 +211,7 @@ public class StuckDeliveryDetectionServiceTests
         acted.Should().Be(1);
         var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
         order.Status.Should().Be(OrderStatusConstants.Delivering);
-        order.RequeueCount.Should().Be(1);
+        order.DeliveryRequeueCount.Should().Be(1);
         order.UpdatedAt.Should().BeAfter(DateTime.UtcNow.AddMinutes(-30));
         (await db.AuditEvents.SingleAsync(e => e.EntityId == orderId)).Action
             .Should().Be("StuckDeliveryRequeued");
@@ -203,7 +230,7 @@ public class StuckDeliveryDetectionServiceTests
 
         acted.Should().Be(1);
         enqueuer.Calls.Should().ContainSingle().Which.OrderId.Should().Be(stuckOld);
-        (await db.PurchaseOrders.SingleAsync(o => o.Id == freshDelivering)).RequeueCount.Should().Be(0);
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == freshDelivering)).DeliveryRequeueCount.Should().Be(0);
         (await db.PurchaseOrders.SingleAsync(o => o.Id == oldDelivered)).Status
             .Should().Be(OrderStatusConstants.Delivered);
     }
@@ -223,6 +250,7 @@ public class StuckDeliveryDetectionServiceTests
         ProcuLinkDbContext db,
         string status,
         int updatedMinutesAgo,
+        int deliveryRequeueCount = 0,
         int requeueCount = 0,
         DateTime? deliveryDueAt = null,
         bool slaBreached = false)
@@ -238,6 +266,9 @@ public class StuckDeliveryDetectionServiceTests
             OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
             Currency = "EUR",
             Status = status,
+            // Delivery-phase budget (what this sweep spends) and the parse/transform budget are
+            // seeded independently so cross-phase-budget behaviour can be asserted.
+            DeliveryRequeueCount = deliveryRequeueCount,
             RequeueCount = requeueCount,
             DeliveryDueAt = deliveryDueAt,
             SlaBreached = slaBreached,

@@ -114,11 +114,6 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
 
     private async Task ApplyResolvedAsync(Organisation org, Subscription sub, SubscriptionService subscriptions, CancellationToken ct)
     {
-        // Capture BEFORE any mutation so we can release billing-held orders when a MISSED
-        // reactivation webhook is healed here (read_only/past_due → active/trialing). Also covers
-        // the re-subscribe adoption path, which recurses into this method with the live sub.
-        var wasReadOnly = AccountStatusConstants.IsReadOnly(org.AccountStatus);
-
         var status = sub.Status ?? string.Empty;
         var priceId = sub.Items?.Data?.FirstOrDefault()?.Price?.Id;
 
@@ -180,17 +175,26 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
         // read_only→active here (not via the live webhook) would strand its delivery_held orders
         // FOREVER (no sweep watches delivery_held; RetryDeliveryAsync rejects it). Mirrors
         // BillingController's reactivation gate.
-        await ReleaseHeldOrdersIfReactivatedAsync(org, wasReadOnly, ct);
+        await ReleaseHeldOrdersIfProcessingAsync(org, ct);
     }
 
     /// <summary>
-    /// When reconciliation heals an org from a read-only/delinquent status back into a processing
-    /// status, release any billing-held orders back into delivery. Best-effort: a release failure
-    /// must never fail the reconcile (which would leave the org's billing state un-reconciled).
+    /// SELF-HEALING release (B3): whenever this reconcile leaves the org in a PROCESSING
+    /// (good-standing, non-read-only) status, release any billing-held orders back into delivery —
+    /// NOT only on the read_only→processing transition edge. The edge fires once and is consumed as
+    /// soon as the heal commits, so a transition-gated release that then FAILS (this is best-effort)
+    /// would strand the held orders forever: the edge is gone and never retried. Because
+    /// <see cref="Core.Services.Delivery.IDeliveryService.ReleaseBillingHeldOrdersAsync"/> is
+    /// idempotent and returns 0 when nothing is held, calling it on EVERY processing-reconcile is
+    /// safe, and a failed release simply self-heals on the next daily sweep. Best-effort throughout:
+    /// a release failure must never fail the reconcile (which would leave the org's billing state
+    /// un-reconciled).
     /// </summary>
-    private async Task ReleaseHeldOrdersIfReactivatedAsync(Organisation org, bool wasReadOnly, CancellationToken ct)
+    private async Task ReleaseHeldOrdersIfProcessingAsync(Organisation org, CancellationToken ct)
     {
-        if (!wasReadOnly || AccountStatusConstants.IsReadOnly(org.AccountStatus))
+        // Read-only / delinquent orgs cannot process orders — their held orders stay held (they are
+        // re-held anyway by RetryDeliveryAsync's billing gate, so releasing here would only churn).
+        if (AccountStatusConstants.IsReadOnly(org.AccountStatus))
             return;
 
         try
@@ -198,7 +202,7 @@ public sealed class StripeSubscriptionReconciliationService : IBillingReconcilia
             var released = await _delivery.ReleaseBillingHeldOrdersAsync(org.Id, ct);
             if (released > 0)
                 _logger.LogInformation(
-                    "Reconcile: org {OrgId} healed read_only→processing — released {Count} billing-held order(s) into delivery.",
+                    "Reconcile: org {OrgId} in good standing — released {Count} billing-held order(s) into delivery.",
                     org.Id, released);
         }
         catch (Exception ex)
