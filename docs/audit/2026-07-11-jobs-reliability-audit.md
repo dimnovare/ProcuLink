@@ -49,6 +49,21 @@ TransformOrderJob concurrent claim → orphan R2 blob; CatalogSyncSource child g
 first_upload_parsed re-fires on re-parse; ParseOrder failed→Succeeded hides failures; EmailPollOrg catch assumes
 23505 swallows transient; FireIntegrationTrigger FailureCount lost-update + double-increment.
 
+## STATUS (2026-07-11)
+- **A1/A2 (ingress claim-first + DisableConcurrentExecution): ATTEMPTED, HELD — NOT merged.** Branch
+  `fix/jobs-claim-first-ingress` implements claim-first + real-Postgres concurrency tests (all green), but
+  adversarial review found it trades the duplicate-order bug for a **silent lost-order** one: all 3 channels
+  "leave the claim as SEEN on stub failure", so a TRANSIENT `CreateStubAsync` failure (R2 blip / DB timeout /
+  SIGTERM after the claim commits) marks the file imported and the retry 23505-**skips** → the PO is never
+  imported, never retried, never surfaced. For procurement, silent-lost is worse than a detectable duplicate,
+  and `CreateStubAsync`'s window (R2 + commit + webhook) is larger than the original order-first ledger window.
+  The Email `OrderId=Guid.Empty` is traceability-only (no resume). **Correct fix = resume-on-conflict:** claim
+  carries a completion/OrderId marker; on 23505, look up whether an order actually exists for this source-ref →
+  skip only if it does, else RESUME (create the order). Rework needed before merge; the (tracked) duplicate bug
+  stays in prod meanwhile — do NOT ship the lost-order version to "close" the finding.
+- Remaining clusters (B1/B2 lost-order, A3/A5/B3/B4/B5 delivery-idempotency, C1/C2/C3 poisoned-DbContext,
+  Tier-D) not yet started — pending agent budget.
+
 ## Top 3 (risk-reduction per unit work)
 1. Claim-first ingress + [DisableConcurrentExecution(orgId)] × 3 → closes 6 of 8 P1s (A1+A2); stops duplicate POs + charges.
 2. TransformOrderJob dual-write gap (B1) + Ops requeue (B2) → the two silent-lost-order paths.
