@@ -196,6 +196,83 @@ public class CatalogSyncJobTests
         row.LastSyncError.Should().NotContain("files.internal.example");
     }
 
+    // ── Poisoned-context regression (finding C2) ────────────────────────────────
+    // When the pull stages child rows (SupplierProduct upserts) and then fails, the SAME
+    // scoped DbContext still tracks those Added rows. Before the fix, PersistFailureAsync's
+    // SaveChanges re-hit the underlying (unique) violation and swallowed it — leaving the
+    // source stuck showing "running" for up to a day. The failed-status write must clear the
+    // tracker first so the honest "failed" status actually persists.
+
+    /// <summary>
+    /// Throws on any SaveChanges that still carries an Added <see cref="SupplierProduct"/> —
+    /// models the concurrent-child unique violation the failed pull left staged in the shared
+    /// tracker. A save with only the source row (no staged child) succeeds.
+    /// </summary>
+    private sealed class FailWhileCatalogChildStagedDbContext : ProcuLinkDbContext
+    {
+        public FailWhileCatalogChildStagedDbContext(DbContextOptions<ProcuLinkDbContext> options) : base(options) { }
+
+        public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken ct = default)
+        {
+            if (ChangeTracker.Entries<SupplierProduct>().Any(e => e.State == EntityState.Added))
+                throw new DbUpdateException("Simulated unique violation from a concurrently-staged catalog child (finding C2).");
+            return base.SaveChangesAsync(acceptAllChangesOnSuccess, ct);
+        }
+    }
+
+    [Fact]
+    public async Task SourceJob_PullStagesChildrenThenFails_StillPersistsFailedStatus_NotStuckRunning()
+    {
+        var orgId  = Guid.NewGuid();
+        var dbName = Guid.NewGuid().ToString();
+        DbContextOptions<ProcuLinkDbContext> Opts() =>
+            new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(dbName).Options;
+
+        var source = NewSource(orgId);
+        using (var seed = new ProcuLinkDbContext(Opts()))
+        {
+            seed.SupplierCatalogSources.Add(source);
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = new FailWhileCatalogChildStagedDbContext(Opts());
+
+        const string safe = "Catalog sync failed — duplicate product code in the feed.";
+        var pull = new Mock<ICatalogPullService>();
+        pull.Setup(p => p.PullAsync(orgId, source.Id, It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                // The pull upserted a child row (Added state) before the failure surfaced —
+                // exactly what a concurrent sync leaves behind in the shared tracker.
+                db.SupplierProducts.Add(new SupplierProduct
+                {
+                    Id         = Guid.NewGuid(),
+                    OrgId      = orgId,
+                    SupplierId = source.SupplierId,
+                    Code       = "DUP-001",
+                    Name       = "Concurrently-inserted product",
+                    CreatedAt  = DateTime.UtcNow,
+                    UpdatedAt  = DateTime.UtcNow,
+                });
+            })
+            .ThrowsAsync(new CatalogSyncException(safe));
+
+        var job = new CatalogSyncSourceJob(db, pull.Object, NullLogger<CatalogSyncSourceJob>.Instance);
+        var act = () => job.ExecuteAsync(orgId, source.Id, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<CatalogSyncException>()).Which.Message.Should().Be(safe);
+
+        // Fresh context: the failed status must have actually LANDED — not stuck at "running".
+        await using var verify = new ProcuLinkDbContext(Opts());
+        var row = await verify.SupplierCatalogSources.AsNoTracking().SingleAsync(s => s.Id == source.Id);
+        row.LastSyncStatus.Should().Be("failed",
+            "the honest failed status must persist, not be swallowed and leave the source stuck 'running'");
+        row.LastSyncError.Should().Be(safe);
+
+        // And no corrupt partial catalog child leaked under the failed sync.
+        (await verify.SupplierProducts.AsNoTracking().CountAsync(p => p.OrgId == orgId)).Should().Be(0);
+    }
+
     [Fact]
     public async Task SourceJob_MissingSource_BailsSilently()
     {

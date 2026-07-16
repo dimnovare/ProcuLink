@@ -146,6 +146,14 @@ public sealed class InvoiceService : IInvoiceService
     // moment of failure so the row is not stale. Mirrors OrderIngestionService.SetOrderFailedAsync.
     public async Task SetFailedAsync(Guid orgId, Guid invoiceId, CancellationToken ct)
     {
+        // Poisoned-context guard (finding C1): this runs from a catch AFTER a failed
+        // PersistParsedAsync may have staged invoice lines (AddRange) and mutated the invoice
+        // on the SAME scoped DbContext. Without clearing, the SaveChanges below would flush that
+        // poisoned set — committing parsed lines under a "failed" invoice, which the status guard
+        // then blocks from ever re-parsing. Clear first so only the clean status flip persists;
+        // the row is re-loaded fresh below.
+        _db.ChangeTracker.Clear();
+
         var inv = await _db.Invoices
                            .Where(i => i.OrganisationId == orgId && i.Id == invoiceId)
                            .FirstOrDefaultAsync(ct);

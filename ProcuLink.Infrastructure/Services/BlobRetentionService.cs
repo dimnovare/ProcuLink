@@ -108,6 +108,16 @@ public class BlobRetentionService : IBlobRetentionService
                 // and DeleteAsync on a missing key is idempotent, so a retry is safe.
                 _logger.LogError(ex, "BlobRetention: sweep failed for org {OrgId} — continuing with the next org.", org.Id);
             }
+            finally
+            {
+                // Poisoned-context guard (finding C3): every org shares this ONE scoped DbContext.
+                // If this org's SaveChanges threw, its staged purge timestamps + audit row stay in
+                // the tracker; left un-cleared they would batch into the NEXT org's SaveChanges —
+                // re-hitting the fault (stranding the next org's purge) and entangling tenants.
+                // On success the entities are already persisted, so clearing is equally safe.
+                // Each org re-queries fresh, so starting from an empty tracker is always correct.
+                _db.ChangeTracker.Clear();
+            }
         }
 
         var run = new BlobRetentionRunResult(results);

@@ -86,6 +86,13 @@ public sealed class CatalogSyncSourceJob
     {
         try
         {
+            // Poisoned-context guard (finding C2): a failed pull can leave child rows (catalog
+            // upserts) staged on the SAME scoped DbContext. Without clearing, the SaveChanges
+            // below would re-hit their (e.g. unique) violation and be swallowed by the catch —
+            // leaving the source stuck showing "running". Clear first so only the failed-status
+            // flip persists; the source is re-loaded fresh below.
+            _db.ChangeTracker.Clear();
+
             var source = await _db.SupplierCatalogSources
                 .FirstOrDefaultAsync(s => s.Id == sourceId && s.OrgId == orgId);
             if (source is null) return;

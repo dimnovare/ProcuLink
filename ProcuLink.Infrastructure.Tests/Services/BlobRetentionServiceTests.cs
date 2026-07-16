@@ -243,6 +243,82 @@ public class BlobRetentionServiceTests
         storage.Verify(s => s.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    // ── Poisoned-context regression (finding C3) ────────────────────────────────
+    // The sweep shares ONE scoped DbContext across every org. If org A's per-org SaveChanges
+    // throws, its staged entities (purge timestamps + audit row) stay in the tracker; before
+    // the fix they leaked into org B's SaveChanges, re-hitting the fault and STRANDING org B's
+    // purge (and entangling the two tenants). Each org iteration must clear the tracker.
+
+    /// <summary>
+    /// Throws on every SaveChanges while the FIRST org's audit row is still staged (Added) —
+    /// models a per-org save fault that, left un-cleared, poisons every subsequent org's save.
+    /// Order-independent: it latches onto whichever org saves first.
+    /// </summary>
+    private sealed class PoisonFirstOrgSweepDbContext : ProcuLinkDbContext
+    {
+        public Guid? PoisonOrgId;
+        public PoisonFirstOrgSweepDbContext(DbContextOptions<ProcuLinkDbContext> options) : base(options) { }
+
+        public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken ct = default)
+        {
+            var addedAudits = ChangeTracker.Entries<RetentionAuditLog>()
+                .Where(e => e.State == EntityState.Added)
+                .Select(e => e.Entity.OrgId)
+                .ToList();
+            PoisonOrgId ??= addedAudits.Count > 0 ? addedAudits[0] : (Guid?)null;
+            if (PoisonOrgId is Guid poison && addedAudits.Contains(poison))
+                throw new DbUpdateException("Simulated transient failure on the first org's sweep save (finding C3).");
+            return base.SaveChangesAsync(acceptAllChangesOnSuccess, ct);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_OneOrgSaveFails_DoesNotStrandTheNextOrgsPurge()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        DbContextOptions<ProcuLinkDbContext> Opts() =>
+            new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(dbName).Options;
+
+        Guid org1, org2, order1, order2;
+        using (var seed = new ProcuLinkDbContext(Opts()))
+        {
+            org1   = await SeedOrgAsync(seed, retentionDays: 30);
+            org2   = await SeedOrgAsync(seed, retentionDays: 30);
+            order1 = await SeedOrderAsync(seed, org1, OrderStatusConstants.Delivered, ageDays: 90, withSource: true, artifactCount: 0);
+            order2 = await SeedOrderAsync(seed, org2, OrderStatusConstants.Delivered, ageDays: 90, withSource: true, artifactCount: 0);
+        }
+
+        var storage = NewStorage();
+        await using var db = new PoisonFirstOrgSweepDbContext(Opts());
+        var service = new BlobRetentionService(
+            db, storage.Object, DeleteModeOptions(), NullLogger<BlobRetentionService>.Instance);
+
+        // One org's save is sabotaged; RunAsync fault-isolates it and continues to the next org.
+        await service.RunAsync(default);
+
+        db.PoisonOrgId.Should().NotBeNull("exactly one org's sweep save was sabotaged");
+        var failedOrg     = db.PoisonOrgId!.Value;
+        var survivorOrg   = failedOrg == org1 ? org2 : org1;
+        var survivorOrder = failedOrg == org1 ? order2 : order1;
+        var failedOrder   = failedOrg == org1 ? order1 : order2;
+
+        // Verify against a FRESH context (committed state only, not the poisoned tracker).
+        await using var verify = new ProcuLinkDbContext(Opts());
+
+        // The survivor org's purge landed despite the OTHER org's failed save.
+        var survived = await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == survivorOrder);
+        survived.SourceFilePurgedAt.Should().NotBeNull(
+            "the next org's purge must not be stranded by the prior org's failed save");
+        (await verify.RetentionAuditLogs.AsNoTracking().AnyAsync(a => a.OrgId == survivorOrg))
+            .Should().BeTrue("the survivor org's audit row must persist");
+
+        // The failed org's own writes did NOT leak in via another org's transaction.
+        var failed = await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == failedOrder);
+        failed.SourceFilePurgedAt.Should().BeNull(
+            "the failed org's purge must not have leaked in through a later org's SaveChanges (no cross-tenant entanglement)");
+        (await verify.RetentionAuditLogs.AsNoTracking().AnyAsync(a => a.OrgId == failedOrg)).Should().BeFalse();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
     private static ProcuLinkDbContext CreateDb() =>
