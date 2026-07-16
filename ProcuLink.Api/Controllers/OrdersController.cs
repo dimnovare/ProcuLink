@@ -1806,9 +1806,10 @@ public sealed class OrdersController : ControllerBase
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before redelivering." });
 
-        order.Status = "delivering";
-        await _db.SaveChangesAsync(ct);
-
+        // B2 (lost-order): DO NOT pre-flip to 'delivering'. The order stays in its claimable status
+        // so the enqueued job's atomic claim succeeds; a FRESH 'delivering' row is REJECTED by the
+        // claim's reclaim-window guard, which would strand the order and silently defeat this send.
+        // (The write here was already inert — GetByIdAsync returns an AsNoTracking entity.)
         DeliverOrderJob.EnqueueRedeliver(_jobs, id, orgId, artifact.Id);
 
         _logger.LogInformation(
@@ -1856,16 +1857,27 @@ public sealed class OrdersController : ControllerBase
                       + $"(current: '{order.Status}')."
             });
 
+        // The order above came from GetByIdAsync, which reads through AsNoTracking — mutating it
+        // would persist NOTHING while this method still wrote the audit event, leaving an
+        // operator-confirmed record over an order the endpoint never moved. Re-query the TRACKED,
+        // org-scoped row to write through (mirrors OpsController.RequeueDelivery).
+        var tracked = await _db.PurchaseOrders
+            .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == orgId, ct);
+        if (tracked is null)
+            return NotFound();
+
         var now = DateTime.UtcNow;
-        order.Status = OrderStatusConstants.Delivered;
-        order.UpdatedAt = now;
+        tracked.Status = OrderStatusConstants.Delivered;
+        tracked.UpdatedAt = now;
         // A confirmed delivery closes the SLA window — mirrors DeliveryService's success path.
-        order.DeliveryDueAt = null;
-        order.SlaBreached = false;
+        tracked.DeliveryDueAt = null;
+        tracked.SlaBreached = false;
 
         // ICurrentTenantService only exposes the Clerk "sub" string, never the internal Guid — the
         // acting user's Guid FK (AuditEvent.UserId) has to be resolved via the AppUser row so the
         // human who asserted delivery is genuinely on the record, not just implied.
+        // Users is deliberately GLOBAL (unique ClerkUserId; org membership lives in Membership),
+        // so this lookup is legitimately un-org-scoped.
         var actingUserId = await _db.Users
             .AsNoTracking()
             .Where(u => u.ClerkUserId == _tenant.ClerkUserId)
@@ -1878,6 +1890,11 @@ public sealed class OrdersController : ControllerBase
             fromStatus = OrderStatusConstants.DeliveryUnconfirmed,
             toStatus = OrderStatusConstants.Delivered,
             confirmedAt = now,
+            // A missing AppUser row soft-degrades the FK to null rather than blocking the operator
+            // over an auth-plumbing gap. The Clerk id is always in hand, so recording it here keeps
+            // a null FK meaning "FK unresolved" instead of "a human acted and we cannot say who" —
+            // which is what would make this event indistinguishable from the SYSTEM-generated park.
+            actorClerkUserId = _tenant.ClerkUserId,
             detail = "Operator confirmed out-of-band that the supplier received this order. "
                    + "The delivery attempt itself was never acknowledged; this records the "
                    + "operator's assertion, not an observed supplier ACK.",
