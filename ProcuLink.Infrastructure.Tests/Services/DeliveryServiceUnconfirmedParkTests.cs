@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Hangfire;
+using Hangfire.States;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -6,6 +8,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Tests.TestDoubles;
 
@@ -332,6 +335,111 @@ public class DeliveryServiceUnconfirmedParkTests
 
         // Plain-language rule: no internal vocabulary leaks into operator-facing copy.
         message.Should().NotContainAny("idempotency", "re-adopt", "dispatching row", "park");
+    }
+
+    // ── A retry that fires when the order is ALREADY parked (I3) ─────────────────────────────
+    // Reachable: the stuck sweep bumps UpdatedAt before enqueueing, so its retry finds the row
+    // non-stale, no-ops, and schedules a backoff retry; any such retry firing after the park
+    // seeds the loop. RetryDeliveryAsync's non-retryable early gate persists NO attempt row, so
+    // the count never advances — a caller that reschedules on that result reschedules at the SAME
+    // delay forever. The park is only recognisable to the existing guards if the early return
+    // carries Parked.
+
+    [Fact]
+    public async Task RetryDeliveryAsync_OnAlreadyParkedOrder_ReturnsParkedResult()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedParkedOrderAsync(db, encryption, "erp_erply");
+
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 200), "erp_erply", ResendSafety.Unsafe);
+        var service = CreateService(db, dispatcher, encryption);
+
+        var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
+
+        result.Success.Should().BeFalse();
+        result.Parked.Should().BeTrue("an already-parked order is still parked — the callers' park guards must recognise it");
+        dispatcher.Calls.Should().Be(0, "the automatic queue must never re-send a park on the operator's behalf");
+    }
+
+    [Fact]
+    public async Task RetryDeliveryJob_OnAlreadyParkedOrder_SchedulesNoFurtherRetry()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedParkedOrderAsync(db, encryption, "erp_erply");
+
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 200), "erp_erply", ResendSafety.Unsafe);
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(
+            CreateService(db, dispatcher, encryption),
+            jobs,
+            NullLogger<RetryDeliveryJob>.Instance,
+            new DeliveryReliabilityOptions { MaxAttempts = MaxAttempts, BackoffMinutes = new[] { 30, 60, 120 } });
+
+        await job.ExecuteAsync(ids.OrderId, ids.OrgId, default);
+
+        jobs.Captured.Should().BeEmpty(
+            "the attempt count cannot advance past a park, so a rescheduled retry would repeat at the same delay forever");
+        dispatcher.Calls.Should().Be(0);
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId)).Status
+            .Should().Be(OrderStatusConstants.DeliveryUnconfirmed, "only an operator moves an order out of the park");
+    }
+
+    // Regression guard: the Parked flag marks the park ONLY. Dead-letter and delivered keep their
+    // own semantics — mislabelling either as a park would misroute the callers' guards.
+    [Fact]
+    public async Task RetryDeliveryAsync_DeadLetteredOrDelivered_AreNotReportedAsParked()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+
+        var deadLetter = await SeedOrderAsync(db, OrderStatusConstants.DeliveryDeadLetter);
+        var delivered = await SeedOrderAsync(db, OrderStatusConstants.Delivered);
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db, new CountingDispatcher(new DeliveryResult(true, null, 200), "http", ResendSafety.Unsafe), encryption);
+
+        var deadLetterResult = await service.RetryDeliveryAsync(deadLetter.OrgId, deadLetter.OrderId, MaxAttempts, default);
+        deadLetterResult.Success.Should().BeFalse();
+        deadLetterResult.Parked.Should().BeFalse("retries are exhausted — that is not a park");
+
+        var deliveredResult = await service.RetryDeliveryAsync(delivered.OrgId, delivered.OrderId, MaxAttempts, default);
+        deliveredResult.Success.Should().BeTrue();
+        deliveredResult.Parked.Should().BeFalse("a confirmed delivery is not a park");
+    }
+
+    /// <summary>The exact post-park state: order parked, its attempt row finalised 'unconfirmed'.</summary>
+    private static async Task<(Guid OrgId, Guid SupplierId, Guid OrderId, Guid ArtifactId)> SeedParkedOrderAsync(
+        ProcuLinkDbContext db, DeliveryEncryptionService encryption, string protocol)
+    {
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.DeliveryUnconfirmed);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol));
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+            Channel = protocol, Destination = "https://erp.example/orders",
+            Status = DeliveryAttempt.StatusUnconfirmed, AttemptNumber = 1,
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-30),
+            IdempotencyKey = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId),
+            ErrorMessage = DeliveryService.BuildUnconfirmedMessage(protocol),
+        });
+        await db.SaveChangesAsync();
+        return ids;
+    }
+
+    /// <summary>Captures every scheduled/enqueued job so "scheduled nothing" is a real assertion.</summary>
+    private sealed class CapturingJobClient : IBackgroundJobClient
+    {
+        public List<(Hangfire.Common.Job Job, IState State)> Captured { get; } = new();
+
+        public string Create(Hangfire.Common.Job job, IState state)
+        {
+            Captured.Add((job, state));
+            return Guid.NewGuid().ToString();
+        }
+
+        public bool ChangeState(string jobId, IState state, string expectedState) => true;
     }
 
     // ── Helpers (copied from DeliveryServiceIdempotencyTests.cs — direct sibling) ───────────

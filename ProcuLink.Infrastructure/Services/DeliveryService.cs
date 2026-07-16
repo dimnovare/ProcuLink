@@ -918,6 +918,18 @@ public sealed class DeliveryService : IDeliveryService
         if (order.Status == OrderStatusConstants.Delivered)
             return new DeliveryResult(true, null);
 
+        // An order that is ALREADY parked (a retry scheduled before the park, firing after it) is
+        // reported as Parked so the callers' existing park guards recognise it. Without the flag
+        // this fell through as an ordinary non-retryable failure and the queue rescheduled — but
+        // this early return persists no attempt row, so the count never advances and the retry
+        // would repeat at the same delay forever. Only the park is flagged: dead-letter and
+        // delivered above keep their own semantics.
+        if (order.Status == OrderStatusConstants.DeliveryUnconfirmed)
+            return new DeliveryResult(
+                false,
+                "This order is waiting for someone to decide whether to send it again or mark it delivered.",
+                Parked: true);
+
         if (order.Status is not (OrderStatusConstants.DeliveryFailed
                               or OrderStatusConstants.ReadyToDeliver
                               or OrderStatusConstants.Delivering))
