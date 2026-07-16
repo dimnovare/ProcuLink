@@ -125,9 +125,22 @@ public enum ResendSafety
 | `EmailApiDeliveryDispatcher`, `SmtpDeliveryDispatcher`, `ErplyDeliveryDispatcher`, `DirectoDeliveryDispatcher` | `Unsafe` |
 
 The tier lives on the dispatcher because each channel is the only thing that knows
-its own idempotency contract. An **abstract** member (not a defaulted interface
-property) forces a new dispatcher to state its tier — a compile error instead of
-the silent map-drift the A5 adversarial review caught in `d4d6eac`.
+its own idempotency contract.
+
+**Defaulted, not abstract** (revised 2026-07-16 during planning): the interface
+supplies `ResendSafety ResendSafety => ResendSafety.Unsafe;`. The original argument
+for an abstract member was "a compile error beats silent drift" (the A5 lesson from
+`d4d6eac`) — but that was written before counting the implementers. There are 6
+production dispatchers and **14 test doubles**; abstract means 14 files of churn to
+buy a guarantee that the table test below already provides for the dispatchers that
+matter. Decisively: here the default direction is **fail-safe**. A dispatcher that
+forgets to declare its tier parks on crash recovery — conservative, never a
+duplicate. The A5 drift was dangerous because the default was permissive; this one
+is not.
+
+Explicitness is enforced where it counts by a table test that names all six
+production dispatchers and their expected tier, so a new production dispatcher
+fails the suite until it is listed and considered.
 
 `ErpDeliveryDispatcherBase` declares `Unsafe` once for both ERP dispatchers.
 
@@ -169,6 +182,30 @@ The confirm dialogs must state the risk in the direction the operator is moving:
 `Safe` and `BestEffort` re-send exactly as they do today — unchanged behaviour.
 A **first** open (not re-adopted) on an `Unsafe` channel also sends normally: this
 fires only on crash recovery, never on the common path.
+
+#### The park must also leave the retry queue (found during planning)
+
+Parking is not enough on its own. `DeliverOrderJob` and `RetryDeliveryJob` decide
+whether to schedule an automatic backoff retry by branching on
+`result.ResponseCode` — they bail out only for a 4xx supplier rejection. A parked
+result is `Success = false` with a **null** `ResponseCode`, so it would fall
+through to `ScheduleRetry`, and the retry loop would re-send the exact PO the park
+just refused to re-send. Without this the feature is decorative.
+
+`DeliveryResult` therefore gains `bool Parked = false` (defaulted, so every existing
+call site compiles unchanged). Both jobs return early on it — placed **before** the
+attempt-cap check too, so a parked order is never escalated to dead-letter by the
+queue either. An ordinary transient failure keeps retrying exactly as before.
+
+#### The park sentence must reach the operator (found during planning)
+
+`GET /api/orders/{id}` populates `errorMessage` only for a hardcoded list of
+statuses (`failed`, `transform_failed`, `delivery_failed`, `rejected_by_supplier`,
+`delivery_dead_letter`). A parked order matches none, so the API would return
+`errorMessage: null` and the operator would see an unfamiliar status with no
+explanation and no guidance. `delivery_unconfirmed` is added to that gate and to
+the attempt-message fallback — the branch that carries the park sentence, since
+`ParkUnconfirmedAsync` writes it to `attempt.ErrorMessage`.
 
 ### 3. New terminal attempt status
 
@@ -216,6 +253,17 @@ The attempt row **stays** `unconfirmed`. We never fabricate a success we did not
 observe; the operator's assertion is recorded as its own event, distinct from an
 observed supplier ACK.
 
+### 5B. Ops health counts the park (found during planning)
+
+`OpsHealthSummary` gains `DeliveryUnconfirmed`, populated from the existing
+`GROUP BY o.Status` (no extra round-trip) and included in `TotalProblemOrders`.
+
+The Health page renders a green "All clear" banner from these counts, so without
+this it would tell an operator everything is fine while a PO sits unsent waiting on
+them. A parked order belongs in `TotalProblemOrders` rather than the informational
+bucket: `PendingReview`/`PendingRouting` are excluded there because they are normal
+workflow backlogs, whereas a park is a fault whose PO may never have arrived.
+
 ### 6. Billing — no code
 
 Metering is a **query**, not a counter: billable = `delivered` ∨
@@ -233,10 +281,16 @@ under-bill by one order. Accepted — erring in the customer's favour.
 
 ### 7. Documentation (honest residual — offer⇔works)
 
-- Delivery help article: the at-least-once caveat, what "Delivery unconfirmed"
-  means, and what to do about it.
-- `project-proculink/src/lib/standards/catalog.ts`: the per-channel idempotency
-  tier as the conservative capability matrix.
+- Help articles: `help/dashboard-and-statuses/page.mdx` (the end-user status
+  glossary — a new row for the parked state) and `help/exceptions-and-stuck-orders/page.mdx`
+  (the crash/unknown-outcome case and the "Send again" vs "Mark as delivered" choice).
+- **`project-proculink/src/lib/api/connectors.ts`** — the per-channel idempotency
+  caveat belongs on each `ConnectorManifest` entry (one per protocol: `http`,
+  `sftp`, `ftps`, `smtp`/`email`, `erp_erply`, `erp_directo`).
+  **Correction (2026-07-16, during planning):** an earlier draft of this spec named
+  `src/lib/standards/catalog.ts`. That file is the wrong target — it documents
+  *document-format* standards (cXML, UBL, Peppol, EDIFACT, X12…), and none of its
+  entries describe delivery channels. `connectors.ts` is the per-channel catalog.
 - `ErpDeliveryDispatcherBase`'s existing honest comment updated to point at the park.
 
 ### 8. Frontend (`project-proculink`, separate PR)
