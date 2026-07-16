@@ -44,7 +44,16 @@ public sealed class DeliverySlaService : IDeliverySlaService
         // inside one transaction, so it holds each claimed row's lock until commit. Two overlapping
         // sweeps walking an UNORDERED result set could lock the same two orders in opposite order
         // and deadlock — Postgres would detect it and kill one sweep. A total order shared by every
-        // sweep makes that impossible.
+        // sweep rules that out BETWEEN TWO SLA SWEEPS.
+        //
+        // It does NOT rule out a deadlock against StuckDeliveryDetectionService, which selects
+        // overlapping 'delivering' rows with no OrderBy and commits its mutations via a single
+        // change-tracked SaveChanges (UPDATE ordering is EF's, not Id order). Both jobs run on the
+        // identical */15 * * * * cron (see Worker.cs). A Postgres deadlock between the two is
+        // possible when >=2 orders are simultaneously stuck-delivering and SLA-overdue. This is an
+        // accepted residual, not a defect to fix here: both sides are transactional, Postgres kills
+        // one victim, and that sweep simply retries on the next 15-minute tick — self-healing and
+        // non-corrupting.
         var breached = await _db.PurchaseOrders
             .Where(o => o.DeliveryDueAt != null
                         && o.DeliveryDueAt < now
