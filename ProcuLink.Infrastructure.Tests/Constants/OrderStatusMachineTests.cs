@@ -103,8 +103,9 @@ public class OrderStatusMachineTests
     private static readonly IReadOnlySet<string> KnownObserverOnlyEdges = new HashSet<string>(StringComparer.Ordinal)
     {
         // The observer's "a failed parse can be retried" comment is wrong: nothing re-parses an
-        // order whose status is 'failed'. ParseOrderJob only FILTERS on failed (ParseOrderJob.cs:71-73)
-        // and OrdersController rejects a transform of one outright ("Upload a corrected file
+        // order whose status is 'failed'. ParseOrderJob calls it a terminal status and throws
+        // rather than re-driving it (ParseOrderJob.cs:67-74); elsewhere it only FILTERS on failed
+        // (:89-91). OrdersController rejects a transform of one outright ("Upload a corrected file
         // before transforming", OrdersController.cs:1355). Recovery is a NEW order row, so
         // 'failed' really is terminal, as the machine says.
         Edge(Failed, PendingParse),
