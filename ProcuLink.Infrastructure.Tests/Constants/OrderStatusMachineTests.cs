@@ -152,14 +152,21 @@ public class OrderStatusMachineTests
         Edge(RejectedBySupplier, Delivering),
 
         // ── Reachable, but only through a gap — deliberately NOT blessed in the machine ──
-        // WebhookIngressController.Status (:157-175) loads the order by id with NO from-status
-        // predicate, then writes 'delivered' (or 'delivery_failed' on "rejected") to any order not
-        // already delivered. A supplier callback can therefore force these — and, in principle,
-        // 'delivered' onto an order still in pending_parse. That reads as a missing from-status
-        // guard on the webhook rather than an intended flow, so the machine keeps calling these
-        // impossible; teaching it to allow them would document the gap as design. If the guard is
-        // added, these exemptions go stale and the second assertion below will say so. If instead
-        // the unguarded write is judged intended, move them into Transitions.
+        // WebhookIngressController.Status loads the order by id with NO from-status predicate, then
+        // writes 'delivered' to any order not already delivered. A supplier callback can therefore
+        // force these — and, in principle, 'delivered' onto an order still in pending_parse. That
+        // reads as a missing from-status guard on the webhook rather than an intended flow, so the
+        // machine keeps calling these impossible; teaching it to allow them would document the gap
+        // as design. The from-status guard is being built on fix/webhook-status-from-guard; when it
+        // lands, these go stale and the second assertion below will name each one.
+        //
+        // rejected_by_supplier -> delivery_failed is NO LONGER webhook-reachable: a "rejected"
+        // callback now writes rejected_by_supplier (this commit — it used to write delivery_failed,
+        // which StrandedFailedDeliveryDetectionService then swept and RE-SENT). It stays exempt
+        // because it is still reachable WITHOUT the webhook: DeliveryService's pre-claim failure
+        // paths (FailMissingConfigAsync / FailBeforeDispatchAsync) write delivery_failed with no
+        // status check, racing the enqueue-time guards in OrdersController.Redeliver /
+        // OpsController.RequeueDelivery. Rare, but real — and the observer SHOULD warn if it fires.
         Edge(ReadyToDeliver, Delivered),
         Edge(DeliveryFailed, Delivered),
         Edge(DeliveryDeadLetter, Delivered),
