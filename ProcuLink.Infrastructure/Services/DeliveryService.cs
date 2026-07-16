@@ -1084,14 +1084,23 @@ public sealed class DeliveryService : IDeliveryService
             .FirstOrDefaultAsync(ct);
 
         // Holdable = an idle, send-ready order that has NOT yet been claimed for this dispatch:
-        //   • ready_to_deliver — DeliverOrderJob's first-delivery billing gate (transform just done).
-        //   • delivery_failed  — RetryDeliveryAsync's billing gate (A5): a backoff retry for an order
-        //                        that previously failed, now blocked because the org lapsed.
+        //   • ready_to_deliver     — DeliverOrderJob's first-delivery billing gate (transform just done).
+        //   • delivery_failed      — RetryDeliveryAsync's billing gate (A5): a backoff retry for an order
+        //                            that previously failed, now blocked because the org lapsed.
+        //   • delivery_unconfirmed — the same case reached from the park: an operator clicked
+        //                            "Send again" for an org that lapsed since the park. Only that
+        //                            operator path can arrive here — RetryDeliveryAsync refuses this
+        //                            status before its own billing gate, so the automatic queue can
+        //                            never turn a park into a hold. Omitting it would hold NOTHING and
+        //                            leave the order parked: invisible to ReleaseBillingHeldOrdersAsync
+        //                            (it sweeps delivery_held only), so billing settling would never
+        //                            rescue it.
         // Any other status (delivering / delivered / dead-letter / already held) is a benign no-op —
         // the billing gate simply returns without holding, and never delivers.
         if (order is null ||
             order.Status is not (OrderStatusConstants.ReadyToDeliver
-                              or OrderStatusConstants.DeliveryFailed))
+                              or OrderStatusConstants.DeliveryFailed
+                              or OrderStatusConstants.DeliveryUnconfirmed))
             return false;
 
         var fromStatus = order.Status;

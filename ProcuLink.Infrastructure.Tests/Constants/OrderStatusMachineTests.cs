@@ -29,6 +29,10 @@ public class OrderStatusMachineTests
     [InlineData(DeliveryFailed, Delivering)]     // retry / redeliver
     [InlineData(DeliveryFailed, DeliveryDeadLetter)]
     [InlineData(DeliveryFailed, Ready)]          // MV-1 sibling: mapping edit after a failed delivery
+    // An operator "Send again" from the park, for an org that lapsed since the park, is held
+    // (not delivered) by DeliverOrderJob's billing gate → HoldForBillingAsync. Same case as
+    // delivery_failed → delivery_held above.
+    [InlineData(DeliveryUnconfirmed, DeliveryHeld)]
     [InlineData(DeliveryDeadLetter, Delivering)] // ops requeue rescue
     [InlineData(DeliveryDeadLetter, DeliveryFailed)] // requeued dead-letter fails again / late failure webhook (aligns with the observer map)
     [InlineData(DeliveryDeadLetter, Ready)]      // MV-1 sibling: mapping edit after dead-letter

@@ -51,7 +51,9 @@ public static class OrderStatusMachine
             // Unknown-outcome park. The operator decides: send again (→ delivering) or confirm the
             // supplier got it (→ delivered). A mapping edit invalidates the artifact (→ ready, the
             // MV-1 sibling). Dead-letter/failed remain reachable if a later re-send exhausts retries.
-            [DeliveryUnconfirmed] = Set(Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, Ready, RejectedBySupplier),
+            // → delivery_held: the delivery_failed sibling — a "Send again" for an org that lapsed
+            // since the park is held (not delivered) via HoldForBillingAsync.
+            [DeliveryUnconfirmed] = Set(Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
             // dead_letter → delivery_failed keeps this a superset of OrderStatusTransitionObserver's
             // map (a requeued dead-letter that fails again, or a late failure webhook) so IsAllowed
             // never rejects a transition the observer treats as expected.
