@@ -131,8 +131,6 @@ public class RetryDeliveryJobBackoffTests
         var delivery = new Mock<IDeliveryService>();
         delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new DeliveryResult(false, "Delivery unconfirmed…", ResponseCode: null, Parked: true));
-        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(1);
 
         var jobs = new CapturingJobClient();
         var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
@@ -140,6 +138,8 @@ public class RetryDeliveryJobBackoffTests
         await job.ExecuteAsync(orderId, orgId, default);
 
         jobs.Captured.Should().BeEmpty("a parked delivery waits for an operator, never for the backoff queue");
+        delivery.Verify(d => d.CountDeliveryAttemptsAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never, "the parked guard returns before the attempt-count read");
     }
 
     // Regression guard: an ordinary transient failure (Parked defaults to false) must STILL
