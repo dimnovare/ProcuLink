@@ -92,7 +92,7 @@ public class OrderStatusMachineTests
         {
             PendingParse, Parsing, PendingReview, Ready, Transforming, ReadyToDeliver,
             Delivering, Delivered, DeliveryFailed, TransformFailed, RejectedBySupplier,
-            DeliveryDeadLetter, Failed, Unrouted, DeliveryHeld,
+            DeliveryDeadLetter, Failed, Unrouted, DeliveryHeld, DeliveryUnconfirmed,
         };
         foreach (var s in declared)
             OrderStatusMachine.Transitions.Keys.Should().Contain(s);

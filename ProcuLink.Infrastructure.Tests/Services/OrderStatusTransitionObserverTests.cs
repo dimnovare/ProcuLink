@@ -46,6 +46,11 @@ public class OrderStatusTransitionObserverTests
     [InlineData(OrderStatusConstants.DeliveryFailed,     OrderStatusConstants.DeliveryDeadLetter)]
     [InlineData(OrderStatusConstants.DeliveryDeadLetter, OrderStatusConstants.Delivering)]         // ops requeue
     [InlineData(OrderStatusConstants.Delivered,          OrderStatusConstants.RejectedBySupplier)] // late business NACK
+    // Park (delivery_unconfirmed): unknown-outcome crash recovery on a non-idempotent channel
+    [InlineData(OrderStatusConstants.Delivering,         OrderStatusConstants.DeliveryUnconfirmed)] // park: unknown-outcome crash recovery
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivering)] // resume after unconfirmed
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivered)] // confirmed after the fact
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Ready)] // MV-1 sibling: mapping edit after unconfirmed
     // Self-transition is always fine (idempotent re-write of the same status).
     [InlineData(OrderStatusConstants.Delivered, OrderStatusConstants.Delivered)]
     public void IsExpected_LegitimatePipelineTransitions_AreExpected(string from, string to)
