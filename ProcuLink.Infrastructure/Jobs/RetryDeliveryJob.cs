@@ -99,10 +99,13 @@ public class RetryDeliveryJob
 
         if (attemptsMade >= maxAttempts)
         {
-            // RetryDeliveryAsync already dead-lettered at the cap; nothing more to schedule.
+            // Do NOT claim the order was dead-lettered here: RetryDeliveryAsync dead-letters at the
+            // cap only on the paths that reach its own cap check, and returns earlier (leaving the
+            // status untouched) for e.g. a lost claim or a missing artifact. Report what this job
+            // actually decided — the status is the order's own record.
             _logger.LogWarning(
-                "RetryDeliveryJob: order {OrderId} reached the attempt cap ({Max}); dead-lettered.",
-                orderId, maxAttempts);
+                "RetryDeliveryJob: order {OrderId} is at the attempt cap ({Max}); no further retry scheduled. Last error: {Error}",
+                orderId, maxAttempts, result.ErrorMessage);
             return;
         }
 
