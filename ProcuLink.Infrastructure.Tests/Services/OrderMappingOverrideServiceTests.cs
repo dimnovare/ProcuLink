@@ -222,6 +222,10 @@ public class OrderMappingOverrideServiceTests
     // re-transforming, so a mapping edit after either state must also reset to 'ready'.
     [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.DeliveryFailed)]
     [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.DeliveryDeadLetter)]
+    // A parked order is redeliverable and Send again ships the STORED artifact without
+    // re-transforming, so a mapping edit must invalidate it — the same MV-1 sibling reasoning
+    // that covers delivery_failed and delivery_dead_letter.
+    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.DeliveryUnconfirmed)]
     public async Task UpsertAsync_ChangedOverride_PastReady_ResetsStatusToReady(string startStatus)
     {
         await using var db = NewDb();
