@@ -33,6 +33,11 @@ public abstract class ErpDeliveryDispatcherBase : IDeliveryDispatcher
 
     public string Protocol { get; }
 
+    // No dedupe signal reaches the ERP: the connector contract accepts no idempotency key, and
+    // both connectors are generic HTTP posts to a tenant-configured URL with no document model
+    // or lookup API. A re-send after an unknown outcome creates a DUPLICATE ERP order.
+    public ResendSafety ResendSafety => ResendSafety.Unsafe;
+
     public async Task<DeliveryResult> DispatchAsync(
         byte[] content,
         string fileName,

@@ -23,6 +23,10 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => "http";
 
+    // Sends Idempotency-Key + X-Message-Id. Whether the supplier honours them is their choice,
+    // so this is best-effort, not a guarantee — re-drive, and document the residual.
+    public ResendSafety ResendSafety => ResendSafety.BestEffort;
+
     public HttpDeliveryDispatcher(
         IHttpClientFactory httpClientFactory,
         OutboundRequestGuard guard,

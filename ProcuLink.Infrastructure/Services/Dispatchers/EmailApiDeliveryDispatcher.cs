@@ -33,6 +33,11 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Email;
 
+    // Only a deterministic Message-ID is set. Receiving-MTA dedup on a caller-supplied
+    // Message-ID is best-effort and rarely applied, so a re-send after an unknown outcome
+    // most likely lands a duplicate email.
+    public ResendSafety ResendSafety => ResendSafety.Unsafe;
+
     public EmailApiDeliveryDispatcher(IEmailApiClient email, ILogger<EmailApiDeliveryDispatcher> logger)
     {
         _email = email;

@@ -29,6 +29,10 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Ftps;
 
+    // The deterministic filename is overwritten on re-send, so a crash-recovery re-drive
+    // cannot leave the supplier holding two copies.
+    public ResendSafety ResendSafety => ResendSafety.Safe;
+
     public FtpsDeliveryDispatcher(ILogger<FtpsDeliveryDispatcher> logger, OutboundRequestGuard guard)
     {
         _logger = logger;

@@ -35,6 +35,11 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Smtp;
 
+    // Only a deterministic Message-ID is set. Receiving-MTA dedup on a caller-supplied
+    // Message-ID is best-effort and rarely applied, so a re-send after an unknown outcome
+    // most likely lands a duplicate email.
+    public ResendSafety ResendSafety => ResendSafety.Unsafe;
+
     public SmtpDeliveryDispatcher(ILogger<SmtpDeliveryDispatcher> logger, OutboundRequestGuard guard)
     {
         _logger = logger;
