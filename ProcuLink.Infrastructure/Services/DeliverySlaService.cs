@@ -67,10 +67,13 @@ public sealed class DeliverySlaService : IDeliverySlaService
     }
 
     /// <summary>
-    /// Relational path — the flag flip IS the claim. Moving the !SlaBreached condition into the
-    /// UPDATE means only the sweep whose statement affects a row writes the audit event; an
-    /// overlapping sweep sees 0 rows and writes nothing, so the DeliverySlaBreached audit row can
-    /// never be double-inserted.
+    /// Relational path — the flag flip IS the claim. The UPDATE re-checks every condition the
+    /// RunAsync SELECT applied (not just !SlaBreached), against the same `now`, so it is both the
+    /// concurrency guard and a re-verification against staleness: only the sweep whose statement
+    /// affects a row writes the audit event; an overlapping sweep sees 0 rows and writes nothing, so
+    /// the DeliverySlaBreached audit row can never be double-inserted, and an order that changed
+    /// status or lost its DeliveryDueAt (e.g. delivered or dead-lettered) between the SELECT and the
+    /// claim is silently skipped instead of flagged from a stale in-memory snapshot.
     ///
     /// <para>One transaction wraps the claims and their audit rows: ExecuteUpdateAsync auto-commits
     /// its own statement, so an unwrapped claim followed by a separate SaveChanges could crash
@@ -90,7 +93,10 @@ public sealed class DeliverySlaService : IDeliverySlaService
             var claimed = await _db.PurchaseOrders
                 .Where(o => o.Id == order.Id
                          && o.OrgId == order.OrgId
-                         && !o.SlaBreached)
+                         && !o.SlaBreached
+                         && o.DeliveryDueAt != null
+                         && o.DeliveryDueAt < now
+                         && !ExcludedStatuses.Contains(o.Status))
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.SlaBreached, true)
                     .SetProperty(o => o.UpdatedAt, now), ct);
@@ -98,7 +104,7 @@ public sealed class DeliverySlaService : IDeliverySlaService
             if (claimed == 0)
             {
                 _logger.LogInformation(
-                    "DeliverySla: order {OrderId} (org {OrgId}) was flagged by a concurrent sweep — skipping duplicate audit.",
+                    "DeliverySla: order {OrderId} (org {OrgId}) was not claimed — either flagged by a concurrent sweep, or its status/DeliveryDueAt changed (e.g. delivered or dead-lettered) since the SELECT — skipping.",
                     order.Id, order.OrgId);
                 continue;
             }
