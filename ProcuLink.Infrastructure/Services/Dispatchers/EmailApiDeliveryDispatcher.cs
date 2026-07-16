@@ -93,9 +93,10 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
         // provider rejects the send — surfaced as a delivery_failed with the provider's reason).
         var from = string.IsNullOrWhiteSpace(cfg.FromAddress) ? _email.DefaultFrom : cfg.FromAddress!;
 
-        // A3 idempotency: a deterministic Message-ID (stable across a crash-recovery re-send of the
-        // same artifact) lets a receiving MTA de-duplicate the re-send. Best-effort — provider
-        // support for a caller-supplied Message-ID varies.
+        // A3 idempotency: a deterministic Message-ID (stable across a re-send of the same artifact)
+        // lets a receiving MTA de-duplicate. Best-effort only — MTA dedup on a caller-supplied
+        // Message-ID is rarely applied, which is why this dispatcher declares ResendSafety.Unsafe
+        // and DeliveryService parks an unknown-outcome re-drive rather than risking a duplicate email.
         var headers = string.IsNullOrWhiteSpace(idempotencyKey)
             ? null
             : new[] { new EmailApiHeader("Message-ID", $"<{idempotencyKey}@proculink.eu>") };
