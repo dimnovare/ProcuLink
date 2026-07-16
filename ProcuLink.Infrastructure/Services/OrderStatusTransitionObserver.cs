@@ -92,12 +92,13 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             [OrderStatusConstants.Delivered] = Set(
                 OrderStatusConstants.RejectedBySupplier),
             // Failed deliveries: retry, dead-letter, late supplier ACK, re-transform, or
-            // return to the review loop after corrections.
+            // return to the review loop after corrections. A5: a backoff retry that fires after the
+            // org lapsed (read_only/past_due) is held via HoldForBillingAsync → delivery_held.
             [OrderStatusConstants.DeliveryFailed] = Set(
                 OrderStatusConstants.Delivering, OrderStatusConstants.DeliveryDeadLetter,
                 OrderStatusConstants.Delivered, OrderStatusConstants.RejectedBySupplier,
                 OrderStatusConstants.Transforming, OrderStatusConstants.PendingReview,
-                OrderStatusConstants.Ready),
+                OrderStatusConstants.Ready, OrderStatusConstants.DeliveryHeld),
             // Dead-letter: ops requeue back into delivery; a late supplier ACK may still land.
             [OrderStatusConstants.DeliveryDeadLetter] = Set(
                 OrderStatusConstants.Delivering, OrderStatusConstants.Delivered,

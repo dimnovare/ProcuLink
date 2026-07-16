@@ -42,9 +42,11 @@ public abstract class ErpDeliveryDispatcherBase : IDeliveryDispatcher
         CancellationToken ct,
         string? idempotencyKey = null)
     {
-        // A3 idempotency: the ERP connector contract does not currently accept an idempotency key;
-        // the attempt-started row (DeliveryService) remains the universal crash backstop for this
-        // channel. idempotencyKey is intentionally unused here.
+        // A3 idempotency: the ERP connector contract does not currently accept an idempotency key,
+        // so a crash-after-ACK re-drive is NOT de-duplicated at the ERP — a re-send can create a
+        // duplicate ERP order. The attempt-started row only prevents a duplicate attempt ROW and
+        // keeps the re-drive detectable/observable; it is NOT a duplicate-order guard for this
+        // channel. idempotencyKey is intentionally unused here (documented honest limitation).
         var result = await _connector.SendAsync(
             new ErpDeliveryRequest(content, fileName, contentType, config, decryptedCredentials),
             ct);

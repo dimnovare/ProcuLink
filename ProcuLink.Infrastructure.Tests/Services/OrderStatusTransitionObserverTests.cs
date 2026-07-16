@@ -42,6 +42,7 @@ public class OrderStatusTransitionObserverTests
     [InlineData(OrderStatusConstants.Delivering,         OrderStatusConstants.RejectedBySupplier)]
     [InlineData(OrderStatusConstants.Delivering,         OrderStatusConstants.DeliveryDeadLetter)] // stuck delivery
     [InlineData(OrderStatusConstants.DeliveryFailed,     OrderStatusConstants.Delivering)]         // retry
+    [InlineData(OrderStatusConstants.DeliveryFailed,     OrderStatusConstants.DeliveryHeld)]        // A5: retry billing hold
     [InlineData(OrderStatusConstants.DeliveryFailed,     OrderStatusConstants.DeliveryDeadLetter)]
     [InlineData(OrderStatusConstants.DeliveryDeadLetter, OrderStatusConstants.Delivering)]         // ops requeue
     [InlineData(OrderStatusConstants.Delivered,          OrderStatusConstants.RejectedBySupplier)] // late business NACK
@@ -82,6 +83,28 @@ public class OrderStatusTransitionObserverTests
         Assert.Empty(logger.Warnings);
         await using var verify = new ProcuLinkDbContext(options);
         Assert.Equal(OrderStatusConstants.Transforming,
+            (await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId)).Status);
+    }
+
+    [Fact]
+    public async Task SaveChanges_DeliveryFailedToDeliveryHeld_IsSilent_AndPersists()
+    {
+        // A5: RetryDeliveryAsync's billing gate holds a delivery_failed order (org lapsed at retry
+        // time) via HoldForBillingAsync → delivery_held. This transition MUST be in the allowed map,
+        // or the log-only observer would emit a spurious WARNING on every real billing hold.
+        var logger = new CapturingLogger();
+        var (options, orderId) = await SeedAsync(logger, OrderStatusConstants.DeliveryFailed);
+
+        await using (var db = new ProcuLinkDbContext(options))
+        {
+            var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+            order.Status = OrderStatusConstants.DeliveryHeld;
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Empty(logger.Warnings);
+        await using var verify = new ProcuLinkDbContext(options);
+        Assert.Equal(OrderStatusConstants.DeliveryHeld,
             (await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId)).Status);
     }
 

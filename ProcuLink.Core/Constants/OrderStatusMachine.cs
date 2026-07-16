@@ -43,7 +43,9 @@ public static class OrderStatusMachine
             // delivery_failed/delivery_dead_letter → ready: the MV-1 sibling — a mapping edit after a
             // failed/dead-lettered delivery invalidates the stored artifact (Retry/requeue would ship it
             // un-re-transformed), so the order resets and the next Send re-transforms.
-            [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, Ready, RejectedBySupplier),
+            // delivery_failed → delivery_held: A5 — a backoff retry for an org that lapsed to
+            // read_only/past_due since the first attempt is held (not delivered) via HoldForBillingAsync.
+            [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
             // dead_letter → delivery_failed keeps this a superset of OrderStatusTransitionObserver's
             // map (a requeued dead-letter that fails again, or a late failure webhook) so IsAllowed
             // never rejects a transition the observer treats as expected.
