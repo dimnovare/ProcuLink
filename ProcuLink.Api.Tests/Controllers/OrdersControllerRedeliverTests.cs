@@ -380,6 +380,45 @@ public class OrdersControllerMarkDeliveredTests
             "a null FK must degrade to 'FK unresolved', never to 'a human acted and we cannot say who'");
     }
 
+    // TOCTOU: the gate above ran against the DETACHED snapshot from GetByIdAsync, which is stale
+    // the instant a "Send again" wins the race — DeliverOrderJob's atomic claim can flip
+    // delivery_unconfirmed -> delivering (a real send in flight) between that read and this
+    // endpoint's write. Simulate exactly that ordering: detach while still delivery_unconfirmed,
+    // then move the DB row to 'delivering' before calling the endpoint.
+    [Fact]
+    public async Task MarkDelivered_RaceWithConcurrentClaim_DoesNotOverwrite_AndDoesNotAuditAFalseTransition()
+    {
+        var options = ParkedOrderTestHarness.NewOptions();
+        await using var db = new ProcuLinkDbContext(options);
+        var (ctrl, orders, orgId, _) = Build(db);
+
+        var order = OrderInStatus(orgId, OrderStatusConstants.DeliveryUnconfirmed);
+        await SeedAndDetachAsync(options, db, orders, orgId, order);
+
+        // The race: another worker's DeliverOrderJob claims the order for a real re-send after the
+        // detached read above was taken (which still shows delivery_unconfirmed).
+        await using (var racing = new ProcuLinkDbContext(options))
+        {
+            var raced = await racing.PurchaseOrders.SingleAsync(o => o.Id == order.Id);
+            raced.Status = OrderStatusConstants.Delivering;
+            raced.UpdatedAt = DateTime.UtcNow;
+            await racing.SaveChangesAsync();
+        }
+
+        var result = await ctrl.MarkDelivered(order.Id, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>(
+            "the order moved out of delivery_unconfirmed under us — the operator's stale assertion no longer applies");
+
+        var persisted = await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == order.Id);
+        persisted.Status.Should().Be(OrderStatusConstants.Delivering,
+            "an in-flight send must never be silently overwritten back to 'delivered'");
+
+        (await db.AuditEvents.AsNoTracking()
+            .AnyAsync(e => e.EntityId == order.Id && e.Action == "DeliveryConfirmedManually"))
+            .Should().BeFalse("no audit event may claim a fromStatus transition that never actually happened");
+    }
+
     [Fact]
     public async Task MarkDelivered_FromAnyOtherStatus_Is400()
     {

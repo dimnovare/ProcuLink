@@ -1873,7 +1873,25 @@ public sealed class OrdersController : ControllerBase
         if (tracked is null)
             return NotFound();
 
+        // TOCTOU guard: the gate above ran against the DETACHED snapshot from GetByIdAsync, which
+        // is stale by the time we reach this write whenever an operator's "Send again" wins the
+        // race — DeliverOrderJob's atomic claim can flip delivery_unconfirmed -> delivering (and
+        // start a real send) in the gap between that read and this one. PurchaseOrderEntity carries
+        // no concurrency token, so re-checking the TRACKED row here is what stops this endpoint from
+        // silently overwriting an in-flight send back to 'delivered' — the order moved under us, so
+        // the operator's assertion (made against the stale snapshot) no longer applies.
+        if (tracked.Status != OrderStatusConstants.DeliveryUnconfirmed)
+            return BadRequest(new
+            {
+                error = $"Only an order whose delivery is unconfirmed can be marked delivered "
+                      + $"(current: '{tracked.Status}')."
+            });
+
         var now = DateTime.UtcNow;
+        // Derived from the TRACKED row (just re-checked above), never a hardcoded constant — an
+        // audit event that names a transition which did not actually happen is the exact failure
+        // this whole feature exists to prevent.
+        var fromStatus = tracked.Status;
         tracked.Status = OrderStatusConstants.Delivered;
         tracked.UpdatedAt = now;
         // A confirmed delivery closes the SLA window — mirrors DeliveryService's success path.
@@ -1894,7 +1912,7 @@ public sealed class OrdersController : ControllerBase
         var payload = System.Text.Json.JsonSerializer.Serialize(new
         {
             orderId = id,
-            fromStatus = OrderStatusConstants.DeliveryUnconfirmed,
+            fromStatus,
             toStatus = OrderStatusConstants.Delivered,
             confirmedAt = now,
             // A missing AppUser row soft-degrades the FK to null rather than blocking the operator
