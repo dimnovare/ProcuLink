@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Webhooks;
 using ProcuLink.Infrastructure;
@@ -71,6 +72,33 @@ public class WebhookIngressControllerTests
             HttpContext = httpContext,
         };
     }
+
+    /// <summary>Seeds one routed order in <paramref name="status"/> for <paramref name="orgId"/>.</summary>
+    private static async Task SeedOrderAsync(
+        ProcuLinkDbContext db, Guid orgId, Guid orderId, string status)
+    {
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id         = orderId,
+            OrgId      = orgId,
+            SupplierId = Guid.NewGuid(),
+            PoNumber   = "PO-GUARD-001",
+            Status     = status,
+            OrderDate  = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency   = "EUR",
+            CreatedAt  = DateTime.UtcNow,
+            UpdatedAt  = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Stubs the HMAC verifier to accept, resolving to <paramref name="orgId"/>.</summary>
+    private static void StubVerifier(Mock<IHmacWebhookVerifier> verifier, string slug, Guid orgId)
+        => verifier
+            .Setup(v => v.VerifyAsync(
+                slug, It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HmacVerificationResult(true, null, orgId));
 
     // ── Ping ─────────────────────────────────────────────────────────────────
 
@@ -248,6 +276,54 @@ public class WebhookIngressControllerTests
         var events = db.AuditEvents.ToList();
         events.Should().ContainSingle(e =>
             e.Action == "webhook_status" && e.EntityId == orderId);
+    }
+
+    [Theory]
+    [InlineData(OrderStatusConstants.Delivering)]
+    [InlineData(OrderStatusConstants.DeliveryFailed)]
+    [InlineData(OrderStatusConstants.ReadyToDeliver)]
+    public async Task Status_RejectedCallback_WritesRejectedBySupplier_NotDeliveryFailed(string from)
+    {
+        // A supplier business rejection is NOT a transport failure. Writing delivery_failed lets
+        // StrandedFailedDeliveryDetectionService sweep the order after its aged threshold and
+        // re-drive it (RetryDeliveryAsync retries from delivery_failed) -- re-sending a PO the
+        // supplier explicitly rejected. That sweeper's own comment (:46) justifies its predicate
+        // on the premise that "a supplier rejection lands in rejected_by_supplier".
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, from);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.RejectedBySupplier);
+    }
+
+    [Fact]
+    public async Task Status_RejectedCallbackForDeliveredOrder_WritesRejectedBySupplier()
+    {
+        // HTTP 200 is not supplier business acceptance. The prior `order.Status != "delivered"`
+        // condition answered a post-delivery business rejection with 200 OK and dropped it.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivered);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.RejectedBySupplier);
     }
 
     // ── Minimal in-memory DbContext ──────────────────────────────────────────

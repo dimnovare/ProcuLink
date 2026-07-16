@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Webhooks;
 using ProcuLink.Infrastructure;
@@ -160,17 +161,23 @@ public sealed class WebhookIngressController : ControllerBase
         if (order is null)
             return NotFound(new { error = "Order not found." });
 
-        // Mutate order status only when the supplier reports a terminal/forward state.
-        // We never overwrite an already-`delivered` order, and we don't move backwards
-        // from delivered/delivery_failed via a "received"/"in_progress" callback.
-        if (status == "delivered" && order.Status != "delivered")
+        // A supplier business rejection is NOT a transport failure. delivery_failed would put the
+        // order back in reach of the retry machinery -- StrandedFailedDeliveryDetectionService
+        // sweeps aged delivery_failed orders with attempts remaining, and RetryDeliveryAsync
+        // retries from delivery_failed -- so we would re-send a PO the supplier explicitly
+        // rejected. (That sweeper's predicate is justified on the premise that a supplier
+        // rejection lands in rejected_by_supplier: StrandedFailedDeliveryDetectionService.cs:46.)
+        //
+        // A rejection is honoured even for an already-delivered order: HTTP 200 from the channel
+        // is transport success, never supplier business acceptance.
+        if (status == "rejected")
         {
-            order.Status    = "delivered";
+            order.Status    = OrderStatusConstants.RejectedBySupplier;
             order.UpdatedAt = DateTime.UtcNow;
         }
-        else if (status == "rejected" && order.Status != "delivered")
+        else if (status == "delivered" && order.Status != OrderStatusConstants.Delivered)
         {
-            order.Status    = "delivery_failed";
+            order.Status    = OrderStatusConstants.Delivered;
             order.UpdatedAt = DateTime.UtcNow;
         }
 
