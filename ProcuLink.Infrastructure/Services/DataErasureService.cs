@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Services;
+using ProcuLink.Infrastructure.Services.Ingress;
 
 namespace ProcuLink.Infrastructure.Services;
 
@@ -78,9 +79,24 @@ public sealed class DataErasureService : IDataErasureService
             .Where(cl => cl.OrgId == organisationId && confirmationIds.Contains(cl.OrderConfirmationId))
             .ToListAsync(ct);
         // IMAP-ingest ledger rows for this order carry the attachment file name +
-        // IMAP Message-Id — orphan PII if left behind after the order is erased.
+        // IMAP Message-Id — orphan PII if left behind after the order is erased. These are safe to
+        // DELETE outright: the IMAP message is flagged SEEN on the mail server, so it is never
+        // re-fetched and cannot re-import.
         var emailImportRecords = await _db.EmailImportRecords
             .Where(r => r.OrderId == orderId && r.OrgId == organisationId).ToListAsync(ct);
+        // SFTP/S3 pull-ingress ledger rows are DIFFERENT: the source file still lives on the
+        // customer's SFTP/S3 (ProcuLink never deletes it) and the poller lists it every cycle. The
+        // row must NOT be deleted (the file would re-import as a NEW order) and must NOT keep its
+        // real, now-dangling OrderId (the poller's resume-on-conflict would see the order missing and
+        // RESURRECT the erased order — a duplicate-PO defect AND a right-to-erasure breach). Instead
+        // TOMBSTONE it: OrderId = Guid.Empty makes IngressDedupe.ClaimSatisfiedAsync return satisfied,
+        // so the file is permanently skipped and the erased order can never resurrect. Loaded +
+        // mutated (not ExecuteUpdate) so this is included in the same SaveChanges as the order delete
+        // and stays translatable on the EF InMemory test provider.
+        var sftpLedger = await _db.Set<Core.Entities.ImportedSftpFile>()
+            .Where(f => f.OrderId == orderId && f.OrgId == organisationId).ToListAsync(ct);
+        var s3Ledger = await _db.Set<Core.Entities.ImportedS3Object>()
+            .Where(f => f.OrderId == orderId && f.OrgId == organisationId).ToListAsync(ct);
 
         // ── 1. Delete the sensitive R2 blobs first (idempotent; best-effort) ──────
         var r2Keys = new List<string>();
@@ -125,6 +141,10 @@ public sealed class DataErasureService : IDataErasureService
         _db.AiSuggestionDecisions.RemoveRange(aiDecisions);
         _db.IdempotencyKeys.RemoveRange(idempotencyKeys);
         _db.EmailImportRecords.RemoveRange(emailImportRecords);
+        // Tombstone the SFTP/S3 pull-ingress ledger rows (see rationale above): keep the row so the
+        // file is not re-imported, but sever its link to the erased order so it is never resurrected.
+        foreach (var row in sftpLedger) row.OrderId = IngressDedupe.TerminalOrderId;
+        foreach (var row in s3Ledger)   row.OrderId = IngressDedupe.TerminalOrderId;
         _db.PurchaseOrders.Remove(order);
         await _db.SaveChangesAsync(ct);
 
@@ -132,11 +152,12 @@ public sealed class DataErasureService : IDataErasureService
             "Erased order {OrderId} (org {OrgId}): R2={R2} lines={Lines} artifacts={Artifacts} " +
             "attempts={Attempts} exceptions={Exceptions} validations={Validations} passport={Passport} " +
             "audit={Audit} confirmations={Confirmations} confirmationLines={ConfirmationLines} " +
-            "aiDecisions={AiDecisions} idempotencyKeys={IdempotencyKeys} emailImportRecords={EmailImportRecords}.",
+            "aiDecisions={AiDecisions} idempotencyKeys={IdempotencyKeys} emailImportRecords={EmailImportRecords} " +
+            "sftpLedgerTombstoned={SftpLedger} s3LedgerTombstoned={S3Ledger}.",
             orderId, organisationId, r2Deleted, lines.Count, artifacts.Count, attempts.Count,
             exceptions.Count, validations.Count, passport.Count, audits.Count,
             confirmations.Count, confirmationLines.Count, aiDecisions.Count, idempotencyKeys.Count,
-            emailImportRecords.Count);
+            emailImportRecords.Count, sftpLedger.Count, s3Ledger.Count);
 
         return new OrderErasureResult(
             Found: true,

@@ -331,9 +331,10 @@ public class DataErasureServiceTests
             modelBuilder.Ignore<TenantApiKey>();
             modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<SftpIngressConfig>();
-            modelBuilder.Ignore<ImportedSftpFile>();
             modelBuilder.Ignore<S3IngressConfig>();
-            modelBuilder.Ignore<ImportedS3Object>();
+            // ImportedSftpFile / ImportedS3Object are NOT ignored: EraseOrderAsync tombstones their
+            // OrderId so the erased order cannot be resurrected by a re-poll of the surviving source
+            // file. The trimmed model must include them for that query to translate.
             modelBuilder.Ignore<Buyer>();
             modelBuilder.Ignore<ValidationRule>();
             modelBuilder.Ignore<OutputTemplate>();

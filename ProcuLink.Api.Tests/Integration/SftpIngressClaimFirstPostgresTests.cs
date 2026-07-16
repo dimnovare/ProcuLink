@@ -264,6 +264,47 @@ public sealed class SftpIngressClaimFirstPostgresTests : IAsyncLifetime
         claim.OrderId.Should().Be(Guid.Empty, "the claim is marked terminal (Guid.Empty) after the permanent failure");
     }
 
+    [DockerRequiredFact]
+    public async Task ErasedOrder_IsNotResurrected_OnNextPoll()
+    {
+        const string remotePath = "/incoming/po-erase.csv";
+        var orgId = await SeedOrgSupplierConfigAsync("/incoming");
+        var orders = new CountingOrderService(_options!);
+        var enqueuer = new CountingParseEnqueuer();
+        var factory = new OneFileSftpFactory(remotePath, "h1,h2\r\nv1,v2"u8.ToArray());
+
+        // Poll 1: import the file → one order + one ledger row (OrderId = the created order).
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+            (await NewService(db1, orders, enqueuer, factory).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(1);
+
+        Guid erasedOrderId;
+        await using (var v = new ProcuLinkDbContext(_options!))
+            erasedOrderId = (await v.PurchaseOrders.SingleAsync(o => o.OrgId == orgId)).Id;
+
+        // GDPR / bulk erase removes the order. The source file still lives on the customer's SFTP
+        // (ProcuLink never deletes it), so the ledger row MUST be tombstoned, not left dangling.
+        await using (var eraseDb = new ProcuLinkDbContext(_options!))
+        {
+            var erase = new DataErasureService(eraseDb, new NoOpFileStorage(), NullLogger<DataErasureService>.Instance);
+            (await erase.EraseOrderAsync(orgId, erasedOrderId, CancellationToken.None)).Found.Should().BeTrue();
+        }
+        (await OrderCountAsync(orgId)).Should().Be(0, "the order was erased");
+
+        // Poll 2: the same file is STILL on the SFTP server. It must NOT resurrect the erased order.
+        await using (var db2 = new ProcuLinkDbContext(_options!))
+            (await NewService(db2, orders, enqueuer, factory).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(0, "an erased order must never be resurrected by a re-poll of the surviving source file");
+
+        (await OrderCountAsync(orgId)).Should().Be(0,
+            "no order exists after erase + re-poll — the erased order stays erased (right-to-erasure)");
+
+        await using var verify = new ProcuLinkDbContext(_options!);
+        var ledger = await verify.Set<ImportedSftpFile>().SingleAsync(f => f.OrgId == orgId && f.RemotePath == remotePath);
+        ledger.OrderId.Should().Be(Guid.Empty,
+            "the ledger row survives but is tombstoned (Guid.Empty) so the file is permanently skipped");
+    }
+
     // ── SFTP test doubles ─────────────────────────────────────────────────────
 
     /// <summary>Parse-job enqueuer that throws — models a crash in the post-order-commit step.</summary>

@@ -254,6 +254,46 @@ public sealed class S3IngressClaimFirstPostgresTests : IAsyncLifetime
         claim.OrderId.Should().Be(Guid.Empty, "the claim is marked terminal (Guid.Empty) after the permanent failure");
     }
 
+    [DockerRequiredFact]
+    public async Task ErasedOrder_IsNotResurrected_OnNextPoll()
+    {
+        const string key = "incoming/po-erase.csv";
+        var orgId = await SeedOrgSupplierConfigAsync();
+        var orders = new CountingOrderService(_options!);
+        var enqueuer = new CountingParseEnqueuer();
+        var s3 = OneObjectS3(key, "\"etag-1\"", new byte[] { 1, 2, 3 });
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+            (await NewService(db1, orders, enqueuer, s3).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(1);
+
+        Guid erasedOrderId;
+        await using (var v = new ProcuLinkDbContext(_options!))
+            erasedOrderId = (await v.PurchaseOrders.SingleAsync(o => o.OrgId == orgId)).Id;
+
+        // GDPR / bulk erase removes the order. The object still lives in the customer's bucket
+        // (ProcuLink never deletes it), so the ledger row MUST be tombstoned, not left dangling.
+        await using (var eraseDb = new ProcuLinkDbContext(_options!))
+        {
+            var erase = new DataErasureService(eraseDb, new NoOpFileStorage(), NullLogger<DataErasureService>.Instance);
+            (await erase.EraseOrderAsync(orgId, erasedOrderId, CancellationToken.None)).Found.Should().BeTrue();
+        }
+        (await OrderCountAsync(orgId)).Should().Be(0, "the order was erased");
+
+        // Re-poll: the same object is STILL in the bucket. It must NOT resurrect the erased order.
+        await using (var db2 = new ProcuLinkDbContext(_options!))
+            (await NewService(db2, orders, enqueuer, s3).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(0, "an erased order must never be resurrected by a re-poll of the surviving object");
+
+        (await OrderCountAsync(orgId)).Should().Be(0,
+            "no order exists after erase + re-poll — the erased order stays erased (right-to-erasure)");
+
+        await using var verify = new ProcuLinkDbContext(_options!);
+        var ledger = await verify.Set<ImportedS3Object>().SingleAsync(f => f.OrgId == orgId && f.ObjectKey == key);
+        ledger.OrderId.Should().Be(Guid.Empty,
+            "the processed-object row survives but is tombstoned (Guid.Empty) so the object is permanently skipped");
+    }
+
     /// <summary>Parse-job enqueuer that throws — models a crash in the post-order-commit step.</summary>
     private sealed class ThrowingParseEnqueuer : IParseJobEnqueuer
     {

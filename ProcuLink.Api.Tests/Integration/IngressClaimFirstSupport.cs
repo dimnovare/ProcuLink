@@ -94,6 +94,19 @@ internal sealed class CountingOrderService : IStubOrderCreator
     }
 }
 
+/// <summary>
+/// No-op <see cref="IFileStorageService"/> for the erase-then-resurrect Postgres tests: the R2
+/// blob deletes in DataErasureService are best-effort, and these tests only assert on the DB
+/// (order gone, ledger tombstoned), so storage calls are swallowed.
+/// </summary>
+internal sealed class NoOpFileStorage : IFileStorageService
+{
+    public Task<string> UploadAsync(Stream content, string key, string contentType, CancellationToken ct) => Task.FromResult(key);
+    public Task<string> GetSignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct) => Task.FromResult($"https://example.invalid/{key}");
+    public Task<Stream> DownloadAsync(string key, CancellationToken ct) => Task.FromResult<Stream>(new MemoryStream());
+    public Task DeleteAsync(string key, CancellationToken ct) => Task.CompletedTask;
+}
+
 /// <summary>Thread-safe counting <see cref="IParseJobEnqueuer"/> for the SFTP/S3 ingress tests.</summary>
 internal sealed class CountingParseEnqueuer : IParseJobEnqueuer
 {
