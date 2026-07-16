@@ -29,17 +29,34 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
         _enqueuer = enqueuer;
     }
 
-    public async Task<int> RunAsync(TimeSpan agedThreshold, CancellationToken ct)
+    public async Task<int> RunAsync(TimeSpan agedThreshold, CancellationToken ct, int maxBatch = IStrandedReadyOrderDetectionService.DefaultMaxBatch)
     {
         var cutoff = DateTime.UtcNow - agedThreshold;
 
         // Cross-tenant maintenance sweep (mirrors StuckDeliveryDetectionService). Tenant isolation is
-        // preserved because each order, enqueue, and audit event carries that order's own OrgId. Load
-        // the aged ready_to_deliver candidates with a simple, provider-portable top query; the
-        // per-order eligibility checks below run as separate queries (no correlated subqueries) so the
-        // logic is identical on InMemory and Postgres.
+        // preserved because each order, enqueue, and audit event carries that order's own OrgId.
+        //
+        // Every cheap eligibility filter is pushed INTO the query so the database — not this process —
+        // excludes the orders that legitimately REST in ready_to_deliver. Without this, a
+        // manual-delivery-heavy org's parked orders (which sit in ready_to_deliver indefinitely) would
+        // be loaded and skipped on EVERY 15-minute sweep, forever — O(all parked orders) rows plus an
+        // N+1 config/attempt lookup per order. We recover ONLY:
+        //   • routed orders (SupplierId set — an unrouted order has no delivery config),
+        //   • configured to AUTO-deliver for THAT order's own supplier (a manual order legitimately
+        //     rests here awaiting a manual send; force-dispatching it would be a bug — worse than
+        //     leaving it), and
+        //   • with NO delivery attempt yet (the exact "delivery was never dispatched" signature — any
+        //     prior attempt means delivery already ran / is running → never re-drive: double-send guard).
+        // Bounded by maxBatch (oldest strand first) so one sweep can never load an unbounded backlog;
+        // the remainder is picked up by the next run.
         var candidates = await _db.PurchaseOrders
             .Where(o => o.Status == OrderStatusConstants.ReadyToDeliver && o.UpdatedAt < cutoff)
+            .Where(o => o.SupplierId != null)
+            .Where(o => _db.SupplierDeliveryConfigs.Any(c =>
+                c.OrgId == o.OrgId && c.SupplierId == o.SupplierId && c.AutoDeliver))
+            .Where(o => !_db.DeliveryAttempts.Any(a => a.OrderId == o.Id && a.OrgId == o.OrgId))
+            .OrderBy(o => o.UpdatedAt)
+            .Take(maxBatch)
             .ToListAsync(ct);
 
         if (candidates.Count == 0)
@@ -54,34 +71,9 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
 
         foreach (var order in candidates)
         {
-            // Idempotency / recovery re-check: guard explicitly so an order that already left
-            // ready_to_deliver (delivered between the query and now) is never re-driven.
-            if (order.Status != OrderStatusConstants.ReadyToDeliver)
-                continue;
-
-            // Unrouted orders have no delivery config — they can't be stranded auto-deliveries.
-            if (order.SupplierId is null)
-                continue;
-
-            // Recover ONLY orders configured to AUTO-deliver. A manual order (AutoDeliver=false, or no
-            // config) legitimately rests in ready_to_deliver awaiting a manual send — force-dispatching
-            // it would be a bug, worse than leaving it. A lost enqueue only strands an order that was
-            // SUPPOSED to auto-dispatch, which is exactly this set.
-            var autoDeliver = await _db.SupplierDeliveryConfigs
-                .Where(c => c.OrgId == order.OrgId && c.SupplierId == order.SupplierId)
-                .Select(c => (bool?)c.AutoDeliver)
-                .FirstOrDefaultAsync(ct);
-            if (autoDeliver != true)
-                continue;
-
-            // The exact "delivery was never dispatched" signature: no delivery attempt yet. Any prior
-            // attempt means delivery already ran / is running → never re-drive (double-send guard).
-            var attempted = await _db.DeliveryAttempts
-                .AnyAsync(a => a.OrderId == order.Id && a.OrgId == order.OrgId, ct);
-            if (attempted)
-                continue;
-
-            // ready_to_deliver is only ever set alongside an artifact, but guard defensively.
+            // ready_to_deliver is only ever set alongside an artifact, but guard defensively — an
+            // order with no artifact has nothing to deliver. (The routed / auto-deliver / no-attempt
+            // filters are already enforced in the query above.)
             var artifactId = await _db.OutboundArtifacts
                 .Where(a => a.OrderId == order.Id && a.OrgId == order.OrgId)
                 .OrderByDescending(a => a.CreatedAt)

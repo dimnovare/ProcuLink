@@ -25,11 +25,15 @@ namespace ProcuLink.Core.Services.Delivery;
 /// </remarks>
 public interface IStrandedReadyOrderDetectionService
 {
+    /// <summary>The most orders one sweep will recover (oldest-stranded first); the rest wait for the next run.</summary>
+    const int DefaultMaxBatch = 200;
+
     /// <summary>
-    /// Re-enqueues delivery for every order older than <paramref name="agedThreshold"/> still in
-    /// <c>ready_to_deliver</c> that is configured to auto-deliver and has no delivery attempt yet,
-    /// writing a <c>StrandedReadyDeliveryRecovered</c> audit event per order. Idempotent. Returns the
-    /// number of orders acted on.
+    /// Re-enqueues delivery for orders older than <paramref name="agedThreshold"/> still in
+    /// <c>ready_to_deliver</c> that are configured to auto-deliver and have no delivery attempt yet,
+    /// writing a <c>StrandedReadyDeliveryRecovered</c> audit event per order. Bounded to at most
+    /// <paramref name="maxBatch"/> orders per sweep (oldest first). Idempotent. Returns the number of
+    /// orders acted on.
     /// </summary>
-    Task<int> RunAsync(TimeSpan agedThreshold, CancellationToken ct);
+    Task<int> RunAsync(TimeSpan agedThreshold, CancellationToken ct, int maxBatch = DefaultMaxBatch);
 }

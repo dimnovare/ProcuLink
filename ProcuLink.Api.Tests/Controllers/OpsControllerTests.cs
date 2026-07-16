@@ -189,6 +189,53 @@ public class OpsControllerTests
     }
 
     [Fact]
+    public async Task RequeueDelivery_SnapshotsClearedAttemptForensicsIntoAuditPayload()
+    {
+        // B2 forensics: hard-deleting the prior attempts to reset the cap must NOT lose their
+        // diagnostic history. The DeliveryRequeuedByOperator audit event captures each cleared
+        // attempt's forensics (attempt #, status, response code, error, body, timestamp) so the
+        // dead-letter evidence survives the requeue.
+        await using var db = NewDb();
+        var (ctrl, _, orders, _, orgId) = Build(db);
+
+        var order = OrderWithArtifact(orgId, OrderStatusConstants.DeliveryDeadLetter);
+        db.PurchaseOrders.Add(order);
+        await db.SaveChangesAsync();
+
+        var attemptedAt = DateTime.UtcNow.AddMinutes(-5);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = order.Id, OrgId = orgId,
+            Channel = "http", Destination = "https://supplier.example/orders",
+            Status = "failed", AttemptNumber = 3, AttemptedAt = attemptedAt,
+            ResponseCode = 503, ErrorMessage = "Gateway timeout",
+            ResponseBody = "upstream connect error",
+        });
+        await db.SaveChangesAsync();
+
+        orders.Setup(o => o.GetByIdAsync(orgId, order.Id, It.IsAny<CancellationToken>()))
+              .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(order));
+
+        var result = await ctrl.RequeueDelivery(order.Id, CancellationToken.None);
+        result.Should().BeOfType<AcceptedResult>();
+
+        // Rows are still hard-deleted (cap reset), but their forensics survive in the audit payload.
+        (await db.DeliveryAttempts.CountAsync(a => a.OrderId == order.Id)).Should().Be(0);
+
+        var audit = await db.AuditEvents.SingleAsync(
+            e => e.EntityId == order.Id && e.Action == "DeliveryRequeuedByOperator");
+        var cleared = audit.Payload!.RootElement.GetProperty("clearedAttempts");
+        cleared.GetArrayLength().Should().Be(1);
+        var a0 = cleared[0];
+        a0.GetProperty("attemptNumber").GetInt32().Should().Be(3);
+        a0.GetProperty("status").GetString().Should().Be("failed");
+        a0.GetProperty("responseCode").GetInt32().Should().Be(503);
+        a0.GetProperty("errorMessage").GetString().Should().Be("Gateway timeout");
+        a0.GetProperty("responseBody").GetString().Should().Be("upstream connect error");
+        a0.GetProperty("attemptedAt").GetDateTime().Should().BeCloseTo(attemptedAt, TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
     public async Task RequeueDelivery_FromDeliveryFailed_IsAllowed()
     {
         await using var db = NewDb();

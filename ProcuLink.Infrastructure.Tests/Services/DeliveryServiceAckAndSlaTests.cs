@@ -179,6 +179,32 @@ public class DeliveryServiceAckAndSlaTests
         return new DeliveryEncryptionService(config);
     }
 
+    [Fact]
+    public async Task DispatchArtifactAsync_ManualConfig_RequireAutoDeliver_NoOps_WritesNoAttempt()
+    {
+        // The dispatch-side gate the INLINE B1 recovery (TransformOrderJob.TryRecoverStrandedDeliveryAsync)
+        // relies on: it re-enqueues delivery with requireAutoDeliver=true, so a MANUAL order
+        // (AutoDeliver=false) must NO-OP at dispatch — no send, no delivery attempt row, status
+        // untouched — never a force-send. Previously covered only indirectly (via the revision path).
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        var manual = MakeConfig(ids.OrgId, ids.SupplierId, encryption);
+        manual.AutoDeliver = false;
+        db.SupplierDeliveryConfigs.Add(manual);
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 200)), encryption);
+
+        var result = await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        result.Success.Should().BeTrue(); // benign no-op success, exactly like a live AutoDeliver=false
+        (await db.DeliveryAttempts.CountAsync(a => a.OrderId == ids.OrderId)).Should().Be(0);
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId)).Status
+            .Should().Be(OrderStatusConstants.ReadyToDeliver);
+    }
+
     private static async Task<(Guid OrgId, Guid SupplierId, Guid OrderId, Guid ArtifactId)> SeedOrderAsync(
         ProcuLinkDbContext db)
     {

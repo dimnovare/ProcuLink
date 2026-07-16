@@ -131,6 +131,37 @@ public class TransformOrderJobSkipTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_SkippedTransform_Recovery_EnqueuesWithRequireAutoDeliverTrue_NeverForceSends()
+    {
+        // A MANUAL order recovered by the inline B1 path must NEVER be force-sent: the recovery
+        // re-drives through DeliverOrderJob.Enqueue (requireAutoDeliver=TRUE), so a manual order
+        // (AutoDeliver=false) no-ops at dispatch instead of being force-dispatched. This locks that
+        // the inline recovery never regresses to EnqueueRedeliver (requireAutoDeliver=false).
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedOrderAsync(db, OrderStatusConstants.ReadyToDeliver);
+        var artifactId = Guid.NewGuid();
+        await SeedArtifactAsync(db, orgId, orderId, artifactId);
+
+        Job? captured = null;
+        var jobs = new Mock<IBackgroundJobClient>();
+        jobs.Setup(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()))
+            .Callback<Job, IState>((j, _) => captured = j)
+            .Returns(Guid.NewGuid().ToString());
+
+        var orderService = OrderServiceReturning(
+            new TransformResponse(artifactId, "csv", DateTime.UtcNow, Skipped: true));
+        var job = new TransformOrderJob(
+            orderService.Object, jobs.Object, NullLogger<TransformOrderJob>.Instance, db, new FakeAnalyticsService());
+
+        await job.ExecuteAsync(orderId, orgId, "csv", CancellationToken.None);
+
+        Assert.NotNull(captured);
+        Assert.Equal(typeof(DeliverOrderJob), captured!.Type);
+        // DeliverOrderJob.ExecuteAsync(orderId, org, artifactId, requireAutoDeliver, ct) — arg[3] must be TRUE.
+        Assert.True((bool)captured.Args[3]!);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_SkippedTransform_AlreadyHasDeliveryAttempt_DoesNotReEnqueue()
     {
         // Double-send guard preserved: an order that already had a delivery attempt (delivery ran /

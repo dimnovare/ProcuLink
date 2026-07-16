@@ -33,6 +33,12 @@ public sealed class StrandedReadyDeliveryDetectionJob
         _logger = logger;
     }
 
+    // DisableConcurrentExecution: two overlapping sweeps would double-audit the same strand and
+    // double-enqueue its recovery (both harmless — the UpdatedAt bump + DeliverOrderJob's atomic claim
+    // already prevent any double-send — but wasteful and noisy). A 15-min sweep should never overlap;
+    // the mutex is cheap insurance against a manual re-trigger or a slow run. Timeout < the 15-min
+    // recurrence so a hung run can't block the next tick indefinitely.
+    [DisableConcurrentExecution(timeoutInSeconds: 300)]
     [Queue("background")]
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(CancellationToken ct)

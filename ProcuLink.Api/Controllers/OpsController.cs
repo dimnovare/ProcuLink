@@ -173,9 +173,29 @@ public sealed class OpsController : ControllerBase
                     fromStatus,
                     toStatus             = OrderStatusConstants.DeliveryFailed,
                     priorAttemptsCleared = priorAttempts.Count,
+                    // Forensic snapshot: the cleared attempt rows are hard-deleted to reset the cap,
+                    // so preserve their dead-letter evidence (codes / error bodies / timestamps) here
+                    // in the immutable audit log rather than losing it. Response bodies are already
+                    // bounded to DeliveryAttempt.MaxResponseBodyLength at write time.
+                    clearedAttempts = priorAttempts
+                        .OrderBy(a => a.AttemptNumber)
+                        .Select(a => new
+                        {
+                            attemptNumber   = a.AttemptNumber,
+                            status          = a.Status,
+                            channel         = a.Channel,
+                            destination     = a.Destination,
+                            responseCode    = a.ResponseCode,
+                            errorMessage    = a.ErrorMessage,
+                            rejectionReason = a.RejectionReason,
+                            responseBody    = a.ResponseBody,
+                            attemptedAt     = a.AttemptedAt,
+                            acknowledgedAt  = a.AcknowledgedAt,
+                        })
+                        .ToArray(),
                     artifactId           = artifact.Id,
                     requeuedAt           = DateTime.UtcNow,
-                    detail               = "Operator escalation: attempt cap reset and order left claimable so the re-enqueued delivery reaches the supplier past the dead-letter cap.",
+                    detail               = "Operator escalation: attempt cap reset and order left claimable so the re-enqueued delivery reaches the supplier past the dead-letter cap. Cleared attempts' forensics are snapshotted in clearedAttempts.",
                 })),
                 CreatedAt = DateTime.UtcNow,
             });

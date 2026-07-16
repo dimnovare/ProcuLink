@@ -116,6 +116,105 @@ public class StrandedReadyOrderDetectionServiceTests
         enqueuer.Calls.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task RunAsync_UnroutedOrder_NullSupplier_IsUntouched()
+    {
+        // An unrouted order (SupplierId == null) has no delivery config — it can't be a stranded
+        // auto-delivery, so the sweep must skip it (never bump, never audit, never enqueue).
+        await using var db = CreateDb();
+        var (_, orderId, _) = await SeedStrandedAsync(db, updatedMinutesAgo: 45, autoDeliver: true, routed: false);
+        var enqueuer = new RecordingDispatchEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        acted.Should().Be(0);
+        enqueuer.Calls.Should().BeEmpty();
+        (await db.AuditEvents.CountAsync(e => e.EntityId == orderId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RunAsync_AutoDeliver_NoArtifact_IsUntouched()
+    {
+        // Auto-deliver + no attempt but NO artifact exists → there is nothing to deliver, so the
+        // sweep must skip it (defensive: ready_to_deliver is only ever set alongside an artifact).
+        await using var db = CreateDb();
+        var (_, orderId, _) = await SeedStrandedAsync(db, updatedMinutesAgo: 45, autoDeliver: true, withArtifact: false);
+        var enqueuer = new RecordingDispatchEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        acted.Should().Be(0);
+        enqueuer.Calls.Should().BeEmpty();
+        (await db.AuditEvents.CountAsync(e => e.EntityId == orderId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RunAsync_AutoDeliverConfigForDifferentSupplier_DoesNotLeak()
+    {
+        // Config scoping: the order's OWN supplier has no auto-deliver config, but the SAME org has
+        // an auto-deliver config for a DIFFERENT supplier. That config must never be borrowed to
+        // force-send this (manual) order.
+        await using var db = CreateDb();
+        var (orgId, orderId, _) = await SeedStrandedAsync(db, updatedMinutesAgo: 45, autoDeliver: true, withConfig: false);
+        db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = Guid.NewGuid(), // different supplier
+            Protocol = "http", AutoDeliver = true,
+            ConfigJson = "{}", EncryptedCredentials = "",
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var enqueuer = new RecordingDispatchEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        acted.Should().Be(0);
+        enqueuer.Calls.Should().BeEmpty();
+        (await db.AuditEvents.CountAsync(e => e.EntityId == orderId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RunAsync_MultipleOrgs_RecoversEachOrgsStrand_WithItsOwnOrgId_ManualUntouched()
+    {
+        // Cross-tenant sweep: two different orgs each have an aged auto-deliver strand; both are
+        // recovered and each enqueue carries THAT order's own OrgId. A third org's manual order is
+        // left untouched. Tenant isolation is preserved even though the sweep is cross-tenant.
+        await using var db = CreateDb();
+        var (orgA, orderA, artA) = await SeedStrandedAsync(db, updatedMinutesAgo: 45, autoDeliver: true);
+        var (orgB, orderB, artB) = await SeedStrandedAsync(db, updatedMinutesAgo: 60, autoDeliver: true);
+        var (_, orderManual, _)  = await SeedStrandedAsync(db, updatedMinutesAgo: 90, autoDeliver: false);
+        var enqueuer = new RecordingDispatchEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        acted.Should().Be(2);
+        enqueuer.Calls.Should().BeEquivalentTo(new[]
+        {
+            (orderA, orgA, artA),
+            (orderB, orgB, artB),
+        });
+        (await db.AuditEvents.CountAsync(e => e.EntityId == orderManual)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RunAsync_MoreStrandsThanBatchCap_ActsOnlyUpToCap_OldestFirst()
+    {
+        // The sweep is bounded per run (a manual-heavy org could otherwise park a huge backlog).
+        // With three strands and a cap of two, only the two OLDEST are recovered; the newest waits
+        // for the next sweep.
+        await using var db = CreateDb();
+        var (_, oldest, _) = await SeedStrandedAsync(db, updatedMinutesAgo: 90, autoDeliver: true);
+        var (_, middle, _) = await SeedStrandedAsync(db, updatedMinutesAgo: 60, autoDeliver: true);
+        var (_, newest, _) = await SeedStrandedAsync(db, updatedMinutesAgo: 45, autoDeliver: true);
+        var enqueuer = new RecordingDispatchEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default, maxBatch: 2);
+
+        acted.Should().Be(2);
+        enqueuer.Calls.Select(c => c.OrderId).Should().BeEquivalentTo(new[] { oldest, middle });
+        enqueuer.Calls.Select(c => c.OrderId).Should().NotContain(newest);
+    }
+
     [Theory]
     [InlineData(OrderStatusConstants.Delivering)]
     [InlineData(OrderStatusConstants.Delivered)]
@@ -185,7 +284,9 @@ public class StrandedReadyOrderDetectionServiceTests
         int updatedMinutesAgo,
         bool autoDeliver,
         bool withConfig = true,
-        string status = OrderStatusConstants.ReadyToDeliver)
+        string status = OrderStatusConstants.ReadyToDeliver,
+        bool routed = true,
+        bool withArtifact = true)
     {
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
@@ -197,7 +298,9 @@ public class StrandedReadyOrderDetectionServiceTests
         {
             Id = orderId,
             OrgId = orgId,
-            SupplierId = supplierId,
+            // Unrouted orders have no supplier (and therefore no delivery config) — they can't be
+            // stranded auto-deliveries.
+            SupplierId = routed ? supplierId : null,
             PoNumber = "PO-STRAND",
             OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
             Currency = "EUR",
@@ -205,12 +308,13 @@ public class StrandedReadyOrderDetectionServiceTests
             CreatedAt = updated,
             UpdatedAt = updated,
         });
-        db.OutboundArtifacts.Add(new OutboundArtifact
-        {
-            Id = artifactId, OrderId = orderId, OrgId = orgId,
-            Format = "csv", FileKey = "artifact.csv", CreatedAt = updated,
-        });
-        if (withConfig)
+        if (withArtifact)
+            db.OutboundArtifacts.Add(new OutboundArtifact
+            {
+                Id = artifactId, OrderId = orderId, OrgId = orgId,
+                Format = "csv", FileKey = "artifact.csv", CreatedAt = updated,
+            });
+        if (withConfig && routed)
             db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
             {
                 Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,

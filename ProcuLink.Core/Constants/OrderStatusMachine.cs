@@ -44,7 +44,10 @@ public static class OrderStatusMachine
             // failed/dead-lettered delivery invalidates the stored artifact (Retry/requeue would ship it
             // un-re-transformed), so the order resets and the next Send re-transforms.
             [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, Ready, RejectedBySupplier),
-            [DeliveryDeadLetter] = Set(Delivering, Ready, RejectedBySupplier),
+            // dead_letter → delivery_failed keeps this a superset of OrderStatusTransitionObserver's
+            // map (a requeued dead-letter that fails again, or a late failure webhook) so IsAllowed
+            // never rejects a transition the observer treats as expected.
+            [DeliveryDeadLetter] = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
             [RejectedBySupplier] = Set(),
             [Failed]             = Set(),
             [TransformFailed]    = Set(),

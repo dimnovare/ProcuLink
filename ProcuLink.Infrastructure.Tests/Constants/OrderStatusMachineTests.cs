@@ -30,6 +30,7 @@ public class OrderStatusMachineTests
     [InlineData(DeliveryFailed, DeliveryDeadLetter)]
     [InlineData(DeliveryFailed, Ready)]          // MV-1 sibling: mapping edit after a failed delivery
     [InlineData(DeliveryDeadLetter, Delivering)] // ops requeue rescue
+    [InlineData(DeliveryDeadLetter, DeliveryFailed)] // requeued dead-letter fails again / late failure webhook (aligns with the observer map)
     [InlineData(DeliveryDeadLetter, Ready)]      // MV-1 sibling: mapping edit after dead-letter
     [InlineData(Delivered, DeliveryFailed)]      // webhook late-failure edge
     [InlineData(Ready, RejectedBySupplier)]      // mark-rejected (from any non-terminal)
