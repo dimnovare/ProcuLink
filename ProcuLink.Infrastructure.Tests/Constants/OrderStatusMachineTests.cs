@@ -120,8 +120,11 @@ public class OrderStatusMachineTests
         Edge(TransformFailed, Transforming),
         Edge(TransformFailed, PendingReview),
 
-        // 'pending_parse' is a stub-creation value only: CreateStubAsync writes 'parsing' directly,
-        // so nothing transitions OUT of pending_parse into the parse outcomes.
+        // Nothing WRITES 'pending_parse' either: every ingest path stamps 'parsing' straight onto
+        // the stub (OrderIngestionService.cs:343, SampleOrderService.cs:130), and the stuck-order
+        // requeue re-writes 'parsing' too (StuckOrderDetectionService.cs:101). No order is ever in
+        // pending_parse, so nothing can transition out of it. Like transform_failed, the status is
+        // declared but dead.
         Edge(PendingParse, PendingReview),
         Edge(PendingParse, Ready),
         Edge(PendingParse, Failed),
@@ -131,9 +134,9 @@ public class OrderStatusMachineTests
         Edge(PendingReview, Failed),
         Edge(Ready, Failed),
 
-        // No re-transform path re-enters 'transforming' from these: OrdersController.Transform
-        // guards on status == ready, and a mapping edit resets the order to 'ready' first
-        // (the MV-1 edges the machine already allows).
+        // No re-transform path re-enters 'transforming' from these: the transform claim is keyed on
+        // ready|transforming (OrderTransformService.cs:244), and a mapping edit resets the order to
+        // 'ready' first (the MV-1 edges the machine already allows).
         Edge(ReadyToDeliver, Transforming),
         Edge(DeliveryFailed, Transforming),
         Edge(DeliveryFailed, PendingReview),
