@@ -138,6 +138,69 @@ public class RetryDeliveryJobBackoffTests
     }
 
     /// <summary>
+    /// A retry that never reached the wire (no dispatch, no attempt row) must NOT be rescheduled.
+    /// Rescheduling one is an UNBOUNDED loop, not a retry: with no attempt row the count never
+    /// advances, so <c>attemptsMade &gt;= maxAttempts</c> never becomes true and every run schedules
+    /// the same backoff step forever. Only the Outcome distinguishes this from a real transient
+    /// failure — the message text is not a contract and ResponseCode is null for both.
+    /// </summary>
+    [Theory]
+    // Claim lost: another worker owns the in-flight send; it — not us — will finish or fail it.
+    [InlineData("Delivery for this order is already in progress.")]
+    // Non-claimable / terminal statuses: nothing a later retry can change.
+    [InlineData("Order status 'delivery_held' is not retryable.")]
+    [InlineData("Order is in dead-letter state — retries are exhausted.")]
+    [InlineData("Order not found.")]
+    [InlineData("No outbound artifact found. Transform the order before retrying delivery.")]
+    public async Task ExecuteAsync_NoDispatchAttempted_DoesNotSchedule(string message)
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, message, Outcome: DeliveryOutcome.NotAttempted));
+        // The count is FROZEN at whatever it was — the cap guard can never fire on this path.
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().BeEmpty(
+            "no attempt row was written, so a rescheduled run would repeat this forever");
+        delivery.Verify(d => d.CountDeliveryAttemptsAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never, "backoff bookkeeping is meaningless when nothing was dispatched");
+    }
+
+    /// <summary>
+    /// Guards the default: an unmarked <see cref="DeliveryResult"/> must keep the retry queue
+    /// running. <see cref="DeliveryOutcome.Dispatched"/> is the safe default — a missed call site
+    /// degrades to the old (noisy) behaviour, never to silently abandoning a deliverable order.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_TransientFailure_DefaultOutcomeIsDispatched_SchedulesRetry()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "Connection refused"));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().HaveCount(1);
+    }
+
+    /// <summary>
     /// Captures every <see cref="IBackgroundJobClient.Create"/> call so the scheduled state
     /// (and its backoff delay) raised by the <c>Schedule&lt;T&gt;</c> extension can be asserted.
     /// </summary>

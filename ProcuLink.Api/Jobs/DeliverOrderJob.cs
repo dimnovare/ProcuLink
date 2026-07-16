@@ -111,6 +111,19 @@ public class DeliverOrderJob
         if (result.ResponseCode is >= 400 and <= 499)
             return;
 
+        // Nothing was dispatched (order/artifact gone, or another worker holds the claim and owns
+        // the in-flight send), so no attempt row exists. Seeding the backoff queue from a
+        // non-dispatch hands RetryDeliveryJob an order it can only bow out of — and with the
+        // attempt count frozen at 0, neither job's cap guard can ever end the chain. Whoever owns
+        // the block owns re-driving it. Mirrors RetryDeliveryJob's identical guard.
+        if (result.Outcome == DeliveryOutcome.NotAttempted)
+        {
+            _logger.LogInformation(
+                "DeliverOrderJob: order {OrderId} not dispatched ({Error}); not scheduling auto-retry.",
+                orderId, result.ErrorMessage);
+            return;
+        }
+
         var maxAttempts = _reliability.MaxAttempts > 0 ? _reliability.MaxAttempts : RetryDeliveryJob.MaxAttempts;
         var attemptsMade = await _deliveryService.CountDeliveryAttemptsAsync(organisationId, orderId, ct);
         if (attemptsMade >= maxAttempts)

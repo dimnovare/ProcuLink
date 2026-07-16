@@ -19,6 +19,14 @@ namespace ProcuLink.Infrastructure.Jobs;
 /// attempt-count guard inside <c>RetryDeliveryAsync</c> makes the whole chain idempotent:
 /// a duplicated job sees the higher attempt count and either dead-letters or no-ops.
 /// </para>
+///
+/// <para>
+/// <b>Only a DISPATCHED failure is retryable.</b> A result marked
+/// <see cref="DeliveryOutcome.NotAttempted"/> never reached a dispatcher and wrote no attempt row,
+/// so the count that drives BOTH the backoff step and the cap is frozen — rescheduling it produces
+/// an unbounded ~30-min loop, not a retry. The queue therefore terminates on: delivered, a 4xx
+/// supplier rejection, the attempt cap, and any non-dispatch outcome.
+/// </para>
 /// </summary>
 public class RetryDeliveryJob
 {
@@ -67,6 +75,21 @@ public class RetryDeliveryJob
         if (result.Success)
         {
             _logger.LogInformation("RetryDeliveryJob delivered order {OrderId}", orderId);
+            return;
+        }
+
+        if (result.Outcome == DeliveryOutcome.NotAttempted)
+        {
+            // Nothing was dispatched and no attempt row was written: the order was not claimable
+            // (gone / terminal / held / dead-lettered / no artifact), or another worker holds the
+            // claim and owns the in-flight send. Either way THIS job cannot move the order, and the
+            // frozen attempt count means the cap guard below could never stop the chain — so
+            // rescheduling would re-run this same no-op every backoff step, forever. Stop; whoever
+            // owns the block (the claim holder, the billing reactivation re-drive, a re-transform,
+            // an operator) owns restarting delivery.
+            _logger.LogInformation(
+                "RetryDeliveryJob: order {OrderId} not dispatched ({Error}); not rescheduling.",
+                orderId, result.ErrorMessage);
             return;
         }
 
