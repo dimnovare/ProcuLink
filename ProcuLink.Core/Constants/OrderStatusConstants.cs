@@ -21,6 +21,15 @@ public static class OrderStatusConstants
     /// </summary>
     public const string DeliveryHeld = "delivery_held";
     public const string DeliveryFailed = "delivery_failed";
+
+    /// <summary>
+    /// A send happened but its outcome is unknown (a crash lost the ACK) on a channel that cannot
+    /// de-duplicate a re-send — ERP, email, legacy SMTP. Re-sending could hand the supplier a
+    /// duplicate PO, so the order waits for a human: "Send again" or "Mark as delivered".
+    /// Deliberately NOT <see cref="DeliveryFailed"/> — we do not know that it failed. Non-billable
+    /// until an operator confirms delivery (the meter counts only delivered/rejected_by_supplier).
+    /// </summary>
+    public const string DeliveryUnconfirmed = "delivery_unconfirmed";
     public const string TransformFailed = "transform_failed";
     public const string RejectedBySupplier = "rejected_by_supplier";
     public const string DeliveryDeadLetter = "delivery_dead_letter";

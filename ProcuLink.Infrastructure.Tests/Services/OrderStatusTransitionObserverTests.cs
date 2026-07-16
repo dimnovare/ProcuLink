@@ -108,6 +108,36 @@ public class OrderStatusTransitionObserverTests
             (await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId)).Status);
     }
 
+    // The park (unknown-outcome crash recovery on a non-idempotent channel) moves
+    // delivering → delivery_unconfirmed. Both transition maps must carry it, or the observer
+    // logs a spurious "unexpected transition" for a move the system performs on purpose —
+    // the exact map drift d4d6eac had to fix for A5.
+    [Theory]
+    [InlineData(OrderStatusConstants.Delivering, OrderStatusConstants.DeliveryUnconfirmed)]
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivering)]
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivered)]
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Ready)]
+    public async Task ParkTransitions_AreRegisteredInBothMaps_AndObserverStaysSilent(string from, string to)
+    {
+        Assert.True(OrderStatusMachine.IsAllowed(from, to), $"{from} -> {to} is a real flow the park performs");
+
+        // Observer silence via the same mechanism as the A5 sibling
+        // (SaveChanges_DeliveryFailedToDeliveryHeld_IsSilent_AndPersists): a real SaveChanges
+        // through the interceptor with a capturing logger, not just the pure IsExpected check —
+        // this also catches a bug in the interceptor wiring itself, not only in the static maps.
+        var logger = new CapturingLogger();
+        var (options, orderId) = await SeedAsync(logger, from);
+
+        await using (var db = new ProcuLinkDbContext(options))
+        {
+            var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+            order.Status = to;
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Empty(logger.Warnings);
+    }
+
     [Fact]
     public async Task SaveChanges_UnexpectedTransition_LogsWarning_ButNeverBlocks()
     {

@@ -38,7 +38,9 @@ public static class OrderStatusMachine
             [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier),
             // Billing hold → released back to ready_to_deliver when the org returns to good standing.
             [DeliveryHeld]       = Set(ReadyToDeliver, Ready, RejectedBySupplier),
-            [Delivering]         = Set(Delivered, DeliveryFailed, RejectedBySupplier),
+            // delivering → delivery_unconfirmed: the park — a crash-recovery re-drive on a channel
+            // that cannot de-duplicate stops rather than risk a duplicate PO.
+            [Delivering]         = Set(Delivered, DeliveryFailed, DeliveryUnconfirmed, RejectedBySupplier),
             [Delivered]          = Set(DeliveryFailed, Ready, RejectedBySupplier),
             // delivery_failed/delivery_dead_letter → ready: the MV-1 sibling — a mapping edit after a
             // failed/dead-lettered delivery invalidates the stored artifact (Retry/requeue would ship it
@@ -46,6 +48,10 @@ public static class OrderStatusMachine
             // delivery_failed → delivery_held: A5 — a backoff retry for an org that lapsed to
             // read_only/past_due since the first attempt is held (not delivered) via HoldForBillingAsync.
             [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
+            // Unknown-outcome park. The operator decides: send again (→ delivering) or confirm the
+            // supplier got it (→ delivered). A mapping edit invalidates the artifact (→ ready, the
+            // MV-1 sibling). Dead-letter/failed remain reachable if a later re-send exhausts retries.
+            [DeliveryUnconfirmed] = Set(Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, Ready, RejectedBySupplier),
             // dead_letter → delivery_failed keeps this a superset of OrderStatusTransitionObserver's
             // map (a requeued dead-letter that fails again, or a late failure webhook) so IsAllowed
             // never rejects a transition the observer treats as expected.

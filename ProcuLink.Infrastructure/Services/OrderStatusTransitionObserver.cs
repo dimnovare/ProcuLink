@@ -87,7 +87,14 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
                 OrderStatusConstants.RejectedBySupplier),
             [OrderStatusConstants.Delivering] = Set(
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
+                OrderStatusConstants.DeliveryUnconfirmed,
                 OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.DeliveryDeadLetter),
+            // Unknown-outcome park: the operator sends again or confirms delivery. Mirrors
+            // OrderStatusMachine — both maps or neither (the d4d6eac drift lesson).
+            [OrderStatusConstants.DeliveryUnconfirmed] = Set(
+                OrderStatusConstants.Delivering, OrderStatusConstants.Delivered,
+                OrderStatusConstants.DeliveryFailed, OrderStatusConstants.DeliveryDeadLetter,
+                OrderStatusConstants.Ready, OrderStatusConstants.RejectedBySupplier),
             // A delivered order can still be rejected later (supplier business ACK ≠ HTTP 200).
             [OrderStatusConstants.Delivered] = Set(
                 OrderStatusConstants.RejectedBySupplier),
