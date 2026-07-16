@@ -14,10 +14,11 @@ namespace ProcuLink.Api.Tests.Jobs;
 /// <para>On OSS Hangfire, <see cref="DisableConcurrentExecutionAttribute"/> keys its distributed
 /// lock on the job TYPE + METHOD ONLY — never on the job's arguments (per-argument mutexing needs
 /// the paid Hangfire.Pro <c>[Mutex]</c>; see PerOrderDistributedMutexAttribute). These sweeps take
-/// no arguments and are global by nature, so a per-method lock is exactly the right semantic.</para>
+/// no arguments and are cross-tenant by nature, so a per-method lock is exactly the right semantic —
+/// unlike the per-ORG poll children, which take an orgId argument and therefore use
+/// <c>[PerOrgDistributedMutex]</c> instead (see PollJobConcurrencyGuardTests).</para>
 ///
-/// A distributed lock cannot be unit-tested, so this asserts the attribute is present — the same
-/// approach PollJobConcurrencyGuardTests takes for the poll children.
+/// A distributed lock cannot be unit-tested, so this asserts the attribute is present.
 /// </summary>
 public class SweepJobConcurrencyGuardTests
 {
@@ -25,6 +26,7 @@ public class SweepJobConcurrencyGuardTests
     [InlineData(typeof(StuckOrderDetectionJob))]
     [InlineData(typeof(DeliverySlaSweepJob))]
     [InlineData(typeof(StuckDeliveryDetectionJob))]
+    [InlineData(typeof(StrandedFailedDeliveryDetectionJob))]
     public void ExecuteAsync_HasDisableConcurrentExecution(Type jobType)
     {
         var method = jobType.GetMethod("ExecuteAsync", BindingFlags.Public | BindingFlags.Instance);

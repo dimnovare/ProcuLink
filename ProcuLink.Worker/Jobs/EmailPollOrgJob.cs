@@ -13,6 +13,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
@@ -72,15 +73,16 @@ public sealed class EmailPollOrgJob
     /// </summary>
     [Queue("polling")]
     [AutomaticRetry(Attempts = 2)]
-    // GLOBAL lock, not per-org: on OSS Hangfire, DisableConcurrentExecution keys the distributed
-    // lock on job TYPE + METHOD ONLY — it does NOT include this job's orgId argument. Per-argument
-    // mutexing needs the paid Hangfire.Pro [Mutex] (see PerOrderDistributedMutexAttribute, which
-    // exists for exactly that reason). A global lock strictly CONTAINS the per-org lock the
-    // claim-first ledger insert in ProcessMessageAsync needs, so correctness is unaffected — two
-    // IMAP polls for the SAME org still can never overlap. The cost is throughput: every org's
-    // IMAP polling serialises through this one lock, a ceiling as org count grows. Tracked
-    // separately.
-    [DisableConcurrentExecution(300)]
+    // PER-ORG lock: PerOrgDistributedMutex acquires a storage-backed distributed lock keyed on the
+    // orgId ARGUMENT (resource "poll:EmailPollOrgJob.ExecuteAsync:{orgId}"), so two IMAP polls for
+    // the SAME org can never overlap, while two DIFFERENT orgs never contend and poll in parallel.
+    // NOT [DisableConcurrentExecution]: on OSS Hangfire that keys on job TYPE + METHOD ONLY (never
+    // the arguments), which serialised EVERY org's IMAP polling through one lock — one slow or hung
+    // tenant IMAP endpoint stalled all other tenants for up to the timeout.
+    // Per-org granularity is sufficient because the lock is only the OUTER guard: the claim-first
+    // ledger insert + unique index in ProcessMessageAsync is what actually guarantees exactly-one
+    // order, and two different orgs share no state to race over.
+    [PerOrgDistributedMutex(orgArgumentIndex: 0, timeoutSeconds: 300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
         // Re-read config inside the child job so the child is self-contained.
