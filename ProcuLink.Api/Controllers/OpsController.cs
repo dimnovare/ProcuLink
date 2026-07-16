@@ -77,7 +77,8 @@ public sealed class OpsController : ControllerBase
             SecondsSinceWorkerHeartbeat:  s.SecondsSinceWorkerHeartbeat,
             WorkerHealthy:                s.WorkerHealthy,
             PendingReview:                s.PendingReview,
-            PendingRouting:               s.PendingRouting));
+            PendingRouting:               s.PendingRouting,
+            DeliveryHeld:                 s.DeliveryHeld));
     }
 
     // ── GET /api/ops/dead-letter ──────────────────────────────────────────────

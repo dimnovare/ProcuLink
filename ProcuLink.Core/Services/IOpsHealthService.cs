@@ -74,15 +74,30 @@ public sealed record OpsHealthSummary(
     int       PendingReview             = 0,
     // INFORMATIONAL ONLY — orders parked unrouted, awaiting a USER action (assign a supplier).
     // Like PendingReview, a backlog not a fault → excluded from TotalProblemOrders.
-    int       PendingRouting            = 0)
+    int       PendingRouting            = 0,
+    // NEEDS ATTENTION, NOT A FAULT — orders paused at the delivery step because the org could not
+    // process orders at that moment (billing lapsed: past_due / read_only / cancelled). The
+    // transformed artifact is intact and DeliveryService.ReleaseBillingHeldOrdersAsync re-drives
+    // delivery automatically on reactivation, so a hold is DELIBERATE and self-resolving.
+    //
+    // UNLIKE PendingReview / PendingRouting it IS counted in TotalProblemOrders. Those are normal
+    // workflow states every order passes through; a hold only ever happens when something is wrong,
+    // and the PO is NOT going out. TotalProblemOrders is never displayed as a number — it is the
+    // input to the operations/health "All clear" gate — so counting a hold here says "not all
+    // clear", NOT "this failed". Severity stays honest at the render layer, which tones held amber
+    // (attention) rather than red (failure).
+    int       DeliveryHeld              = 0)
 {
     /// <summary>
-    /// Sum of all problematic order counts (excludes OpenExceptions, which can overlap order
-    /// states, AND PendingReview, which is a user-action backlog, not a system fault).
+    /// Sum of the order counts meaning "something needs an operator's attention right now" — the
+    /// input to the "All clear" gate. Excludes OpenExceptions (can overlap order states) and
+    /// PendingReview / PendingRouting (normal user-action backlogs, not a sign anything is wrong).
+    /// Includes DeliveryHeld: a paused PO is not going out, so it must never read as "All clear" —
+    /// see the DeliveryHeld remarks for why that is not a failure claim.
     /// </summary>
     public int TotalProblemOrders =>
         ParsingStuck + DeliveringStuck + TransformFailed + DeliveryFailed +
-        DeliveryDeadLetter + RejectedBySupplier + Failed;
+        DeliveryDeadLetter + RejectedBySupplier + Failed + DeliveryHeld;
 }
 
 /// <summary>One row on the dead-letter / failed-delivery operator queue.</summary>

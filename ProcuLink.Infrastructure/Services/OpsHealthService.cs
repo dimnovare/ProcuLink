@@ -87,7 +87,11 @@ public sealed class OpsHealthService : IOpsHealthService
             PendingReview:                Count(OrderStatusConstants.PendingReview),
             // INFORMATIONAL: routing backlog (orders parked awaiting a supplier), same GROUP BY,
             // no extra round-trip. Like PendingReview, a user-action backlog → not in TotalProblemOrders.
-            PendingRouting:               Count(OrderStatusConstants.Unrouted));
+            PendingRouting:               Count(OrderStatusConstants.Unrouted),
+            // Deliveries PAUSED on a billing hold, reused from the same org-scoped GROUP BY — no
+            // extra round-trip. Needs a human (settle billing) but releases itself on reactivation;
+            // counted toward TotalProblemOrders so a paused PO can never read as "All clear".
+            DeliveryHeld:                 Count(OrderStatusConstants.DeliveryHeld));
     }
 
     /// <summary>
