@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Services;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -269,7 +270,7 @@ public class OrderServiceMappingOverrideTransformTests
     }
 
     [Fact]
-    public async Task TransformAsync_BrokenTemplate_FailsClearly_AndRevertsStatusToReady()
+    public async Task TransformAsync_BrokenTemplate_FailsClearly_AndMarksTransformFailed()
     {
         await using var db = NewDb();
         var (orgId, orderId) = await SeedResolvedOrderAsync(db);
@@ -286,9 +287,11 @@ public class OrderServiceMappingOverrideTransformTests
         Assert.False(result.IsSuccess);
         Assert.Contains("compile", result.Error);
 
-        // The order must NOT be left stuck in "transforming" — a broken template reverts to ready.
+        // The order must NOT be left stuck in "transforming" — and NOT quietly reverted to "ready"
+        // either, which is indistinguishable from "never transformed" and hid the failure from ops
+        // health. A broken template is terminal until a human fixes it: park it VISIBLY.
         var reloaded = await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId);
-        Assert.Equal("ready", reloaded.Status);
+        Assert.Equal(OrderStatusConstants.TransformFailed, reloaded.Status);
     }
 
     [Fact]

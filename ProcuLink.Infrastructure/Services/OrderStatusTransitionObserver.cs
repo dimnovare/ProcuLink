@@ -71,11 +71,14 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             [OrderStatusConstants.Ready] = Set(
                 OrderStatusConstants.PendingReview, OrderStatusConstants.Transforming,
                 OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.Failed),
-            // Transform: success → ready_to_deliver; validation/template failure reverts to
-            // ready; stuck-detection fails a hung transform.
+            // Transform: success → ready_to_deliver; a TERMINAL validation/template failure parks the
+            // order in transform_failed (visible), where it stays recoverable; stuck-detection fails a
+            // hung transform. ready: the compensating release when a re-transform enqueue fails.
             [OrderStatusConstants.Transforming] = Set(
                 OrderStatusConstants.Ready, OrderStatusConstants.ReadyToDeliver,
                 OrderStatusConstants.TransformFailed, OrderStatusConstants.Failed),
+            // Recovery out of a failed transform: fix the template/mapping and re-transform (the
+            // transform claim accepts transform_failed), or re-resolve back into the review loop.
             [OrderStatusConstants.TransformFailed] = Set(
                 OrderStatusConstants.Ready, OrderStatusConstants.Transforming,
                 OrderStatusConstants.PendingReview),

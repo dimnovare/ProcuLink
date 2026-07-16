@@ -41,7 +41,10 @@ public static class OrderStatusMachine
             [Unrouted]           = Set(Parsing, PendingParse, Failed, RejectedBySupplier),
             [PendingReview]      = Set(Ready, PendingReview, RejectedBySupplier),
             [Ready]              = Set(Transforming, PendingReview, RejectedBySupplier),
-            [Transforming]       = Set(ReadyToDeliver, Ready, Failed, RejectedBySupplier),
+            // transforming → transform_failed: a TERMINAL transform failure (a template that would not
+            // render, or an output mapping that could not be applied) — neither is fixable by retrying
+            // the same inputs, so the order is parked visibly rather than reverted to 'ready'.
+            [Transforming]       = Set(ReadyToDeliver, Ready, TransformFailed, Failed, RejectedBySupplier),
             // ready_to_deliver/delivered → ready: a mapping edit after transform (MV-1) invalidates
             // the artifact and resets the order so the next Send re-transforms.
             // ready_to_deliver → delivery_held: a mid-pipeline billing flip pauses (not fails) delivery.
@@ -62,7 +65,14 @@ public static class OrderStatusMachine
             [DeliveryDeadLetter] = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
             [RejectedBySupplier] = Set(),
             [Failed]             = Set(),
-            [TransformFailed]    = Set(),
+            // transform_failed is a FAILURE state, not a terminal one — unlike 'failed' (a bad source
+            // file: recovery is a new order row), a failed transform holds a perfectly good order whose
+            // TEMPLATE/MAPPING is broken. Fixing that and re-transforming is the intended cure, so the
+            // transform claim accepts transform_failed and re-enters 'transforming'
+            // (OrderTransformService / OrdersController.Transform). It also holds NO artifact, so
+            // nothing stale can be re-shipped. → ready: the compensating release when the re-transform
+            // enqueue itself fails. → pending_review: a re-resolve that reopens the review loop.
+            [TransformFailed]    = Set(Transforming, Ready, PendingReview, RejectedBySupplier),
         };
 
     /// <summary>Every known order status (the keys of the machine).</summary>

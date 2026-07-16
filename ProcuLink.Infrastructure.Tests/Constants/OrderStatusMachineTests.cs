@@ -21,6 +21,13 @@ public class OrderStatusMachineTests
     [InlineData(Transforming, ReadyToDeliver)]
     [InlineData(Transforming, Ready)]            // transform validation revert / requeue
     [InlineData(Transforming, Failed)]
+    // A TERMINAL transform failure (broken template / unusable output mapping) parks the order
+    // VISIBLY instead of reverting it to 'ready', where it was indistinguishable from
+    // "never transformed" — see OrderTransformService.FailTransformAsync.
+    [InlineData(Transforming, TransformFailed)]
+    // ...and back OUT again: the user fixes the template/mapping and re-transforms. The transform
+    // claim accepts transform_failed precisely so this is not a dead end.
+    [InlineData(TransformFailed, Transforming)]
     [InlineData(ReadyToDeliver, Delivering)]
     [InlineData(ReadyToDeliver, DeliveryFailed)] // missing config
     [InlineData(ReadyToDeliver, DeliveryHeld)]   // mid-pipeline billing flip pauses delivery
@@ -60,7 +67,6 @@ public class OrderStatusMachineTests
     [Theory]
     [InlineData(Failed)]
     [InlineData(RejectedBySupplier)]
-    [InlineData(TransformFailed)]
     public void IsTerminal_TrueForTerminalStates(string status)
         => OrderStatusMachine.IsTerminal(status).Should().BeTrue();
 
@@ -68,6 +74,10 @@ public class OrderStatusMachineTests
     [InlineData(Delivered)]            // a webhook can still flip it to delivery_failed
     [InlineData(DeliveryDeadLetter)]   // an ops requeue can still rescue it
     [InlineData(Ready)]
+    // transform_failed is a FAILURE state but NOT a terminal one: unlike 'failed' (a bad source file,
+    // where recovery means a NEW order row), the order itself is fine — its template/mapping is broken.
+    // Fixing that and re-transforming is the intended cure, so it must have a way out.
+    [InlineData(TransformFailed)]
     public void IsTerminal_FalseForNonTerminalStates(string status)
         => OrderStatusMachine.IsTerminal(status).Should().BeFalse();
 
@@ -113,19 +123,10 @@ public class OrderStatusMachineTests
         Edge(Failed, PendingReview),
         Edge(Failed, Ready),
 
-        // 'transform_failed' is declared and bucketed but never WRITTEN by any production code —
-        // OrderTransformService reverts a failed transform to 'ready' instead. Both the edge into
-        // it and every edge out of it are dead.
-        Edge(Transforming, TransformFailed),
-        Edge(TransformFailed, Ready),
-        Edge(TransformFailed, Transforming),
-        Edge(TransformFailed, PendingReview),
-
-        // Nothing WRITES 'pending_parse' either: every ingest path stamps 'parsing' straight onto
+        // Nothing WRITES 'pending_parse': every ingest path stamps 'parsing' straight onto
         // the stub (OrderIngestionService.cs:343, SampleOrderService.cs:130), and the stuck-order
         // requeue re-writes 'parsing' too (StuckOrderDetectionService.cs:101). No order is ever in
-        // pending_parse, so nothing can transition out of it. Like transform_failed, the status is
-        // declared but dead.
+        // pending_parse, so nothing can transition out of it. The status is declared but dead.
         Edge(PendingParse, PendingReview),
         Edge(PendingParse, Ready),
         Edge(PendingParse, Failed),
@@ -136,8 +137,8 @@ public class OrderStatusMachineTests
         Edge(Ready, Failed),
 
         // No re-transform path re-enters 'transforming' from these: the transform claim is keyed on
-        // ready|transforming (OrderTransformService.cs:244), and a mapping edit resets the order to
-        // 'ready' first (the MV-1 edges the machine already allows).
+        // ready|transforming|transform_failed (OrderTransformService.cs), and a mapping edit resets a
+        // post-artifact order to 'ready' first (the MV-1 edges the machine already allows).
         Edge(ReadyToDeliver, Transforming),
         Edge(DeliveryFailed, Transforming),
         Edge(DeliveryFailed, PendingReview),
