@@ -84,9 +84,13 @@ public static class OrderStatusMachine
     /// A manual "send again" (OrdersController.Redeliver) is valid only from a
     /// stalled-but-recoverable delivery state. (A dead-lettered order is rescued by
     /// the separate ops "requeue delivery" path, not by redeliver.)
+    /// <para>
+    /// delivery_unconfirmed is included: the park's entire purpose is to let a HUMAN choose to
+    /// re-send, accepting the duplicate risk the automatic retry must not take on their behalf.
+    /// </para>
     /// </summary>
     public static readonly IReadOnlySet<string> RedeliverableFrom =
-        Set(DeliveryFailed, ReadyToDeliver);
+        Set(DeliveryFailed, ReadyToDeliver, DeliveryUnconfirmed);
 
     private static readonly IReadOnlySet<string> EmptySet =
         new HashSet<string>(StringComparer.Ordinal);

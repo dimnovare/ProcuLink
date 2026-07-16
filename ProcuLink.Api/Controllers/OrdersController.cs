@@ -1762,7 +1762,7 @@ public sealed class OrdersController : ControllerBase
     /// Re-enqueue delivery for an order that has already been transformed.
     /// Bypasses the AutoDeliver flag — use when the supplier was unreachable
     /// or the operator wants to force a manual retry.
-    /// Valid source statuses: delivery_failed, ready_to_deliver.
+    /// Valid source statuses: delivery_failed, ready_to_deliver, delivery_unconfirmed.
     /// </summary>
     [HttpPost("{id:guid}/redeliver")]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
@@ -1779,12 +1779,15 @@ public sealed class OrdersController : ControllerBase
         var order = getResult.Value!;
 
         // Centralised in the order-status state machine (W2): a manual redeliver is
-        // valid only from a stalled-but-recoverable delivery state. Behaviour is
-        // identical to the prior literal {delivery_failed, ready_to_deliver}.
+        // valid only from a stalled-but-recoverable delivery state.
         if (!ProcuLink.Core.Constants.OrderStatusMachine.RedeliverableFrom.Contains(order.Status))
             return BadRequest(new
             {
-                error = $"Order must be in 'delivery_failed' or 'ready_to_deliver' status to redeliver (current: '{order.Status}')."
+                // Derived from the set, never a literal: adding a redeliverable status must not
+                // leave this sentence quietly lying about which statuses are valid.
+                error = $"Order must be in one of these statuses to redeliver: "
+                      + $"{string.Join(", ", ProcuLink.Core.Constants.OrderStatusMachine.RedeliverableFrom.OrderBy(s => s, StringComparer.Ordinal))} "
+                      + $"(current: '{order.Status}')."
             });
 
         var artifact = order.OutboundArtifacts
