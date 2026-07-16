@@ -53,7 +53,7 @@ public sealed class OpsController : ControllerBase
     /// <summary>
     /// Job-health summary: counts of orders in each problematic state (stuck
     /// parsing/delivering, transform_failed, delivery_failed, delivery_dead_letter,
-    /// rejected_by_supplier, failed, SLA-breached) plus total open exceptions.
+    /// rejected_by_supplier, failed, delivery_unconfirmed, SLA-breached) plus total open exceptions.
     /// </summary>
     [HttpGet("health")]
     [ProducesResponseType(typeof(OpsHealthDto), StatusCodes.Status200OK)]
@@ -77,7 +77,8 @@ public sealed class OpsController : ControllerBase
             SecondsSinceWorkerHeartbeat:  s.SecondsSinceWorkerHeartbeat,
             WorkerHealthy:                s.WorkerHealthy,
             PendingReview:                s.PendingReview,
-            PendingRouting:               s.PendingRouting));
+            PendingRouting:               s.PendingRouting,
+            DeliveryUnconfirmed:          s.DeliveryUnconfirmed));
     }
 
     // ── GET /api/ops/dead-letter ──────────────────────────────────────────────

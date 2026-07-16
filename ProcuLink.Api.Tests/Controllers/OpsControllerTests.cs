@@ -12,6 +12,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Controllers;
@@ -118,6 +119,91 @@ public class OpsControllerTests
         });
 
         json.Should().Contain("\"pendingReview\":5");
+    }
+
+    // Regression for the gap where OpsHealthSummary.DeliveryUnconfirmed (commit 046f3e5) died at
+    // the controller boundary: OpsHealthDto had no such property, so a parked order's count never
+    // reached the HTTP response the frontend Health tile reads.
+    [Fact]
+    public async Task GetHealth_MapsDeliveryUnconfirmed_IntoDto_AndIntoTotalProblemOrders()
+    {
+        await using var db = NewDb();
+        var (ctrl, health, _, _, orgId) = Build(db);
+        health.Setup(h => h.GetHealthAsync(orgId, It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new OpsHealthSummary(
+                  ParsingStuck: 0, DeliveringStuck: 0, TransformFailed: 0,
+                  DeliveryFailed: 0, DeliveryDeadLetter: 0, RejectedBySupplier: 0,
+                  Failed: 0, SlaBreached: 0, OpenExceptions: 0, StuckThresholdMinutes: 30,
+                  DeliveryUnconfirmed: 5));
+
+        var result = await ctrl.GetHealth(CancellationToken.None);
+
+        var ok  = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto = ok.Value.Should().BeOfType<OpsHealthDto>().Subject;
+        dto.DeliveryUnconfirmed.Should().Be(5);
+        // A parked order is a fault needing a human, not a normal workflow backlog — it must
+        // count toward TotalProblemOrders, unlike PendingReview/PendingRouting.
+        dto.TotalProblemOrders.Should().Be(5);
+    }
+
+    // End-to-end proof (real OpsHealthService, no mock): a parked order seeded in the database
+    // must survive the whole service -> controller -> DTO -> JSON round trip, since that is
+    // exactly the path the frontend Health tile depends on.
+    [Fact]
+    public async Task GetHealth_ParkedOrderSeededInDb_ReachesDto_ThroughRealOpsHealthService()
+    {
+        await using var db = NewDb();
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            SupplierId = supplierId,
+            PoNumber   = "PO-PARKED",
+            OrderDate  = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency   = "EUR",
+            Status     = OrderStatusConstants.DeliveryUnconfirmed,
+            CreatedAt  = DateTime.UtcNow,
+            UpdatedAt  = DateTime.UtcNow,
+            Lines      = new List<PurchaseOrderLineEntity>(),
+        });
+        await db.SaveChangesAsync();
+
+        var tenant = new Mock<ICurrentTenantService>();
+        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
+        var ctrl = new OpsController(
+            new OpsHealthService(db), tenant.Object, new Mock<IOrderService>().Object,
+            new Mock<IBackgroundJobClient>().Object, db, NullLogger<OpsController>.Instance);
+
+        var result = await ctrl.GetHealth(CancellationToken.None);
+
+        var ok  = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto = ok.Value.Should().BeOfType<OpsHealthDto>().Subject;
+        dto.DeliveryUnconfirmed.Should().Be(1);
+        dto.TotalProblemOrders.Should().Be(1);
+    }
+
+    [Fact]
+    public void OpsHealthDto_SerialisesDeliveryUnconfirmed_AsCamelCaseJson()
+    {
+        // The frontend Health tile plan (docs/superpowers/plans/2026-07-16-delivery-unconfirmed-park-frontend.md,
+        // Task 4) reads exactly `deliveryUnconfirmed`. Pin the System.Text.Json camelCase contract
+        // so a rename can't silently re-break the Health tile.
+        var dto = new OpsHealthDto(
+            ParsingStuck: 0, DeliveringStuck: 0, TransformFailed: 0, DeliveryFailed: 0,
+            DeliveryDeadLetter: 0, RejectedBySupplier: 0, Failed: 0, SlaBreached: 0,
+            OpenExceptions: 0, StuckThresholdMinutes: 30, TotalProblemOrders: 3,
+            ActiveWorkers: 0, LastWorkerHeartbeatUtc: null, SecondsSinceWorkerHeartbeat: null,
+            WorkerHealthy: false, PendingReview: 0, DeliveryUnconfirmed: 3);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(dto, new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        });
+
+        json.Should().Contain("\"deliveryUnconfirmed\":3");
     }
 
     // ── GET /api/ops/dead-letter ──────────────────────────────────────────────

@@ -30,6 +30,12 @@ namespace ProcuLink.Api.Contracts;
 /// a supplier assignment), NOT a system fault. Like <paramref name="PendingReview"/>, excluded from
 /// <paramref name="TotalProblemOrders"/>.
 /// </param>
+/// <param name="DeliveryUnconfirmed">
+/// Orders in <c>delivery_unconfirmed</c> — a PO whose delivery outcome is unknown after a crash on
+/// a channel that cannot de-duplicate a re-send, parked until a human resolves it. Unlike
+/// <paramref name="PendingReview"/>/<paramref name="PendingRouting"/> this is a fault, not a normal
+/// workflow backlog, so it is included in <paramref name="TotalProblemOrders"/>.
+/// </param>
 public record OpsHealthDto(
     int ParsingStuck,
     int DeliveringStuck,
@@ -47,7 +53,8 @@ public record OpsHealthDto(
     double?    SecondsSinceWorkerHeartbeat,
     bool       WorkerHealthy,
     int        PendingReview,
-    int        PendingRouting = 0
+    int        PendingRouting = 0,
+    int        DeliveryUnconfirmed = 0
 );
 
 /// <summary>
