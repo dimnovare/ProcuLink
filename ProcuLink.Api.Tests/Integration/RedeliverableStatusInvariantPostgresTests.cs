@@ -214,17 +214,21 @@ public sealed class RedeliverableStatusInvariantPostgresTests : IAsyncLifetime
             }
 
             await using var verify = NewContext();
-            var attempts = await verify.DeliveryAttempts.AsNoTracking()
-                .Where(a => a.OrderId == ids.OrderId && a.OrgId == ids.OrgId)
+            // Count SUCCESS rows, not every attempt row: a seed that grows a prior failed attempt
+            // (the realistic state for delivery_failed) must not read as a claim failure here.
+            var succeeded = await verify.DeliveryAttempts.AsNoTracking()
+                .Where(a => a.OrderId == ids.OrderId && a.OrgId == ids.OrgId && a.Status == "success")
                 .CountAsync();
             var finalStatus = await verify.PurchaseOrders.AsNoTracking()
                 .Where(o => o.Id == ids.OrderId && o.OrgId == ids.OrgId)
                 .Select(o => o.Status).SingleAsync();
 
-            if (dispatcher.Calls != 1 || attempts != 1)
+            // The order must also LAND: a dispatch that never writes the terminal status leaves the
+            // order stuck in 'delivering' — a strand one step later in the same method.
+            if (dispatcher.Calls != 1 || succeeded != 1 || finalStatus != OrderStatusConstants.Delivered)
                 strands.Add(
-                    $"{status}: dispatches={dispatcher.Calls} (expected 1), attemptRows={attempts} (expected 1), " +
-                    $"finalStatus={finalStatus}");
+                    $"{status}: dispatches={dispatcher.Calls} (expected 1), successAttemptRows={succeeded} " +
+                    $"(expected 1), finalStatus={finalStatus} (expected delivered)");
         }
 
         Assert.True(strands.Count == 0,
@@ -256,10 +260,13 @@ public sealed class RedeliverableStatusInvariantPostgresTests : IAsyncLifetime
         {
             var ids = await SeedOrderInStatusAsync(encryption, status);
 
+            // A hold must PAUSE the send, never perform it: a held order that still reaches a
+            // dispatcher would meter the €0.50 overage the billing gate exists to prevent.
+            var dispatcher = new CountingDispatcher();
             bool held;
             await using (var db = NewContext())
             {
-                var svc = BuildService(db, new CountingDispatcher(), encryption);
+                var svc = BuildService(db, dispatcher, encryption);
                 held = await svc.HoldForBillingAsync(ids.OrgId, ids.OrderId, CancellationToken.None);
             }
 
@@ -271,8 +278,10 @@ public sealed class RedeliverableStatusInvariantPostgresTests : IAsyncLifetime
                 .Where(a => a.OrgId == ids.OrgId && a.EntityId == ids.OrderId && a.Action == "DeliveryHeldForBilling")
                 .CountAsync();
 
-            if (!held || finalStatus != OrderStatusConstants.DeliveryHeld || audited != 1)
-                unheld.Add($"{status}: held={held}, finalStatus={finalStatus} (expected delivery_held), auditRows={audited} (expected 1)");
+            if (!held || finalStatus != OrderStatusConstants.DeliveryHeld || audited != 1 || dispatcher.Calls != 0)
+                unheld.Add(
+                    $"{status}: held={held}, finalStatus={finalStatus} (expected delivery_held), " +
+                    $"auditRows={audited} (expected 1), dispatches={dispatcher.Calls} (expected 0)");
         }
 
         Assert.True(unheld.Count == 0,
