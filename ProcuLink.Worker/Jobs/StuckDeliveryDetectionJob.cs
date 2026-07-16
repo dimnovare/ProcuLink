@@ -34,6 +34,11 @@ public sealed class StuckDeliveryDetectionJob
 
     [Queue("background")]
     [AutomaticRetry(Attempts = 0)]
+    // DisableConcurrentExecution: two overlapping sweeps would both act on the same stranded
+    // 'delivering' order — double-auditing it and racing its recovery bookkeeping. On OSS Hangfire
+    // this keys the lock on TYPE + METHOD only (never on args) — correct for this argument-less
+    // cross-tenant sweep. Timeout < the 15-min recurrence so a hung run can't block the next tick.
+    [DisableConcurrentExecution(timeoutInSeconds: 300)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
         var acted = await _service.RunAsync(StuckThreshold, ct);

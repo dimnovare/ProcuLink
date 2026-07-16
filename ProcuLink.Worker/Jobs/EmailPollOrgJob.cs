@@ -72,9 +72,14 @@ public sealed class EmailPollOrgJob
     /// </summary>
     [Queue("polling")]
     [AutomaticRetry(Attempts = 2)]
-    // Per-org lock: DisableConcurrentExecution keys on the method + args, and this child takes
-    // orgId as its argument, so two IMAP polls for the SAME org can never overlap. With the
-    // claim-first ledger insert in ProcessMessageAsync this closes the concurrent-duplicate window.
+    // GLOBAL lock, not per-org: on OSS Hangfire, DisableConcurrentExecution keys the distributed
+    // lock on job TYPE + METHOD ONLY — it does NOT include this job's orgId argument. Per-argument
+    // mutexing needs the paid Hangfire.Pro [Mutex] (see PerOrderDistributedMutexAttribute, which
+    // exists for exactly that reason). A global lock strictly CONTAINS the per-org lock the
+    // claim-first ledger insert in ProcessMessageAsync needs, so correctness is unaffected — two
+    // IMAP polls for the SAME org still can never overlap. The cost is throughput: every org's
+    // IMAP polling serialises through this one lock, a ceiling as org count grows. Tracked
+    // separately.
     [DisableConcurrentExecution(300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {

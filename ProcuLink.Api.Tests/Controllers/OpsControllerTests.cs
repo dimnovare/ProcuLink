@@ -101,6 +101,48 @@ public class OpsControllerTests
     }
 
     [Fact]
+    public async Task GetHealth_MapsDeliveryHeld_ToDto()
+    {
+        // The operator dashboard can only show billing-held orders if the count survives the
+        // summary → DTO hop. Pin it: a dropped mapping here re-hides the paused POs.
+        await using var db = NewDb();
+        var (ctrl, health, _, _, orgId) = Build(db);
+        health.Setup(h => h.GetHealthAsync(orgId, It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new OpsHealthSummary(
+                  ParsingStuck: 0, DeliveringStuck: 0, TransformFailed: 0,
+                  DeliveryFailed: 0, DeliveryDeadLetter: 0, RejectedBySupplier: 0,
+                  Failed: 0, SlaBreached: 0, OpenExceptions: 0, StuckThresholdMinutes: 30,
+                  DeliveryHeld: 4));
+
+        var result = await ctrl.GetHealth(CancellationToken.None);
+
+        var ok  = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto = ok.Value.Should().BeOfType<OpsHealthDto>().Subject;
+        dto.DeliveryHeld.Should().Be(4);
+        dto.TotalProblemOrders.Should().Be(4,
+            "held orders count toward the all-clear determination — a paused PO is not 'All clear'");
+    }
+
+    [Fact]
+    public void OpsHealthDto_SerialisesDeliveryHeld_AsCamelCaseJson()
+    {
+        // The frontend reads exactly `deliveryHeld`. Pin the camelCase contract like pendingReview.
+        var dto = new OpsHealthDto(
+            ParsingStuck: 0, DeliveringStuck: 0, TransformFailed: 0, DeliveryFailed: 0,
+            DeliveryDeadLetter: 0, RejectedBySupplier: 0, Failed: 0, SlaBreached: 0,
+            OpenExceptions: 0, StuckThresholdMinutes: 30, TotalProblemOrders: 2,
+            ActiveWorkers: 0, LastWorkerHeartbeatUtc: null, SecondsSinceWorkerHeartbeat: null,
+            WorkerHealthy: false, PendingReview: 0, DeliveryHeld: 2);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(dto, new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        });
+
+        json.Should().Contain("\"deliveryHeld\":2");
+    }
+
+    [Fact]
     public void OpsHealthDto_SerialisesPendingReview_AsCamelCaseJson()
     {
         // The frontend reads exactly `pendingReview`. Pin the System.Text.Json camelCase
