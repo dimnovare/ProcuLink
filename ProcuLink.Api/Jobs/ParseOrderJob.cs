@@ -55,6 +55,24 @@ public class ParseOrderJob
             throw new InvalidOperationException($"Parse failed: {result.Error}");
         }
 
+        // ── Terminal-failure guard ────────────────────────────────────────────
+        // A parse failure sets status='failed' and returns Fail, and we throw above. Hangfire then
+        // RETRIES, and the retry re-enters ParseStoredFileAsync, whose status!='parsing' re-entry
+        // guard sees the now-'failed' order, treats it as an already-processed SKIP and returns Ok.
+        // Reporting that as success marked the whole job Succeeded and hid every terminal parse
+        // failure from Hangfire's Failed queue. Throw instead: the remaining retries burn out on a
+        // cheap read and the job lands red where ops can see it. Attempt 1's real exception stays in
+        // the job history. This also short-circuits the analytics block below, which would otherwise
+        // fire first_upload_parsed for a FAILED order.
+        if (result.Value!.Entity.Status == OrderStatusConstants.Failed)
+        {
+            _logger.LogError(
+                "ParseOrderJob: order {OrderId} is in terminal status '{Status}' — surfacing as a failed job rather than reporting success.",
+                orderId, result.Value!.Entity.Status);
+            throw new InvalidOperationException(
+                $"Parse failed: order {orderId} is in terminal status '{OrderStatusConstants.Failed}'.");
+        }
+
         _logger.LogInformation(
             "ParseOrderJob completed for order {OrderId}, new status={Status}",
             orderId, result.Value!.Entity.Status);
