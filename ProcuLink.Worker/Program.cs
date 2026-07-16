@@ -355,6 +355,15 @@ builder.Services.AddScoped<DeliverySlaSweepJob>();
 builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
 builder.Services.AddScoped<IStuckDeliveryDetectionService, StuckDeliveryDetectionService>();
 builder.Services.AddScoped<StuckDeliveryDetectionJob>();
+// B1 lost-order backstop: recover orders stranded in 'ready_to_deliver' whose delivery enqueue was
+// lost between TransformOrderJob's commit and DeliverOrderJob.Enqueue (crash / DB blip). Re-drives
+// AUTO-deliver orders with no delivery attempt through the normal first-delivery job; idempotent
+// (DeliverOrderJob's atomic claim prevents any double-send). The dispatch adapter lives in
+// ProcuLink.Api alongside DeliverOrderJob and needs only IBackgroundJobClient, which this Worker
+// already provides.
+builder.Services.AddScoped<IDeliveryDispatchEnqueuer, ProcuLink.Api.Jobs.HangfireDeliveryDispatchEnqueuer>();
+builder.Services.AddScoped<IStrandedReadyOrderDetectionService, StrandedReadyOrderDetectionService>();
+builder.Services.AddScoped<StrandedReadyDeliveryDetectionJob>();
 builder.Services.AddScoped<BillingReconciliationJob>();
 // ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();

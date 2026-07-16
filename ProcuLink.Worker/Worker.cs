@@ -60,6 +60,15 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/15 * * * *");
 
+        // B1 lost-order backstop: recover orders stranded in 'ready_to_deliver' whose delivery enqueue
+        // was lost between TransformOrderJob's commit and DeliverOrderJob.Enqueue (every 15 min,
+        // 30-min aged threshold). Re-drives AUTO-deliver orders with no delivery attempt through the
+        // normal first-delivery job; idempotent (DeliverOrderJob's claim prevents double-send).
+        _recurringJobs.AddOrUpdate<StrandedReadyDeliveryDetectionJob>(
+            "stranded-ready-delivery-detection",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/15 * * * *");
+
         // Reliability/observability: alert (Sentry) when no worker is beating or the dead-letter /
         // failed-delivery backlog spikes (every 5 min). No-op without a Sentry DSN; rate-limited.
         _recurringJobs.AddOrUpdate<WorkerHealthAlertJob>(
@@ -100,7 +109,7 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "0 2 * * *");
 
-        _logger.LogInformation("Registered recurring jobs: worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection (every 15 min), catalog-sync (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
+        _logger.LogInformation("Registered recurring jobs: worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection + stranded-ready-delivery-detection (every 15 min), catalog-sync (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

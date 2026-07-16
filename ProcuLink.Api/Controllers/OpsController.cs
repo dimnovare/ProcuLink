@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -5,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 
@@ -134,22 +136,61 @@ public sealed class OpsController : ControllerBase
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before requeuing delivery." });
 
-        // Optimistic status flip so the operator view reflects the requeue immediately.
+        // B2 (lost-order): DO NOT pre-flip to 'delivering'. DeliverOrderJob's atomic claim only
+        // accepts ready_to_deliver / delivery_failed / STALE-delivering; a FRESH 'delivering' row
+        // (UpdatedAt just stamped to now) is REJECTED by the reclaim-window guard, so the enqueued
+        // job would no-op — the order stranded and this escalation silently defeated. Instead:
+        //   (1) reset the delivery-attempt cap — the operator's explicit intent is to dispatch PAST
+        //       the dead-letter cap; without a reset, a single transient failure of the requeued
+        //       dispatch would immediately re-dead-letter and the automatic retry queue would never
+        //       re-engage; and
+        //   (2) leave the order in the CLAIMABLE 'delivery_failed' idle status so the enqueued
+        //       DeliverOrderJob's claim SUCCEEDS and actually dispatches the artifact to the supplier.
         var tracked = await _db.PurchaseOrders
             .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == orgId, ct);
         if (tracked is not null)
         {
-            tracked.Status    = OrderStatusConstants.Delivering;
+            var priorAttempts = await _db.DeliveryAttempts
+                .Where(a => a.OrderId == id && a.OrgId == orgId)
+                .ToListAsync(ct);
+
+            var fromStatus = tracked.Status;
+            _db.DeliveryAttempts.RemoveRange(priorAttempts);         // reset the attempt cap
+            tracked.Status    = OrderStatusConstants.DeliveryFailed; // claimable, send-ready idle state
             tracked.UpdatedAt = DateTime.UtcNow;
+
+            _db.AuditEvents.Add(new AuditEvent
+            {
+                Id         = Guid.NewGuid(),
+                OrgId      = orgId,
+                UserId     = null,
+                EntityType = "Order",
+                EntityId   = id,
+                Action     = "DeliveryRequeuedByOperator",
+                Payload    = JsonDocument.Parse(JsonSerializer.Serialize(new
+                {
+                    reason               = "OpsRequeueDelivery",
+                    fromStatus,
+                    toStatus             = OrderStatusConstants.DeliveryFailed,
+                    priorAttemptsCleared = priorAttempts.Count,
+                    artifactId           = artifact.Id,
+                    requeuedAt           = DateTime.UtcNow,
+                    detail               = "Operator escalation: attempt cap reset and order left claimable so the re-enqueued delivery reaches the supplier past the dead-letter cap.",
+                })),
+                CreatedAt = DateTime.UtcNow,
+            });
+
+            // Commit the reset + claimable status BEFORE enqueuing, so the DeliverOrderJob can't run
+            // and read a stale status / attempt count (mirrors ReleaseBillingHeldOrdersAsync).
             await _db.SaveChangesAsync(ct);
         }
 
         DeliverOrderJob.EnqueueRedeliver(_jobs, id, orgId, artifact.Id);
 
         _logger.LogWarning(
-            "Ops requeue-delivery: order {OrderId} (org {OrgId}) re-enqueued from '{FromStatus}', artifact {ArtifactId}.",
+            "Ops requeue-delivery: order {OrderId} (org {OrgId}) re-enqueued from '{FromStatus}' (attempt cap reset), artifact {ArtifactId}.",
             id, orgId, order.Status, artifact.Id);
 
-        return Accepted(new { status = OrderStatusConstants.Delivering });
+        return Accepted(new { status = OrderStatusConstants.DeliveryFailed, requeued = true });
     }
 }

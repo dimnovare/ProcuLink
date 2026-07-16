@@ -64,6 +64,18 @@ public class OpsControllerTests
         };
     }
 
+    private static async Task SeedFailedAttemptsAsync(ProcuLinkDbContext db, Guid orgId, Guid orderId, int count)
+    {
+        for (var i = 1; i <= count; i++)
+            db.DeliveryAttempts.Add(new DeliveryAttempt
+            {
+                Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
+                Channel = "http", Destination = "https://supplier.example",
+                Status = "failed", AttemptNumber = i, AttemptedAt = DateTime.UtcNow,
+            });
+        await db.SaveChangesAsync();
+    }
+
     // ── GET /api/ops/health ───────────────────────────────────────────────────
 
     [Fact]
@@ -137,14 +149,21 @@ public class OpsControllerTests
     // ── POST /api/ops/orders/{id}/requeue-delivery ────────────────────────────
 
     [Fact]
-    public async Task RequeueDelivery_FromDeadLetter_FlipsToDelivering_AndEnqueues()
+    public async Task RequeueDelivery_FromDeadLetter_LeavesClaimableStatus_ResetsAttempts_AndEnqueues()
     {
+        // B2 (lost-order): the escalation endpoint must NOT pre-flip to a fresh 'delivering' — the
+        // enqueued DeliverOrderJob's atomic claim REJECTS a fresh 'delivering' row (it only claims
+        // ready_to_deliver / delivery_failed / STALE-delivering), so the pre-flip was a benign no-op
+        // that stranded the order and silently defeated the requeue. Instead it must leave the order
+        // in a CLAIMABLE status and RESET the attempt cap so the operator's dispatch-past-the-cap
+        // intent actually reaches the supplier.
         await using var db = NewDb();
         var (ctrl, _, orders, jobs, orgId) = Build(db);
 
         var order = OrderWithArtifact(orgId, OrderStatusConstants.DeliveryDeadLetter);
         db.PurchaseOrders.Add(order);
         await db.SaveChangesAsync();
+        await SeedFailedAttemptsAsync(db, orgId, order.Id, count: 3); // already at the dead-letter cap
 
         orders.Setup(o => o.GetByIdAsync(orgId, order.Id, It.IsAny<CancellationToken>()))
               .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(order));
@@ -154,7 +173,14 @@ public class OpsControllerTests
         result.Should().BeOfType<AcceptedResult>();
 
         var persisted = await db.PurchaseOrders.FindAsync(order.Id);
-        persisted!.Status.Should().Be(OrderStatusConstants.Delivering);
+        // NOT 'delivering' — that status is exactly what the claim rejects.
+        persisted!.Status.Should().NotBe(OrderStatusConstants.Delivering);
+        // A claimable, send-ready idle status so the enqueued DeliverOrderJob's claim SUCCEEDS.
+        persisted.Status.Should().BeOneOf(
+            OrderStatusConstants.DeliveryFailed, OrderStatusConstants.ReadyToDeliver);
+
+        // Attempt cap reset so a transient failure of the requeued dispatch re-engages the retry queue.
+        (await db.DeliveryAttempts.CountAsync(a => a.OrderId == order.Id)).Should().Be(0);
 
         // A DeliverOrderJob was enqueued.
         jobs.Verify(j => j.Create(

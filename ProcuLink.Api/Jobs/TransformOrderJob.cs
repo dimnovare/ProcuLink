@@ -67,12 +67,16 @@ public class TransformOrderJob
 
         if (result.Value!.Skipped)
         {
-            // The transform was already done (or is running elsewhere) — the run that
-            // produced the artifact also enqueued its delivery, so doing it again here
-            // would dispatch the same PO to the supplier twice.
-            _logger.LogInformation(
-                "TransformOrderJob skipped for order {OrderId}: already in flight or transformed (artifact {ArtifactId}); not enqueueing delivery.",
-                orderId, result.Value.ArtifactId);
+            // The transform claim matched 0 rows: the order is already transformed, or a concurrent
+            // transform is in flight. USUALLY the run that produced the artifact also enqueued its
+            // delivery — re-enqueuing then would be redundant (though DeliverOrderJob's atomic claim
+            // makes it harmless). But there is ONE case where delivery was NEVER enqueued: the first
+            // run crashed AFTER committing ready_to_deliver + the artifact and BEFORE this method's
+            // DeliverOrderJob.Enqueue below. No sweep covers ready_to_deliver (StuckOrder =
+            // parsing/transforming, StuckDelivery = delivering, SLA needs DeliveryDueAt), so the PO
+            // is stranded forever, invisibly. Recover EXACTLY that stranded signature.
+            await TryRecoverStrandedDeliveryAsync(
+                orderId, organisationId, result.Value.ArtifactId, ct);
             return;
         }
 
@@ -108,6 +112,63 @@ public class TransformOrderJob
         }
 
         DeliverOrderJob.Enqueue(_jobs, orderId, organisationId, result.Value.ArtifactId);
+    }
+
+    // ── B1 lost-order recovery ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Re-enqueues delivery for an order stranded in <c>ready_to_deliver</c> by a crash between the
+    /// transform commit and the delivery enqueue. Acts ONLY on the exact stranded signature — the
+    /// order is still <c>ready_to_deliver</c>, a real artifact exists, and there is NO delivery
+    /// attempt yet — so a concurrent in-flight transform, an already-delivering/-delivered order, or
+    /// an order that already had a delivery attempt is never re-driven. This is idempotent and cannot
+    /// double-send: <see cref="DeliverOrderJob"/>'s own atomic <c>delivering</c> claim (+ per-order
+    /// distributed mutex) is the authority — a duplicate or racing enqueue simply no-ops there.
+    /// </summary>
+    private async Task TryRecoverStrandedDeliveryAsync(
+        Guid orderId, Guid organisationId, Guid artifactId, CancellationToken ct)
+    {
+        if (artifactId == Guid.Empty)
+        {
+            // No artifact was ever produced — there is nothing to deliver.
+            _logger.LogInformation(
+                "TransformOrderJob skipped for order {OrderId}: no artifact — not enqueueing delivery.",
+                orderId);
+            return;
+        }
+
+        var status = await _db.PurchaseOrders
+            .Where(o => o.Id == orderId && o.OrgId == organisationId)
+            .Select(o => o.Status)
+            .FirstOrDefaultAsync(ct);
+
+        if (status != OrderStatusConstants.ReadyToDeliver)
+        {
+            // Delivery already happened / is happening, or the transform is genuinely still in
+            // flight elsewhere — do NOT re-drive.
+            _logger.LogInformation(
+                "TransformOrderJob skipped for order {OrderId} (status={Status}): not a stranded ready_to_deliver — not enqueueing delivery.",
+                orderId, status);
+            return;
+        }
+
+        var alreadyAttempted = await _db.DeliveryAttempts
+            .AnyAsync(a => a.OrderId == orderId && a.OrgId == organisationId, ct);
+
+        if (alreadyAttempted)
+        {
+            // A prior delivery attempt exists → delivery was already dispatched; never re-enqueue.
+            _logger.LogInformation(
+                "TransformOrderJob skipped for order {OrderId}: delivery already attempted — not re-enqueueing.",
+                orderId);
+            return;
+        }
+
+        _logger.LogWarning(
+            "TransformOrderJob recovering STRANDED order {OrderId}: ready_to_deliver with artifact {ArtifactId} and no delivery attempt (crash between transform commit and delivery enqueue) — re-enqueueing delivery.",
+            orderId, artifactId);
+
+        DeliverOrderJob.Enqueue(_jobs, orderId, organisationId, artifactId);
     }
 
     // ── Static factory method ─────────────────────────────────────────────────

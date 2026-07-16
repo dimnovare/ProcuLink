@@ -16,10 +16,23 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Jobs;
 
 /// <summary>
-/// Audit batch A #1 (job half): when TransformAsync reports a
-/// <see cref="TransformResponse.Skipped"/> no-op (the order was already transformed or is
-/// in flight), the job must NOT enqueue <c>DeliverOrderJob</c> — the run that produced the
-/// artifact already did, and a second enqueue dispatches the same PO to the supplier twice.
+/// B1 (lost-order) — the Skipped path of <see cref="TransformOrderJob"/>.
+///
+/// <para>Original intent (audit batch A #1): a Skipped transform must not blindly re-enqueue
+/// delivery, because the run that produced the artifact already enqueued it — a second enqueue
+/// would double-send the PO.</para>
+///
+/// <para>B1 correction: that reasoning fails when the FIRST run crashed AFTER committing
+/// <c>ready_to_deliver</c> + the artifact but BEFORE enqueuing delivery. The Hangfire retry's
+/// transform claim then matches 0 rows (already ready_to_deliver) → Skipped → and, under the old
+/// behaviour, returned WITHOUT enqueuing delivery. Nothing else re-drives <c>ready_to_deliver</c>
+/// (StuckOrder = parsing/transforming, StuckDelivery = delivering, SLA needs DeliveryDueAt) → the
+/// PO was stranded forever, invisibly.</para>
+///
+/// <para>The fix: on Skipped, RE-ENQUEUE delivery ONLY for the exact stranded signature —
+/// <c>ready_to_deliver</c> + a real artifact + NO delivery attempt yet. That is safe because
+/// <c>DeliverOrderJob</c>'s own atomic claim (+ per-order mutex) prevents any double-send: an
+/// order already delivering/delivered, or one with a prior attempt, is never re-driven here.</para>
 /// </summary>
 public class TransformOrderJobSkipTests
 {
@@ -64,25 +77,130 @@ public class TransformOrderJobSkipTests
         return (orgId, orderId);
     }
 
-    [Fact]
-    public async Task ExecuteAsync_SkippedTransform_DoesNotEnqueueDelivery_OrEmitAnalytics()
+    private static async Task SeedArtifactAsync(ProcuLinkDbContext db, Guid orgId, Guid orderId, Guid artifactId)
     {
+        db.OutboundArtifacts.Add(new OutboundArtifact
+        {
+            Id = artifactId, OrderId = orderId, OrgId = orgId,
+            Format = "csv", FileKey = "k", CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task SeedDeliveryAttemptAsync(ProcuLinkDbContext db, Guid orgId, Guid orderId)
+    {
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
+            Channel = "http", Destination = "https://supplier.example",
+            Status = "failed", AttemptNumber = 1, AttemptedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    // ── B1: stranded ready_to_deliver + no attempt → RE-ENQUEUE (recovery) ──────
+
+    [Fact]
+    public async Task ExecuteAsync_SkippedTransform_StrandedReadyToDeliver_NoAttempt_ReEnqueuesDeliveryOnce()
+    {
+        // The exact B1 signature: the first run committed ready_to_deliver + artifact then crashed
+        // before enqueuing delivery. The retried job sees Skipped and MUST recover the lost delivery.
         await using var db = NewDb();
         var (orgId, orderId) = await SeedOrderAsync(db, OrderStatusConstants.ReadyToDeliver);
+        var artifactId = Guid.NewGuid();
+        await SeedArtifactAsync(db, orgId, orderId, artifactId);
+
         var jobs = NewBackgroundJobClient();
         var analytics = new FakeAnalyticsService();
         var orderService = OrderServiceReturning(
-            new TransformResponse(Guid.NewGuid(), "csv", DateTime.UtcNow, Skipped: true));
+            new TransformResponse(artifactId, "csv", DateTime.UtcNow, Skipped: true));
 
         var job = new TransformOrderJob(
             orderService.Object, jobs.Object, NullLogger<TransformOrderJob>.Instance, db, analytics);
 
         await job.ExecuteAsync(orderId, orgId, "csv", CancellationToken.None);
 
-        jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Never,
-            "a skipped transform must never re-enqueue delivery — that double-sends the PO");
+        // Exactly one DeliverOrderJob recovered the stranded delivery.
+        jobs.Verify(j => j.Create(
+                It.Is<Job>(job => job.Type == typeof(DeliverOrderJob)),
+                It.IsAny<IState>()),
+            Times.Once,
+            "a stranded ready_to_deliver order with no delivery attempt must have delivery re-enqueued");
+        // Analytics only fires on a real (non-skipped) first transform, never on the recovery path.
         Assert.Empty(analytics.CapturedEvents);
     }
+
+    [Fact]
+    public async Task ExecuteAsync_SkippedTransform_AlreadyHasDeliveryAttempt_DoesNotReEnqueue()
+    {
+        // Double-send guard preserved: an order that already had a delivery attempt (delivery ran /
+        // is running) must NOT be re-enqueued even though the transform Skipped.
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedOrderAsync(db, OrderStatusConstants.ReadyToDeliver);
+        var artifactId = Guid.NewGuid();
+        await SeedArtifactAsync(db, orgId, orderId, artifactId);
+        await SeedDeliveryAttemptAsync(db, orgId, orderId);
+
+        var jobs = NewBackgroundJobClient();
+        var orderService = OrderServiceReturning(
+            new TransformResponse(artifactId, "csv", DateTime.UtcNow, Skipped: true));
+
+        var job = new TransformOrderJob(
+            orderService.Object, jobs.Object, NullLogger<TransformOrderJob>.Instance, db, new FakeAnalyticsService());
+
+        await job.ExecuteAsync(orderId, orgId, "csv", CancellationToken.None);
+
+        jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Never,
+            "an order with a prior delivery attempt must not be re-enqueued (double-send guard)");
+    }
+
+    [Theory]
+    [InlineData(OrderStatusConstants.Delivering)]
+    [InlineData(OrderStatusConstants.Delivered)]
+    [InlineData(OrderStatusConstants.DeliveryFailed)]
+    public async Task ExecuteAsync_SkippedTransform_NonReadyStatus_DoesNotReEnqueue(string status)
+    {
+        // Only the ready_to_deliver strand is recoverable here. A concurrent in-flight delivery or a
+        // terminal state must never be re-driven from the transform Skipped path.
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedOrderAsync(db, status);
+        var artifactId = Guid.NewGuid();
+        await SeedArtifactAsync(db, orgId, orderId, artifactId);
+
+        var jobs = NewBackgroundJobClient();
+        var orderService = OrderServiceReturning(
+            new TransformResponse(artifactId, "csv", DateTime.UtcNow, Skipped: true));
+
+        var job = new TransformOrderJob(
+            orderService.Object, jobs.Object, NullLogger<TransformOrderJob>.Instance, db, new FakeAnalyticsService());
+
+        await job.ExecuteAsync(orderId, orgId, "csv", CancellationToken.None);
+
+        jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Never,
+            "a non-ready_to_deliver order must not be re-enqueued from the transform Skipped path");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SkippedTransform_NoArtifact_DoesNotReEnqueue()
+    {
+        // Skipped with an empty artifact id (no artifact exists) — there is nothing to deliver.
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedOrderAsync(db, OrderStatusConstants.ReadyToDeliver);
+
+        var jobs = NewBackgroundJobClient();
+        var orderService = OrderServiceReturning(
+            new TransformResponse(Guid.Empty, "csv", DateTime.UtcNow, Skipped: true));
+
+        var job = new TransformOrderJob(
+            orderService.Object, jobs.Object, NullLogger<TransformOrderJob>.Instance, db, new FakeAnalyticsService());
+
+        await job.ExecuteAsync(orderId, orgId, "csv", CancellationToken.None);
+
+        jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Never,
+            "no artifact means nothing to deliver — no re-enqueue");
+    }
+
+    // ── Real (non-skipped) transform still enqueues exactly one delivery ─────────
 
     [Fact]
     public async Task ExecuteAsync_RealTransform_StillEnqueuesDelivery()
