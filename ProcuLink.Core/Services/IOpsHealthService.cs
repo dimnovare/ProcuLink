@@ -74,7 +74,12 @@ public sealed record OpsHealthSummary(
     int       PendingReview             = 0,
     // INFORMATIONAL ONLY — orders parked unrouted, awaiting a USER action (assign a supplier).
     // Like PendingReview, a backlog not a fault → excluded from TotalProblemOrders.
-    int       PendingRouting            = 0)
+    int       PendingRouting            = 0,
+    // Orders whose delivery outcome is unknown after a crash on a channel that cannot
+    // de-duplicate a re-send. Counted as a PROBLEM, not an informational backlog: unlike
+    // PendingReview/PendingRouting (normal workflow), this is a fault — a PO that may never
+    // have reached the supplier — and it stays parked until a human resolves it.
+    int       DeliveryUnconfirmed       = 0)
 {
     /// <summary>
     /// Sum of all problematic order counts (excludes OpenExceptions, which can overlap order
@@ -82,7 +87,7 @@ public sealed record OpsHealthSummary(
     /// </summary>
     public int TotalProblemOrders =>
         ParsingStuck + DeliveringStuck + TransformFailed + DeliveryFailed +
-        DeliveryDeadLetter + RejectedBySupplier + Failed;
+        DeliveryDeadLetter + RejectedBySupplier + Failed + DeliveryUnconfirmed;
 }
 
 /// <summary>One row on the dead-letter / failed-delivery operator queue.</summary>

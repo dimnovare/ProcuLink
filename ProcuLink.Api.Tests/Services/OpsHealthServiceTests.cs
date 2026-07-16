@@ -141,6 +141,44 @@ public class OpsHealthServiceTests
         s.TotalProblemOrders.Should().Be(0, "unrouted is a user-action backlog, not a system fault");
     }
 
+    // The Health page's "All clear" banner is computed from these counts. A parked order is a PO
+    // sitting unsent, waiting on a human — the one thing that banner must never hide.
+    [Fact]
+    public async Task GetHealth_CountsParkedOrders_AndTreatsThemAsProblems()
+    {
+        await using var db = NewDb();
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.PurchaseOrders.Add(Order(orgId, supplierId, OrderStatusConstants.DeliveryUnconfirmed));
+        await db.SaveChangesAsync();
+
+        var svc = new OpsHealthService(db);
+        var s   = await svc.GetHealthAsync(orgId, CancellationToken.None);
+
+        s.DeliveryUnconfirmed.Should().Be(1);
+        s.TotalProblemOrders.Should().BeGreaterThan(0,
+            "an unsent PO waiting on a human is a problem, not a normal review backlog");
+    }
+
+    // Org-scoping, like every other count on this service.
+    [Fact]
+    public async Task GetHealth_ParkedCount_IsOrgScoped()
+    {
+        await using var db = NewDb();
+        var mine       = Guid.NewGuid();
+        var theirs     = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.PurchaseOrders.Add(Order(theirs, supplierId, OrderStatusConstants.DeliveryUnconfirmed));
+        await db.SaveChangesAsync();
+
+        var svc = new OpsHealthService(db);
+        var s   = await svc.GetHealthAsync(mine, CancellationToken.None);
+
+        s.DeliveryUnconfirmed.Should().Be(0);
+    }
+
     [Fact]
     public async Task GetHealth_EmptyOrg_AllZero()
     {

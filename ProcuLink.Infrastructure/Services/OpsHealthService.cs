@@ -87,7 +87,11 @@ public sealed class OpsHealthService : IOpsHealthService
             PendingReview:                Count(OrderStatusConstants.PendingReview),
             // INFORMATIONAL: routing backlog (orders parked awaiting a supplier), same GROUP BY,
             // no extra round-trip. Like PendingReview, a user-action backlog → not in TotalProblemOrders.
-            PendingRouting:               Count(OrderStatusConstants.Unrouted));
+            PendingRouting:               Count(OrderStatusConstants.Unrouted),
+            // A fault, not a backlog — a PO whose delivery outcome is unknown after a crash on a
+            // channel that cannot de-duplicate. Counted in TotalProblemOrders. Same GROUP BY,
+            // no extra round-trip.
+            DeliveryUnconfirmed:          Count(OrderStatusConstants.DeliveryUnconfirmed));
     }
 
     /// <summary>
