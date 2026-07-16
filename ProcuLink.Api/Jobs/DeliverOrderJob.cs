@@ -95,6 +95,20 @@ public class DeliverOrderJob
             orderId,
             result.ErrorMessage);
 
+        // A parked delivery has already finalised the crash-recovered attempt as 'unconfirmed'
+        // and left the order at 'delivery_unconfirmed', a status RetryDeliveryAsync refuses as
+        // non-retryable — that early return persists NO new attempt row. Scheduling a backoff
+        // retry anyway would see the attempt count never advance: the queue would reschedule
+        // itself at the SAME delay forever, never re-sending, never dead-lettering, never
+        // resolving. It waits for an operator ("Send again" / "Mark as delivered"), not the queue.
+        if (result.Parked)
+        {
+            _logger.LogWarning(
+                "DeliverOrderJob: order {OrderId} is parked (delivery unconfirmed); no automatic retry scheduled.",
+                orderId);
+            return;
+        }
+
         // A 4xx is an explicit supplier rejection — retrying the same payload won't help, so it
         // is left for operator review (status 'rejected_by_supplier'). Only transient failures
         // (5xx / network, no 4xx code) enter the automatic backoff queue.

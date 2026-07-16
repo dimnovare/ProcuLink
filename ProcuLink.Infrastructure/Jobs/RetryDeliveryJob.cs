@@ -70,6 +70,19 @@ public class RetryDeliveryJob
             return;
         }
 
+        if (result.Parked)
+        {
+            // RetryDeliveryAsync refuses 'delivery_unconfirmed' as non-retryable and returns early
+            // WITHOUT persisting a new attempt row, so CountDeliveryAttemptsAsync's count would never
+            // advance past this point. Scheduling another backoff retry here would reschedule itself
+            // at the SAME delay forever — never re-sending, never dead-lettering, never resolving.
+            // An operator decides from here ("Send again" / "Mark as delivered"), not the queue.
+            _logger.LogWarning(
+                "RetryDeliveryJob: order {OrderId} is parked (delivery unconfirmed); not rescheduling.",
+                orderId);
+            return;
+        }
+
         // Count attempts already made so we know which backoff step is next and whether
         // the cap has been reached. RetryDeliveryAsync has just persisted this attempt.
         var attemptsMade = await _delivery.CountDeliveryAttemptsAsync(organisationId, orderId, ct);

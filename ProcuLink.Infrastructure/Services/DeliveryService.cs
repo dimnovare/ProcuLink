@@ -419,11 +419,20 @@ public sealed class DeliveryService : IDeliveryService
 
     /// <summary>
     /// The unknown-outcome park: finalise the re-adopted in-flight row as
-    /// <c>unconfirmed</c> and stop. NO send occurs, and NO retry is scheduled — the order waits
-    /// for an operator to either send it again or confirm the supplier received it.
+    /// <c>unconfirmed</c> and stop. NO send occurs. The returned <see cref="DeliveryResult.Parked"/>
+    /// flag makes NO retry scheduled true too: <c>RetryDeliveryAsync</c> also refuses this order's
+    /// new status (<c>delivery_unconfirmed</c>) as non-retryable, and both
+    /// <c>RetryDeliveryJob</c>/<c>DeliverOrderJob</c> check the flag before touching the backoff
+    /// queue or the dead-letter cap — the order simply waits for an operator to either send it
+    /// again or confirm the supplier received it.
     /// <para>
-    /// The SLA timer is deliberately left running: a parked order SHOULD nag until a human
-    /// resolves it, so <c>DeliveryDueAt</c>/<c>SlaBreached</c> are untouched here.
+    /// This method does not itself write <c>DeliveryDueAt</c>/<c>SlaBreached</c> — but they are NOT
+    /// left at whatever a prior breach set them to. The claim earlier in this dispatch
+    /// (<c>DispatchArtifactAsync</c>'s <c>alreadyClaimed</c> branch, which runs before this park is
+    /// reached) already reset them: <c>SlaBreached = false</c> and <c>DeliveryDueAt = now +
+    /// SlaWindow</c>. So a stuck order that had already breached its SLA before this crash-recovery
+    /// re-drive silently un-breaches and gets a fresh window — deliberately: a parked order SHOULD
+    /// keep nagging until a human resolves it, just on a renewed timer rather than the old one.
     /// </para>
     /// </summary>
     private async Task<DeliveryResult> ParkUnconfirmedAsync(
@@ -451,8 +460,8 @@ public sealed class DeliveryService : IDeliveryService
             idempotencyKey = attempt.IdempotencyKey,
             parkedAt = now,
             detail = "Crash-recovery re-drive on a channel that cannot de-duplicate a re-send. "
-                   + "The artifact was sent but the outcome was never observed; re-sending could "
-                   + "duplicate the PO, so the order is parked for an operator decision.",
+                   + "The artifact may have been sent, but the outcome was never observed; "
+                   + "re-sending could duplicate the PO, so the order is parked for an operator decision.",
         });
 
         _db.AuditEvents.Add(new AuditEvent
@@ -475,16 +484,19 @@ public sealed class DeliveryService : IDeliveryService
             + "NOT re-sent; waiting for an operator to send again or mark delivered.",
             order.Id, order.OrgId, config.Protocol);
 
-        return new DeliveryResult(false, message);
+        return new DeliveryResult(false, message, ResponseCode: null, ResponseBody: null, Parked: true);
     }
 
     /// <summary>
     /// The operator-facing park sentence. Plain language, one sentence of what happened plus what
-    /// to do — never internal vocabulary (no "idempotency", "re-adopt", "dispatching row").
+    /// to do — never internal vocabulary (no "idempotency", "re-adopt", "dispatching row", "park").
+    /// Says only what a re-adopted in-flight row PROVES: the send was ATTEMPTED, not that it
+    /// succeeded — a crash between the marker commit and the network write, or a cancelled token on
+    /// shutdown, parks with no send at all. Never fabricate an observed outcome.
     /// </summary>
     internal static string BuildUnconfirmedMessage(string protocol) =>
-        $"Delivery unconfirmed. We sent this order but lost the connection before the supplier "
-        + $"confirmed it, and {DescribeChannel(protocol)} cannot tell us whether it arrived. "
+        $"Delivery unconfirmed. We may have sent this order, but lost the connection before the "
+        + $"supplier confirmed it, and {DescribeChannel(protocol)} cannot tell us whether it arrived. "
         + $"Check with the supplier, then either send it again or mark it delivered.";
 
     private static string DescribeChannel(string protocol) => protocol?.ToLowerInvariant() switch
@@ -1033,7 +1045,15 @@ public sealed class DeliveryService : IDeliveryService
             alreadyClaimed: true,
             ct);
 
-        if (!result.Success && willDeadLetterOnFailure)
+        // A parked result (ParkUnconfirmedAsync) is Success=false but is a DEFERRAL to a human,
+        // not a failure — it must never trip the cap-edge dead-letter. Without this guard, the
+        // crashed send being the LAST allowed attempt (this branch) would let DeadLetterAsync fire
+        // immediately after the park and overwrite every one of its constraints: the order would
+        // flip from 'delivery_unconfirmed' to 'delivery_dead_letter', DeliveryDueAt would be nulled
+        // (killing the SLA nag the park deliberately leaves running), the order would become
+        // permanently non-retryable (blocking the operator's "Send again"), and the audit trail
+        // would fabricate "retries exhausted" over an attempt row that says 'unconfirmed'.
+        if (!result.Success && willDeadLetterOnFailure && !result.Parked)
             await DeadLetterAsync(order, priorAttempts + 1, lastError: result.ErrorMessage, ct);
 
         return result;

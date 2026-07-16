@@ -123,6 +123,85 @@ public class DeliveryServiceUnconfirmedParkTests
             .Should().Be(OrderStatusConstants.Delivered);
     }
 
+    // CRITICAL: a park at the attempt-cap edge must not be immediately overwritten by
+    // dead-lettering. RetryDeliveryAsync's cap logic decides `willDeadLetterOnFailure` from
+    // `priorAttempts + 1 >= maxAttempts` BEFORE dispatching, then dead-letters if the dispatch
+    // result is `Success=false` — which a park always is. Without a guard, the crashed send being
+    // the LAST allowed attempt (priorAttempts == maxAttempts - 1) means DeadLetterAsync fires
+    // right after ParkUnconfirmedAsync and clobbers every park constraint: the order becomes
+    // 'delivery_dead_letter' instead of 'delivery_unconfirmed', DeliveryDueAt is nulled (killing
+    // the SLA nag the park deliberately leaves running), the order becomes permanently
+    // non-retryable (blocking the operator's "Send again"), and the audit fabricates
+    // "DeliveryDeadLettered — retries exhausted" over an attempt row that says 'unconfirmed'.
+    [Fact]
+    public async Task ReAdopt_OnUnsafeChannel_AtLastAllowedAttempt_ParksInsteadOfDeadLettering()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "erp_erply"));
+
+        // Two prior TERMINAL attempts already recorded (priorAttempts == 2), so with
+        // MaxAttempts == 3 this crash-recovery re-drive is the LAST allowed attempt
+        // (priorAttempts + 1 >= maxAttempts) — exactly the edge the existing park tests
+        // (which all run at priorAttempts == 0) never exercise.
+        db.DeliveryAttempts.AddRange(
+            new DeliveryAttempt
+            {
+                Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+                Channel = "erp_erply", Destination = "https://erp.example/orders",
+                Status = DeliveryAttempt.StatusFailed, AttemptNumber = 1,
+                AttemptedAt = DateTime.UtcNow.AddHours(-2), ErrorMessage = "HTTP 503",
+            },
+            new DeliveryAttempt
+            {
+                Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+                Channel = "erp_erply", Destination = "https://erp.example/orders",
+                Status = DeliveryAttempt.StatusFailed, AttemptNumber = 2,
+                AttemptedAt = DateTime.UtcNow.AddHours(-1), ErrorMessage = "HTTP 503",
+            });
+
+        // The in-flight row for THIS (3rd) attempt, re-adopted as the unknown-outcome park.
+        var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(),
+            OrderId = ids.OrderId,
+            OrgId = ids.OrgId,
+            Channel = "erp_erply",
+            Destination = "https://erp.example/orders",
+            Status = DeliveryAttempt.StatusDispatching,
+            AttemptNumber = 3,
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-30),
+            IdempotencyKey = key,
+        });
+        await db.SaveChangesAsync();
+
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 200), "erp_erply", ResendSafety.Unsafe);
+        var service = CreateService(db, dispatcher, encryption);
+
+        var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
+
+        dispatcher.Calls.Should().Be(0, "the unknown outcome must never be blindly re-sent, even at the attempt cap");
+        result.Success.Should().BeFalse();
+        result.Parked.Should().BeTrue();
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId);
+        order.Status.Should().Be(OrderStatusConstants.DeliveryUnconfirmed,
+            "a park is a deferral to a human, not a failure — it must never be overwritten by dead-lettering");
+        order.DeliveryDueAt.Should().NotBeNull(
+            "the SLA nag the park deliberately leaves running must not be killed by DeadLetterAsync nulling DeliveryDueAt");
+
+        var attempts = await db.DeliveryAttempts.Where(a => a.OrderId == ids.OrderId).ToListAsync();
+        attempts.Should().HaveCount(3, "the re-adopted row is finalised in place, never duplicated, and dead-lettering must not add its own bookkeeping");
+        attempts.Single(a => a.AttemptNumber == 3).Status.Should().Be(DeliveryAttempt.StatusUnconfirmed);
+
+        var auditActions = await db.AuditEvents.Where(a => a.EntityId == ids.OrderId).Select(a => a.Action).ToListAsync();
+        auditActions.Should().Contain("DeliveryUnconfirmed");
+        auditActions.Should().NotContain("DeliveryDeadLettered",
+            "the audit trail must not fabricate a 'retries exhausted' event over an attempt row that says unconfirmed");
+    }
+
     // A parked order is not billable: the meter counts only delivered + rejected_by_supplier.
     [Fact]
     public async Task ParkedOrder_IsNotBillable()
@@ -150,6 +229,59 @@ public class DeliveryServiceUnconfirmedParkTests
             (o.Status == OrderStatusConstants.Delivered || o.Status == OrderStatusConstants.RejectedBySupplier));
 
         billable.Should().Be(0, "we never charge for a delivery we cannot confirm");
+    }
+
+    // The audit event is a binding constraint on the park, not an implementation detail: it is
+    // the only durable, queryable record that an order was parked rather than delivered or
+    // dead-lettered (org-scoped, so a support/ops query never leaks across tenants).
+    [Fact]
+    public async Task ReAdopt_OnUnsafeChannel_WritesDeliveryUnconfirmedAuditEvent()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "email"));
+
+        var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+            Channel = "email", Destination = "orders@supplier.example",
+            Status = DeliveryAttempt.StatusDispatching, AttemptNumber = 1,
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-30), IdempotencyKey = key,
+        });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db, new CountingDispatcher(new DeliveryResult(true, null, 200), "email", ResendSafety.Unsafe), encryption);
+        await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
+
+        var audit = await db.AuditEvents.SingleAsync(a => a.Action == "DeliveryUnconfirmed");
+        audit.OrgId.Should().Be(ids.OrgId, "the audit event must be org-scoped");
+        audit.EntityType.Should().Be("Order");
+        audit.EntityId.Should().Be(ids.OrderId);
+    }
+
+    // IMPORTANT: a re-adopted in-flight row proves only that a send was ATTEMPTED — a crash
+    // between the marker commit and the network write (or a cancelled token on shutdown) parks
+    // with no send at all. The operator sentence must never assert a send we cannot prove.
+    [Theory]
+    [InlineData("erp_erply", "the Erply connection")]
+    [InlineData("erp_directo", "the Directo connection")]
+    [InlineData("email", "email")]
+    [InlineData("sftp", "this delivery channel")]
+    public void BuildUnconfirmedMessage_NeverAssertsAConfirmedSend(string protocol, string expectedChannelPhrase)
+    {
+        var message = DeliveryService.BuildUnconfirmedMessage(protocol);
+
+        message.Should().Contain("may have sent this order",
+            "a re-adopted row only proves the send was attempted, not that it happened");
+        message.Should().NotContain("We sent this order",
+            "asserting a definite send fabricates an outcome the crash-recovery path cannot observe");
+        message.Should().Contain(expectedChannelPhrase);
+        message.Should().Contain("send it again or mark it delivered");
+
+        // Plain-language rule: no internal vocabulary leaks into operator-facing copy.
+        message.Should().NotContainAny("idempotency", "re-adopt", "dispatching row", "park");
     }
 
     // ── Helpers (copied from DeliveryServiceIdempotencyTests.cs — direct sibling) ───────────
