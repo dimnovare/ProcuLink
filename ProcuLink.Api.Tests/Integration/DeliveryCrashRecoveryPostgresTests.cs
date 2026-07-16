@@ -18,9 +18,11 @@ namespace ProcuLink.Api.Tests.Integration;
 /// order stuck in <c>delivering</c> (its <c>UpdatedAt</c> aged past the reclaim window, exactly as
 /// <c>StuckDeliveryDetectionService</c> would re-drive it) with a committed but never-finalised
 /// <c>dispatching</c> attempt row — the marker written just BEFORE the supplier ACK that the crash
-/// lost. The stuck re-drive must RE-ADOPT that in-flight row (re-send with the SAME idempotency key,
-/// which a supporting supplier de-duplicates) and finalise it — never manufacture a SECOND terminal
-/// attempt or a second delivery.
+/// lost. The stuck re-drive must RE-ADOPT that in-flight row on a channel that CAN de-duplicate
+/// (re-send with the SAME idempotency key) and finalise it — never manufacture a SECOND terminal
+/// attempt or a second delivery. On a channel that CANNOT de-duplicate (ERP, email) the same
+/// re-adopt must instead PARK the order (<c>delivery_unconfirmed</c>) rather than risk a duplicate
+/// PO — see the ERP sibling test below.
 ///
 /// <para>The stale-<c>delivering</c> reclaim is an atomic guarded <c>ExecuteUpdateAsync</c> that is
 /// untranslatable on EF InMemory, so this real-Postgres test is the one that exercises the actual
@@ -105,6 +107,51 @@ public sealed class DeliveryCrashRecoveryPostgresTests : IAsyncLifetime
         Assert.Equal(OrderStatusConstants.Delivered, status);
     }
 
+    // The A3 sibling on a channel that CANNOT de-duplicate: the same stale-'delivering' reclaim
+    // must NOT re-send — it must park. Proven on real Postgres for the same reason as the HTTP
+    // test above: the EF InMemory provider emulates the claim through the change tracker and
+    // never exercises the relational ExecuteUpdateAsync predicate this sweep actually runs under.
+    [DockerRequiredFact]
+    public async Task StaleDelivering_OnErpChannel_IsParkedUnconfirmed_NotReSent()
+    {
+        var encryption = CreateEncryption();
+        var ids = await SeedStuckDeliveringOrderAsync(encryption, protocol: DeliveryProtocolConstants.ErpErply);
+
+        var dispatcher = new CapturingKeyDispatcher(new DeliveryResult(true, null, 200))
+        {
+            // erp_erply: no dedupe signal reaches the endpoint, so a re-adopted in-flight row must
+            // park rather than risk handing the supplier's ERP a duplicate PO.
+            Protocol = DeliveryProtocolConstants.ErpErply,
+            ResendSafety = ResendSafety.Unsafe,
+        };
+
+        await using (var db = NewContext())
+        {
+            var service = CreateService(db, dispatcher, encryption);
+            var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
+            Assert.False(result.Success);
+            Assert.True(result.Parked);
+        }
+
+        // NOT re-sent: an unknown outcome on a channel that cannot de-duplicate must never reach
+        // the dispatcher, or a duplicate PO could land at the supplier's ERP.
+        Assert.Equal(0, dispatcher.Calls);
+
+        await using var verify = NewContext();
+
+        var status = await verify.PurchaseOrders.AsNoTracking()
+            .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
+        Assert.Equal(OrderStatusConstants.DeliveryUnconfirmed, status);
+
+        // Exactly ONE attempt row — the in-flight 'dispatching' row was finalised 'unconfirmed' in
+        // place, never duplicated into a second attempt.
+        var attempts = await verify.DeliveryAttempts
+            .Where(a => a.OrderId == ids.OrderId)
+            .ToListAsync();
+        Assert.Single(attempts);
+        Assert.Equal(DeliveryAttempt.StatusUnconfirmed, attempts[0].Status);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static DeliveryEncryptionService CreateEncryption()
@@ -118,18 +165,19 @@ public sealed class DeliveryCrashRecoveryPostgresTests : IAsyncLifetime
 
     /// <summary>
     /// Seeds the exact post-crash state: a stale 'delivering' order + artifact + a committed
-    /// 'dispatching' attempt row carrying the deterministic idempotency key.
+    /// 'dispatching' attempt row carrying the deterministic idempotency key. <paramref name="protocol"/>
+    /// selects the channel — the HTTP sibling test re-adopts and re-sends; the ERP park test needs a
+    /// channel that cannot de-duplicate.
     /// </summary>
     private async Task<(Guid OrgId, Guid OrderId, string ExpectedKey)> SeedStuckDeliveringOrderAsync(
-        DeliveryEncryptionService encryption)
+        DeliveryEncryptionService encryption, string protocol = DeliveryProtocolConstants.Http)
     {
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
         var orderId = Guid.NewGuid();
         var artifactId = Guid.NewGuid();
         var now = DateTime.UtcNow;
-        // Mirrors DeliveryService.BuildIdempotencyKey (internal to Infrastructure).
-        var expectedKey = $"plk-dlv-{orderId:N}-{artifactId:N}";
+        var expectedKey = DeliveryService.BuildIdempotencyKey(orderId, artifactId);
 
         await using var db = NewContext();
         db.Organisations.Add(new Organisation
@@ -148,7 +196,7 @@ public sealed class DeliveryCrashRecoveryPostgresTests : IAsyncLifetime
             Id = Guid.NewGuid(),
             OrgId = orgId,
             SupplierId = supplierId,
-            Protocol = "http",
+            Protocol = protocol,
             AutoDeliver = true,
             ConfigJson = "{\"url\":\"https://supplier.example/orders\"}",
             EncryptedCredentials = encryption.Encrypt("{\"type\":\"none\"}"),
@@ -185,7 +233,7 @@ public sealed class DeliveryCrashRecoveryPostgresTests : IAsyncLifetime
             Id = Guid.NewGuid(),
             OrderId = orderId,
             OrgId = orgId,
-            Channel = "http",
+            Channel = protocol,
             Destination = "https://supplier.example/orders",
             Status = DeliveryAttempt.StatusDispatching,
             AttemptNumber = 1,
@@ -215,11 +263,12 @@ public sealed class DeliveryCrashRecoveryPostgresTests : IAsyncLifetime
         private int _calls;
         public int Calls => Volatile.Read(ref _calls);
         public string? LastIdempotencyKey { get; private set; }
-        public string Protocol => "http";
-        // Models an HTTP supplier — HTTP re-drives carry the idempotency key as a header a
-        // supporting endpoint can de-duplicate, so it is not Unsafe (the default this test double
-        // would otherwise inherit, which would park a re-adopted row instead of re-sending it).
-        public ResendSafety ResendSafety => ResendSafety.BestEffort;
+
+        // Settable so this one double plays either channel this file needs, rather than forking a
+        // second dispatcher for a two-field difference: default HTTP/BestEffort keeps the existing
+        // re-adopt-and-resend test unchanged; the ERP park test overrides both at construction.
+        public string Protocol { get; init; } = DeliveryProtocolConstants.Http;
+        public ResendSafety ResendSafety { get; init; } = ResendSafety.BestEffort;
 
         public CapturingKeyDispatcher(DeliveryResult result) => _result = result;
 

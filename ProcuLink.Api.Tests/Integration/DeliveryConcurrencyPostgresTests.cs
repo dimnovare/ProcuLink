@@ -314,10 +314,7 @@ public sealed class DeliveryConcurrencyPostgresTests : IAsyncLifetime
                 Channel = "http", Destination = "https://supplier.example/orders",
                 Status = DeliveryAttempt.StatusUnconfirmed, AttemptNumber = 1,
                 AttemptedAt = DateTime.UtcNow.AddMinutes(-30),
-                // Mirrors DeliveryService.BuildIdempotencyKey, which is internal to Infrastructure.
-                // The exact value is incidental here — what this test turns on is the row's TERMINAL
-                // status, since only a 'dispatching' row is ever re-adopted.
-                IdempotencyKey = $"plk-dlv-{ids.OrderId:N}-{ids.ArtifactId:N}",
+                IdempotencyKey = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId),
                 ErrorMessage = "Delivery unconfirmed. We may have sent this order, but lost the "
                              + "connection before the supplier confirmed it.",
             });
