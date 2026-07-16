@@ -22,9 +22,14 @@ public sealed class S3PollOrgJob
 
     [Queue("polling")]
     [AutomaticRetry(Attempts = 2)]
-    // Per-org lock: DisableConcurrentExecution keys on the method + args, and this child takes
-    // orgId as its argument, so two S3/R2 polls for the SAME org can never overlap. With the
-    // claim-first ledger insert in S3IngressService this closes the concurrent-duplicate window.
+    // GLOBAL lock, not per-org: on OSS Hangfire, DisableConcurrentExecution keys the distributed
+    // lock on job TYPE + METHOD ONLY — it does NOT include this job's orgId argument. Per-argument
+    // mutexing needs the paid Hangfire.Pro [Mutex] (see PerOrderDistributedMutexAttribute, which
+    // exists for exactly that reason). A global lock strictly CONTAINS the per-org lock the
+    // claim-first ledger insert in S3IngressService needs, so correctness is unaffected — two
+    // S3/R2 polls for the SAME org still can never overlap. The cost is throughput: every org's
+    // S3/R2 polling serialises through this one lock, a ceiling as org count grows. Tracked
+    // separately.
     [DisableConcurrentExecution(300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {

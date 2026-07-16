@@ -30,6 +30,13 @@ public sealed class StuckOrderDetectionJob
 
     [Queue("background")]
     [AutomaticRetry(Attempts = 0)]
+    // DisableConcurrentExecution: two overlapping sweeps both read the same stuck order and both
+    // bump RequeueCount through the change tracker — a lost update — and both append a
+    // StuckRequeued audit row. On OSS Hangfire this attribute keys the lock on TYPE + METHOD only
+    // (never on args; per-argument mutexing needs paid Hangfire.Pro [Mutex]), which is precisely
+    // right here: this is an argument-less cross-tenant sweep that should never run twice at once.
+    // Timeout < the 15-min recurrence so a hung run can't block the next tick indefinitely.
+    [DisableConcurrentExecution(timeoutInSeconds: 300)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
         var marked = await _service.RunAsync(StuckThreshold, ct);

@@ -7,11 +7,17 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Jobs;
 
 /// <summary>
-/// Guards the per-org concurrency lock on the pull-ingress child jobs. Hangfire's
-/// <see cref="DisableConcurrentExecutionAttribute"/> keys the distributed lock on the method +
-/// its arguments; each child job takes <c>orgId</c> as its first argument, so the lock is
-/// effectively per-organisation — two children for the SAME org can never overlap, which (with
-/// the claim-first ledger insert) closes the concurrent-duplicate-import window.
+/// Guards the concurrency lock on the pull-ingress child jobs: two children polling the same org
+/// concurrently would both pass the check-then-act dedupe, and (with the claim-first ledger
+/// insert) this closes the concurrent-duplicate-import window.
+///
+/// <para><b>Keying (corrected 2026-07-16):</b> on OSS Hangfire this attribute keys the distributed
+/// lock on the job TYPE + METHOD ONLY — it does NOT include the job's arguments, so this is a
+/// GLOBAL lock per child job type, not a per-org one. Per-argument mutexing requires the paid
+/// Hangfire.Pro <c>[Mutex]</c> (see <c>PerOrderDistributedMutexAttribute</c>, which exists for
+/// exactly this reason). A global lock strictly contains the per-org lock the duplicate-import
+/// argument needs, so correctness is unaffected — but every org's polling serialises through one
+/// lock per channel, which is a throughput ceiling as org count grows. Tracked separately.</para>
 /// </summary>
 public class PollJobConcurrencyGuardTests
 {
