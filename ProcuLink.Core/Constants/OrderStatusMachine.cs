@@ -18,6 +18,16 @@ namespace ProcuLink.Core.Constants;
 /// Hard <i>operation</i> guards live in the named sets below (e.g.
 /// <see cref="RedeliverableFrom"/>) so a controller/service references one
 /// canonical set instead of a hand-written literal.</para>
+///
+/// <para><b>Relationship to <c>OrderStatusTransitionObserver.AllowedTransitions</c>:</b> that map
+/// is the codebase's other hand-maintained inventory of the same flows, and the two drift (the A5
+/// delivery_held work in d4d6eac, and delivering→delivery_dead_letter, were each registered in only
+/// one of them). Both maps are supersets of the real flows, but neither strictly contains the other:
+/// the observer only logs, so it is generous ON PURPOSE, and it lists edges no call site performs.
+/// This map is the stricter one — calling impossible moves impossible is its entire value, so it
+/// does NOT simply mirror the observer. <c>OrderStatusMachineTests</c> pins the overlap
+/// structurally: every observer edge must be allowed here unless it is exempted there with the
+/// call-site evidence that it cannot happen.</para>
 /// </summary>
 public static class OrderStatusMachine
 {
@@ -38,7 +48,9 @@ public static class OrderStatusMachine
             [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier),
             // Billing hold → released back to ready_to_deliver when the org returns to good standing.
             [DeliveryHeld]       = Set(ReadyToDeliver, Ready, RejectedBySupplier),
-            [Delivering]         = Set(Delivered, DeliveryFailed, RejectedBySupplier),
+            // delivering → delivery_dead_letter: StuckDeliveryDetectionService dead-letters an order
+            // that kept stranding in 'delivering' after its re-drive budget was spent.
+            [Delivering]         = Set(Delivered, DeliveryFailed, DeliveryDeadLetter, RejectedBySupplier),
             [Delivered]          = Set(DeliveryFailed, Ready, RejectedBySupplier),
             // delivery_failed/delivery_dead_letter → ready: the MV-1 sibling — a mapping edit after a
             // failed/dead-lettered delivery invalidates the stored artifact (Retry/requeue would ship it
@@ -46,9 +58,7 @@ public static class OrderStatusMachine
             // delivery_failed → delivery_held: A5 — a backoff retry for an org that lapsed to
             // read_only/past_due since the first attempt is held (not delivered) via HoldForBillingAsync.
             [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
-            // dead_letter → delivery_failed keeps this a superset of OrderStatusTransitionObserver's
-            // map (a requeued dead-letter that fails again, or a late failure webhook) so IsAllowed
-            // never rejects a transition the observer treats as expected.
+            // dead_letter → delivery_failed: an ops requeue that fails again, or a late failure webhook.
             [DeliveryDeadLetter] = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
             [RejectedBySupplier] = Set(),
             [Failed]             = Set(),

@@ -40,8 +40,13 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
     /// WebhookIngressController). Self-transitions (from == to) are always allowed and
     /// are not listed. Generous by design: this map must stay SILENT for every legit
     /// flow — false-positive warnings would train operators to ignore it.
+    ///
+    /// <para><c>internal</c> (not private) so <c>OrderStatusMachineTests</c> can assert the
+    /// superset invariant <see cref="OrderStatusMachine.Transitions"/> documents — every edge
+    /// this map calls expected must be an edge the machine calls allowed. See that test for why
+    /// the invariant is enforced structurally rather than trusted to review.</para>
     /// </summary>
-    private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> AllowedTransitions =
+    internal static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> AllowedTransitions =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
         {
             // Stub created → parse job picks it up (or fails fast). Stuck-detection can
