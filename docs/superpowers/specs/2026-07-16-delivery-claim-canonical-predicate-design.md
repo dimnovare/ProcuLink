@@ -68,18 +68,24 @@ hand-fix) live only on `claude/wizardly-spence-6b738a`, which is unmerged, unpus
 active worktree (`loving-euclid-2575e4`). On main the two dispatch predicates still agree — the drift this
 spec addresses is only real on that branch.
 
-The branches have diverged: **21 commits on main not in wizardly-spence; 20 on wizardly-spence not in main.**
-Notably, main has the observer-superset structural test and `internal` visibility on
-`OrderStatusTransitionObserver.AllowedTransitions`; wizardly-spence has neither.
-
 **Order of operations:**
 
-1. `claude/wizardly-spence-6b738a` merges main (picking up the observer test + `internal` visibility).
-2. `claude/wizardly-spence-6b738a` merges to main.
+1. ~~`claude/wizardly-spence-6b738a` merges main~~ — **DONE.** It is now 0 commits behind `origin/main`
+   (which has itself advanced to 73e7e51), so it has the observer-superset structural test and `internal`
+   visibility on `OrderStatusTransitionObserver.AllowedTransitions`.
+2. **PR #27** (`fix(delivery): park unknown-outcome re-drives instead of duplicating the PO`) merges to main.
+   It is **OPEN and MERGEABLE** as of 2026-07-16 ~19:00. ← **the only remaining blocker**
 3. **Then** this spec executes on main.
 
-Starting earlier means hand-resolving conflicts in the exact lines the other session is editing. Project
-memory already records the cost of rebasing two branches that edit the same method.
+Starting before step 2 means hand-resolving conflicts in the exact lines PR #27 changes. Project memory
+already records the cost of rebasing two branches that edit the same method.
+
+> **Live duplicate-work hazard (2026-07-16 ~19:00).** Session `local_f5ee08ce`, titled *"Add a structural
+> guard for delivery status-list drift"* (branch `claude/wizardly-khayyam-c45ffe`, worktree
+> `keen-edison-52f244`), is running against this same problem. At time of writing it has no commits and a
+> clean tree at `origin/main`. Whoever executes this spec must reconcile with that session first — and note
+> that a guard built on today's main will pin two predicates that **currently agree**, i.e. it would not
+> reproduce the 52c6431 failure at all, because `delivery_unconfirmed` does not exist on main (§1.1).
 
 ---
 
