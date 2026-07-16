@@ -118,9 +118,10 @@ public class OpsControllerTests
 
         var ok  = result.Should().BeOfType<OkObjectResult>().Subject;
         var dto = ok.Value.Should().BeOfType<OpsHealthDto>().Subject;
-        dto.DeliveryHeld.Should().Be(4);
-        dto.TotalProblemOrders.Should().Be(4,
-            "held orders count toward the all-clear determination — a paused PO is not 'All clear'");
+        dto.DeliveryHeld.Should().Be(4, "the held count must reach the client — the health gate checks it directly");
+        dto.TotalProblemOrders.Should().Be(0,
+            "a billing pause is deliberate and self-releasing, not a fault — like pending_review it is "
+            + "excluded from TotalProblemOrders; the all-clear gate breaks on deliveryHeld directly");
     }
 
     [Fact]

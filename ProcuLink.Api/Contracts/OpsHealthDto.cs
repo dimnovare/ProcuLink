@@ -33,9 +33,10 @@ namespace ProcuLink.Api.Contracts;
 /// <param name="DeliveryHeld">
 /// Orders in <c>delivery_held</c> — delivery PAUSED because the org could not process orders at
 /// delivery time (billing lapsed). NEEDS ATTENTION but is not a failure: the artifact is intact and
-/// delivery is re-driven automatically once the org is back in good standing. Counted in
-/// <paramref name="TotalProblemOrders"/> so a paused PO can never read as "All clear" — POs are not
-/// going out, and that is exactly what the all-clear gate exists to tell an operator.
+/// delivery is re-driven automatically once the org is back in good standing. Deliberately EXCLUDED
+/// from <paramref name="TotalProblemOrders"/> (like PendingReview / PendingRouting) — a self-releasing
+/// pause is not a "problem order" and must never be rendered as a failure. The operations/health
+/// "All clear" gate checks this count DIRECTLY, so a paused PO still can never read as "All clear".
 /// </param>
 public record OpsHealthDto(
     int ParsingStuck,
