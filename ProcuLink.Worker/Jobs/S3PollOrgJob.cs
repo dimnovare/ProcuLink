@@ -1,5 +1,6 @@
 using Hangfire;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Infrastructure.Jobs;
 
 namespace ProcuLink.Worker.Jobs;
 
@@ -22,15 +23,16 @@ public sealed class S3PollOrgJob
 
     [Queue("polling")]
     [AutomaticRetry(Attempts = 2)]
-    // GLOBAL lock, not per-org: on OSS Hangfire, DisableConcurrentExecution keys the distributed
-    // lock on job TYPE + METHOD ONLY — it does NOT include this job's orgId argument. Per-argument
-    // mutexing needs the paid Hangfire.Pro [Mutex] (see PerOrderDistributedMutexAttribute, which
-    // exists for exactly that reason). A global lock strictly CONTAINS the per-org lock the
-    // claim-first ledger insert in S3IngressService needs, so correctness is unaffected — two
-    // S3/R2 polls for the SAME org still can never overlap. The cost is throughput: every org's
-    // S3/R2 polling serialises through this one lock, a ceiling as org count grows. Tracked
-    // separately.
-    [DisableConcurrentExecution(300)]
+    // PER-ORG lock: PerOrgDistributedMutex acquires a storage-backed distributed lock keyed on the
+    // orgId ARGUMENT (resource "poll:S3PollOrgJob.ExecuteAsync:{orgId}"), so two S3/R2 polls for the
+    // SAME org can never overlap, while two DIFFERENT orgs never contend and poll in parallel.
+    // NOT [DisableConcurrentExecution]: on OSS Hangfire that keys on job TYPE + METHOD ONLY (never
+    // the arguments), which serialised EVERY org's S3/R2 polling through one lock — one slow or hung
+    // tenant bucket stalled all other tenants for up to the timeout.
+    // Per-org granularity is sufficient because the lock is only the OUTER guard: the claim-first
+    // ledger insert + unique index in S3IngressService is what actually guarantees exactly-one
+    // order, and two different orgs share no state to race over.
+    [PerOrgDistributedMutex(orgArgumentIndex: 0, timeoutSeconds: 300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
         _logger.LogInformation("S3PollOrgJob: starting S3/R2 poll for org {OrgId}.", orgId);
