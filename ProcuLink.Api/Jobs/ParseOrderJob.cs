@@ -90,7 +90,21 @@ public class ParseOrderJob
                         && o.Status != OrderStatusConstants.PendingParse
                         && o.Status != OrderStatusConstants.Failed, ct);
 
-        if (!hadOtherParsedOrders)
+        // Re-parse guard: the org-level check above does NOT stop an org's ONLY order from firing
+        // this twice. Routing's assign-supplier flips an 'unrouted' order back to 'parsing' and
+        // re-parses it; on that second parse the AnyAsync still finds no OTHER parsed order, so the
+        // event re-fired — a deterministic double-count. first_upload_parsed is a once-per-order
+        // milestone, not a per-parse event. ParseStoredFileAsync writes exactly one 'Parsed' audit
+        // event per parse, so more than one for this order means we have been here before.
+        var parseCount = await _db.AuditEvents
+            .AsNoTracking()
+            .CountAsync(e => e.OrgId == organisationId
+                          && e.EntityType == "Order"
+                          && e.EntityId == orderId
+                          && e.Action == "Parsed", ct);
+        var isReParse = parseCount > 1;
+
+        if (!hadOtherParsedOrders && !isReParse)
         {
             var order = await _db.PurchaseOrders.AsNoTracking()
                 .Where(o => o.Id == orderId && o.OrgId == organisationId)
