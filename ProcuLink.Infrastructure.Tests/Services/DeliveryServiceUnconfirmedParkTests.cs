@@ -255,9 +255,12 @@ public class DeliveryServiceUnconfirmedParkTests
             .Should().Be(1, "the parked row records an outcome we never observed — a later send never rewrites it");
     }
 
-    // A parked order is not billable: the meter counts only delivered + rejected_by_supplier.
+    // A park never enters the delivered-only meter's billable set (delivered + rejected_by_supplier).
+    // Scoped precisely: that meter is Billing:CountDeliveredOnly, which DEFAULTS OFF, so this pins
+    // the flag-ON behaviour. With the flag OFF the shipped count-at-creation meter counts every
+    // order whatever its status — a park included, exactly as delivery_failed is counted today.
     [Fact]
-    public async Task ParkedOrder_IsNotBillable()
+    public async Task ParkedOrder_IsNotInTheDeliveredOnlyMeterBillableSet()
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
