@@ -2031,22 +2031,21 @@ public sealed class OrdersController : ControllerBase
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before retrying delivery." });
 
-        // Optimistic status flip so the UI reflects the retry immediately.
-        var tracked = await _db.PurchaseOrders
-            .Where(o => o.Id == id && o.OrgId == orgId)
-            .FirstOrDefaultAsync(ct);
-        if (tracked is not null)
-        {
-            tracked.Status = OrderStatusConstants.Delivering;
-            tracked.UpdatedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync(ct);
-        }
-
+        // B2 (lost-order): DO NOT pre-flip to 'delivering'. RetryDeliveryAsync's atomic claim only
+        // accepts delivery_failed / ready_to_deliver / STALE-delivering (UpdatedAt older than the
+        // reclaim window); an optimistic pre-flip stamps UpdatedAt = now, so the enqueued
+        // RetryDeliveryJob's own claim matches 0 rows and returns "already in progress". The job then
+        // schedules a backoff (~30 min) — by which point the row IS stale, so it eventually delivers.
+        // Net effect of the pre-flip: the operator's "Retry now" click sent nothing for half an hour
+        // while the UI read 'delivering'. Leave the order in its CLAIMABLE status so the job's claim
+        // succeeds on the first run and dispatches immediately; the claim itself flips the status to
+        // 'delivering' (and stamps UpdatedAt) within seconds. Mirrors the ops requeue-delivery leg.
         RetryDeliveryJob.Enqueue(_jobs, id, orgId);
 
         _logger.LogInformation("RetryDeliveryJob enqueued for order {OrderId}, org {OrgId}", id, orgId);
 
-        return Accepted(new { status = "delivering" });
+        // Report the status the row actually holds — the job owns the flip to 'delivering'.
+        return Accepted(new { status = order.Status, retrying = true });
     }
 
     // ── POST /api/orders/{id}/mark-rejected ──────────────────────────────────
