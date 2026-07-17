@@ -327,13 +327,16 @@ public sealed class DeliveryService : IDeliveryService
         var (attempt, reAdopted) = await OpenDispatchAttemptAsync(order, artifact, config, idempotencyKey, ct);
 
         // ── The unknown-outcome park ──────────────────────────────────────────────
-        // A re-adopted in-flight row means the previous activation SENT this artifact and died
-        // before learning whether the supplier accepted it. On a channel that cannot de-duplicate
-        // (ERP: no dedupe signal reaches the endpoint; email: caller-supplied Message-ID dedup is
-        // best-effort), re-sending would hand the supplier a duplicate PO. We cannot know whether
-        // the ACK happened — the crash destroyed the only transaction that could have recorded it —
-        // so we do not guess: park the order and let a human decide. Safe/BestEffort channels
-        // re-drive unchanged.
+        // A re-adopted in-flight row means the previous activation ATTEMPTED this artifact and died
+        // before learning the outcome. It does NOT prove a send happened: the marker is committed
+        // before the network write, so a crash in between — or a cancelled token on shutdown, which
+        // escapes the catch below — leaves the same row with nothing sent. The reachable states are
+        // therefore "sent and accepted", "sent and rejected" and "never sent", and this process
+        // cannot tell them apart: the crash destroyed the only transaction that could have recorded
+        // it. On a channel that cannot de-duplicate (ERP: no dedupe signal reaches the endpoint;
+        // email: caller-supplied Message-ID dedup is best-effort), re-sending on that ambiguity
+        // would risk handing the supplier a duplicate PO. So we do not guess: park the order and let
+        // a human — who can ask the supplier — decide. Safe/BestEffort channels re-drive unchanged.
         if (reAdopted && dispatcher.ResendSafety == ResendSafety.Unsafe)
             return await ParkUnconfirmedAsync(order, attempt, config, ct);
 
@@ -1167,6 +1170,28 @@ public sealed class DeliveryService : IDeliveryService
         return true;
     }
 
+    /// <summary>
+    /// Releases every <c>delivery_held</c> order back to <c>ready_to_deliver</c> and re-drives it.
+    /// <para>
+    /// Restoring UNCONDITIONALLY — without recording which status the hold came from — is deliberate,
+    /// including for an order that was <c>delivery_unconfirmed</c> when it was held. A park reaches
+    /// <c>delivery_held</c> only when an operator clicked "Send again" on an order whose org had
+    /// lapsed (<c>OrdersController.Redeliver</c> → <c>DeliverOrderJob</c>'s billing gate). The human
+    /// has ALREADY accepted the duplicate risk and chosen to send; releasing here COMPLETES that
+    /// choice. Restoring such an order to <c>delivery_unconfirmed</c> instead would silently discard
+    /// a decision the operator made and believes was actioned.
+    /// </para>
+    /// <para>
+    /// This is only safe while no AUTOMATIC path can hold a park — otherwise the release would send
+    /// with no human, the exact duplicate the park exists to prevent. Two things guarantee it, and
+    /// both must hold: <c>RetryDeliveryAsync</c> refuses a parked order BEFORE reaching its billing
+    /// gate (so the backoff queue can never hold one), and every non-operator <c>DeliverOrderJob</c>
+    /// enqueue is filtered to <c>ready_to_deliver</c> (post-transform, the B1 stranded-recovery gate,
+    /// and the stranded-ready sweep), while the ops requeue endpoint rejects a parked order outright.
+    /// <c>DeliveryServiceBillingGateTests.Retry_OnParkedOrder_WithLapsedOrg_RefusesBeforeTheBillingGate_AndNeverHolds</c>
+    /// pins the first. Widen either and this method must learn where the hold came from.
+    /// </para>
+    /// </summary>
     public async Task<int> ReleaseBillingHeldOrdersAsync(Guid orgId, CancellationToken ct)
     {
         var held = await _db.PurchaseOrders
