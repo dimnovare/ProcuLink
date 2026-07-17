@@ -958,12 +958,23 @@ public class WebhookIngressControllerTests
         // gets sent, which is what we want. Refusing 'rejected' leaves it re-drivable and re-sends
         // something the supplier refused. Same mechanism, opposite outcomes.
         //
-        // Reachable only compoundly: an ops requeue hard-deletes the attempt rows (erasing the
-        // evidence from an order that WAS dispatched), a pre-dispatch failure on the requeued job
-        // leaves a markerless row, then a late supplier rejection arrives. The fix is to stop erasing
-        // the evidence, so that no-marker => never-dispatched becomes true by construction -- that
-        // changes the delivery attempt-cap mechanism on a live path and is the founder's call, not
-        // this test's. When it lands, this test should FAIL and be replaced.
+        // WHY IT IS TOLERATED rather than patched here: it is reachable only compoundly -- an ops
+        // requeue hard-deletes the attempt rows (erasing the evidence from an order that WAS
+        // dispatched), THEN a pre-dispatch failure on the requeued job leaves a markerless row, THEN
+        // a late supplier rejection arrives. Each step is real on its own; all three in sequence are
+        // rare. That is the whole reason it is tolerated -- if any step were common this would be a
+        // stop-the-line fix, not a pinned gap.
+        //
+        // EXPIRY -- this test must not rot into a comment with a test attached. The fix is specced at
+        // docs/superpowers/specs/2026-07-17-delivery-cap-without-erasing-evidence.md ("option B"):
+        // stop erasing the evidence, so that no-marker => never-dispatched holds BY CONSTRUCTION
+        // instead of by hope. It replaces OpsController's RemoveRange with a cap-reset marker, which
+        // changes the delivery attempt-cap mechanism on a live money path -- hence a sequenced change
+        // of its own, not a patch smuggled in here.
+        //
+        // When B lands this test FAILS, and that failure is the ACCEPTANCE SIGNAL, not a regression.
+        // Delete it and assert the inverse: the rejection is accepted, the order leaves the sweeper's
+        // reach, and the PO is never re-sent.
         var db      = MakeDb();
         var orgId   = Guid.NewGuid();
         var orderId = Guid.NewGuid();
