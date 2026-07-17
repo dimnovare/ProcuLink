@@ -82,6 +82,22 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
         // Pinned by LostOrderRecoveryPostgresTests.B6_NoAttemptWritingPath_LeavesTheOrderInReadyToDeliver;
         // if B6 goes red, fix the offending path or add the cap — do not silence B6.
         //
+        // DO NOT UNIFY THIS WITH THE WEBHOOK DISPATCH-EVIDENCE GUARD (WebhookIngressController.Status).
+        // Both look like a "was this dispatched?" test and they are NOT the same question, so one
+        // predicate cannot serve both:
+        //   • Here: "was the CURRENT artifact dispatched?" — necessarily ARTIFACT-scoped, because a
+        //     re-transform mints a new artifact and older rows MUST go stale, or the corrected PO is
+        //     never sent (the defect described above).
+        //   • There: "did a send ever BEGIN for this order?" — necessarily ORDER-scoped and
+        //     artifact-agnostic, because a supplier may legitimately report against ANY artifact of an
+        //     order; judging that callback against only the newest artifact would answer the wrong
+        //     question and reject a valid report.
+        // Neither test can be reused for the other's question. A per-row marker test cannot answer THIS
+        // one: DeliveryAttempt has no ArtifactId column, and IdempotencyKey (artifact-scoped,
+        // plk-dlv-{orderId:N}-{artifactId:N}) cannot be backfilled — per-attempt artifact identity was
+        // never stored. Two discriminators is the correct shape, not drift; collapsing them yields a
+        // silent lost order on this side or a wrong supplier-callback verdict on the other.
+        //
         // Bounded by maxBatch (oldest strand first) so one sweep can never load an unbounded backlog;
         // the remainder is picked up by the next run.
         var candidates = await _db.PurchaseOrders
