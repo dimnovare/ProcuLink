@@ -350,17 +350,27 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
         // THE INVARIANT THE MISSING CAP RESTS ON. StrandedReadyOrderDetectionService deliberately has
         // NO attempt cap, because the sweep can drive at most ONE dispatch per artifact: the first
         // dispatch writes a current-artifact attempt row (which its discriminator then blocks on) AND
-        // flips the order out of ready_to_deliver (which its status filter then blocks on) — excluded
-        // twice over. That "AND" is this test. It holds only because every attempt-writing path writes
-        // the terminal STATUS BEFORE adding the row (FailMissingConfigAsync :535 then :538;
-        // FailBeforeDispatchAsync -> PersistAttemptAsync :600 then :627) — an accident of write ORDER,
-        // not something the type system or the schema enforces.
+        // leaves the order out of ready_to_deliver (which its status filter then blocks on) — excluded
+        // twice over. That "AND" is what this test pins.
         //
-        // If a path is ever reordered, or a new one forgets to flip the status, an order sits in
-        // ready_to_deliver holding a current-artifact row: the discriminator blocks it, the status
-        // filter no longer saves it, and the sweep silently skips a never-sent order — the same silent
-        // lost order this class exists to prevent, re-entered through the back door with nothing to
-        // catch it. Then the sweep WOULD need a cap. This test is what makes that audible.
+        // It holds by TWO routes, and neither is enforced by the type system or the schema:
+        //   • PRE-CLAIM paths flip the status themselves (missing config; no dispatcher; bad
+        //     credentials) — they run while the order really is still ready_to_deliver.
+        //   • POST-CLAIM paths are covered by the atomic claim (DeliveryService.cs:206-210), which
+        //     already moved the order to 'delivering' before any attempt row exists (download failure;
+        //     OpenDispatchAttemptAsync; PersistAttemptAsync). OpenDispatchAttemptAsync writes an
+        //     attempt row and NO order status at all — the claim ALONE covers it. So do NOT restate
+        //     this as "every attempt-writing path writes a terminal status": that is false.
+        // Nor is it about the source ORDER of the status write and the row Add within a path — those
+        // are both tracked and land in ONE SaveChanges, so they commit atomically and swapping the two
+        // statements has no observable effect. The live hazard is removing or weakening the CLAIM, or
+        // adding a pre-claim path that never moves the order.
+        //
+        // Either way the symptom is identical: an order sits in ready_to_deliver holding a
+        // current-artifact row, the discriminator blocks it, the status filter no longer saves it, and
+        // the sweep silently skips a never-sent PO — the same silent lost order this class exists to
+        // prevent, re-entered through the back door. Then the sweep WOULD need a cap. This test asserts
+        // the outcome for every path, so it catches that regardless of which route was meant to cover it.
         var encryption = CreateEncryption();
 
         // Every path that persists a DeliveryAttempt, each on its own order seeded ready_to_deliver.
@@ -414,7 +424,9 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
                 $"path '{path}' left the order in ready_to_deliver while holding an attempt row against the " +
                 "current artifact. StrandedReadyOrderDetectionService's discriminator now blocks that order and " +
                 "its status filter no longer excludes it, so the sweep will silently skip a never-sent PO. " +
-                "Either restore the status-write-before-row-write order, or give the sweep a real attempt cap.");
+                "Either restore whichever route was covering this path — the path's own terminal-status write " +
+                "if it runs pre-claim, or the atomic claim at DeliveryService.cs:206-210 if it runs post-claim " +
+                "— or give the sweep a real attempt cap.");
         }
     }
 

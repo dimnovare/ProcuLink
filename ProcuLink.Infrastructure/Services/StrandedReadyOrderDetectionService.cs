@@ -73,14 +73,27 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
         // ready_to_deliver (excluded by the status filter) — excluded twice over. A delivery_failed
         // outcome then hands off to StrandedFailedDeliveryDetectionService, which counts ALL terminal
         // rows, so earlier failures still cap the retry ladder.
-        // That rests entirely on: NO attempt-writing path leaves an order in ready_to_deliver — true
-        // today only because each writes the terminal status BEFORE adding the row
-        // (DeliveryService.FailMissingConfigAsync, and FailBeforeDispatchAsync → PersistAttemptAsync).
-        // Reorder those two writes, or add a path that forgets to flip the status, and an order sits
-        // here holding a current-artifact row: the filter below blocks it, the status filter no longer
-        // saves it, and this sweep silently skips a never-sent PO — at which point it needs a real cap.
-        // Pinned by LostOrderRecoveryPostgresTests.B6_NoAttemptWritingPath_LeavesTheOrderInReadyToDeliver;
-        // if B6 goes red, fix the offending path or add the cap — do not silence B6.
+        // That rests entirely on: NO attempt-writing path leaves an order in ready_to_deliver holding a
+        // current-artifact row. That holds by TWO routes, and it is worth knowing which one covers a
+        // path before you change it:
+        //   • PRE-CLAIM paths write the terminal status themselves — FailMissingConfigAsync, plus
+        //     FailBeforeDispatchAsync reached from the no-dispatcher and undecryptable-credentials
+        //     checks. These run before the claim, so the order really is still ready_to_deliver and
+        //     they must move it.
+        //   • POST-CLAIM paths are covered by the ATOMIC CLAIM (DeliveryService.cs:206-210), which has
+        //     already flipped the order to 'delivering' before any attempt row can exist — the artifact
+        //     download failure, OpenDispatchAttemptAsync, and PersistAttemptAsync. Note that
+        //     OpenDispatchAttemptAsync writes an attempt row and NO order status at all: it is
+        //     protected by the claim ALONE. So "every attempt-writing path writes a terminal status" is
+        //     false — do not rely on it.
+        // The live hazard is therefore removing or weakening the claim (or adding a pre-claim path that
+        // forgets to flip the status), NOT the source order of the two writes inside a path: within a
+        // path the status write and the row Add are both tracked and land in ONE SaveChanges, so they
+        // commit atomically and their statement order has no observable effect.
+        // Pinned by LostOrderRecoveryPostgresTests.B6_NoAttemptWritingPath_LeavesTheOrderInReadyToDeliver,
+        // which drives every path and asserts none ends in ready_to_deliver — it catches a path that
+        // fails to move the order, by whichever route was supposed to cover it. If B6 goes red, fix the
+        // path or add the cap — do not silence B6.
         //
         // DO NOT UNIFY THIS WITH THE WEBHOOK DISPATCH-EVIDENCE GUARD (WebhookIngressController.Status).
         // Both look like a "was this dispatched?" test and they are NOT the same question, so one
@@ -153,7 +166,11 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
                 detectedAt = now,
                 thresholdMinutes = agedThreshold.TotalMinutes,
                 reEnqueued = _enqueuer is not null,
-                detail = "Order left in ready_to_deliver with an artifact and no delivery attempt (delivery enqueue lost between the transform commit and DeliverOrderJob.Enqueue) — re-driving delivery.",
+                // Read by a human during a double-send investigation — it must not overstate what was
+                // checked. The order may well carry OLDER attempt rows (from a delivery of a previous
+                // artifact, or a pre-dispatch failure that sent nothing); what was verified is only
+                // that none of them targets the artifact named above.
+                detail = "Order left in ready_to_deliver with an artifact that has no delivery attempt against it (delivery enqueue lost between the transform commit and DeliverOrderJob.Enqueue) — re-driving delivery. Attempts against EARLIER artifacts may exist and were deliberately not treated as evidence about this one.",
             });
 
             _db.AuditEvents.Add(new AuditEvent
@@ -169,7 +186,7 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
             });
 
             _logger.LogWarning(
-                "StrandedReadyDeliveryDetection: order {OrderId} (org {OrgId}) stranded in 'ready_to_deliver' with artifact {ArtifactId} and no delivery attempt — re-enqueueing delivery.",
+                "StrandedReadyDeliveryDetection: order {OrderId} (org {OrgId}) stranded in 'ready_to_deliver' with artifact {ArtifactId}, which has no delivery attempt against it (attempts against earlier artifacts may exist) — re-enqueueing delivery.",
                 order.Id, order.OrgId, artifactId.Value);
 
             actedOn++;

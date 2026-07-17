@@ -17,10 +17,13 @@ namespace ProcuLink.Core.Services.Delivery;
 /// </para>
 /// <para>
 /// Recovers ONLY orders configured to AUTO-deliver (a manual order legitimately rests in
-/// <c>ready_to_deliver</c> awaiting a manual send and must never be force-dispatched) that have NO
-/// delivery attempt yet (the exact "delivery was never dispatched" signature). Re-drives them via the
-/// normal first-delivery job. Idempotent — <c>DeliverOrderJob</c>'s atomic claim prevents any
-/// double-send, and the swept order's <c>UpdatedAt</c> is bumped so it leaves the aged window.
+/// <c>ready_to_deliver</c> awaiting a manual send and must never be force-dispatched) whose CURRENT
+/// artifact has no delivery attempt against it (the "this payload was never dispatched" signature).
+/// Attempts against EARLIER artifacts are deliberately ignored: an attempt row proves neither that a
+/// send happened (four pre-dispatch paths persist rows having sent zero bytes) nor, if one did, that
+/// it sent the current payload — a re-transform mints a new artifact and nothing deletes the old rows.
+/// Re-drives them via the normal first-delivery job. Idempotent — <c>DeliverOrderJob</c>'s atomic claim
+/// prevents any double-send, and the swept order's <c>UpdatedAt</c> is bumped so it leaves the aged window.
 /// </para>
 /// </remarks>
 public interface IStrandedReadyOrderDetectionService
@@ -30,7 +33,8 @@ public interface IStrandedReadyOrderDetectionService
 
     /// <summary>
     /// Re-enqueues delivery for orders older than <paramref name="agedThreshold"/> still in
-    /// <c>ready_to_deliver</c> that are configured to auto-deliver and have no delivery attempt yet,
+    /// <c>ready_to_deliver</c> that are configured to auto-deliver and whose current artifact has no
+    /// delivery attempt against it (attempts against earlier artifacts do not block recovery),
     /// writing a <c>StrandedReadyDeliveryRecovered</c> audit event per order. Bounded to at most
     /// <paramref name="maxBatch"/> orders per sweep (oldest first). Idempotent. Returns the number of
     /// orders acted on.

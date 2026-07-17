@@ -164,15 +164,17 @@ public class TransformOrderJobSkipTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_SkippedTransform_AlreadyHasDeliveryAttempt_DoesNotReEnqueue()
+    public async Task ExecuteAsync_SkippedTransform_AttemptOnCurrentArtifact_DoesNotReEnqueue()
     {
-        // Double-send guard preserved: an order that already had a delivery attempt (delivery ran /
-        // is running) must NOT be re-enqueued even though the transform Skipped.
+        // Double-send guard preserved: an attempt made AFTER the current artifact was written is an
+        // attempt at THIS payload, so re-enqueueing would send it twice. The timestamps are explicit
+        // because the comparison IS the guard — the mere existence of the row is not.
         await using var db = NewDb();
         var (orgId, orderId) = await SeedOrderAsync(db, OrderStatusConstants.ReadyToDeliver);
+        var now = DateTime.UtcNow;
         var artifactId = Guid.NewGuid();
-        await SeedArtifactAsync(db, orgId, orderId, artifactId);
-        await SeedDeliveryAttemptAsync(db, orgId, orderId);
+        await SeedArtifactAsync(db, orgId, orderId, artifactId, now.AddMinutes(-45));
+        await SeedDeliveryAttemptAsync(db, orgId, orderId, now.AddMinutes(-40));
 
         var jobs = NewBackgroundJobClient();
         var orderService = OrderServiceReturning(
@@ -184,7 +186,7 @@ public class TransformOrderJobSkipTests
         await job.ExecuteAsync(orderId, orgId, "csv", CancellationToken.None);
 
         jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Never,
-            "an order with a prior delivery attempt must not be re-enqueued (double-send guard)");
+            "an attempt against the CURRENT artifact must not be re-enqueued (double-send guard)");
     }
 
     [Fact]

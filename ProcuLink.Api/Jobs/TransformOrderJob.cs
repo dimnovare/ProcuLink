@@ -10,9 +10,15 @@ namespace ProcuLink.Api.Jobs;
 /// <summary>
 /// Hangfire background job: transforms a resolved order to the requested output format
 /// and uploads the artifact to storage. Idempotent via the atomic ready/transforming
-/// claim inside <c>OrderTransformService.TransformAsync</c>: a duplicated or retried
-/// job on an already-transformed order gets a <see cref="TransformResponse.Skipped"/>
-/// response and must NOT re-enqueue delivery (that would double-send the PO).
+/// claim inside <c>OrderTransformService.TransformAsync</c>: a duplicated or retried job on an
+/// already-transformed order gets a <see cref="TransformResponse.Skipped"/> response.
+/// <para>
+/// A Skipped response re-enqueues delivery ONLY for the stranded signature — see
+/// <c>TryRecoverStrandedDeliveryAsync</c>. It is NOT an unconditional re-enqueue (that would
+/// double-send the PO), and it is NOT an unconditional skip either: the first run may have crashed
+/// after committing the artifact and before enqueuing delivery, which is the lost order this job
+/// recovers.
+/// </para>
 /// </summary>
 public class TransformOrderJob
 {
@@ -189,7 +195,7 @@ public class TransformOrderJob
         }
 
         _logger.LogWarning(
-            "TransformOrderJob recovering STRANDED order {OrderId}: ready_to_deliver with artifact {ArtifactId} and no delivery attempt (crash between transform commit and delivery enqueue) — re-enqueueing delivery.",
+            "TransformOrderJob recovering STRANDED order {OrderId}: ready_to_deliver with artifact {ArtifactId}, which has no delivery attempt against it (attempts against earlier artifacts may exist and are not evidence about this one) — crash between transform commit and delivery enqueue; re-enqueueing delivery.",
             orderId, artifactId);
 
         DeliverOrderJob.Enqueue(_jobs, orderId, organisationId, artifactId);
