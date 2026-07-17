@@ -31,6 +31,12 @@ namespace ProcuLink.Api.Tests.Integration;
 /// <item><b>B3</b> — the operator <c>retry-delivery</c> endpoint (the same pre-flip, missed when B2 was
 /// fixed) leaves the order CLAIMABLE, so the enqueued <c>RetryDeliveryJob</c>'s claim SUCCEEDS on its
 /// FIRST run and dispatches immediately — not after the ~30-minute backoff the pre-flip forced.</item>
+/// <item><b>B4</b> — a delivery attempt predating the order's CURRENT artifact (the order was
+/// re-transformed after that attempt) is not evidence this artifact was dispatched, so the sweep must
+/// still recover the strand. Negating on mere attempt-row existence made it permanently unrecoverable:
+/// the corrected PO silently never sent.</item>
+/// <item><b>B5</b> — the converse, which keeps B4 honest: an attempt made AFTER the current artifact
+/// still blocks the sweep, so the double-send guard survives.</item>
 /// </list>
 /// Docker-gated; skips where Docker is absent.
 /// </summary>
@@ -280,7 +286,95 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
         }
     }
 
+    // ── B4: a stale attempt older than the CURRENT artifact must not blind the sweep ────────────
+
+    [DockerRequiredFact]
+    public async Task B4_StaleAttemptOlderThanCurrentArtifact_SweepStillRecovers()
+    {
+        var encryption = CreateEncryption();
+        // The reachable chain: the order already had a delivery attempt (here a pre-dispatch failure —
+        // zero bytes sent, ArtifactSha256 null), the operator then edited the mapping, which reset the
+        // order to Ready, and the re-transform committed a NEW artifact + ready_to_deliver. The crash
+        // landed in the transform-commit → DeliverOrderJob.Enqueue gap. Nothing deletes the old attempt
+        // row on re-transform, so the strand carries it.
+        var ids = await SeedDeliverableOrderAsync(encryption, status: OrderStatusConstants.ReadyToDeliver, agedMinutes: 45);
+
+        // Attempt against the OLD artifact, strictly BEFORE the re-transform.
+        await AddAttemptAsync(ids.OrgId, ids.OrderId, DateTime.UtcNow.AddMinutes(-40), DeliveryAttempt.StatusFailed);
+
+        // Re-transform: a new artifact, strictly NEWER than the stale attempt, is now the current one.
+        var currentArtifactId = await AddArtifactAsync(ids.OrgId, ids.OrderId, DateTime.UtcNow.AddMinutes(-35));
+
+        var recorder = new RecordingDispatchEnqueuer();
+        await using (var db = NewContext())
+        {
+            var sweep = new StrandedReadyOrderDetectionService(
+                db, NullLogger<StrandedReadyOrderDetectionService>.Instance, recorder);
+            var acted = await sweep.RunAsync(TimeSpan.FromMinutes(30), CancellationToken.None);
+            Assert.Equal(1, acted);
+        }
+
+        // It re-drives the CURRENT artifact — not the one the stale attempt belonged to.
+        var call = Assert.Single(recorder.Calls);
+        Assert.Equal((ids.OrderId, ids.OrgId, currentArtifactId), call);
+    }
+
+    // ── B5: an attempt ON the current artifact still blocks (double-send guard) ─────────────────
+
+    [DockerRequiredFact]
+    public async Task B5_AttemptOnCurrentArtifact_SweepSkips_NoDoubleSend()
+    {
+        var encryption = CreateEncryption();
+        // Artifact seeded at -45m; the attempt at -40m is strictly NEWER, so a dispatch for THIS
+        // payload already ran. Re-driving would double-send it.
+        var ids = await SeedDeliverableOrderAsync(encryption, status: OrderStatusConstants.ReadyToDeliver, agedMinutes: 45);
+        await AddAttemptAsync(ids.OrgId, ids.OrderId, DateTime.UtcNow.AddMinutes(-40), DeliveryAttempt.StatusFailed);
+
+        var recorder = new RecordingDispatchEnqueuer();
+        await using (var db = NewContext())
+        {
+            var sweep = new StrandedReadyOrderDetectionService(
+                db, NullLogger<StrandedReadyOrderDetectionService>.Instance, recorder);
+            var acted = await sweep.RunAsync(TimeSpan.FromMinutes(30), CancellationToken.None);
+            Assert.Equal(0, acted);
+        }
+
+        Assert.Empty(recorder.Calls);
+    }
+
     // ── Helpers (mirrors DeliveryConcurrencyPostgresTests) ─────────────────────────────────────
+
+    /// <summary>Adds one delivery attempt row at an explicit <paramref name="attemptedAt"/>.</summary>
+    private async Task AddAttemptAsync(Guid orgId, Guid orderId, DateTime attemptedAt, string status)
+    {
+        await using var db = NewContext();
+        var attemptNumber = await db.DeliveryAttempts
+            .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId
+                          && a.Status != DeliveryAttempt.StatusDispatching) + 1;
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
+            Channel = "http", Destination = "https://supplier.example/orders",
+            Status = status, AttemptNumber = attemptNumber, AttemptedAt = attemptedAt,
+            // The pre-dispatch failure signature: no bytes were ever sent.
+            ArtifactSha256 = null,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Adds one artifact row at an explicit <paramref name="createdAt"/>; returns its id.</summary>
+    private async Task<Guid> AddArtifactAsync(Guid orgId, Guid orderId, DateTime createdAt)
+    {
+        var artifactId = Guid.NewGuid();
+        await using var db = NewContext();
+        db.OutboundArtifacts.Add(new OutboundArtifact
+        {
+            Id = artifactId, OrderId = orderId, OrgId = orgId,
+            Format = "csv", FileKey = $"artifact-{artifactId:N}.csv", CreatedAt = createdAt,
+        });
+        await db.SaveChangesAsync();
+        return artifactId;
+    }
 
     private sealed class CountingDispatcher : IDeliveryDispatcher
     {

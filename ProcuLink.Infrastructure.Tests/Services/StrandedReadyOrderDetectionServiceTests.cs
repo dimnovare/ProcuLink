@@ -66,16 +66,18 @@ public class StrandedReadyOrderDetectionServiceTests
     }
 
     [Fact]
-    public async Task RunAsync_ReadyToDeliver_WithPriorDeliveryAttempt_IsUntouched()
+    public async Task RunAsync_ReadyToDeliver_AttemptOnCurrentArtifact_IsUntouched()
     {
-        // A prior delivery attempt means delivery WAS dispatched — never re-drive (double-send guard).
+        // Double-send guard: an attempt made AFTER the current artifact was written is an attempt at
+        // THIS payload — re-driving would send it twice. (The seed's artifact is stamped 45 min ago;
+        // this attempt is deliberately newer, which is the whole reason it blocks.)
         await using var db = CreateDb();
         var (orgId, orderId, _) = await SeedStrandedAsync(db, updatedMinutesAgo: 45, autoDeliver: true);
         db.DeliveryAttempts.Add(new DeliveryAttempt
         {
             Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
             Channel = "http", Destination = "d", Status = "failed", AttemptNumber = 1,
-            AttemptedAt = DateTime.UtcNow,
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-40),
         });
         await db.SaveChangesAsync();
         var enqueuer = new RecordingDispatchEnqueuer();
@@ -84,6 +86,34 @@ public class StrandedReadyOrderDetectionServiceTests
 
         acted.Should().Be(0);
         enqueuer.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunAsync_ReadyToDeliver_StaleAttemptOlderThanCurrentArtifact_IsRecovered()
+    {
+        // The inverse, and the defect this sweep shipped with: an attempt row is NOT proof a send
+        // happened, and even a row that DID send is not proof it sent THIS payload. Here the attempt
+        // predates the current artifact — the order was re-transformed after it (a mapping edit resets
+        // a past-ready order), and nothing deletes old attempt rows on re-transform. Negating on mere
+        // row existence made this strand permanently unrecoverable: the corrected PO silently never
+        // sent. Only the AttemptedAt-vs-artifact comparison distinguishes it from the case above.
+        await using var db = CreateDb();
+        var (orgId, orderId, artifactId) = await SeedStrandedAsync(db, updatedMinutesAgo: 45, autoDeliver: true);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
+            Channel = "http", Destination = "d", Status = "failed", AttemptNumber = 1,
+            // Older than the artifact the seed wrote at -45 min → it never dispatched that artifact.
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-50),
+        });
+        await db.SaveChangesAsync();
+        var enqueuer = new RecordingDispatchEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        acted.Should().Be(1);
+        enqueuer.Calls.Should().ContainSingle()
+            .Which.Should().Be((orderId, orgId, artifactId));
     }
 
     [Fact]

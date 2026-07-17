@@ -45,8 +45,26 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
         //   • configured to AUTO-deliver for THAT order's own supplier (a manual order legitimately
         //     rests here awaiting a manual send; force-dispatching it would be a bug — worse than
         //     leaving it), and
-        //   • with NO delivery attempt yet (the exact "delivery was never dispatched" signature — any
-        //     prior attempt means delivery already ran / is running → never re-drive: double-send guard).
+        //   • with no delivery attempt against the order's CURRENT artifact.
+        //
+        // That last filter compares AttemptedAt to the newest artifact's CreatedAt, and the comparison
+        // — not the mere existence of an attempt row — is what makes this a double-send guard. An
+        // attempt row does NOT prove a send happened: the four pre-dispatch failure paths in
+        // DeliveryService (missing config, no dispatcher, undecryptable credentials, artifact download
+        // failed) all persist a terminal row having sent zero bytes. Nor does a row that DID send prove
+        // it sent THIS payload: a mapping edit resets a past-ready order (OrderMappingOverrideService
+        // .IsPastReady covers delivered/delivery_failed/delivery_dead_letter) and the re-transform
+        // commits a NEW artifact, while nothing deletes the old attempt rows — repo-wide the only
+        // DeliveryAttempts.RemoveRange is the operator requeue in OpsController. So an order that had
+        // ever been attempted was permanently unrecoverable here, and its corrected PO silently never
+        // sent.
+        //
+        // DEPENDS ON: OrderTransformService ADDs a new OutboundArtifact row stamped CreatedAt = UtcNow
+        // on every transform (it never updates one in place). If a re-transform ever reuses an artifact
+        // row, attempts from the PREVIOUS payload would date newer than it and would silently blind
+        // this sweep again — the exact defect this filter fixes. The 30-minute aged threshold
+        // (StrandedReadyDeliveryDetectionJob) dwarfs any clock skew between the two writers.
+        //
         // Bounded by maxBatch (oldest strand first) so one sweep can never load an unbounded backlog;
         // the remainder is picked up by the next run.
         var candidates = await _db.PurchaseOrders
@@ -54,7 +72,10 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
             .Where(o => o.SupplierId != null)
             .Where(o => _db.SupplierDeliveryConfigs.Any(c =>
                 c.OrgId == o.OrgId && c.SupplierId == o.SupplierId && c.AutoDeliver))
-            .Where(o => !_db.DeliveryAttempts.Any(a => a.OrderId == o.Id && a.OrgId == o.OrgId))
+            .Where(o => !_db.DeliveryAttempts.Any(a => a.OrderId == o.Id && a.OrgId == o.OrgId
+                && a.AttemptedAt >= _db.OutboundArtifacts
+                    .Where(art => art.OrderId == o.Id && art.OrgId == o.OrgId)
+                    .Max(art => art.CreatedAt)))
             .OrderBy(o => o.UpdatedAt)
             .Take(maxBatch)
             .ToListAsync(ct);
