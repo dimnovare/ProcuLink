@@ -263,20 +263,24 @@ concept" argument does **not** apply here and I was wrong to think it might: my 
 `SkippedAutoDeliverOff`) was cosmetic — both terminal. This split is **behavioural** — transient vs terminal —
 and a test proves it.
 
-Why theirs wins, recorded so this is not re-litigated:
+Why mine lost, recorded so it is not re-litigated:
 
-- **It is orthogonal to `Success`; mine was not.** My `{ Dispatched, NotClaimed, SkippedAutoDeliverOff, Failed }`
-  made `Failed` an *outcome*, duplicating what `Success` already says. Theirs keeps the axes separate:
-  `Dispatched` + `Success=false` is a real, retryable failure; `NotAttempted` is not retryable at all.
-- **It solves a safety bug, not a logging nit.** Rescheduling a `NotAttempted` result is an unbounded ~30-min
-  loop, not a retry: with no `DeliveryAttempt` row the count is frozen, so `attemptsMade >= maxAttempts` never
-  trips and `BackoffFor` returns the same delay forever. `ResponseCode` is null, so the 4xx guard misses it
-  too. My design would have logged honestly and still spun.
-- **My extra members were logging detail.** `NotClaimed` and `SkippedAutoDeliverOff` are both instances of
-  their `NotAttempted`. Splitting them buys nothing for the retry contract and would have broken a guard that
-  branches on `== NotAttempted`.
-- Their `Dispatched = 0` default is deliberate: a call site that forgets to mark itself degrades to the old
-  noise, never to silently abandoning a deliverable order. Inverting that default is the dangerous direction.
+- **It was not orthogonal to `Success`.** My `{ Dispatched, NotClaimed, SkippedAutoDeliverOff, Failed }` made
+  `Failed` an *outcome*, duplicating what `Success` already says. The shipped enum keeps the axes separate:
+  `Dispatched` + `Success=false` is a real, retryable failure; the non-dispatch members describe something
+  `Success` cannot express at all.
+- **It solved a logging nit, not a safety bug.** The real defect is that a non-dispatch has no
+  `DeliveryAttempt` row, so `CountDeliveryAttemptsAsync` is frozen, `attemptsMade >= maxAttempts` never trips,
+  and `BackoffFor` returns the same delay forever. `ResponseCode` is null, so the 4xx guard misses it too. Mine
+  would have logged honestly and still spun.
+- **My extra members were cosmetic.** `NotClaimed` and `SkippedAutoDeliverOff` are both non-dispatch *and both
+  terminal* — splitting them buys the retry contract nothing. Note this is **not** an argument against the
+  `ClaimLost` / `NotRetryable` split, which divides the same space along a **behavioural** axis (transient vs
+  terminal) that a real-Postgres test enforces. My split was two names for one behaviour; theirs is two
+  behaviours.
+- `Dispatched = 0` as the default is deliberate and survives: a call site that forgets to mark itself degrades
+  to the old noise, never to silently abandoning a deliverable order. Inverting that default is the dangerous
+  direction.
 
 **This spec now owes NOTHING here — PR #30 did all of it.** The mapping, for reference and for review:
 
