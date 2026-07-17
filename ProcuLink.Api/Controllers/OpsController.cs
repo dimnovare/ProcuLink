@@ -152,8 +152,15 @@ public sealed class OpsController : ControllerBase
             .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == orgId, ct);
         if (tracked is not null)
         {
+            // TERMINAL attempts only. An in-flight 'dispatching' row is not a spent attempt — it is
+            // the only evidence that a send was already started and never finalised, and the next
+            // dispatch re-adopts it (same idempotency key) to PARK rather than re-send on a channel
+            // that cannot de-duplicate. Clearing it would make that re-drive look like a first send
+            // and hand the supplier a duplicate PO. Excluding it also costs the cap reset nothing:
+            // the cap counts terminal attempts only.
             var priorAttempts = await _db.DeliveryAttempts
-                .Where(a => a.OrderId == id && a.OrgId == orgId)
+                .Where(a => a.OrderId == id && a.OrgId == orgId
+                         && a.Status != DeliveryAttempt.StatusDispatching)
                 .ToListAsync(ct);
 
             var fromStatus = tracked.Status;
