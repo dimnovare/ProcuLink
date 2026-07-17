@@ -3,7 +3,37 @@
 Status: **SPEC ONLY. Cut is held** — #31 has landed; still waiting on #27 and on
 `distracted-edison`'s canonicalisation mechanism (itself blocked on #27). Audit session's sequencing.
 Ruling: option **B** (fix the premise, not the symptom) — audit session, 2026-07-17.
-Branch base: main @ `91b489f` (#31 merged).
+Branch base: main @ `ccb5cc7` (#31, #32, #33, #34 merged).
+
+*(That line has now gone stale twice in one day and been corrected twice — see the preamble. It is
+kept because a wrong base commit sends the next reader to the wrong code, which is the same failure
+mode in miniature.)*
+
+## Preamble — read this before trusting anything below, including this spec
+
+This subsystem has produced 9+ false justifications in two days; several are mine. The class is not
+"people write sloppy comments". It is: **a comment that DESCRIBES is inert, but a comment that
+JUSTIFIES is a proof obligation** — and when it drifts it does not merely mislead, it *licenses* the
+next person to do the wrong thing. Every Critical here was an undischarged "because".
+
+**The class does not respect authorship, expertise, or intent.** Three data points, all from the
+people best positioned to resist it:
+
+1. This document contained **two false internal claims within an hour of being written** — a status
+   line saying "pending #31" after #31 landed, and a cross-reference to an "Open Question" already
+   ruled on — written by the person who had just spent a day cataloguing the class.
+2. PR #32 shipped a comment claiming *"EF cannot translate a captured Expression into the claim's
+   correlated subquery"*, which **licensed shipping two copies of a security-relevant predicate**. It
+   was false (PR #34), and it was written *while cleaning up five other instances of the same class*.
+3. That one came from an **error message** — the one kind of "because" that arrives pre-authorised
+   from a third party. `.Compile()`'s failure text contains the word "Invoke", so it reads as "Invoke
+   does not translate" and means "your Invoke target is a delegate". **An error message tells you WHAT
+   failed, not WHY; the WHY it implies is inference.** The compiler is not a witness to its own cause.
+
+Practical consequence for this spec: **every claim below was grepped, not remembered**, and the ones
+that decide behaviour say so with a file:line. Where a justification only becomes true once narrowed,
+that narrowing is written down rather than smoothed over — a special case whose rule does not factor
+is usually a defect, which is exactly why option B beat option A.
 
 ## The premise we are fixing
 
@@ -118,6 +148,24 @@ Same PR. Real-Postgres test: requeue → the sweep still re-drives.
 5. GREEN: `RedeliverableStatusInvariantPostgresTests` stays green throughout (condition 5 — the net;
    red there is a silent strand, not a flake).
 6. Equivalence: every cap site agrees after the change. Pin it; do not eyeball five call sites.
+7. **ASSERT-THE-DIFFERENCE (mandatory).** The do-not-unify comment is necessary but NOT sufficient —
+   it relies on a reviewer reading it, and this cluster's entire evidence base is that they do not.
+   The assertion makes unification **fail the build**:
+
+   > seed the post-requeue row (marker present, `CapSupersededAt` set) and assert the two
+   > discriminators **DISAGREE** — evidence says "a send was begun"; the cap says "does not count
+   > against the current budget". Both correct. Collapsing them turns it red.
+
+   Same move as `DispatchAndRetryClaimSets_DifferExactlyBy_DeliveryUnconfirmed`. Keep the comment for
+   the human deciding WHETHER to touch it; the assertion is what stops them.
+8. **Do NOT collapse `StrandedFailedDeliveryDetectionService:62` into `!CountsAgainstCap`.** It reads
+   `a.Status == StatusDispatching` — "a send is IN FLIGHT" — a different business concept that merely
+   looks like the negation. Collapsing it compiles, returns an int, and passes every test. Leave it a
+   literal with a comment saying why it is not the inverse.
+
+   This is the **third** instance of one shape in this subsystem (the four claim lists, the five cap
+   sites, and this). The pattern is not "people duplicate things" — it is **people write the same
+   words for different reasons, and the reasons drift apart silently.** Site 4 is the fourth.
 
 ## RULED (audit session, 2026-07-17) — both were open questions; neither was guessed
 
@@ -178,10 +226,35 @@ Under B **we no longer lose it** — the rows survive. So that justification bec
 lands. This is the cluster's defect class arriving pre-emptively: a comment that will license the next
 reader to believe the archive is load-bearing when it is redundant.
 
-Decide explicitly in the B PR (do not let the refactor decide): either drop the archive (rows
-survive, the audit event still records the requeue itself), or keep it and rewrite the justification
-to say what it is actually for. **Recommendation: keep the audit event, drop the row-copy, and say
-why** — the rows are now the record.
+### RULED: drop the row-copy, keep the audit EVENT — and the justification must name its own
+### invalidation condition
+
+The audit event stays: *an operator requeued this* is not recoverable from the rows. The row-copy
+goes: under B the rows survive, so it is pure redundancy.
+
+**But "the rows are now the record" is too flat to ship, and the narrowing is the tell** (this
+spec's own corollary: if a justification only becomes true once narrowed, look harder at it).
+Verified — not assumed — because this decision DELETES an evidence copy on a money path:
+
+| fact | site |
+|---|---|
+| `AuditEventDays = 180` | `DataRetentionOptions.cs:21` |
+| `DeliveryAttemptDays = 180` | `DataRetentionOptions.cs:30` |
+| both cutoffs computed and applied | `DataRetentionService.cs:66`, `:69` |
+| the whole sweep is `Enabled = false` by default, and the service honours it | `DataRetentionOptions.cs:18`, `DataRetentionService.cs:55` |
+
+So the copy does **not** outlive the rows — but **the two windows are INDEPENDENTLY CONFIGURABLE**.
+Set `DeliveryAttemptDays` below `AuditEventDays` and the rows die first, at which point the copy WOULD
+have been the record and dropping it was wrong.
+
+**Write the dependency and its invalidation condition, not the flat claim:**
+
+> The rows are the record because `AuditEventDays` and `DeliveryAttemptDays` both default to 180 and
+> are pruned by the same sweep. If `DeliveryAttemptDays` is ever configured BELOW `AuditEventDays`,
+> the attempt rows die first and this decision must be revisited.
+
+A justification with no invalidation condition is the same shrug the `KNOWN_GAP` was not allowed to
+be.
 
 ## Coordination
 
