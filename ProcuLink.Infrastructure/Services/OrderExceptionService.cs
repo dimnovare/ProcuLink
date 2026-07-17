@@ -43,6 +43,15 @@ public sealed class OrderExceptionService : IOrderExceptionService
             return ("transform_failed", "Transform", "error", "Transform failed for this order.");
         if (status == OrderStatusConstants.DeliveryFailed)
             return ("delivery_failed", "Deliver", "error", "Delivery to the supplier failed.");
+        // Severity is 'warning', not 'error': we do not know that this delivery failed, and an
+        // unknown outcome dressed as a failure is what makes an operator click Send again — handing
+        // the supplier the duplicate PO the park exists to prevent. The sentence is the park's OWN,
+        // reused rather than restated so the two surfaces can never drift into contradicting each
+        // other. Null protocol = the channel-agnostic wording: reconcile works from order status and
+        // has no delivery channel to name.
+        if (status == OrderStatusConstants.DeliveryUnconfirmed)
+            return ("delivery_unconfirmed", "Deliver", "warning",
+                DeliveryService.BuildUnconfirmedMessage(protocol: null));
         if (status == OrderStatusConstants.RejectedBySupplier)
             return ("supplier_rejected", "Deliver", "error", "The supplier rejected this order.");
         if (status == OrderStatusConstants.DeliveryDeadLetter)

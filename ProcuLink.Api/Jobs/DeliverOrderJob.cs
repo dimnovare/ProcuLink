@@ -100,6 +100,31 @@ public class DeliverOrderJob
         if (result.Success)
             return;
 
+        // Nothing was dispatched and no later attempt can help (order/artifact gone, terminal, held,
+        // or parked with an outcome nobody observed). Seeding the backoff queue here hands
+        // RetryDeliveryJob an order it can only bow out of. On every case but the park no attempt row
+        // exists either, so the count is frozen at 0 and neither job's cap guard can ever end the
+        // chain; the park instead must never be re-sent automatically at all, because a duplicate PO
+        // is the one thing it exists to prevent. Whoever owns the block — an operator, for the park —
+        // owns re-driving it. Mirrors RetryDeliveryJob's identical guard.
+        //
+        // A lost claim never reaches this branch: DispatchArtifactAsync returns Success=true for it
+        // (a benign no-op), so the Success check above already returned.
+        //
+        // Checked BEFORE the failure log below, not after: nothing was dispatched on ANY of these
+        // paths, so "finished with delivery failure" is false for all of them — and actively
+        // misleading for a park, which is a deferral to a human, not a failure. This is the log an
+        // operator reads during the incident.
+        if (result.Outcome == DeliveryOutcome.NotRetryable)
+        {
+            _logger.LogWarning(
+                "DeliverOrderJob: order {OrderId} was not dispatched and no retry can move it ({Error}); "
+                + "not scheduling one. Whoever owns the block — an operator, for a parked order — owns re-driving it.",
+                orderId,
+                result.ErrorMessage);
+            return;
+        }
+
         _logger.LogWarning(
             "DeliverOrderJob finished with delivery failure for order {OrderId}: {Error}",
             orderId,
@@ -110,22 +135,6 @@ public class DeliverOrderJob
         // (5xx / network, no 4xx code) enter the automatic backoff queue.
         if (result.ResponseCode is >= 400 and <= 499)
             return;
-
-        // Nothing was dispatched and no later attempt can help (order/artifact gone, terminal, or
-        // held), so no attempt row exists. Seeding the backoff queue here hands RetryDeliveryJob an
-        // order it can only bow out of — and with the attempt count frozen at 0, neither job's cap
-        // guard can ever end the chain. Whoever owns the block owns re-driving it. Mirrors
-        // RetryDeliveryJob's identical guard.
-        //
-        // A lost claim never reaches this branch: DispatchArtifactAsync returns Success=true for it
-        // (a benign no-op), so the Success check above already returned.
-        if (result.Outcome == DeliveryOutcome.NotRetryable)
-        {
-            _logger.LogInformation(
-                "DeliverOrderJob: order {OrderId} not dispatched ({Error}); not scheduling auto-retry.",
-                orderId, result.ErrorMessage);
-            return;
-        }
 
         var maxAttempts = _reliability.MaxAttempts > 0 ? _reliability.MaxAttempts : RetryDeliveryJob.MaxAttempts;
         var attemptsMade = await _deliveryService.CountDeliveryAttemptsAsync(organisationId, orderId, ct);

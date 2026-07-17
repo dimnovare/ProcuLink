@@ -184,9 +184,19 @@ public sealed class DeliveryService : IDeliveryService
         // already flipped the row to a FRESH 'delivering'), so it skips the claim and only stamps
         // the SLA window.
         //
-        // Claimable = ready_to_deliver / delivery_failed (idle, send-ready), OR a STALE 'delivering'
-        // (UpdatedAt older than the reclaim window — crash recovery). A 'delivered'/terminal order is
-        // NOT claimable, so a redeliver on an already-delivered order affects 0 rows and no-ops.
+        // Claimable = ready_to_deliver / delivery_failed (idle, send-ready), delivery_unconfirmed
+        // (parked — see below), OR a STALE 'delivering' (UpdatedAt older than the reclaim window —
+        // crash recovery). A 'delivered'/terminal order is NOT claimable, so a redeliver on an
+        // already-delivered order affects 0 rows and no-ops.
+        //
+        // delivery_unconfirmed is claimable ONLY because an operator's "Send again" arrives through
+        // this path, and a status missing here fails SILENTLY: the claim matches 0 rows and returns
+        // the benign no-op success below, so the job logs success having sent nothing and the order
+        // stays parked forever. This does NOT re-open the automatic-retry door — RetryDeliveryAsync
+        // still refuses the status, so only a human can re-drive a parked order.
+        // Safe against an immediate re-park: the park finalises its attempt row TERMINAL
+        // ('unconfirmed'), and OpenDispatchAttemptAsync only re-adopts a 'dispatching' row — so this
+        // re-send opens a FRESH attempt (reAdopted: false) and reaches the dispatcher.
         var dispatchStart = DateTime.UtcNow;
         var dueAt = dispatchStart + _reliability.SlaWindow;
 
@@ -202,6 +212,7 @@ public sealed class DeliveryService : IDeliveryService
                     .Where(x => x.Id == orderId && x.OrgId == orgId
                              && (x.Status == OrderStatusConstants.ReadyToDeliver
                               || x.Status == OrderStatusConstants.DeliveryFailed
+                              || x.Status == OrderStatusConstants.DeliveryUnconfirmed
                               || (x.Status == OrderStatusConstants.Delivering && x.UpdatedAt < staleBefore)))
                     .ExecuteUpdateAsync(s => s
                         .SetProperty(o => o.Status, OrderStatusConstants.Delivering)
@@ -248,6 +259,7 @@ public sealed class DeliveryService : IDeliveryService
                 // status (e.g. already delivered) still no-ops, matching the relational 0-rows branch.
                 if (order.Status is not (OrderStatusConstants.ReadyToDeliver
                                       or OrderStatusConstants.DeliveryFailed
+                                      or OrderStatusConstants.DeliveryUnconfirmed
                                       or OrderStatusConstants.Delivering))
                 {
                     _logger.LogInformation(
@@ -316,7 +328,21 @@ public sealed class DeliveryService : IDeliveryService
         // retry budget — and it carries the SAME idempotency key, which a supporting supplier
         // de-duplicates (HTTP header / email Message-ID; SFTP/FTPS overwrite the deterministic file).
         var idempotencyKey = BuildIdempotencyKey(order.Id, artifact.Id);
-        var attempt = await OpenDispatchAttemptAsync(order, artifact, config, idempotencyKey, ct);
+        var (attempt, reAdopted) = await OpenDispatchAttemptAsync(order, artifact, config, idempotencyKey, ct);
+
+        // ── The unknown-outcome park ──────────────────────────────────────────────
+        // A re-adopted in-flight row means the previous activation ATTEMPTED this artifact and died
+        // before learning the outcome. It does NOT prove a send happened: the marker is committed
+        // before the network write, so a crash in between — or a cancelled token on shutdown, which
+        // escapes the catch below — leaves the same row with nothing sent. The reachable states are
+        // therefore "sent and accepted", "sent and rejected" and "never sent", and this process
+        // cannot tell them apart: the crash destroyed the only transaction that could have recorded
+        // it. On a channel that cannot de-duplicate (ERP: no dedupe signal reaches the endpoint;
+        // email: caller-supplied Message-ID dedup is best-effort), re-sending on that ambiguity
+        // would risk handing the supplier a duplicate PO. So we do not guess: park the order and let
+        // a human — who can ask the supplier — decide. Safe/BestEffort channels re-drive unchanged.
+        if (reAdopted && dispatcher.ResendSafety == ResendSafety.Unsafe)
+            return await ParkUnconfirmedAsync(order, attempt, config, ct);
 
         DeliveryResult result;
         try
@@ -358,8 +384,10 @@ public sealed class DeliveryService : IDeliveryService
     /// but died before finalising), it is REUSED — the re-send stays the same logical attempt (same
     /// attempt number, same key), so it neither duplicates a terminal row nor consumes a retry-budget
     /// slot. Otherwise a fresh row is inserted with the next attempt number.
+    /// <c>ReAdopted</c> tells the caller which case happened — a re-adopted row on a channel that
+    /// cannot de-duplicate a re-send must be PARKED, not re-sent (see the unknown-outcome park below).
     /// </summary>
-    private async Task<DeliveryAttempt> OpenDispatchAttemptAsync(
+    private async Task<(DeliveryAttempt Attempt, bool ReAdopted)> OpenDispatchAttemptAsync(
         PurchaseOrderEntity order,
         OutboundArtifact artifact,
         SupplierDeliveryConfig config,
@@ -373,8 +401,11 @@ public sealed class DeliveryService : IDeliveryService
             .OrderByDescending(a => a.AttemptedAt)
             .FirstOrDefaultAsync(ct);
 
+        // Re-adopting an in-flight row IS the "we already sent this artifact, and never learned
+        // the outcome" signal — the row was committed before the send, so its survival means the
+        // send was attempted and the process died before finalising it.
         if (existing is not null)
-            return existing;
+            return (existing, true);
 
         // Next 1-based attempt index. Only TERMINAL attempts count toward the number (a stale
         // 'dispatching' row for a DIFFERENT artifact must not inflate it) — consistent with the
@@ -402,8 +433,119 @@ public sealed class DeliveryService : IDeliveryService
         _db.DeliveryAttempts.Add(attempt);
         // COMMIT before the send — this is the crash-detectable marker.
         await _db.SaveChangesAsync(ct);
-        return attempt;
+        return (attempt, false);
     }
+
+    /// <summary>
+    /// The unknown-outcome park: finalise the re-adopted in-flight row as
+    /// <c>unconfirmed</c> and stop. NO send occurs. The result is
+    /// <see cref="DeliveryOutcome.NotRetryable"/>, which makes NO retry scheduled true too: both
+    /// <c>RetryDeliveryJob</c>/<c>DeliverOrderJob</c> stop on that marker before touching the backoff
+    /// queue, <c>RetryDeliveryAsync</c>'s cap-edge dead-letter is guarded on it (so a park on the LAST
+    /// allowed attempt still parks rather than dead-lettering), and <c>RetryDeliveryAsync</c>
+    /// independently refuses this order's new status (<c>delivery_unconfirmed</c>). The order simply
+    /// waits for an operator to either send it again or confirm the supplier received it.
+    /// <para>
+    /// Unlike the other <see cref="DeliveryOutcome.NotRetryable"/> paths, this one DOES advance the
+    /// attempt count — the re-adopted row is finalised here, not abandoned. That is consistent: the
+    /// marker states who owns restarting the order (a human), not whether a row was written.
+    /// </para>
+    /// <para>
+    /// This method does not itself write <c>DeliveryDueAt</c>/<c>SlaBreached</c> — but they are NOT
+    /// left at whatever a prior breach set them to. The claim earlier in this dispatch
+    /// (<c>DispatchArtifactAsync</c>'s <c>alreadyClaimed</c> branch, which runs before this park is
+    /// reached) already reset them: <c>SlaBreached = false</c> and <c>DeliveryDueAt = now +
+    /// SlaWindow</c>. So a stuck order that had already breached its SLA before this crash-recovery
+    /// re-drive silently un-breaches and gets a fresh window — deliberately: a parked order SHOULD
+    /// keep nagging until a human resolves it, just on a renewed timer rather than the old one.
+    /// </para>
+    /// </summary>
+    private async Task<DeliveryResult> ParkUnconfirmedAsync(
+        PurchaseOrderEntity order,
+        DeliveryAttempt attempt,
+        SupplierDeliveryConfig config,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var message = BuildUnconfirmedMessage(config.Protocol);
+
+        attempt.Status = DeliveryAttempt.StatusUnconfirmed;
+        attempt.AttemptedAt = now;
+        attempt.ErrorMessage = message;
+
+        order.Status = OrderStatusConstants.DeliveryUnconfirmed;
+        order.UpdatedAt = now;
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            orderId = order.Id,
+            fromStatus = OrderStatusConstants.Delivering,
+            toStatus = OrderStatusConstants.DeliveryUnconfirmed,
+            channel = config.Protocol,
+            idempotencyKey = attempt.IdempotencyKey,
+            parkedAt = now,
+            detail = "Crash-recovery re-drive on a channel that cannot de-duplicate a re-send. "
+                   + "The artifact may have been sent, but the outcome was never observed; "
+                   + "re-sending could duplicate the PO, so the order is parked for an operator decision.",
+        });
+
+        _db.AuditEvents.Add(new AuditEvent
+        {
+            Id = Guid.NewGuid(),
+            OrgId = order.OrgId,
+            UserId = null,
+            EntityType = "Order",
+            EntityId = order.Id,
+            Action = "DeliveryUnconfirmed",
+            Payload = System.Text.Json.JsonDocument.Parse(payload),
+            CreatedAt = now,
+        });
+
+        await _db.SaveChangesAsync(ct);
+
+        // Reconcile like every other terminal delivery status. Two things ride on this: the park
+        // gets an exception row (without one a parked order is invisible to the tiles/dashboard —
+        // "not all clear" over a grid of zeros), and a 'delivery_failed' exception left open by the
+        // attempt that preceded the park is auto-resolved. That second one is the sharp edge: an
+        // order asserting both "delivery failed" (error) and "unconfirmed" (warning) invites the
+        // operator to believe the red one and re-send — the duplicate PO this park exists to stop.
+        await SafeReconcileExceptionsAsync(order.OrgId, order.Id, ct);
+
+        _logger.LogWarning(
+            "DeliveryUnconfirmed: order {OrderId} (org {OrgId}) parked — a crash-recovery re-drive "
+            + "re-adopted an in-flight send on {Protocol}, which cannot de-duplicate a re-send. "
+            + "NOT re-sent; waiting for an operator to send again or mark delivered.",
+            order.Id, order.OrgId, config.Protocol);
+
+        return new DeliveryResult(false, message, ResponseCode: null, ResponseBody: null,
+            Outcome: DeliveryOutcome.NotRetryable);
+    }
+
+    /// <summary>
+    /// The operator-facing park sentence. Plain language, one sentence of what happened plus what
+    /// to do — never internal vocabulary (no "idempotency", "re-adopt", "dispatching row", "park").
+    /// Says only what a re-adopted in-flight row PROVES: the send was ATTEMPTED, not that it
+    /// succeeded — a crash between the marker commit and the network write, or a cancelled token on
+    /// shutdown, parks with no send at all. Never fabricate an observed outcome.
+    /// <para>
+    /// A null <paramref name="protocol"/> yields the channel-agnostic wording, for callers that know
+    /// the order is parked but not which channel parked it (<c>OrderExceptionService.ProblemFor</c>
+    /// works from order status alone). Shared rather than restated: two operator surfaces telling
+    /// different stories about the same order is the failure this whole feature guards against.
+    /// </para>
+    /// </summary>
+    internal static string BuildUnconfirmedMessage(string? protocol) =>
+        $"Delivery unconfirmed. We may have sent this order, but lost the connection before the "
+        + $"supplier confirmed it, and {DescribeChannel(protocol)} cannot tell us whether it arrived. "
+        + $"Check with the supplier, then either send it again or mark it delivered.";
+
+    private static string DescribeChannel(string? protocol) => protocol?.ToLowerInvariant() switch
+    {
+        "email" or "smtp" => "email",
+        "erp_erply" => "the Erply connection",
+        "erp_directo" => "the Directo connection",
+        _ => "this delivery channel",
+    };
 
     /// <summary>
     /// Launch batch 7 — the delivery config that GOVERNS this dispatch. When the
@@ -808,6 +950,18 @@ public sealed class DeliveryService : IDeliveryService
         if (order.Status == OrderStatusConstants.Delivered)
             return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotRetryable);
 
+        // An order that is ALREADY parked (a retry scheduled before the park, firing after it). The
+        // generic status check below would refuse it as NotRetryable anyway — this branch exists only
+        // to say WHY in words: its message is what the retry job writes to the log, and "Order status
+        // 'delivery_unconfirmed' is not retryable." names an internal status instead of the decision
+        // a human still owes. Never re-driven automatically: re-sending an unobserved outcome on a
+        // channel that cannot de-duplicate risks a duplicate PO.
+        if (order.Status == OrderStatusConstants.DeliveryUnconfirmed)
+            return new DeliveryResult(
+                false,
+                "This order is waiting for someone to decide whether to send it again or mark it delivered.",
+                Outcome: DeliveryOutcome.NotRetryable);
+
         // Not retryable = terminal, or waiting on something only another actor can clear:
         // 'delivery_held' waits on the billing reactivation re-drive (ReleaseBillingHeldOrdersAsync),
         // never on a backoff attempt.
@@ -966,7 +1120,24 @@ public sealed class DeliveryService : IDeliveryService
             alreadyClaimed: true,
             ct);
 
-        if (!result.Success && willDeadLetterOnFailure)
+        // Dead-lettering asserts "this attempt failed AND it was the last one allowed". That is false
+        // for every NotRetryable result: none of them reached a dispatcher, so no attempt failed here
+        // at all. Guarding on the marker rather than on the park alone is therefore the honest rule,
+        // and it is what keeps the retry axis single-mechanism — a park-specific re-check of the
+        // order status would rebuild the very flag this branch was collapsed out of.
+        //
+        // The park (ParkUnconfirmedAsync) is why the guard exists: Success=false, but a DEFERRAL to a
+        // human, not a failure. Without it, the crashed send being the LAST allowed attempt (this
+        // branch) lets DeadLetterAsync fire immediately after the park and overwrite every one of its
+        // constraints — the order flips from 'delivery_unconfirmed' to 'delivery_dead_letter',
+        // DeliveryDueAt is nulled (killing the SLA nag the park deliberately leaves running), the
+        // order becomes permanently non-retryable (blocking the operator's "Send again"), and the
+        // audit trail fabricates "retries exhausted" over an attempt row that says 'unconfirmed'.
+        //
+        // The only other NotRetryable reachable here is the artifact/order vanishing mid-retry (a
+        // concurrent erase, racing this method's own lookup). Dead-lettering that would write the same
+        // false "retries exhausted" audit — onto a row that was just deleted.
+        if (!result.Success && willDeadLetterOnFailure && result.Outcome != DeliveryOutcome.NotRetryable)
             await DeadLetterAsync(order, priorAttempts + 1, lastError: result.ErrorMessage, ct);
 
         return result;
@@ -985,14 +1156,23 @@ public sealed class DeliveryService : IDeliveryService
             .FirstOrDefaultAsync(ct);
 
         // Holdable = an idle, send-ready order that has NOT yet been claimed for this dispatch:
-        //   • ready_to_deliver — DeliverOrderJob's first-delivery billing gate (transform just done).
-        //   • delivery_failed  — RetryDeliveryAsync's billing gate (A5): a backoff retry for an order
-        //                        that previously failed, now blocked because the org lapsed.
+        //   • ready_to_deliver     — DeliverOrderJob's first-delivery billing gate (transform just done).
+        //   • delivery_failed      — RetryDeliveryAsync's billing gate (A5): a backoff retry for an order
+        //                            that previously failed, now blocked because the org lapsed.
+        //   • delivery_unconfirmed — the same case reached from the park: an operator clicked
+        //                            "Send again" for an org that lapsed since the park. Only that
+        //                            operator path can arrive here — RetryDeliveryAsync refuses this
+        //                            status before its own billing gate, so the automatic queue can
+        //                            never turn a park into a hold. Omitting it would hold NOTHING and
+        //                            leave the order parked: invisible to ReleaseBillingHeldOrdersAsync
+        //                            (it sweeps delivery_held only), so billing settling would never
+        //                            rescue it.
         // Any other status (delivering / delivered / dead-letter / already held) is a benign no-op —
         // the billing gate simply returns without holding, and never delivers.
         if (order is null ||
             order.Status is not (OrderStatusConstants.ReadyToDeliver
-                              or OrderStatusConstants.DeliveryFailed))
+                              or OrderStatusConstants.DeliveryFailed
+                              or OrderStatusConstants.DeliveryUnconfirmed))
             return false;
 
         var fromStatus = order.Status;
@@ -1033,6 +1213,28 @@ public sealed class DeliveryService : IDeliveryService
         return true;
     }
 
+    /// <summary>
+    /// Releases every <c>delivery_held</c> order back to <c>ready_to_deliver</c> and re-drives it.
+    /// <para>
+    /// Restoring UNCONDITIONALLY — without recording which status the hold came from — is deliberate,
+    /// including for an order that was <c>delivery_unconfirmed</c> when it was held. A park reaches
+    /// <c>delivery_held</c> only when an operator clicked "Send again" on an order whose org had
+    /// lapsed (<c>OrdersController.Redeliver</c> → <c>DeliverOrderJob</c>'s billing gate). The human
+    /// has ALREADY accepted the duplicate risk and chosen to send; releasing here COMPLETES that
+    /// choice. Restoring such an order to <c>delivery_unconfirmed</c> instead would silently discard
+    /// a decision the operator made and believes was actioned.
+    /// </para>
+    /// <para>
+    /// This is only safe while no AUTOMATIC path can hold a park — otherwise the release would send
+    /// with no human, the exact duplicate the park exists to prevent. Two things guarantee it, and
+    /// both must hold: <c>RetryDeliveryAsync</c> refuses a parked order BEFORE reaching its billing
+    /// gate (so the backoff queue can never hold one), and every non-operator <c>DeliverOrderJob</c>
+    /// enqueue is filtered to <c>ready_to_deliver</c> (post-transform, the B1 stranded-recovery gate,
+    /// and the stranded-ready sweep), while the ops requeue endpoint rejects a parked order outright.
+    /// <c>DeliveryServiceBillingGateTests.Retry_OnParkedOrder_WithLapsedOrg_RefusesBeforeTheBillingGate_AndNeverHolds</c>
+    /// pins the first. Widen either and this method must learn where the hold came from.
+    /// </para>
+    /// </summary>
     public async Task<int> ReleaseBillingHeldOrdersAsync(Guid orgId, CancellationToken ct)
     {
         var held = await _db.PurchaseOrders

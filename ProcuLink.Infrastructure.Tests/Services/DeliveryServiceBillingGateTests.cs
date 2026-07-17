@@ -107,6 +107,130 @@ public class DeliveryServiceBillingGateTests
             .Should().Be(OrderStatusConstants.ReadyToDeliver, "the held order is re-driven, never stranded");
     }
 
+    // ── The park + a lapsed org (I1) ─────────────────────────────────────────
+    // Only an operator "Send again" can bring a parked order here: RetryDeliveryAsync refuses
+    // 'delivery_unconfirmed' before its own billing gate, so the automatic queue can never turn a
+    // park into a hold. The human already accepted the duplicate risk the park exists to defer —
+    // the hold just pauses that authorised send until the org can pay for it.
+
+    [Fact]
+    public async Task HoldForBilling_ParkedOrder_HoldsExplicitly_NotLeftParked()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.DeliveryUnconfirmed);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.CanProcessOrdersAsync(ids.OrgId, It.IsAny<CancellationToken>()))
+               .ReturnsAsync(false); // org lapsed (read_only / past_due / trial_expired)
+
+        var service = CreateService(db, new CountingDispatcher(new DeliveryResult(true, null, 202)), encryption, billing.Object);
+
+        // Exactly what DeliverOrderJob's billing gate does when the operator clicks "Send again".
+        var held = await service.HoldForBillingAsync(ids.OrgId, ids.OrderId, default);
+
+        held.Should().BeTrue("a parked order is holdable — the operator's Send again must not be swallowed");
+        (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status
+            .Should().Be(OrderStatusConstants.DeliveryHeld, "the order moves to the explicit, auto-releasing hold");
+        (await db.AuditEvents.CountAsync(e => e.EntityId == ids.OrderId && e.Action == "DeliveryHeldForBilling"))
+            .Should().Be(1, "the hold is on the record — the operator's click left a trace");
+    }
+
+    [Fact]
+    public async Task HeldParkedOrder_IsReleasedByReactivationFlow_NotStrandedInThePark()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.DeliveryUnconfirmed);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.CanProcessOrdersAsync(ids.OrgId, It.IsAny<CancellationToken>()))
+               .ReturnsAsync(false);
+
+        var service = CreateService(db, new CountingDispatcher(new DeliveryResult(true, null, 202)), encryption, billing.Object);
+
+        await service.HoldForBillingAsync(ids.OrgId, ids.OrderId, default);
+        (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status
+            .Should().Be(OrderStatusConstants.DeliveryHeld);
+
+        // Org returns to good standing → the reactivation flow rescues it. An order left parked
+        // would be invisible to this sweep (it only scans delivery_held) and never re-driven.
+        var released = await service.ReleaseBillingHeldOrdersAsync(ids.OrgId, default);
+
+        released.Should().Be(1);
+        (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status
+            .Should().Be(OrderStatusConstants.ReadyToDeliver, "the operator's Send again resumes once billing settles");
+    }
+
+    // ── The invariant that makes releasing a held park to ready_to_deliver SAFE ──────────────
+    // ReleaseBillingHeldOrdersAsync restores every delivery_held order to ready_to_deliver and
+    // re-drives it, without recording where it came from. That is correct ONLY while a park can
+    // reach delivery_held by an operator's decision alone: releasing then COMPLETES the "Send
+    // again" they already chose. It would become a real bug the moment the AUTOMATIC queue could
+    // hold a park — the release would send with no human, which is the one thing the park exists
+    // to prevent.
+    //
+    // That invariant rests entirely on RetryDeliveryAsync refusing a parked order BEFORE its
+    // billing gate. Moving the gate above the non-retryable check — a plausible tidy-up — silently
+    // converts the automatic queue into a park-holder and turns the unconditional release into a
+    // duplicate PO. Pin it here rather than in a comment nobody runs.
+    [Fact]
+    public async Task Retry_OnParkedOrder_WithLapsedOrg_RefusesBeforeTheBillingGate_AndNeverHolds()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.DeliveryUnconfirmed);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.CanProcessOrdersAsync(ids.OrgId, It.IsAny<CancellationToken>()))
+               .ReturnsAsync(false); // lapsed — the gate WOULD hold if the park check did not run first
+
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 202));
+        var service = CreateService(db, dispatcher, encryption, billing.Object);
+
+        var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
+
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
+        dispatcher.Calls.Should().Be(0);
+
+        (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status
+            .Should().Be(OrderStatusConstants.DeliveryUnconfirmed,
+                "the automatic queue must leave a park parked — only a human moves it");
+        (await db.AuditEvents.CountAsync(e => e.EntityId == ids.OrderId && e.Action == "DeliveryHeldForBilling"))
+            .Should().Be(0,
+                "a park held WITHOUT a human decision would be released straight back into a send that nobody chose");
+
+        billing.Verify(b => b.CanProcessOrdersAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never,
+            "the park check must short-circuit ahead of the billing gate — that ordering is the whole guarantee");
+    }
+
+    // Regression guard: the hold must not widen to statuses that are mid-dispatch or finished.
+    [Theory]
+    [InlineData(OrderStatusConstants.Delivering)]
+    [InlineData(OrderStatusConstants.Delivered)]
+    [InlineData(OrderStatusConstants.DeliveryDeadLetter)]
+    public async Task HoldForBilling_NonHoldableStatus_IsBenignNoOp(string status)
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, status);
+        await db.SaveChangesAsync();
+
+        var billing = new Mock<IBillingService>();
+        var service = CreateService(db, new CountingDispatcher(new DeliveryResult(true, null, 202)), encryption, billing.Object);
+
+        var held = await service.HoldForBillingAsync(ids.OrgId, ids.OrderId, default);
+
+        held.Should().BeFalse();
+        (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status.Should().Be(status);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static ProcuLinkDbContext CreateDb() =>

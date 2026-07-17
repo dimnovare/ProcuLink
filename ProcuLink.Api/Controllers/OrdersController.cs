@@ -343,20 +343,32 @@ public sealed class OrdersController : ControllerBase
         var entity = result.Value!;
         string? errorMessage = null;
 
-        if (entity.Status is "failed" or "transform_failed" or "delivery_failed" or "rejected_by_supplier" or "delivery_dead_letter")
+        // delivery_unconfirmed included: a parked order must surface its explanation ("we sent this
+        // but never learned whether it arrived — send again or mark delivered"), or the operator
+        // gets a status with no sentence and no guidance.
+        if (entity.Status is "failed" or "transform_failed" or "delivery_failed"
+                          or "rejected_by_supplier" or "delivery_dead_letter"
+                          or OrderStatusConstants.DeliveryUnconfirmed)
         {
-            var payload = await _db.AuditEvents
-                .AsNoTracking()
-                .Where(e => e.EntityId == id
-                         && e.OrgId == _tenant.OrganisationId
-                         && e.EntityType == "Order"
-                         && (e.Action == "ParseFailed"
-                          || e.Action == "TransformFailed"
-                          || e.Action == "DeliveryFailed"
-                          || e.Action == "DeliveryDeadLettered"))
-                .OrderByDescending(e => e.CreatedAt)
-                .Select(e => e.Payload)
-                .FirstOrDefaultAsync(ct);
+            // A parked order skips this branch entirely. None of these actions can carry the park
+            // sentence (the DeliveryUnconfirmed payload keys it "detail"), but a SURVIVING one from
+            // an unrelated earlier episode — a fixed-then-delivered ParseFailed, or a
+            // DeliveryDeadLettered from an ops requeue that crashed and parked — would win the
+            // assignment and show the operator a stale error instead of why the order is parked.
+            var payload = entity.Status == OrderStatusConstants.DeliveryUnconfirmed
+                ? null
+                : await _db.AuditEvents
+                    .AsNoTracking()
+                    .Where(e => e.EntityId == id
+                             && e.OrgId == _tenant.OrganisationId
+                             && e.EntityType == "Order"
+                             && (e.Action == "ParseFailed"
+                              || e.Action == "TransformFailed"
+                              || e.Action == "DeliveryFailed"
+                              || e.Action == "DeliveryDeadLettered"))
+                    .OrderByDescending(e => e.CreatedAt)
+                    .Select(e => e.Payload)
+                    .FirstOrDefaultAsync(ct);
 
             if (payload != null)
             {
@@ -372,7 +384,11 @@ public sealed class OrdersController : ControllerBase
                 catch { /* malformed payload — ignore */ }
             }
 
-            if (errorMessage is null && entity.Status is "delivery_failed" or "delivery_dead_letter")
+            // The branch that actually carries the park sentence: ParkUnconfirmedAsync writes it to
+            // attempt.ErrorMessage. For a parked order this is the ONLY path that can reach it —
+            // hence the skip above rather than a mere ordering preference.
+            if (errorMessage is null && entity.Status is "delivery_failed" or "delivery_dead_letter"
+                                                      or OrderStatusConstants.DeliveryUnconfirmed)
             {
                 errorMessage = await _db.DeliveryAttempts
                     .AsNoTracking()
@@ -1775,7 +1791,7 @@ public sealed class OrdersController : ControllerBase
     /// Re-enqueue delivery for an order that has already been transformed.
     /// Bypasses the AutoDeliver flag — use when the supplier was unreachable
     /// or the operator wants to force a manual retry.
-    /// Valid source statuses: delivery_failed, ready_to_deliver.
+    /// Valid source statuses: delivery_failed, ready_to_deliver, delivery_unconfirmed.
     /// </summary>
     [HttpPost("{id:guid}/redeliver")]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
@@ -1792,12 +1808,15 @@ public sealed class OrdersController : ControllerBase
         var order = getResult.Value!;
 
         // Centralised in the order-status state machine (W2): a manual redeliver is
-        // valid only from a stalled-but-recoverable delivery state. Behaviour is
-        // identical to the prior literal {delivery_failed, ready_to_deliver}.
+        // valid only from a stalled-but-recoverable delivery state.
         if (!ProcuLink.Core.Constants.OrderStatusMachine.RedeliverableFrom.Contains(order.Status))
             return BadRequest(new
             {
-                error = $"Order must be in 'delivery_failed' or 'ready_to_deliver' status to redeliver (current: '{order.Status}')."
+                // Derived from the set, never a literal: adding a redeliverable status must not
+                // leave this sentence quietly lying about which statuses are valid.
+                error = $"Order must be in one of these statuses to redeliver: "
+                      + $"{string.Join(", ", ProcuLink.Core.Constants.OrderStatusMachine.RedeliverableFrom.OrderBy(s => s, StringComparer.Ordinal))} "
+                      + $"(current: '{order.Status}')."
             });
 
         var artifact = order.OutboundArtifacts
@@ -1807,9 +1826,10 @@ public sealed class OrdersController : ControllerBase
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before redelivering." });
 
-        order.Status = "delivering";
-        await _db.SaveChangesAsync(ct);
-
+        // B2 (lost-order): DO NOT pre-flip to 'delivering'. The order stays in its claimable status
+        // so the enqueued job's atomic claim succeeds; a FRESH 'delivering' row is REJECTED by the
+        // claim's reclaim-window guard, which would strand the order and silently defeat this send.
+        // (The write here was already inert — GetByIdAsync returns an AsNoTracking entity.)
         DeliverOrderJob.EnqueueRedeliver(_jobs, id, orgId, artifact.Id);
 
         _logger.LogInformation(
@@ -1817,6 +1837,160 @@ public sealed class OrdersController : ControllerBase
             id, artifact.Id, orgId);
 
         return Accepted(new { status = "delivering" });
+    }
+
+    // ── POST /api/orders/{id}/mark-delivered ─────────────────────────────────
+
+    /// <summary>
+    /// Operator confirmation that a parked (<c>delivery_unconfirmed</c>) order DID reach the
+    /// supplier — established out-of-band, e.g. the supplier confirmed by phone or the order is
+    /// visible in their portal. Closes the order truthfully without re-sending it.
+    /// <para>
+    /// The delivery ATTEMPT row stays <c>unconfirmed</c>: its outcome was never observed and this
+    /// endpoint does not change that. What is new is the operator's assertion, recorded as its own
+    /// audit event with the acting user. Only valid from <c>delivery_unconfirmed</c>.
+    /// </para>
+    /// <para>
+    /// Billing: metering counts <c>delivered</c>/<c>rejected_by_supplier</c> by query, so this is
+    /// the point at which the order becomes chargeable — correct, since the operator has just
+    /// confirmed the supplier received it. No metering call belongs here.
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/mark-delivered")]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MarkDelivered(Guid id, CancellationToken ct)
+    {
+        var orgId     = _tenant.OrganisationId;
+        var getResult = await _orders.GetByIdAsync(orgId, id, ct);
+
+        if (!getResult.IsSuccess)
+            return NotFound();
+
+        var order = getResult.Value!;
+
+        if (order.Status != OrderStatusConstants.DeliveryUnconfirmed)
+            return BadRequest(new
+            {
+                error = $"Only an order whose delivery is unconfirmed can be marked delivered "
+                      + $"(current: '{order.Status}')."
+            });
+
+        // The order above came from GetByIdAsync, which reads through AsNoTracking — mutating it
+        // would persist NOTHING while this method still wrote the audit event, leaving an
+        // operator-confirmed record over an order the endpoint never moved. Re-query the TRACKED,
+        // org-scoped row to write through (mirrors OpsController.RequeueDelivery).
+        var tracked = await _db.PurchaseOrders
+            .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == orgId, ct);
+        if (tracked is null)
+            return NotFound();
+
+        // TOCTOU guard: the gate above ran against the DETACHED snapshot from GetByIdAsync, which
+        // is stale by the time we reach this write whenever an operator's "Send again" wins the
+        // race — DeliverOrderJob's atomic claim can flip delivery_unconfirmed -> delivering (and
+        // start a real send) in the gap between that read and this one. PurchaseOrderEntity carries
+        // no concurrency token, so re-checking the TRACKED row here is what stops this endpoint from
+        // silently overwriting an in-flight send back to 'delivered' — the order moved under us, so
+        // the operator's assertion (made against the stale snapshot) no longer applies.
+        if (tracked.Status != OrderStatusConstants.DeliveryUnconfirmed)
+            return BadRequest(new
+            {
+                error = $"Only an order whose delivery is unconfirmed can be marked delivered "
+                      + $"(current: '{tracked.Status}')."
+            });
+
+        var now = DateTime.UtcNow;
+        // Derived from the TRACKED row (just re-checked above), never a hardcoded constant — an
+        // audit event that names a transition which did not actually happen is the exact failure
+        // this whole feature exists to prevent.
+        var fromStatus = tracked.Status;
+        tracked.Status = OrderStatusConstants.Delivered;
+        tracked.UpdatedAt = now;
+        // A confirmed delivery closes the SLA window — mirrors DeliveryService's success path.
+        tracked.DeliveryDueAt = null;
+        tracked.SlaBreached = false;
+
+        // ICurrentTenantService only exposes the Clerk "sub" string, never the internal Guid — the
+        // acting user's Guid FK (AuditEvent.UserId) has to be resolved via the AppUser row so the
+        // human who asserted delivery is genuinely on the record, not just implied.
+        // Users is deliberately GLOBAL (unique ClerkUserId; org membership lives in Membership),
+        // so this lookup is legitimately un-org-scoped.
+        var actingUserId = await _db.Users
+            .AsNoTracking()
+            .Where(u => u.ClerkUserId == _tenant.ClerkUserId)
+            .Select(u => (Guid?)u.Id)
+            .FirstOrDefaultAsync(ct);
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            orderId = id,
+            fromStatus,
+            toStatus = OrderStatusConstants.Delivered,
+            confirmedAt = now,
+            // A missing AppUser row soft-degrades the FK to null rather than blocking the operator
+            // over an auth-plumbing gap. The Clerk id is always in hand, so recording it here keeps
+            // a null FK meaning "FK unresolved" instead of "a human acted and we cannot say who" —
+            // which is what would make this event indistinguishable from the SYSTEM-generated park.
+            actorClerkUserId = _tenant.ClerkUserId,
+            detail = "Operator confirmed out-of-band that the supplier received this order. "
+                   + "The delivery attempt itself was never acknowledged; this records the "
+                   + "operator's assertion, not an observed supplier ACK.",
+        });
+
+        _db.AuditEvents.Add(new ProcuLink.Core.Entities.AuditEvent
+        {
+            Id = Guid.NewGuid(),
+            OrgId = orgId,
+            UserId = actingUserId,
+            EntityType = "Order",
+            EntityId = id,
+            Action = "DeliveryConfirmedManually",
+            Payload = System.Text.Json.JsonDocument.Parse(payload),
+            CreatedAt = now,
+        });
+
+        await _db.SaveChangesAsync(ct);
+
+        // Exceptions are derived from the order's status, and nothing else ever revisits a
+        // delivered order to re-derive them — so without this call the park's own
+        // 'delivery_unconfirmed' warning (opened by ReconcileAsync when the crash-recovery path
+        // parked this order) stays open forever, even though the operator just confirmed the
+        // supplier received it. Called AFTER the save above commits: reconcile reads the order's
+        // CURRENT status back from the tracked row, so it must see 'delivered', not the
+        // 'delivery_unconfirmed' this write just replaced. Mirrors WebhookIngressController's
+        // SafeReconcileExceptionsAsync for the same delivered transition arriving via callback.
+        await SafeReconcileExceptionsAsync(orgId, id, ct);
+
+        _logger.LogInformation(
+            "DeliveryConfirmedManually: order {OrderId} (org {OrgId}) marked delivered by operator {UserId} "
+            + "after an unconfirmed delivery.",
+            id, orgId, _tenant.ClerkUserId);
+
+        return Accepted(new { status = "delivered" });
+    }
+
+    /// <summary>
+    /// Reconcile the order's exceptions, never failing the operator's mark-delivered action if it
+    /// goes wrong. The status write and audit event are already committed by this point, so a
+    /// reconcile error must not turn the operator's SUCCESSFUL confirmation into a 500 — the
+    /// operator did the one correct thing (confirmed with the supplier), and an observability-surface
+    /// fault must not be allowed to contradict that. Same contract as
+    /// WebhookIngressController's private helper of the same name / OrderServiceShared.SafeReconcileExceptionsAsync.
+    /// </summary>
+    private async Task SafeReconcileExceptionsAsync(Guid orgId, Guid orderId, CancellationToken ct)
+    {
+        try
+        {
+            await _exceptionService.ReconcileAsync(orgId, orderId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "MarkDelivered: exception reconcile failed for order {OrderId} (org {OrgId}) — non-fatal, "
+                + "the delivered status is already committed.",
+                orderId, orgId);
+        }
     }
 
     // ── POST /api/orders/{id}/retry-delivery ─────────────────────────────────

@@ -33,6 +33,11 @@ public abstract class ErpDeliveryDispatcherBase : IDeliveryDispatcher
 
     public string Protocol { get; }
 
+    // No dedupe signal reaches the ERP: the connector contract accepts no idempotency key, and
+    // both connectors are generic HTTP posts to a tenant-configured URL with no document model
+    // or lookup API. A re-send after an unknown outcome creates a DUPLICATE ERP order.
+    public ResendSafety ResendSafety => ResendSafety.Unsafe;
+
     public async Task<DeliveryResult> DispatchAsync(
         byte[] content,
         string fileName,
@@ -42,11 +47,15 @@ public abstract class ErpDeliveryDispatcherBase : IDeliveryDispatcher
         CancellationToken ct,
         string? idempotencyKey = null)
     {
-        // A3 idempotency: the ERP connector contract does not currently accept an idempotency key,
-        // so a crash-after-ACK re-drive is NOT de-duplicated at the ERP — a re-send can create a
-        // duplicate ERP order. The attempt-started row only prevents a duplicate attempt ROW and
-        // keeps the re-drive detectable/observable; it is NOT a duplicate-order guard for this
-        // channel. idempotencyKey is intentionally unused here (documented honest limitation).
+        // A3 idempotency: the ERP connector contract accepts no idempotency key, and both
+        // connectors are generic HTTP posts to a tenant-configured URL — there is no ERP document
+        // model or lookup API to dedupe against. So idempotencyKey is intentionally unused here.
+        //
+        // The duplicate-order risk this used to carry is now handled upstream rather than ignored:
+        // this dispatcher declares ResendSafety.Unsafe, so DeliveryService PARKS a crash-recovery
+        // re-drive (delivery_unconfirmed) for an operator decision instead of blindly re-sending.
+        // A duplicate is still possible if the operator chooses "Send again" — that is their
+        // informed call, not something the system does behind their back.
         var result = await _connector.SendAsync(
             new ErpDeliveryRequest(content, fileName, contentType, config, decryptedCredentials),
             ct);

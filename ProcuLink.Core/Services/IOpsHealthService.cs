@@ -87,7 +87,14 @@ public sealed record OpsHealthSummary(
     // so an operator sees it, and the operations/health "All clear" gate checks deliveryHeld
     // DIRECTLY (opsHealthState.ts) rather than via this aggregate — so a paused PO still can never
     // read as "All clear". The render layer tones held amber (attention), never red (failure).
-    int       DeliveryHeld              = 0)
+    int       DeliveryHeld              = 0,
+    // Orders whose delivery outcome is unknown after a crash on a channel that cannot de-duplicate
+    // a re-send. INCLUDED in TotalProblemOrders — the opposite call to DeliveryHeld above, and for
+    // the reason that founder call turns on: a hold is deliberate and self-releasing, whereas a
+    // park is a FAULT (a crash lost the outcome; the PO may never have reached the supplier) that
+    // stays parked until a human resolves it. It is neither deliberate nor self-resolving, so the
+    // PendingReview / PendingRouting backlog precedent does not cover it.
+    int       DeliveryUnconfirmed       = 0)
 {
     /// <summary>
     /// Sum of the order counts meaning "something is WRONG and needs an operator" — one input to the
@@ -98,7 +105,7 @@ public sealed record OpsHealthSummary(
     /// </summary>
     public int TotalProblemOrders =>
         ParsingStuck + DeliveringStuck + TransformFailed + DeliveryFailed +
-        DeliveryDeadLetter + RejectedBySupplier + Failed;
+        DeliveryDeadLetter + RejectedBySupplier + Failed + DeliveryUnconfirmed;
 }
 
 /// <summary>One row on the dead-letter / failed-delivery operator queue.</summary>

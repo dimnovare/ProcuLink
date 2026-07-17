@@ -40,19 +40,35 @@ public enum DeliveryOutcome
     ///
     /// <para>Bounded despite the frozen attempt count: the next run either claims the now-stale row
     /// (count advances) or finds the order terminal (<see cref="NotRetryable"/> → stop).</para>
+    ///
+    /// <para>The exact opposite of <see cref="NotRetryable"/>, and never interchangeable with it: a
+    /// lost claim means "someone else may still send this", a park under NotRetryable means "nobody
+    /// may send this again without a human".</para>
     /// </summary>
     ClaimLost = 1,
 
     /// <summary>
-    /// Nothing was dispatched, no attempt row was written, and no retry can ever change that: the
-    /// order is gone, delivered, dead-lettered, held for billing, past the attempt cap, has no
-    /// artifact, or auto-deliver is off.
+    /// Nothing was dispatched and NO RETRY CAN EVER CHANGE THAT — something outside the queue owns
+    /// restarting this order: it is gone, delivered, dead-lettered, held for billing, past the
+    /// attempt cap, has no artifact, auto-deliver is off, or the send was PARKED with an outcome
+    /// nobody observed (<c>DeliveryService.ParkUnconfirmedAsync</c>).
     ///
-    /// <para><b>TERMINAL — never reschedule.</b> With no attempt row the count is frozen, so
-    /// <c>attemptsMade &gt;= maxAttempts</c> never becomes true and the same backoff step is chosen
-    /// forever — an unbounded ~30-min job loop against an order the retry is powerless to move.
-    /// Whatever unblocks it (a billing reactivation re-drive, a re-transform, an operator) owns
-    /// restarting delivery.</para>
+    /// <para><b>TERMINAL — never reschedule.</b> Whatever unblocks it (a billing reactivation
+    /// re-drive, a re-transform, an operator) owns restarting delivery. On most of these paths no
+    /// attempt row was written either, which makes a reschedule actively unbounded rather than merely
+    /// useless: with the count frozen, <c>attemptsMade &gt;= maxAttempts</c> never becomes true and
+    /// the same backoff step is chosen forever — an unbounded ~30-min job loop against an order the
+    /// retry is powerless to move.</para>
+    ///
+    /// <para><b>"No attempt row" is NOT the test — ownership is.</b> The park is the exception that
+    /// proves it: it finalises the re-adopted in-flight <c>dispatching</c> row to <c>unconfirmed</c>,
+    /// so the attempt count DOES advance, and the loop above is not what the marker prevents there.
+    /// It is still never retryable, for a stronger reason: a crash-recovery re-drive on a channel
+    /// that cannot de-duplicate (<c>ResendSafety.Unsafe</c> — ERP/email) cannot know whether the
+    /// supplier already received the PO, so an automatic re-send risks handing them a DUPLICATE. Only
+    /// a human ("Send again" / "Mark as delivered") may weigh that; the queue must never decide it on
+    /// their behalf. Callers must therefore branch on this marker alone — never infer it from a
+    /// frozen attempt count.</para>
     /// </summary>
     NotRetryable = 2,
 }

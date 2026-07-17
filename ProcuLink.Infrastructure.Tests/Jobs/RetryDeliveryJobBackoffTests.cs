@@ -117,6 +117,54 @@ public class RetryDeliveryJobBackoffTests
         jobs.Captured.Should().BeEmpty();
     }
 
+    // The park's whole purpose is that a HUMAN decides. It arrives as NotRetryable — the scenario the
+    // marker was widened to cover, and the one case of it whose attempt count DOES advance, so the
+    // unbounded-loop argument alone would not have stopped the queue here. Re-sending an unobserved
+    // outcome on a channel that cannot de-duplicate risks a duplicate PO, so the backoff queue must
+    // stay out of it entirely: the order waits for "Send again" / "Mark as delivered".
+    [Fact]
+    public async Task ExecuteAsync_ParkedOrderResult_DoesNotSchedule()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "Delivery unconfirmed…", ResponseCode: null,
+                    Outcome: DeliveryOutcome.NotRetryable));
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().BeEmpty("a parked delivery waits for an operator, never for the backoff queue");
+        delivery.Verify(d => d.CountDeliveryAttemptsAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never, "the parked guard returns before the attempt-count read");
+    }
+
+    // Regression guard: an ordinary transient failure (Outcome defaults to Dispatched) must STILL
+    // be retried — the NotRetryable guard must not swallow normal backoff scheduling.
+    [Fact]
+    public async Task ExecuteAsync_OrdinaryTransientFailure_StillSchedulesRetry()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "connection reset", ResponseCode: null));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().HaveCount(1, "a normal transient failure still enters the backoff queue — the park must not break retries");
+    }
+
     [Fact]
     public async Task ExecuteAsync_Success_DoesNotSchedule()
     {

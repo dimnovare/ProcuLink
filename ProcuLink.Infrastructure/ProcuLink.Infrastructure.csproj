@@ -52,6 +52,10 @@
   <ItemGroup>
     <!-- Allow internal test-only ctors to be reachable from Infrastructure.Tests. -->
     <InternalsVisibleTo Include="ProcuLink.Infrastructure.Tests" />
+    <!-- Api.Tests' real-Postgres delivery integration tests seed rows carrying the deterministic
+         idempotency key: they must call DeliveryService.BuildIdempotencyKey directly rather than
+         re-deriving its string format, or the two are free to drift apart undetected. -->
+    <InternalsVisibleTo Include="ProcuLink.Api.Tests" />
   </ItemGroup>
 
 </Project>

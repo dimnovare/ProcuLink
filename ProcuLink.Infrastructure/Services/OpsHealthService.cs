@@ -89,9 +89,14 @@ public sealed class OpsHealthService : IOpsHealthService
             // no extra round-trip. Like PendingReview, a user-action backlog → not in TotalProblemOrders.
             PendingRouting:               Count(OrderStatusConstants.Unrouted),
             // Deliveries PAUSED on a billing hold, reused from the same org-scoped GROUP BY — no
-            // extra round-trip. Needs a human (settle billing) but releases itself on reactivation;
-            // counted toward TotalProblemOrders so a paused PO can never read as "All clear".
-            DeliveryHeld:                 Count(OrderStatusConstants.DeliveryHeld));
+            // extra round-trip. Needs a human (settle billing) but releases itself on reactivation,
+            // so it is EXCLUDED from TotalProblemOrders (founder call, 2026-07-16); the health
+            // page's "All clear" gate checks this count directly instead.
+            DeliveryHeld:                 Count(OrderStatusConstants.DeliveryHeld),
+            // A fault, not a backlog — a PO whose delivery outcome is unknown after a crash on a
+            // channel that cannot de-duplicate. Counted in TotalProblemOrders. Same GROUP BY,
+            // no extra round-trip.
+            DeliveryUnconfirmed:          Count(OrderStatusConstants.DeliveryUnconfirmed));
     }
 
     /// <summary>

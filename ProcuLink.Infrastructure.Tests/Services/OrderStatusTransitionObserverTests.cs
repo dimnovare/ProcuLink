@@ -46,10 +46,17 @@ public class OrderStatusTransitionObserverTests
     [InlineData(OrderStatusConstants.DeliveryFailed,     OrderStatusConstants.DeliveryDeadLetter)]
     [InlineData(OrderStatusConstants.DeliveryDeadLetter, OrderStatusConstants.Delivering)]         // ops requeue
     [InlineData(OrderStatusConstants.Delivered,          OrderStatusConstants.RejectedBySupplier)] // late business NACK
+    // Park (delivery_unconfirmed): unknown-outcome crash recovery on a non-idempotent channel
+    [InlineData(OrderStatusConstants.Delivering,         OrderStatusConstants.DeliveryUnconfirmed)] // park: unknown-outcome crash recovery
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivering)] // resume after unconfirmed
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivered)] // confirmed after the fact
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Ready)] // MV-1 sibling: mapping edit after unconfirmed
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.DeliveryHeld)] // "Send again" for an org that lapsed since the park
     // MV-1: OrderMappingOverrideService.IsPastReady includes 'delivered', so a mapping edit on a
     // delivered order writes delivered -> ready THROUGH the change tracker (i.e. through this
     // observer). It is a legit flow, so the map must stay SILENT for it.
     [InlineData(OrderStatusConstants.Delivered,          OrderStatusConstants.Ready)]              // MV-1 mapping edit
+
     // Self-transition is always fine (idempotent re-write of the same status).
     [InlineData(OrderStatusConstants.Delivered, OrderStatusConstants.Delivered)]
     public void IsExpected_LegitimatePipelineTransitions_AreExpected(string from, string to)
@@ -110,6 +117,36 @@ public class OrderStatusTransitionObserverTests
         await using var verify = new ProcuLinkDbContext(options);
         Assert.Equal(OrderStatusConstants.DeliveryHeld,
             (await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId)).Status);
+    }
+
+    // The park (unknown-outcome crash recovery on a non-idempotent channel) moves
+    // delivering → delivery_unconfirmed. Both transition maps must carry it, or the observer
+    // logs a spurious "unexpected transition" for a move the system performs on purpose —
+    // the exact map drift d4d6eac had to fix for A5.
+    [Theory]
+    [InlineData(OrderStatusConstants.Delivering, OrderStatusConstants.DeliveryUnconfirmed)]
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivering)]
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivered)]
+    [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Ready)]
+    public async Task ParkTransitions_AreRegisteredInBothMaps_AndObserverStaysSilent(string from, string to)
+    {
+        Assert.True(OrderStatusMachine.IsAllowed(from, to), $"{from} -> {to} is a real flow the park performs");
+
+        // Observer silence via the same mechanism as the A5 sibling
+        // (SaveChanges_DeliveryFailedToDeliveryHeld_IsSilent_AndPersists): a real SaveChanges
+        // through the interceptor with a capturing logger, not just the pure IsExpected check —
+        // this also catches a bug in the interceptor wiring itself, not only in the static maps.
+        var logger = new CapturingLogger();
+        var (options, orderId) = await SeedAsync(logger, from);
+
+        await using (var db = new ProcuLinkDbContext(options))
+        {
+            var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+            order.Status = to;
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Empty(logger.Warnings);
     }
 
     [Fact]

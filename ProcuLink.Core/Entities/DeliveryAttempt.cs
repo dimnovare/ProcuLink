@@ -76,6 +76,27 @@ public class DeliveryAttempt
     /// </summary>
     public const string StatusDispatching = "dispatching";
 
+    /// <summary>
+    /// Terminal: a send was ATTEMPTED and its outcome is unknown — it may or may not have reached
+    /// the supplier, and the channel cannot tell us which. Set when a crash-recovery re-drive
+    /// re-adopts an in-flight <c>dispatching</c> row on a
+    /// <see cref="Core.Services.Delivery.ResendSafety.Unsafe"/> channel: re-sending could duplicate
+    /// the PO, so the order is parked for a human decision instead.
+    /// <para>
+    /// The marker is committed BEFORE the network write, so its survival does not prove a send
+    /// happened: a crash in between — or a cancelled token on shutdown, which escapes
+    /// <c>DeliveryService</c>'s <c>catch … when (ex is not OperationCanceledException)</c> — parks
+    /// with nothing sent. COUNTS toward the retry attempt cap anyway: an attempt that MIGHT have
+    /// reached the supplier has to be budgeted as though it did.
+    /// </para>
+    /// <para>
+    /// Never rewritten to <see cref="StatusSuccess"/> by the operator's "Mark as delivered": that
+    /// moves the ORDER to delivered and audits the human's assertion separately. We never
+    /// fabricate a supplier ACK we did not observe.
+    /// </para>
+    /// </summary>
+    public const string StatusUnconfirmed = "unconfirmed";
+
     // Navigation — Order is optional (null for test-fire rows)
     public PurchaseOrderEntity? Order { get; set; }
     public Organisation Organisation { get; set; } = null!;

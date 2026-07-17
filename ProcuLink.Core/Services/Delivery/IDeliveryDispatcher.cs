@@ -13,6 +13,20 @@ public interface IDeliveryDispatcher
     string Protocol { get; }
 
     /// <summary>
+    /// Whether re-sending the same artifact after an UNKNOWN outcome can duplicate at the
+    /// counterparty. Read by <c>DeliveryService</c> ONLY when a crash-recovery re-drive re-adopts
+    /// an in-flight <c>dispatching</c> row: an <see cref="Core.Services.Delivery.ResendSafety.Unsafe"/>
+    /// channel is parked for a human decision instead of blindly re-sent.
+    /// <para>
+    /// Defaults to <see cref="Core.Services.Delivery.ResendSafety.Unsafe"/> — the fail-safe
+    /// direction. A dispatcher that has not declared its idempotency contract parks (conservative)
+    /// rather than duplicates. Production dispatchers must still declare their tier explicitly;
+    /// <c>DispatcherResendSafetyTests</c> enforces that.
+    /// </para>
+    /// </summary>
+    ResendSafety ResendSafety => ResendSafety.Unsafe;
+
+    /// <summary>
     /// Dispatches the artifact payload to the configured destination.
     /// Must not throw — return DeliveryResult(false, message) on failure.
     /// </summary>

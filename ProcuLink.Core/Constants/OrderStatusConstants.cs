@@ -21,6 +21,24 @@ public static class OrderStatusConstants
     /// </summary>
     public const string DeliveryHeld = "delivery_held";
     public const string DeliveryFailed = "delivery_failed";
+
+    /// <summary>
+    /// A send was ATTEMPTED and its outcome is unknown (a crash lost the ACK — or struck before the
+    /// send, which looks identical from here) on a channel that cannot de-duplicate a re-send —
+    /// ERP, email, legacy SMTP. Re-sending could hand the supplier a duplicate PO, so the order
+    /// waits for a human: "Send again" or "Mark as delivered". Deliberately NOT
+    /// <see cref="DeliveryFailed"/> — we do not know that it failed, and equally not
+    /// <see cref="Delivered"/> — we never saw it arrive.
+    /// <para>
+    /// Billing: whether a parked order is metered depends on the <c>Billing:CountDeliveredOnly</c>
+    /// flag. ON, the meter counts only delivered/rejected_by_supplier, so a park is non-billable
+    /// until an operator confirms it. The flag DEFAULTS OFF (<c>StripeBillingService</c>) and is in
+    /// no checked-in config, so the SHIPPED default is the historical count-at-creation meter, which
+    /// counts every order whatever its status — a parked order included. Not a park-specific charge:
+    /// <see cref="DeliveryFailed"/> meters identically today.
+    /// </para>
+    /// </summary>
+    public const string DeliveryUnconfirmed = "delivery_unconfirmed";
     public const string TransformFailed = "transform_failed";
     public const string RejectedBySupplier = "rejected_by_supplier";
     public const string DeliveryDeadLetter = "delivery_dead_letter";

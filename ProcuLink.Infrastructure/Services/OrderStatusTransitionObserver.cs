@@ -107,7 +107,17 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
                 OrderStatusConstants.Delivered, OrderStatusConstants.RejectedBySupplier),
             [OrderStatusConstants.Delivering] = Set(
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
+                OrderStatusConstants.DeliveryUnconfirmed,
                 OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.DeliveryDeadLetter),
+            // Unknown-outcome park: the operator sends again or confirms delivery. A "Send again"
+            // for an org that lapsed since the park is held → delivery_held (the delivery_failed
+            // sibling below). Mirrors OrderStatusMachine — both maps or neither (the d4d6eac
+            // drift lesson).
+            [OrderStatusConstants.DeliveryUnconfirmed] = Set(
+                OrderStatusConstants.Delivering, OrderStatusConstants.Delivered,
+                OrderStatusConstants.DeliveryFailed, OrderStatusConstants.DeliveryDeadLetter,
+                OrderStatusConstants.DeliveryHeld,
+                OrderStatusConstants.Ready, OrderStatusConstants.RejectedBySupplier),
             // A delivered order can still be rejected later (supplier business ACK ≠ HTTP 200), and
             // MV-1 resets it to ready: OrderMappingOverrideService.IsPastReady includes 'delivered',
             // so a mapping edit on a delivered order performs delivered → ready as a TRACKED write

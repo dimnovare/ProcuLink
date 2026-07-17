@@ -82,12 +82,14 @@ public class RetryDeliveryJob
 
         if (result.Outcome == DeliveryOutcome.NotRetryable)
         {
-            // Nothing was dispatched, no attempt row was written, and no later retry can change that
-            // (gone / delivered / dead-lettered / held for billing / no artifact / past the cap).
-            // The frozen attempt count means the cap guard below could never stop the chain, so
-            // rescheduling would re-run this same no-op every backoff step, forever. Stop; whoever
-            // owns the block (a billing reactivation re-drive, a re-transform, an operator) owns
-            // restarting delivery.
+            // Nothing was dispatched and no later retry can change that (gone / delivered /
+            // dead-lettered / held for billing / no artifact / past the cap / parked with an outcome
+            // nobody observed). On every one of those but the park no attempt row was written, so the
+            // frozen count means the cap guard below could never stop the chain and rescheduling
+            // would re-run this same no-op every backoff step, forever. The park stops here for a
+            // stronger reason — re-sending it risks a duplicate PO, so only a human may re-drive it.
+            // Either way: stop; whoever owns the block (a billing reactivation re-drive, a
+            // re-transform, an operator) owns restarting delivery.
             //
             // ClaimLost deliberately does NOT return here: it is transient, and its reschedule is
             // the crash-recovery net (see DeliveryOutcome.ClaimLost) — it falls through to the
@@ -114,10 +116,13 @@ public class RetryDeliveryJob
 
         if (attemptsMade >= maxAttempts)
         {
-            // RetryDeliveryAsync already dead-lettered at the cap; nothing more to schedule.
+            // Do NOT claim the order was dead-lettered here: RetryDeliveryAsync dead-letters at the
+            // cap only on the paths that reach its own cap check, and returns earlier (leaving the
+            // status untouched) for e.g. a lost claim or a missing artifact. Report what this job
+            // actually decided — the status is the order's own record.
             _logger.LogWarning(
-                "RetryDeliveryJob: order {OrderId} reached the attempt cap ({Max}); dead-lettered.",
-                orderId, maxAttempts);
+                "RetryDeliveryJob: order {OrderId} is at the attempt cap ({Max}); no further retry scheduled. Last error: {Error}",
+                orderId, maxAttempts, result.ErrorMessage);
             return;
         }
 

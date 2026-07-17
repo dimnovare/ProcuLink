@@ -16,13 +16,16 @@ namespace ProcuLink.Api.Tests.Integration;
 /// <summary>
 /// D-1 (HIGH) — proves the first-deliver/redeliver/requeue path can NOT double-send a PO on REAL
 /// Postgres, where <c>DispatchArtifactAsync</c>'s atomic <c>ExecuteUpdateAsync</c> ready_to_deliver /
-/// delivery_failed / stale-delivering → delivering claim actually runs (the EF InMemory provider can't
-/// translate it). The claim mirrors <c>RetryDeliveryAsync</c>'s verbatim:
+/// delivery_failed / delivery_unconfirmed / stale-delivering → delivering claim actually runs (the EF
+/// InMemory provider can't translate it, so its sibling predicate is separate code these tests cannot
+/// cover). The claim mirrors <c>RetryDeliveryAsync</c>'s verbatim:
 /// <list type="bullet">
 /// <item>two parallel <c>DispatchArtifactAsync</c> for the SAME order → exactly ONE dispatch, ONE
 /// success attempt row (a double-clicked Redeliver / Redeliver racing an ops Requeue);</item>
 /// <item>a direct dispatch racing the <c>RetryDeliveryAsync</c> path → exactly ONE dispatch;</item>
-/// <item>a redeliver on an already-<c>delivered</c> order → NO new dispatch, NO new attempt row.</item>
+/// <item>a redeliver on an already-<c>delivered</c> order → NO new dispatch, NO new attempt row;</item>
+/// <item>a redeliver on a PARKED order → claimed and dispatched (a status missing from the claim
+/// fails silently: 0 rows matched reads as a benign no-op success).</item>
 /// </list>
 /// Docker-gated; skips where Docker is absent.
 /// </summary>
@@ -285,5 +288,62 @@ public sealed class DeliveryConcurrencyPostgresTests : IAsyncLifetime
         var status = await verify.PurchaseOrders.AsNoTracking()
             .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
         Assert.Equal(OrderStatusConstants.Delivered, status);
+    }
+
+    /// <summary>
+    /// The operator's "Send again" on a parked (delivery_unconfirmed) order must reach the supplier
+    /// on REAL Postgres. The relational claim is the predicate that runs in production, and the
+    /// InMemory sibling of this test cannot cover it — the two predicates are separate code that
+    /// must agree, and a status missing from this one fails SILENTLY: the ExecuteUpdateAsync matches
+    /// 0 rows and returns the benign no-op success, so the job logs success having sent nothing.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task Redeliver_FromParkedOrder_IsClaimedAndDispatched()
+    {
+        var encryption = CreateEncryption();
+        var ids = await SeedDeliverableOrderAsync(encryption, status: OrderStatusConstants.DeliveryUnconfirmed);
+
+        // The exact post-park state: the attempt row was finalised TERMINAL ('unconfirmed'), which
+        // is what lets this re-send open a fresh attempt rather than re-adopt an in-flight row and
+        // immediately re-park.
+        await using (var seed = NewContext())
+        {
+            seed.DeliveryAttempts.Add(new DeliveryAttempt
+            {
+                Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+                Channel = "http", Destination = "https://supplier.example/orders",
+                Status = DeliveryAttempt.StatusUnconfirmed, AttemptNumber = 1,
+                AttemptedAt = DateTime.UtcNow.AddMinutes(-30),
+                IdempotencyKey = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId),
+                ErrorMessage = "Delivery unconfirmed. We may have sent this order, but lost the "
+                             + "connection before the supplier confirmed it.",
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var dispatcher = new CountingDispatcher();
+        await using (var db = NewContext())
+        {
+            var svc = BuildService(db, dispatcher, encryption);
+            var result = await svc.DispatchArtifactAsync(
+                ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: false, CancellationToken.None);
+            Assert.True(result.Success);
+            Assert.Equal(DeliveryOutcome.Dispatched, result.Outcome);
+        }
+
+        Assert.Equal(1, dispatcher.Calls);
+
+        await using var verify = NewContext();
+        var status = await verify.PurchaseOrders.AsNoTracking()
+            .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
+        Assert.Equal(OrderStatusConstants.Delivered, status);
+
+        var attempts = await verify.DeliveryAttempts.AsNoTracking()
+            .Where(a => a.OrderId == ids.OrderId && a.OrgId == ids.OrgId)
+            .OrderBy(a => a.AttemptNumber).ToListAsync();
+        Assert.Equal(2, attempts.Count);
+        // The parked row records an outcome we never observed — a later send never rewrites it.
+        Assert.Equal(DeliveryAttempt.StatusUnconfirmed, attempts[0].Status);
+        Assert.Equal("success", attempts[1].Status);
     }
 }

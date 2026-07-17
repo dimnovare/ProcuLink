@@ -38,6 +38,13 @@ namespace ProcuLink.Api.Contracts;
 /// pause is not a "problem order" and must never be rendered as a failure. The operations/health
 /// "All clear" gate checks this count DIRECTLY, so a paused PO still can never read as "All clear".
 /// </param>
+/// <param name="DeliveryUnconfirmed">
+/// Orders in <c>delivery_unconfirmed</c> — a PO whose delivery outcome is unknown after a crash on
+/// a channel that cannot de-duplicate a re-send, parked until a human resolves it. The opposite
+/// call to <paramref name="DeliveryHeld"/>, and for the reason that distinction turns on: a hold is
+/// deliberate and self-releasing, a park is a fault that resolves only when a human acts. So this
+/// IS included in <paramref name="TotalProblemOrders"/>.
+/// </param>
 public record OpsHealthDto(
     int ParsingStuck,
     int DeliveringStuck,
@@ -56,7 +63,8 @@ public record OpsHealthDto(
     bool       WorkerHealthy,
     int        PendingReview,
     int        PendingRouting = 0,
-    int        DeliveryHeld = 0
+    int        DeliveryHeld = 0,
+    int        DeliveryUnconfirmed = 0
 );
 
 /// <summary>

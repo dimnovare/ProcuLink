@@ -38,6 +38,10 @@ public class OrderStatusMachineTests
     [InlineData(DeliveryFailed, Delivering)]     // retry / redeliver
     [InlineData(DeliveryFailed, DeliveryDeadLetter)]
     [InlineData(DeliveryFailed, Ready)]          // MV-1 sibling: mapping edit after a failed delivery
+    // An operator "Send again" from the park, for an org that lapsed since the park, is held
+    // (not delivered) by DeliverOrderJob's billing gate → HoldForBillingAsync. Same case as
+    // delivery_failed → delivery_held above.
+    [InlineData(DeliveryUnconfirmed, DeliveryHeld)]
     [InlineData(DeliveryDeadLetter, Delivering)] // ops requeue rescue
     [InlineData(DeliveryDeadLetter, DeliveryFailed)] // requeued dead-letter fails again / late failure webhook (aligns with the observer map)
     [InlineData(DeliveryDeadLetter, Ready)]      // MV-1 sibling: mapping edit after dead-letter
@@ -98,9 +102,14 @@ public class OrderStatusMachineTests
     }
 
     [Fact]
-    public void RedeliverableFrom_MatchesThePriorLiteralExactly()
+    public void RedeliverableFrom_IsExactlyTheThreeOperatorSendableStatuses()
+        // Exact, not a superset: a status added here becomes re-sendable from the UI, so widening
+        // the set must be a deliberate edit rather than a silent side effect.
+        // delivery_unconfirmed belongs because the park exists precisely so a HUMAN can choose to
+        // re-send: the outcome of the original send was never observed, so a re-send may duplicate
+        // the PO — a risk the automatic retry must never take on the operator's behalf.
         => OrderStatusMachine.RedeliverableFrom.Should()
-            .BeEquivalentTo(new[] { DeliveryFailed, ReadyToDeliver });
+            .BeEquivalentTo(new[] { DeliveryFailed, ReadyToDeliver, DeliveryUnconfirmed });
 
     /// <summary>
     /// Edges the observer calls "expected" that the machine deliberately does NOT allow.
@@ -294,7 +303,7 @@ public class OrderStatusMachineTests
         {
             PendingParse, Parsing, PendingReview, Ready, Transforming, ReadyToDeliver,
             Delivering, Delivered, DeliveryFailed, TransformFailed, RejectedBySupplier,
-            DeliveryDeadLetter, Failed, Unrouted, DeliveryHeld,
+            DeliveryDeadLetter, Failed, Unrouted, DeliveryHeld, DeliveryUnconfirmed,
         };
         foreach (var s in declared)
             OrderStatusMachine.Transitions.Keys.Should().Contain(s);

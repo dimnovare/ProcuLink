@@ -12,6 +12,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Controllers;
@@ -163,6 +164,91 @@ public class OpsControllerTests
         json.Should().Contain("\"pendingReview\":5");
     }
 
+    // Regression for the gap where OpsHealthSummary.DeliveryUnconfirmed (commit 046f3e5) died at
+    // the controller boundary: OpsHealthDto had no such property, so a parked order's count never
+    // reached the HTTP response the frontend Health tile reads.
+    [Fact]
+    public async Task GetHealth_MapsDeliveryUnconfirmed_IntoDto_AndIntoTotalProblemOrders()
+    {
+        await using var db = NewDb();
+        var (ctrl, health, _, _, orgId) = Build(db);
+        health.Setup(h => h.GetHealthAsync(orgId, It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new OpsHealthSummary(
+                  ParsingStuck: 0, DeliveringStuck: 0, TransformFailed: 0,
+                  DeliveryFailed: 0, DeliveryDeadLetter: 0, RejectedBySupplier: 0,
+                  Failed: 0, SlaBreached: 0, OpenExceptions: 0, StuckThresholdMinutes: 30,
+                  DeliveryUnconfirmed: 5));
+
+        var result = await ctrl.GetHealth(CancellationToken.None);
+
+        var ok  = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto = ok.Value.Should().BeOfType<OpsHealthDto>().Subject;
+        dto.DeliveryUnconfirmed.Should().Be(5);
+        // A parked order is a fault needing a human, not a normal workflow backlog — it must
+        // count toward TotalProblemOrders, unlike PendingReview/PendingRouting.
+        dto.TotalProblemOrders.Should().Be(5);
+    }
+
+    // End-to-end proof (real OpsHealthService, no mock): a parked order seeded in the database
+    // must survive the whole service -> controller -> DTO -> JSON round trip, since that is
+    // exactly the path the frontend Health tile depends on.
+    [Fact]
+    public async Task GetHealth_ParkedOrderSeededInDb_ReachesDto_ThroughRealOpsHealthService()
+    {
+        await using var db = NewDb();
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            SupplierId = supplierId,
+            PoNumber   = "PO-PARKED",
+            OrderDate  = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency   = "EUR",
+            Status     = OrderStatusConstants.DeliveryUnconfirmed,
+            CreatedAt  = DateTime.UtcNow,
+            UpdatedAt  = DateTime.UtcNow,
+            Lines      = new List<PurchaseOrderLineEntity>(),
+        });
+        await db.SaveChangesAsync();
+
+        var tenant = new Mock<ICurrentTenantService>();
+        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
+        var ctrl = new OpsController(
+            new OpsHealthService(db), tenant.Object, new Mock<IOrderService>().Object,
+            new Mock<IBackgroundJobClient>().Object, db, NullLogger<OpsController>.Instance);
+
+        var result = await ctrl.GetHealth(CancellationToken.None);
+
+        var ok  = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto = ok.Value.Should().BeOfType<OpsHealthDto>().Subject;
+        dto.DeliveryUnconfirmed.Should().Be(1);
+        dto.TotalProblemOrders.Should().Be(1);
+    }
+
+    [Fact]
+    public void OpsHealthDto_SerialisesDeliveryUnconfirmed_AsCamelCaseJson()
+    {
+        // The frontend Health tile plan (docs/superpowers/plans/2026-07-16-delivery-unconfirmed-park-frontend.md,
+        // Task 4) reads exactly `deliveryUnconfirmed`. Pin the System.Text.Json camelCase contract
+        // so a rename can't silently re-break the Health tile.
+        var dto = new OpsHealthDto(
+            ParsingStuck: 0, DeliveringStuck: 0, TransformFailed: 0, DeliveryFailed: 0,
+            DeliveryDeadLetter: 0, RejectedBySupplier: 0, Failed: 0, SlaBreached: 0,
+            OpenExceptions: 0, StuckThresholdMinutes: 30, TotalProblemOrders: 3,
+            ActiveWorkers: 0, LastWorkerHeartbeatUtc: null, SecondsSinceWorkerHeartbeat: null,
+            WorkerHealthy: false, PendingReview: 0, DeliveryUnconfirmed: 3);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(dto, new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        });
+
+        json.Should().Contain("\"deliveryUnconfirmed\":3");
+    }
+
     // ── GET /api/ops/dead-letter ──────────────────────────────────────────────
 
     [Fact]
@@ -294,6 +380,59 @@ public class OpsControllerTests
         var result = await ctrl.RequeueDelivery(order.Id, CancellationToken.None);
 
         result.Should().BeOfType<AcceptedResult>();
+    }
+
+    // The cap reset must not take the crash marker with it. An in-flight 'dispatching' row is the
+    // ONLY evidence that a send was already attempted and never finalised; DispatchArtifactAsync
+    // re-adopts it (matching the idempotency key) and parks instead of re-sending on a channel that
+    // cannot de-duplicate. Deleting it makes the next re-drive look like a first send: reAdopted
+    // false, no park, and the supplier gets the duplicate PO.
+    //
+    // Reachable: attempts 1..3 fail terminally, the 4th send commits its marker and CRASHES mid-send.
+    // The stuck sweep re-drives, RetryDeliveryAsync counts 3 TERMINAL attempts (>= the cap) and
+    // dead-letters — leaving the order dead-lettered with its 'dispatching' row still unfinalised.
+    // That is exactly a status this endpoint accepts.
+    [Fact]
+    public async Task RequeueDelivery_KeepsTheInFlightAttempt_SoTheNextDriveStillParksInsteadOfReSending()
+    {
+        await using var db = NewDb();
+        var (ctrl, _, orders, _, orgId) = Build(db);
+
+        var order = OrderWithArtifact(orgId, OrderStatusConstants.DeliveryDeadLetter);
+        db.PurchaseOrders.Add(order);
+        await db.SaveChangesAsync();
+        await SeedFailedAttemptsAsync(db, orgId, order.Id, count: 3);
+
+        var artifactId = order.OutboundArtifacts.Single().Id;
+        var inFlightId = Guid.NewGuid();
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = inFlightId, OrderId = order.Id, OrgId = orgId,
+            Channel = "erp_erply", Destination = "https://erp.example/orders",
+            Status = DeliveryAttempt.StatusDispatching, AttemptNumber = 4,
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-30),
+            IdempotencyKey = $"plk-dlv-{order.Id:N}-{artifactId:N}", // DeliveryService.BuildIdempotencyKey (internal to Infrastructure)
+        });
+        await db.SaveChangesAsync();
+
+        orders.Setup(o => o.GetByIdAsync(orgId, order.Id, It.IsAny<CancellationToken>()))
+              .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(order));
+
+        var result = await ctrl.RequeueDelivery(order.Id, CancellationToken.None);
+        result.Should().BeOfType<AcceptedResult>();
+
+        var surviving = await db.DeliveryAttempts.Where(a => a.OrderId == order.Id).ToListAsync();
+
+        surviving.Should().ContainSingle(
+            "the terminal attempts are cleared to reset the cap, but the in-flight marker must survive");
+        surviving[0].Id.Should().Be(inFlightId);
+        surviving[0].Status.Should().Be(DeliveryAttempt.StatusDispatching,
+            "deleting the marker turns an unknown outcome back into a blind re-send on a channel that cannot de-duplicate");
+
+        // The operator's dispatch-past-the-cap intent still holds: the cap counts only TERMINAL
+        // attempts, so keeping this row costs the requeue nothing.
+        (await db.DeliveryAttempts.CountAsync(a =>
+            a.OrderId == order.Id && a.Status != DeliveryAttempt.StatusDispatching)).Should().Be(0);
     }
 
     [Fact]

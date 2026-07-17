@@ -199,6 +199,10 @@ public class DeliveryServiceIdempotencyTests
         public int Calls { get; private set; }
         public string? LastIdempotencyKey { get; private set; }
         public string Protocol => "http";
+        // Models an HTTP supplier — HTTP re-drives carry the idempotency key as a header a
+        // supporting endpoint can de-duplicate, so it is not Unsafe (the default this test double
+        // would otherwise inherit, which would park a re-adopted row instead of re-sending it).
+        public ResendSafety ResendSafety => ResendSafety.BestEffort;
 
         public CapturingDispatcher(DeliveryResult result) => _result = result;
 

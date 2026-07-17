@@ -61,9 +61,11 @@ public static class OrderStatusMachine
             // PRE-CLAIM billing gate has NO dispatch behind it, so this edge too is gated on dispatch
             // evidence rather than on the status — see WebhookReportableFrom.
             [DeliveryHeld]       = Set(ReadyToDeliver, Delivered, Ready, RejectedBySupplier),
+            // delivering → delivery_unconfirmed: the park — a crash-recovery re-drive on a channel
+            // that cannot de-duplicate stops rather than risk a duplicate PO.
             // delivering → delivery_dead_letter: StuckDeliveryDetectionService dead-letters an order
             // that kept stranding in 'delivering' after its re-drive budget was spent.
-            [Delivering]         = Set(Delivered, DeliveryFailed, DeliveryDeadLetter, RejectedBySupplier),
+            [Delivering]         = Set(Delivered, DeliveryFailed, DeliveryUnconfirmed, DeliveryDeadLetter, RejectedBySupplier),
             [Delivered]          = Set(DeliveryFailed, Ready, RejectedBySupplier),
             // delivery_failed/delivery_dead_letter → ready: the MV-1 sibling — a mapping edit after a
             // failed/dead-lettered delivery invalidates the stored artifact (Retry/requeue would ship it
@@ -73,6 +75,19 @@ public static class OrderStatusMachine
             // delivery_failed/delivery_dead_letter → delivered: a late positive ACK from the supplier
             // status webhook. Both are gated by WebhookReportableFrom + dispatch evidence.
             [DeliveryFailed]     = Set(Delivering, Delivered, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
+            // Unknown-outcome park. The operator decides: send again (→ delivering) or confirm the
+            // supplier got it (→ delivered). A mapping edit invalidates the artifact (→ ready, the
+            // MV-1 sibling). Dead-letter/failed remain reachable if a later re-send exhausts retries.
+            // → delivery_held: the delivery_failed sibling — a "Send again" for an org that lapsed
+            // since the park is held (not delivered) via HoldForBillingAsync.
+            // Unlike its neighbours above, → delivered here has NO webhook provenance: a parked order
+            // would SATISFY the dispatch-evidence half of the webhook guard (the park finalises the
+            // in-flight row it re-adopted, and that row keeps the IdempotencyKey the pre-send commit
+            // stamped), so delivery_unconfirmed is held out of WebhookReportableFrom by the STATUS
+            // half alone. Deliberate, and reviewable on its own: admitting it would let a callback
+            // resolve a park — the one thing that could supply what the park lacks, positive evidence
+            // the PO arrived — but it widens a webhook-driven path into a billable status.
+            [DeliveryUnconfirmed] = Set(Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
             // dead_letter → delivery_failed: an ops requeue that fails again. (NOT a webhook: a supplier
             // status callback writes delivered or rejected_by_supplier only — never delivery_failed.)
             [DeliveryDeadLetter] = Set(Delivering, Delivered, DeliveryFailed, Ready, RejectedBySupplier),
@@ -118,9 +133,13 @@ public static class OrderStatusMachine
     /// A manual "send again" (OrdersController.Redeliver) is valid only from a
     /// stalled-but-recoverable delivery state. (A dead-lettered order is rescued by
     /// the separate ops "requeue delivery" path, not by redeliver.)
+    /// <para>
+    /// delivery_unconfirmed is included: the park's entire purpose is to let a HUMAN choose to
+    /// re-send, accepting the duplicate risk the automatic retry must not take on their behalf.
+    /// </para>
     /// </summary>
     public static readonly IReadOnlySet<string> RedeliverableFrom =
-        Set(DeliveryFailed, ReadyToDeliver);
+        Set(DeliveryFailed, ReadyToDeliver, DeliveryUnconfirmed);
 
     /// <summary>
     /// A supplier status callback (<c>POST /api/webhook-ingress/{slug}/status</c>) may report a

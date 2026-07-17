@@ -28,6 +28,10 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Sftp;
 
+    // The deterministic filename is overwritten on re-send, so a crash-recovery re-drive
+    // cannot leave the supplier holding two copies.
+    public ResendSafety ResendSafety => ResendSafety.Safe;
+
     public SftpDeliveryDispatcher(ILogger<SftpDeliveryDispatcher> logger, OutboundRequestGuard guard)
     {
         _logger = logger;

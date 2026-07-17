@@ -53,7 +53,7 @@ public sealed class OpsController : ControllerBase
     /// <summary>
     /// Job-health summary: counts of orders in each problematic state (stuck
     /// parsing/delivering, transform_failed, delivery_failed, delivery_dead_letter,
-    /// rejected_by_supplier, failed, SLA-breached) plus total open exceptions.
+    /// rejected_by_supplier, failed, delivery_unconfirmed, SLA-breached) plus total open exceptions.
     /// </summary>
     [HttpGet("health")]
     [ProducesResponseType(typeof(OpsHealthDto), StatusCodes.Status200OK)]
@@ -78,7 +78,8 @@ public sealed class OpsController : ControllerBase
             WorkerHealthy:                s.WorkerHealthy,
             PendingReview:                s.PendingReview,
             PendingRouting:               s.PendingRouting,
-            DeliveryHeld:                 s.DeliveryHeld));
+            DeliveryHeld:                 s.DeliveryHeld,
+            DeliveryUnconfirmed:          s.DeliveryUnconfirmed));
     }
 
     // ── GET /api/ops/dead-letter ──────────────────────────────────────────────
@@ -151,8 +152,15 @@ public sealed class OpsController : ControllerBase
             .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == orgId, ct);
         if (tracked is not null)
         {
+            // TERMINAL attempts only. An in-flight 'dispatching' row is not a spent attempt — it is
+            // the only evidence that a send was already started and never finalised, and the next
+            // dispatch re-adopts it (same idempotency key) to PARK rather than re-send on a channel
+            // that cannot de-duplicate. Clearing it would make that re-drive look like a first send
+            // and hand the supplier a duplicate PO. Excluding it also costs the cap reset nothing:
+            // the cap counts terminal attempts only.
             var priorAttempts = await _db.DeliveryAttempts
-                .Where(a => a.OrderId == id && a.OrgId == orgId)
+                .Where(a => a.OrderId == id && a.OrgId == orgId
+                         && a.Status != DeliveryAttempt.StatusDispatching)
                 .ToListAsync(ct);
 
             var fromStatus = tracked.Status;
