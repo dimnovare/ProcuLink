@@ -578,8 +578,8 @@ public class WebhookIngressControllerTests
 
         result.Should().BeOfType<ConflictObjectResult>(
             "the order holds an attempt row, but nothing was ever dispatched to a supplier");
-        ConflictError(result).Should().Contain("has not been sent to a supplier yet",
-            "the refusal must say what is actually true: attempted, never sent");
+        ConflictError(result).Should().Contain("no record of it having been sent",
+            "the refusal must say what is actually true: attempted, with no record of a send");
         var order = await db.PurchaseOrders.FindAsync(orderId);
         order!.Status.Should().Be(from, "the refused callback must leave the order (and its safety net) untouched");
         db.AuditEvents.Should().ContainSingle(e => e.Action == "webhook_status_rejected");
@@ -858,8 +858,43 @@ public class WebhookIngressControllerTests
 
         var error = ConflictError(await ctrl.Status("status-slug", CancellationToken.None));
 
-        error.Should().Contain("has not been sent to a supplier yet");
+        error.Should().Contain("no record of it having been sent to a supplier");
         error.Should().Contain(OrderStatusConstants.ReadyToDeliver);
+    }
+
+    [Theory]
+    [InlineData(OrderStatusConstants.Delivered)]
+    [InlineData(OrderStatusConstants.DeliveryFailed)]
+    [InlineData(OrderStatusConstants.DeliveryDeadLetter)]
+    [InlineData(OrderStatusConstants.Delivering)]
+    public async Task Status_RefusedForOrderWhoseEvidenceWasErased_DoesNotClaimItWasNeverSent(string from)
+    {
+        // The sentence must never contradict itself to a counterparty. An ops requeue hard-deletes an
+        // order's attempt rows (OpsController, RemoveRange) and retention prunes them for terminal
+        // statuses, so a genuinely DISPATCHED order can reach the no-evidence refusal. The old copy
+        // then said, verbatim: "This order has not been sent to a supplier yet (it is 'delivered')".
+        //
+        // We cannot tell "never sent" from "evidence erased" -- ready_to_deliver and delivery_held are
+        // each reachable both BEFORE a dispatch and after one (MV-1 reset; A5 hold), so the status
+        // cannot decide it either. The sentence therefore claims only what is true in every shape:
+        // we have no record of a send.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, from);
+        // Evidence erased: no attempt rows at all, exactly as the requeue leaves it.
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var error = ConflictError(await ctrl.Status("status-slug", CancellationToken.None));
+
+        error.Should().NotContain("has not been sent to a supplier yet",
+            "this order may well HAVE been sent -- only its evidence is gone, and saying otherwise "
+          + "next to \"it is '{0}'\" is a self-contradiction the supplier reads", from);
+        error.Should().Contain("no record of it having been sent",
+            "the honest claim is the absence of a record, never the absence of a send");
     }
 
     [Fact]
@@ -904,6 +939,64 @@ public class WebhookIngressControllerTests
 
         error.Should().NotContain("has not been sent to a supplier yet");
         error.Should().Contain(OrderStatusConstants.Ready);
+    }
+
+    [Fact]
+    public async Task Status_RefusedRejection_LeavesTheOrderInTheStrandedFailedSweepersReach_KNOWN_GAP()
+    {
+        // KNOWN GAP, pinned deliberately so it cannot be forgotten or mis-described as safe. This
+        // documents CURRENT behaviour; it is not an endorsement of it.
+        //
+        // "Refusing fails closed, which is the safe direction" was WRONG, and this is the proof. A
+        // refusal writes nothing, so the order keeps its status -- and delivery_failed is exactly what
+        // StrandedFailedDeliveryDetectionService sweeps (aged + SupplierId + terminal attempts under
+        // the cap + no dispatching row). It re-drives, and the PO the supplier just REJECTED is sent
+        // a second time. That sweeper justifies its own predicate on rejections landing in
+        // rejected_by_supplier; a refused rejection breaks that premise.
+        //
+        // The asymmetry is the point: refusing 'delivered' leaves the order re-drivable and the PO
+        // gets sent, which is what we want. Refusing 'rejected' leaves it re-drivable and re-sends
+        // something the supplier refused. Same mechanism, opposite outcomes.
+        //
+        // WHY IT IS TOLERATED rather than patched here: it is reachable only compoundly -- an ops
+        // requeue hard-deletes the attempt rows (erasing the evidence from an order that WAS
+        // dispatched), THEN a pre-dispatch failure on the requeued job leaves a markerless row, THEN
+        // a late supplier rejection arrives. Each step is real on its own; all three in sequence are
+        // rare. That is the whole reason it is tolerated -- if any step were common this would be a
+        // stop-the-line fix, not a pinned gap.
+        //
+        // EXPIRY -- this test must not rot into a comment with a test attached. The fix is specced at
+        // docs/superpowers/specs/2026-07-17-delivery-cap-without-erasing-evidence.md ("option B"):
+        // stop erasing the evidence, so that no-marker => never-dispatched holds BY CONSTRUCTION
+        // instead of by hope. It replaces OpsController's RemoveRange with a cap-reset marker, which
+        // changes the delivery attempt-cap mechanism on a live money path -- hence a sequenced change
+        // of its own, not a patch smuggled in here.
+        //
+        // When B lands this test FAILS, and that failure is the ACCEPTANCE SIGNAL, not a regression.
+        // Delete it and assert the inverse: the rejection is accepted, the order leaves the sweeper's
+        // reach, and the PO is never re-sent.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.DeliveryFailed);
+        await SeedPreDispatchAttemptAsync(db, orgId, orderId);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<ConflictObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.DeliveryFailed,
+            "the refusal writes nothing -- which is precisely the problem: delivery_failed is the "
+          + "status StrandedFailedDeliveryDetectionService sweeps and re-drives, so this rejected PO "
+          + "remains eligible to be sent to the supplier a SECOND time");
+        order.Status.Should().NotBe(OrderStatusConstants.RejectedBySupplier,
+            "before the dispatch-evidence guard this callback wrote rejected_by_supplier, which is "
+          + "terminal and therefore outside that sweeper's status filter -- this test is the "
+          + "regression that guard introduced, held visible until it is fixed at the root");
     }
 
     [Fact]
