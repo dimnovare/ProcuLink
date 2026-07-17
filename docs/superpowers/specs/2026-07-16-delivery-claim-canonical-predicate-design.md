@@ -241,13 +241,27 @@ considered and rejected as disproportionate.
 `DeliveryOutcome` on `claude/priceless-pike-d2eb0a` (f078bff, unmerged), and its design is better than the one
 this spec proposed. **Consume theirs; do not introduce a competing enum.**
 
-```csharp
-public enum DeliveryOutcome { Dispatched = 0, NotAttempted = 1 }
+**Updated 2026-07-17: the enum is now TERNARY, and the binary version was wrong.** PR #30 / 03a24c2:
 
-public record DeliveryResult(
-    bool Success, string? ErrorMessage, int? ResponseCode = null, string? ResponseBody = null,
-    DeliveryOutcome Outcome = DeliveryOutcome.Dispatched);
+```csharp
+public enum DeliveryOutcome { Dispatched = 0, ClaimLost = 1, NotRetryable = 2 }
 ```
+
+- **`ClaimLost`** — no dispatch, no attempt row, **transient**. **MUST keep rescheduling**: it is the only path
+  that recovers a crashed holder. Bounded — the next run either claims the now-stale row or finds the order
+  terminal.
+- **`NotRetryable`** — no dispatch, no attempt row, and no later attempt can help. Never reschedule (the
+  original unbounded ~30-min loop).
+
+The binary `{ Dispatched, NotAttempted }` collapsed transient and terminal, which turned "delivered 30 minutes
+late" into "never delivered, dead-lettered once the sweep burns `MaxRequeues=2`". A real-Postgres test
+(`CrashedHolderRecoveryCompositionPostgresTests`) fails if the two are collapsed — see §4.4a for why.
+
+My orthogonality argument survives intact: `Success` stays a separate axis, `Dispatched` is still the default,
+and the 0-row claim still returns `Success=true`, so no benign lost race logs a failure. My "don't split the
+concept" argument does **not** apply here and I was wrong to think it might: my split (`NotClaimed` vs
+`SkippedAutoDeliverOff`) was cosmetic — both terminal. This split is **behavioural** — transient vs terminal —
+and a test proves it.
 
 Why theirs wins, recorded so this is not re-litigated:
 
@@ -264,13 +278,51 @@ Why theirs wins, recorded so this is not re-litigated:
 - Their `Dispatched = 0` default is deliberate: a call site that forgets to mark itself degrades to the old
   noise, never to silently abandoning a deliverable order. Inverting that default is the dangerous direction.
 
-**What this spec still owes:** once both branches land, `DispatchArtifactAsync`'s claim-lost returns and its
-auto-deliver-off return must set `Outcome = DeliveryOutcome.NotAttempted` — nothing was dispatched and no
-attempt row was written, so the retry queue must not pick them up. Any job deciding whether to reschedule
-branches on `Outcome`, never on `ErrorMessage` text.
+**This spec now owes NOTHING here — PR #30 did all of it.** The mapping, for reference and for review:
 
-The founder's call on item 4 (keep control flow, add an outcome marker) stands and was independently reached
-by two other sessions. See [[project-delivery-outcome-notattempted]].
+| Return | Outcome |
+|---|---|
+| `DispatchArtifactAsync` relational claim-lost (~L222) | `ClaimLost` (`Success` stays `true`) |
+| `DispatchArtifactAsync` InMemory claim-lost (~L253) | `ClaimLost` (`Success` stays `true`) |
+| `DispatchArtifactAsync` auto-deliver-off (~L158) | `NotRetryable` |
+| `RetryDeliveryAsync` claim-lost | `ClaimLost` |
+| `RetryDeliveryAsync` terminal early-returns (not found / dead-letter / not-retryable status / no artifact / billing hold / cap) | `NotRetryable` |
+
+Auto-deliver-off is `NotRetryable` — the answer to the question this spec put to the type's owner: it
+dispatched nothing, and no retry can change a config decision, so it is terminal, not a lost race. It returns
+`Success=true`, so control flow is unchanged either way.
+
+Any job deciding whether to reschedule branches on `Outcome`, never on `ErrorMessage` text.
+
+The founder's call on item 4 (keep control flow, add an outcome marker) stands and was independently reached by
+three sessions. See [[project-delivery-outcome-notattempted]].
+
+### 4.4a The stuck sweep freshens the row it is recovering (verified on main)
+
+Found by `local_1559ce63` when the audit session made it *prove* rather than assert that stopping the retry
+queue was safe. Verified here against `origin/main`. `StuckDeliveryDetectionService`:
+
+```csharp
+// Bump UpdatedAt so this order leaves the stuck window: the retry job will move it
+// to a terminal status, and a duplicate sweep before then won't re-act on it.
+order.UpdatedAt = now;
+...
+await _retryEnqueuer.EnqueueAsync(orderId, orgId, ct);
+```
+
+The sweep stamps `UpdatedAt = now` on a `delivering` row and *then* enqueues the retry. The retry's claim
+requires `(Delivering && UpdatedAt < staleBefore)`. The row is now fresh, so the claim matches **0 rows** and
+bounces. **The comment is a false premise: the retry job cannot move it to a terminal status**, because the
+bump is what stops it claiming. Only the ~30-minute scheduled backoff ages the row enough for a later attempt
+to succeed.
+
+This is the same defect class as §1.1 and §8: **a comment asserting a guarantee the code does not deliver.** It
+also means the reclaim window and the sweep are coupled in a way neither file mentions — directly relevant
+here, because §4.2 makes the staleness gate shared and explicit for the first time.
+
+**Consequence for this spec:** the `~30-min backoff` is not a wasteful fallback, it is *the* crash-recovery
+mechanism. §4.2 must not "optimise" the staleness gate away, and §4.5 item 3's matrix must keep covering
+`fresh delivering → not claimable`, which is the property the whole recovery path rests on.
 
 **Rejected:** classifying a 0-row claim by re-reading the row (benign vs suspicious). It needs a third
 drift-prone "benign statuses" list, and it solves at runtime what §4.5's invariant solves at build time.
@@ -395,6 +447,29 @@ unconditional InMemory flip. The only genuinely new InMemory rejection is fresh-
 count is 1, not several.
 
 ---
+
+## 7a. OPEN DESIGN CALL — the stuck sweep's handback protocol (founder decision needed)
+
+Handed to this spec by `local_1559ce63` as "above my scope; your predicate work is the natural home". Agreed
+that it belongs here conceptually — it is entirely about claim/staleness semantics. **But it is NOT folded
+into the plan**, because it is a behaviour change to crash recovery, it rewrites 4 existing tests, and this
+spec is already last in a five-deep merge queue. Recorded here so it is not lost. **Founder call.**
+
+**The question:** should `StuckDeliveryDetectionService` hand a re-driven order back in an *idle claimable*
+status, instead of leaving it `delivering` with a fresh `UpdatedAt` (§4.4a)?
+
+| Option | Effect | Cost / risk |
+|---|---|---|
+| **A. Leave it; fix the false comment.** *(Recommended)* | `ClaimLost` reschedules, the row ages, the ~30-min backoff delivers it. Works today. | Recovery is ~30 min, not immediate. Cheapest, zero behaviour change, and it makes the comment honest — which is the actual defect. |
+| **B. Sweep sets `ready_to_deliver`.** | Retry claims immediately; recovery in seconds. The sweep's comment becomes true. | Rewrites 4 tests pinning `Status == Delivering` after re-drive. **Weakens a safety property:** an idle status is claimable *regardless of `UpdatedAt`*, so if the "stuck" holder is merely slow (a long SFTP push) rather than dead, the row is instantly claimable and the PO double-sends. The staleness gate exists precisely to make "abandoned" a *provable* property rather than a presumed one. |
+| **C. Keep `delivering`, drop the bump.** | Row stays stale, so the enqueued retry claims immediately *and* the staleness gate still proves abandonment. Best of both on paper. | The bump is load-bearing for the sweep's own idempotency (`UpdatedAt` is how a duplicate sweep knows not to re-act). Dropping it needs a separate `last_swept_at` column or equivalent — a schema change. |
+
+**Recommendation: A.** The defect that actually hurt anyone here is the *false comment*, not the 30-minute
+recovery — and B trades a proven safety property (staleness ⇒ genuinely abandoned) for latency on a path that
+already self-heals. C is the intellectually honest fix and is worth revisiting if the 30-minute window ever
+becomes a real complaint, but it is a schema change to solve a latency problem nobody has reported.
+
+Whichever wins, the comment must stop claiming the retry job will move the order to a terminal status.
 
 ## 8. Out of scope
 
