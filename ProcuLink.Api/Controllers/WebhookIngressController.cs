@@ -238,8 +238,14 @@ public sealed class WebhookIngressController : ControllerBase
     /// <c>20260716083147_AddDeliveryAttemptIdempotencyKey</c> added the column with NO backfill, so
     /// every row written before 2026-07-16 has a NULL key. <c>artifact_sha256</c> shipped 2026-06-11
     /// (<c>20260611095227</c>) and covers that legacy window. Orders dispatched in the ~2 days
-    /// between launch (2026-06-09) and 06-11 have neither and are refused — the residual gap fails
-    /// CLOSED, which is the safe direction.</para>
+    /// between launch (2026-06-09) and 06-11 have neither and are refused.</para>
+    ///
+    /// <para><b>A refusal writes nothing — but do not read that as "safe".</b> It leaves the order
+    /// on whatever status it had, and the consequence depends on the status: refusing a
+    /// <c>delivered</c> report leaves the PO re-drivable (good — it still gets sent), while refusing
+    /// a <c>rejected</c> report on a <c>delivery_failed</c> order leaves it re-drivable too, where
+    /// <c>StrandedFailedDeliveryDetectionService</c> will re-send the PO the supplier just rejected.
+    /// See <see cref="RefusalReason.NeverDispatched"/> for the full asymmetry and the follow-up.</para>
     ///
     /// <para>Marking a never-dispatched order 'delivered' would not merely be wrong: it would
     /// DISABLE that order's own safety net. StrandedReadyOrderDetectionService sweeps on
@@ -406,12 +412,30 @@ public sealed class WebhookIngressController : ControllerBase
         AlreadyRejected,
 
         /// <summary>
-        /// No attempt row carries a dispatch marker, so no send was ever begun for this order and no
-        /// supplier can be reporting on it. Two windows can ERASE the evidence for a genuinely
-        /// dispatched order — OpsController's requeue hard-deletes its attempt rows to reset the cap,
-        /// and DataRetentionService prunes attempt rows for terminal statuses (disabled by default,
-        /// 180d) — so this reason can be reached for an order that WAS sent long ago. Both fail
-        /// CLOSED: the callback is refused, never applied.
+        /// No attempt row carries a dispatch marker, so we cannot prove a send was ever begun.
+        /// USUALLY that means none was. It does NOT mean that: the evidence can be ERASED from an
+        /// order that genuinely WAS dispatched — OpsController's requeue hard-deletes its attempt
+        /// rows to reset the cap, and DataRetentionService prunes them for terminal statuses
+        /// (disabled by default, 180d).
+        ///
+        /// <para><b>Refusing is NOT automatically the safe direction — that claim was wrong and is
+        /// worth stating plainly, because it hid a real regression.</b> A refusal writes nothing, so
+        /// the order keeps whatever status it had, and what happens next depends on which status
+        /// that is:</para>
+        /// <list type="bullet">
+        ///   <item>refusing a <c>delivered</c> report leaves the order re-drivable — the PO gets
+        ///     sent, which is what we want. Safe.</item>
+        ///   <item>refusing a <c>rejected</c> report ALSO leaves it re-drivable — and if it is
+        ///     sitting in <c>delivery_failed</c>, <c>StrandedFailedDeliveryDetectionService</c>
+        ///     sweeps it and re-sends the PO the supplier just told us they REJECTED. That sweeper
+        ///     justifies its predicate on rejections landing in <c>rejected_by_supplier</c>; a
+        ///     refusal breaks that premise. Harmful.</item>
+        /// </list>
+        /// <para>So "fails closed" describes the WRITE, not the OUTCOME. The reachable path is
+        /// compound (ops requeue erases the rows → a pre-dispatch failure on the requeued job leaves
+        /// a markerless row → a late supplier rejection), which is why it is tracked as a follow-up
+        /// rather than patched here: closing it properly means not erasing the evidence in the first
+        /// place, so that no-marker ⇒ never-dispatched becomes true by construction.</para>
         /// </summary>
         NeverDispatched,
 
@@ -480,11 +504,13 @@ public sealed class WebhookIngressController : ControllerBase
     private static RefusalReason ClassifyRefusal(string orderStatus, bool hasDispatchEvidence) =>
         string.Equals(orderStatus, OrderStatusConstants.RejectedBySupplier, StringComparison.Ordinal)
             ? RefusalReason.AlreadyRejected
-            // Covers every state whose attempt rows carry no dispatch marker — the parse/review
+            // NO dispatch marker on any attempt row. That is USUALLY "never sent" — the parse/review
             // pipeline, the two reportable-but-idle states (ready_to_deliver awaiting a Send,
-            // delivery_held by the pre-send billing gate), AND an order whose only rows came from a
-            // pre-dispatch gate (missing config / no dispatcher / bad credentials / download
-            // failure). "Never sent" is TRUE for all of them.
+            // delivery_held by the pre-send billing gate), and an order whose only rows came from a
+            // pre-dispatch gate. But it is NOT ALWAYS: the evidence can be ERASED from an order that
+            // genuinely WAS sent (see RefusalReason.NeverDispatched). The absence of evidence is not
+            // evidence of absence, so this reason means "we cannot prove this was sent" — never
+            // "this was not sent". The supplier-facing sentence must not claim more than that.
             : !hasDispatchEvidence
                 ? RefusalReason.NeverDispatched
                 : RefusalReason.NotAwaitingOutcome;
@@ -498,10 +524,20 @@ public sealed class WebhookIngressController : ControllerBase
               + "cannot be applied to it. If that rejection was recorded in error, ask for the order to be "
               + "sent again and report the outcome of that new send.",
 
+            // Says only what is TRUE in every shape that reaches here, which is exactly: we have no
+            // record of a send. It does NOT say "this was never sent" — that is unprovable from
+            // here. Usually it is an order still awaiting its Send, but the evidence can also have
+            // been ERASED from an order that genuinely WAS dispatched (an ops requeue clears its
+            // attempt rows), and the status cannot tell the two apart: ready_to_deliver and
+            // delivery_held are each reachable BOTH before a dispatch and after one (MV-1 reset; A5
+            // hold). The previous wording asserted the order had "not been sent yet (it is
+            // 'delivered')" — self-contradictory, with a dead-end fix, sent to a counterparty.
+            // Both fixes are offered because we cannot tell the caller which case they are in.
             RefusalReason.NeverDispatched =>
-                $"This order has not been sent to a supplier yet (it is '{orderStatus}'), so a "
-              + $"'{reportedStatus}' update cannot be applied to it. Check that the orderId in the callback "
-              + "matches an order you received.",
+                $"This order is '{orderStatus}', and we have no record of it having been sent to a supplier, "
+              + $"so a '{reportedStatus}' update cannot be applied to it. Check that the orderId in the "
+              + "callback matches an order you received; if it does, contact the buyer to have the outcome "
+              + "recorded manually.",
 
             // NotAwaitingOutcome: it WAS sent, but has since moved on (e.g. MV-1 reset it to 'ready'
             // for re-transform after a mapping edit).

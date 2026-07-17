@@ -22,13 +22,20 @@ namespace ProcuLink.Infrastructure.Services;
 /// break a save.</para>
 ///
 /// <para>Honest limitation: writes issued via <c>ExecuteUpdateAsync</c> bypass the EF change
-/// tracker and are NOT observed. Current ExecuteUpdate writers: the parse job's parent-row
-/// update; the transform and delivery atomic claims; and the supplier status callback's claim
-/// (<c>WebhookIngressController.ApplyReportedStatusAsync</c> — so webhook-driven
-/// <c>→ delivered / → rejected_by_supplier</c> transitions never reach this observer, even
-/// though they are listed in the map below for the non-relational path and as documentation).
-/// The remaining tracked-entity writes — transform, resolution, stuck/ops, mapping-edit flows —
-/// are the majority of transitions and are all covered.</para>
+/// tracker and are NOT observed. This doc deliberately does NOT enumerate those writers. An
+/// earlier revision did, and its list was already wrong when written — it named four when there
+/// were eight — because a list in a comment is a second copy of a fact that lives in the code,
+/// and the copy drifts. Worse, a closed list reads as complete, which is how an existential gets
+/// sold as a universal (the defect that produced this subsystem's last several Criticals).
+/// To get the CURRENT set, ask the code:</para>
+/// <code>grep -rn "SetProperty(o =&gt; o.Status" --include=*.cs</code>
+/// <para>One consequence IS worth naming, because the map below would otherwise mislead: the
+/// supplier status callback claims via <c>ExecuteUpdateAsync</c>
+/// (<c>WebhookIngressController.ApplyReportedStatusAsync</c>), so webhook-driven
+/// <c>→ delivered / → rejected_by_supplier</c> transitions never reach this observer — even though
+/// they ARE listed in the map, which serves the non-relational path and documentation. The
+/// tracked-entity writes (transform, resolution, stuck/ops, mapping-edit flows) are the majority of
+/// transitions and are all covered.</para>
 /// </summary>
 public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
 {
