@@ -10,6 +10,7 @@ using Moq;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Webhooks;
 using ProcuLink.Infrastructure;
 using Xunit;
@@ -34,13 +35,14 @@ public class WebhookIngressControllerTests
     }
 
     private static (WebhookIngressController Controller, Mock<IHmacWebhookVerifier> Verifier, ProcuLinkDbContext Db)
-        Build(ProcuLinkDbContext? db = null)
+        Build(ProcuLinkDbContext? db = null, IOrderExceptionService? exceptions = null)
     {
         db ??= MakeDb();
         var verifier = new Mock<IHmacWebhookVerifier>();
         var ctrl     = new WebhookIngressController(
             verifier.Object,
             db,
+            exceptions ?? new RecordingExceptionService(),
             NullLogger<WebhookIngressController>.Instance);
         return (ctrl, verifier, db);
     }
@@ -326,6 +328,181 @@ public class WebhookIngressControllerTests
         order!.Status.Should().Be(OrderStatusConstants.RejectedBySupplier);
     }
 
+    // -- Exception reconcile + rejection reason (peer-review findings) --------
+
+    /// <summary>Records ReconcileAsync calls; the real service needs entities this test ctx ignores.</summary>
+    private sealed class RecordingExceptionService : IOrderExceptionService
+    {
+        public List<(Guid OrgId, Guid OrderId)> Calls { get; } = new();
+
+        public Task ReconcileAsync(Guid orgId, Guid orderId, CancellationToken ct)
+        {
+            Calls.Add((orgId, orderId));
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<OrderException>> ListAsync(Guid orgId, string? state, CancellationToken ct)
+            => throw new NotSupportedException();
+        public Task<IReadOnlyList<OrderException>> ListForOrderAsync(Guid orgId, Guid orderId, CancellationToken ct)
+            => throw new NotSupportedException();
+        public Task<bool> ResolveAsync(Guid orgId, Guid exceptionId, CancellationToken ct)
+            => throw new NotSupportedException();
+        public Task<bool> IgnoreAsync(Guid orgId, Guid exceptionId, CancellationToken ct)
+            => throw new NotSupportedException();
+    }
+
+    /// <summary>Throws, to prove a reconcile failure never fails the supplier callback.</summary>
+    private sealed class ThrowingExceptionService : IOrderExceptionService
+    {
+        public Task ReconcileAsync(Guid orgId, Guid orderId, CancellationToken ct)
+            => throw new InvalidOperationException("reconcile blew up");
+
+        public Task<IReadOnlyList<OrderException>> ListAsync(Guid orgId, string? state, CancellationToken ct)
+            => throw new NotSupportedException();
+        public Task<IReadOnlyList<OrderException>> ListForOrderAsync(Guid orgId, Guid orderId, CancellationToken ct)
+            => throw new NotSupportedException();
+        public Task<bool> ResolveAsync(Guid orgId, Guid exceptionId, CancellationToken ct)
+            => throw new NotSupportedException();
+        public Task<bool> IgnoreAsync(Guid orgId, Guid exceptionId, CancellationToken ct)
+            => throw new NotSupportedException();
+    }
+
+    [Theory]
+    [InlineData("rejected")]
+    [InlineData("delivered")]
+    public async Task Status_MutatingCallback_ReconcilesOrderExceptions(string reported)
+    {
+        // Mirrors OrderResolutionService.MarkRejectedAsync, the canonical rejection path, which
+        // reconciles after the status write. Without this, a stale delivery_failed exception from an
+        // earlier 503 keeps reading "Delivery to the supplier failed." on an order the supplier has
+        // since REJECTED -- and nothing else re-reconciles it. On the delivered->rejected path it
+        // inverts: a rejected order carrying ZERO open exceptions.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var exceptions = new RecordingExceptionService();
+        var (ctrl, verifier, _) = Build(db, exceptions);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivering);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"{reported}\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        await ctrl.Status("status-slug", CancellationToken.None);
+
+        exceptions.Calls.Should().ContainSingle().Which.Should().Be((orgId, orderId));
+    }
+
+    [Theory]
+    [InlineData("received")]
+    [InlineData("in_progress")]
+    public async Task Status_NonMutatingCallback_DoesNotReconcile(string reported)
+    {
+        // Telemetry mutates nothing, so there is no status change to reconcile against.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var exceptions = new RecordingExceptionService();
+        var (ctrl, verifier, _) = Build(db, exceptions);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivering);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"{reported}\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        await ctrl.Status("status-slug", CancellationToken.None);
+
+        exceptions.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Status_WhenReconcileThrows_CallbackStillSucceedsAndStatusIsWritten()
+    {
+        // The supplier callback must not fail because our bookkeeping did. Mirrors
+        // OrderServiceShared.SafeReconcileExceptionsAsync, which logs and swallows.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db, new ThrowingExceptionService());
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivering);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>("a reconcile failure is non-fatal");
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.RejectedBySupplier,
+            "the status write is committed before the reconcile is attempted");
+    }
+
+    [Fact]
+    public async Task Status_RejectedCallback_WritesReasonOntoLatestDeliveryAttempt()
+    {
+        // The reason reached ONLY an AuditEvent with EntityType="PurchaseOrder", which
+        // OrdersController.Get never reads (it filters EntityType=="Order") -- so the UI fell back to
+        // the latest DeliveryAttempt and showed the supplier rejecting the PO because of a GATEWAY
+        // TIMEOUT, while the real reason was unreachable. MarkRejectedAsync stamps it on the latest
+        // attempt (OrderResolutionService.cs:268); the webhook must do the same.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivering);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
+            Channel = "http", Destination = "d", Status = DeliveryAttempt.StatusFailed,
+            AttemptNumber = 1, AttemptedAt = DateTime.UtcNow.AddMinutes(-10),
+            ErrorMessage = "504 Gateway Timeout",
+        });
+        var latest = new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
+            Channel = "http", Destination = "d", Status = DeliveryAttempt.StatusSuccess,
+            AttemptNumber = 2, AttemptedAt = DateTime.UtcNow,
+        };
+        db.DeliveryAttempts.Add(latest);
+        await db.SaveChangesAsync();
+
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\",\"reason\":\"SKU discontinued\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        await ctrl.Status("status-slug", CancellationToken.None);
+
+        var saved = await db.DeliveryAttempts.FindAsync(latest.Id);
+        saved!.RejectionReason.Should().Be("SKU discontinued",
+            "the LATEST attempt carries the reason the UI surfaces");
+    }
+
+    [Fact]
+    public async Task Status_DeliveredCallback_DoesNotWriteARejectionReason()
+    {
+        // A positive ACK is not a rejection; nothing should be stamped as one.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivering);
+        var attempt = new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
+            Channel = "http", Destination = "d", Status = DeliveryAttempt.StatusSuccess,
+            AttemptNumber = 1, AttemptedAt = DateTime.UtcNow,
+        };
+        db.DeliveryAttempts.Add(attempt);
+        await db.SaveChangesAsync();
+
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\",\"reason\":\"ignore me\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        await ctrl.Status("status-slug", CancellationToken.None);
+
+        var saved = await db.DeliveryAttempts.FindAsync(attempt.Id);
+        saved!.RejectionReason.Should().BeNull();
+    }
+
     // ── Minimal in-memory DbContext ──────────────────────────────────────────
 
     private sealed class WebhookIngressTestDbContext : ProcuLinkDbContext
@@ -346,7 +523,6 @@ public class WebhookIngressControllerTests
             modelBuilder.Ignore<CanonicalFieldDef>();
             modelBuilder.Ignore<ItemMapping>();
             modelBuilder.Ignore<OutboundArtifact>();
-            modelBuilder.Ignore<DeliveryAttempt>();
             modelBuilder.Ignore<SupplierPoMapping>();
             modelBuilder.Ignore<SupplierDeliveryConfig>();
             modelBuilder.Ignore<IdempotencyKey>();
@@ -374,6 +550,15 @@ public class WebhookIngressControllerTests
             var jsonDocNullableConverter = new ValueConverter<JsonDocument?, string?>(
                 v => v == null ? null : v.RootElement.GetRawText(),
                 v => JsonDocHelpers.ParseNullable(v));
+
+            // DeliveryAttempt is MAPPED (not ignored): the rejection reason is written onto the
+            // latest attempt, which is where OrdersController.Get surfaces it from.
+            modelBuilder.Entity<DeliveryAttempt>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.Ignore(x => x.Order);
+                b.Ignore(x => x.Organisation);
+            });
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {

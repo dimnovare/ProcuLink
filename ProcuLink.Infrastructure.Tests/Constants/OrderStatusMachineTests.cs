@@ -166,7 +166,9 @@ public class OrderStatusMachineTests
         // because it is still reachable WITHOUT the webhook: DeliveryService's pre-claim failure
         // paths (FailMissingConfigAsync / FailBeforeDispatchAsync) write delivery_failed with no
         // status check, racing the enqueue-time guards in OrdersController.Redeliver /
-        // OpsController.RequeueDelivery. Rare, but real — and the observer SHOULD warn if it fires.
+        // OpsController.RequeueDelivery. Rare, but real — and the OBSERVER LISTS it as expected, so it
+        // stays silent when it fires. That silence is precisely WHY this exemption exists: the
+        // assertion below flags observer-listed edges the machine calls impossible, and this is one.
         Edge(ReadyToDeliver, Delivered),
         Edge(DeliveryFailed, Delivered),
         Edge(DeliveryDeadLetter, Delivered),
