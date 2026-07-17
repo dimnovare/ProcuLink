@@ -64,9 +64,9 @@ prevented the outage, and it is ranked first below.
 ## 3. Preconditions — do not start before these hold
 
 `delivery_unconfirmed` **does not exist on main.** Both c94c8ff (the redeliver feature) and 52c6431 (the
-hand-fix) live only on `claude/wizardly-spence-6b738a`, which is unmerged, unpushed, and checked out in an
-active worktree (`loving-euclid-2575e4`). On main the two dispatch predicates still agree — the drift this
-spec addresses is only real on that branch.
+hand-fix) live only on `claude/wizardly-spence-6b738a` — now **PR #27**, pushed, open, and the last open PR in
+the repo *(2026-07-17 ~12:30)*. On main the two dispatch predicates still agree — the drift this spec addresses
+is only real on that branch.
 
 **Order of operations:**
 
@@ -244,7 +244,7 @@ considered and rejected as disproportionate.
 ### 4.4 `Outcome` — SUPERSEDED, do not build
 
 **This section's original design is withdrawn (2026-07-17).** A sibling session has already built
-`DeliveryOutcome` on `claude/priceless-pike-d2eb0a` (f078bff, unmerged), and its design is better than the one
+`DeliveryOutcome` — **PR #30, merged 2026-07-17 08:27, now on main** — and its design is better than the one
 this spec proposed. **Consume theirs; do not introduce a competing enum.**
 
 **Updated 2026-07-17: the enum is now TERNARY, and the binary version was wrong.** PR #30 / 03a24c2:
