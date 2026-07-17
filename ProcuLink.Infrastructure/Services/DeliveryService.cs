@@ -490,6 +490,14 @@ public sealed class DeliveryService : IDeliveryService
 
         await _db.SaveChangesAsync(ct);
 
+        // Reconcile like every other terminal delivery status. Two things ride on this: the park
+        // gets an exception row (without one a parked order is invisible to the tiles/dashboard —
+        // "not all clear" over a grid of zeros), and a 'delivery_failed' exception left open by the
+        // attempt that preceded the park is auto-resolved. That second one is the sharp edge: an
+        // order asserting both "delivery failed" (error) and "unconfirmed" (warning) invites the
+        // operator to believe the red one and re-send — the duplicate PO this park exists to stop.
+        await SafeReconcileExceptionsAsync(order.OrgId, order.Id, ct);
+
         _logger.LogWarning(
             "DeliveryUnconfirmed: order {OrderId} (org {OrgId}) parked — a crash-recovery re-drive "
             + "re-adopted an in-flight send on {Protocol}, which cannot de-duplicate a re-send. "
@@ -505,13 +513,19 @@ public sealed class DeliveryService : IDeliveryService
     /// Says only what a re-adopted in-flight row PROVES: the send was ATTEMPTED, not that it
     /// succeeded — a crash between the marker commit and the network write, or a cancelled token on
     /// shutdown, parks with no send at all. Never fabricate an observed outcome.
+    /// <para>
+    /// A null <paramref name="protocol"/> yields the channel-agnostic wording, for callers that know
+    /// the order is parked but not which channel parked it (<c>OrderExceptionService.ProblemFor</c>
+    /// works from order status alone). Shared rather than restated: two operator surfaces telling
+    /// different stories about the same order is the failure this whole feature guards against.
+    /// </para>
     /// </summary>
-    internal static string BuildUnconfirmedMessage(string protocol) =>
+    internal static string BuildUnconfirmedMessage(string? protocol) =>
         $"Delivery unconfirmed. We may have sent this order, but lost the connection before the "
         + $"supplier confirmed it, and {DescribeChannel(protocol)} cannot tell us whether it arrived. "
         + $"Check with the supplier, then either send it again or mark it delivered.";
 
-    private static string DescribeChannel(string protocol) => protocol?.ToLowerInvariant() switch
+    private static string DescribeChannel(string? protocol) => protocol?.ToLowerInvariant() switch
     {
         "email" or "smtp" => "email",
         "erp_erply" => "the Erply connection",

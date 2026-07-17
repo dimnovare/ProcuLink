@@ -409,6 +409,106 @@ public class DeliveryServiceUnconfirmedParkTests
         deliveredResult.Parked.Should().BeFalse("a confirmed delivery is not a park");
     }
 
+    // ── The park must reach the exception surface (F1) ───────────────────────────────────────
+    // A park writes a terminal status like every other delivery outcome, so it must reconcile
+    // exceptions like every other delivery outcome. Two failures ride on this: a parked order with
+    // no exception row is invisible to the tiles/dashboard (the operator sees "not all clear" over
+    // a grid of zeros), and — worse — a park that FOLLOWS a failed attempt leaves that attempt's
+    // stale 'delivery_failed' exception OPEN. The order then asserts both "Delivery to the supplier
+    // failed" (error) and "delivery unconfirmed" at once. An operator who believes the red one
+    // clicks Send and hands the supplier the duplicate PO this whole feature exists to prevent.
+
+    [Fact]
+    public async Task ParkAfterAFailedAttempt_ResolvesTheStaleFailureException_AndNeverShowsBoth()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "erp_erply"));
+
+        // Attempt 1 genuinely failed and opened a 'delivery_failed' exception (PersistAttemptAsync's
+        // reconcile). Attempt 2 then crashed mid-send, leaving the in-flight row this re-drive
+        // re-adopts — so the park lands on top of a live failure exception.
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+            Channel = "erp_erply", Destination = "https://erp.example/orders",
+            Status = DeliveryAttempt.StatusFailed, AttemptNumber = 1,
+            AttemptedAt = DateTime.UtcNow.AddHours(-2), ErrorMessage = "HTTP 503",
+        });
+        db.OrderExceptions.Add(new OrderException
+        {
+            Id = Guid.NewGuid(), OrgId = ids.OrgId, OrderId = ids.OrderId,
+            Stage = "Deliver", Code = "delivery_failed", Severity = "error", State = "open",
+            Message = "Delivery to the supplier failed.",
+            CreatedAt = DateTime.UtcNow.AddHours(-2),
+        });
+
+        var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+            Channel = "erp_erply", Destination = "https://erp.example/orders",
+            Status = DeliveryAttempt.StatusDispatching, AttemptNumber = 2,
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-30), IdempotencyKey = key,
+        });
+        await db.SaveChangesAsync();
+
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 200), "erp_erply", ResendSafety.Unsafe);
+        var service = CreateService(db, dispatcher, encryption);
+
+        var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
+
+        result.Parked.Should().BeTrue();
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId)).Status
+            .Should().Be(OrderStatusConstants.DeliveryUnconfirmed);
+
+        var open = await db.OrderExceptions
+            .Where(e => e.OrderId == ids.OrderId && e.State == "open")
+            .ToListAsync();
+
+        open.Should().ContainSingle(
+            "a parked order has exactly one problem — an unknown outcome; telling the operator it ALSO definitely failed "
+            + "invites the Send-again duplicate the park exists to prevent");
+        open[0].Code.Should().Be("delivery_unconfirmed");
+
+        (await db.OrderExceptions.SingleAsync(e => e.Code == "delivery_failed")).State
+            .Should().Be("resolved", "the failure that preceded the park is no longer the order's condition");
+    }
+
+    [Fact]
+    public async Task Park_OpensAWarningException_ThatNeverClaimsTheSendHappened()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "email"));
+
+        var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+            Channel = "email", Destination = "orders@supplier.example",
+            Status = DeliveryAttempt.StatusDispatching, AttemptNumber = 1,
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-30), IdempotencyKey = key,
+        });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db, new CountingDispatcher(new DeliveryResult(true, null, 200), "email", ResendSafety.Unsafe), encryption);
+        await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
+
+        var ex = await db.OrderExceptions.SingleAsync(e => e.OrderId == ids.OrderId && e.State == "open");
+
+        ex.Code.Should().Be("delivery_unconfirmed");
+        ex.Stage.Should().Be("Deliver");
+        ex.Severity.Should().Be("warning",
+            "we do not know that this delivery failed — dressing an unknown outcome as an error is the same lie in a different colour");
+        ex.Message.Should().Contain("may have sent this order",
+            "the exception surface must not assert a send the crash-recovery path never observed");
+        ex.Message.Should().Contain("send it again or mark it delivered", "the operator's two choices are the point of the park");
+        ex.Message.Should().NotContainAny("idempotency", "re-adopt", "dispatching row", "park");
+    }
+
     /// <summary>The exact post-park state: order parked, its attempt row finalised 'unconfirmed'.</summary>
     private static async Task<(Guid OrgId, Guid SupplierId, Guid OrderId, Guid ArtifactId)> SeedParkedOrderAsync(
         ProcuLinkDbContext db, DeliveryEncryptionService encryption, string protocol)
