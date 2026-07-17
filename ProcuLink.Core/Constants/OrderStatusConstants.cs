@@ -30,8 +30,25 @@ public static class OrderStatusConstants
     /// Routing hold state: the source file was extracted but no supplier could be determined,
     /// so the order is parked awaiting a human (or content-matcher) to assign one. NOT a failure —
     /// a user-action backlog, resolvable by assigning a supplier, which re-enters the parse flow.
-    /// Introduced by the supplier-routing track (Phase 0). No order reaches this state until the
-    /// content-routing ingest paths are wired (Phase 1).
+    /// <para>
+    /// REACHABLE IN PRODUCTION TODAY — do not treat this as a future state. The single writer is
+    /// <c>OrderIngestionService.cs</c> (<c>if (entity.SupplierId is null) newStatus = Unrouted</c>) on
+    /// the main parse path, fed by the three pull-ingress channels when an org has no valid default
+    /// supplier (unset, or soft-deleted after ingress was enabled): <c>SftpIngressService</c>,
+    /// <c>S3IngressService</c> and <c>EmailPollOrgJob</c> each import such files via
+    /// <c>IOrderService.CreateUnroutedStubAsync</c> rather than dropping them. Corroborating live
+    /// consumers: <c>OrdersController</c>'s assign-supplier endpoint is gated on this status,
+    /// <c>OpsHealthService</c> reports it as <c>PendingRouting</c>, and <c>OrderExceptionService</c>
+    /// opens an <c>unrouted_order</c> exception for it with precedence over unresolved lines.
+    /// </para>
+    /// <para>
+    /// This doc previously read "No order reaches this state until the content-routing ingest paths
+    /// are wired (Phase 1)". That was true when written and became false when Phase 1b shipped, and
+    /// nothing failed — a frontend author then trusted it and shipped a status map that renders a
+    /// parked, awaiting-assignment order as brand-new "New" at stage 0, hiding the one order in the
+    /// inbox that needs a human. If you change who writes this status, change this paragraph: it is
+    /// read as a reachability contract by code in the other repo.
+    /// </para>
     /// </summary>
     public const string Unrouted = "unrouted";
 
