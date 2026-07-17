@@ -74,18 +74,34 @@ spec addresses is only real on that branch.
    (which has itself advanced to 73e7e51), so it has the observer-superset structural test and `internal`
    visibility on `OrderStatusTransitionObserver.AllowedTransitions`.
 2. **PR #27** (`fix(delivery): park unknown-outcome re-drives instead of duplicating the PO`) merges to main.
-   It is **OPEN and MERGEABLE** as of 2026-07-16 ~19:00. ← **the only remaining blocker**
-3. **Then** this spec executes on main.
+   **OPEN and MERGEABLE**; still open as of 2026-07-17. It carries both `delivery_unconfirmed` (52c6431) and
+   the hold-set hand-fix (392b5a4). ← **blocker 1**
+3. **`claude/priceless-pike-d2eb0a`** (f078bff, `fix(delivery): stop the unbounded retry loop on non-dispatch
+   results`) merges to main — it owns `DeliveryOutcome` (§4.4). Unmerged, no PR seen. ← **blocker 2**
+4. **Then** this spec executes on main, merging main first.
 
 Starting before step 2 means hand-resolving conflicts in the exact lines PR #27 changes. Project memory
 already records the cost of rebasing two branches that edit the same method.
 
-> **Live duplicate-work hazard (2026-07-16 ~19:00).** Session `local_f5ee08ce`, titled *"Add a structural
-> guard for delivery status-list drift"* (branch `claude/wizardly-khayyam-c45ffe`, worktree
-> `keen-edison-52f244`), is running against this same problem. At time of writing it has no commits and a
-> clean tree at `origin/main`. Whoever executes this spec must reconcile with that session first — and note
-> that a guard built on today's main will pin two predicates that **currently agree**, i.e. it would not
-> reproduce the 52c6431 failure at all, because `delivery_unconfirmed` does not exist on main (§1.1).
+> **Duplicate-work hazard — RESOLVED 2026-07-17.** Session `local_f5ee08ce` (*"Add a structural guard for
+> delivery status-list drift"*, branch `claude/wizardly-khayyam-c45ffe`) turned out **not** to collide. Its
+> piece is **test-only and already MERGED to main** (56a82ba + 8684d17;
+> `ProcuLink.Api.Tests/Integration/RedeliverableStatusInvariantPostgresTests.cs`). It has no further edits
+> planned in `DeliveryService.cs`, so the claim lines are this spec's alone.
+>
+> It sidestepped the blocker this spec is stuck behind by proving non-vacuity against
+> **`delivery_dead_letter`** — a status that already exists on main — rather than against
+> `delivery_unconfirmed`. That is why it shipped and this has not.
+>
+> **Its test is the safety net under this refactor.** Per status in `RedeliverableFrom`, on real Postgres, it
+> asserts the claim CLAIMS it (dispatch + success attempt row + lands `delivered`) and `HoldForBillingAsync`
+> HOLDS it (and dispatches 0). If the §4.3 repoint breaks claim semantics, it says so per status with dispatch
+> evidence. Merge main before executing so it is running underneath.
+>
+> Confirmed by that session, and worth keeping straight: its test catches **neither** of this spec's two
+> traps — the staleness divergence (it is relational-only and statuses-only) nor the Dispatch/Retry return
+> contracts (it deliberately never asserts on the return value, because `Success` is `true` for the
+> silent-strand case). §4.5 item 3's equivalence matrix is still required.
 
 ---
 
@@ -104,11 +120,27 @@ public static readonly IReadOnlySet<string> ClaimableForDispatchFrom =
 /// a parked order is re-driven only by a human "Send again", never by the backoff queue (52c6431).
 public static readonly IReadOnlySet<string> ClaimableForRetryFrom =
     Set(ReadyToDeliver, DeliveryFailed);
+
+/// HoldForBillingAsync's holdable set — the FOURTH list (added 2026-07-17; see below).
+/// Must accept every status "Send again" can traverse, because a lapsed org's redeliver
+/// reaches the billing gate BEFORE the claim.
+public static readonly IReadOnlySet<string> HoldableForBillingFrom =
+    Set(ReadyToDeliver, DeliveryFailed, DeliveryUnconfirmed);
 ```
 
-One canonical set is **wrong** — there are genuinely two, differing by exactly one status, and that delta is a
-load-bearing product decision. Naming one and leaving its near-twin a literal 600 lines away hides the very
+One canonical set is **wrong** — there are genuinely three, and the deltas between them are load-bearing
+product decisions. Naming one and leaving its near-twins as literals hundreds of lines away hides the very
 thing the next reader needs to see.
+
+**The fourth list (added 2026-07-17, from `local_f5ee08ce`).** This spec originally mapped only the five
+*enqueue* sites and missed `HoldForBillingAsync`'s holdable set (~L966), which sits *downstream* of the billing
+gate at `DeliverOrderJob.cs:86` — a path "Send again" traverses whenever the org has lapsed. Its failure mode
+is the same silent shape but **strictly worse than the one this spec was written for**: a status it refuses
+holds nothing, sends nothing, and audits nothing, and because the order never becomes `delivery_held`,
+`ReleaseBillingHeldOrdersAsync` never re-drives it on reactivation. **Permanent invisible strand, no
+self-heal** — where the claim-drift case at least leaves an order a sweep can find. It was hand-fixed in
+392b5a4, which is *inside PR #27* — i.e. the same list-by-hand pattern bit a fourth time on one branch. That
+is the argument for the named set, not against it.
 
 These hold **idle** statuses only. The stale-`delivering` reclaim is not status membership — it is status *plus
 time* — so it composes onto the set in the predicate (§4.2), not into it.
@@ -177,24 +209,42 @@ The `IsRelational()` fork stays. It is necessary only because InMemory cannot ru
 because of the predicate. It is also a house idiom (7 services, 164 InMemory test files); deleting it was
 considered and rejected as disproportionate.
 
-### 4.4 `Outcome` — honest logs, unchanged control flow
+### 4.4 `Outcome` — SUPERSEDED, do not build
 
-73 non-test construction sites, so a required parameter is out. A derived init property touches only the sites
-whose meaning is special:
+**This section's original design is withdrawn (2026-07-17).** A sibling session has already built
+`DeliveryOutcome` on `claude/priceless-pike-d2eb0a` (f078bff, unmerged), and its design is better than the one
+this spec proposed. **Consume theirs; do not introduce a competing enum.**
 
 ```csharp
-public enum DeliveryOutcome { Dispatched, NotClaimed, SkippedAutoDeliverOff, Failed }
+public enum DeliveryOutcome { Dispatched = 0, NotAttempted = 1 }
 
-public record DeliveryResult(bool Success, string? ErrorMessage, int? ResponseCode = null, string? ResponseBody = null)
-{
-    public DeliveryOutcome Outcome { get; init; } = Success ? DeliveryOutcome.Dispatched : DeliveryOutcome.Failed;
-}
+public record DeliveryResult(
+    bool Success, string? ErrorMessage, int? ResponseCode = null, string? ResponseBody = null,
+    DeliveryOutcome Outcome = DeliveryOutcome.Dispatched);
 ```
 
-The other ~70 sites compile untouched and derive correctly. Only the claim-lost and auto-deliver-off returns
-set it explicitly. `Success` semantics are unchanged, so the benign concurrent-activation case behaves exactly
-as today — `DeliverOrderJob` simply stops logging "success" for "did nothing", and ops-health gains a
-countable signal.
+Why theirs wins, recorded so this is not re-litigated:
+
+- **It is orthogonal to `Success`; mine was not.** My `{ Dispatched, NotClaimed, SkippedAutoDeliverOff, Failed }`
+  made `Failed` an *outcome*, duplicating what `Success` already says. Theirs keeps the axes separate:
+  `Dispatched` + `Success=false` is a real, retryable failure; `NotAttempted` is not retryable at all.
+- **It solves a safety bug, not a logging nit.** Rescheduling a `NotAttempted` result is an unbounded ~30-min
+  loop, not a retry: with no `DeliveryAttempt` row the count is frozen, so `attemptsMade >= maxAttempts` never
+  trips and `BackoffFor` returns the same delay forever. `ResponseCode` is null, so the 4xx guard misses it
+  too. My design would have logged honestly and still spun.
+- **My extra members were logging detail.** `NotClaimed` and `SkippedAutoDeliverOff` are both instances of
+  their `NotAttempted`. Splitting them buys nothing for the retry contract and would have broken a guard that
+  branches on `== NotAttempted`.
+- Their `Dispatched = 0` default is deliberate: a call site that forgets to mark itself degrades to the old
+  noise, never to silently abandoning a deliverable order. Inverting that default is the dangerous direction.
+
+**What this spec still owes:** once both branches land, `DispatchArtifactAsync`'s claim-lost returns and its
+auto-deliver-off return must set `Outcome = DeliveryOutcome.NotAttempted` — nothing was dispatched and no
+attempt row was written, so the retry queue must not pick them up. Any job deciding whether to reschedule
+branches on `Outcome`, never on `ErrorMessage` text.
+
+The founder's call on item 4 (keep control flow, add an outcome marker) stands and was independently reached
+by two other sessions. See [[project-delivery-outcome-notattempted]].
 
 **Rejected:** classifying a 0-row claim by re-reading the row (benign vs suspicious). It needs a third
 drift-prone "benign statuses" list, and it solves at runtime what §4.5's invariant solves at build time.
@@ -203,10 +253,22 @@ drift-prone "benign statuses" list, and it solves at runtime what §4.5's invari
 
 **Ranked. The first is the one that would have caught 52c6431.**
 
-1. **`RedeliverableFrom_IsSubsetOf_ClaimableForDispatchFrom`** — pure, no DB, milliseconds. Directly pins the
-   regression.
-2. **Sibling invariants for the other enqueue paths** (§5 maps them). Note the Ops guard set is *not* a
-   subset — the invariant there must be stated over its **normalized target**, not its guard.
+0. **Already merged, not ours to write:** `RedeliverableStatusInvariantPostgresTests` (§3) pins the same
+   invariant *behaviourally* on real Postgres, across the claim and the hold set. It is the net; do not
+   duplicate it.
+1. **`RedeliverableFrom_IsSubsetOf_ClaimableForDispatchFrom`** — pure, no DB, milliseconds. Complementary to
+   item 0, not a substitute, and vice versa.
+
+   > **Its validity is conditional, and the condition is this spec.** As `local_f5ee08ce` correctly argued: a
+   > set-vs-set assertion pins *declaration against declaration*, and means nothing while the real gates are
+   > hand-written literals that can drift underneath it — that is fake safety. It only becomes load-bearing
+   > once **every** gate derives from the named set (§4.1 + §4.3). It therefore must ship in the same change
+   > as the repoint, never alone or ahead of it. What it buys over item 0: build-time, milliseconds, no
+   > Docker — it fails in the editor rather than in CI.
+
+2. **Sibling invariants for the other enqueue paths** (§5 maps them), plus the **hold set** (§4.1). Note the
+   Ops guard set is *not* a subset — the invariant there must be stated over its **normalized target**, not
+   its guard.
 3. **Relational/InMemory equivalence matrix, on real Postgres.** For every status in
    `OrderStatusMachine.AllStatuses` × {fresh, stale} `UpdatedAt`, assert the relational `ExecuteUpdateAsync`
    claim and `predicate.Compile()(order)` reach the same verdict.

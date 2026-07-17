@@ -13,7 +13,10 @@
 ## Global Constraints
 
 - **BLOCKED until PR #27 (`claude/wizardly-spence-6b738a`) merges to main.** `delivery_unconfirmed` does not exist on main. Do not start before it lands; see spec §3.
-- **Reconcile with session `local_f5ee08ce`** (branch `claude/wizardly-khayyam-c45ffe`, *"Add a structural guard for delivery status-list drift"*) before writing code — it targets this same problem.
+- **ALSO BLOCKED on `claude/priceless-pike-d2eb0a` (f078bff)** — it owns `DeliveryOutcome`. Task 5 consumes it and must not re-declare it.
+- **Merge main FIRST.** `RedeliverableStatusInvariantPostgresTests` (56a82ba + 8684d17) is merged and green: per status in `RedeliverableFrom`, on real Postgres, it asserts the claim CLAIMS it and `HoldForBillingAsync` HOLDS it. It is the net under this refactor — if a repoint breaks claim semantics it tells you per status with dispatch evidence. Do not duplicate it; do not "fix" it if it goes red.
+- Session `local_f5ee08ce` is **resolved, not colliding** — its work was test-only and is on main. It has no further edits planned in `DeliveryService.cs`.
+- **Never assert dispatch via `result.Success`** — it is `true` for the silent-strand case. Evidence is the dispatcher call + the `DeliveryAttempt` row.
 - Work in an isolated git worktree (`superpowers:using-git-worktrees`). Never in the shared checkout.
 - Every EF query org-scoped: `.Where(x => x.OrganisationId == organisationId)`. No exceptions.
 - No raw SQL — EF Core only.
@@ -32,7 +35,7 @@
 | `ProcuLink.Core/Services/Delivery/DeliveryClaim.cs` (create) | The single claim predicate factory. No EF dependency — BCL expressions only. |
 | `ProcuLink.Core/Services/Delivery/DeliveryResult.cs` (modify) | Add `DeliveryOutcome` + the derived `Outcome` init property. |
 | `ProcuLink.Infrastructure/Services/DeliveryService.cs` (modify) | Repoint all four claim sites at the shared predicate. |
-| `ProcuLink.Api/Jobs/DeliverOrderJob.cs` (modify) | Log `NotClaimed` distinctly from a real dispatch. |
+| `ProcuLink.Api/Jobs/DeliverOrderJob.cs` | **No change here.** The `NotAttempted` reschedule guard is owned by `claude/priceless-pike-d2eb0a` (f078bff), in both `DeliverOrderJob` and `RetryDeliveryJob`. Do not touch it. |
 | `ProcuLink.Infrastructure.Tests/Constants/OrderStatusMachineTests.cs` (modify) | The subset invariants (pure, no DB). |
 | `ProcuLink.Core.Tests` or `ProcuLink.Infrastructure.Tests/Services/DeliveryClaimTests.cs` (create) | Factory unit tests incl. the empty-set guard. |
 | `ProcuLink.Api.Tests/Integration/DeliveryClaimEquivalencePostgresTests.cs` (create) | Relational-vs-compiled equivalence matrix on real Postgres. |
@@ -93,6 +96,21 @@ Append to `OrderStatusMachineTests.cs`:
             .Should().BeEquivalentTo(new[] { OrderStatusConstants.DeliveryUnconfirmed },
                 "a parked (delivery_unconfirmed) order is re-driven ONLY by a human Send again — the " +
                 "automatic backoff queue must never pick it up");
+
+    /// <summary>
+    /// The FOURTH list. HoldForBillingAsync sits downstream of DeliverOrderJob's billing gate, on the path
+    /// "Send again" takes when the org has lapsed. Its drift is worse than the claim's: a refused status
+    /// holds nothing, sends nothing, audits nothing, and never reaches delivery_held — so
+    /// ReleaseBillingHeldOrdersAsync never rescues it on reactivation. Permanent strand, no self-heal.
+    /// Hand-fixed once in 392b5a4; this is the assertion that stops it happening a third time.
+    /// </summary>
+    [Fact]
+    public void RedeliverableFrom_IsSubsetOf_HoldableForBillingFrom()
+        => OrderStatusMachine.RedeliverableFrom.Should().BeSubsetOf(
+            OrderStatusMachine.HoldableForBillingFrom,
+            "a lapsed org's Send again reaches the billing gate BEFORE the claim. A status the hold set " +
+            "refuses is held nowhere, sent nowhere and audited nowhere, and never becomes delivery_held — " +
+            "so the reactivation re-drive never finds it. That strand is permanent, unlike a lost claim");
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -131,6 +149,19 @@ In `OrderStatusMachine.cs`, directly beneath `RedeliverableFrom`:
     /// </summary>
     public static readonly IReadOnlySet<string> ClaimableForRetryFrom =
         Set(ReadyToDeliver, DeliveryFailed);
+
+    /// <summary>
+    /// HoldForBillingAsync's holdable set. This gate sits DOWNSTREAM of DeliverOrderJob's billing check, on
+    /// the path "Send again" takes whenever the org has lapsed — so it must accept every status
+    /// <see cref="RedeliverableFrom"/> admits.
+    ///
+    /// <para><b>Its drift is worse than the claim's.</b> A status this refuses holds nothing, sends nothing
+    /// and audits nothing; because the order never reaches 'delivery_held', ReleaseBillingHeldOrdersAsync
+    /// never re-drives it on reactivation. Permanent invisible strand with no self-heal, where a claim-drift
+    /// at least leaves a row a sweep can find. Hand-fixed once already in 392b5a4 — hence this set.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> HoldableForBillingFrom =
+        Set(ReadyToDeliver, DeliveryFailed, DeliveryUnconfirmed);
 ```
 
 - [ ] **Step 4: Run to verify it passes**
@@ -492,18 +523,35 @@ than Postgres. Aged the seed to match its own Postgres twin."
 
 ---
 
-### Task 5: `DeliveryOutcome` — stop the log claiming success for "did nothing"
+### Task 5: Mark the non-dispatch returns `NotAttempted` + repoint the hold set
+
+> **Scope changed 2026-07-17 — read this before writing any enum.** This task originally declared its own
+> `DeliveryOutcome { Dispatched, NotClaimed, SkippedAutoDeliverOff, Failed }`. That design is **withdrawn**
+> (spec §4.4). `claude/priceless-pike-d2eb0a` (f078bff) already owns `DeliveryOutcome`, its design is better,
+> and two enums cannot coexist. **Consume theirs. Do NOT re-declare it, do NOT add members to it.** Adding
+> members would break a guard that branches on `== NotAttempted`.
 
 **Files:**
-- Modify: `ProcuLink.Core/Services/Delivery/DeliveryResult.cs`
-- Modify: `ProcuLink.Infrastructure/Services/DeliveryService.cs` (the two claim-lost returns + the auto-deliver-off return)
-- Modify: `ProcuLink.Api/Jobs/DeliverOrderJob.cs`
+- Modify: `ProcuLink.Infrastructure/Services/DeliveryService.cs` — the two claim-lost returns, the auto-deliver-off return, and `HoldForBillingAsync`'s holdable gate (~L966)
 - Test: `ProcuLink.Infrastructure.Tests/Services/DeliveryClaimOutcomeTests.cs` (create)
 
 **Interfaces:**
-- Produces: `DeliveryOutcome { Dispatched, NotClaimed, SkippedAutoDeliverOff, Failed }`; `DeliveryResult.Outcome` (init-only, defaults to `Success ? Dispatched : Failed`).
+- Consumes (already defined on `claude/priceless-pike-d2eb0a`, must be on main first):
+  `enum DeliveryOutcome { Dispatched = 0, NotAttempted = 1 }` and
+  `record DeliveryResult(bool Success, string? ErrorMessage, int? ResponseCode = null, string? ResponseBody = null, DeliveryOutcome Outcome = DeliveryOutcome.Dispatched)`.
+- Consumes: `OrderStatusMachine.HoldableForBillingFrom` (Task 1).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Guard — confirm the enum is on main before writing anything**
+
+```bash
+git show origin/main:ProcuLink.Core/Services/Delivery/DeliveryResult.cs | grep -n "NotAttempted"
+```
+
+Expected: a match. If it returns nothing, `claude/priceless-pike-d2eb0a` has not merged — **STOP** (Global Constraints). Do not declare the enum yourself to unblock; that is the collision this task exists to avoid.
+
+- [ ] **Step 2: Write the failing test**
+
+Create `ProcuLink.Infrastructure.Tests/Services/DeliveryClaimOutcomeTests.cs`:
 
 ```csharp
 using FluentAssertions;
@@ -515,111 +563,85 @@ namespace ProcuLink.Infrastructure.Tests.Services;
 public class DeliveryClaimOutcomeTests
 {
     [Fact]
-    public void Outcome_DefaultsFromSuccess_SoExistingCallSitesStayCorrect()
+    public void LostClaim_IsSuccessful_ButMarkedNotAttempted()
     {
-        new DeliveryResult(true, null).Outcome.Should().Be(DeliveryOutcome.Dispatched);
-        new DeliveryResult(false, "boom").Outcome.Should().Be(DeliveryOutcome.Failed);
+        var r = new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotAttempted);
+
+        r.Success.Should().BeTrue(
+            "the benign concurrent-activation case must NOT schedule a retry — another worker owns the send");
+        r.Outcome.Should().Be(DeliveryOutcome.NotAttempted,
+            "'we sent nothing because another worker owns it' and 'we delivered the PO' were the same value " +
+            "before this, which is how a stranded order got logged as a success");
     }
 
     [Fact]
-    public void NotClaimed_IsSuccessful_ButDistinguishableFromADispatch()
-    {
-        var r = new DeliveryResult(true, null) { Outcome = DeliveryOutcome.NotClaimed };
-
-        r.Success.Should().BeTrue("the benign concurrent-activation case must NOT schedule a retry");
-        r.Outcome.Should().Be(DeliveryOutcome.NotClaimed,
-            "'we sent nothing because another worker owns it' and 'we delivered the PO' were the same " +
-            "value before this — which is how a stranded order got logged as a success");
-    }
+    public void Outcome_DefaultsToDispatched_SoAForgottenCallSiteDegradesToNoiseNotAbandonment()
+        => new DeliveryResult(true, null).Outcome.Should().Be(DeliveryOutcome.Dispatched);
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [ ] **Step 3: Run to verify it fails**
 
 ```bash
 dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~DeliveryClaimOutcomeTests"
 ```
 
-Expected: compile error — `DeliveryOutcome` does not exist.
+Expected: FAIL — the returns are not yet marked. (If it errors that `Outcome` is unknown, Step 1's guard was skipped.)
 
-- [ ] **Step 3: Add the enum + derived property**
+- [ ] **Step 4: Mark the three non-dispatch returns in `DeliveryService.cs`**
 
-Replace the record declaration in `DeliveryResult.cs` (keep the existing XML docs on the positional params):
-
-```csharp
-/// <summary>What a dispatch call actually did. `Success` alone cannot distinguish "delivered the PO"
-/// from "sent nothing because someone else owns the claim" — both are (true, null).</summary>
-public enum DeliveryOutcome
-{
-    /// <summary>The payload reached the remote endpoint and it accepted.</summary>
-    Dispatched,
-    /// <summary>The atomic claim matched 0 rows: another worker owns it, or it left a claimable state.
-    /// Benign and deliberately NOT a failure — no retry is scheduled.</summary>
-    NotClaimed,
-    /// <summary>Auto-deliver is off for this connection and the caller required it.</summary>
-    SkippedAutoDeliverOff,
-    /// <summary>The dispatch was attempted and failed.</summary>
-    Failed,
-}
-
-public record DeliveryResult(bool Success, string? ErrorMessage, int? ResponseCode = null, string? ResponseBody = null)
-{
-    /// <summary>Defaults to the Success-derived meaning, so the ~70 dispatcher-layer construction sites
-    /// stay correct untouched. Only DeliveryService's claim-lost / skip paths set it explicitly.</summary>
-    public DeliveryOutcome Outcome { get; init; } = Success ? DeliveryOutcome.Dispatched : DeliveryOutcome.Failed;
-}
-```
-
-- [ ] **Step 4: Tag the three special returns in `DeliveryService.cs`**
+Each of these dispatched nothing and wrote no `DeliveryAttempt` row, so the retry queue must not pick them up:
 
 ```csharp
 // auto-deliver off (requireAutoDeliver && !config.AutoDeliver)
-return new DeliveryResult(true, null) { Outcome = DeliveryOutcome.SkippedAutoDeliverOff };
+return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotAttempted);
 
 // relational claim: claimed == 0
-return new DeliveryResult(true, null) { Outcome = DeliveryOutcome.NotClaimed };
+return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotAttempted);
 
 // InMemory claim: predicate rejected
-return new DeliveryResult(true, null) { Outcome = DeliveryOutcome.NotClaimed };
+return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotAttempted);
 ```
 
-- [ ] **Step 5: Make the job log honestly**
+Leave `Success` alone. Rescheduling a `NotAttempted` is an unbounded ~30-min loop, not a retry: with no attempt row `CountDeliveryAttemptsAsync` is frozen, `attemptsMade >= maxAttempts` never trips, and `BackoffFor` returns the same delay forever.
 
-In `DeliverOrderJob.ExecuteAsync`, replace `if (result.Success) return;` with:
+- [ ] **Step 5: Repoint `HoldForBillingAsync` to the canonical set**
+
+Replace the hand-written holdable literal (~L966) — it currently reads `order.Status is not (OrderStatusConstants.ReadyToDeliver or OrderStatusConstants.DeliveryFailed)`:
 
 ```csharp
-        if (result.Success)
-        {
-            // "Nothing was sent" and "the PO was delivered" were both logged as success before this.
-            if (result.Outcome != DeliveryOutcome.Dispatched)
-                _logger.LogInformation(
-                    "DeliverOrderJob: order {OrderId} not dispatched ({Outcome}) — no payload was sent.",
-                    orderId, result.Outcome);
-            return;
-        }
+        // The FOURTH list (spec §4.1). Derives from the named set so it cannot drift away from
+        // RedeliverableFrom again: a status this refuses is held nowhere, sent nowhere and audited
+        // nowhere, and never reaches delivery_held — so ReleaseBillingHeldOrdersAsync never rescues it
+        // on reactivation. That strand is permanent, unlike a lost claim. Hand-fixed once in 392b5a4.
+        if (order is null || !OrderStatusMachine.HoldableForBillingFrom.Contains(order.Status))
+            return false;
 ```
 
-- [ ] **Step 6: Run to verify**
+- [ ] **Step 6: Run to verify it passes**
 
 ```bash
 dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~DeliveryClaimOutcomeTests"
-dotnet build
+dotnet test ProcuLink.Api.Tests --filter "FullyQualifiedName~RedeliverableStatusInvariant"
 ```
 
-Expected: PASS, and the build stays green — the ~70 other `new DeliveryResult(...)` sites are untouched.
+Expected: PASS for both. The second is the merged behavioural net (Global Constraints) — it asserts `HoldForBillingAsync` HOLDS every `RedeliverableFrom` status on real Postgres, so it covers this repoint directly. If it goes red, the repoint changed hold semantics; fix the repoint, never the test.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add ProcuLink.Core/Services/Delivery/DeliveryResult.cs ProcuLink.Infrastructure/Services/DeliveryService.cs ProcuLink.Api/Jobs/DeliverOrderJob.cs ProcuLink.Infrastructure.Tests/Services/DeliveryClaimOutcomeTests.cs
-git commit -m "feat(delivery): distinguish 'not claimed' from 'delivered' in the result
+git add ProcuLink.Infrastructure/Services/DeliveryService.cs ProcuLink.Infrastructure.Tests/Services/DeliveryClaimOutcomeTests.cs
+git commit -m "feat(delivery): mark non-dispatch returns NotAttempted; hold set derives
 
-Returning success for 'we did nothing' is what turned a status-list gap
-into a stranded order with a green log. Control flow is unchanged — the
-benign concurrent-activation case still must not schedule a retry — but
-the job no longer reports a dispatch that never happened."
+Returning bare success for 'we did nothing' is what turned a status-list
+gap into a stranded order with a green log. Control flow is unchanged --
+the benign lost race still must not schedule a retry -- but the result now
+says which of the two happened, and the retry queue can tell.
+
+The hold set was the fourth hand-synced list and the worst of them: a
+status it refuses never reaches delivery_held, so the reactivation
+re-drive never finds it. Permanent strand, no self-heal. It now derives."
 ```
-
 ---
 
 ### Task 6: Sibling invariants + the Postgres equivalence matrix
@@ -744,10 +766,10 @@ every status in the machine, so a new one is covered on arrival."
 
 | Spec section | Task |
 |---|---|
-| §4.1 canonical sets | Task 1 |
+| §4.1 canonical sets (incl. `HoldableForBillingFrom`, the fourth list) | Task 1; hold-set repoint in Task 5 Step 5 |
 | §4.2 predicate factory + empty-set guard | Task 2 |
 | §4.3 consumption, both paths, separate return contracts | Tasks 3, 4 |
-| §4.4 `Outcome` | Task 5 |
+| §4.4 `Outcome` | **Superseded** — enum owned by `claude/priceless-pike-d2eb0a`. Task 5 only marks the three non-dispatch returns `NotAttempted`. |
 | §4.5 item 1 (subset invariant) + red-phase ritual | Task 1 (Steps 1, 5) |
 | §4.5 item 2 (sibling invariants) | Task 6 Step 1 |
 | §4.5 item 3 (Postgres matrix) | Task 6 Step 2 |
@@ -757,6 +779,8 @@ every status in the machine, so a new one is covered on arrival."
 
 **Placeholder scan:** none — every code step carries the actual code, every command its expected output.
 
-**Type consistency:** `DeliveryClaim.Claimable(Guid, Guid, IReadOnlySet<string>, DateTime)` is defined in Task 2 and used with that exact signature in Tasks 3, 4, 6. `ClaimableForDispatchFrom` / `ClaimableForRetryFrom` are defined in Task 1 and referenced under those exact names throughout. `DeliveryOutcome` members (`Dispatched`, `NotClaimed`, `SkippedAutoDeliverOff`, `Failed`) are defined in Task 5 and used consistently there.
+**Type consistency:** `DeliveryClaim.Claimable(Guid, Guid, IReadOnlySet<string>, DateTime)` is defined in Task 2 and used with that exact signature in Tasks 3, 4, 6. `ClaimableForDispatchFrom` / `ClaimableForRetryFrom` / `HoldableForBillingFrom` are defined in Task 1 and referenced under those exact names in Tasks 5 and 6. `DeliveryOutcome` is **not defined by this plan** — Task 5 consumes `{ Dispatched = 0, NotAttempted = 1 }` from `claude/priceless-pike-d2eb0a` and its Step 1 guards that it is present before writing code.
 
-**Known ordering risk:** Task 1's tests reference `OrderStatusConstants.DeliveryUnconfirmed`, which exists only once PR #27 merges (Global Constraints). The whole plan is blocked on that; nothing here works around it.
+**Known ordering risk:** Task 1's tests reference `OrderStatusConstants.DeliveryUnconfirmed`, which exists only once PR #27 merges, and Task 5 consumes a `DeliveryOutcome` that exists only once `claude/priceless-pike-d2eb0a` merges (Global Constraints). Both are hard blocks with explicit guards; nothing here works around either. Merge main first so the merged behavioural net (`RedeliverableStatusInvariantPostgresTests`) runs underneath the whole plan.
+
+**Sequencing note if only PR #27 lands:** Tasks 1–4 and 6 are executable without `claude/priceless-pike-d2eb0a`; only Task 5 depends on it. If the Outcome branch stalls, ship 1–4 + 6 and leave Task 5 for a follow-up — the claim dedup and every invariant stand on their own. Do **not** unblock Task 5 by declaring the enum locally.
