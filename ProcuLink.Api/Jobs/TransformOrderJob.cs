@@ -10,9 +10,15 @@ namespace ProcuLink.Api.Jobs;
 /// <summary>
 /// Hangfire background job: transforms a resolved order to the requested output format
 /// and uploads the artifact to storage. Idempotent via the atomic ready/transforming
-/// claim inside <c>OrderTransformService.TransformAsync</c>: a duplicated or retried
-/// job on an already-transformed order gets a <see cref="TransformResponse.Skipped"/>
-/// response and must NOT re-enqueue delivery (that would double-send the PO).
+/// claim inside <c>OrderTransformService.TransformAsync</c>: a duplicated or retried job on an
+/// already-transformed order gets a <see cref="TransformResponse.Skipped"/> response.
+/// <para>
+/// A Skipped response re-enqueues delivery ONLY for the stranded signature — see
+/// <c>TryRecoverStrandedDeliveryAsync</c>. It is NOT an unconditional re-enqueue (that would
+/// double-send the PO), and it is NOT an unconditional skip either: the first run may have crashed
+/// after committing the artifact and before enqueuing delivery, which is the lost order this job
+/// recovers.
+/// </para>
 /// </summary>
 public class TransformOrderJob
 {
@@ -72,9 +78,9 @@ public class TransformOrderJob
             // delivery — re-enqueuing then would be redundant (though DeliverOrderJob's atomic claim
             // makes it harmless). But there is ONE case where delivery was NEVER enqueued: the first
             // run crashed AFTER committing ready_to_deliver + the artifact and BEFORE this method's
-            // DeliverOrderJob.Enqueue below. No sweep covers ready_to_deliver (StuckOrder =
-            // parsing/transforming, StuckDelivery = delivering, SLA needs DeliveryDueAt), so the PO
-            // is stranded forever, invisibly. Recover EXACTLY that stranded signature.
+            // DeliverOrderJob.Enqueue below. This inline path recovers that strand on the very next
+            // Hangfire retry; StrandedReadyOrderDetectionService is the systemic backstop that catches
+            // it (and any other path leaving such a strand) within its aged window regardless.
             await TryRecoverStrandedDeliveryAsync(
                 orderId, organisationId, result.Value.ArtifactId, ct);
             return;
@@ -119,11 +125,14 @@ public class TransformOrderJob
     /// <summary>
     /// Re-enqueues delivery for an order stranded in <c>ready_to_deliver</c> by a crash between the
     /// transform commit and the delivery enqueue. Acts ONLY on the exact stranded signature — the
-    /// order is still <c>ready_to_deliver</c>, a real artifact exists, and there is NO delivery
-    /// attempt yet — so a concurrent in-flight transform, an already-delivering/-delivered order, or
-    /// an order that already had a delivery attempt is never re-driven. This is idempotent and cannot
-    /// double-send: <see cref="DeliverOrderJob"/>'s own atomic <c>delivering</c> claim (+ per-order
-    /// distributed mutex) is the authority — a duplicate or racing enqueue simply no-ops there.
+    /// order is still <c>ready_to_deliver</c>, the reported artifact exists, and NO delivery attempt
+    /// has been made against THAT artifact — so a concurrent in-flight transform, an
+    /// already-delivering/-delivered order, or an order whose current artifact was already dispatched
+    /// is never re-driven. Attempts predating the current artifact are deliberately ignored: they were
+    /// made against a superseded payload (or sent nothing at all), so they are not evidence about this
+    /// one. This is idempotent and cannot double-send: <see cref="DeliverOrderJob"/>'s own atomic
+    /// <c>delivering</c> claim (+ per-order distributed mutex) is the authority — a duplicate or racing
+    /// enqueue simply no-ops there.
     /// </summary>
     private async Task TryRecoverStrandedDeliveryAsync(
         Guid orderId, Guid organisationId, Guid artifactId, CancellationToken ct)
@@ -152,20 +161,41 @@ public class TransformOrderJob
             return;
         }
 
-        var alreadyAttempted = await _db.DeliveryAttempts
-            .AnyAsync(a => a.OrderId == orderId && a.OrgId == organisationId, ct);
+        // An attempt row is not evidence that THIS artifact was dispatched — only an attempt made
+        // against the current artifact is. (Rationale + the DEPENDS-ON that keeps the comparison
+        // meaningful: StrandedReadyOrderDetectionService, which applies the same discriminator.) The
+        // Skipped path's artifactId is the order's newest artifact — OrderTransformService's claimed==0
+        // branch selects it OrderByDescending(CreatedAt) — so its CreatedAt is the cutoff.
+        var artifactCreatedAt = await _db.OutboundArtifacts
+            .Where(a => a.Id == artifactId && a.OrderId == orderId && a.OrgId == organisationId)
+            .Select(a => (DateTime?)a.CreatedAt)
+            .FirstOrDefaultAsync(ct);
 
-        if (alreadyAttempted)
+        if (artifactCreatedAt is null)
         {
-            // A prior delivery attempt exists → delivery was already dispatched; never re-enqueue.
+            // The reported artifact does not exist for this order — nothing provable to deliver.
             _logger.LogInformation(
-                "TransformOrderJob skipped for order {OrderId}: delivery already attempted — not re-enqueueing.",
+                "TransformOrderJob skipped for order {OrderId}: artifact {ArtifactId} not found — not enqueueing delivery.",
+                orderId, artifactId);
+            return;
+        }
+
+        var attemptedThisArtifact = await _db.DeliveryAttempts
+            .AnyAsync(a => a.OrderId == orderId && a.OrgId == organisationId
+                        && a.AttemptedAt >= artifactCreatedAt.Value, ct);
+
+        if (attemptedThisArtifact)
+        {
+            // A dispatch for the current artifact already ran (or is in flight) → re-enqueueing could
+            // double-send this payload.
+            _logger.LogInformation(
+                "TransformOrderJob skipped for order {OrderId}: the current artifact was already attempted — not re-enqueueing.",
                 orderId);
             return;
         }
 
         _logger.LogWarning(
-            "TransformOrderJob recovering STRANDED order {OrderId}: ready_to_deliver with artifact {ArtifactId} and no delivery attempt (crash between transform commit and delivery enqueue) — re-enqueueing delivery.",
+            "TransformOrderJob recovering STRANDED order {OrderId}: ready_to_deliver with artifact {ArtifactId}, which has no delivery attempt against it (attempts against earlier artifacts may exist and are not evidence about this one) — crash between transform commit and delivery enqueue; re-enqueueing delivery.",
             orderId, artifactId);
 
         DeliverOrderJob.Enqueue(_jobs, orderId, organisationId, artifactId);
