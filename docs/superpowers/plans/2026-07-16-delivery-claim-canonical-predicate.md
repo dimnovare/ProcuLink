@@ -17,6 +17,9 @@
 - **Merge main FIRST.** `RedeliverableStatusInvariantPostgresTests` (56a82ba + 8684d17) is merged and green: per status in `RedeliverableFrom`, on real Postgres, it asserts the claim CLAIMS it and `HoldForBillingAsync` HOLDS it. It is the net under this refactor — if a repoint breaks claim semantics it tells you per status with dispatch evidence. Do not duplicate it; do not "fix" it if it goes red.
 - Session `local_f5ee08ce` is **resolved, not colliding** — its work was test-only and is on main. It has no further edits planned in `DeliveryService.cs`.
 - **Never assert dispatch via `result.Success`** — it is `true` for the silent-strand case. Evidence is the dispatcher call + the `DeliveryAttempt` row.
+- **PRESERVE the Dispatch/Retry asymmetry.** `RetryDeliveryAsync` deliberately excludes `delivery_unconfirmed` — that asymmetry IS the park mechanism (a human may re-send a parked order; the automatic backoff queue may not). An audit over PR #27 confirmed the four other lists agree and this one differs on purpose. **Do not "fix" it into uniformity.** Task 1's `DispatchAndRetryClaimSets_DifferExactlyBy_DeliveryUnconfirmed` exists to make that deliberate.
+- **Merge position: LAST.** Queue is PR #28 → funny-maxwell + priceless-pike → FE PR #19 → BE PR #27 → this. Both of this plan's blockers land ahead of it, so by execution time `delivery_unconfirmed` and `DeliveryOutcome` are both on main.
+- **Run the full suite, never a narrow `--filter`** — a filtered run is not green (project rule).
 - Work in an isolated git worktree (`superpowers:using-git-worktrees`). Never in the shared checkout.
 - Every EF query org-scoped: `.Where(x => x.OrganisationId == organisationId)`. No exceptions.
 - No raw SQL — EF Core only.
@@ -479,10 +482,14 @@ The InMemory retry branch currently flips unconditionally. Gate it with the same
 - [ ] **Step 3: Run — expect exactly ONE failure**
 
 ```bash
-dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~DeliveryServiceIdempotencyTests"
+dotnet test ProcuLink.Infrastructure.Tests
 ```
 
 Expected: `CrashAfterSendBeforeCommit_ReDrive_ReAdoptsInFlightRow_SameKey_NoSecondDelivery` **FAILS**. This is correct and expected (spec §7).
+
+> **The "exactly one test breaks" figure is PRE-#27 and will be wrong when you run this.** It was measured on the tree before PR #27. The audit session reports **#27 adds ~5 more park tests carrying the same `UpdatedAt = now` trap** — a fresh `delivering` row that the relational claim rejects and only InMemory accepts. Expect several failures, not one. **Re-run the fallout analysis after merging main**, and triage each failure with the §7 question: *does this test seed a state production can actually reach?* If the seed is a fresh `delivering`, the test is asserting InMemory-only behaviour and the fix is to age the seed. Do not relax the predicate to make any of them green.
+>
+> Run the **full suite**, not a narrow `--filter` — a filtered run is not green (project rule; it has already missed an already-red test here).
 
 - [ ] **Step 4: Fix the test by making it honest**
 
