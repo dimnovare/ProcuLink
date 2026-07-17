@@ -126,11 +126,37 @@ public static readonly IReadOnlySet<string> ClaimableForRetryFrom =
 /// reaches the billing gate BEFORE the claim.
 public static readonly IReadOnlySet<string> HoldableForBillingFrom =
     Set(ReadyToDeliver, DeliveryFailed, DeliveryUnconfirmed);
+
+/// The FIFTH list (added 2026-07-17): OrdersController.Retry's admission guard, the
+/// RedeliverableFrom twin for the retry leg. Must be a subset of ClaimableForRetryFrom.
+public static readonly IReadOnlySet<string> RetryableFrom =
+    Set(DeliveryFailed);
 ```
 
-One canonical set is **wrong** — there are genuinely three, and the deltas between them are load-bearing
+One canonical set is **wrong** — there are genuinely four, and the deltas between them are load-bearing
 product decisions. Naming one and leaving its near-twins as literals hundreds of lines away hides the very
 thing the next reader needs to see.
+
+**The fifth list (added 2026-07-17, found by `local_9082ac44`, verified here on main).**
+`OrdersController.Retry` (`OrdersController.cs:1847`) gates its 400-vs-202 on a bare literal:
+
+```csharp
+if (order.Status != OrderStatusConstants.DeliveryFailed)
+    return BadRequest(new { error = $"Order must be in 'delivery_failed' status to retry delivery (current: '{order.Status}')." });
+```
+
+This is `RedeliverableFrom`'s twin for the retry leg — an endpoint-level admission guard, and the one place a
+user-facing 400 is minted from a hardcoded status name. It is **correct today** (`{delivery_failed}` ⊆
+`ClaimableForRetryFrom`), so this is drift *prevention*, not a bug fix. It is exactly the shape
+`RedeliverableFrom` had before it was named — and naming that one is what made 52c6431 findable at all.
+
+Note `RedeliverableFrom`'s error message already derives from the set, with the reason stated in-line: *"Derived
+from the set, never a literal: adding a redeliverable status must not leave this sentence quietly lying about
+which statuses are valid."* The Retry message hardcodes `'delivery_failed'` in its prose and must derive too —
+otherwise a widened set leaves the sentence lying about which statuses are valid.
+
+**PR #29 does not touch this literal** (verified against `origin/claude/funny-maxwell-a8fde7`: still at
+`:1847`, unchanged). It fixes the pre-flip, not the guard. So this is unowned and belongs to this spec.
 
 **The fourth list (added 2026-07-17, from `local_f5ee08ce`).** This spec originally mapped only the five
 *enqueue* sites and missed `HoldForBillingAsync`'s holdable set (~L966), which sits *downstream* of the billing
@@ -266,9 +292,10 @@ drift-prone "benign statuses" list, and it solves at runtime what §4.5's invari
    > as the repoint, never alone or ahead of it. What it buys over item 0: build-time, milliseconds, no
    > Docker — it fails in the editor rather than in CI.
 
-2. **Sibling invariants for the other enqueue paths** (§5 maps them), plus the **hold set** (§4.1). Note the
-   Ops guard set is *not* a subset — the invariant there must be stated over its **normalized target**, not
-   its guard.
+2. **Sibling invariants for the other enqueue paths** (§5 maps them), plus the **hold set** and the
+   **Retry admission guard** (§4.1) — i.e. `RedeliverableFrom ⊆ HoldableForBillingFrom` and
+   `RetryableFrom ⊆ ClaimableForRetryFrom`. Note the Ops guard set is *not* a subset — the invariant there
+   must be stated over its **normalized target**, not its guard.
 3. **Relational/InMemory equivalence matrix, on real Postgres.** For every status in
    `OrderStatusMachine.AllStatuses` × {fresh, stale} `UpdatedAt`, assert the relational `ExecuteUpdateAsync`
    claim and `predicate.Compile()(order)` reach the same verdict.
@@ -371,13 +398,30 @@ count is 1, not several.
 
 ## 8. Out of scope
 
-**`OrdersController.Retry` pre-flip (P2, live on main, spawned as its own task).** `OrdersController.cs:1847-1858`
-optimistically flips to `delivering` with `UpdatedAt = UtcNow` and *then* enqueues `RetryDeliveryJob`, whose
-claim rejects a fresh `delivering`. The operator's "Retry now" therefore does nothing for ~30 minutes (until
-the backoff fires and the row is stale), while the UI shows `delivering`. Self-healing, no attempt row written,
-dead-letter cap not burned — but the button lies. The sibling `Redeliver` path was already fixed for exactly
-this ("B2 (lost-order): DO NOT pre-flip to 'delivering'"); `Retry` was missed. Memory obs 4218 recorded the
-class on 2026-07-11.
+**`OrdersController.Retry` pre-flip — now owned by PR #29 (`claude/funny-maxwell-a8fde7`, MERGEABLE).**
+`OrdersController.cs:1847-1858` optimistically flips to `delivering` with `UpdatedAt = UtcNow` and *then*
+enqueues `RetryDeliveryJob`, whose claim rejects a fresh `delivering`. The operator's "Retry now" therefore
+does nothing for ~30 minutes, while the UI shows `delivering`. Self-healing, no attempt row written,
+dead-letter cap not burned — but the button lies. Memory obs 4218 recorded the class on 2026-07-11.
+
+> **Correction (2026-07-17) — two errors of mine, both now verified against `origin/main`:**
+>
+> 1. **The "B2 / DO NOT pre-flip" prior art is NOT in `OrdersController.Redeliver`.** This spec originally
+>    called Redeliver "the already-fixed sibling". Wrong: `origin/main`'s `OrdersController.cs` contains no
+>    such comment at all. The prior art is the **ops requeue/escalation** leg
+>    (`OpsControllerTests.cs:197`, `RequeueDelivery_FromDeadLetter_LeavesClaimableStatus_...`). I read that
+>    comment inside `Redeliver` on the **`claude/wizardly-spence-6b738a` branch** — where PR #27 adds it — and
+>    wrote it up as established prior art on main. **I conflated a branch with main.** The defect and its
+>    severity are unaffected; only the attribution was wrong.
+> 2. **The ~30-minute rescuer is `RetryDeliveryJob`'s own backoff, not a sweep.**
+>    `RetryDeliveryJob.cs:96` does `ScheduleRetry(_jobs, orderId, organisationId, _options.BackoffFor(attemptsMade))`
+>    after `RetryDeliveryAsync` returns "already in progress"; by then `UpdatedAt` is stale, so the retry's own
+>    next run claims successfully. `StrandedFailedDeliveryDetectionService` **cannot** be the rescuer: it
+>    matches `Status == DeliveryFailed && UpdatedAt < cutoff` (3h), and the pre-flip leaves the row in
+>    `delivering`. This matters if anyone tunes that sweep expecting it to cover this.
+>
+> The lesson is the one this thread keeps re-teaching: a fact measured on one branch and asserted about
+> another is the same defect class as a stale comment. See §1.1.
 
 ---
 

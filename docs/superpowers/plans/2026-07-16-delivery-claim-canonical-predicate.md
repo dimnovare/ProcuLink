@@ -114,6 +114,18 @@ Append to `OrderStatusMachineTests.cs`:
             "a lapsed org's Send again reaches the billing gate BEFORE the claim. A status the hold set " +
             "refuses is held nowhere, sent nowhere and audited nowhere, and never becomes delivery_held — " +
             "so the reactivation re-drive never finds it. That strand is permanent, unlike a lost claim");
+
+    /// <summary>
+    /// The FIFTH list. OrdersController.Retry admits only delivery_failed and mints a 400 for anything else;
+    /// the retry claim must be able to claim whatever it admits, or the 202 is a lie in the 52c6431 shape.
+    /// Passes today — this is drift prevention, not a fix.
+    /// </summary>
+    [Fact]
+    public void RetryableFrom_IsSubsetOf_ClaimableForRetryFrom()
+        => OrderStatusMachine.RetryableFrom.Should().BeSubsetOf(
+            OrderStatusMachine.ClaimableForRetryFrom,
+            "OrdersController.Retry returns 202 for every status in RetryableFrom and enqueues " +
+            "RetryDeliveryJob; a status it admits but the retry claim rejects is the 52c6431 shape again");
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -165,6 +177,17 @@ In `OrderStatusMachine.cs`, directly beneath `RedeliverableFrom`:
     /// </summary>
     public static readonly IReadOnlySet<string> HoldableForBillingFrom =
         Set(ReadyToDeliver, DeliveryFailed, DeliveryUnconfirmed);
+
+    /// <summary>
+    /// OrdersController.Retry's admission guard — <see cref="RedeliverableFrom"/>'s twin for the retry leg,
+    /// and the one place a user-facing 400 is minted from a status name.
+    ///
+    /// <para>Correct today ({delivery_failed} is a subset of <see cref="ClaimableForRetryFrom"/>), so naming
+    /// it is drift PREVENTION, not a bug fix. It is the exact shape RedeliverableFrom had before it was
+    /// named — and naming that one is what made 52c6431 findable.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> RetryableFrom =
+        Set(DeliveryFailed);
 ```
 
 - [ ] **Step 4: Run to verify it passes**
@@ -530,7 +553,7 @@ than Postgres. Aged the seed to match its own Postgres twin."
 
 ---
 
-### Task 5: Mark the non-dispatch returns `NotAttempted` + repoint the hold set
+### Task 5: Mark the non-dispatch returns `NotAttempted` + repoint the hold and retry gates
 
 > **Scope changed 2026-07-17 — read this before writing any enum.** This task originally declared its own
 > `DeliveryOutcome { Dispatched, NotClaimed, SkippedAutoDeliverOff, Failed }`. That design is **withdrawn**
@@ -540,13 +563,15 @@ than Postgres. Aged the seed to match its own Postgres twin."
 
 **Files:**
 - Modify: `ProcuLink.Infrastructure/Services/DeliveryService.cs` — the two claim-lost returns, the auto-deliver-off return, and `HoldForBillingAsync`'s holdable gate (~L966)
+- Modify: `ProcuLink.Api/Controllers/OrdersController.cs:1847` — the Retry admission guard (the fifth list)
 - Test: `ProcuLink.Infrastructure.Tests/Services/DeliveryClaimOutcomeTests.cs` (create)
+- Check: `ProcuLink.Api.Tests/Controllers/OrdersControllerErrorMessageTests.cs` — may pin the old 400 wording
 
 **Interfaces:**
 - Consumes (already defined on `claude/priceless-pike-d2eb0a`, must be on main first):
   `enum DeliveryOutcome { Dispatched = 0, NotAttempted = 1 }` and
   `record DeliveryResult(bool Success, string? ErrorMessage, int? ResponseCode = null, string? ResponseBody = null, DeliveryOutcome Outcome = DeliveryOutcome.Dispatched)`.
-- Consumes: `OrderStatusMachine.HoldableForBillingFrom` (Task 1).
+- Consumes: `OrderStatusMachine.HoldableForBillingFrom` and `OrderStatusMachine.RetryableFrom` (Task 1).
 
 - [ ] **Step 1: Guard — confirm the enum is on main before writing anything**
 
@@ -625,7 +650,28 @@ Replace the hand-written holdable literal (~L966) — it currently reads `order.
             return false;
 ```
 
-- [ ] **Step 6: Run to verify it passes**
+- [ ] **Step 6: Repoint the FIFTH list — `OrdersController.Retry`'s admission guard**
+
+`OrdersController.cs:1847` gates the retry 400-vs-202 on a bare literal, and hardcodes the status name in the
+user-facing prose too. PR #29 fixes that action's pre-flip but does **not** touch this guard (verified), so it
+is ours. Mirror how `Redeliver` derives both the check *and* its message from `RedeliverableFrom`:
+
+```csharp
+        if (!OrderStatusMachine.RetryableFrom.Contains(order.Status))
+            return BadRequest(new
+            {
+                // Derived from the set, never a literal: widening RetryableFrom must not leave this
+                // sentence quietly lying about which statuses are valid. Mirrors Redeliver's guard.
+                error = $"Order must be in one of these statuses to retry delivery: "
+                      + $"{string.Join(", ", OrderStatusMachine.RetryableFrom.OrderBy(s => s, StringComparer.Ordinal))} "
+                      + $"(current: '{order.Status}')."
+            });
+```
+
+> This changes a user-facing 400 message. Check `OrdersControllerErrorMessageTests` for an assertion on the old
+> wording and update it if present — the message is now generated, so pinning the old literal would defeat it.
+
+- [ ] **Step 7: Run to verify it passes**
 
 ```bash
 dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~DeliveryClaimOutcomeTests"
@@ -634,11 +680,11 @@ dotnet test ProcuLink.Api.Tests --filter "FullyQualifiedName~RedeliverableStatus
 
 Expected: PASS for both. The second is the merged behavioural net (Global Constraints) — it asserts `HoldForBillingAsync` HOLDS every `RedeliverableFrom` status on real Postgres, so it covers this repoint directly. If it goes red, the repoint changed hold semantics; fix the repoint, never the test.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add ProcuLink.Infrastructure/Services/DeliveryService.cs ProcuLink.Infrastructure.Tests/Services/DeliveryClaimOutcomeTests.cs
-git commit -m "feat(delivery): mark non-dispatch returns NotAttempted; hold set derives
+git add ProcuLink.Api/Controllers/OrdersController.cs ProcuLink.Infrastructure/Services/DeliveryService.cs ProcuLink.Infrastructure.Tests/Services/DeliveryClaimOutcomeTests.cs
+git commit -m "feat(delivery): mark non-dispatch returns NotAttempted; hold + retry gates derive
 
 Returning bare success for 'we did nothing' is what turned a status-list
 gap into a stranded order with a green log. Control flow is unchanged --
