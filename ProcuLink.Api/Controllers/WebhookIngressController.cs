@@ -240,6 +240,23 @@ public sealed class WebhookIngressController : ControllerBase
     /// (<c>20260611095227</c>) and covers that legacy window. Orders dispatched in the ~2 days
     /// between launch (2026-06-09) and 06-11 have neither and are refused.</para>
     ///
+    /// <para><b>DO NOT UNIFY THIS WITH <c>StrandedReadyOrderDetectionService</c>'s DISCRIMINATOR.</b>
+    /// That sweep also decides "was this dispatched?" and reaches a different answer by different
+    /// means, so the two look like duplication and are not. They ask different questions:</para>
+    /// <list type="bullet">
+    ///   <item><b>Here:</b> "was a send ever BEGUN for this ORDER, at any time?" — necessarily
+    ///     order-scoped, marker-based and artifact-AGNOSTIC, because a supplier may legitimately
+    ///     report against ANY artifact of an order. Judging a callback against only the newest
+    ///     artifact would answer the wrong question and refuse a valid report.</item>
+    ///   <item><b>There:</b> "was the CURRENT artifact dispatched?" — necessarily artifact-scoped,
+    ///     because a re-transform mints a new artifact and older attempts MUST go stale, or the
+    ///     corrected PO is never sent. See that service for its predicate and its reasoning; it is
+    ///     deliberately not restated here, because a restated predicate is a second copy that drifts.</item>
+    /// </list>
+    /// <para>Two discriminators is the correct shape, not drift. Collapsing them yields a silent
+    /// lost order on that side (a corrected PO skipped forever) or a wrong supplier-callback verdict
+    /// on this one. That service carries the mirror of this paragraph.</para>
+    ///
     /// <para><b>A refusal writes nothing — but do not read that as "safe".</b> It leaves the order
     /// on whatever status it had, and the consequence depends on the status: refusing a
     /// <c>delivered</c> report leaves the PO re-drivable (good — it still gets sent), while refusing
