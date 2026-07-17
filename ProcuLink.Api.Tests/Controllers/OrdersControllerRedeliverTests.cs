@@ -12,6 +12,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Controllers;
@@ -60,7 +61,8 @@ internal static class ParkedOrderTestHarness
     }
 
     internal static OrdersController NewController(
-        ProcuLinkDbContext db, IOrderService orders, ICurrentTenantService tenant, IBackgroundJobClient jobs) =>
+        ProcuLinkDbContext db, IOrderService orders, ICurrentTenantService tenant, IBackgroundJobClient jobs,
+        IOrderExceptionService? exceptionService = null) =>
         new(
             orders,
             tenant,
@@ -69,7 +71,7 @@ internal static class ParkedOrderTestHarness
             NullLogger<OrdersController>.Instance,
             new Mock<IBillingService>().Object,
             new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
+            exceptionService ?? new Mock<IOrderExceptionService>().Object,
             new Mock<ISupplierAcceptanceService>().Object,
             new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
             new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
@@ -221,7 +223,7 @@ public class OrdersControllerMarkDeliveredTests
     private const string ActingClerkUserId = "user_test_operator";
 
     private static (OrdersController Ctrl, Mock<IOrderService> Orders, Guid OrgId, Guid ActingUserId) Build(
-        ProcuLinkDbContext db, bool seedActingUser = true)
+        ProcuLinkDbContext db, bool seedActingUser = true, IOrderExceptionService? exceptionService = null)
     {
         var orgId  = Guid.NewGuid();
         var tenant = new Mock<ICurrentTenantService>();
@@ -245,7 +247,8 @@ public class OrdersControllerMarkDeliveredTests
         }
 
         var orders = new Mock<IOrderService>();
-        var ctrl   = ParkedOrderTestHarness.NewController(db, orders.Object, tenant.Object, new Mock<IBackgroundJobClient>().Object);
+        var ctrl   = ParkedOrderTestHarness.NewController(
+            db, orders.Object, tenant.Object, new Mock<IBackgroundJobClient>().Object, exceptionService);
 
         return (ctrl, orders, orgId, actingUserId);
     }
@@ -469,6 +472,53 @@ public class OrdersControllerMarkDeliveredTests
             (o.Status == OrderStatusConstants.Delivered || o.Status == OrderStatusConstants.RejectedBySupplier));
 
         billable.Should().Be(1);
+    }
+
+    // Exception-surface consequence: the park (26928e8) taught ReconcileAsync to open a
+    // 'delivery_unconfirmed' warning so a parked order isn't invisible to the health tiles. Nothing
+    // but a status-changing write ever revisits that row — so the operator's one correct action
+    // (confirming out-of-band that the supplier received it) must be the thing that closes it, or
+    // the warning outlives the very order it was about and the org never reads "all clear" again.
+    // Uses the REAL OrderExceptionService (not the harness's default mock) because this proves
+    // genuine state (open -> resolved) and a genuine OpsHealthService count, not that a mock was called.
+    [Fact]
+    public async Task MarkDelivered_ReconcilesExceptions_ClearingTheParkWarning_AndOpsHealthReturnsToZero()
+    {
+        var options = ParkedOrderTestHarness.NewOptions();
+        await using var db = new ProcuLinkDbContext(options);
+        var (ctrl, orders, orgId, _) = Build(db, exceptionService: new OrderExceptionService(db));
+
+        var order = OrderInStatus(orgId, OrderStatusConstants.DeliveryUnconfirmed);
+        await SeedAndDetachAsync(options, db, orders, orgId, order);
+
+        // The park itself is what would have opened this row in production (DeliveryService's
+        // own reconcile call). Seeded directly here so this test proves MarkDelivered's OWN
+        // reconcile, not the park's.
+        db.OrderExceptions.Add(new OrderException
+        {
+            Id        = Guid.NewGuid(),
+            OrgId     = orgId,
+            OrderId   = order.Id,
+            Stage     = "Deliver",
+            Code      = "delivery_unconfirmed",
+            Severity  = "warning",
+            State     = "open",
+            Message   = "Delivery unconfirmed. Check with the supplier, then either send it again or mark it delivered.",
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.MarkDelivered(order.Id, CancellationToken.None);
+
+        result.Should().BeOfType<AcceptedResult>();
+
+        var ex = await db.OrderExceptions.AsNoTracking().SingleAsync(e => e.OrderId == order.Id);
+        ex.State.Should().Be("resolved",
+            "the operator confirmed delivery — the park's warning is exactly what that confirmation resolves");
+
+        var health = await new OpsHealthService(db).GetHealthAsync(orgId, CancellationToken.None);
+        health.OpenExceptions.Should().Be(0,
+            "the operator did the one correct thing; the org must return to all-clear, not stay stuck open forever");
     }
 
     private static string? AuditPayloadActor(AuditEvent audit) =>

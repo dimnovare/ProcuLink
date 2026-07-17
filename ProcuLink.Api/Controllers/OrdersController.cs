@@ -1952,12 +1952,45 @@ public sealed class OrdersController : ControllerBase
 
         await _db.SaveChangesAsync(ct);
 
+        // Exceptions are derived from the order's status, and nothing else ever revisits a
+        // delivered order to re-derive them — so without this call the park's own
+        // 'delivery_unconfirmed' warning (opened by ReconcileAsync when the crash-recovery path
+        // parked this order) stays open forever, even though the operator just confirmed the
+        // supplier received it. Called AFTER the save above commits: reconcile reads the order's
+        // CURRENT status back from the tracked row, so it must see 'delivered', not the
+        // 'delivery_unconfirmed' this write just replaced. Mirrors WebhookIngressController's
+        // SafeReconcileExceptionsAsync for the same delivered transition arriving via callback.
+        await SafeReconcileExceptionsAsync(orgId, id, ct);
+
         _logger.LogInformation(
             "DeliveryConfirmedManually: order {OrderId} (org {OrgId}) marked delivered by operator {UserId} "
             + "after an unconfirmed delivery.",
             id, orgId, _tenant.ClerkUserId);
 
         return Accepted(new { status = "delivered" });
+    }
+
+    /// <summary>
+    /// Reconcile the order's exceptions, never failing the operator's mark-delivered action if it
+    /// goes wrong. The status write and audit event are already committed by this point, so a
+    /// reconcile error must not turn the operator's SUCCESSFUL confirmation into a 500 — the
+    /// operator did the one correct thing (confirmed with the supplier), and an observability-surface
+    /// fault must not be allowed to contradict that. Same contract as
+    /// WebhookIngressController's private helper of the same name / OrderServiceShared.SafeReconcileExceptionsAsync.
+    /// </summary>
+    private async Task SafeReconcileExceptionsAsync(Guid orgId, Guid orderId, CancellationToken ct)
+    {
+        try
+        {
+            await _exceptionService.ReconcileAsync(orgId, orderId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "MarkDelivered: exception reconcile failed for order {OrderId} (org {OrgId}) — non-fatal, "
+                + "the delivered status is already committed.",
+                orderId, orgId);
+        }
     }
 
     // ── POST /api/orders/{id}/retry-delivery ─────────────────────────────────
