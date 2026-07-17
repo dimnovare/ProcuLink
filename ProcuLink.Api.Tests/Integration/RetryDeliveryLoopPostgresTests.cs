@@ -20,14 +20,18 @@ namespace ProcuLink.Api.Tests.Integration;
 
 /// <summary>
 /// UNBOUNDED RETRY LOOP guard — proves on REAL Postgres that <see cref="RetryDeliveryJob"/> stops
-/// rescheduling itself when <c>RetryDeliveryAsync</c> returned WITHOUT dispatching.
+/// rescheduling itself when a retry can never help, while STILL rescheduling when it can.
 ///
 /// <para>The loop: a non-dispatch failure writes no <c>DeliveryAttempt</c> row and carries no
 /// response code, so it is indistinguishable (to the job) from a transient 5xx —
 /// <c>IsSupplierRejection</c> is false, <c>CountDeliveryAttemptsAsync</c> returns the SAME number
 /// forever so the cap never trips, and <c>BackoffFor</c> returns the same delay. The job reschedules
-/// every ~30 min against an order it can never move. <see cref="DeliveryOutcome.NotAttempted"/> is
+/// every ~30 min against an order it can never move. <see cref="DeliveryOutcome.NotRetryable"/> is
 /// what breaks the cycle.</para>
+///
+/// <para>The mirror-image hazard is over-correcting: a <see cref="DeliveryOutcome.ClaimLost"/> result
+/// ALSO writes no attempt row, yet must keep rescheduling — it is the crash-recovery net. Both
+/// directions are pinned here.</para>
 ///
 /// <para>Real Postgres is required: the atomic <c>delivering</c>-claim is an untranslatable
 /// <c>ExecuteUpdateAsync</c> on EF InMemory, whose retry path emulates the claim through the change
@@ -73,22 +77,25 @@ public sealed class RetryDeliveryLoopPostgresTests : IAsyncLifetime
     private ProcuLinkDbContext NewContext() => new(_options!);
 
     /// <summary>
-    /// The reported case: the claim matches 0 rows because ANOTHER worker holds a FRESH
-    /// <c>delivering</c> claim mid-send. The holder owns that send — this job must bow out, not
-    /// spin. (The status passes the advisory pre-check, so only the atomic claim rejects it.)
+    /// The claim matches 0 rows because ANOTHER worker holds a FRESH <c>delivering</c> claim
+    /// mid-send. No dispatch — but the backoff MUST still be scheduled, because that reschedule is
+    /// what recovers the order if the holder turns out to be dead (see
+    /// <c>CrashedHolderRecoveryCompositionPostgresTests</c>). Marked ClaimLost, not NotRetryable.
+    /// (The status passes the advisory pre-check, so only the atomic claim rejects it.)
     /// </summary>
     [DockerRequiredFact]
-    public async Task ClaimLostToAnotherWorker_NoDispatch_JobDoesNotReschedule()
+    public async Task ClaimLostToAnotherWorker_NoDispatch_ButStillReschedules()
     {
         var ids = await SeedOrderAsync(OrderStatusConstants.Delivering, updatedAt: DateTime.UtcNow);
         var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 202));
 
         var (result, jobs) = await RunJobAsync(ids, dispatcher);
 
-        result.Outcome.Should().Be(DeliveryOutcome.NotAttempted);
+        result.Outcome.Should().Be(DeliveryOutcome.ClaimLost);
         result.Success.Should().BeFalse();
         dispatcher.Calls.Should().Be(0, "the other worker's send is in flight — this one must not double-dispatch");
-        jobs.Captured.Should().BeEmpty("the claim holder owns the outcome; rescheduling here spins forever");
+        jobs.Captured.Should().HaveCount(1,
+            "if that holder is dead, this backoff is the only thing that ever gets the order sent");
         await AssertNoAttemptRowsAsync(ids.OrderId);
     }
 
@@ -105,7 +112,7 @@ public sealed class RetryDeliveryLoopPostgresTests : IAsyncLifetime
 
         var (result, jobs) = await RunJobAsync(ids, dispatcher);
 
-        result.Outcome.Should().Be(DeliveryOutcome.NotAttempted);
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
         dispatcher.Calls.Should().Be(0);
         jobs.Captured.Should().BeEmpty();
         await AssertNoAttemptRowsAsync(ids.OrderId);
@@ -120,7 +127,7 @@ public sealed class RetryDeliveryLoopPostgresTests : IAsyncLifetime
 
         var (result, jobs) = await RunJobAsync(ids, dispatcher);
 
-        result.Outcome.Should().Be(DeliveryOutcome.NotAttempted);
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
         dispatcher.Calls.Should().Be(0);
         jobs.Captured.Should().BeEmpty();
     }
@@ -144,7 +151,7 @@ public sealed class RetryDeliveryLoopPostgresTests : IAsyncLifetime
         var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 202));
         var (result, jobs) = await RunJobAsync(ids, dispatcher);
 
-        result.Outcome.Should().Be(DeliveryOutcome.NotAttempted);
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
         dispatcher.Calls.Should().Be(0);
         jobs.Captured.Should().BeEmpty();
     }

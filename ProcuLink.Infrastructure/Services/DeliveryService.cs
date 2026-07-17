@@ -141,7 +141,7 @@ public sealed class DeliveryService : IDeliveryService
             .FirstOrDefaultAsync(ct);
 
         if (artifact is null || order is null)
-            return new DeliveryResult(false, "Order artifact not found.", Outcome: DeliveryOutcome.NotAttempted);
+            return new DeliveryResult(false, "Order artifact not found.", Outcome: DeliveryOutcome.NotRetryable);
 
         // ── Launch batch 7 — revision authority ────────────────────────────────
         // A pinned order delivers over the CHANNEL its published revision snapshotted
@@ -155,7 +155,7 @@ public sealed class DeliveryService : IDeliveryService
 
         // Auto-deliver is off: a deliberate no-op, never a send.
         if (requireAutoDeliver && !config.AutoDeliver)
-            return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotAttempted);
+            return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotRetryable);
 
         if (!_dispatchers.TryGetValue(config.Protocol, out var dispatcher))
             return await FailBeforeDispatchAsync(order, artifact, config, "No dispatcher registered for delivery protocol.", reconcileFailedAttempt, ct);
@@ -219,7 +219,10 @@ public sealed class DeliveryService : IDeliveryService
                     _logger.LogInformation(
                         "Delivery {OrderId}: not claimed (already delivering/delivered/terminal) — skipping dispatch.",
                         orderId);
-                    return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotAttempted);
+                    // Success stays TRUE (a benign no-op — DeliverOrderJob returns on Success and must
+                    // never log a "delivery failure" for a lost race). ClaimLost only records that
+                    // nothing was dispatched; it does not change this path's control flow.
+                    return new DeliveryResult(true, null, Outcome: DeliveryOutcome.ClaimLost);
                 }
 
                 await claimTx.CommitAsync(ct);
@@ -250,7 +253,7 @@ public sealed class DeliveryService : IDeliveryService
                     _logger.LogInformation(
                         "Delivery {OrderId}: not claimed (status '{Status}' not claimable) — skipping dispatch.",
                         orderId, order.Status);
-                    return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotAttempted);
+                    return new DeliveryResult(true, null, Outcome: DeliveryOutcome.ClaimLost);
                 }
 
                 order.Status = OrderStatusConstants.Delivering;
@@ -792,18 +795,18 @@ public sealed class DeliveryService : IDeliveryService
             .Where(x => x.Id == orderId && x.OrgId == orgId)
             .FirstOrDefaultAsync(ct);
 
-        // Every early return below is NotAttempted: no dispatch, no attempt row, so the retry
-        // queue's attempt count cannot advance. Rescheduling any of them loops forever against an
-        // order the retry is powerless to move (see DeliveryOutcome.NotAttempted).
+        // Every early return below is NotRetryable: no dispatch, no attempt row, and no later retry
+        // can change the answer. The frozen attempt count means rescheduling any of them loops
+        // forever against an order the retry is powerless to move (see DeliveryOutcome.NotRetryable).
         if (order is null)
-            return new DeliveryResult(false, "Order not found.", Outcome: DeliveryOutcome.NotAttempted);
+            return new DeliveryResult(false, "Order not found.", Outcome: DeliveryOutcome.NotRetryable);
 
         if (order.Status == OrderStatusConstants.DeliveryDeadLetter)
             return new DeliveryResult(false, "Order is in dead-letter state — retries are exhausted.",
-                Outcome: DeliveryOutcome.NotAttempted);
+                Outcome: DeliveryOutcome.NotRetryable);
 
         if (order.Status == OrderStatusConstants.Delivered)
-            return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotAttempted);
+            return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotRetryable);
 
         // Not retryable = terminal, or waiting on something only another actor can clear:
         // 'delivery_held' waits on the billing reactivation re-drive (ReleaseBillingHeldOrdersAsync),
@@ -812,7 +815,7 @@ public sealed class DeliveryService : IDeliveryService
                               or OrderStatusConstants.ReadyToDeliver
                               or OrderStatusConstants.Delivering))
             return new DeliveryResult(false, $"Order status '{order.Status}' is not retryable.",
-                Outcome: DeliveryOutcome.NotAttempted);
+                Outcome: DeliveryOutcome.NotRetryable);
 
         // Resolve the artifact BEFORE the claim: a missing artifact is a side-effect-free
         // early return, so it must not first flip the order into 'delivering' and strand it.
@@ -823,7 +826,7 @@ public sealed class DeliveryService : IDeliveryService
 
         if (artifact is null)
             return new DeliveryResult(false, "No outbound artifact found. Transform the order before retrying delivery.",
-                Outcome: DeliveryOutcome.NotAttempted);
+                Outcome: DeliveryOutcome.NotRetryable);
 
         // ── A5: billing gate on the retry path ────────────────────────────────────
         // A backoff retry can fire LONG after the first delivery attempt — by which time the org may
@@ -843,7 +846,7 @@ public sealed class DeliveryService : IDeliveryService
             _logger.LogWarning(
                 "RetryDeliveryAsync: order {OrderId} (org {OrgId}) NOT delivered — org cannot process orders (billing). Held={Held}; awaiting reactivation re-drive.",
                 orderId, orgId, held);
-            return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotAttempted);
+            return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotRetryable);
         }
 
         // ── Concurrency claim ──────────────────────────────────────────────────
@@ -892,12 +895,17 @@ public sealed class DeliveryService : IDeliveryService
                 // out of a claimable state) between our read and this update — do NOT
                 // double-dispatch.
                 //
-                // NotAttempted: no dispatch, no attempt row. The claim HOLDER owns this send and
-                // will record its own attempt (and its own retry, if it fails). Rescheduling here
-                // would add a second, permanently count-frozen retry chain for the same order.
+                // ClaimLost, NOT NotRetryable — the caller MUST keep retrying. The tempting reasoning
+                // ("the holder owns this send, so stay quiet") is disproven by
+                // CrashedHolderRecoveryCompositionPostgresTests: if the holder DIES,
+                // StuckDeliveryDetectionService re-drives the order but bumps UpdatedAt to now first,
+                // so the re-driven retry lands right back HERE (fresh 'delivering' ⇒ 0 rows). The
+                // scheduled backoff is what carries the order past the reclaim window so a later
+                // attempt can claim the now-stale row. Stop rescheduling and a crashed holder's PO is
+                // never sent — it just burns the sweep's requeue budget and dead-letters.
                 await claimTx.RollbackAsync(ct);
                 return new DeliveryResult(false, "Delivery for this order is already in progress.",
-                    Outcome: DeliveryOutcome.NotAttempted);
+                    Outcome: DeliveryOutcome.ClaimLost);
             }
 
             // Count is read inside the SAME transaction as the claim, so the cap decision is
@@ -935,12 +943,12 @@ public sealed class DeliveryService : IDeliveryService
 
         if (priorAttempts >= maxAttempts)
         {
-            // NotAttempted: dead-lettered without dispatching. The job's cap guard also stops here
+            // NotRetryable: dead-lettered without dispatching. The job's cap guard also stops here
             // (the count IS at the cap), but marking it keeps the contract honest — the retry queue
             // must never resume a dead-lettered order.
             await DeadLetterAsync(order, priorAttempts, lastError: "Maximum delivery attempts reached.", ct);
             return new DeliveryResult(false, "Maximum delivery attempts reached — order moved to dead-letter.",
-                Outcome: DeliveryOutcome.NotAttempted);
+                Outcome: DeliveryOutcome.NotRetryable);
         }
 
         // If this attempt is the last one allowed, a failure will dead-letter immediately —

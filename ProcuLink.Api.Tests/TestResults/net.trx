@@ -1,0 +1,364 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="97cbc985-5a90-4dc5-a7c8-f53823ad0be8" name="Dim@DIMA-PC 2026-07-17 10:21:07" runUser="REDACTED-PARTY\Dim" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-07-17T10:21:07.1911617+03:00" queuing="2026-07-17T10:21:07.1911631+03:00" start="2026-07-17T10:20:57.2357820+03:00" finish="2026-07-17T10:24:16.2742747+03:00" />
+  <TestSettings name="default" id="6f4902c5-4a61-4f82-b538-6aab47bf6901">
+    <Deployment runDeploymentRoot="Dim_DIMA-PC_2026-07-17_10_21_07" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="1ae6473f-c9ab-4540-8512-7dc8fb4063f0" testId="3772bc30-3776-95a2-49c5-e7619bf2135f" testName="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.DeadLetteredOrder_JobDoesNotReschedule" computerName="DIMA-PC" duration="00:00:00.0010000" startTime="2026-07-17T10:22:42.5746028+03:00" endTime="2026-07-17T10:23:00.6611548+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="1ae6473f-c9ab-4540-8512-7dc8fb4063f0">
+      <Output>
+        <ErrorInfo>
+          <Message>Npgsql.NpgsqlException : Exception while reading from stream&#xD;
+---- System.TimeoutException : Timeout during reading attempt</Message>
+          <StackTrace>   at Npgsql.Internal.NpgsqlReadBuffer.&lt;Ensure&gt;g__EnsureLong|55_0(NpgsqlReadBuffer buffer, Int32 count, Boolean async, Boolean readingNotifications)&#xD;
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.RawOpen(SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.&lt;Open&gt;g__OpenCore|213_1(NpgsqlConnector conn, SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.Open(NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.UnpooledDataSource.Get(NpgsqlConnection conn, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.NpgsqlConnection.&lt;Open&gt;g__OpenAsync|42_0(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.ExistsAsync(CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Migrations.Internal.Migrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Migrations.Internal.NpgsqlMigrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+   at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync() in C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs:line 64&#xD;
+   at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync() in C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs:line 64&#xD;
+----- Inner Stack Trace -----&#xD;
+</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="b7e89fd4-f44e-4374-801a-4b1f86e04f03" testId="df7ce2f0-f7e6-a964-e7e3-0013a44dca82" testName="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.TransientDispatchFailure_AttemptRowWritten_JobStillReschedules" computerName="DIMA-PC" duration="00:00:00.8757483" startTime="2026-07-17T10:23:17.3084143+03:00" endTime="2026-07-17T10:23:24.2586362+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="b7e89fd4-f44e-4374-801a-4b1f86e04f03" />
+    <UnitTestResult executionId="3a94d137-93c9-4930-9d88-f7110448e6b8" testId="be145f4b-c236-3ee2-fa37-2c132f8e2014" testName="ProcuLink.Api.Tests.Integration.RedeliverableStatusInvariantPostgresTests.EveryRedeliverableStatus_IsHeldByTheBillingGate" computerName="DIMA-PC" duration="00:00:00.0010000" startTime="2026-07-17T10:23:40.8671318+03:00" endTime="2026-07-17T10:23:59.1317959+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="3a94d137-93c9-4930-9d88-f7110448e6b8">
+      <Output>
+        <ErrorInfo>
+          <Message>Npgsql.NpgsqlException : Exception while reading from stream&#xD;
+---- System.TimeoutException : Timeout during reading attempt</Message>
+          <StackTrace>   at Npgsql.Internal.NpgsqlReadBuffer.&lt;Ensure&gt;g__EnsureLong|55_0(NpgsqlReadBuffer buffer, Int32 count, Boolean async, Boolean readingNotifications)&#xD;
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.RawOpen(SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.&lt;Open&gt;g__OpenCore|213_1(NpgsqlConnector conn, SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.Open(NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.UnpooledDataSource.Get(NpgsqlConnection conn, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.NpgsqlConnection.&lt;Open&gt;g__OpenAsync|42_0(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.ExistsAsync(CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.GetAppliedMigrationsAsync(CancellationToken cancellationToken)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Migrations.Internal.NpgsqlMigrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+   at ProcuLink.Api.Tests.Integration.RedeliverableStatusInvariantPostgresTests.InitializeAsync() in C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RedeliverableStatusInvariantPostgresTests.cs:line 80&#xD;
+   at ProcuLink.Api.Tests.Integration.RedeliverableStatusInvariantPostgresTests.InitializeAsync() in C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RedeliverableStatusInvariantPostgresTests.cs:line 80&#xD;
+----- Inner Stack Trace -----&#xD;
+</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="e97ba353-e003-497d-82cd-68087b558052" testId="17c7b298-e5c6-9d93-563b-fb00101e3c63" testName="ProcuLink.Api.Tests.Jobs.DeliverOrderJobNoDispatchTests.ExecuteAsync_NoDispatchAttempted_DoesNotSeedRetryQueue" computerName="DIMA-PC" duration="00:00:00.0077665" startTime="2026-07-17T10:21:05.7698127+03:00" endTime="2026-07-17T10:21:05.7699912+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="e97ba353-e003-497d-82cd-68087b558052" />
+    <UnitTestResult executionId="ce28b8ba-c613-4534-afed-fda62ef5bdd4" testId="96e25a96-ff3b-1dae-c0b8-ce159bda9491" testName="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.HeldOrder_NotRetryableStatus_JobDoesNotReschedule" computerName="DIMA-PC" duration="00:00:00.0010000" startTime="2026-07-17T10:23:24.2591501+03:00" endTime="2026-07-17T10:23:40.8646197+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ce28b8ba-c613-4534-afed-fda62ef5bdd4">
+      <Output>
+        <ErrorInfo>
+          <Message>Npgsql.NpgsqlException : Exception while reading from stream&#xD;
+---- System.TimeoutException : Timeout during reading attempt</Message>
+          <StackTrace>   at Npgsql.Internal.NpgsqlReadBuffer.&lt;Ensure&gt;g__EnsureLong|55_0(NpgsqlReadBuffer buffer, Int32 count, Boolean async, Boolean readingNotifications)&#xD;
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.RawOpen(SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.&lt;Open&gt;g__OpenCore|213_1(NpgsqlConnector conn, SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.Open(NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.UnpooledDataSource.Get(NpgsqlConnection conn, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.NpgsqlConnection.&lt;Open&gt;g__OpenAsync|42_0(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.ExistsAsync(CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Migrations.Internal.Migrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Migrations.Internal.NpgsqlMigrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+   at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync() in C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs:line 64&#xD;
+   at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync() in C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs:line 64&#xD;
+----- Inner Stack Trace -----&#xD;
+</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="a31e0d50-daf2-49a3-9eb9-4a02c4ba2340" testId="302ae067-3904-4ff2-2c4d-d08f9e6c8000" testName="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.ClaimLostToAnotherWorker_NoDispatch_JobDoesNotReschedule" computerName="DIMA-PC" duration="00:00:00.0010000" startTime="2026-07-17T10:23:00.6658270+03:00" endTime="2026-07-17T10:23:17.3011858+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a31e0d50-daf2-49a3-9eb9-4a02c4ba2340">
+      <Output>
+        <ErrorInfo>
+          <Message>Npgsql.NpgsqlException : Exception while reading from stream&#xD;
+---- System.TimeoutException : Timeout during reading attempt</Message>
+          <StackTrace>   at Npgsql.Internal.NpgsqlReadBuffer.&lt;Ensure&gt;g__EnsureLong|55_0(NpgsqlReadBuffer buffer, Int32 count, Boolean async, Boolean readingNotifications)&#xD;
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.RawOpen(SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.&lt;Open&gt;g__OpenCore|213_1(NpgsqlConnector conn, SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+   at Npgsql.Internal.NpgsqlConnector.Open(NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.UnpooledDataSource.Get(NpgsqlConnection conn, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.NpgsqlConnection.&lt;Open&gt;g__OpenAsync|42_0(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.ExistsAsync(CancellationToken cancellationToken)&#xD;
+   at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.GetAppliedMigrationsAsync(CancellationToken cancellationToken)&#xD;
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Migrations.Internal.NpgsqlMigrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+   at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync() in C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs:line 64&#xD;
+   at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync() in C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs:line 64&#xD;
+----- Inner Stack Trace -----&#xD;
+</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="0ffebdb4-4398-4d3f-a5a5-19f0a742d5cd" testId="1c9c74a7-06c3-893c-1222-b420679f864d" testName="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.ErasedOrder_JobDoesNotReschedule" computerName="DIMA-PC" duration="00:00:00.0010000" startTime="2026-07-17T10:21:05.6397748+03:00" endTime="2026-07-17T10:22:42.5678964+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="0ffebdb4-4398-4d3f-a5a5-19f0a742d5cd">
+      <Output>
+        <ErrorInfo>
+          <Message>DotNet.Testcontainers.Containers.ResourceReaperException : Initialization has been cancelled.</Message>
+          <StackTrace>   at DotNet.Testcontainers.Containers.ResourceReaper.GetAndStartNewAsync(Guid sessionId, IDockerEndpointAuthenticationConfiguration dockerEndpointAuthConfig, IImage resourceReaperImage, IMount dockerSocket, ILogger logger, Boolean requiresPrivilegedMode, TimeSpan initTimeout, CancellationToken ct) in /_/src/Testcontainers/Containers/ResourceReaper.cs:line 231&#xD;
+   at DotNet.Testcontainers.Containers.ResourceReaper.GetAndStartNewAsync(Guid sessionId, IDockerEndpointAuthenticationConfiguration dockerEndpointAuthConfig, IImage resourceReaperImage, IMount dockerSocket, ILogger logger, Boolean requiresPrivilegedMode, TimeSpan initTimeout, CancellationToken ct) in /_/src/Testcontainers/Containers/ResourceReaper.cs:line 243&#xD;
+   at DotNet.Testcontainers.Containers.ResourceReaper.GetAndStartDefaultAsync(IDockerEndpointAuthenticationConfiguration dockerEndpointAuthConfig, ILogger logger, Boolean isWindowsEngineEnabled, CancellationToken ct) in /_/src/Testcontainers/Containers/ResourceReaper.cs:line 135&#xD;
+   at DotNet.Testcontainers.Clients.TestcontainersClient.RunAsync(IContainerConfiguration configuration, CancellationToken ct) in /_/src/Testcontainers/Clients/TestcontainersClient.cs:line 294&#xD;
+   at DotNet.Testcontainers.Containers.DockerContainer.UnsafeCreateAsync(CancellationToken ct) in /_/src/Testcontainers/Containers/DockerContainer.cs:line 415&#xD;
+   at DotNet.Testcontainers.Containers.DockerContainer.StartAsync(CancellationToken ct) in /_/src/Testcontainers/Containers/DockerContainer.cs:line 279&#xD;
+   at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync() in C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs:line 57</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="03f64850-2734-47bc-a485-f3c56b094b1b" testId="cd5dfa17-2304-07be-9410-db59f2854451" testName="ProcuLink.Api.Tests.Jobs.DeliverOrderJobNoDispatchTests.ExecuteAsync_TransientDispatchFailure_StillSeedsRetryQueue" computerName="DIMA-PC" duration="00:00:00.1389338" startTime="2026-07-17T10:21:05.6420732+03:00" endTime="2026-07-17T10:21:05.7578779+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="03f64850-2734-47bc-a485-f3c56b094b1b" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="ProcuLink.Api.Tests.Jobs.DeliverOrderJobNoDispatchTests.ExecuteAsync_NoDispatchAttempted_DoesNotSeedRetryQueue" storage="c:\users\dmitri.markit\source\repos\proculink\.claude\worktrees\priceless-pike-d2eb0a\proculink.api.tests\bin\debug\net8.0\proculink.api.tests.dll" id="17c7b298-e5c6-9d93-563b-fb00101e3c63">
+      <Execution id="e97ba353-e003-497d-82cd-68087b558052" />
+      <TestMethod codeBase="C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\bin\Debug\net8.0\ProcuLink.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ProcuLink.Api.Tests.Jobs.DeliverOrderJobNoDispatchTests" name="ExecuteAsync_NoDispatchAttempted_DoesNotSeedRetryQueue" />
+    </UnitTest>
+    <UnitTest name="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.ErasedOrder_JobDoesNotReschedule" storage="c:\users\dmitri.markit\source\repos\proculink\.claude\worktrees\priceless-pike-d2eb0a\proculink.api.tests\bin\debug\net8.0\proculink.api.tests.dll" id="1c9c74a7-06c3-893c-1222-b420679f864d">
+      <Execution id="0ffebdb4-4398-4d3f-a5a5-19f0a742d5cd" />
+      <TestMethod codeBase="C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\bin\Debug\net8.0\ProcuLink.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests" name="ErasedOrder_JobDoesNotReschedule" />
+    </UnitTest>
+    <UnitTest name="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.ClaimLostToAnotherWorker_NoDispatch_JobDoesNotReschedule" storage="c:\users\dmitri.markit\source\repos\proculink\.claude\worktrees\priceless-pike-d2eb0a\proculink.api.tests\bin\debug\net8.0\proculink.api.tests.dll" id="302ae067-3904-4ff2-2c4d-d08f9e6c8000">
+      <Execution id="a31e0d50-daf2-49a3-9eb9-4a02c4ba2340" />
+      <TestMethod codeBase="C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\bin\Debug\net8.0\ProcuLink.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests" name="ClaimLostToAnotherWorker_NoDispatch_JobDoesNotReschedule" />
+    </UnitTest>
+    <UnitTest name="ProcuLink.Api.Tests.Jobs.DeliverOrderJobNoDispatchTests.ExecuteAsync_TransientDispatchFailure_StillSeedsRetryQueue" storage="c:\users\dmitri.markit\source\repos\proculink\.claude\worktrees\priceless-pike-d2eb0a\proculink.api.tests\bin\debug\net8.0\proculink.api.tests.dll" id="cd5dfa17-2304-07be-9410-db59f2854451">
+      <Execution id="03f64850-2734-47bc-a485-f3c56b094b1b" />
+      <TestMethod codeBase="C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\bin\Debug\net8.0\ProcuLink.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ProcuLink.Api.Tests.Jobs.DeliverOrderJobNoDispatchTests" name="ExecuteAsync_TransientDispatchFailure_StillSeedsRetryQueue" />
+    </UnitTest>
+    <UnitTest name="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.TransientDispatchFailure_AttemptRowWritten_JobStillReschedules" storage="c:\users\dmitri.markit\source\repos\proculink\.claude\worktrees\priceless-pike-d2eb0a\proculink.api.tests\bin\debug\net8.0\proculink.api.tests.dll" id="df7ce2f0-f7e6-a964-e7e3-0013a44dca82">
+      <Execution id="b7e89fd4-f44e-4374-801a-4b1f86e04f03" />
+      <TestMethod codeBase="C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\bin\Debug\net8.0\ProcuLink.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests" name="TransientDispatchFailure_AttemptRowWritten_JobStillReschedules" />
+    </UnitTest>
+    <UnitTest name="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.DeadLetteredOrder_JobDoesNotReschedule" storage="c:\users\dmitri.markit\source\repos\proculink\.claude\worktrees\priceless-pike-d2eb0a\proculink.api.tests\bin\debug\net8.0\proculink.api.tests.dll" id="3772bc30-3776-95a2-49c5-e7619bf2135f">
+      <Execution id="1ae6473f-c9ab-4540-8512-7dc8fb4063f0" />
+      <TestMethod codeBase="C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\bin\Debug\net8.0\ProcuLink.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests" name="DeadLetteredOrder_JobDoesNotReschedule" />
+    </UnitTest>
+    <UnitTest name="ProcuLink.Api.Tests.Integration.RedeliverableStatusInvariantPostgresTests.EveryRedeliverableStatus_IsHeldByTheBillingGate" storage="c:\users\dmitri.markit\source\repos\proculink\.claude\worktrees\priceless-pike-d2eb0a\proculink.api.tests\bin\debug\net8.0\proculink.api.tests.dll" id="be145f4b-c236-3ee2-fa37-2c132f8e2014">
+      <Execution id="3a94d137-93c9-4930-9d88-f7110448e6b8" />
+      <TestMethod codeBase="C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\bin\Debug\net8.0\ProcuLink.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ProcuLink.Api.Tests.Integration.RedeliverableStatusInvariantPostgresTests" name="EveryRedeliverableStatus_IsHeldByTheBillingGate" />
+    </UnitTest>
+    <UnitTest name="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.HeldOrder_NotRetryableStatus_JobDoesNotReschedule" storage="c:\users\dmitri.markit\source\repos\proculink\.claude\worktrees\priceless-pike-d2eb0a\proculink.api.tests\bin\debug\net8.0\proculink.api.tests.dll" id="96e25a96-ff3b-1dae-c0b8-ce159bda9491">
+      <Execution id="ce28b8ba-c613-4534-afed-fda62ef5bdd4" />
+      <TestMethod codeBase="C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\bin\Debug\net8.0\ProcuLink.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests" name="HeldOrder_NotRetryableStatus_JobDoesNotReschedule" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="3772bc30-3776-95a2-49c5-e7619bf2135f" executionId="1ae6473f-c9ab-4540-8512-7dc8fb4063f0" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="df7ce2f0-f7e6-a964-e7e3-0013a44dca82" executionId="b7e89fd4-f44e-4374-801a-4b1f86e04f03" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="be145f4b-c236-3ee2-fa37-2c132f8e2014" executionId="3a94d137-93c9-4930-9d88-f7110448e6b8" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="17c7b298-e5c6-9d93-563b-fb00101e3c63" executionId="e97ba353-e003-497d-82cd-68087b558052" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="96e25a96-ff3b-1dae-c0b8-ce159bda9491" executionId="ce28b8ba-c613-4534-afed-fda62ef5bdd4" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="302ae067-3904-4ff2-2c4d-d08f9e6c8000" executionId="a31e0d50-daf2-49a3-9eb9-4a02c4ba2340" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="1c9c74a7-06c3-893c-1222-b420679f864d" executionId="0ffebdb4-4398-4d3f-a5a5-19f0a742d5cd" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="cd5dfa17-2304-07be-9410-db59f2854451" executionId="03f64850-2734-47bc-a485-f3c56b094b1b" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="8" executed="8" passed="3" failed="5" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 8.0.29)&#xD;
+[xUnit.net 00:00:00.18]   Discovering: ProcuLink.Api.Tests&#xD;
+[xUnit.net 00:00:07.78]   Discovered:  ProcuLink.Api.Tests&#xD;
+[xUnit.net 00:00:07.82]   Starting:    ProcuLink.Api.Tests&#xD;
+[testcontainers.org 00:00:07.04] Connected to Docker:&#xD;
+  Host: npipe://./pipe/docker_engine&#xD;
+  Server Version: 29.5.3&#xD;
+  Kernel Version: 6.18.33.2-microsoft-standard-WSL2&#xD;
+  API Version: 1.54&#xD;
+  Operating System: Docker Desktop&#xD;
+  Total Memory: 1.86 GB&#xD;
+  Labels: &#xD;
+    com.docker.desktop.address=npipe://\\.\pipe\docker_cli&#xD;
+[testcontainers.org 00:00:13.85] Docker container ecd32d0ed5f1 created&#xD;
+[testcontainers.org 00:00:19.88] Start Docker container ecd32d0ed5f1&#xD;
+[testcontainers.org 00:00:34.46] Wait for Docker container ecd32d0ed5f1 to complete readiness checks&#xD;
+[testcontainers.org 00:00:35.64] Docker container ecd32d0ed5f1 ready&#xD;
+[xUnit.net 00:01:44.81]       DotNet.Testcontainers.Containers.ResourceReaperException : Initialization has been cancelled.&#xD;
+[xUnit.net 00:01:44.81]       Stack Trace:&#xD;
+[xUnit.net 00:01:44.81]         /_/src/Testcontainers/Containers/ResourceReaper.cs(231,0): at DotNet.Testcontainers.Containers.ResourceReaper.GetAndStartNewAsync(Guid sessionId, IDockerEndpointAuthenticationConfiguration dockerEndpointAuthConfig, IImage resourceReaperImage, IMount dockerSocket, ILogger logger, Boolean requiresPrivilegedMode, TimeSpan initTimeout, CancellationToken ct)&#xD;
+[xUnit.net 00:01:44.81]         /_/src/Testcontainers/Containers/ResourceReaper.cs(243,0): at DotNet.Testcontainers.Containers.ResourceReaper.GetAndStartNewAsync(Guid sessionId, IDockerEndpointAuthenticationConfiguration dockerEndpointAuthConfig, IImage resourceReaperImage, IMount dockerSocket, ILogger logger, Boolean requiresPrivilegedMode, TimeSpan initTimeout, CancellationToken ct)&#xD;
+[xUnit.net 00:01:44.81]         /_/src/Testcontainers/Containers/ResourceReaper.cs(135,0): at DotNet.Testcontainers.Containers.ResourceReaper.GetAndStartDefaultAsync(IDockerEndpointAuthenticationConfiguration dockerEndpointAuthConfig, ILogger logger, Boolean isWindowsEngineEnabled, CancellationToken ct)&#xD;
+[xUnit.net 00:01:44.81]         /_/src/Testcontainers/Clients/TestcontainersClient.cs(294,0): at DotNet.Testcontainers.Clients.TestcontainersClient.RunAsync(IContainerConfiguration configuration, CancellationToken ct)&#xD;
+[xUnit.net 00:01:44.81]         /_/src/Testcontainers/Containers/DockerContainer.cs(415,0): at DotNet.Testcontainers.Containers.DockerContainer.UnsafeCreateAsync(CancellationToken ct)&#xD;
+[xUnit.net 00:01:44.81]         /_/src/Testcontainers/Containers/DockerContainer.cs(279,0): at DotNet.Testcontainers.Containers.DockerContainer.StartAsync(CancellationToken ct)&#xD;
+[xUnit.net 00:01:44.81]         C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs(57,0): at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync()&#xD;
+[testcontainers.org 00:01:35.91] Docker container 8fc6945eadce created&#xD;
+[testcontainers.org 00:01:35.92] Start Docker container 8fc6945eadce&#xD;
+[testcontainers.org 00:01:36.15] Wait for Docker container 8fc6945eadce to complete readiness checks&#xD;
+[testcontainers.org 00:01:36.15] Docker container 8fc6945eadce ready&#xD;
+[testcontainers.org 00:01:36.25] Docker container 9433b533ef02 created&#xD;
+[testcontainers.org 00:01:36.27] Start Docker container 9433b533ef02&#xD;
+[testcontainers.org 00:01:36.45] Wait for Docker container 9433b533ef02 to complete readiness checks&#xD;
+[testcontainers.org 00:01:36.46] Execute "pg_isready --host localhost --dbname proculink_retryloop_39c27e28bad4407d8cf76b905b70b39d --username postgres" at Docker container 9433b533ef02&#xD;
+[testcontainers.org 00:01:37.60] Execute "pg_isready --host localhost --dbname proculink_retryloop_39c27e28bad4407d8cf76b905b70b39d --username postgres" at Docker container 9433b533ef02&#xD;
+[testcontainers.org 00:01:37.66] Docker container 9433b533ef02 ready&#xD;
+[xUnit.net 00:02:02.90]       Npgsql.NpgsqlException : Exception while reading from stream&#xD;
+[xUnit.net 00:02:02.90]       ---- System.TimeoutException : Timeout during reading attempt&#xD;
+[xUnit.net 00:02:02.90]       Stack Trace:&#xD;
+[xUnit.net 00:02:02.90]            at Npgsql.Internal.NpgsqlReadBuffer.&lt;Ensure&gt;g__EnsureLong|55_0(NpgsqlReadBuffer buffer, Int32 count, Boolean async, Boolean readingNotifications)&#xD;
+[xUnit.net 00:02:02.90]            at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)&#xD;
+[xUnit.net 00:02:02.90]            at Npgsql.Internal.NpgsqlConnector.RawOpen(SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+[xUnit.net 00:02:02.90]            at Npgsql.Internal.NpgsqlConnector.&lt;Open&gt;g__OpenCore|213_1(NpgsqlConnector conn, SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+[xUnit.net 00:02:02.90]            at Npgsql.Internal.NpgsqlConnector.Open(NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:02.90]            at Npgsql.UnpooledDataSource.Get(NpgsqlConnection conn, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:02.90]            at Npgsql.NpgsqlConnection.&lt;Open&gt;g__OpenAsync|42_0(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:02.90]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:02.90]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:02.90]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)&#xD;
+[xUnit.net 00:02:02.90]            at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:02.90]            at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:02.90]            at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.ExistsAsync(CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:02.90]            at Microsoft.EntityFrameworkCore.Migrations.Internal.Migrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:02.90]            at Npgsql.EntityFrameworkCore.PostgreSQL.Migrations.Internal.NpgsqlMigrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:02.90]         C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs(64,0): at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync()&#xD;
+[xUnit.net 00:02:02.90]         C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs(64,0): at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync()&#xD;
+[xUnit.net 00:02:02.90]         ----- Inner Stack Trace -----&#xD;
+[xUnit.net 00:02:02.90]         &#xD;
+[testcontainers.org 00:01:54.06] Docker container 31652de6718f created&#xD;
+[testcontainers.org 00:01:54.07] Start Docker container 31652de6718f&#xD;
+[testcontainers.org 00:01:54.30] Wait for Docker container 31652de6718f to complete readiness checks&#xD;
+[testcontainers.org 00:01:54.31] Execute "pg_isready --host localhost --dbname proculink_retryloop_a67998087a5845ffa21f30ae2c6e6824 --username postgres" at Docker container 31652de6718f&#xD;
+[testcontainers.org 00:01:55.42] Execute "pg_isready --host localhost --dbname proculink_retryloop_a67998087a5845ffa21f30ae2c6e6824 --username postgres" at Docker container 31652de6718f&#xD;
+[testcontainers.org 00:01:55.51] Docker container 31652de6718f ready&#xD;
+[xUnit.net 00:02:19.54]       Npgsql.NpgsqlException : Exception while reading from stream&#xD;
+[xUnit.net 00:02:19.54]       ---- System.TimeoutException : Timeout during reading attempt&#xD;
+[xUnit.net 00:02:19.54]       Stack Trace:&#xD;
+[xUnit.net 00:02:19.54]            at Npgsql.Internal.NpgsqlReadBuffer.&lt;Ensure&gt;g__EnsureLong|55_0(NpgsqlReadBuffer buffer, Int32 count, Boolean async, Boolean readingNotifications)&#xD;
+[xUnit.net 00:02:19.54]            at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)&#xD;
+[xUnit.net 00:02:19.54]            at Npgsql.Internal.NpgsqlConnector.RawOpen(SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+[xUnit.net 00:02:19.54]            at Npgsql.Internal.NpgsqlConnector.&lt;Open&gt;g__OpenCore|213_1(NpgsqlConnector conn, SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+[xUnit.net 00:02:19.54]            at Npgsql.Internal.NpgsqlConnector.Open(NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:19.54]            at Npgsql.UnpooledDataSource.Get(NpgsqlConnection conn, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:19.54]            at Npgsql.NpgsqlConnection.&lt;Open&gt;g__OpenAsync|42_0(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:19.55]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:19.55]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:19.55]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)&#xD;
+[xUnit.net 00:02:19.55]            at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:19.55]            at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:19.55]            at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.ExistsAsync(CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:19.55]            at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.GetAppliedMigrationsAsync(CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:19.55]            at Npgsql.EntityFrameworkCore.PostgreSQL.Migrations.Internal.NpgsqlMigrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:19.55]         C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs(64,0): at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync()&#xD;
+[xUnit.net 00:02:19.55]         C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs(64,0): at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync()&#xD;
+[xUnit.net 00:02:19.55]         ----- Inner Stack Trace -----&#xD;
+[xUnit.net 00:02:19.55]         &#xD;
+[testcontainers.org 00:02:10.66] Docker container b38a996cd686 created&#xD;
+[testcontainers.org 00:02:10.68] Start Docker container b38a996cd686&#xD;
+[testcontainers.org 00:02:10.90] Wait for Docker container b38a996cd686 to complete readiness checks&#xD;
+[testcontainers.org 00:02:10.91] Execute "pg_isready --host localhost --dbname proculink_retryloop_84014e69488b42c8a513fef6f4396a89 --username postgres" at Docker container b38a996cd686&#xD;
+[testcontainers.org 00:02:11.99] Execute "pg_isready --host localhost --dbname proculink_retryloop_84014e69488b42c8a513fef6f4396a89 --username postgres" at Docker container b38a996cd686&#xD;
+[testcontainers.org 00:02:12.05] Docker container b38a996cd686 ready&#xD;
+[testcontainers.org 00:02:16.97] Delete Docker container b38a996cd686&#xD;
+[testcontainers.org 00:02:17.62] Docker container edf7c6c78545 created&#xD;
+[testcontainers.org 00:02:17.63] Start Docker container edf7c6c78545&#xD;
+[testcontainers.org 00:02:17.87] Wait for Docker container edf7c6c78545 to complete readiness checks&#xD;
+[testcontainers.org 00:02:17.88] Execute "pg_isready --host localhost --dbname proculink_retryloop_b1bcf0fb4d254c06aae60f7ad0bf3514 --username postgres" at Docker container edf7c6c78545&#xD;
+[testcontainers.org 00:02:19.00] Execute "pg_isready --host localhost --dbname proculink_retryloop_b1bcf0fb4d254c06aae60f7ad0bf3514 --username postgres" at Docker container edf7c6c78545&#xD;
+[testcontainers.org 00:02:19.08] Docker container edf7c6c78545 ready&#xD;
+[xUnit.net 00:02:43.10]       Npgsql.NpgsqlException : Exception while reading from stream&#xD;
+[xUnit.net 00:02:43.11]       ---- System.TimeoutException : Timeout during reading attempt&#xD;
+[xUnit.net 00:02:43.11]       Stack Trace:&#xD;
+[xUnit.net 00:02:43.11]            at Npgsql.Internal.NpgsqlReadBuffer.&lt;Ensure&gt;g__EnsureLong|55_0(NpgsqlReadBuffer buffer, Int32 count, Boolean async, Boolean readingNotifications)&#xD;
+[xUnit.net 00:02:43.11]            at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)&#xD;
+[xUnit.net 00:02:43.11]            at Npgsql.Internal.NpgsqlConnector.RawOpen(SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+[xUnit.net 00:02:43.11]            at Npgsql.Internal.NpgsqlConnector.&lt;Open&gt;g__OpenCore|213_1(NpgsqlConnector conn, SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+[xUnit.net 00:02:43.11]            at Npgsql.Internal.NpgsqlConnector.Open(NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:43.11]            at Npgsql.UnpooledDataSource.Get(NpgsqlConnection conn, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:43.11]            at Npgsql.NpgsqlConnection.&lt;Open&gt;g__OpenAsync|42_0(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:43.11]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:43.11]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:43.11]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)&#xD;
+[xUnit.net 00:02:43.11]            at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:43.11]            at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:43.11]            at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.ExistsAsync(CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:43.11]            at Microsoft.EntityFrameworkCore.Migrations.Internal.Migrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:43.11]            at Npgsql.EntityFrameworkCore.PostgreSQL.Migrations.Internal.NpgsqlMigrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:02:43.11]         C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs(64,0): at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync()&#xD;
+[xUnit.net 00:02:43.11]         C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RetryDeliveryLoopPostgresTests.cs(64,0): at ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.InitializeAsync()&#xD;
+[xUnit.net 00:02:43.11]         ----- Inner Stack Trace -----&#xD;
+[xUnit.net 00:02:43.11]         &#xD;
+[testcontainers.org 00:02:34.23] Docker container 2dd315a4e814 created&#xD;
+[testcontainers.org 00:02:34.24] Start Docker container 2dd315a4e814&#xD;
+[testcontainers.org 00:02:34.52] Wait for Docker container 2dd315a4e814 to complete readiness checks&#xD;
+[testcontainers.org 00:02:34.55] Execute "pg_isready --host localhost --dbname proculink_redeliv_93f2dab176ed43de988d37c1bd8fadc8 --username postgres" at Docker container 2dd315a4e814&#xD;
+[testcontainers.org 00:02:35.78] Execute "pg_isready --host localhost --dbname proculink_redeliv_93f2dab176ed43de988d37c1bd8fadc8 --username postgres" at Docker container 2dd315a4e814&#xD;
+[testcontainers.org 00:02:37.27] Execute "pg_isready --host localhost --dbname proculink_redeliv_93f2dab176ed43de988d37c1bd8fadc8 --username postgres" at Docker container 2dd315a4e814&#xD;
+[testcontainers.org 00:02:37.37] Docker container 2dd315a4e814 ready&#xD;
+[xUnit.net 00:03:01.37]       Npgsql.NpgsqlException : Exception while reading from stream&#xD;
+[xUnit.net 00:03:01.37]       ---- System.TimeoutException : Timeout during reading attempt&#xD;
+[xUnit.net 00:03:01.37]       Stack Trace:&#xD;
+[xUnit.net 00:03:01.37]            at Npgsql.Internal.NpgsqlReadBuffer.&lt;Ensure&gt;g__EnsureLong|55_0(NpgsqlReadBuffer buffer, Int32 count, Boolean async, Boolean readingNotifications)&#xD;
+[xUnit.net 00:03:01.37]            at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)&#xD;
+[xUnit.net 00:03:01.37]            at Npgsql.Internal.NpgsqlConnector.RawOpen(SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+[xUnit.net 00:03:01.37]            at Npgsql.Internal.NpgsqlConnector.&lt;Open&gt;g__OpenCore|213_1(NpgsqlConnector conn, SslMode sslMode, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken, Boolean isFirstAttempt)&#xD;
+[xUnit.net 00:03:01.37]            at Npgsql.Internal.NpgsqlConnector.Open(NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:03:01.37]            at Npgsql.UnpooledDataSource.Get(NpgsqlConnection conn, NpgsqlTimeout timeout, Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:03:01.37]            at Npgsql.NpgsqlConnection.&lt;Open&gt;g__OpenAsync|42_0(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:03:01.37]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:03:01.37]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:03:01.37]            at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)&#xD;
+[xUnit.net 00:03:01.37]            at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:03:01.37]            at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlDatabaseCreator.Exists(Boolean async, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:03:01.37]            at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.ExistsAsync(CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:03:01.37]            at Microsoft.EntityFrameworkCore.Migrations.HistoryRepository.GetAppliedMigrationsAsync(CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:03:01.37]            at Npgsql.EntityFrameworkCore.PostgreSQL.Migrations.Internal.NpgsqlMigrator.MigrateAsync(String targetMigration, CancellationToken cancellationToken)&#xD;
+[xUnit.net 00:03:01.37]         C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RedeliverableStatusInvariantPostgresTests.cs(80,0): at ProcuLink.Api.Tests.Integration.RedeliverableStatusInvariantPostgresTests.InitializeAsync()&#xD;
+[xUnit.net 00:03:01.37]         C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\RedeliverableStatusInvariantPostgresTests.cs(80,0): at ProcuLink.Api.Tests.Integration.RedeliverableStatusInvariantPostgresTests.InitializeAsync()&#xD;
+[xUnit.net 00:03:01.37]         ----- Inner Stack Trace -----&#xD;
+[xUnit.net 00:03:01.37]         &#xD;
+[testcontainers.org 00:02:52.61] Docker container 6f88c6d3679e created&#xD;
+[testcontainers.org 00:02:52.65] Start Docker container 6f88c6d3679e&#xD;
+[testcontainers.org 00:02:53.75] Wait for Docker container 6f88c6d3679e to complete readiness checks&#xD;
+[testcontainers.org 00:02:53.78] Execute "pg_isready --host localhost --dbname proculink_redeliv_01ea9249695a4a6580401f24657a8bfb --username postgres" at Docker container 6f88c6d3679e&#xD;
+[testcontainers.org 00:02:55.27] Execute "pg_isready --host localhost --dbname proculink_redeliv_01ea9249695a4a6580401f24657a8bfb --username postgres" at Docker container 6f88c6d3679e&#xD;
+[testcontainers.org 00:02:56.30] Docker container 6f88c6d3679e ready&#xD;
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="DIMA-PC" outcome="Error" timestamp="2026-07-17T10:22:42.5707377+03:00">
+        <Text>[xUnit.net 00:01:44.81]     ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.ErasedOrder_JobDoesNotReschedule [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="DIMA-PC" outcome="Error" timestamp="2026-07-17T10:23:00.6631275+03:00">
+        <Text>[xUnit.net 00:02:02.90]     ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.DeadLetteredOrder_JobDoesNotReschedule [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="DIMA-PC" outcome="Error" timestamp="2026-07-17T10:23:17.3032174+03:00">
+        <Text>[xUnit.net 00:02:19.54]     ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.ClaimLostToAnotherWorker_NoDispatch_JobDoesNotReschedule [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="DIMA-PC" outcome="Error" timestamp="2026-07-17T10:23:40.8650652+03:00">
+        <Text>[xUnit.net 00:02:43.10]     ProcuLink.Api.Tests.Integration.RetryDeliveryLoopPostgresTests.HeldOrder_NotRetryableStatus_JobDoesNotReschedule [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="DIMA-PC" outcome="Error" timestamp="2026-07-17T10:23:59.1321931+03:00">
+        <Text>[xUnit.net 00:03:01.37]     ProcuLink.Api.Tests.Integration.RedeliverableStatusInvariantPostgresTests.EveryRedeliverableStatus_IsHeldByTheBillingGate [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="DIMA-PC" outcome="Error" timestamp="2026-07-17T10:24:16.2479844+03:00">
+        <Text>The active test run was aborted. Reason: Test host process crashed</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>

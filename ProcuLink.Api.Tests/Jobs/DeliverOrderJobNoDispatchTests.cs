@@ -14,7 +14,7 @@ namespace ProcuLink.Api.Tests.Jobs;
 /// <summary>
 /// The first-deliver twin of <c>RetryDeliveryJob</c>'s unbounded-loop guard. DeliverOrderJob runs the
 /// same decision (not 4xx + under the cap → schedule a backoff retry), so it must make the same
-/// distinction: a <see cref="DeliveryOutcome.NotAttempted"/> result never reached a dispatcher and
+/// distinction: a <see cref="DeliveryOutcome.NotRetryable"/> result never reached a dispatcher and
 /// wrote no attempt row, so seeding the retry queue from it just hands RetryDeliveryJob an order it
 /// can only bow out of.
 /// </summary>
@@ -35,7 +35,7 @@ public class DeliverOrderJobNoDispatchTests
         // Nothing dispatched (e.g. the artifact vanished, or another worker holds the claim):
         // no attempt row, no response code — indistinguishable from a transient failure without Outcome.
         delivery.Setup(d => d.DispatchArtifactAsync(orgId, orderId, artifactId, true, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new DeliveryResult(false, "Order artifact not found.", Outcome: DeliveryOutcome.NotAttempted));
+                .ReturnsAsync(new DeliveryResult(false, "Order artifact not found.", Outcome: DeliveryOutcome.NotRetryable));
         delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(0);
 

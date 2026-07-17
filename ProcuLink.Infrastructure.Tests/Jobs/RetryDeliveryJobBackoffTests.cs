@@ -138,28 +138,25 @@ public class RetryDeliveryJobBackoffTests
     }
 
     /// <summary>
-    /// A retry that never reached the wire (no dispatch, no attempt row) must NOT be rescheduled.
-    /// Rescheduling one is an UNBOUNDED loop, not a retry: with no attempt row the count never
-    /// advances, so <c>attemptsMade &gt;= maxAttempts</c> never becomes true and every run schedules
-    /// the same backoff step forever. Only the Outcome distinguishes this from a real transient
-    /// failure — the message text is not a contract and ResponseCode is null for both.
+    /// A TERMINAL non-dispatch (no attempt row, and no later attempt can help) must NOT be
+    /// rescheduled. Rescheduling one is an UNBOUNDED loop, not a retry: with no attempt row the
+    /// count never advances, so <c>attemptsMade &gt;= maxAttempts</c> never becomes true and every
+    /// run schedules the same backoff step forever. Only the Outcome distinguishes this from a real
+    /// transient failure — the message text is not a contract and ResponseCode is null for both.
     /// </summary>
     [Theory]
-    // Claim lost: another worker owns the in-flight send; it — not us — will finish or fail it.
-    [InlineData("Delivery for this order is already in progress.")]
-    // Non-claimable / terminal statuses: nothing a later retry can change.
     [InlineData("Order status 'delivery_held' is not retryable.")]
     [InlineData("Order is in dead-letter state — retries are exhausted.")]
     [InlineData("Order not found.")]
     [InlineData("No outbound artifact found. Transform the order before retrying delivery.")]
-    public async Task ExecuteAsync_NoDispatchAttempted_DoesNotSchedule(string message)
+    public async Task ExecuteAsync_NotRetryable_DoesNotSchedule(string message)
     {
         var orgId = Guid.NewGuid();
         var orderId = Guid.NewGuid();
 
         var delivery = new Mock<IDeliveryService>();
         delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new DeliveryResult(false, message, Outcome: DeliveryOutcome.NotAttempted));
+                .ReturnsAsync(new DeliveryResult(false, message, Outcome: DeliveryOutcome.NotRetryable));
         // The count is FROZEN at whatever it was — the cap guard can never fire on this path.
         delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(1);
@@ -173,6 +170,39 @@ public class RetryDeliveryJobBackoffTests
             "no attempt row was written, so a rescheduled run would repeat this forever");
         delivery.Verify(d => d.CountDeliveryAttemptsAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
             Times.Never, "backoff bookkeeping is meaningless when nothing was dispatched");
+    }
+
+    /// <summary>
+    /// A LOST CLAIM writes no attempt row either, yet it MUST still be rescheduled — the OPPOSITE of
+    /// the terminal case above. That opposition is precisely why the two cannot share one enum
+    /// member.
+    ///
+    /// <para>When the claim holder dies, StuckDeliveryDetectionService re-drives the order but bumps
+    /// UpdatedAt to now BEFORE enqueuing, so the re-driven retry finds a still-fresh 'delivering' row
+    /// and loses the claim again. This backoff is what carries the order past the reclaim window so a
+    /// later attempt CAN claim it. Drop it and a crashed holder's PO is never sent — proven
+    /// end-to-end in CrashedHolderRecoveryCompositionPostgresTests.</para>
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_ClaimLost_StillSchedulesRetry_ItIsTheCrashRecoveryNet()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "Delivery for this order is already in progress.",
+                    Outcome: DeliveryOutcome.ClaimLost));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().HaveCount(1,
+            "the reschedule is the ONLY thing that recovers an order whose claim holder crashed");
     }
 
     /// <summary>

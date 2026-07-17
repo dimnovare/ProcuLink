@@ -1,0 +1,98 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="f8c35e33-736f-4e90-a42e-183da6816cc8" name="Dim@DIMA-PC 2026-07-17 10:38:19" runUser="REDACTED-PARTY\Dim" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-07-17T10:38:19.8200744+03:00" queuing="2026-07-17T10:38:19.8200755+03:00" start="2026-07-17T10:38:10.7660966+03:00" finish="2026-07-17T10:38:23.3591476+03:00" />
+  <TestSettings name="default" id="004b940c-8842-4816-8997-292b35dbd78e">
+    <Deployment runDeploymentRoot="Dim_DIMA-PC_2026-07-17_10_38_19" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="f3996a78-489e-49f7-8c33-ec739fb82ba1" testId="02e4509f-8cf6-4455-1ca2-3434ef3529fb" testName="ProcuLink.Api.Tests.Integration.CrashedHolderRecoveryCompositionPostgresTests.LiveHolder_RetryStaysSilent_NoDispatchNoReschedule" computerName="DIMA-PC" duration="00:00:00.0209559" startTime="2026-07-17T10:38:19.8039761+03:00" endTime="2026-07-17T10:38:23.2596894+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f3996a78-489e-49f7-8c33-ec739fb82ba1" />
+    <UnitTestResult executionId="c4afd8e2-18b5-4720-a67f-0ccdedeedf2e" testId="a76ccf31-9831-6b84-4a48-3c720780ac7f" testName="ProcuLink.Api.Tests.Integration.CrashedHolderRecoveryCompositionPostgresTests.CrashedHolder_SweepRedrive_ActuallyDeliversTheOrder" computerName="DIMA-PC" duration="00:00:01.0634121" startTime="2026-07-17T10:38:11.6601966+03:00" endTime="2026-07-17T10:38:19.7810232+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c4afd8e2-18b5-4720-a67f-0ccdedeedf2e">
+      <Output>
+        <ErrorInfo>
+          <Message>Expected dispatcher.Calls to be 1 because the crashed holder's order must ultimately be SENT, not abandoned, but found 0 (difference of -1).</Message>
+          <StackTrace>   at FluentAssertions.Execution.XUnit2TestFramework.Throw(String message)&#xD;
+   at FluentAssertions.Execution.TestFrameworkProvider.Throw(String message)&#xD;
+   at FluentAssertions.Execution.DefaultAssertionStrategy.HandleFailure(String message)&#xD;
+   at FluentAssertions.Execution.AssertionScope.FailWith(Func`1 failReasonFunc)&#xD;
+   at FluentAssertions.Execution.AssertionScope.FailWith(Func`1 failReasonFunc)&#xD;
+   at FluentAssertions.Execution.AssertionScope.FailWith(String message, Object[] args)&#xD;
+   at FluentAssertions.Numeric.NumericAssertions`2.Be(T expected, String because, Object[] becauseArgs)&#xD;
+   at ProcuLink.Api.Tests.Integration.CrashedHolderRecoveryCompositionPostgresTests.CrashedHolder_SweepRedrive_ActuallyDeliversTheOrder() in C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\CrashedHolderRecoveryCompositionPostgresTests.cs:line 114&#xD;
+--- End of stack trace from previous location ---</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="ProcuLink.Api.Tests.Integration.CrashedHolderRecoveryCompositionPostgresTests.CrashedHolder_SweepRedrive_ActuallyDeliversTheOrder" storage="c:\users\dmitri.markit\source\repos\proculink\.claude\worktrees\priceless-pike-d2eb0a\proculink.api.tests\bin\debug\net8.0\proculink.api.tests.dll" id="a76ccf31-9831-6b84-4a48-3c720780ac7f">
+      <Execution id="c4afd8e2-18b5-4720-a67f-0ccdedeedf2e" />
+      <TestMethod codeBase="C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\bin\Debug\net8.0\ProcuLink.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ProcuLink.Api.Tests.Integration.CrashedHolderRecoveryCompositionPostgresTests" name="CrashedHolder_SweepRedrive_ActuallyDeliversTheOrder" />
+    </UnitTest>
+    <UnitTest name="ProcuLink.Api.Tests.Integration.CrashedHolderRecoveryCompositionPostgresTests.LiveHolder_RetryStaysSilent_NoDispatchNoReschedule" storage="c:\users\dmitri.markit\source\repos\proculink\.claude\worktrees\priceless-pike-d2eb0a\proculink.api.tests\bin\debug\net8.0\proculink.api.tests.dll" id="02e4509f-8cf6-4455-1ca2-3434ef3529fb">
+      <Execution id="f3996a78-489e-49f7-8c33-ec739fb82ba1" />
+      <TestMethod codeBase="C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\bin\Debug\net8.0\ProcuLink.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ProcuLink.Api.Tests.Integration.CrashedHolderRecoveryCompositionPostgresTests" name="LiveHolder_RetryStaysSilent_NoDispatchNoReschedule" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="02e4509f-8cf6-4455-1ca2-3434ef3529fb" executionId="f3996a78-489e-49f7-8c33-ec739fb82ba1" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="a76ccf31-9831-6b84-4a48-3c720780ac7f" executionId="c4afd8e2-18b5-4720-a67f-0ccdedeedf2e" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="2" executed="2" passed="1" failed="1" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 8.0.29)&#xD;
+[xUnit.net 00:00:00.13]   Discovering: ProcuLink.Api.Tests&#xD;
+[xUnit.net 00:00:00.46]   Discovered:  ProcuLink.Api.Tests&#xD;
+[xUnit.net 00:00:00.48]   Starting:    ProcuLink.Api.Tests&#xD;
+[testcontainers.org 00:00:00.05] Connected to Docker:&#xD;
+  Host: npipe://./pipe/docker_engine&#xD;
+  Server Version: 29.5.3&#xD;
+  Kernel Version: 6.18.33.2-microsoft-standard-WSL2&#xD;
+  API Version: 1.54&#xD;
+  Operating System: Docker Desktop&#xD;
+  Total Memory: 1.86 GB&#xD;
+  Labels: &#xD;
+    com.docker.desktop.address=npipe://\\.\pipe\docker_cli&#xD;
+[testcontainers.org 00:00:00.20] Docker container 58fdb5ca62bc created&#xD;
+[testcontainers.org 00:00:00.24] Start Docker container 58fdb5ca62bc&#xD;
+[testcontainers.org 00:00:00.46] Wait for Docker container 58fdb5ca62bc to complete readiness checks&#xD;
+[testcontainers.org 00:00:00.46] Docker container 58fdb5ca62bc ready&#xD;
+[testcontainers.org 00:00:00.56] Docker container f41a8291f9ea created&#xD;
+[testcontainers.org 00:00:00.57] Start Docker container f41a8291f9ea&#xD;
+[testcontainers.org 00:00:00.77] Wait for Docker container f41a8291f9ea to complete readiness checks&#xD;
+[testcontainers.org 00:00:00.79] Execute "pg_isready --host localhost --dbname proculink_crashcompose_b91230e5837b4682ac77a2b087c80dfe --username postgres" at Docker container f41a8291f9ea&#xD;
+[testcontainers.org 00:00:01.88] Execute "pg_isready --host localhost --dbname proculink_crashcompose_b91230e5837b4682ac77a2b087c80dfe --username postgres" at Docker container f41a8291f9ea&#xD;
+[testcontainers.org 00:00:01.95] Docker container f41a8291f9ea ready&#xD;
+[testcontainers.org 00:00:07.67] Delete Docker container f41a8291f9ea&#xD;
+[xUnit.net 00:00:08.62]       Expected dispatcher.Calls to be 1 because the crashed holder's order must ultimately be SENT, not abandoned, but found 0 (difference of -1).&#xD;
+[xUnit.net 00:00:08.62]       Stack Trace:&#xD;
+[xUnit.net 00:00:08.62]            at FluentAssertions.Execution.XUnit2TestFramework.Throw(String message)&#xD;
+[xUnit.net 00:00:08.62]            at FluentAssertions.Execution.TestFrameworkProvider.Throw(String message)&#xD;
+[xUnit.net 00:00:08.62]            at FluentAssertions.Execution.DefaultAssertionStrategy.HandleFailure(String message)&#xD;
+[xUnit.net 00:00:08.62]            at FluentAssertions.Execution.AssertionScope.FailWith(Func`1 failReasonFunc)&#xD;
+[xUnit.net 00:00:08.62]            at FluentAssertions.Execution.AssertionScope.FailWith(Func`1 failReasonFunc)&#xD;
+[xUnit.net 00:00:08.62]            at FluentAssertions.Execution.AssertionScope.FailWith(String message, Object[] args)&#xD;
+[xUnit.net 00:00:08.62]            at FluentAssertions.Numeric.NumericAssertions`2.Be(T expected, String because, Object[] becauseArgs)&#xD;
+[xUnit.net 00:00:08.62]         C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\priceless-pike-d2eb0a\ProcuLink.Api.Tests\Integration\CrashedHolderRecoveryCompositionPostgresTests.cs(114,0): at ProcuLink.Api.Tests.Integration.CrashedHolderRecoveryCompositionPostgresTests.CrashedHolder_SweepRedrive_ActuallyDeliversTheOrder()&#xD;
+[xUnit.net 00:00:08.62]         --- End of stack trace from previous location ---&#xD;
+[testcontainers.org 00:00:08.16] Docker container 3cd198cb04f0 created&#xD;
+[testcontainers.org 00:00:08.17] Start Docker container 3cd198cb04f0&#xD;
+[testcontainers.org 00:00:08.34] Wait for Docker container 3cd198cb04f0 to complete readiness checks&#xD;
+[testcontainers.org 00:00:08.35] Execute "pg_isready --host localhost --dbname proculink_crashcompose_2f3d948ea74049b08f5a7bb70121fbe1 --username postgres" at Docker container 3cd198cb04f0&#xD;
+[testcontainers.org 00:00:09.49] Execute "pg_isready --host localhost --dbname proculink_crashcompose_2f3d948ea74049b08f5a7bb70121fbe1 --username postgres" at Docker container 3cd198cb04f0&#xD;
+[testcontainers.org 00:00:09.64] Docker container 3cd198cb04f0 ready&#xD;
+[testcontainers.org 00:00:11.18] Delete Docker container 3cd198cb04f0&#xD;
+[xUnit.net 00:00:12.10]   Finished:    ProcuLink.Api.Tests&#xD;
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="DIMA-PC" outcome="Error" timestamp="2026-07-17T10:38:19.7834462+03:00">
+        <Text>[xUnit.net 00:00:08.62]     ProcuLink.Api.Tests.Integration.CrashedHolderRecoveryCompositionPostgresTests.CrashedHolder_SweepRedrive_ActuallyDeliversTheOrder [FAIL]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>
