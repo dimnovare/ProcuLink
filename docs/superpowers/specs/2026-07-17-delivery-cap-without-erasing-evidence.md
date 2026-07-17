@@ -2,7 +2,7 @@
 
 Status: **SPEC ONLY. Cut is held** pending #31 and #27 landing (per the audit session's sequencing).
 Ruling: option **B** (fix the premise, not the symptom) — audit session, 2026-07-17.
-Branch base: main @ `52063a3`.
+Branch base: main @ `91b489f` (#31 merged).
 
 ## The premise we are fixing
 
@@ -92,6 +92,11 @@ The nullable marker needs neither.
 Naming: NOT `Superseded` (nothing supersedes the send — it happened). The row is excluded from the
 CAP by an operator's requeue, and the name should say only that.
 
+**Both predicates carry a do-not-unify comment, CITING rather than restating each other** (the #31
+ruling's own rule — a restated predicate is a second copy that drifts). The webhook guard's evidence
+check must never mention `CapSupersededAt`; if someone "simplifies" the two into one, the erasure
+hole reopens under a new name. The comment exists to make that refactor stop and read.
+
 ## Condition 2 — this BREAKS the stranded-failed sweep unless it lands together
 
 `StrandedFailedDeliveryDetectionService:60-61` matches `Count(terminal) < maxAttempts`. Today the
@@ -112,17 +117,69 @@ Same PR. Real-Postgres test: requeue → the sweep still re-drives.
    red there is a silent strand, not a flake).
 6. Equivalence: every cap site agrees after the change. Pin it; do not eyeball five call sites.
 
-## Open questions (do NOT guess — these decide behaviour)
+## RULED (audit session, 2026-07-17) — both were open questions; neither was guessed
 
-1. **Attempt NUMBERING (site 4):** should `AttemptNumber` restart at 1 after a requeue (it effectively
-   does today, since the rows are gone) or keep ascending? Today's behaviour is an accident of the
-   delete. Numbering is supplier-visible via provenance. **Ascending is my recommendation** — the
-   numbers stop lying about how many times we actually hit the supplier — but it is a visible change.
-2. **Retention** (`DataRetentionService`, prunes attempt rows for terminal statuses, disabled by
-   default, 180d) is the SECOND erasure window. It does not affect `delivery_failed` (not in
-   `TerminalOrderStatuses`), so it cannot produce the P1 — but it can still erase evidence from a
-   `delivered`/`rejected_by_supplier` order. Out of scope here; the guard's caveat shrinks to
-   retention-only rather than vanishing. Say so honestly; do not claim the hole is fully closed.
+### Ruling 1 — `AttemptNumber` ASCENDS. Do not preserve the restart.
+
+Today's restart is an **accident of the delete**, not a decision. Ascending is the truthful option:
+if we hit a supplier four times, "attempt 4" is true and "attempt 1" is a lie — in
+**supplier-visible provenance**, the last place a number should lie.
+
+**Condition attached to the ruling: prove no consumer assumes 1-based-per-epoch. VERIFIED — and the
+result strengthens the ruling rather than merely permitting it.**
+
+| consumer | use | ascending-safe? |
+|---|---|---|
+| `PassportDto:152` / `PassportService:181` | display | yes |
+| `DeliveriesController:44,:59` | display DTO | yes |
+| `OpsController:182` | `.OrderBy(a => a.AttemptNumber)` | **yes — and see below** |
+| `DeliveryService:501` | test-fire sentinel `AttemptNumber = 0` | unaffected (`OrderId` is null; never in an order's sequence) |
+
+No `AttemptNumber == 1` exists anywhere in the codebase.
+
+**The ordering site makes ascending REQUIRED, not merely preferable.** `OpsController:182` orders
+prior attempts by `AttemptNumber`. Today the delete keeps the surviving set at 1..N, so that is a
+total order. Once rows SURVIVE, a restarting number would interleave generations — `1,1,2,2,3` — and
+`OrderBy(AttemptNumber)` silently stops being a total order. So the alternative to this ruling would
+have broken an existing consumer. The ruling is load-bearing, not cosmetic.
+
+### Ruling 1 × site 4 — the numbering predicate must DECOUPLE from the cap predicate
+
+Sites 1-3 and site 4 share the predicate `a.Status != StatusDispatching` **today only because the two
+questions happen to have the same answer**. Ruling 1 makes them diverge:
+
+- the **cap** counts attempts in the CURRENT budget → must respect `CapSupersededAt`.
+- the **numbering** counts attempts EVER → must ignore `CapSupersededAt`, or numbers restart, which
+  is exactly what ruling 1 forbids.
+
+So site 4 must stop deriving from the cap predicate **in the same change**, or the two drift the
+instant they diverge — and the drift is silent, because both compile and both return an int. Site 4
+derives from the same countable-set-EVER question the **evidence** predicate asks, not from the cap.
+
+### Ruling 2 — retention: say the caveat in code, do not claim the hole is shut
+
+B shrinks the guard's caveat to **retention-only**; it does not remove it. `DataRetentionService`
+prunes attempt rows for terminal statuses (disabled by default, 180d). It cannot produce THIS P1 —
+`delivery_failed` is not in `TerminalOrderStatuses` — but it can still erase evidence from a
+`delivered` / `rejected_by_supplier` order.
+
+`RefusalReason.NeverDispatched` must therefore keep an erasure caveat naming retention, with the ops
+requeue REMOVED from it once B lands. Claiming the hole fully closed would be this cluster's defect
+one more time.
+
+## New finding — B makes `OpsController`'s attempt-archive justification FALSE
+
+`OpsController:178-182` archives the prior attempts into the audit log before deleting them, and its
+comment justifies that: *"preserve their dead-letter evidence … rather than losing it"*.
+
+Under B **we no longer lose it** — the rows survive. So that justification becomes false the moment B
+lands. This is the cluster's defect class arriving pre-emptively: a comment that will license the next
+reader to believe the archive is load-bearing when it is redundant.
+
+Decide explicitly in the B PR (do not let the refactor decide): either drop the archive (rows
+survive, the audit event still records the requeue itself), or keep it and rewrite the justification
+to say what it is actually for. **Recommendation: keep the audit event, drop the row-copy, and say
+why** — the rows are now the record.
 
 ## Coordination
 
@@ -135,6 +192,9 @@ mechanism, not a second one next to it.**
 
 ## Sequencing
 
-Held until #31 (`StrandedReadyOrderDetectionService` + `TransformOrderJob`) and #27 (the park, heavy
-on `DeliveryService`) land. Both move the retry/claim lines this changes; landing cap semantics into
-them concurrently is how a third compile-clean conflict happens on a money path.
+#31 has LANDED (`91b489f`). Still held for #27 (the park — CONFLICTING, rebasing, heavy on
+`DeliveryService`), which moves the retry/claim lines this changes; landing cap semantics into it
+concurrently is how a third compile-clean conflict happens on a money path.
+
+`claude/distracted-edison-698760` is itself blocked on #27, so their canonicalisation mechanism lands
+after it. Order: #27 -> their mechanism -> B derives from it.
