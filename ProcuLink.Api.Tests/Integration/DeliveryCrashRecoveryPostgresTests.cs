@@ -142,7 +142,7 @@ public sealed class DeliveryCrashRecoveryPostgresTests : IAsyncLifetime
             var service = CreateService(db, dispatcher, encryption);
             var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
             Assert.False(result.Success);
-            Assert.True(result.Parked);
+            Assert.Equal(DeliveryOutcome.NotRetryable, result.Outcome);
         }
 
         // NOT re-sent: an unknown outcome on a channel that cannot de-duplicate must never reach

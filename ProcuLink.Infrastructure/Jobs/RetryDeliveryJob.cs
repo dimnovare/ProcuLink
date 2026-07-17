@@ -19,6 +19,16 @@ namespace ProcuLink.Infrastructure.Jobs;
 /// attempt-count guard inside <c>RetryDeliveryAsync</c> makes the whole chain idempotent:
 /// a duplicated job sees the higher attempt count and either dead-letters or no-ops.
 /// </para>
+///
+/// <para>
+/// <b>The queue terminates on <see cref="DeliveryOutcome.NotRetryable"/>, never on a bare
+/// non-dispatch.</b> A NotRetryable result wrote no attempt row AND can never be helped by a later
+/// attempt, so the count driving BOTH the backoff step and the cap is frozen — rescheduling it is an
+/// unbounded ~30-min loop, not a retry. A <see cref="DeliveryOutcome.ClaimLost"/> result also wrote
+/// no attempt row, but it MUST still be rescheduled: it is the only thing that carries a crashed
+/// holder's order past the reclaim window (see <c>CrashedHolderRecoveryCompositionPostgresTests</c>).
+/// So the queue stops on: delivered, a 4xx supplier rejection, the attempt cap, and NotRetryable.
+/// </para>
 /// </summary>
 public class RetryDeliveryJob
 {
@@ -70,16 +80,23 @@ public class RetryDeliveryJob
             return;
         }
 
-        if (result.Parked)
+        if (result.Outcome == DeliveryOutcome.NotRetryable)
         {
-            // RetryDeliveryAsync refuses 'delivery_unconfirmed' as non-retryable and returns early
-            // WITHOUT persisting a new attempt row, so CountDeliveryAttemptsAsync's count would never
-            // advance past this point. Scheduling another backoff retry here would reschedule itself
-            // at the SAME delay forever — never re-sending, never dead-lettering, never resolving.
-            // An operator decides from here ("Send again" / "Mark as delivered"), not the queue.
-            _logger.LogWarning(
-                "RetryDeliveryJob: order {OrderId} is parked (delivery unconfirmed); not rescheduling.",
-                orderId);
+            // Nothing was dispatched and no later retry can change that (gone / delivered /
+            // dead-lettered / held for billing / no artifact / past the cap / parked with an outcome
+            // nobody observed). On every one of those but the park no attempt row was written, so the
+            // frozen count means the cap guard below could never stop the chain and rescheduling
+            // would re-run this same no-op every backoff step, forever. The park stops here for a
+            // stronger reason — re-sending it risks a duplicate PO, so only a human may re-drive it.
+            // Either way: stop; whoever owns the block (a billing reactivation re-drive, a
+            // re-transform, an operator) owns restarting delivery.
+            //
+            // ClaimLost deliberately does NOT return here: it is transient, and its reschedule is
+            // the crash-recovery net (see DeliveryOutcome.ClaimLost) — it falls through to the
+            // backoff below.
+            _logger.LogInformation(
+                "RetryDeliveryJob: order {OrderId} not dispatched and not retryable ({Error}); not rescheduling.",
+                orderId, result.ErrorMessage);
             return;
         }
 

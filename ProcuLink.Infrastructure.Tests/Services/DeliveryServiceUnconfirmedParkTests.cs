@@ -187,7 +187,7 @@ public class DeliveryServiceUnconfirmedParkTests
 
         dispatcher.Calls.Should().Be(0, "the unknown outcome must never be blindly re-sent, even at the attempt cap");
         result.Success.Should().BeFalse();
-        result.Parked.Should().BeTrue();
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
 
         var order = await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId);
         order.Status.Should().Be(OrderStatusConstants.DeliveryUnconfirmed,
@@ -244,7 +244,8 @@ public class DeliveryServiceUnconfirmedParkTests
 
         dispatcher.Calls.Should().Be(1, "the operator explicitly accepted the duplicate risk — their send must reach the supplier");
         result.Success.Should().BeTrue();
-        result.Parked.Should().BeFalse("a fresh operator-driven send is not a re-adopted unknown outcome");
+        result.Outcome.Should().Be(DeliveryOutcome.Dispatched,
+            "a fresh operator-driven send is not a re-adopted unknown outcome — it reached the dispatcher and wrote its own attempt row");
 
         (await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId)).Status
             .Should().Be(OrderStatusConstants.Delivered);
@@ -345,11 +346,11 @@ public class DeliveryServiceUnconfirmedParkTests
     // non-stale, no-ops, and schedules a backoff retry; any such retry firing after the park
     // seeds the loop. RetryDeliveryAsync's non-retryable early gate persists NO attempt row, so
     // the count never advances — a caller that reschedules on that result reschedules at the SAME
-    // delay forever. The park is only recognisable to the existing guards if the early return
-    // carries Parked.
+    // delay forever. The early return must therefore carry NotRetryable, which is what both jobs'
+    // guards stop on.
 
     [Fact]
-    public async Task RetryDeliveryAsync_OnAlreadyParkedOrder_ReturnsParkedResult()
+    public async Task RetryDeliveryAsync_OnAlreadyParkedOrder_ReturnsNotRetryable()
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
@@ -361,7 +362,8 @@ public class DeliveryServiceUnconfirmedParkTests
         var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
 
         result.Success.Should().BeFalse();
-        result.Parked.Should().BeTrue("an already-parked order is still parked — the callers' park guards must recognise it");
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable,
+            "an already-parked order is still parked — the callers' NotRetryable guards must recognise it");
         dispatcher.Calls.Should().Be(0, "the automatic queue must never re-send a park on the operator's behalf");
     }
 
@@ -389,10 +391,20 @@ public class DeliveryServiceUnconfirmedParkTests
             .Should().Be(OrderStatusConstants.DeliveryUnconfirmed, "only an operator moves an order out of the park");
     }
 
-    // Regression guard: the Parked flag marks the park ONLY. Dead-letter and delivered keep their
-    // own semantics — mislabelling either as a park would misroute the callers' guards.
+    // Regression guard — DELIBERATELY WEAKER since the park's own marker collapsed into
+    // DeliveryOutcome. It used to assert that the RESULT distinguished a park from a dead-letter or a
+    // delivered order. It cannot any more: all three are NotRetryable, because the retry axis asks
+    // only "may the queue re-drive this?" and the answer is no for all three. Nothing branches on the
+    // difference — both jobs and RetryDeliveryAsync's cap-edge dead-letter guard treat every
+    // NotRetryable alike — so the distinction is not merely unpinnable, it is unwanted.
+    //
+    // What survives is the half that guards real state rather than a marker: neither order may be
+    // turned INTO a park. A park writes a status, an audit event and a finalised attempt row, so
+    // mislabelling one here would corrupt the operator's record of what happened — the dead-letter
+    // would start nagging for a decision nobody owes, and the delivered order would ask an operator
+    // to re-send a PO the supplier already has.
     [Fact]
-    public async Task RetryDeliveryAsync_DeadLetteredOrDelivered_AreNotReportedAsParked()
+    public async Task RetryDeliveryAsync_DeadLetteredOrDelivered_AreNotTurnedIntoParks()
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
@@ -401,15 +413,28 @@ public class DeliveryServiceUnconfirmedParkTests
         var delivered = await SeedOrderAsync(db, OrderStatusConstants.Delivered);
         await db.SaveChangesAsync();
 
-        var service = CreateService(db, new CountingDispatcher(new DeliveryResult(true, null, 200), "http", ResendSafety.Unsafe), encryption);
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 200), "http", ResendSafety.Unsafe);
+        var service = CreateService(db, dispatcher, encryption);
 
         var deadLetterResult = await service.RetryDeliveryAsync(deadLetter.OrgId, deadLetter.OrderId, MaxAttempts, default);
         deadLetterResult.Success.Should().BeFalse();
-        deadLetterResult.Parked.Should().BeFalse("retries are exhausted — that is not a park");
+        deadLetterResult.Outcome.Should().Be(DeliveryOutcome.NotRetryable, "retries are exhausted — the queue must stop");
 
         var deliveredResult = await service.RetryDeliveryAsync(delivered.OrgId, delivered.OrderId, MaxAttempts, default);
         deliveredResult.Success.Should().BeTrue();
-        deliveredResult.Parked.Should().BeFalse("a confirmed delivery is not a park");
+        deliveredResult.Outcome.Should().Be(DeliveryOutcome.NotRetryable, "a confirmed delivery needs no retry");
+
+        dispatcher.Calls.Should().Be(0, "neither order is deliverable — nothing may reach the supplier");
+
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == deadLetter.OrderId)).Status
+            .Should().Be(OrderStatusConstants.DeliveryDeadLetter, "a dead-letter must not acquire the park's status");
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == delivered.OrderId)).Status
+            .Should().Be(OrderStatusConstants.Delivered, "a delivered order must not acquire the park's status");
+
+        (await db.AuditEvents.CountAsync(e => e.Action == "DeliveryUnconfirmed"))
+            .Should().Be(0, "no park audit event may be fabricated for an order that was never parked");
+        (await db.DeliveryAttempts.CountAsync(a => a.Status == DeliveryAttempt.StatusUnconfirmed))
+            .Should().Be(0, "no attempt row may be finalised 'unconfirmed' for an order that was never parked");
     }
 
     // ── The park must reach the exception surface (F1) ───────────────────────────────────────
@@ -462,7 +487,7 @@ public class DeliveryServiceUnconfirmedParkTests
 
         var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
 
-        result.Parked.Should().BeTrue();
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
         (await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId)).Status
             .Should().Be(OrderStatusConstants.DeliveryUnconfirmed);
 

@@ -117,20 +117,21 @@ public class RetryDeliveryJobBackoffTests
         jobs.Captured.Should().BeEmpty();
     }
 
-    // The park's whole purpose is that a HUMAN decides. RetryDeliveryAsync refuses
-    // 'delivery_unconfirmed' as non-retryable and persists no new attempt row on that early
-    // return, so scheduling a backoff retry anyway would see the attempt count never advance —
-    // the queue would reschedule itself at the same delay FOREVER (never re-sending, never
-    // dead-lettering, never resolving). A parked result must leave the backoff queue untouched.
+    // The park's whole purpose is that a HUMAN decides. It arrives as NotRetryable — the scenario the
+    // marker was widened to cover, and the one case of it whose attempt count DOES advance, so the
+    // unbounded-loop argument alone would not have stopped the queue here. Re-sending an unobserved
+    // outcome on a channel that cannot de-duplicate risks a duplicate PO, so the backoff queue must
+    // stay out of it entirely: the order waits for "Send again" / "Mark as delivered".
     [Fact]
-    public async Task ExecuteAsync_ParkedResult_DoesNotSchedule()
+    public async Task ExecuteAsync_ParkedOrderResult_DoesNotSchedule()
     {
         var orgId = Guid.NewGuid();
         var orderId = Guid.NewGuid();
 
         var delivery = new Mock<IDeliveryService>();
         delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new DeliveryResult(false, "Delivery unconfirmed…", ResponseCode: null, Parked: true));
+                .ReturnsAsync(new DeliveryResult(false, "Delivery unconfirmed…", ResponseCode: null,
+                    Outcome: DeliveryOutcome.NotRetryable));
 
         var jobs = new CapturingJobClient();
         var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
@@ -142,8 +143,8 @@ public class RetryDeliveryJobBackoffTests
             Times.Never, "the parked guard returns before the attempt-count read");
     }
 
-    // Regression guard: an ordinary transient failure (Parked defaults to false) must STILL
-    // be retried — the park guard must not swallow normal backoff scheduling.
+    // Regression guard: an ordinary transient failure (Outcome defaults to Dispatched) must STILL
+    // be retried — the NotRetryable guard must not swallow normal backoff scheduling.
     [Fact]
     public async Task ExecuteAsync_OrdinaryTransientFailure_StillSchedulesRetry()
     {
@@ -182,6 +183,99 @@ public class RetryDeliveryJobBackoffTests
         jobs.Captured.Should().BeEmpty();
         delivery.Verify(d => d.CountDeliveryAttemptsAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
             Times.Never, "a delivered order needs no backoff bookkeeping");
+    }
+
+    /// <summary>
+    /// A TERMINAL non-dispatch (no attempt row, and no later attempt can help) must NOT be
+    /// rescheduled. Rescheduling one is an UNBOUNDED loop, not a retry: with no attempt row the
+    /// count never advances, so <c>attemptsMade &gt;= maxAttempts</c> never becomes true and every
+    /// run schedules the same backoff step forever. Only the Outcome distinguishes this from a real
+    /// transient failure — the message text is not a contract and ResponseCode is null for both.
+    /// </summary>
+    [Theory]
+    [InlineData("Order status 'delivery_held' is not retryable.")]
+    [InlineData("Order is in dead-letter state — retries are exhausted.")]
+    [InlineData("Order not found.")]
+    [InlineData("No outbound artifact found. Transform the order before retrying delivery.")]
+    public async Task ExecuteAsync_NotRetryable_DoesNotSchedule(string message)
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, message, Outcome: DeliveryOutcome.NotRetryable));
+        // The count is FROZEN at whatever it was — the cap guard can never fire on this path.
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().BeEmpty(
+            "no attempt row was written, so a rescheduled run would repeat this forever");
+        delivery.Verify(d => d.CountDeliveryAttemptsAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never, "backoff bookkeeping is meaningless when nothing was dispatched");
+    }
+
+    /// <summary>
+    /// A LOST CLAIM writes no attempt row either, yet it MUST still be rescheduled — the OPPOSITE of
+    /// the terminal case above. That opposition is precisely why the two cannot share one enum
+    /// member.
+    ///
+    /// <para>When the claim holder dies, StuckDeliveryDetectionService re-drives the order but bumps
+    /// UpdatedAt to now BEFORE enqueuing, so the re-driven retry finds a still-fresh 'delivering' row
+    /// and loses the claim again. This backoff is what carries the order past the reclaim window so a
+    /// later attempt CAN claim it. Drop it and a crashed holder's PO is never sent — proven
+    /// end-to-end in CrashedHolderRecoveryCompositionPostgresTests.</para>
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_ClaimLost_StillSchedulesRetry_ItIsTheCrashRecoveryNet()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "Delivery for this order is already in progress.",
+                    Outcome: DeliveryOutcome.ClaimLost));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().HaveCount(1,
+            "the reschedule is the ONLY thing that recovers an order whose claim holder crashed");
+    }
+
+    /// <summary>
+    /// Guards the default: an unmarked <see cref="DeliveryResult"/> must keep the retry queue
+    /// running. <see cref="DeliveryOutcome.Dispatched"/> is the safe default — a missed call site
+    /// degrades to the old (noisy) behaviour, never to silently abandoning a deliverable order.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_TransientFailure_DefaultOutcomeIsDispatched_SchedulesRetry()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "Connection refused"));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().HaveCount(1);
     }
 
     /// <summary>

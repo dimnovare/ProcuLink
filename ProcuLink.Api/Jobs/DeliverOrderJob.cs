@@ -100,22 +100,6 @@ public class DeliverOrderJob
         if (result.Success)
             return;
 
-        // A parked delivery has already finalised the crash-recovered attempt as 'unconfirmed'
-        // and left the order at 'delivery_unconfirmed', a status RetryDeliveryAsync refuses as
-        // non-retryable — that early return persists NO new attempt row. Scheduling a backoff
-        // retry anyway would see the attempt count never advance: the queue would reschedule
-        // itself at the SAME delay forever, never re-sending, never dead-lettering, never
-        // resolving. It waits for an operator ("Send again" / "Mark as delivered"), not the queue.
-        // Checked before the failure log below: a park is a deferral to a human, not a failure,
-        // and must never be logged as one.
-        if (result.Parked)
-        {
-            _logger.LogWarning(
-                "DeliverOrderJob: order {OrderId} is parked (delivery unconfirmed); no automatic retry scheduled.",
-                orderId);
-            return;
-        }
-
         _logger.LogWarning(
             "DeliverOrderJob finished with delivery failure for order {OrderId}: {Error}",
             orderId,
@@ -126,6 +110,24 @@ public class DeliverOrderJob
         // (5xx / network, no 4xx code) enter the automatic backoff queue.
         if (result.ResponseCode is >= 400 and <= 499)
             return;
+
+        // Nothing was dispatched and no later attempt can help (order/artifact gone, terminal, held,
+        // or parked with an outcome nobody observed). Seeding the backoff queue here hands
+        // RetryDeliveryJob an order it can only bow out of. On every case but the park no attempt row
+        // exists either, so the count is frozen at 0 and neither job's cap guard can ever end the
+        // chain; the park instead must never be re-sent automatically at all, because a duplicate PO
+        // is the one thing it exists to prevent. Whoever owns the block — an operator, for the park —
+        // owns re-driving it. Mirrors RetryDeliveryJob's identical guard.
+        //
+        // A lost claim never reaches this branch: DispatchArtifactAsync returns Success=true for it
+        // (a benign no-op), so the Success check above already returned.
+        if (result.Outcome == DeliveryOutcome.NotRetryable)
+        {
+            _logger.LogInformation(
+                "DeliverOrderJob: order {OrderId} not dispatched ({Error}); not scheduling auto-retry.",
+                orderId, result.ErrorMessage);
+            return;
+        }
 
         var maxAttempts = _reliability.MaxAttempts > 0 ? _reliability.MaxAttempts : RetryDeliveryJob.MaxAttempts;
         var attemptsMade = await _deliveryService.CountDeliveryAttemptsAsync(organisationId, orderId, ct);

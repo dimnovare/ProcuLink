@@ -328,7 +328,7 @@ public sealed class DeliveryConcurrencyPostgresTests : IAsyncLifetime
             var result = await svc.DispatchArtifactAsync(
                 ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: false, CancellationToken.None);
             Assert.True(result.Success);
-            Assert.False(result.Parked);
+            Assert.Equal(DeliveryOutcome.Dispatched, result.Outcome);
         }
 
         Assert.Equal(1, dispatcher.Calls);

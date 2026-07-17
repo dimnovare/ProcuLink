@@ -196,7 +196,7 @@ public class DeliveryServiceBillingGateTests
 
         var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
 
-        result.Parked.Should().BeTrue();
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
         dispatcher.Calls.Should().Be(0);
 
         (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status
