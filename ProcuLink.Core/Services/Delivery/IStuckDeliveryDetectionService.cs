@@ -22,6 +22,14 @@ namespace ProcuLink.Core.Services.Delivery;
 /// order leaves the stuck window until it stalls again, and a dead-lettered order no longer
 /// matches.
 /// </para>
+/// <para>
+/// <b>The re-drive does not deliver on its own, and this sweep cannot recover an order alone.</b>
+/// The same <c>UpdatedAt</c> bump that gives idempotency also makes the row un-claimable for the
+/// reclaim window, so the retry it enqueues loses the atomic claim and returns
+/// <c>DeliveryOutcome.ClaimLost</c>. Delivery happens one SCHEDULED backoff step later (~30 min),
+/// once the row has aged past that window — which is why <c>ClaimLost</c> must keep rescheduling.
+/// Pinned end-to-end by <c>CrashedHolderRecoveryCompositionPostgresTests</c>.
+/// </para>
 /// </remarks>
 public interface IStuckDeliveryDetectionService
 {

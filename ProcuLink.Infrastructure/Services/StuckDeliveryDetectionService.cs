@@ -80,8 +80,21 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
             {
                 // ── Transient stall → re-drive delivery (do NOT fail) ─────────────
                 order.DeliveryRequeueCount += 1;
-                // Bump UpdatedAt so this order leaves the stuck window: the retry job will move it
-                // to a terminal status, and a duplicate sweep before then won't re-act on it.
+                // Bump UpdatedAt so this order leaves the stuck window: a duplicate sweep before the
+                // re-drive lands won't re-act on it.
+                //
+                // The bump ALSO makes this row un-claimable for the reclaim window, so the retry we
+                // enqueue below does NOT deliver it: that retry finds a 'delivering' row that is no
+                // longer stale, loses the atomic claim, and returns ClaimLost. Recovery completes one
+                // SCHEDULED backoff step later (~30 min), once the row has aged past the window and a
+                // retry can actually claim it. That is exactly why ClaimLost must keep rescheduling —
+                // this sweep cannot recover an order on its own. Pinned by
+                // CrashedHolderRecoveryCompositionPostgresTests.
+                //
+                // (Handing the row back in an idle status instead would recover in seconds, but an
+                // idle status is claimable REGARDLESS of UpdatedAt — so a holder that is merely slow
+                // rather than dead would be re-claimed and the PO double-sent. The staleness gate is
+                // what makes "abandoned" provable instead of presumed. Left as-is deliberately.)
                 order.UpdatedAt = now;
 
                 retryRequeues.Add((order.Id, order.OrgId));

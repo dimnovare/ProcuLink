@@ -19,6 +19,16 @@ namespace ProcuLink.Infrastructure.Jobs;
 /// attempt-count guard inside <c>RetryDeliveryAsync</c> makes the whole chain idempotent:
 /// a duplicated job sees the higher attempt count and either dead-letters or no-ops.
 /// </para>
+///
+/// <para>
+/// <b>The queue terminates on <see cref="DeliveryOutcome.NotRetryable"/>, never on a bare
+/// non-dispatch.</b> A NotRetryable result wrote no attempt row AND can never be helped by a later
+/// attempt, so the count driving BOTH the backoff step and the cap is frozen — rescheduling it is an
+/// unbounded ~30-min loop, not a retry. A <see cref="DeliveryOutcome.ClaimLost"/> result also wrote
+/// no attempt row, but it MUST still be rescheduled: it is the only thing that carries a crashed
+/// holder's order past the reclaim window (see <c>CrashedHolderRecoveryCompositionPostgresTests</c>).
+/// So the queue stops on: delivered, a 4xx supplier rejection, the attempt cap, and NotRetryable.
+/// </para>
 /// </summary>
 public class RetryDeliveryJob
 {
@@ -67,6 +77,24 @@ public class RetryDeliveryJob
         if (result.Success)
         {
             _logger.LogInformation("RetryDeliveryJob delivered order {OrderId}", orderId);
+            return;
+        }
+
+        if (result.Outcome == DeliveryOutcome.NotRetryable)
+        {
+            // Nothing was dispatched, no attempt row was written, and no later retry can change that
+            // (gone / delivered / dead-lettered / held for billing / no artifact / past the cap).
+            // The frozen attempt count means the cap guard below could never stop the chain, so
+            // rescheduling would re-run this same no-op every backoff step, forever. Stop; whoever
+            // owns the block (a billing reactivation re-drive, a re-transform, an operator) owns
+            // restarting delivery.
+            //
+            // ClaimLost deliberately does NOT return here: it is transient, and its reschedule is
+            // the crash-recovery net (see DeliveryOutcome.ClaimLost) — it falls through to the
+            // backoff below.
+            _logger.LogInformation(
+                "RetryDeliveryJob: order {OrderId} not dispatched and not retryable ({Error}); not rescheduling.",
+                orderId, result.ErrorMessage);
             return;
         }
 

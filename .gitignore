@@ -73,3 +73,7 @@ docs/design_handoff_proculink_redesign/
 # Design-system screenshot captures (large binaries — keep specs, not PNGs)
 docs/design-system/**/*.png
 docs/design-system/current-ui-screenshots-*/
+
+# Test run artifacts (dotnet test --logger trx)
+TestResults/
+*.trx
