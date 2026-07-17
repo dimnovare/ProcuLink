@@ -171,15 +171,194 @@ public class DeliveryProvenanceTests
         attempt.ArtifactSha256.Should().Be(ProvenanceHash.TrySha256Hex(PayloadBytes));
     }
 
+    // ── dispatch markers: the webhook guard's evidence ───────────────────────
+
+    /// <summary>
+    /// The supplier status callback (<c>WebhookIngressController</c>) accepts a terminal report only
+    /// for an order it can PROVE a send was begun for, and its proof is a per-row marker:
+    /// <c>IdempotencyKey != null OR ArtifactSha256 != null</c>. That proof is only sound while EVERY
+    /// pre-dispatch failure leaves BOTH null — a row alone means nothing, because all four gates
+    /// below write an order-linked terminal row with zero bytes sent.
+    ///
+    /// <para>If any of these starts stamping either marker, the webhook guard silently reopens: a
+    /// never-sent order becomes markable 'delivered', which also DISABLES its safety net (the
+    /// stranded-ready sweep matches <c>ready_to_deliver</c>, the billing release matches
+    /// <c>delivery_held</c>) — permanently lost, displayed as shipped, and billable. These tests are
+    /// the tripwire; the guard's correctness depends on them, not on a comment.</para>
+    /// </summary>
+    public class PreDispatchFailuresWriteNoDispatchMarker
+    {
+        [Fact]
+        public async Task MissingConfig_LeavesBothMarkersNull()
+        {
+            await using var db = CreateDb();
+            var ids = await SeedAsync(db, orderPin: null, artifactRevision: null,
+                configDigest: null, artifactSha: "sha-of-the-artifact-not-the-send");
+            // No SupplierDeliveryConfig seeded -> FailMissingConfigAsync.
+            var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 200)));
+
+            var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+            result.Success.Should().BeFalse();
+            var attempt = await db.DeliveryAttempts.SingleAsync();
+            attempt.Channel.Should().Be("missing_config", "this is the missing-config gate's own row");
+            AssertNoDispatchMarker(attempt);
+        }
+
+        [Fact]
+        public async Task NoDispatcherRegistered_LeavesBothMarkersNull()
+        {
+            await using var db = CreateDb();
+            var encryption = CreateEncryption();
+            var ids = await SeedAsync(db, orderPin: null, artifactRevision: null,
+                configDigest: null, artifactSha: "sha-of-the-artifact-not-the-send");
+            db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+            await db.SaveChangesAsync();
+            // Config protocol is "http"; the only registered dispatcher speaks "sftp" -> no dispatcher.
+            var service = CreateService(db, new WrongProtocolDispatcher(), encryption);
+
+            var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+            result.Success.Should().BeFalse();
+            result.ErrorMessage.Should().Contain("No dispatcher registered");
+            AssertNoDispatchMarker(await db.DeliveryAttempts.SingleAsync());
+        }
+
+        [Fact]
+        public async Task UndecryptableCredentials_LeavesBothMarkersNull()
+        {
+            await using var db = CreateDb();
+            var encryption = CreateEncryption();
+            var ids = await SeedAsync(db, orderPin: null, artifactRevision: null,
+                configDigest: null, artifactSha: "sha-of-the-artifact-not-the-send");
+            var config = MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true);
+            // Garbage ciphertext -> DeliveryEncryptionService.Decrypt returns null (it catches and
+            // returns null rather than throwing), so the credentials gate fails before dispatch.
+            config.EncryptedCredentials = "this-is-not-valid-aes-gcm-ciphertext";
+            db.SupplierDeliveryConfigs.Add(config);
+            await db.SaveChangesAsync();
+            var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 200)), encryption);
+
+            var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+            result.Success.Should().BeFalse();
+            result.ErrorMessage.Should().Contain("credentials could not be decrypted");
+            AssertNoDispatchMarker(await db.DeliveryAttempts.SingleAsync());
+        }
+
+        [Fact]
+        public async Task ArtifactDownloadFailure_LeavesBothMarkersNull()
+        {
+            await using var db = CreateDb();
+            var encryption = CreateEncryption();
+            var ids = await SeedAsync(db, orderPin: null, artifactRevision: null,
+                configDigest: null, artifactSha: "sha-of-the-artifact-not-the-send");
+            db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+            await db.SaveChangesAsync();
+            // An R2 blip: the payload never loads, so nothing can be sent.
+            var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 200)),
+                encryption, new ThrowingFileStorage());
+
+            var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+            result.Success.Should().BeFalse();
+            result.ErrorMessage.Should().Contain("Artifact download failed");
+            AssertNoDispatchMarker(await db.DeliveryAttempts.SingleAsync());
+        }
+
+        /// <summary>
+        /// The positive control. Without it the four tests above would still pass if the markers were
+        /// never written AT ALL — which would fail closed, but would also mean the webhook guard
+        /// refuses every genuine callback. A real send must stamp both.
+        /// </summary>
+        [Fact]
+        public async Task ARealSend_StampsBothMarkers()
+        {
+            await using var db = CreateDb();
+            var encryption = CreateEncryption();
+            var ids = await SeedAsync(db, orderPin: null, artifactRevision: null,
+                configDigest: null, artifactSha: null);
+            db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+            await db.SaveChangesAsync();
+            var service = CreateService(db, new FakeDispatcher(new DeliveryResult(true, null, 200)), encryption);
+
+            var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+            result.Success.Should().BeTrue();
+            var attempt = await db.DeliveryAttempts.SingleAsync();
+            attempt.IdempotencyKey.Should().NotBeNull("OpenDispatchAttemptAsync stamps it before the wire send");
+            attempt.ArtifactSha256.Should().NotBeNull("the dispatched bytes are hashed after DispatchAsync returns");
+        }
+
+        /// <summary>
+        /// A send that REACHED the supplier and was refused (5xx) is still a send: the row keeps its
+        /// markers, so the supplier's later callback is accepted rather than refused as never-sent.
+        /// </summary>
+        [Fact]
+        public async Task ADispatchedButFailedSend_KeepsItsMarkers()
+        {
+            await using var db = CreateDb();
+            var encryption = CreateEncryption();
+            var ids = await SeedAsync(db, orderPin: null, artifactRevision: null,
+                configDigest: null, artifactSha: null);
+            db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+            await db.SaveChangesAsync();
+            var service = CreateService(db, new FakeDispatcher(new DeliveryResult(false, "upstream exploded", 503)), encryption);
+
+            var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+            result.Success.Should().BeFalse();
+            var attempt = await db.DeliveryAttempts.SingleAsync();
+            attempt.IdempotencyKey.Should().NotBeNull("the send was begun — this is not a pre-dispatch failure");
+            attempt.ArtifactSha256.Should().NotBeNull("the bytes were dispatched; the supplier's 503 came back");
+        }
+
+        private static void AssertNoDispatchMarker(DeliveryAttempt attempt)
+        {
+            attempt.IdempotencyKey.Should().BeNull(
+                "no send was begun, so OpenDispatchAttemptAsync never ran to stamp the key — the webhook "
+              + "guard treats a key as proof a send started");
+            attempt.ArtifactSha256.Should().BeNull(
+                "nothing was dispatched, so there are honestly no dispatched bytes to hash — the webhook "
+              + "guard treats this hash as proof a send executed");
+        }
+
+        private sealed class WrongProtocolDispatcher : IDeliveryDispatcher
+        {
+            public string Protocol => "sftp";
+
+            public Task<DeliveryResult> DispatchAsync(
+                byte[] content, string fileName, string contentType,
+                SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct,
+                string? idempotencyKey = null) =>
+                throw new InvalidOperationException("must never be reached: the protocol does not match");
+        }
+
+        private sealed class ThrowingFileStorage : IFileStorageService
+        {
+            public Task<string> UploadAsync(Stream content, string key, string contentType, CancellationToken ct) =>
+                Task.FromResult(key);
+
+            public Task<string> GetSignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct) =>
+                Task.FromResult($"https://files.example/{key}");
+
+            public Task<Stream> DownloadAsync(string key, CancellationToken ct) =>
+                throw new IOException("R2 signing failure");
+
+            public Task DeleteAsync(string key, CancellationToken ct) => Task.CompletedTask;
+        }
+    }
+
     // ── scaffolding (mirrors DeliveryServiceTests) ───────────────────────────
 
     private static DeliveryService CreateService(
         ProcuLinkDbContext db,
         IDeliveryDispatcher dispatcher,
-        DeliveryEncryptionService? encryption = null) =>
+        DeliveryEncryptionService? encryption = null,
+        IFileStorageService? fileStorage = null) =>
         new(
             db,
-            new FakeFileStorage(),
+            fileStorage ?? new FakeFileStorage(),
             encryption ?? CreateEncryption(),
             new[] { dispatcher },
             new NoOpIntegrationTriggerService(),

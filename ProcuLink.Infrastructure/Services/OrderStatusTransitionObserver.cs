@@ -21,10 +21,21 @@ namespace ProcuLink.Infrastructure.Services;
 /// Every code path here is wrapped so that even an internal bug in the observer cannot
 /// break a save.</para>
 ///
-/// <para>Honest limitation: writes issued via <c>ExecuteUpdateAsync</c> (e.g. the parse
-/// job's parent-row update) bypass the EF change tracker and are not observed. The
-/// tracked-entity writes — delivery, transform, resolution, stuck/ops flows — are the
-/// overwhelming majority of transitions and are all covered.</para>
+/// <para>Honest limitation: writes issued via <c>ExecuteUpdateAsync</c> bypass the EF change
+/// tracker and are NOT observed. This doc deliberately does NOT enumerate those writers. An
+/// earlier revision did, and its list was already wrong when written — it named four when there
+/// were eight — because a list in a comment is a second copy of a fact that lives in the code,
+/// and the copy drifts. Worse, a closed list reads as complete, which is how an existential gets
+/// sold as a universal (the defect that produced this subsystem's last several Criticals).
+/// To get the CURRENT set, ask the code:</para>
+/// <code>grep -rn "SetProperty(o =&gt; o.Status" --include=*.cs</code>
+/// <para>One consequence IS worth naming, because the map below would otherwise mislead: the
+/// supplier status callback claims via <c>ExecuteUpdateAsync</c>
+/// (<c>WebhookIngressController.ApplyReportedStatusAsync</c>), so webhook-driven
+/// <c>→ delivered / → rejected_by_supplier</c> transitions never reach this observer — even though
+/// they ARE listed in the map, which serves the non-relational path and documentation. The
+/// tracked-entity writes (transform, resolution, stuck/ops, mapping-edit flows) are the majority of
+/// transitions and are all covered.</para>
 /// </summary>
 public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
 {
@@ -89,10 +100,11 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
                 OrderStatusConstants.Delivering, OrderStatusConstants.Transforming,
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
                 OrderStatusConstants.DeliveryHeld, OrderStatusConstants.RejectedBySupplier),
-            // Billing hold → released back to ready_to_deliver (re-driven) on reactivation.
+            // Billing hold → released back to ready_to_deliver (re-driven) on reactivation, or a
+            // late supplier ACK for an order that was already sent before the hold landed.
             [OrderStatusConstants.DeliveryHeld] = Set(
                 OrderStatusConstants.ReadyToDeliver, OrderStatusConstants.Ready,
-                OrderStatusConstants.RejectedBySupplier),
+                OrderStatusConstants.Delivered, OrderStatusConstants.RejectedBySupplier),
             [OrderStatusConstants.Delivering] = Set(
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
                 OrderStatusConstants.DeliveryUnconfirmed,
@@ -106,9 +118,13 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
                 OrderStatusConstants.DeliveryFailed, OrderStatusConstants.DeliveryDeadLetter,
                 OrderStatusConstants.DeliveryHeld,
                 OrderStatusConstants.Ready, OrderStatusConstants.RejectedBySupplier),
-            // A delivered order can still be rejected later (supplier business ACK ≠ HTTP 200).
+            // A delivered order can still be rejected later (supplier business ACK ≠ HTTP 200), and
+            // MV-1 resets it to ready: OrderMappingOverrideService.IsPastReady includes 'delivered',
+            // so a mapping edit on a delivered order performs delivered → ready as a TRACKED write
+            // (OrderMappingOverrideService.cs:86-87) — i.e. straight through this observer. Without
+            // 'ready' here, every such edit logged a false "unexpected transition" WARNING.
             [OrderStatusConstants.Delivered] = Set(
-                OrderStatusConstants.RejectedBySupplier),
+                OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.Ready),
             // Failed deliveries: retry, dead-letter, late supplier ACK, re-transform, or
             // return to the review loop after corrections. A5: a backoff retry that fires after the
             // org lapsed (read_only/past_due) is held via HoldForBillingAsync → delivery_held.
@@ -121,11 +137,25 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             [OrderStatusConstants.DeliveryDeadLetter] = Set(
                 OrderStatusConstants.Delivering, OrderStatusConstants.Delivered,
                 OrderStatusConstants.DeliveryFailed, OrderStatusConstants.RejectedBySupplier),
-            // Rejected: corrected and re-driven through the loop, or a late positive ACK.
+            // Rejected: corrected and re-driven through the loop.
+            //
+            // → delivered is GONE: the webhook can no longer un-reject an order (Status gates terminal
+            // callbacks on OrderStatusMachine.WebhookReportableFrom, which excludes
+            // rejected_by_supplier), and no dispatch can write 'delivered' onto one either — the
+            // delivery claim only admits ready_to_deliver / delivery_failed / stale-delivering. With no
+            // writer left, listing it would bless an impossible move.
+            //
+            // → delivery_failed STAYS: it is still reachable WITHOUT the webhook. DeliveryService's
+            // PRE-CLAIM failure paths (FailMissingConfigAsync / FailBeforeDispatchAsync) write
+            // delivery_failed unconditionally, with no from-status check, racing the enqueue-time
+            // guards in OrdersController.Redeliver / OpsController.RequeueDelivery. Rare, but real —
+            // and listing it here is what keeps this observer SILENT when it fires, which is
+            // deliberate (see KnownObserverOnlyEdges in OrderStatusMachineTests, which exempts the
+            // resulting machine/observer drift on exactly that basis).
             [OrderStatusConstants.RejectedBySupplier] = Set(
                 OrderStatusConstants.PendingReview, OrderStatusConstants.Ready,
                 OrderStatusConstants.Transforming, OrderStatusConstants.Delivering,
-                OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed),
+                OrderStatusConstants.DeliveryFailed),
             // Failed parse: re-parse (ParseOrderJob runs again for status == failed).
             [OrderStatusConstants.Failed] = Set(
                 OrderStatusConstants.PendingParse, OrderStatusConstants.Parsing,

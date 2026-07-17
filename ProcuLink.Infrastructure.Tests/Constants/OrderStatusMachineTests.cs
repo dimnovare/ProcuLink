@@ -45,6 +45,12 @@ public class OrderStatusMachineTests
     [InlineData(DeliveryDeadLetter, Delivering)] // ops requeue rescue
     [InlineData(DeliveryDeadLetter, DeliveryFailed)] // requeued dead-letter fails again / late failure webhook (aligns with the observer map)
     [InlineData(DeliveryDeadLetter, Ready)]      // MV-1 sibling: mapping edit after dead-letter
+    // Supplier status webhook: a late positive ACK from every dispatched state. All four are
+    // documented as intended in OrderStatusTransitionObserver and gated by WebhookReportableFrom.
+    [InlineData(ReadyToDeliver, Delivered)]      // ACK races our own 'delivering' write
+    [InlineData(DeliveryFailed, Delivered)]      // late positive ACK after a failed attempt
+    [InlineData(DeliveryDeadLetter, Delivered)]  // late positive ACK after dead-lettering
+    [InlineData(DeliveryHeld, Delivered)]        // ACK for an order sent before the billing hold
     [InlineData(Delivered, DeliveryFailed)]      // webhook late-failure edge
     [InlineData(Ready, RejectedBySupplier)]      // mark-rejected (from any non-terminal)
     [InlineData(Delivering, RejectedBySupplier)]
@@ -65,6 +71,7 @@ public class OrderStatusMachineTests
     [InlineData(RejectedBySupplier, Ready)]
     [InlineData(Delivered, Transforming)]
     [InlineData(Parsing, Delivered)]
+    [InlineData(RejectedBySupplier, Delivered)]  // terminal for webhooks: no silent un-rejection
     public void IsAllowed_ImpossibleTransitions_AreRejected(string from, string to)
         => OrderStatusMachine.IsAllowed(from, to).Should().BeFalse($"{from} -> {to} must never happen");
 
@@ -160,28 +167,28 @@ public class OrderStatusMachineTests
         Edge(RejectedBySupplier, Transforming),
         Edge(RejectedBySupplier, Delivering),
 
-        // ── Reachable, but only through a gap — deliberately NOT blessed in the machine ──
-        // WebhookIngressController.Status loads the order by id with NO from-status predicate, then
-        // writes 'delivered' to any order not already delivered. A supplier callback can therefore
-        // force these — and, in principle, 'delivered' onto an order still in pending_parse. That
-        // reads as a missing from-status guard on the webhook rather than an intended flow, so the
-        // machine keeps calling these impossible; teaching it to allow them would document the gap
-        // as design. The from-status guard is being built on fix/webhook-status-from-guard; when it
-        // lands, these go stale and the second assertion below will name each one.
+        // The webhook's four "reachable only through a gap" exemptions are GONE, as this list's
+        // author predicted they would be ("the from-status guard is being built on
+        // fix/webhook-status-from-guard; when it lands, these go stale"). They were exempt because
+        // WebhookIngressController.Status loaded the order by id with NO from-status predicate and
+        // wrote 'delivered' to anything not already delivered. It now gates terminal callbacks on
+        // WebhookReportableFrom PLUS dispatch evidence, so:
+        //   * ready_to_deliver / delivery_failed / delivery_dead_letter -> delivered are real,
+        //     guarded flows (a late ACK for an order that WAS dispatched), and the machine now
+        //     blesses them outright — no exemption left to hold;
+        //   * rejected_by_supplier -> delivered has no writer at all now: the webhook refuses it
+        //     (rejected_by_supplier is excluded from WebhookReportableFrom) and no dispatch can
+        //     produce it (the delivery claim never admits a rejected order), so the OBSERVER dropped
+        //     it too — nothing to exempt.
         //
-        // rejected_by_supplier -> delivery_failed is NO LONGER webhook-reachable: a "rejected"
-        // callback now writes rejected_by_supplier (this commit — it used to write delivery_failed,
-        // which StrandedFailedDeliveryDetectionService then swept and RE-SENT). It stays exempt
-        // because it is still reachable WITHOUT the webhook: DeliveryService's pre-claim failure
-        // paths (FailMissingConfigAsync / FailBeforeDispatchAsync) write delivery_failed with no
-        // status check, racing the enqueue-time guards in OrdersController.Redeliver /
+        // rejected_by_supplier -> delivery_failed SURVIVES, and is now the only webhook-adjacent
+        // entry left. It is NOT webhook-reachable (a "rejected" callback writes rejected_by_supplier),
+        // but it is still reachable WITHOUT the webhook: DeliveryService's pre-claim failure paths
+        // (FailMissingConfigAsync / FailBeforeDispatchAsync) write delivery_failed with no status
+        // check, racing the enqueue-time guards in OrdersController.Redeliver /
         // OpsController.RequeueDelivery. Rare, but real — and the OBSERVER LISTS it as expected, so it
         // stays silent when it fires. That silence is precisely WHY this exemption exists: the
         // assertion below flags observer-listed edges the machine calls impossible, and this is one.
-        Edge(ReadyToDeliver, Delivered),
-        Edge(DeliveryFailed, Delivered),
-        Edge(DeliveryDeadLetter, Delivered),
-        Edge(RejectedBySupplier, Delivered),
         Edge(RejectedBySupplier, DeliveryFailed),
     };
 
@@ -237,6 +244,54 @@ public class OrderStatusMachineTests
             "every KnownObserverOnlyEdges entry must still be a live disagreement between the two maps. A stale " +
             "entry means the edge was reconciled (or removed from the observer) without pruning the exemption, " +
             "which would silently re-open the drift it was hiding. Delete the listed entries.");
+    }
+
+    [Fact]
+    public void WebhookReportableFrom_IsExactlyTheStatesThatCanFollowADispatch()
+    {
+        // Membership means "an order in this state MAY have been dispatched" -- NOT "was". The set
+        // is only HALF of the webhook guard: two of its members (ready_to_deliver, delivery_held)
+        // are also reachable with no dispatch at all, so WebhookIngressController additionally
+        // requires dispatch EVIDENCE -- not merely a DeliveryAttempt row (four pre-dispatch gates
+        // write one having sent nothing) but a marker only the dispatch sequence writes:
+        // IdempotencyKey or ArtifactSha256. rejected_by_supplier is deliberately absent (a supplier
+        // that rejected must not silently flip the order to delivered).
+        OrderStatusMachine.WebhookReportableFrom.Should()
+            .BeEquivalentTo(new[]
+            {
+                ReadyToDeliver, Delivering, Delivered,
+                DeliveryFailed, DeliveryDeadLetter, DeliveryHeld,
+            });
+    }
+
+    [Fact]
+    public void WebhookReportableFrom_ExcludesEveryPreTransformState()
+    {
+        // The bug this guards: a callback could force 'delivered' onto an order still in the
+        // parse/review pipeline -- marked shipped, never sent. Pinned explicitly so a future
+        // widening of the set has to argue with this test.
+        //
+        // NAME: pre-TRANSFORM, not pre-dispatch. The set is NOT free of pre-dispatch states --
+        // ready_to_deliver is where every transformed order rests BEFORE it is ever sent, and
+        // delivery_held is reachable via the pre-send billing gate. Asserting "excludes every
+        // pre-dispatch state" would be false, and believing it is what produced the bug this
+        // branch had to fix: the status check alone let a callback mark a never-dispatched order
+        // delivered. The dispatch-evidence half of the guard is pinned by WebhookIngressControllerTests
+        // .Status_TerminalCallbackForReportableStatusWithNoDeliveryAttempt_Returns409_AndDoesNotMutate
+        // (no row at all) and .Status_TerminalCallbackForOrderWhoseOnlyAttemptFailedBeforeDispatch_
+        // Returns409 (a row exists, but nothing was sent -- a row is not a send), with the marker
+        // premise itself pinned by
+        // DeliveryProvenanceTests.PreDispatchFailuresWriteNoDispatchMarker.
+        foreach (var preTransform in new[]
+                 {
+                     PendingParse, Parsing, Unrouted, PendingReview, Ready,
+                     Transforming, TransformFailed, Failed,
+                 })
+            OrderStatusMachine.WebhookReportableFrom.Should().NotContain(preTransform);
+
+        // Terminal, not pre-transform -- excluded for its own reason (no silent un-rejection),
+        // so it is asserted separately rather than bundled into the list above.
+        OrderStatusMachine.WebhookReportableFrom.Should().NotContain(RejectedBySupplier);
     }
 
     [Fact]

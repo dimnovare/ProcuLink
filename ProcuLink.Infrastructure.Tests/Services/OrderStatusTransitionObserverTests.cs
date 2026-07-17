@@ -52,6 +52,11 @@ public class OrderStatusTransitionObserverTests
     [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivered)] // confirmed after the fact
     [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Ready)] // MV-1 sibling: mapping edit after unconfirmed
     [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.DeliveryHeld)] // "Send again" for an org that lapsed since the park
+    // MV-1: OrderMappingOverrideService.IsPastReady includes 'delivered', so a mapping edit on a
+    // delivered order writes delivered -> ready THROUGH the change tracker (i.e. through this
+    // observer). It is a legit flow, so the map must stay SILENT for it.
+    [InlineData(OrderStatusConstants.Delivered,          OrderStatusConstants.Ready)]              // MV-1 mapping edit
+
     // Self-transition is always fine (idempotent re-write of the same status).
     [InlineData(OrderStatusConstants.Delivered, OrderStatusConstants.Delivered)]
     public void IsExpected_LegitimatePipelineTransitions_AreExpected(string from, string to)
