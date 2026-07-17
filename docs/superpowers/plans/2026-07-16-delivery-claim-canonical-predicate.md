@@ -12,14 +12,16 @@
 
 ## Global Constraints
 
-- **BLOCKED until PR #27 (`claude/wizardly-spence-6b738a`) merges to main.** `delivery_unconfirmed` does not exist on main. Do not start before it lands; see spec §3.
-- **ALSO BLOCKED on PR #30 (`claude/priceless-pike-d2eb0a`, 03a24c2)** — it owns `DeliveryOutcome { Dispatched, ClaimLost, NotRetryable }` **and** all three return mappings. Do not re-declare, extend, or re-map. Task 5 Step 1 verifies only.
+- **BLOCKED until PR #27 (`claude/wizardly-spence-6b738a`) merges to main — the ONLY remaining blocker,** and the last open PR in the repo (as of 2026-07-17 ~12:30). `delivery_unconfirmed` does not exist on main. Do not start before it lands; see spec §3.
+- **PR #30 is MERGED** (2026-07-17 08:27) — `DeliveryOutcome { Dispatched, ClaimLost, NotRetryable }` and all three return mappings are on main, verified by content. Do not re-declare, extend, or re-map. Task 5 Step 1 verifies only.
+- **To check whether a PR landed, do NOT use SHA ancestry — this repo squash-merges.** `git merge-base --is-ancestor <sha> origin/main` returns NO for merged PRs. Use `gh pr list --state merged`, or grep `origin/main` for the content. This plan's author got this wrong on #30.
 - **NEVER mark a claim-lost return `NotRetryable`.** `StuckDeliveryDetectionService` stamps `UpdatedAt = now` before enqueuing the retry, so the re-driven retry meets a fresh `delivering` row, fails the staleness gate and bounces — only the rescheduled ~30-min backoff ages it enough to claim. The reschedule IS crash recovery (spec §4.4a). Marking that path never-reschedule turns "delivered 30 min late" into "never delivered". `CrashedHolderRecoveryCompositionPostgresTests` fails if you do.
 - **Merge main FIRST.** `RedeliverableStatusInvariantPostgresTests` (56a82ba + 8684d17) is merged and green: per status in `RedeliverableFrom`, on real Postgres, it asserts the claim CLAIMS it and `HoldForBillingAsync` HOLDS it. It is the net under this refactor — if a repoint breaks claim semantics it tells you per status with dispatch evidence. Do not duplicate it; do not "fix" it if it goes red.
 - Session `local_f5ee08ce` is **resolved, not colliding** — its work was test-only and is on main. It has no further edits planned in `DeliveryService.cs`.
 - **Never assert dispatch via `result.Success`** — it is `true` for the silent-strand case. Evidence is the dispatcher call + the `DeliveryAttempt` row.
 - **PRESERVE the Dispatch/Retry asymmetry.** `RetryDeliveryAsync` deliberately excludes `delivery_unconfirmed` — that asymmetry IS the park mechanism (a human may re-send a parked order; the automatic backoff queue may not). An audit over PR #27 confirmed the four other lists agree and this one differs on purpose. **Do not "fix" it into uniformity.** Task 1's `DispatchAndRetryClaimSets_DifferExactlyBy_DeliveryUnconfirmed` exists to make that deliberate.
-- **Merge position: LAST.** Queue is PR #28 → funny-maxwell + priceless-pike → FE PR #19 → BE PR #27 → this. Both of this plan's blockers land ahead of it, so by execution time `delivery_unconfirmed` and `DeliveryOutcome` are both on main.
+- **Merge position: LAST.** #28–#35 have all landed; only PR #27 remains ahead of this. `DeliveryOutcome` is already on main; `delivery_unconfirmed` arrives with #27.
+- **Line numbers here were measured against `origin/main` @ 560c902 (2026-07-17).** Main moved eight times the day this was written. Locate every site by content and re-verify before trusting any claim below about what the tree contains.
 - **Run the full suite, never a narrow `--filter`** — a filtered run is not green (project rule).
 - Work in an isolated git worktree (`superpowers:using-git-worktrees`). Never in the shared checkout.
 - Every EF query org-scoped: `.Where(x => x.OrganisationId == organisationId)`. No exceptions.

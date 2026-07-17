@@ -73,12 +73,18 @@ spec addresses is only real on that branch.
 1. ~~`claude/wizardly-spence-6b738a` merges main~~ — **DONE.** It is now 0 commits behind `origin/main`
    (which has itself advanced to 73e7e51), so it has the observer-superset structural test and `internal`
    visibility on `OrderStatusTransitionObserver.AllowedTransitions`.
-2. **PR #27** (`fix(delivery): park unknown-outcome re-drives instead of duplicating the PO`) merges to main.
-   **OPEN and MERGEABLE**; still open as of 2026-07-17. It carries both `delivery_unconfirmed` (52c6431) and
-   the hold-set hand-fix (392b5a4). ← **blocker 1**
-3. **`claude/priceless-pike-d2eb0a`** (f078bff, `fix(delivery): stop the unbounded retry loop on non-dispatch
-   results`) merges to main — it owns `DeliveryOutcome` (§4.4). Unmerged, no PR seen. ← **blocker 2**
+2. ~~`claude/priceless-pike-d2eb0a` merges~~ — **DONE. PR #30 merged 2026-07-17 08:27.** `DeliveryOutcome
+   { Dispatched, ClaimLost, NotRetryable }` and all three return mappings are **on main**, verified by content.
+   So is the §4.4a comment fix.
+3. **PR #27** (`fix(delivery): park unknown-outcome re-drives instead of duplicating the PO`) merges to main.
+   **The ONLY remaining blocker.** Open as of 2026-07-17 ~12:30 — the last open PR in the repo. It carries both
+   `delivery_unconfirmed` (52c6431) and the hold-set hand-fix (392b5a4).
 4. **Then** this spec executes on main, merging main first.
+
+> **Verifying "is PR #N merged?" — do NOT use SHA ancestry.** This repo **squash-merges**, so a PR's original
+> commit SHAs never become ancestors of `main`. `git merge-base --is-ancestor <sha> origin/main` reports
+> **NO for merged PRs** and will tell you a landed change is still pending. I made exactly this mistake on
+> #30. Check `gh pr list --state merged`, or grep `origin/main` for the **content**.
 
 Starting before step 2 means hand-resolving conflicts in the exact lines PR #27 changes. Project memory
 already records the cost of rebasing two branches that edit the same method.
@@ -494,21 +500,33 @@ becomes a real complaint, but it is a schema change to solve a latency problem n
 
 ## 8. Out of scope
 
-**`OrdersController.Retry` pre-flip — now owned by PR #29 (`claude/funny-maxwell-a8fde7`, MERGEABLE).**
-`OrdersController.cs:1847-1858` optimistically flips to `delivering` with `UpdatedAt = UtcNow` and *then*
-enqueues `RetryDeliveryJob`, whose claim rejects a fresh `delivering`. The operator's "Retry now" therefore
-does nothing for ~30 minutes, while the UI shows `delivering`. Self-healing, no attempt row written,
-dead-letter cap not burned — but the button lies. Memory obs 4218 recorded the class on 2026-07-11.
+**`OrdersController.Retry` pre-flip — FIXED. PR #29 merged 2026-07-17 09:00.** It used to optimistically flip
+to `delivering` with `UpdatedAt = UtcNow` and *then* enqueue `RetryDeliveryJob`, whose claim rejects a fresh
+`delivering` — so the operator's "Retry now" did nothing for ~30 minutes while the UI showed `delivering`.
+Self-healing, no attempt row written, dead-letter cap not burned — but the button lied. Found from this spec's
+§8, spawned as its own session, and main now carries the fix plus the "B2 (lost-order): DO NOT pre-flip"
+comment at `OrdersController.cs:1860`. Memory obs 4218 recorded the class on 2026-07-11.
+
+**Note the fifth list survived it** (`OrdersController.cs:1850`): #29 fixed that action's *pre-flip*, not its
+*admission guard*, so `RetryableFrom` (§4.1) is still this spec's to do. Verified on `origin/main` @ 560c902.
 
 > **Correction (2026-07-17) — two errors of mine, both now verified against `origin/main`:**
 >
-> 1. **The "B2 / DO NOT pre-flip" prior art is NOT in `OrdersController.Redeliver`.** This spec originally
->    called Redeliver "the already-fixed sibling". Wrong: `origin/main`'s `OrdersController.cs` contains no
->    such comment at all. The prior art is the **ops requeue/escalation** leg
->    (`OpsControllerTests.cs:197`, `RequeueDelivery_FromDeadLetter_LeavesClaimableStatus_...`). I read that
->    comment inside `Redeliver` on the **`claude/wizardly-spence-6b738a` branch** — where PR #27 adds it — and
->    wrote it up as established prior art on main. **I conflated a branch with main.** The defect and its
->    severity are unaffected; only the attribution was wrong.
+> 1. **The "B2 / DO NOT pre-flip" prior art was NOT in `OrdersController.Redeliver`** *(as of 2026-07-17
+>    ~08:00)*. This spec originally called Redeliver "the already-fixed sibling". Wrong at the time:
+>    `origin/main`'s `OrdersController.cs` contained no such comment. The prior art was the **ops
+>    requeue/escalation** leg (`OpsControllerTests.cs:197`,
+>    `RequeueDelivery_FromDeadLetter_LeavesClaimableStatus_...`). I read that comment inside `Redeliver` on the
+>    **`claude/wizardly-spence-6b738a` branch** and wrote it up as established prior art on main. **I conflated
+>    a branch with main.**
+>
+>    **…and this correction has itself gone stale — PR #29 merged at 09:00 and put that exact comment into
+>    `OrdersController.cs:1860`.** So main now *does* carry it, and my correction's present tense is now as
+>    wrong as the claim it corrected. Left visible rather than quietly rewritten, because it is the cleanest
+>    specimen this spec has of its own thesis: **an unqualified claim about a moving tree is a defect with a
+>    fuse, and neither care nor authorship defuses it.** I made this error three times in one day — twice about
+>    a branch, once about a comment I had personally verified hours earlier. The fix is not "be more careful";
+>    it is to **date-stamp claims about code and cite the tree they were measured against.**
 > 2. **The ~30-minute rescuer is `RetryDeliveryJob`'s own backoff, not a sweep.**
 >    `RetryDeliveryJob.cs:96` does `ScheduleRetry(_jobs, orderId, organisationId, _options.BackoffFor(attemptsMade))`
 >    after `RetryDeliveryAsync` returns "already in progress"; by then `UpdatedAt` is stale, so the retry's own
