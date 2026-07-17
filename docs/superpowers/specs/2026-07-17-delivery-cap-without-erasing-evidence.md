@@ -1,6 +1,7 @@
 # Spec — reset the delivery attempt cap WITHOUT erasing the dispatch evidence
 
-Status: **SPEC ONLY. Cut is held** pending #31 and #27 landing (per the audit session's sequencing).
+Status: **SPEC ONLY. Cut is held** — #31 has landed; still waiting on #27 and on
+`distracted-edison`'s canonicalisation mechanism (itself blocked on #27). Audit session's sequencing.
 Ruling: option **B** (fix the premise, not the symptom) — audit session, 2026-07-17.
 Branch base: main @ `91b489f` (#31 merged).
 
@@ -57,7 +58,8 @@ This is the four-list drift wearing a different hat. Redefining the countable se
 not others yields a 0-row/no-match silent strand on a money path (the 52c6431 class).
 
 **Requirement: ONE definition; every site derives from it.** Site 4 is attempt *numbering*, not the
-cap — it must be decided explicitly (see Open Question 1), not swept along by accident.
+cap — it must be decided explicitly (see **Ruling 1 × site 4** below), not swept along by accident.
+Ruling 1 makes the two questions diverge, so site 4 stops sharing the cap's predicate.
 
 ## The two questions are DIFFERENT ON PURPOSE
 
