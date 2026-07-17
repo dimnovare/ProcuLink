@@ -316,12 +316,20 @@ await _retryEnqueuer.EnqueueAsync(orderId, orgId, ct);
 
 The sweep stamps `UpdatedAt = now` on a `delivering` row and *then* enqueues the retry. The retry's claim
 requires `(Delivering && UpdatedAt < staleBefore)`. The row is now fresh, so the claim matches **0 rows** and
-bounces. **The comment is a false premise: the retry job cannot move it to a terminal status**, because the
+bounces. That comment was a false premise — the retry job *cannot* move it to a terminal status, because the
 bump is what stops it claiming. Only the ~30-minute scheduled backoff ages the row enough for a later attempt
 to succeed.
 
-This is the same defect class as §1.1 and §8: **a comment asserting a guarantee the code does not deliver.** It
-also means the reclaim window and the sweep are coupled in a way neither file mentions — directly relevant
+> **The comment is FIXED in PR #30 (a3bea11, comments-only, verified here).** It now states that the bump makes
+> the row un-claimable for the reclaim window, that the enqueued retry therefore loses the claim and returns
+> `ClaimLost`, that recovery completes one scheduled backoff step later, and that this is why `ClaimLost` must
+> keep rescheduling — naming `CrashedHolderRecoveryCompositionPostgresTests` as evidence. `local_1559ce63` also
+> fixed `IStuckDeliveryDetectionService`'s doc, which carried the same overclaim one level up and, being the
+> **public contract**, would have outlived the implementation comment. **The mechanism below is durable; the
+> "false comment" framing is historical.**
+
+This was the same defect class as §1.1 and §8: **a comment asserting a guarantee the code does not deliver.**
+It also means the reclaim window and the sweep are coupled in a way neither file mentioned — directly relevant
 here, because §4.2 makes the staleness gate shared and explicit for the first time.
 
 **Consequence for this spec:** the `~30-min backoff` is not a wasteful fallback, it is *the* crash-recovery
@@ -473,7 +481,16 @@ recovery — and B trades a proven safety property (staleness ⇒ genuinely aban
 already self-heals. C is the intellectually honest fix and is worth revisiting if the 30-minute window ever
 becomes a real complaint, but it is a schema change to solve a latency problem nobody has reported.
 
-Whichever wins, the comment must stop claiming the retry job will move the order to a terminal status.
+> **Status: A is substantially DONE, and B is withdrawn by its own author.** The comment — A's whole actionable
+> half — is fixed in PR #30 (a3bea11), including the public-contract doc. `local_1559ce63`, who proposed B,
+> withdrew it on the refutation above: they had not noticed that an idle status is claimable *regardless of
+> `UpdatedAt`*, so B would let a merely-slow holder's row be re-claimed instantly and double-send the PO. They
+> recorded that counter-argument **in the comment itself**, so the next person to have the idea meets it at the
+> point of temptation rather than after a failed test. All three sessions now agree on A.
+>
+> **What remains for the founder:** only whether to pursue C's schema change for faster recovery. Recommended
+> answer: no, not until someone complains about the 30-minute window. This section can be closed with "A, and
+> it is done" unless you want otherwise.
 
 ## 8. Out of scope
 
