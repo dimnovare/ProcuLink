@@ -342,6 +342,82 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
         Assert.Empty(recorder.Calls);
     }
 
+    // ── B6: no attempt-writing path may leave the order in ready_to_deliver ────────────────────
+
+    [DockerRequiredFact]
+    public async Task B6_NoAttemptWritingPath_LeavesTheOrderInReadyToDeliver()
+    {
+        // THE INVARIANT THE MISSING CAP RESTS ON. StrandedReadyOrderDetectionService deliberately has
+        // NO attempt cap, because the sweep can drive at most ONE dispatch per artifact: the first
+        // dispatch writes a current-artifact attempt row (which its discriminator then blocks on) AND
+        // flips the order out of ready_to_deliver (which its status filter then blocks on) — excluded
+        // twice over. That "AND" is this test. It holds only because every attempt-writing path writes
+        // the terminal STATUS BEFORE adding the row (FailMissingConfigAsync :535 then :538;
+        // FailBeforeDispatchAsync -> PersistAttemptAsync :600 then :627) — an accident of write ORDER,
+        // not something the type system or the schema enforces.
+        //
+        // If a path is ever reordered, or a new one forgets to flip the status, an order sits in
+        // ready_to_deliver holding a current-artifact row: the discriminator blocks it, the status
+        // filter no longer saves it, and the sweep silently skips a never-sent order — the same silent
+        // lost order this class exists to prevent, re-entered through the back door with nothing to
+        // catch it. Then the sweep WOULD need a cap. This test is what makes that audible.
+        var encryption = CreateEncryption();
+
+        // Every path that persists a DeliveryAttempt, each on its own order seeded ready_to_deliver.
+        var cases = new (string Path, Func<Task<(Guid OrgId, Guid SupplierId, Guid OrderId, Guid ArtifactId)>> Seed,
+                         Func<ProcuLinkDbContext, DeliveryService> Build)[]
+        {
+            // Pre-claim: the order is still ready_to_deliver when these run, so they must flip it themselves.
+            ("missing config (FailMissingConfigAsync)",
+                () => SeedDeliverableOrderAsync(encryption, OrderStatusConstants.ReadyToDeliver, 45, withConfig: false),
+                db => BuildService(db, new CountingDispatcher(), encryption)),
+
+            ("no dispatcher registered for protocol",
+                () => SeedDeliverableOrderAsync(encryption, OrderStatusConstants.ReadyToDeliver, 45, protocol: "sftp"),
+                db => BuildService(db, new CountingDispatcher(), encryption)), // CountingDispatcher is http-only
+
+            ("undecryptable credentials",
+                () => SeedDeliverableOrderAsync(encryption, OrderStatusConstants.ReadyToDeliver, 45,
+                        rawCredentials: "not-a-valid-ciphertext"),
+                db => BuildService(db, new CountingDispatcher(), encryption)),
+
+            // Post-claim (already 'delivering'), but it must still never land back on ready_to_deliver.
+            ("artifact download failed (R2 blip)",
+                () => SeedDeliverableOrderAsync(encryption, OrderStatusConstants.ReadyToDeliver, 45),
+                db => BuildService(db, new CountingDispatcher(), encryption, new ThrowingFileStorage())),
+
+            // The normal terminal persist — the success side of PersistAttemptAsync.
+            ("successful dispatch (PersistAttemptAsync)",
+                () => SeedDeliverableOrderAsync(encryption, OrderStatusConstants.ReadyToDeliver, 45),
+                db => BuildService(db, new CountingDispatcher(), encryption)),
+        };
+
+        foreach (var (path, seed, build) in cases)
+        {
+            var ids = await seed();
+
+            await using (var db = NewContext())
+                await build(db).DispatchArtifactAsync(
+                    ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: false, CancellationToken.None);
+
+            await using var verify = NewContext();
+            var status = await verify.PurchaseOrders.AsNoTracking()
+                .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
+            var wroteAttempt = await verify.DeliveryAttempts.AsNoTracking()
+                .AnyAsync(a => a.OrderId == ids.OrderId && a.OrgId == ids.OrgId);
+
+            // Guard the guard: a path that silently stopped writing an attempt row would make the
+            // status assertion below pass vacuously.
+            Assert.True(wroteAttempt, $"path '{path}' was expected to persist a DeliveryAttempt row but did not — " +
+                                       "this test no longer exercises what it claims to.");
+            Assert.True(status != OrderStatusConstants.ReadyToDeliver,
+                $"path '{path}' left the order in ready_to_deliver while holding an attempt row against the " +
+                "current artifact. StrandedReadyOrderDetectionService's discriminator now blocks that order and " +
+                "its status filter no longer excludes it, so the sweep will silently skip a never-sent PO. " +
+                "Either restore the status-write-before-row-write order, or give the sweep a real attempt cap.");
+        }
+    }
+
     // ── Helpers (mirrors DeliveryConcurrencyPostgresTests) ─────────────────────────────────────
 
     /// <summary>Adds one delivery attempt row at an explicit <paramref name="attemptedAt"/>.</summary>
@@ -412,10 +488,11 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
     }
 
     private static DeliveryService BuildService(
-        ProcuLinkDbContext db, IDeliveryDispatcher dispatcher, DeliveryEncryptionService encryption) =>
+        ProcuLinkDbContext db, IDeliveryDispatcher dispatcher, DeliveryEncryptionService encryption,
+        IFileStorageService? storage = null) =>
         new(
             db,
-            new CountingFileStorage(),
+            storage ?? new CountingFileStorage(),
             encryption,
             new[] { dispatcher },
             new NoOpIntegrationTriggerService(),
@@ -427,6 +504,18 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
     {
         public Task EnqueueAsync(Guid organisationId, string eventType, object payload, CancellationToken ct)
             => Task.CompletedTask;
+    }
+
+    /// <summary>Storage whose download throws — the R2-blip pre-dispatch failure path.</summary>
+    private sealed class ThrowingFileStorage : IFileStorageService
+    {
+        public Task<string> UploadAsync(Stream content, string key, string contentType, CancellationToken ct) =>
+            Task.FromResult(key);
+        public Task<string> GetSignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct) =>
+            Task.FromResult($"https://files.example/{key}");
+        public Task<Stream> DownloadAsync(string key, CancellationToken ct) =>
+            throw new InvalidOperationException("R2 blip: signing failed.");
+        public Task DeleteAsync(string key, CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class CountingFileStorage : IFileStorageService
@@ -441,8 +530,13 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
     }
 
     /// <summary>Seeds org + supplier + auto-deliver config + an order (aged) with one artifact.</summary>
+    /// <param name="withConfig">False omits the SupplierDeliveryConfig entirely — forces the missing-config path.</param>
+    /// <param name="protocol">Config protocol; set to one no dispatcher is registered for to force that path.</param>
+    /// <param name="rawCredentials">Stored verbatim into EncryptedCredentials instead of a real ciphertext —
+    /// use to force the undecryptable-credentials path.</param>
     private async Task<(Guid OrgId, Guid SupplierId, Guid OrderId, Guid ArtifactId)> SeedDeliverableOrderAsync(
-        DeliveryEncryptionService encryption, string status, int agedMinutes)
+        DeliveryEncryptionService encryption, string status, int agedMinutes,
+        bool withConfig = true, string protocol = "http", string? rawCredentials = null)
     {
         var orgId      = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
@@ -470,14 +564,15 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
             Id = artifactId, OrderId = orderId, OrgId = orgId,
             Format = "csv", FileKey = "artifact.csv", CreatedAt = aged,
         });
-        db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
-        {
-            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
-            Protocol = "http", AutoDeliver = true,
-            ConfigJson = "{\"url\":\"https://supplier.example/orders\"}",
-            EncryptedCredentials = encryption.Encrypt("{\"type\":\"none\"}"),
-            CreatedAt = aged, UpdatedAt = aged,
-        });
+        if (withConfig)
+            db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
+                Protocol = protocol, AutoDeliver = true,
+                ConfigJson = "{\"url\":\"https://supplier.example/orders\"}",
+                EncryptedCredentials = rawCredentials ?? encryption.Encrypt("{\"type\":\"none\"}"),
+                CreatedAt = aged, UpdatedAt = aged,
+            });
         await db.SaveChangesAsync();
 
         return (orgId, supplierId, orderId, artifactId);

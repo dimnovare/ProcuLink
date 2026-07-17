@@ -65,6 +65,23 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
         // this sweep again — the exact defect this filter fixes. The 30-minute aged threshold
         // (StrandedReadyDeliveryDetectionJob) dwarfs any clock skew between the two writers.
         //
+        // NO ATTEMPT CAP HERE, DELIBERATELY — and that is a DEPENDENCY, not an observation. This sweep
+        // re-drives via DeliverOrderJob, the first-delivery path, which carries no cap of its own (the
+        // cap lives in RetryDeliveryAsync and StrandedFailedDeliveryDetectionService). It needs none
+        // BECAUSE it can drive at most ONE dispatch per artifact: that dispatch writes a
+        // current-artifact attempt row (excluded by the filter below) AND flips the order out of
+        // ready_to_deliver (excluded by the status filter) — excluded twice over. A delivery_failed
+        // outcome then hands off to StrandedFailedDeliveryDetectionService, which counts ALL terminal
+        // rows, so earlier failures still cap the retry ladder.
+        // That rests entirely on: NO attempt-writing path leaves an order in ready_to_deliver — true
+        // today only because each writes the terminal status BEFORE adding the row
+        // (DeliveryService.FailMissingConfigAsync, and FailBeforeDispatchAsync → PersistAttemptAsync).
+        // Reorder those two writes, or add a path that forgets to flip the status, and an order sits
+        // here holding a current-artifact row: the filter below blocks it, the status filter no longer
+        // saves it, and this sweep silently skips a never-sent PO — at which point it needs a real cap.
+        // Pinned by LostOrderRecoveryPostgresTests.B6_NoAttemptWritingPath_LeavesTheOrderInReadyToDeliver;
+        // if B6 goes red, fix the offending path or add the cap — do not silence B6.
+        //
         // Bounded by maxBatch (oldest strand first) so one sweep can never load an unbounded backlog;
         // the remainder is picked up by the next run.
         var candidates = await _db.PurchaseOrders
