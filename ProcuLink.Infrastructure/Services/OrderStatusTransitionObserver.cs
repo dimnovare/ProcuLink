@@ -21,10 +21,14 @@ namespace ProcuLink.Infrastructure.Services;
 /// Every code path here is wrapped so that even an internal bug in the observer cannot
 /// break a save.</para>
 ///
-/// <para>Honest limitation: writes issued via <c>ExecuteUpdateAsync</c> (e.g. the parse
-/// job's parent-row update) bypass the EF change tracker and are not observed. The
-/// tracked-entity writes — delivery, transform, resolution, stuck/ops flows — are the
-/// overwhelming majority of transitions and are all covered.</para>
+/// <para>Honest limitation: writes issued via <c>ExecuteUpdateAsync</c> bypass the EF change
+/// tracker and are NOT observed. Current ExecuteUpdate writers: the parse job's parent-row
+/// update; the transform and delivery atomic claims; and the supplier status callback's claim
+/// (<c>WebhookIngressController.ApplyReportedStatusAsync</c> — so webhook-driven
+/// <c>→ delivered / → rejected_by_supplier</c> transitions never reach this observer, even
+/// though they are listed in the map below for the non-relational path and as documentation).
+/// The remaining tracked-entity writes — transform, resolution, stuck/ops, mapping-edit flows —
+/// are the majority of transitions and are all covered.</para>
 /// </summary>
 public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
 {
@@ -89,16 +93,21 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
                 OrderStatusConstants.Delivering, OrderStatusConstants.Transforming,
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
                 OrderStatusConstants.DeliveryHeld, OrderStatusConstants.RejectedBySupplier),
-            // Billing hold → released back to ready_to_deliver (re-driven) on reactivation.
+            // Billing hold → released back to ready_to_deliver (re-driven) on reactivation, or a
+            // late supplier ACK for an order that was already sent before the hold landed.
             [OrderStatusConstants.DeliveryHeld] = Set(
                 OrderStatusConstants.ReadyToDeliver, OrderStatusConstants.Ready,
-                OrderStatusConstants.RejectedBySupplier),
+                OrderStatusConstants.Delivered, OrderStatusConstants.RejectedBySupplier),
             [OrderStatusConstants.Delivering] = Set(
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
                 OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.DeliveryDeadLetter),
-            // A delivered order can still be rejected later (supplier business ACK ≠ HTTP 200).
+            // A delivered order can still be rejected later (supplier business ACK ≠ HTTP 200), and
+            // MV-1 resets it to ready: OrderMappingOverrideService.IsPastReady includes 'delivered',
+            // so a mapping edit on a delivered order performs delivered → ready as a TRACKED write
+            // (OrderMappingOverrideService.cs:86-87) — i.e. straight through this observer. Without
+            // 'ready' here, every such edit logged a false "unexpected transition" WARNING.
             [OrderStatusConstants.Delivered] = Set(
-                OrderStatusConstants.RejectedBySupplier),
+                OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.Ready),
             // Failed deliveries: retry, dead-letter, late supplier ACK, re-transform, or
             // return to the review loop after corrections. A5: a backoff retry that fires after the
             // org lapsed (read_only/past_due) is held via HoldForBillingAsync → delivery_held.
@@ -111,11 +120,25 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             [OrderStatusConstants.DeliveryDeadLetter] = Set(
                 OrderStatusConstants.Delivering, OrderStatusConstants.Delivered,
                 OrderStatusConstants.DeliveryFailed, OrderStatusConstants.RejectedBySupplier),
-            // Rejected: corrected and re-driven through the loop, or a late positive ACK.
+            // Rejected: corrected and re-driven through the loop.
+            //
+            // → delivered is GONE: the webhook can no longer un-reject an order (Status gates terminal
+            // callbacks on OrderStatusMachine.WebhookReportableFrom, which excludes
+            // rejected_by_supplier), and no dispatch can write 'delivered' onto one either — the
+            // delivery claim only admits ready_to_deliver / delivery_failed / stale-delivering. With no
+            // writer left, listing it would bless an impossible move.
+            //
+            // → delivery_failed STAYS: it is still reachable WITHOUT the webhook. DeliveryService's
+            // PRE-CLAIM failure paths (FailMissingConfigAsync / FailBeforeDispatchAsync) write
+            // delivery_failed unconditionally, with no from-status check, racing the enqueue-time
+            // guards in OrdersController.Redeliver / OpsController.RequeueDelivery. Rare, but real —
+            // and listing it here is what keeps this observer SILENT when it fires, which is
+            // deliberate (see KnownObserverOnlyEdges in OrderStatusMachineTests, which exempts the
+            // resulting machine/observer drift on exactly that basis).
             [OrderStatusConstants.RejectedBySupplier] = Set(
                 OrderStatusConstants.PendingReview, OrderStatusConstants.Ready,
                 OrderStatusConstants.Transforming, OrderStatusConstants.Delivering,
-                OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed),
+                OrderStatusConstants.DeliveryFailed),
             // Failed parse: re-parse (ParseOrderJob runs again for status == failed).
             [OrderStatusConstants.Failed] = Set(
                 OrderStatusConstants.PendingParse, OrderStatusConstants.Parsing,
