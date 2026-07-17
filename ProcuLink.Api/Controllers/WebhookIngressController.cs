@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -268,18 +269,16 @@ public sealed class WebhookIngressController : ControllerBase
         StatusPayload       payload,
         CancellationToken   ct)
     {
+        // The rows that prove a send was begun — ONE predicate (HasDispatchMarker), composed here and
+        // again in the claim below, so the advisory read and the real decision cannot drift apart.
+        // The DbSet form (not the navigation) is deliberate: it keeps org_id in the emitted SQL rather
+        // than letting it ride the FK.
+        var dispatched = _db.DeliveryAttempts.Where(HasDispatchMarker);
+
         // Advisory only on the relational path (the claim below is the real decision) — read here so
         // a refusal can explain ITSELF accurately. On the non-relational path it IS the decision.
-        //
-        // The marker condition is written out here and again inside the claim predicate; EF cannot
-        // translate a captured Expression variable into the claim's correlated subquery, so the two
-        // are kept literally identical instead. Their equivalence is what makes the InMemory tests
-        // meaningful, so it is PINNED on both providers: WebhookIngressControllerTests exercises this
-        // read, WebhookStatusClaimPostgresTests exercises the claim, and both assert the same
-        // accept/refuse outcomes per shape.
-        var hasDispatchEvidence = await _db.DeliveryAttempts
-            .AnyAsync(a => a.OrgId == orgId && a.OrderId == order.Id
-                        && (a.IdempotencyKey != null || a.ArtifactSha256 != null), ct);
+        var hasDispatchEvidence = await dispatched
+            .AnyAsync(a => a.OrgId == orgId && a.OrderId == order.Id, ct);
 
         var updatedAt = DateTime.UtcNow;
 
@@ -295,8 +294,7 @@ public sealed class WebhookIngressController : ControllerBase
                 var rows = await _db.PurchaseOrders
                     .Where(o => o.Id == order.Id && o.OrgId == orgId
                              && ReportableFromStatuses.Contains(o.Status)
-                             && _db.DeliveryAttempts.Any(a => a.OrgId == o.OrgId && a.OrderId == o.Id
-                                                           && (a.IdempotencyKey != null || a.ArtifactSha256 != null)))
+                             && dispatched.Any(a => a.OrgId == o.OrgId && a.OrderId == o.Id))
                     .ExecuteUpdateAsync(s => s
                         .SetProperty(o => o.Status, target)
                         .SetProperty(o => o.UpdatedAt, updatedAt), ct);
@@ -580,6 +578,33 @@ public sealed class WebhookIngressController : ControllerBase
     /// </summary>
     private static readonly string[] ReportableFromStatuses =
         OrderStatusMachine.WebhookReportableFrom.ToArray();
+
+    /// <summary>
+    /// The dispatch marker — the ONE definition, shared by the advisory read and the atomic claim.
+    ///
+    /// <para>Both sites compose it as <c>_db.DeliveryAttempts.Where(HasDispatchMarker)</c> and add
+    /// their own org/order scoping. EF Core 8 translates this into the claim's correlated subquery
+    /// fine, including inside <c>ExecuteUpdateAsync</c> — proven on real Postgres by
+    /// <c>WebhookStatusClaimPostgresTests</c>, which distinguishes a marker-carrying row from a
+    /// pre-dispatch one, so a silently-dropped predicate fails the suite rather than passing it.</para>
+    ///
+    /// <para><b>What does NOT work, so nobody re-derives the wrong lesson from a stray exception:</b>
+    /// <c>.Compile()</c>-ing this to a <c>Func</c> and invoking it in a query. EF cannot see inside a
+    /// delegate, so it cannot inline it — and the failure reads
+    /// <c>"… Invoke(__Compile_0, d) could not be translated"</c>, which looks like "Invoke does not
+    /// translate" and is not. The Invoke target must stay a LambdaExpression; EF's
+    /// InvocationExpressionRemovingExpressionVisitor inlines it. Keep this an
+    /// <c>Expression&lt;Func&lt;…&gt;&gt;</c>.</para>
+    ///
+    /// <para>Do NOT fold the cap's countable-set predicate into this one. They ask different
+    /// questions of the same table: this asks "was a send ever BEGUN for this order, ever?"
+    /// (order-scoped, artifact- and budget-agnostic — a supplier may report against ANY past
+    /// dispatch), while the cap asks "how many attempts count against the CURRENT budget?". See
+    /// <c>StrandedReadyOrderDetectionService</c> for the sibling distinction it makes for the same
+    /// reason. Collapsing them reopens the never-dispatched hole under a new name.</para>
+    /// </summary>
+    private static readonly Expression<Func<DeliveryAttempt, bool>> HasDispatchMarker =
+        a => a.IdempotencyKey != null || a.ArtifactSha256 != null;
 
     /// <summary>
     /// Reconcile the order's exceptions, never failing the supplier's callback if it goes wrong.
