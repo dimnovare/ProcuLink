@@ -61,7 +61,8 @@ public static class OrderStatusMachine
             // delivery_failed → delivery_held: A5 — a backoff retry for an org that lapsed to
             // read_only/past_due since the first attempt is held (not delivered) via HoldForBillingAsync.
             [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
-            // dead_letter → delivery_failed: an ops requeue that fails again, or a late failure webhook.
+            // dead_letter → delivery_failed: an ops requeue that fails again. (NOT a webhook: a supplier
+            // status callback writes delivered or rejected_by_supplier only — never delivery_failed.)
             [DeliveryDeadLetter] = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
             [RejectedBySupplier] = Set(),
             [Failed]             = Set(),
@@ -86,7 +87,14 @@ public static class OrderStatusMachine
     public static IReadOnlySet<string> NextStatuses(string from) =>
         Transitions.TryGetValue(from, out var next) ? next : EmptySet;
 
-    /// <summary>A status with no outgoing transitions (delivered is NOT terminal — a webhook can flip it to delivery_failed).</summary>
+    /// <summary>
+    /// A status with no outgoing transitions. <c>delivered</c> is NOT terminal: a supplier status
+    /// callback can still reject it (HTTP 200 is transport success, not business acceptance), and an
+    /// MV-1 mapping edit resets it to <c>ready</c> for re-transform. (It can NOT be webhook-flipped to
+    /// delivery_failed — that callback writes rejected_by_supplier. The delivered → delivery_failed
+    /// entry survives for DeliveryService's pre-claim failure paths, which write delivery_failed with
+    /// no status check.)
+    /// </summary>
     public static bool IsTerminal(string status) => NextStatuses(status).Count == 0;
 
     /// <summary>A status the UI renders as the red "Failed" pill (delegates to the canonical bucket).</summary>

@@ -3,7 +3,9 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Webhooks;
 using ProcuLink.Infrastructure;
 
@@ -36,16 +38,19 @@ public sealed class WebhookIngressController : ControllerBase
 {
     private readonly IHmacWebhookVerifier                  _verifier;
     private readonly ProcuLinkDbContext                    _db;
+    private readonly IOrderExceptionService                _exceptions;
     private readonly ILogger<WebhookIngressController>     _logger;
 
     public WebhookIngressController(
         IHmacWebhookVerifier                  verifier,
         ProcuLinkDbContext                    db,
+        IOrderExceptionService                exceptions,
         ILogger<WebhookIngressController>     logger)
     {
-        _verifier = verifier;
-        _db       = db;
-        _logger   = logger;
+        _verifier   = verifier;
+        _db         = db;
+        _exceptions = exceptions;
+        _logger     = logger;
     }
 
     /// <summary>POST /api/webhook-ingress/{slug}/ping — connectivity + auth test.</summary>
@@ -160,18 +165,46 @@ public sealed class WebhookIngressController : ControllerBase
         if (order is null)
             return NotFound(new { error = "Order not found." });
 
-        // Mutate order status only when the supplier reports a terminal/forward state.
-        // We never overwrite an already-`delivered` order, and we don't move backwards
-        // from delivered/delivery_failed via a "received"/"in_progress" callback.
-        if (status == "delivered" && order.Status != "delivered")
+        // A supplier business rejection is NOT a transport failure. delivery_failed would put the
+        // order back in reach of the retry machinery -- StrandedFailedDeliveryDetectionService
+        // sweeps aged delivery_failed orders with attempts remaining, and RetryDeliveryAsync
+        // retries from delivery_failed -- so we would re-send a PO the supplier explicitly
+        // rejected. (That sweeper's predicate is justified on the premise that a supplier
+        // rejection lands in rejected_by_supplier: StrandedFailedDeliveryDetectionService.cs:46.)
+        //
+        // A rejection is honoured even for an already-delivered order: HTTP 200 from the channel
+        // is transport success, never supplier business acceptance.
+        var mutated = false;
+
+        if (status == "rejected")
         {
-            order.Status    = "delivered";
+            order.Status    = OrderStatusConstants.RejectedBySupplier;
             order.UpdatedAt = DateTime.UtcNow;
+            mutated         = true;
+
+            // Stamp the supplier's reason where the ORDER can actually read it. The AuditEvent below
+            // is written with EntityType="PurchaseOrder", but OrdersController.Get filters audits on
+            // EntityType=="Order" and otherwise falls back to the latest DeliveryAttempt -- so a
+            // reason that lives only in that audit is unreachable, and the UI shows the supplier
+            // rejecting the PO because of whatever the last transport error happened to be (e.g. a
+            // gateway timeout) instead of the real reason. Mirrors the canonical manual path,
+            // OrderResolutionService.MarkRejectedAsync (:261-269).
+            if (!string.IsNullOrWhiteSpace(payload.Reason))
+            {
+                var latestAttempt = await _db.DeliveryAttempts
+                    .Where(a => a.OrgId == orgId && a.OrderId == order.Id)
+                    .OrderByDescending(a => a.AttemptedAt)
+                    .FirstOrDefaultAsync(ct);
+
+                if (latestAttempt is not null)
+                    latestAttempt.RejectionReason = payload.Reason;
+            }
         }
-        else if (status == "rejected" && order.Status != "delivered")
+        else if (status == "delivered" && order.Status != OrderStatusConstants.Delivered)
         {
-            order.Status    = "delivery_failed";
+            order.Status    = OrderStatusConstants.Delivered;
             order.UpdatedAt = DateTime.UtcNow;
+            mutated         = true;
         }
 
         var auditPayload = JsonSerializer.Serialize(new
@@ -194,6 +227,16 @@ public sealed class WebhookIngressController : ControllerBase
         });
         await _db.SaveChangesAsync(ct);
 
+        // Exceptions are derived from the order's status, so a status write that skips reconcile
+        // leaves the previous status's exception open forever: an earlier 503 opens
+        // "Delivery to the supplier failed.", this callback moves the order to rejected_by_supplier,
+        // and nothing re-reconciles it -- the operator reads a transport failure on an order the
+        // supplier actually REJECTED. The delivered case inverts it (a stale problem on a delivered
+        // order). Both statuses have a correct mapping in OrderExceptionService.ProblemFor, so one
+        // reconcile fixes both. Mirrors OrderResolutionService.MarkRejectedAsync (:279).
+        if (mutated)
+            await SafeReconcileExceptionsAsync(orgId, payload.OrderId, ct);
+
         _logger.LogInformation(
             "Webhook status={Status} received for order {OrderId} (org {OrgId}).",
             status, payload.OrderId, orgId);
@@ -202,6 +245,27 @@ public sealed class WebhookIngressController : ControllerBase
     }
 
     // ── helpers ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Reconcile the order's exceptions, never failing the supplier's callback if it goes wrong.
+    /// The status write is already committed by this point, so a reconcile error must not turn a
+    /// SUCCESSFUL status update into a 500 the supplier will retry. Same contract (and same reason)
+    /// as OrderServiceShared.SafeReconcileExceptionsAsync.
+    /// </summary>
+    private async Task SafeReconcileExceptionsAsync(Guid orgId, Guid orderId, CancellationToken ct)
+    {
+        try
+        {
+            await _exceptions.ReconcileAsync(orgId, orderId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Webhook status: exception reconcile failed for order {OrderId} (org {OrgId}) — non-fatal, " +
+                "the status write is already committed.",
+                orderId, orgId);
+        }
+    }
 
     private async Task<(string Body, string Ts, string Nonce, string Sig)> ReadHeadersAndBodyAsync(
         CancellationToken ct)
