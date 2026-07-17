@@ -94,6 +94,74 @@ public class WebhookIngressControllerTests
         await db.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// Seeds ONE DISPATCHED delivery attempt — the dispatch evidence the status guard requires.
+    ///
+    /// <para>The evidence is NOT the row's existence: four pre-dispatch gates write an order-linked
+    /// terminal row with nothing sent (missing config, no dispatcher, undecryptable credentials,
+    /// artifact-download failure), so a bare row proves only that delivery was ATTEMPTED. The
+    /// evidence is a marker only the dispatch sequence writes — <c>IdempotencyKey</c> (stamped by
+    /// <c>OpenDispatchAttemptAsync</c> on the row it commits before the wire send) or
+    /// <c>ArtifactSha256</c> (the hash of the bytes actually dispatched). This helper stamps both,
+    /// as a real dispatched row carries both. Use <see cref="SeedPreDispatchAttemptAsync"/> for the
+    /// never-sent shape.</para>
+    ///
+    /// <para>That every pre-dispatch gate really does leave BOTH null is pinned in
+    /// <c>DeliveryProvenanceTests.PreDispatchFailuresWriteNoDispatchMarker</c> — this helper's
+    /// premise is a test, not a comment.</para>
+    /// </summary>
+    private static async Task SeedDeliveryAttemptAsync(
+        ProcuLinkDbContext db, Guid orgId, Guid orderId,
+        string status = DeliveryAttempt.StatusSuccess)
+    {
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id             = Guid.NewGuid(),
+            OrgId          = orgId,
+            OrderId        = orderId,
+            Channel        = "http",
+            Destination    = "https://supplier.example/orders",
+            Status         = status,
+            AttemptNumber  = 1,
+            AttemptedAt    = DateTime.UtcNow,
+            IdempotencyKey = $"{orderId:N}:{Guid.NewGuid():N}",
+            ArtifactSha256 = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c",
+        });
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Seeds an attempt row from a PRE-DISPATCH failure: a row exists, but nothing was ever sent, so
+    /// it carries neither marker. This is the shape that made the row-existence guard unsound — an
+    /// order can hold one of these and have reached a supplier zero times.
+    /// </summary>
+    private static async Task SeedPreDispatchAttemptAsync(
+        ProcuLinkDbContext db, Guid orgId, Guid orderId)
+    {
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id             = Guid.NewGuid(),
+            OrgId          = orgId,
+            OrderId        = orderId,
+            Channel        = "missing_config",
+            Destination    = "supplier delivery config",
+            Status         = DeliveryAttempt.StatusFailed,
+            AttemptNumber  = 1,
+            AttemptedAt    = DateTime.UtcNow,
+            ErrorMessage   = "Supplier delivery config is missing.",
+            IdempotencyKey = null,
+            ArtifactSha256 = null,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Reads the <c>error</c> string off a 409 body.</summary>
+    private static string ConflictError(IActionResult result)
+    {
+        var conflict = result.Should().BeOfType<ConflictObjectResult>().Subject;
+        return (string)conflict.Value!.GetType().GetProperty("error")!.GetValue(conflict.Value)!;
+    }
+
     /// <summary>Stubs the HMAC verifier to accept, resolving to <paramref name="orgId"/>.</summary>
     private static void StubVerifier(Mock<IHmacWebhookVerifier> verifier, string slug, Guid orgId)
         => verifier
@@ -256,6 +324,10 @@ public class WebhookIngressControllerTests
             UpdatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
+        // MV-1: this order WAS dispatched — a mapping edit reset it to ready, the next Send
+        // re-transformed it back to ready_to_deliver, and a late ACK for the ORIGINAL dispatch
+        // lands here. The MARKER on that original dispatch's attempt row is what makes it reportable.
+        await SeedDeliveryAttemptAsync(db, orgId, orderId);
 
         var body = $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}";
         SetHttpContext(ctrl, body: body);
@@ -297,6 +369,7 @@ public class WebhookIngressControllerTests
         var (ctrl, verifier, _) = Build(db);
 
         await SeedOrderAsync(db, orgId, orderId, from);
+        await SeedDeliveryAttemptAsync(db, orgId, orderId);
         SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\"}}");
         StubVerifier(verifier, "status-slug", orgId);
 
@@ -318,6 +391,7 @@ public class WebhookIngressControllerTests
         var (ctrl, verifier, _) = Build(db);
 
         await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivered);
+        await SeedDeliveryAttemptAsync(db, orgId, orderId);
         SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\"}}");
         StubVerifier(verifier, "status-slug", orgId);
 
@@ -328,7 +402,244 @@ public class WebhookIngressControllerTests
         order!.Status.Should().Be(OrderStatusConstants.RejectedBySupplier);
     }
 
-    // -- Exception reconcile + rejection reason (peer-review findings) --------
+    [Theory]
+    [InlineData(OrderStatusConstants.PendingParse,  "delivered")]
+    [InlineData(OrderStatusConstants.Parsing,       "delivered")]
+    [InlineData(OrderStatusConstants.Unrouted,      "delivered")]
+    [InlineData(OrderStatusConstants.PendingReview, "delivered")]
+    [InlineData(OrderStatusConstants.Ready,         "delivered")]
+    [InlineData(OrderStatusConstants.Transforming,  "delivered")]
+    [InlineData(OrderStatusConstants.PendingParse,  "rejected")]
+    [InlineData(OrderStatusConstants.Ready,         "rejected")]
+    public async Task Status_TerminalCallbackForNeverDispatchedOrder_Returns409_AndDoesNotMutate(
+        string from, string reported)
+    {
+        // The order was never sent to a supplier, so a supplier cannot be reporting on it. Marking
+        // it delivered would be a silent lost order: shipped in the UI, never actually sent.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, from);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"{reported}\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<ConflictObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(from, "a rejected callback must not mutate the order");
+    }
+
+    [Fact]
+    public async Task Status_DeliveredCallbackForRejectedBySupplierOrder_Returns409_AndDoesNotMutate()
+    {
+        // rejected_by_supplier is terminal for webhooks: a supplier that rejected must not silently
+        // flip the order to delivered -- a human has likely already acted on the rejection. A
+        // genuine retraction is an operator re-drive, not an automatic write.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.RejectedBySupplier);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<ConflictObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.RejectedBySupplier);
+    }
+
+    [Fact]
+    public async Task Status_DuplicateRejectedCallback_IsIdempotent200_NotConflict()
+    {
+        // Callback endpoints get retried. A supplier re-posting a rejection it already delivered
+        // must not get a 409 for work that succeeded -- this short-circuit is what lets
+        // rejected_by_supplier stay OUT of WebhookReportableFrom.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.RejectedBySupplier);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.RejectedBySupplier);
+        db.AuditEvents.Should().ContainSingle(e => e.Action == "webhook_status");
+    }
+
+    [Theory]
+    [InlineData(OrderStatusConstants.ReadyToDeliver)]
+    [InlineData(OrderStatusConstants.Delivering)]
+    [InlineData(OrderStatusConstants.DeliveryFailed)]
+    [InlineData(OrderStatusConstants.DeliveryDeadLetter)]
+    [InlineData(OrderStatusConstants.DeliveryHeld)]
+    public async Task Status_DeliveredCallbackForDispatchedOrder_Returns200_AndMarksDelivered(string from)
+    {
+        // Every dispatched state accepts a late positive ACK. delivery_held is included because
+        // delivery_failed -> delivery_held is real (A5): refusing a held order's ACK would make the
+        // reactivation re-drive send it a SECOND time. "Dispatched" is proven by a dispatch MARKER on
+        // an attempt row, not by the status alone (ready_to_deliver and delivery_held are BOTH also
+        // reachable without any dispatch) and not by a bare row (the pre-dispatch gates write those
+        // having sent nothing) -- which is what the sibling 409 tests below pin.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, from);
+        await SeedDeliveryAttemptAsync(db, orgId, orderId);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.Delivered);
+    }
+
+    [Theory]
+    [InlineData(OrderStatusConstants.ReadyToDeliver, "delivered")]
+    [InlineData(OrderStatusConstants.ReadyToDeliver, "rejected")]
+    [InlineData(OrderStatusConstants.DeliveryHeld,   "delivered")]
+    [InlineData(OrderStatusConstants.DeliveryHeld,   "rejected")]
+    public async Task Status_TerminalCallbackForReportableStatusWithNoDeliveryAttempt_Returns409_AndDoesNotMutate(
+        string from, string reported)
+    {
+        // C1 -- the status alone does NOT prove dispatch. BOTH of these states are reachable
+        // PRE-dispatch:
+        //   * ready_to_deliver is where EVERY transformed order rests before it is ever sent
+        //     (AutoDeliver defaults false -> it waits for a human "Send"; StrandedReadyOrder-
+        //     DetectionService exists solely because orders sit there un-sent).
+        //   * delivery_held via the PRE-CLAIM billing gate (DeliveryService.cs:822-825), which moves
+        //     the STILL-IDLE order there -- "never a delivery".
+        // Marking either 'delivered' would also disable its own safety net: the stranded-ready sweep
+        // matches Status == ready_to_deliver and the billing release matches Status == delivery_held,
+        // so both predicates would stop matching -> permanently lost, displayed as shipped, billable.
+        // The discriminator is dispatch EVIDENCE: an attempt row carrying a dispatch marker.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, from);
+        // Deliberately NO delivery attempt: nothing was ever sent to a supplier.
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"{reported}\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<ConflictObjectResult>(
+            "no delivery attempt exists, so no supplier can be reporting an outcome for this order");
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(from, "the refused callback must leave the order (and its safety net) untouched");
+        db.AuditEvents.Should().ContainSingle(e => e.Action == "webhook_status_rejected");
+        db.AuditEvents.Should().NotContain(e => e.Action == "webhook_status");
+    }
+
+    [Theory]
+    [InlineData(OrderStatusConstants.ReadyToDeliver, "delivered")]
+    [InlineData(OrderStatusConstants.ReadyToDeliver, "rejected")]
+    [InlineData(OrderStatusConstants.DeliveryHeld,   "delivered")]
+    [InlineData(OrderStatusConstants.DeliveryFailed, "delivered")]
+    public async Task Status_TerminalCallbackForOrderWhoseOnlyAttemptFailedBeforeDispatch_Returns409(
+        string from, string reported)
+    {
+        // C2 -- an attempt ROW is not a SEND. Four pre-dispatch gates write an order-linked terminal
+        // row having sent zero bytes (missing config, no dispatcher registered, undecryptable
+        // credentials, artifact-download failure), so "a row exists" would wave through an order no
+        // supplier has ever seen. Reachable end-to-end: ready_to_deliver -> Send -> missing config ->
+        // delivery_failed + a row -> the org lapses -> the A5 gate holds it (delivery_held) -> a
+        // callback marks it 'delivered' -> ReleaseBillingHeldOrders stops matching -> the PO is lost,
+        // shown as shipped, and billed. The marker pair is what closes this; the null-ness of both
+        // markers on every pre-dispatch path is pinned in
+        // DeliveryProvenanceTests.PreDispatchFailuresWriteNoDispatchMarker.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, from);
+        await SeedPreDispatchAttemptAsync(db, orgId, orderId);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"{reported}\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<ConflictObjectResult>(
+            "the order holds an attempt row, but nothing was ever dispatched to a supplier");
+        ConflictError(result).Should().Contain("has not been sent to a supplier yet",
+            "the refusal must say what is actually true: attempted, never sent");
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(from, "the refused callback must leave the order (and its safety net) untouched");
+        db.AuditEvents.Should().ContainSingle(e => e.Action == "webhook_status_rejected");
+        db.AuditEvents.Should().NotContain(e => e.Action == "webhook_status");
+    }
+
+    [Fact]
+    public async Task Status_TerminalCallbackForOrderWithBothAPreDispatchRowAndARealSend_Returns200()
+    {
+        // The evidence is per-ROW, not per-order: a first Send that failed before dispatch (missing
+        // config) leaves a marker-less row; fixing the config and re-sending adds a REAL dispatched
+        // row. The order was genuinely sent, so its callback must land -- an over-strict guard that
+        // demanded EVERY row carry a marker would refuse a real delivery.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivering);
+        await SeedPreDispatchAttemptAsync(db, orgId, orderId);
+        await SeedDeliveryAttemptAsync(db, orgId, orderId);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.Delivered);
+    }
+
+    [Fact]
+    public async Task Status_DeliveredCallbackForAnotherOrgsDeliveryAttempt_Returns409()
+    {
+        // The attempt-row evidence is org-scoped like every other query here: another tenant's
+        // attempt row must never satisfy this order's dispatch check.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.ReadyToDeliver);
+        await SeedDeliveryAttemptAsync(db, Guid.NewGuid(), orderId);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<ConflictObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.ReadyToDeliver);
+    }
+
+    // ── Exception reconcile + rejection reason (peer-review findings, PR #28) ─────
+    //
+    // These arrived on main while this branch was parked. The guard re-homes both into the ACCEPT
+    // path of ApplyReportedStatusAsync -- a refused callback writes no status, so there is nothing to
+    // reconcile and no reason to stamp. Their seeds now carry dispatch markers, because an order the
+    // supplier is reporting on WAS dispatched; without a marker the guard would (correctly) refuse
+    // and these would be testing the refusal path by accident.
 
     /// <summary>Records ReconcileAsync calls; the real service needs entities this test ctx ignores.</summary>
     private sealed class RecordingExceptionService : IOrderExceptionService
@@ -384,6 +695,7 @@ public class WebhookIngressControllerTests
         var (ctrl, verifier, _) = Build(db, exceptions);
 
         await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivering);
+        await SeedDeliveryAttemptAsync(db, orgId, orderId);
         SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"{reported}\"}}");
         StubVerifier(verifier, "status-slug", orgId);
 
@@ -414,6 +726,28 @@ public class WebhookIngressControllerTests
     }
 
     [Fact]
+    public async Task Status_RefusedCallback_DoesNotReconcile()
+    {
+        // A refusal writes no status, so reconciling would be reconciling against nothing -- and the
+        // guard's whole point is that this order's state is untouched.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var exceptions = new RecordingExceptionService();
+        var (ctrl, verifier, _) = Build(db, exceptions);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.ReadyToDeliver);
+        // No dispatch evidence -> the claim refuses.
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<ConflictObjectResult>();
+        exceptions.Calls.Should().BeEmpty("a refused callback changed no status");
+    }
+
+    [Fact]
     public async Task Status_WhenReconcileThrows_CallbackStillSucceedsAndStatusIsWritten()
     {
         // The supplier callback must not fail because our bookkeeping did. Mirrors
@@ -424,6 +758,7 @@ public class WebhookIngressControllerTests
         var (ctrl, verifier, _) = Build(db, new ThrowingExceptionService());
 
         await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivering);
+        await SeedDeliveryAttemptAsync(db, orgId, orderId);
         SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\"}}");
         StubVerifier(verifier, "status-slug", orgId);
 
@@ -449,18 +784,21 @@ public class WebhookIngressControllerTests
         var (ctrl, verifier, _) = Build(db);
 
         await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Delivering);
+        // Both rows carry markers: a 504 means the payload WAS sent and the gateway timed out.
         db.DeliveryAttempts.Add(new DeliveryAttempt
         {
             Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
             Channel = "http", Destination = "d", Status = DeliveryAttempt.StatusFailed,
             AttemptNumber = 1, AttemptedAt = DateTime.UtcNow.AddMinutes(-10),
             ErrorMessage = "504 Gateway Timeout",
+            IdempotencyKey = $"{orderId:N}:1",
         });
         var latest = new DeliveryAttempt
         {
             Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
             Channel = "http", Destination = "d", Status = DeliveryAttempt.StatusSuccess,
             AttemptNumber = 2, AttemptedAt = DateTime.UtcNow,
+            IdempotencyKey = $"{orderId:N}:2",
         };
         db.DeliveryAttempts.Add(latest);
         await db.SaveChangesAsync();
@@ -490,6 +828,7 @@ public class WebhookIngressControllerTests
             Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId,
             Channel = "http", Destination = "d", Status = DeliveryAttempt.StatusSuccess,
             AttemptNumber = 1, AttemptedAt = DateTime.UtcNow,
+            IdempotencyKey = $"{orderId:N}:1",
         };
         db.DeliveryAttempts.Add(attempt);
         await db.SaveChangesAsync();
@@ -501,6 +840,120 @@ public class WebhookIngressControllerTests
 
         var saved = await db.DeliveryAttempts.FindAsync(attempt.Id);
         saved!.RejectionReason.Should().BeNull();
+    }
+
+    // ── 409 copy: the sentence must be TRUE on every reachable refusal shape ──────
+
+    [Fact]
+    public async Task Status_RefusedForNeverDispatchedOrder_SaysItWasNeverSent()
+    {
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.ReadyToDeliver);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var error = ConflictError(await ctrl.Status("status-slug", CancellationToken.None));
+
+        error.Should().Contain("has not been sent to a supplier yet");
+        error.Should().Contain(OrderStatusConstants.ReadyToDeliver);
+    }
+
+    [Fact]
+    public async Task Status_RefusedForRejectedOrder_DoesNotClaimItWasNeverSent()
+    {
+        // The order WAS sent and the supplier rejected it, so "this order has not been sent to a
+        // supplier yet" is false on both clauses, and "check that the orderId matches an order you
+        // received" is a dead end -- it DOES match one.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.RejectedBySupplier);
+        await SeedDeliveryAttemptAsync(db, orgId, orderId);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var error = ConflictError(await ctrl.Status("status-slug", CancellationToken.None));
+
+        error.Should().NotContain("has not been sent to a supplier yet");
+        error.Should().Contain("already recorded as rejected");
+    }
+
+    [Fact]
+    public async Task Status_RefusedForDispatchedOrderNotAwaitingOutcome_DoesNotClaimItWasNeverSent()
+    {
+        // MV-1: a mapping edit on a DELIVERED order resets it to 'ready' for re-transform. It has
+        // attempt rows (it was sent), but 'ready' is not a state awaiting a delivery outcome, so
+        // neither the "never sent" sentence nor the "check your orderId" fix applies.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.Ready);
+        await SeedDeliveryAttemptAsync(db, orgId, orderId);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var error = ConflictError(await ctrl.Status("status-slug", CancellationToken.None));
+
+        error.Should().NotContain("has not been sent to a supplier yet");
+        error.Should().Contain(OrderStatusConstants.Ready);
+    }
+
+    [Fact]
+    public async Task Status_RejectedCallback_WritesWebhookStatusRejectedAudit_WithActualStatus()
+    {
+        // A 409 nobody can see is a silent ignore with extra steps. The audit is what makes the
+        // supplier's integration error actionable, so it carries the order's real status.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.PendingParse);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        await ctrl.Status("status-slug", CancellationToken.None);
+
+        var audit = db.AuditEvents.Should()
+            .ContainSingle(e => e.Action == "webhook_status_rejected" && e.EntityId == orderId)
+            .Subject;
+        audit.OrgId.Should().Be(orgId);
+        var json = audit.Payload!.RootElement;
+        json.GetProperty("ReportedStatus").GetString().Should().Be("delivered");
+        json.GetProperty("OrderStatusAtReceipt").GetString().Should().Be(OrderStatusConstants.PendingParse);
+        db.AuditEvents.Should().NotContain(e => e.Action == "webhook_status");
+    }
+
+    [Theory]
+    [InlineData("received")]
+    [InlineData("in_progress")]
+    public async Task Status_NonMutatingCallback_FromAnyState_Returns200_AndDoesNotMutate(string reported)
+    {
+        // received/in_progress are pure telemetry -- they mutate nothing, so guarding them would
+        // add noise without preventing harm. They stay 200 from any state.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.PendingParse);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"{reported}\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.PendingParse);
+        db.AuditEvents.Should().ContainSingle(e => e.Action == "webhook_status");
     }
 
     // ── Minimal in-memory DbContext ──────────────────────────────────────────
@@ -551,15 +1004,6 @@ public class WebhookIngressControllerTests
                 v => v == null ? null : v.RootElement.GetRawText(),
                 v => JsonDocHelpers.ParseNullable(v));
 
-            // DeliveryAttempt is MAPPED (not ignored): the rejection reason is written onto the
-            // latest attempt, which is where OrdersController.Get surfaces it from.
-            modelBuilder.Entity<DeliveryAttempt>(b =>
-            {
-                b.HasKey(x => x.Id);
-                b.Ignore(x => x.Order);
-                b.Ignore(x => x.Organisation);
-            });
-
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {
                 b.HasKey(x => x.Id);
@@ -569,6 +1013,15 @@ public class WebhookIngressControllerTests
                 b.Ignore(x => x.OutboundArtifacts);
                 b.Ignore(x => x.DeliveryAttempts);
                 b.Property(x => x.CanonicalJson).HasConversion(jsonDocNullableConverter);
+            });
+
+            // DeliveryAttempt is MAPPED here (not ignored): it carries the dispatch markers the
+            // status guard requires, so the guard cannot be exercised without it.
+            modelBuilder.Entity<DeliveryAttempt>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.Ignore(x => x.Order);
+                b.Ignore(x => x.Organisation);
             });
 
             modelBuilder.Entity<AuditEvent>(b =>

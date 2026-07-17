@@ -46,6 +46,10 @@ public class OrderStatusTransitionObserverTests
     [InlineData(OrderStatusConstants.DeliveryFailed,     OrderStatusConstants.DeliveryDeadLetter)]
     [InlineData(OrderStatusConstants.DeliveryDeadLetter, OrderStatusConstants.Delivering)]         // ops requeue
     [InlineData(OrderStatusConstants.Delivered,          OrderStatusConstants.RejectedBySupplier)] // late business NACK
+    // MV-1: OrderMappingOverrideService.IsPastReady includes 'delivered', so a mapping edit on a
+    // delivered order writes delivered -> ready THROUGH the change tracker (i.e. through this
+    // observer). It is a legit flow, so the map must stay SILENT for it.
+    [InlineData(OrderStatusConstants.Delivered,          OrderStatusConstants.Ready)]              // MV-1 mapping edit
     // Self-transition is always fine (idempotent re-write of the same status).
     [InlineData(OrderStatusConstants.Delivered, OrderStatusConstants.Delivered)]
     public void IsExpected_LegitimatePipelineTransitions_AreExpected(string from, string to)
