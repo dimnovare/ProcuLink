@@ -11,6 +11,36 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-23) — delivery-reliability + UI waves shipped
+
+- **Delivery reliability (BE #28–#36, 2026-07-16→17, all merged + live):** supplier rejections
+  land in `rejected_by_supplier` (never re-sent); `DeliveryOutcome {Dispatched, ClaimLost,
+  NotRetryable}` retry contract (unbounded-loop fix); Retry pre-flip removed; the
+  `ready_to_deliver` rescue sweep discriminates on artifact age (silent-lost-order fix);
+  webhook status callbacks require a dispatch MARKER (`IdempotencyKey`/`ArtifactSha256`), one
+  shared predicate; **crash-after-ACK now PARKS (`delivery_unconfirmed`) instead of duplicating
+  the PO on erp_*/email**. `RedeliverableStatusInvariantPostgresTests` pins the four-list drift.
+- **UI wave (FE #19–#26, founder-approved via mockups, all merged + live):** park operator UI;
+  retry visibility (no more double-click dead-letters); inbox status truth (`sending`,
+  `unrouted`, full failed-bucket — nothing renders as "New" falsely); **order-page chrome 5 rows
+  → 2 (~348px → ~148px)**; navbar de-dup + dashboard context line; **Fields|Lines per-line
+  mapping view** in the workshop; polish + gate-context pass.
+- **Open engineering, in order:** (1) the **B cut** — reset the delivery attempt cap WITHOUT
+  erasing dispatch evidence (spec: `docs/superpowers/specs/2026-07-17-delivery-cap-without-erasing-evidence.md`;
+  money-path, founder-visible, closes the refused-rejection re-send P1); (2) canonical
+  delivery-claim predicate implementation (design merged, #36); (3) three park follow-ups
+  (supplier ACK auto-resolves a park; billing-held park truthful resolution; the ~50% park
+  race vs Hangfire refetch); (4) `StatusJourney` errDot (rejection draws its X on Validate).
+- **Founder gates:** sweep hand-back design call (stuck sweep returns `delivering`+fresh
+  timestamp; 4 tests pin it); relocate `docs/proposals/2026-07-11-orphan-org-75abde9a-preimage.json`
+  OUT of this public repo's tree (org-data preimage, untracked — `git add -A` risk).
+- **Ops note 2026-07-23:** GitHub Actions went silent ~07:00–08:15 UTC+3 and Vercel dropped one
+  main-push webhook (recovered; interim prod deploy went out via `vercel deploy --prod`).
+- **Process rules earned this wave** (durable memory has detail): a comment that JUSTIFIES is a
+  proof obligation ("because X" ⇒ verify X); assert-the-difference over comment-the-difference;
+  `git merge-base --is-ancestor` LIES about squash-merged PRs (grep main for content instead);
+  worktree grep hits are copies of main, not evidence of a separate track.
+
 ## Snapshot (2026-07-04)
 
 - **Production is LIVE** at `proculink.eu` + `api.proculink.eu` (launched 2026-06-09 window).
