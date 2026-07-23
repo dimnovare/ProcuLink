@@ -77,8 +77,10 @@ public sealed record OpsHealthSummary(
     int       PendingRouting            = 0,
     // NEEDS ATTENTION, NOT A FAULT — orders paused at the delivery step because the org could not
     // process orders at that moment (billing lapsed: past_due / read_only / cancelled). The
-    // transformed artifact is intact and DeliveryService.ReleaseBillingHeldOrdersAsync re-drives
-    // delivery automatically on reactivation, so a hold is DELIBERATE and self-resolving.
+    // transformed artifact is intact and DeliveryService.ReleaseBillingHeldOrdersAsync releases the
+    // hold automatically on reactivation (re-driving it — or restoring a held park to
+    // delivery_unconfirmed, where the count below and TotalProblemOrders pick it back up), so a
+    // hold is DELIBERATE and self-resolving.
     //
     // Deliberately EXCLUDED from TotalProblemOrders, like PendingReview / PendingRouting (founder
     // call, 2026-07-16): that total is documented as "sum of all problematic order counts", and a

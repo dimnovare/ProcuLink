@@ -970,8 +970,8 @@ public sealed class DeliveryService : IDeliveryService
                 Outcome: DeliveryOutcome.NotRetryable);
 
         // Not retryable = terminal, or waiting on something only another actor can clear:
-        // 'delivery_held' waits on the billing reactivation re-drive (ReleaseBillingHeldOrdersAsync),
-        // never on a backoff attempt.
+        // 'delivery_held' waits on the billing reactivation release (ReleaseBillingHeldOrdersAsync —
+        // which re-drives it, or restores a held park to its human), never on a backoff attempt.
         if (order.Status is not (OrderStatusConstants.DeliveryFailed
                               or OrderStatusConstants.ReadyToDeliver
                               or OrderStatusConstants.Delivering))
@@ -1179,7 +1179,8 @@ public sealed class DeliveryService : IDeliveryService
         //                            never turn a park into a hold. Omitting it would hold NOTHING and
         //                            leave the order parked: invisible to ReleaseBillingHeldOrdersAsync
         //                            (it sweeps delivery_held only), so billing settling would never
-        //                            rescue it.
+        //                            rescue it. The hold records the origin (HeldFromStatus below) so
+        //                            that release RESTORES the park instead of auto re-sending it.
         // Any other status (delivering / delivered / dead-letter / already held) is a benign no-op —
         // the billing gate simply returns without holding, and never delivers.
         if (order is null ||
@@ -1191,6 +1192,11 @@ public sealed class DeliveryService : IDeliveryService
         var fromStatus = order.Status;
         var now = DateTime.UtcNow;
         order.Status = OrderStatusConstants.DeliveryHeld;
+        // The LIVE ROW must remember where the hold came from, not just the audit payload:
+        // ReleaseBillingHeldOrdersAsync branches on it — a held PARK is restored to
+        // delivery_unconfirmed for its human, every other hold is re-driven. Overwritten on every
+        // hold, cleared on release; meaningful only while the status is delivery_held.
+        order.HeldFromStatus = fromStatus;
         order.UpdatedAt = now;
         // Pause the SLA window while held so the SLA sweep never flags an order that is
         // deliberately waiting on billing (not a delivery failure).
@@ -1227,25 +1233,33 @@ public sealed class DeliveryService : IDeliveryService
     }
 
     /// <summary>
-    /// Releases every <c>delivery_held</c> order back to <c>ready_to_deliver</c> and re-drives it.
+    /// Releases every <c>delivery_held</c> order, branching on where the hold came from
+    /// (<c>HeldFromStatus</c>, recorded by <see cref="HoldForBillingAsync"/>):
+    /// <list type="bullet">
+    /// <item>A held PARK (<c>HeldFromStatus == delivery_unconfirmed</c>) is RESTORED to
+    /// <c>delivery_unconfirmed</c> and NOT re-driven. The operator's "Send again" that ran into the
+    /// billing gate was made against that moment's state, and while held it could not be revisited:
+    /// <c>OrdersController.MarkDelivered</c> gates on <c>delivery_unconfirmed</c>, so an operator who
+    /// learned meanwhile that the supplier DID receive the PO had no way to close the order. Billing
+    /// can recover days later — completing the stale click then would be an AUTOMATIC re-send of an
+    /// unknown-outcome PO on a channel that cannot de-duplicate, the exact duplicate the park exists
+    /// to prevent. The human re-decides from the restored park, where "Send again" and
+    /// "Mark as delivered" both work again.</item>
+    /// <item>Every other hold (<c>ready_to_deliver</c> / <c>delivery_failed</c> origin, or a legacy
+    /// null recorded before the column existed) keeps the original behavior: released to
+    /// <c>ready_to_deliver</c> and re-driven. Those holds interrupted an AUTOMATIC send that owed
+    /// nobody a decision — the release completes it. (<c>delivery_failed</c> origin is deliberately
+    /// NOT restored verbatim: the A5 hold consumed the backoff attempt that was mid-flight, so a
+    /// restore without a re-drive would strand the order until a sweep noticed; the re-drive claim
+    /// accepts <c>ready_to_deliver</c>, making it the one release status every re-driven hold
+    /// can share.)</item>
+    /// </list>
     /// <para>
-    /// Restoring UNCONDITIONALLY — without recording which status the hold came from — is deliberate,
-    /// including for an order that was <c>delivery_unconfirmed</c> when it was held. A park reaches
-    /// <c>delivery_held</c> only when an operator clicked "Send again" on an order whose org had
-    /// lapsed (<c>OrdersController.Redeliver</c> → <c>DeliverOrderJob</c>'s billing gate). The human
-    /// has ALREADY accepted the duplicate risk and chosen to send; releasing here COMPLETES that
-    /// choice. Restoring such an order to <c>delivery_unconfirmed</c> instead would silently discard
-    /// a decision the operator made and believes was actioned.
-    /// </para>
-    /// <para>
-    /// This is only safe while no AUTOMATIC path can hold a park — otherwise the release would send
-    /// with no human, the exact duplicate the park exists to prevent. Two things guarantee it, and
-    /// both must hold: <c>RetryDeliveryAsync</c> refuses a parked order BEFORE reaching its billing
-    /// gate (so the backoff queue can never hold one), and every non-operator <c>DeliverOrderJob</c>
-    /// enqueue is filtered to <c>ready_to_deliver</c> (post-transform, the B1 stranded-recovery gate,
-    /// and the stranded-ready sweep), while the ops requeue endpoint rejects a parked order outright.
-    /// <c>DeliveryServiceBillingGateTests.Retry_OnParkedOrder_WithLapsedOrg_RefusesBeforeTheBillingGate_AndNeverHolds</c>
-    /// pins the first. Widen either and this method must learn where the hold came from.
+    /// A restored park also gets its SLA window reopened (<c>DeliveryDueAt = now + SlaWindow</c>) —
+    /// <see cref="ParkUnconfirmedAsync"/>'s contract is that a park keeps nagging until a human acts,
+    /// on a renewed timer after every event that touches it, and the hold paused that nag
+    /// (<see cref="HoldForBillingAsync"/> nulls <c>DeliveryDueAt</c> so the SLA sweep never flags a
+    /// deliberate pause).
     /// </para>
     /// </summary>
     public async Task<int> ReleaseBillingHeldOrdersAsync(Guid orgId, CancellationToken ct)
@@ -1258,18 +1272,37 @@ public sealed class DeliveryService : IDeliveryService
             return 0;
 
         var now = DateTime.UtcNow;
+        var toReDrive = new List<PurchaseOrderEntity>();
         foreach (var order in held)
         {
-            order.Status = OrderStatusConstants.ReadyToDeliver;
+            var isPark = order.HeldFromStatus == OrderStatusConstants.DeliveryUnconfirmed;
+            var toStatus = isPark ? OrderStatusConstants.DeliveryUnconfirmed : OrderStatusConstants.ReadyToDeliver;
+
+            order.Status = toStatus;
+            order.HeldFromStatus = null;
             order.UpdatedAt = now;
+            if (isPark)
+            {
+                // Resume the park's nag (see the method doc above).
+                order.DeliveryDueAt = now + _reliability.SlaWindow;
+                order.SlaBreached = false;
+            }
+            else
+            {
+                toReDrive.Add(order);
+            }
 
             var payload = System.Text.Json.JsonSerializer.Serialize(new
             {
                 reason = "DeliveryHoldReleased",
                 fromStatus = OrderStatusConstants.DeliveryHeld,
-                toStatus = OrderStatusConstants.ReadyToDeliver,
+                toStatus,
                 releasedAt = now,
-                detail = "Org returned to a processing state — delivery hold released and re-driven.",
+                detail = isPark
+                    ? "Org returned to a processing state — the hold is over, and the order is back "
+                      + "where it was: waiting for someone to decide whether to send it again or mark "
+                      + "it delivered. It was NOT sent automatically."
+                    : "Org returned to a processing state — delivery hold released and re-driven.",
             });
 
             _db.AuditEvents.Add(new AuditEvent
@@ -1292,19 +1325,20 @@ public sealed class DeliveryService : IDeliveryService
 
         if (_retryEnqueuer is null)
         {
-            _logger.LogWarning(
-                "DeliveryHoldReleased: {Count} order(s) reset to 'ready_to_deliver' for org {OrgId} but no IRetryDeliveryEnqueuer is registered in this process — they will re-drive once an enqueuer is available (or via an operator Retry).",
-                held.Count, orgId);
+            if (toReDrive.Count > 0)
+                _logger.LogWarning(
+                    "DeliveryHoldReleased: {Count} order(s) reset to 'ready_to_deliver' for org {OrgId} but no IRetryDeliveryEnqueuer is registered in this process — they will re-drive once an enqueuer is available (or via an operator Retry).",
+                    toReDrive.Count, orgId);
         }
         else
         {
-            foreach (var order in held)
+            foreach (var order in toReDrive)
                 await _retryEnqueuer.EnqueueAsync(order.Id, orgId, ct);
         }
 
         _logger.LogWarning(
-            "DeliveryHoldReleased: released {Count} billing-held order(s) for org {OrgId} back into delivery.",
-            held.Count, orgId);
+            "DeliveryHoldReleased: released {Count} billing-held order(s) for org {OrgId} — {ReDriven} re-driven, {Restored} restored to their park for an operator decision.",
+            held.Count, orgId, toReDrive.Count, held.Count - toReDrive.Count);
         return held.Count;
     }
 

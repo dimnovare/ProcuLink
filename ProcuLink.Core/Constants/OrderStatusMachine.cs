@@ -56,11 +56,16 @@ public static class OrderStatusMachine
             // edge on dispatch evidence, not on the status — see WebhookReportableFrom.
             [ReadyToDeliver]     = Set(Delivering, Delivered, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier),
             // Billing hold → released back to ready_to_deliver when the org returns to good standing.
+            // delivery_held → delivery_unconfirmed: the release RESTORES a held PARK instead of
+            // re-driving it — HoldForBillingAsync records the origin (HeldFromStatus) and
+            // ReleaseBillingHeldOrdersAsync branches on it, because an automatic re-send of an
+            // unknown-outcome PO on a channel that cannot de-duplicate is the duplicate the park
+            // exists to prevent.
             // delivery_held → delivered/rejected_by_supplier: a late supplier ACK for an order sent
             // before the hold landed (delivery_failed → delivery_held is real, A5). A hold placed by the
             // PRE-CLAIM billing gate has NO dispatch behind it, so this edge too is gated on dispatch
             // evidence rather than on the status — see WebhookReportableFrom.
-            [DeliveryHeld]       = Set(ReadyToDeliver, Delivered, Ready, RejectedBySupplier),
+            [DeliveryHeld]       = Set(ReadyToDeliver, Delivered, DeliveryUnconfirmed, Ready, RejectedBySupplier),
             // delivering → delivery_unconfirmed: the park — a crash-recovery re-drive on a channel
             // that cannot de-duplicate stops rather than risk a duplicate PO.
             // delivering → delivery_dead_letter: StuckDeliveryDetectionService dead-letters an order

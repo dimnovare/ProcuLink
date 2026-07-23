@@ -128,6 +128,10 @@ public class OrderStatusTransitionObserverTests
     [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivering)]
     [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Delivered)]
     [InlineData(OrderStatusConstants.DeliveryUnconfirmed, OrderStatusConstants.Ready)]
+    // The billing release RESTORES a held park (HeldFromStatus == delivery_unconfirmed) instead
+    // of re-driving it — ReleaseBillingHeldOrdersAsync performs this move as a tracked write, so
+    // both maps must carry it or every restore logs a spurious warning.
+    [InlineData(OrderStatusConstants.DeliveryHeld, OrderStatusConstants.DeliveryUnconfirmed)]
     public async Task ParkTransitions_AreRegisteredInBothMaps_AndObserverStaysSilent(string from, string to)
     {
         Assert.True(OrderStatusMachine.IsAllowed(from, to), $"{from} -> {to} is a real flow the park performs");

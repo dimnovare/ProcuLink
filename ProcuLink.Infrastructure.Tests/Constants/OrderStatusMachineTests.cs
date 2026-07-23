@@ -42,6 +42,11 @@ public class OrderStatusMachineTests
     // (not delivered) by DeliverOrderJob's billing gate → HoldForBillingAsync. Same case as
     // delivery_failed → delivery_held above.
     [InlineData(DeliveryUnconfirmed, DeliveryHeld)]
+    // ...and back OUT again: the billing release restores a held park to delivery_unconfirmed
+    // (HeldFromStatus records the origin) instead of re-driving it — an automatic re-send of an
+    // unknown-outcome PO on a channel that cannot de-duplicate is the duplicate the park exists
+    // to prevent. See ReleaseBillingHeldOrdersAsync.
+    [InlineData(DeliveryHeld, DeliveryUnconfirmed)]
     [InlineData(DeliveryDeadLetter, Delivering)] // ops requeue rescue
     [InlineData(DeliveryDeadLetter, DeliveryFailed)] // requeued dead-letter fails again / late failure webhook (aligns with the observer map)
     [InlineData(DeliveryDeadLetter, Ready)]      // MV-1 sibling: mapping edit after dead-letter
