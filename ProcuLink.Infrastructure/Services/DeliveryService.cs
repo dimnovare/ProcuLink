@@ -1261,6 +1261,15 @@ public sealed class DeliveryService : IDeliveryService
     /// (<see cref="HoldForBillingAsync"/> nulls <c>DeliveryDueAt</c> so the SLA sweep never flags a
     /// deliberate pause).
     /// </para>
+    /// <para>
+    /// KNOWN WINDOW (pre-existing — the previous unconditional release had the identical
+    /// load-then-<c>SaveChanges</c> shape): the rows are read tracked and written back without a
+    /// concurrency token, so a supplier status callback that claims one of them via
+    /// <c>ExecuteUpdateAsync</c> (<c>WebhookIngressController</c> — <c>delivery_held</c> is
+    /// webhook-reportable) in the milliseconds between this SELECT and the save is overwritten
+    /// backwards. Closing it means per-row atomic claims — the canonical delivery-claim predicate
+    /// work (#36) owns that shape; tracked as a follow-up, not silently.
+    /// </para>
     /// </summary>
     public async Task<int> ReleaseBillingHeldOrdersAsync(Guid orgId, CancellationToken ct)
     {
