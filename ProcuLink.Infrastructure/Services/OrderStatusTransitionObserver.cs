@@ -146,8 +146,8 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             // → delivered is GONE: the webhook can no longer un-reject an order (Status gates terminal
             // callbacks on OrderStatusMachine.WebhookReportableFrom, which excludes
             // rejected_by_supplier), and no dispatch can write 'delivered' onto one either — the
-            // delivery claim only admits ready_to_deliver / delivery_failed / stale-delivering. With no
-            // writer left, listing it would bless an impossible move.
+            // delivery claim (DispatchArtifactAsync / RetryDeliveryAsync) never admits
+            // rejected_by_supplier. With no writer left, listing it would bless an impossible move.
             //
             // → delivery_failed STAYS: it is still reachable WITHOUT the webhook. DeliveryService's
             // PRE-CLAIM failure paths (FailMissingConfigAsync / FailBeforeDispatchAsync) write
