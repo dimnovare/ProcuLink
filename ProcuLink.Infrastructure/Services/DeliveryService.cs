@@ -185,15 +185,32 @@ public sealed class DeliveryService : IDeliveryService
         // the SLA window.
         //
         // Claimable = ready_to_deliver / delivery_failed (idle, send-ready), delivery_unconfirmed
-        // (parked — see below), OR a STALE 'delivering' (UpdatedAt older than the reclaim window —
-        // crash recovery). A 'delivered'/terminal order is NOT claimable, so a redeliver on an
-        // already-delivered order affects 0 rows and no-ops.
+        // (parked — HUMAN activations only, see below), OR a STALE 'delivering' (UpdatedAt older
+        // than the reclaim window — crash recovery). A 'delivered'/terminal order is NOT claimable,
+        // so a redeliver on an already-delivered order affects 0 rows and no-ops.
         //
-        // delivery_unconfirmed is claimable ONLY because an operator's "Send again" arrives through
-        // this path, and a status missing here fails SILENTLY: the claim matches 0 rows and returns
-        // the benign no-op success below, so the job logs success having sent nothing and the order
-        // stays parked forever. This does NOT re-open the automatic-retry door — RetryDeliveryAsync
-        // still refuses the status, so only a human can re-drive a parked order.
+        // delivery_unconfirmed is claimable ONLY when requireAutoDeliver is false — which is true
+        // exactly when a human pressed a button: every requireAutoDeliver:false enqueue is
+        // DeliverOrderJob.EnqueueRedeliver (OrdersController.Redeliver — the park's "Send again" —
+        // and OpsController.RequeueDelivery), while every automatic activation goes through
+        // DeliverOrderJob.Enqueue with true (TransformOrderJob, HangfireDeliveryDispatchEnqueuer /
+        // the stranded-ready sweep). The human path must claim it, and a status missing here fails
+        // SILENTLY: the claim matches 0 rows and returns the benign no-op success below, so the job
+        // logs success having sent nothing and the order stays parked forever.
+        //
+        // The requireAutoDeliver gate exists because unconditional admission re-opened the park to
+        // one automatic path the retry queue's park refusal (RetryDeliveryAsync) never sees: a dead
+        // Worker's in-flight DeliverOrderJob is REFETCHED by Hangfire ~30 min later (see the
+        // Attempts=0 note on DeliverOrderJob) and re-runs this claim AFTER the stuck sweep's
+        // re-drive has already parked the order. The parked attempt row is terminal ('unconfirmed'),
+        // so OpenDispatchAttemptAsync re-adopts nothing, the re-adopt park guard below never fires,
+        // and the refetch would open a fresh attempt and SEND the parked PO automatically — the
+        // exact duplicate the park exists to prevent. This predicate, not the pre-claim status
+        // reads, is the enforcement: the sweep can park the order between those reads and this
+        // update. (A refetched EnqueueRedeliver activation can still claim the park its own crashed
+        // send produced — that is the one re-execution of the operator's already-accepted send that
+        // Hangfire's at-least-once refetch has always implied, not a new automatic path.)
+        //
         // Safe against an immediate re-park: the park finalises its attempt row TERMINAL
         // ('unconfirmed'), and OpenDispatchAttemptAsync only re-adopts a 'dispatching' row — so this
         // re-send opens a FRESH attempt (reAdopted: false) and reaches the dispatcher.
@@ -212,7 +229,7 @@ public sealed class DeliveryService : IDeliveryService
                     .Where(x => x.Id == orderId && x.OrgId == orgId
                              && (x.Status == OrderStatusConstants.ReadyToDeliver
                               || x.Status == OrderStatusConstants.DeliveryFailed
-                              || x.Status == OrderStatusConstants.DeliveryUnconfirmed
+                              || (!requireAutoDeliver && x.Status == OrderStatusConstants.DeliveryUnconfirmed)
                               || (x.Status == OrderStatusConstants.Delivering && x.UpdatedAt < staleBefore)))
                     .ExecuteUpdateAsync(s => s
                         .SetProperty(o => o.Status, OrderStatusConstants.Delivering)
@@ -228,7 +245,8 @@ public sealed class DeliveryService : IDeliveryService
                     // no retry scheduled by DeliverOrderJob, which only checks result.Success).
                     await claimTx.RollbackAsync(ct);
                     _logger.LogInformation(
-                        "Delivery {OrderId}: not claimed (already delivering/delivered/terminal) — skipping dispatch.",
+                        "Delivery {OrderId}: not claimed (already delivering/delivered/terminal, or parked "
+                        + "awaiting an operator — an automatic activation never claims a park) — skipping dispatch.",
                         orderId);
                     // Success stays TRUE (a benign no-op — DeliverOrderJob returns on Success and must
                     // never log a "delivery failure" for a lost race). ClaimLost only records that
@@ -257,13 +275,18 @@ public sealed class DeliveryService : IDeliveryService
                 // emulate the claim through the change tracker (InMemory tests are single-threaded,
                 // so the race the relational claim defends against cannot occur there). A non-claimable
                 // status (e.g. already delivered) still no-ops, matching the relational 0-rows branch.
-                if (order.Status is not (OrderStatusConstants.ReadyToDeliver
-                                      or OrderStatusConstants.DeliveryFailed
-                                      or OrderStatusConstants.DeliveryUnconfirmed
-                                      or OrderStatusConstants.Delivering))
+                // Mirrors the relational predicate above INCLUDING the requireAutoDeliver gate on
+                // delivery_unconfirmed — these two lists drifting is the four-hardcoded-status-list
+                // class that has bitten four times (AutomaticParkClaimPostgresTests pins the
+                // relational branch; DeliveryServiceUnconfirmedParkTests pins this one).
+                var claimable = order.Status is OrderStatusConstants.ReadyToDeliver
+                                             or OrderStatusConstants.DeliveryFailed
+                                             or OrderStatusConstants.Delivering
+                             || (!requireAutoDeliver && order.Status == OrderStatusConstants.DeliveryUnconfirmed);
+                if (!claimable)
                 {
                     _logger.LogInformation(
-                        "Delivery {OrderId}: not claimed (status '{Status}' not claimable) — skipping dispatch.",
+                        "Delivery {OrderId}: not claimed (status '{Status}' not claimable for this activation) — skipping dispatch.",
                         orderId, order.Status);
                     return new DeliveryResult(true, null, Outcome: DeliveryOutcome.ClaimLost);
                 }
@@ -1178,14 +1201,18 @@ public sealed class DeliveryService : IDeliveryService
         //   • delivery_failed      — RetryDeliveryAsync's billing gate (A5): a backoff retry for an order
         //                            that previously failed, now blocked because the org lapsed.
         //   • delivery_unconfirmed — the same case reached from the park: an operator clicked
-        //                            "Send again" for an org that lapsed since the park. Only that
-        //                            operator path can arrive here — RetryDeliveryAsync refuses this
-        //                            status before its own billing gate, so the automatic queue can
-        //                            never turn a park into a hold. Omitting it would hold NOTHING and
+        //                            "Send again" for an org that lapsed since the park. The backoff
+        //                            queue never lands here (RetryDeliveryAsync refuses this status
+        //                            before its own billing gate), but one AUTOMATIC path does: a
+        //                            Hangfire-refetched DeliverOrderJob checks billing BEFORE the
+        //                            dispatch claim that would refuse its park claim, so a lapsed
+        //                            org's refetch holds the park instead of no-oping. That is safe,
+        //                            not a leak: holding pauses the nag without sending, and release
+        //                            RESTORES a held park (HeldFromStatus below) rather than
+        //                            re-driving it. Omitting the status here would hold NOTHING and
         //                            leave the order parked: invisible to ReleaseBillingHeldOrdersAsync
         //                            (it sweeps delivery_held only), so billing settling would never
-        //                            rescue it. The hold records the origin (HeldFromStatus below) so
-        //                            that release RESTORES the park instead of auto re-sending it.
+        //                            rescue it.
         // Any other status (delivering / delivered / dead-letter / already held) is a benign no-op —
         // the billing gate simply returns without holding, and never delivers.
         if (order is null ||

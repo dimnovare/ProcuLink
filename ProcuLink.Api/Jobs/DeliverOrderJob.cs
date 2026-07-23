@@ -52,7 +52,11 @@ public class DeliverOrderJob
     // that either: the dead process released its lock. Re-dispatch after a crash is therefore
     // expected and by design — delivery here is AT-LEAST-ONCE, and duplicate-ORDER suppression
     // rests on the deterministic idempotency key the re-send carries (see DispatchArtifactAsync)
-    // plus supplier-side de-duplication, NOT on this attribute.
+    // plus supplier-side de-duplication, NOT on this attribute. One carve-out: if the stuck sweep's
+    // re-drive PARKED the order (delivery_unconfirmed) before the refetch runs, a refetched
+    // AUTOMATIC activation (requireAutoDeliver: true) is refused by the dispatch claim — the parked
+    // row is terminal, so the re-adopt park guard could not have caught the refetch, and re-sending
+    // a park is the operator's call alone (DispatchArtifactAsync's claim comment).
     //
     // PerOrderDistributedMutex (D-1) serialises activations PER ORDER (storage-backed distributed
     // lock keyed on the orderId argument, index 0). Two DeliverOrderJob activations for the SAME

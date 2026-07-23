@@ -138,10 +138,11 @@ public sealed class OpsController : ControllerBase
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before requeuing delivery." });
 
-        // B2 (lost-order): DO NOT pre-flip to 'delivering'. DeliverOrderJob's atomic claim only
-        // accepts ready_to_deliver / delivery_failed / STALE-delivering; a FRESH 'delivering' row
-        // (UpdatedAt just stamped to now) is REJECTED by the reclaim-window guard, so the enqueued
-        // job would no-op — the order stranded and this escalation silently defeated. Instead:
+        // B2 (lost-order): DO NOT pre-flip to 'delivering'. DeliverOrderJob's atomic claim
+        // (DispatchArtifactAsync — the one authority on which statuses are claimable) REJECTS a
+        // FRESH 'delivering' row (UpdatedAt just stamped to now) via its reclaim-window guard, so
+        // the enqueued job would no-op — the order stranded and this escalation silently defeated.
+        // Instead:
         //   (1) reset the delivery-attempt cap — the operator's explicit intent is to dispatch PAST
         //       the dead-letter cap; without a reset, a single transient failure of the requeued
         //       dispatch would immediately re-dead-letter and the automatic retry queue would never
