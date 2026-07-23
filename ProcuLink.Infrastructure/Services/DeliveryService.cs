@@ -752,9 +752,14 @@ public sealed class DeliveryService : IDeliveryService
                 : OrderStatusConstants.DeliveryFailed;
         order.UpdatedAt = now;
 
-        // SLA timer: a confirmed delivery closes the SLA window — clear the deadline and breach flag
-        // so the sweep can never flag an already-delivered order.
-        if (result.Success)
+        // SLA timer: a terminal supplier outcome closes the SLA window — clear the deadline and breach
+        // flag so the sweep can never nag a settled order. A confirmed delivery settles it, and so does
+        // a 4xx rejection: the supplier received and explicitly refused the payload, so the order is as
+        // done as a delivered one (retrying the same bytes will not help). A 5xx / transient failure is
+        // NOT terminal — the order still owes a delivery and its window must keep ticking, so it is
+        // deliberately excluded here. rejected_by_supplier is likewise excluded from DeliverySlaService's
+        // sweep (belt-and-braces for legacy rows), mirroring Delivered and DeliveryDeadLetter.
+        if (result.Success || isSupplierRejection)
         {
             order.DeliveryDueAt = null;
             order.SlaBreached = false;

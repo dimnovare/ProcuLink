@@ -66,7 +66,11 @@ public sealed class DeliverySlaConcurrencyPostgresTests : IAsyncLifetime
     private ProcuLinkDbContext NewContext() => new(_options!);
 
     /// <summary>Seeds org + supplier + one overdue, unflagged, still-delivering order.</summary>
-    private async Task<(Guid OrgId, Guid OrderId)> SeedOverdueOrderAsync()
+    private Task<(Guid OrgId, Guid OrderId)> SeedOverdueOrderAsync() =>
+        SeedOverdueOrderAsync(OrderStatusConstants.Delivering);
+
+    /// <summary>Seeds org + supplier + one overdue, unflagged order in the given status.</summary>
+    private async Task<(Guid OrgId, Guid OrderId)> SeedOverdueOrderAsync(string status)
     {
         var orgId      = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
@@ -86,7 +90,7 @@ public sealed class DeliverySlaConcurrencyPostgresTests : IAsyncLifetime
         {
             Id = orderId, OrgId = orgId, SupplierId = supplierId,
             PoNumber = "PO-SLA-CONC-1", BuyerName = "Buyer", OrderDate = new DateOnly(2026, 6, 1),
-            Currency = "EUR", Status = OrderStatusConstants.Delivering,
+            Currency = "EUR", Status = status,
             DeliveryDueAt = now.AddMinutes(-5), SlaBreached = false,
             CreatedAt = now, UpdatedAt = now,
         });
@@ -154,6 +158,30 @@ public sealed class DeliverySlaConcurrencyPostgresTests : IAsyncLifetime
 
         flagged.Sum().Should().Be(orderIds.Count,
             "every order is claimed exactly once, by whichever sweep won it");
+    }
+
+    [DockerRequiredFact]
+    public async Task RunAsync_RejectedBySupplierOrder_IsNotFlagged()
+    {
+        // A supplier that terminally rejected the PO has settled it. Even if a legacy row left
+        // DeliveryDueAt live (the write-paths now clear it, but pre-fix rows exist), the sweep must
+        // not raise a false "delivery overdue" on a rejected_by_supplier order — it is excluded
+        // belt-and-braces, exactly as Delivered and DeliveryDeadLetter are.
+        var (_, orderId) = await SeedOverdueOrderAsync(OrderStatusConstants.RejectedBySupplier);
+
+        await using var db = NewContext();
+        var flagged = await new DeliverySlaService(db, NullLogger<DeliverySlaService>.Instance)
+            .RunAsync(CancellationToken.None);
+
+        flagged.Should().Be(0, "rejected_by_supplier is a terminal supplier outcome excluded from the SLA sweep");
+
+        await using var verify = NewContext();
+        var order = await verify.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        order.SlaBreached.Should().BeFalse("a settled (rejected) order must never be marked SLA-breached");
+
+        var auditCount = await verify.AuditEvents
+            .CountAsync(e => e.EntityId == orderId && e.Action == "DeliverySlaBreached");
+        auditCount.Should().Be(0, "no breach audit may be written for a rejected order");
     }
 
     [DockerRequiredFact]

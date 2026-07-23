@@ -139,6 +139,34 @@ public class DeliveryServiceRejectionTests
     }
 
     [Fact]
+    public async Task DispatchArtifactAsync_4xxResponse_ClosesSlaWindow()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(false, "Supplier rejected: unknown buyer code", 422)),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.RejectedBySupplier);
+
+        // A terminal supplier rejection settles the order: dispatch opened an SLA window
+        // (DeliveryDueAt = dispatchStart + SlaWindow) before the send, and once that deadline
+        // passes the sweep would raise a false "delivery overdue" on an order the supplier has
+        // already rejected. Closing the window here is what prevents that nag.
+        order.DeliveryDueAt.Should().BeNull();
+        order.SlaBreached.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task DispatchArtifactAsync_5xxResponse_SetsDeliveryFailedAndLeavesRejectionReasonNull()
     {
         await using var db = CreateDb();

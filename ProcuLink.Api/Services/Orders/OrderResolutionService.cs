@@ -256,6 +256,13 @@ internal sealed class OrderResolutionService
         entity.Status    = OrderStatusConstants.RejectedBySupplier;
         entity.UpdatedAt = now;
 
+        // A terminal supplier rejection settles the order, so close the SLA window — mirrors the
+        // automatic 4xx path in DeliveryService.PersistAttemptAsync. Without this, an order marked
+        // rejected while its DeliveryDueAt was still live (e.g. it was mid-delivery) keeps a live
+        // deadline, and once it passes the sweep raises a false "delivery overdue" on a settled order.
+        entity.DeliveryDueAt = null;
+        entity.SlaBreached   = false;
+
         // Write the rejection reason onto the most-recent delivery attempt for this
         // order (if one exists), so the audit trail shows it in context.
         var latestAttempt = await _db.DeliveryAttempts

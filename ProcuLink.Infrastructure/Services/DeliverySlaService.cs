@@ -11,12 +11,14 @@ namespace ProcuLink.Infrastructure.Services;
 public sealed class DeliverySlaService : IDeliverySlaService
 {
     // Terminal / confirmed statuses whose SLA must never be flagged. A confirmed delivery
-    // clears DeliveryDueAt, and dead-letter clears it too, but we also exclude them here so a
-    // late-arriving row (or legacy data) can never be flagged after the fact.
+    // clears DeliveryDueAt, dead-letter clears it too, and a supplier rejection (4xx / manual
+    // mark-rejected) now clears it as well — but we also exclude them here so a late-arriving row
+    // (or legacy data written before those clears existed) can never be flagged after the fact.
     private static readonly string[] ExcludedStatuses =
     {
         OrderStatusConstants.Delivered,
         OrderStatusConstants.DeliveryDeadLetter,
+        OrderStatusConstants.RejectedBySupplier,
     };
 
     private readonly ProcuLinkDbContext _db;
