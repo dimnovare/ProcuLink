@@ -256,11 +256,19 @@ public class OrderStatusMachineTests
         // write one having sent nothing) but a marker only the dispatch sequence writes:
         // IdempotencyKey or ArtifactSha256. rejected_by_supplier is deliberately absent (a supplier
         // that rejected must not silently flip the order to delivered).
+        //
+        // delivery_unconfirmed (2026-07-23) is the one member whose membership is sound on its own:
+        // its only writer is DeliveryService.ParkUnconfirmedAsync, which finalises a re-adopted row
+        // that keeps its pre-send IdempotencyKey -- every real park carries a marker. Admitted so
+        // the supplier's own callback can resolve a park (positive arrival evidence, the one thing
+        // the park lacks); pinned by WebhookIngressControllerTests' ParkedOrder tests and
+        // WebhookStatusClaimPostgresTests.Status_ParkedOrder_IsClaimed_AndTheSlaWindowCloses.
         OrderStatusMachine.WebhookReportableFrom.Should()
             .BeEquivalentTo(new[]
             {
                 ReadyToDeliver, Delivering, Delivered,
                 DeliveryFailed, DeliveryDeadLetter, DeliveryHeld,
+                DeliveryUnconfirmed,
             });
     }
 

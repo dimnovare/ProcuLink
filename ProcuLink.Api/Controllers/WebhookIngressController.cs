@@ -308,13 +308,22 @@ public sealed class WebhookIngressController : ControllerBase
             // leaving a status change nobody can explain. One transaction spans both.
             await using (var claimTx = await _db.Database.BeginTransactionAsync(ct))
             {
+                // A terminal supplier outcome also closes the SLA window, in the same atomic
+                // UPDATE (mirrors the dispatch success path, DeliveryService.PersistAttemptAsync,
+                // and the operator's OrdersController.MarkDelivered). Not cosmetic for the park:
+                // ParkUnconfirmedAsync deliberately leaves a live DeliveryDueAt so the nag runs
+                // until a human acts — this callback IS the act, and rejected_by_supplier is not in
+                // DeliverySlaService.ExcludedStatuses, so an open window would let the sweep flag
+                // an order the supplier has already settled.
                 var rows = await _db.PurchaseOrders
                     .Where(o => o.Id == order.Id && o.OrgId == orgId
                              && ReportableFromStatuses.Contains(o.Status)
                              && dispatched.Any(a => a.OrgId == o.OrgId && a.OrderId == o.Id))
                     .ExecuteUpdateAsync(s => s
                         .SetProperty(o => o.Status, target)
-                        .SetProperty(o => o.UpdatedAt, updatedAt), ct);
+                        .SetProperty(o => o.UpdatedAt, updatedAt)
+                        .SetProperty(o => o.DeliveryDueAt, (DateTime?)null)
+                        .SetProperty(o => o.SlaBreached, false), ct);
 
                 if (rows == 0)
                 {
@@ -333,11 +342,15 @@ public sealed class WebhookIngressController : ControllerBase
                     // OriginalValue does not clear IsModified, so EF may include the same values in
                     // the UPDATE again. That is harmless — identical values, same transaction, and
                     // the row is already claim-locked — and no behaviour here depends on it.
-                    order.Status    = target;
-                    order.UpdatedAt = updatedAt;
+                    order.Status        = target;
+                    order.UpdatedAt     = updatedAt;
+                    order.DeliveryDueAt = null;
+                    order.SlaBreached   = false;
                     var entry = _db.Entry(order);
-                    entry.Property(x => x.Status).OriginalValue    = target;
-                    entry.Property(x => x.UpdatedAt).OriginalValue = updatedAt;
+                    entry.Property(x => x.Status).OriginalValue        = target;
+                    entry.Property(x => x.UpdatedAt).OriginalValue     = updatedAt;
+                    entry.Property(x => x.DeliveryDueAt).OriginalValue = null;
+                    entry.Property(x => x.SlaBreached).OriginalValue   = false;
 
                     await StampRejectionReasonAsync(orgId, order, target, payload, ct);
                     AddStatusAudit(orgId, order.Id, reportedStatus, payload);
@@ -359,8 +372,10 @@ public sealed class WebhookIngressController : ControllerBase
             if (!OrderStatusMachine.WebhookReportableFrom.Contains(order.Status) || !hasDispatchEvidence)
                 return await RejectStatusCallbackAsync(orgId, order, hasDispatchEvidence, reportedStatus, payload, ct);
 
-            order.Status    = target;
-            order.UpdatedAt = updatedAt;
+            order.Status        = target;
+            order.UpdatedAt     = updatedAt;
+            order.DeliveryDueAt = null;
+            order.SlaBreached   = false;
             await StampRejectionReasonAsync(orgId, order, target, payload, ct);
             AddStatusAudit(orgId, order.Id, reportedStatus, payload);
             await _db.SaveChangesAsync(ct);

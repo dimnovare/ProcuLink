@@ -78,7 +78,8 @@ public sealed class WebhookStatusClaimPostgresTests : IAsyncLifetime
 
     // ── seeding ──────────────────────────────────────────────────────────────
 
-    private async Task<(Guid OrgId, Guid OrderId)> SeedOrderAsync(string status)
+    private async Task<(Guid OrgId, Guid OrderId)> SeedOrderAsync(
+        string status, DateTime? deliveryDueAt = null, bool slaBreached = false)
     {
         var orgId      = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
@@ -99,6 +100,7 @@ public sealed class WebhookStatusClaimPostgresTests : IAsyncLifetime
             Id = orderId, OrgId = orgId, SupplierId = supplierId,
             PoNumber = "PO-WH-CLAIM-1", BuyerName = "Buyer", OrderDate = new DateOnly(2026, 7, 1),
             Currency = "EUR", Status = status, CreatedAt = now, UpdatedAt = now,
+            DeliveryDueAt = deliveryDueAt, SlaBreached = slaBreached,
         });
         await db.SaveChangesAsync();
 
@@ -123,6 +125,28 @@ public sealed class WebhookStatusClaimPostgresTests : IAsyncLifetime
             ArtifactSha256 = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c",
         });
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// The exact row ParkUnconfirmedAsync leaves behind: terminal 'unconfirmed', carrying the
+    /// pre-send <c>IdempotencyKey</c> and NO <c>ArtifactSha256</c> (the sha lands only after
+    /// <c>DispatchAsync</c> returns — the park exists because it never did). Key-only is the
+    /// marker shape the claim's correlated EXISTS must accept.
+    /// </summary>
+    private async Task<Guid> SeedParkedAttemptAsync(Guid orgId, Guid orderId)
+    {
+        await using var db = NewContext();
+        var attempt = new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, OrderId = orderId,
+            Channel = "erp_erply", Destination = "https://erp.example/api",
+            Status = DeliveryAttempt.StatusUnconfirmed, AttemptNumber = 1, AttemptedAt = DateTime.UtcNow,
+            ErrorMessage = "Delivery unconfirmed.",
+            IdempotencyKey = $"{orderId:N}:{Guid.NewGuid():N}", ArtifactSha256 = null,
+        };
+        db.DeliveryAttempts.Add(attempt);
+        await db.SaveChangesAsync();
+        return attempt.Id;
     }
 
     /// <summary>
@@ -252,6 +276,41 @@ public sealed class WebhookStatusClaimPostgresTests : IAsyncLifetime
         // Status_WhenTheAuditWriteFails_TheClaimedStatusIsRolledBackToo proves.)
         (await verify.AuditEvents.CountAsync(e => e.EntityId == orderId && e.Action == "webhook_status"))
             .Should().Be(1);
+    }
+
+    [DockerRequiredFact]
+    public async Task Status_ParkedOrder_IsClaimed_AndTheSlaWindowCloses()
+    {
+        // The park (delivery_unconfirmed) waits on exactly one question — did the PO arrive? — and
+        // the supplier's own callback answers it. This proves, on the real claim:
+        //   * delivery_unconfirmed is admitted by the from-status set;
+        //   * a KEY-ONLY marker row (the park's shape: IdempotencyKey set, ArtifactSha256 null)
+        //     satisfies the correlated EXISTS;
+        //   * the added SLA SetPropertys translate — the park deliberately leaves a live
+        //     DeliveryDueAt (the nag runs until a human acts), and the callback IS the act, so the
+        //     claim must close the window in the same atomic UPDATE.
+        var (orgId, orderId) = await SeedOrderAsync(
+            OrderStatusConstants.DeliveryUnconfirmed,
+            deliveryDueAt: DateTime.UtcNow.AddHours(2), slaBreached: false);
+        var attemptId = await SeedParkedAttemptAsync(orgId, orderId);
+
+        await using var db = NewContext();
+        var ctrl = BuildController(db, orgId, $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+
+        var result = await ctrl.Status("wh-slug", CancellationToken.None);
+
+        OkStatus(result).Should().Be(OrderStatusConstants.Delivered);
+
+        await using var verify = NewContext();
+        var order = await verify.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        order.Status.Should().Be(OrderStatusConstants.Delivered);
+        order.DeliveryDueAt.Should().BeNull("a resolved park must stop nagging");
+        order.SlaBreached.Should().BeFalse();
+
+        // The ORDER moves; the attempt row keeps recording what the channel observed — nothing.
+        var row = await verify.DeliveryAttempts.SingleAsync(a => a.Id == attemptId);
+        row.Status.Should().Be(DeliveryAttempt.StatusUnconfirmed,
+            "the webhook never rewrites an attempt row to success");
     }
 
     [DockerRequiredFact]

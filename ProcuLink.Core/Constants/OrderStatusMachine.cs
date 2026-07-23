@@ -80,13 +80,13 @@ public static class OrderStatusMachine
             // MV-1 sibling). Dead-letter/failed remain reachable if a later re-send exhausts retries.
             // → delivery_held: the delivery_failed sibling — a "Send again" for an org that lapsed
             // since the park is held (not delivered) via HoldForBillingAsync.
-            // Unlike its neighbours above, → delivered here has NO webhook provenance: a parked order
-            // would SATISFY the dispatch-evidence half of the webhook guard (the park finalises the
-            // in-flight row it re-adopted, and that row keeps the IdempotencyKey the pre-send commit
-            // stamped), so delivery_unconfirmed is held out of WebhookReportableFrom by the STATUS
-            // half alone. Deliberate, and reviewable on its own: admitting it would let a callback
-            // resolve a park — the one thing that could supply what the park lacks, positive evidence
-            // the PO arrived — but it widens a webhook-driven path into a billable status.
+            // → delivered/rejected_by_supplier also arrive via the supplier status webhook
+            // (2026-07-23): a terminal callback answers exactly the question the park is waiting
+            // on — did the PO arrive? — with the one thing the park lacks, the supplier's own
+            // statement. The park always satisfied the guard's dispatch-evidence half (the park
+            // finalises the in-flight row it re-adopted, and that row keeps the IdempotencyKey the
+            // pre-send commit stamped), so admitting the status into WebhookReportableFrom was the
+            // only missing half. See that set's doc for the billable-status trade.
             [DeliveryUnconfirmed] = Set(Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
             // dead_letter → delivery_failed: an ops requeue that fails again. (NOT a webhook: a supplier
             // status callback writes delivered or rejected_by_supplier only — never delivery_failed.)
@@ -176,6 +176,17 @@ public static class OrderStatusMachine
     /// release matches <c>Status == delivery_held</c> — overwrite either and the order is
     /// permanently lost, displayed as shipped, and billable).</para>
     ///
+    /// <para><c>delivery_unconfirmed</c> (added 2026-07-23) is the opposite case: for this member
+    /// the proxy is SOUND on its own. Its only writer is <c>DeliveryService.ParkUnconfirmedAsync</c>,
+    /// which finalises the re-adopted in-flight row to <c>unconfirmed</c> without touching the
+    /// <c>IdempotencyKey</c> the pre-send commit stamped (<c>OpenDispatchAttemptAsync</c>) — so a
+    /// parked order always carries a marker row and the evidence half passes for every real park.
+    /// It is admitted because a terminal callback answers exactly the question the park is waiting
+    /// on — did the PO arrive? — with positive supplier evidence no operator guess can match;
+    /// refusing it left even http-channel parks to be resolved by out-of-band guesswork. This
+    /// deliberately lets an authenticated webhook move an order into a BILLABLE status; that trade
+    /// was made in the 2026-07-23 open-queue handover (item 3), not silently here.</para>
+    ///
     /// <para><c>rejected_by_supplier</c> is deliberately ABSENT: a supplier that rejected must not
     /// silently flip the order to delivered, because a human has likely already acted on the
     /// rejection. A genuine retraction is an operator re-drive, not an automatic write. A REPEATED
@@ -183,7 +194,8 @@ public static class OrderStatusMachine
     /// already matches the order's status.</para>
     /// </summary>
     public static readonly IReadOnlySet<string> WebhookReportableFrom =
-        Set(ReadyToDeliver, Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld);
+        Set(ReadyToDeliver, Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld,
+            DeliveryUnconfirmed);
 
     private static readonly IReadOnlySet<string> EmptySet =
         new HashSet<string>(StringComparer.Ordinal);

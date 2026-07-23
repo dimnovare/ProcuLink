@@ -108,9 +108,12 @@ public class DeliveryAttempt
     /// reached the supplier has to be budgeted as though it did.
     /// </para>
     /// <para>
-    /// Never rewritten to <see cref="StatusSuccess"/> by the operator's "Mark as delivered": that
-    /// moves the ORDER to delivered and audits the human's assertion separately. We never
-    /// fabricate a supplier ACK we did not observe.
+    /// Never rewritten to <see cref="StatusSuccess"/> — not by the operator's "Mark as delivered"
+    /// and not by the supplier status webhook resolving the park. Each moves the ORDER and records
+    /// its own provenance (the operator's assertion as a DeliveryConfirmedManually audit; the
+    /// supplier's report as webhook_status, plus <see cref="RejectionReason"/> on this row for a
+    /// rejection), while this row's Status keeps recording what the CHANNEL observed: nothing.
+    /// We never fabricate a transport-level ACK we did not observe.
     /// </para>
     /// </summary>
     public const string StatusUnconfirmed = "unconfirmed";

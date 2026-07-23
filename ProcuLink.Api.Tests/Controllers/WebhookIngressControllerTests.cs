@@ -77,19 +77,22 @@ public class WebhookIngressControllerTests
 
     /// <summary>Seeds one routed order in <paramref name="status"/> for <paramref name="orgId"/>.</summary>
     private static async Task SeedOrderAsync(
-        ProcuLinkDbContext db, Guid orgId, Guid orderId, string status)
+        ProcuLinkDbContext db, Guid orgId, Guid orderId, string status,
+        DateTime? deliveryDueAt = null, bool slaBreached = false)
     {
         db.PurchaseOrders.Add(new PurchaseOrderEntity
         {
-            Id         = orderId,
-            OrgId      = orgId,
-            SupplierId = Guid.NewGuid(),
-            PoNumber   = "PO-GUARD-001",
-            Status     = status,
-            OrderDate  = DateOnly.FromDateTime(DateTime.UtcNow),
-            Currency   = "EUR",
-            CreatedAt  = DateTime.UtcNow,
-            UpdatedAt  = DateTime.UtcNow,
+            Id            = orderId,
+            OrgId         = orgId,
+            SupplierId    = Guid.NewGuid(),
+            PoNumber      = "PO-GUARD-001",
+            Status        = status,
+            OrderDate     = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency      = "EUR",
+            CreatedAt     = DateTime.UtcNow,
+            UpdatedAt     = DateTime.UtcNow,
+            DeliveryDueAt = deliveryDueAt,
+            SlaBreached   = slaBreached,
         });
         await db.SaveChangesAsync();
     }
@@ -128,6 +131,36 @@ public class WebhookIngressControllerTests
             ArtifactSha256 = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c",
         });
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Seeds the exact row <c>DeliveryService.ParkUnconfirmedAsync</c> leaves behind: terminal
+    /// <c>unconfirmed</c>, carrying the <c>IdempotencyKey</c> the pre-send commit stamped
+    /// (OpenDispatchAttemptAsync) and NO <c>ArtifactSha256</c> — the sha is stamped only after
+    /// <c>DispatchAsync</c> returns, and the park exists precisely because that return was never
+    /// observed. The key ALONE is the dispatch marker here, so these tests also pin that the
+    /// evidence predicate does not quietly start requiring both.
+    /// </summary>
+    private static async Task<DeliveryAttempt> SeedParkedAttemptAsync(
+        ProcuLinkDbContext db, Guid orgId, Guid orderId)
+    {
+        var attempt = new DeliveryAttempt
+        {
+            Id             = Guid.NewGuid(),
+            OrgId          = orgId,
+            OrderId        = orderId,
+            Channel        = "erp_erply",
+            Destination    = "https://erp.example/api",
+            Status         = DeliveryAttempt.StatusUnconfirmed,
+            AttemptNumber  = 1,
+            AttemptedAt    = DateTime.UtcNow,
+            ErrorMessage   = "Delivery unconfirmed.",
+            IdempotencyKey = $"{orderId:N}:{Guid.NewGuid():N}",
+            ArtifactSha256 = null,
+        };
+        db.DeliveryAttempts.Add(attempt);
+        await db.SaveChangesAsync();
+        return attempt;
     }
 
     /// <summary>
@@ -506,6 +539,103 @@ public class WebhookIngressControllerTests
         result.Should().BeOfType<OkObjectResult>();
         var order = await db.PurchaseOrders.FindAsync(orderId);
         order!.Status.Should().Be(OrderStatusConstants.Delivered);
+    }
+
+    [Fact]
+    public async Task Status_DeliveredCallbackForParkedOrder_Returns200_AndResolvesThePark()
+    {
+        // delivery_unconfirmed exists because the channel could not tell us whether the PO arrived
+        // (DeliveryService.ParkUnconfirmedAsync). A supplier's own 'delivered' callback answers
+        // exactly that question, with the one thing the park lacks: positive arrival evidence.
+        // Refusing it forced an operator to resolve by out-of-band guesswork a question the
+        // counterparty had already answered over an authenticated channel. The evidence half of the
+        // guard was ALWAYS satisfied for a park (the parked row keeps its pre-send IdempotencyKey);
+        // only the status half held the callback out.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        // The park leaves a live SLA window behind on purpose (the nag runs until a human acts) —
+        // the callback IS the resolution, so it must close that window too.
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.DeliveryUnconfirmed,
+            deliveryDueAt: DateTime.UtcNow.AddHours(2));
+        var parked = await SeedParkedAttemptAsync(db, orgId, orderId);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>(
+            "the callback answers exactly the question the park is waiting on");
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.Delivered);
+        order.DeliveryDueAt.Should().BeNull("a resolved park must stop nagging");
+        order.SlaBreached.Should().BeFalse();
+
+        // The ORDER moves; the row's Status keeps recording what the CHANNEL observed — nothing.
+        // Same rule as the operator's mark-delivered: we never fabricate a transport-level ACK.
+        // The supplier's report lives in the webhook_status audit event.
+        var row = await db.DeliveryAttempts.FindAsync(parked.Id);
+        row!.Status.Should().Be(DeliveryAttempt.StatusUnconfirmed,
+            "the webhook resolves the ORDER, never rewrites the attempt row to success");
+        db.AuditEvents.Should().ContainSingle(e => e.Action == "webhook_status");
+    }
+
+    [Fact]
+    public async Task Status_RejectedCallbackForParkedOrder_WritesRejectedBySupplier_AndStampsTheReason()
+    {
+        // The rejection twin: "we received it and refuse it" also answers the park's question (the
+        // PO ARRIVED). rejected_by_supplier keeps it out of every re-drive sweep. The reason must
+        // land on the parked attempt row — the latest one — where the UI actually reads it.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var (ctrl, verifier, _) = Build(db);
+
+        // A long-parked order may have breached its SLA already; the resolution must clear the
+        // breach flag too, or DeliverySlaService re-flags a settled order (rejected_by_supplier is
+        // not in its ExcludedStatuses).
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.DeliveryUnconfirmed,
+            deliveryDueAt: DateTime.UtcNow.AddHours(-1), slaBreached: true);
+        var parked = await SeedParkedAttemptAsync(db, orgId, orderId);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\",\"reason\":\"Item list invalid\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        var result = await ctrl.Status("status-slug", CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var order = await db.PurchaseOrders.FindAsync(orderId);
+        order!.Status.Should().Be(OrderStatusConstants.RejectedBySupplier);
+        order.DeliveryDueAt.Should().BeNull();
+        order.SlaBreached.Should().BeFalse();
+
+        var row = await db.DeliveryAttempts.FindAsync(parked.Id);
+        row!.Status.Should().Be(DeliveryAttempt.StatusUnconfirmed);
+        row.RejectionReason.Should().Be("Item list invalid",
+            "the latest attempt carries the reason the UI surfaces");
+    }
+
+    [Fact]
+    public async Task Status_TerminalCallbackForParkedOrder_ReconcilesTheParkException()
+    {
+        // The park opened a delivery_unconfirmed exception (it is what makes a parked order visible
+        // on the tiles). Nothing else ever revisits a delivered order to re-derive exceptions, so
+        // skipping reconcile here would leave the park's warning open forever on a resolved order.
+        var db      = MakeDb();
+        var orgId   = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var exceptions = new RecordingExceptionService();
+        var (ctrl, verifier, _) = Build(db, exceptions);
+
+        await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.DeliveryUnconfirmed);
+        await SeedParkedAttemptAsync(db, orgId, orderId);
+        SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"delivered\"}}");
+        StubVerifier(verifier, "status-slug", orgId);
+
+        await ctrl.Status("status-slug", CancellationToken.None);
+
+        exceptions.Calls.Should().ContainSingle().Which.Should().Be((orgId, orderId));
     }
 
     [Theory]
