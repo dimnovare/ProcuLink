@@ -256,6 +256,46 @@ public class DeliveryServiceUnconfirmedParkTests
             .Should().Be(1, "the parked row records an outcome we never observed — a later send never rewrites it");
     }
 
+    // ── Queue item 5 (2026-07-23): an AUTOMATIC activation must never claim a park ───────────
+    // The refetch race: a DeliverOrderJob activation dies mid-send, Hangfire refetches the SAME
+    // job (~30 min invisibility timeout) after the stuck sweep's re-drive has already PARKED the
+    // order. The parked attempt row is terminal ('unconfirmed'), so the refetched activation
+    // re-adopts nothing, opens a FRESH row and sends — an automatic send of a parked PO, the
+    // exact duplicate the park exists to prevent. The claim must refuse a park unless a human
+    // drove the activation (requireAutoDeliver: false). This test pins the InMemory emulation
+    // branch of the claim; AutomaticParkClaimPostgresTests pins the relational ExecuteUpdate
+    // predicate — the two lists drifting is the four-hardcoded-status-list class.
+    [Fact]
+    public async Task AutomaticActivation_FromParkedOrder_IsRefused_AndSendsNothing()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedParkedOrderAsync(db, encryption, "erp_erply");
+
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 200), "erp_erply", ResendSafety.Unsafe);
+        var service = CreateService(db, dispatcher, encryption);
+
+        // requireAutoDeliver: true — exactly how a Hangfire refetch re-runs DeliverOrderJob.Enqueue's
+        // automatic activation (TransformOrderJob / the stranded-ready sweep). The seeded config has
+        // AutoDeliver = true (MakeConfig), so the AutoDeliver no-op cannot mask a missing refusal.
+        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+        dispatcher.Calls.Should().Be(0,
+            "only a human may re-send a parked order — an automatic activation must be refused by the claim");
+        result.Success.Should().BeTrue(
+            "the refusal is the benign lost-claim no-op DeliverOrderJob stops on without logging a failure or scheduling a retry");
+        result.Outcome.Should().Be(DeliveryOutcome.ClaimLost,
+            "the order is owned by its operator — nothing was dispatched and the queue must simply stand down");
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId);
+        order.Status.Should().Be(OrderStatusConstants.DeliveryUnconfirmed,
+            "the park waits for its operator, never for the queue");
+
+        var attempts = await db.DeliveryAttempts.Where(a => a.OrderId == ids.OrderId).ToListAsync();
+        attempts.Should().ContainSingle("a refused activation must not open a fresh attempt row")
+            .Which.Status.Should().Be(DeliveryAttempt.StatusUnconfirmed);
+    }
+
     // A park never enters the delivered-only meter's billable set (delivered + rejected_by_supplier).
     // Scoped precisely: that meter is Billing:CountDeliveredOnly, which DEFAULTS OFF, so this pins
     // the flag-ON behaviour. With the flag OFF the shipped count-at-creation meter counts every
