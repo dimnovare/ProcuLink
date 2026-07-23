@@ -27,9 +27,11 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   mapping view** in the workshop; polish + gate-context pass.
 - **Open engineering, in order:** (1) canonical delivery-claim predicate implementation
   (design merged, #36 — note the B cut shipped `DeliveryAttempt.CountsAgainstCap` as the cap's
-  canonical predicate; the claim-set work should reuse that pattern); (2) two remaining park
-  follow-ups (billing-held park truthful resolution; the ~50% park race vs Hangfire refetch —
-  supplier-ACK park resolution shipped, see below).
+  canonical predicate; the claim-set work should reuse that pattern; the billing-release
+  load-then-save window is chip'd toward it, see the PR #40 entry); (2) one remaining park
+  follow-up: the ~50% park race vs Hangfire refetch (queue item 5 — do NOT start until PR #40
+  and the SLA dispatch-4xx chip's PR both land; all three touch DeliveryService park semantics).
+  Supplier-ACK park resolution (#38) and billing-held park truthful resolution (#40) shipped.
 - **2026-07-23: the B cut SHIPPED — BE PR #37 (merged, `7052053`).** Ops requeue supersedes
   attempt rows (`CapSupersededAt`) instead of deleting them; `DeliveryAttempt.CountsAgainstCap`
   is the ONE cap predicate (all five sites); numbering ascends across requeues; evidence
@@ -49,6 +51,17 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   RED-first, 3 InMemory + 1 real-Postgres tests; Api 1514 / Infra 999 / Transform 1218 green.
   Adjacent pre-existing gap chip'd, not fixed: dispatch-4xx → `rejected_by_supplier` keeps a
   live `DeliveryDueAt` (SLA sweep can flag a settled order).
+- **2026-07-23: billing-held park restores truthfully — BE PR #40 (open, awaiting founder
+  merge), queue item 4.** `PurchaseOrderEntity.HeldFromStatus` (nullable, migration
+  `20260723135012`) records a hold's origin on the LIVE row; `ReleaseBillingHeldOrdersAsync`
+  now RESTORES a held park to `delivery_unconfirmed` (SLA nag reopened, NO re-drive — the
+  auto re-send of an unknown-outcome PO was the duplicate the park exists to prevent) while
+  every other hold keeps release+re-drive; `delivery_held → delivery_unconfirmed` added to
+  BOTH transition maps. Reverses the old release doc's "human already chose" justification —
+  the choice was stale and uncancellable while held (`MarkDelivered` gates on the park).
+  TDD RED-first (6 red observed); real-Postgres migration round trip
+  (`BillingHeldParkRestorePostgresTests`). Api 1515 / Infra 1002 / Transform 1218 green.
+  Pre-existing release-vs-webhook write window named in the method doc + chip'd toward #36.
 - **Founder gates:** sweep hand-back design call (stuck sweep returns `delivering`+fresh
   timestamp; 4 tests pin it). ~~Preimage relocation~~ DONE 2026-07-23: moved (not deleted) to
   `C:\Users\Dmitri.REDACTED-PARTY\Documents\proculink-private\`, SHA256-verified, tree clean.
