@@ -1999,7 +1999,7 @@ public sealed class OrdersController : ControllerBase
     /// Operator-triggered delivery retry with dead-letter escalation.
     /// Enqueues <see cref="RetryDeliveryJob"/> that re-dispatches the latest artifact;
     /// after the attempt cap the order moves to <c>delivery_dead_letter</c>.
-    /// Only valid from <c>delivery_failed</c>.
+    /// Valid only from <c>OrderStatusMachine.RetryableFrom</c> (today: <c>delivery_failed</c>).
     /// </summary>
     [HttpPost("{id:guid}/retry-delivery")]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
@@ -2018,10 +2018,20 @@ public sealed class OrdersController : ControllerBase
         if (order.Status == OrderStatusConstants.DeliveryDeadLetter)
             return BadRequest(new { error = "Order is in dead-letter state — delivery retries are exhausted." });
 
-        if (order.Status != OrderStatusConstants.DeliveryFailed)
+        // The FIFTH canonical list — RedeliverableFrom's twin for the retry leg. Centralised in
+        // the state machine (OrderStatusMachine.RetryableFrom, pinned as a subset of the retry
+        // claim's set) so this admission guard cannot drift from what RetryDeliveryJob's claim
+        // can actually claim — a status admitted here but refused by the claim is the 52c6431
+        // shape: a 202 that dispatches nothing.
+        if (!ProcuLink.Core.Constants.OrderStatusMachine.RetryableFrom.Contains(order.Status))
             return BadRequest(new
             {
-                error = $"Order must be in 'delivery_failed' status to retry delivery (current: '{order.Status}')."
+                // Derived from the set, never a literal: widening RetryableFrom must not leave
+                // this sentence quietly lying about which statuses are valid. Mirrors Redeliver's
+                // guard above.
+                error = $"Order must be in one of these statuses to retry delivery: "
+                      + $"{string.Join(", ", ProcuLink.Core.Constants.OrderStatusMachine.RetryableFrom.OrderBy(s => s, StringComparer.Ordinal))} "
+                      + $"(current: '{order.Status}')."
             });
 
         var artifact = order.OutboundArtifacts

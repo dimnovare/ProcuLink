@@ -1209,29 +1209,14 @@ public sealed class DeliveryService : IDeliveryService
             .Where(o => o.Id == orderId && o.OrgId == orgId)
             .FirstOrDefaultAsync(ct);
 
-        // Holdable = an idle, send-ready order that has NOT yet been claimed for this dispatch:
-        //   • ready_to_deliver     — DeliverOrderJob's first-delivery billing gate (transform just done).
-        //   • delivery_failed      — RetryDeliveryAsync's billing gate (A5): a backoff retry for an order
-        //                            that previously failed, now blocked because the org lapsed.
-        //   • delivery_unconfirmed — the same case reached from the park: an operator clicked
-        //                            "Send again" for an org that lapsed since the park. The backoff
-        //                            queue never lands here (RetryDeliveryAsync refuses this status
-        //                            before its own billing gate), but one AUTOMATIC path does: a
-        //                            Hangfire-refetched DeliverOrderJob checks billing BEFORE the
-        //                            dispatch claim that would refuse its park claim, so a lapsed
-        //                            org's refetch holds the park instead of no-oping. That is safe,
-        //                            not a leak: holding pauses the nag without sending, and release
-        //                            RESTORES a held park (HeldFromStatus below) rather than
-        //                            re-driving it. Omitting the status here would hold NOTHING and
-        //                            leave the order parked: invisible to ReleaseBillingHeldOrdersAsync
-        //                            (it sweeps delivery_held only), so billing settling would never
-        //                            rescue it.
-        // Any other status (delivering / delivered / dead-letter / already held) is a benign no-op —
-        // the billing gate simply returns without holding, and never delivers.
-        if (order is null ||
-            order.Status is not (OrderStatusConstants.ReadyToDeliver
-                              or OrderStatusConstants.DeliveryFailed
-                              or OrderStatusConstants.DeliveryUnconfirmed))
+        // The FOURTH canonical list — see OrderStatusMachine.HoldableForBillingFrom for the
+        // per-status rationale (including why the park is holdable, and how a refetched automatic
+        // activation can legitimately reach this gate with one). Deriving it here is what stops
+        // the drift that bit in 392b5a4: a status this gate refuses is held nowhere, sent nowhere
+        // and audited nowhere, and never reaches delivery_held — so the reactivation release never
+        // rescues it. Any non-holdable status (delivering / delivered / dead-letter / already
+        // held) is a benign no-op — the billing gate returns without holding, and never delivers.
+        if (order is null || !OrderStatusMachine.HoldableForBillingFrom.Contains(order.Status))
             return false;
 
         var fromStatus = order.Status;
