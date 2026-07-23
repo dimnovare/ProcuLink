@@ -942,61 +942,53 @@ public class WebhookIngressControllerTests
     }
 
     [Fact]
-    public async Task Status_RefusedRejection_LeavesTheOrderInTheStrandedFailedSweepersReach_KNOWN_GAP()
+    public async Task Status_RejectionOnRequeuedOrder_IsAccepted_BecauseEvidenceSurvivesTheRequeue()
     {
-        // KNOWN GAP, pinned deliberately so it cannot be forgotten or mis-described as safe. This
-        // documents CURRENT behaviour; it is not an endorsement of it.
+        // The KNOWN_GAP's inverse — option B landed (spec:
+        // docs/superpowers/specs/2026-07-17-delivery-cap-without-erasing-evidence.md).
         //
-        // "Refusing fails closed, which is the safe direction" was WRONG, and this is the proof. A
-        // refusal writes nothing, so the order keeps its status -- and delivery_failed is exactly what
-        // StrandedFailedDeliveryDetectionService sweeps (aged + SupplierId + terminal attempts under
-        // the cap + no dispatching row). It re-drives, and the PO the supplier just REJECTED is sent
-        // a second time. That sweeper justifies its own predicate on rejections landing in
-        // rejected_by_supplier; a refused rejection breaks that premise.
+        // The gap was compound: an ops requeue HARD-DELETED the attempt rows of a genuinely
+        // dispatched order, a pre-dispatch failure on the requeued job left a markerless row, and a
+        // late supplier rejection was then refused — leaving the order in delivery_failed, exactly
+        // what StrandedFailedDeliveryDetectionService sweeps, so the PO the supplier just REJECTED
+        // was sent a SECOND time.
         //
-        // The asymmetry is the point: refusing 'delivered' leaves the order re-drivable and the PO
-        // gets sent, which is what we want. Refusing 'rejected' leaves it re-drivable and re-sends
-        // something the supplier refused. Same mechanism, opposite outcomes.
+        // The requeue now supersedes rows (CapSupersededAt) instead of deleting them, so the
+        // dispatch evidence SURVIVES and the rejection is ACCEPTED: the order lands in
+        // rejected_by_supplier, outside the sweeper's status filter. This is the post-requeue row
+        // shape at the unit level; the full compound path — real OpsController requeue, real sweep —
+        // is pinned on Postgres by CapWithoutErasingEvidencePostgresTests.C2.
         //
-        // WHY IT IS TOLERATED rather than patched here: it is reachable only compoundly -- an ops
-        // requeue hard-deletes the attempt rows (erasing the evidence from an order that WAS
-        // dispatched), THEN a pre-dispatch failure on the requeued job leaves a markerless row, THEN
-        // a late supplier rejection arrives. Each step is real on its own; all three in sequence are
-        // rare. That is the whole reason it is tolerated -- if any step were common this would be a
-        // stop-the-line fix, not a pinned gap.
-        //
-        // EXPIRY -- this test must not rot into a comment with a test attached. The fix is specced at
-        // docs/superpowers/specs/2026-07-17-delivery-cap-without-erasing-evidence.md ("option B"):
-        // stop erasing the evidence, so that no-marker => never-dispatched holds BY CONSTRUCTION
-        // instead of by hope. It replaces OpsController's RemoveRange with a cap-reset marker, which
-        // changes the delivery attempt-cap mechanism on a live money path -- hence a sequenced change
-        // of its own, not a patch smuggled in here.
-        //
-        // When B lands this test FAILS, and that failure is the ACCEPTANCE SIGNAL, not a regression.
-        // Delete it and assert the inverse: the rejection is accepted, the order leaves the sweeper's
-        // reach, and the PO is never re-sent.
+        // NOTE the old KNOWN_GAP seed (a markerless pre-dispatch row ONLY) did NOT go red when B
+        // landed: with erasure gone, that end-state is reachable only by an order that genuinely
+        // never dispatched, and refusing THAT callback is correct — the guard's premise
+        // "no marker ⇒ never dispatched" now holds by construction. The gap test was deleted
+        // because its scenario became unreachable, not because its assertions flipped.
         var db      = MakeDb();
         var orgId   = Guid.NewGuid();
         var orderId = Guid.NewGuid();
         var (ctrl, verifier, _) = Build(db);
 
         await SeedOrderAsync(db, orgId, orderId, OrderStatusConstants.DeliveryFailed);
+        // A dispatched row a requeue then superseded (evidence intact, out of the budget)…
+        await SeedDeliveryAttemptAsync(db, orgId, orderId, status: DeliveryAttempt.StatusFailed);
+        var dispatched = await db.DeliveryAttempts.SingleAsync(a => a.OrderId == orderId);
+        dispatched.CapSupersededAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        // …then the requeued job failed pre-dispatch, leaving a markerless row in the new budget.
         await SeedPreDispatchAttemptAsync(db, orgId, orderId);
+
         SetHttpContext(ctrl, body: $"{{\"orderId\":\"{orderId}\",\"status\":\"rejected\"}}");
         StubVerifier(verifier, "status-slug", orgId);
 
         var result = await ctrl.Status("status-slug", CancellationToken.None);
 
-        result.Should().BeOfType<ConflictObjectResult>();
+        result.Should().BeOfType<OkObjectResult>(
+            "the superseded row still carries the dispatch markers — evidence is epoch-agnostic");
         var order = await db.PurchaseOrders.FindAsync(orderId);
-        order!.Status.Should().Be(OrderStatusConstants.DeliveryFailed,
-            "the refusal writes nothing -- which is precisely the problem: delivery_failed is the "
-          + "status StrandedFailedDeliveryDetectionService sweeps and re-drives, so this rejected PO "
-          + "remains eligible to be sent to the supplier a SECOND time");
-        order.Status.Should().NotBe(OrderStatusConstants.RejectedBySupplier,
-            "before the dispatch-evidence guard this callback wrote rejected_by_supplier, which is "
-          + "terminal and therefore outside that sweeper's status filter -- this test is the "
-          + "regression that guard introduced, held visible until it is fixed at the root");
+        order!.Status.Should().Be(OrderStatusConstants.RejectedBySupplier,
+            "an accepted rejection leaves the stranded-failed sweeper's status filter, so the "
+          + "rejected PO can never be re-driven to the supplier");
     }
 
     [Fact]

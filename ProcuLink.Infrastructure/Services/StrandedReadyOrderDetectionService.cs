@@ -54,10 +54,11 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
         // failed) all persist a terminal row having sent zero bytes. Nor does a row that DID send prove
         // it sent THIS payload: a mapping edit resets a past-ready order (OrderMappingOverrideService
         // .IsPastReady covers delivered/delivery_failed/delivery_dead_letter) and the re-transform
-        // commits a NEW artifact, while nothing deletes the old attempt rows — repo-wide the only
-        // DeliveryAttempts.RemoveRange is the operator requeue in OpsController. So an order that had
-        // ever been attempted was permanently unrecoverable here, and its corrected PO silently never
-        // sent.
+        // commits a NEW artifact, while nothing deletes the old attempt rows — attempt rows are
+        // permanent now (the ops requeue supersedes via CapSupersededAt instead of deleting; the
+        // only remaining DeliveryAttempts.RemoveRange is DataErasureService's whole-order erasure).
+        // So an order that had ever been attempted was permanently unrecoverable here, and its
+        // corrected PO silently never sent.
         //
         // DEPENDS ON: OrderTransformService ADDs a new OutboundArtifact row stamped CreatedAt = UtcNow
         // on every transform (it never updates one in place). If a re-transform ever reuses an artifact

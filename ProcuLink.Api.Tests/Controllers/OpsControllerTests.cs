@@ -308,8 +308,16 @@ public class OpsControllerTests
         persisted.Status.Should().BeOneOf(
             OrderStatusConstants.DeliveryFailed, OrderStatusConstants.ReadyToDeliver);
 
-        // Attempt cap reset so a transient failure of the requeued dispatch re-engages the retry queue.
-        (await db.DeliveryAttempts.CountAsync(a => a.OrderId == order.Id)).Should().Be(0);
+        // Attempt cap reset so a transient failure of the requeued dispatch re-engages the retry
+        // queue — by SUPERSEDING the rows (CapSupersededAt), never by deleting them: the rows and
+        // their dispatch evidence must survive (the refused-rejection re-send P1).
+        var rows = await db.DeliveryAttempts.Where(a => a.OrderId == order.Id).ToListAsync();
+        rows.Should().HaveCount(3, "the requeue must not erase attempt rows");
+        rows.Should().OnlyContain(a => a.CapSupersededAt != null, "every prior terminal attempt leaves the budget");
+        (await db.DeliveryAttempts
+            .Where(a => a.OrderId == order.Id)
+            .Where(DeliveryAttempt.CountsAgainstCap)
+            .CountAsync()).Should().Be(0, "the current budget starts fresh");
 
         // A DeliverOrderJob was enqueued.
         jobs.Verify(j => j.Create(
@@ -318,12 +326,14 @@ public class OpsControllerTests
     }
 
     [Fact]
-    public async Task RequeueDelivery_SnapshotsClearedAttemptForensicsIntoAuditPayload()
+    public async Task RequeueDelivery_RowsAreTheForensicRecord_AuditKeepsTheEventNotACopy()
     {
-        // B2 forensics: hard-deleting the prior attempts to reset the cap must NOT lose their
-        // diagnostic history. The DeliveryRequeuedByOperator audit event captures each cleared
-        // attempt's forensics (attempt #, status, response code, error, body, timestamp) so the
-        // dead-letter evidence survives the requeue.
+        // Under option B the attempt rows SURVIVE the requeue, so they are the forensic record
+        // themselves — the audit event no longer copies them (a copy whose source outlives it is
+        // redundancy that licenses a false "the archive is load-bearing" belief; see the
+        // invalidation condition in OpsController: if DeliveryAttemptDays is ever configured below
+        // AuditEventDays, revisit). The audit EVENT stays: "an operator requeued this" is not
+        // recoverable from the rows.
         await using var db = NewDb();
         var (ctrl, _, orders, _, orgId) = Build(db);
 
@@ -348,20 +358,20 @@ public class OpsControllerTests
         var result = await ctrl.RequeueDelivery(order.Id, CancellationToken.None);
         result.Should().BeOfType<AcceptedResult>();
 
-        // Rows are still hard-deleted (cap reset), but their forensics survive in the audit payload.
-        (await db.DeliveryAttempts.CountAsync(a => a.OrderId == order.Id)).Should().Be(0);
+        // The row IS the record: it survives with every forensic column intact, superseded out of
+        // the budget.
+        var row = (await db.DeliveryAttempts.Where(a => a.OrderId == order.Id).ToListAsync())
+            .Should().ContainSingle().Subject;
+        row.CapSupersededAt.Should().NotBeNull();
+        row.ResponseCode.Should().Be(503);
+        row.ErrorMessage.Should().Be("Gateway timeout");
+        row.ResponseBody.Should().Be("upstream connect error");
 
         var audit = await db.AuditEvents.SingleAsync(
             e => e.EntityId == order.Id && e.Action == "DeliveryRequeuedByOperator");
-        var cleared = audit.Payload!.RootElement.GetProperty("clearedAttempts");
-        cleared.GetArrayLength().Should().Be(1);
-        var a0 = cleared[0];
-        a0.GetProperty("attemptNumber").GetInt32().Should().Be(3);
-        a0.GetProperty("status").GetString().Should().Be("failed");
-        a0.GetProperty("responseCode").GetInt32().Should().Be(503);
-        a0.GetProperty("errorMessage").GetString().Should().Be("Gateway timeout");
-        a0.GetProperty("responseBody").GetString().Should().Be("upstream connect error");
-        a0.GetProperty("attemptedAt").GetDateTime().Should().BeCloseTo(attemptedAt, TimeSpan.FromSeconds(1));
+        audit.Payload!.RootElement.GetProperty("priorAttemptsSuperseded").GetInt32().Should().Be(1);
+        audit.Payload.RootElement.TryGetProperty("clearedAttempts", out _).Should().BeFalse(
+            "the row-copy is gone — the surviving rows are the record");
     }
 
     [Fact]
@@ -423,16 +433,21 @@ public class OpsControllerTests
 
         var surviving = await db.DeliveryAttempts.Where(a => a.OrderId == order.Id).ToListAsync();
 
-        surviving.Should().ContainSingle(
-            "the terminal attempts are cleared to reset the cap, but the in-flight marker must survive");
-        surviving[0].Id.Should().Be(inFlightId);
-        surviving[0].Status.Should().Be(DeliveryAttempt.StatusDispatching,
-            "deleting the marker turns an unknown outcome back into a blind re-send on a channel that cannot de-duplicate");
+        // ALL rows survive now; the in-flight row additionally stays OUT of the supersede set —
+        // it was never part of the spent budget, and stamping it would misdescribe an unfinalised
+        // send as a superseded one.
+        surviving.Should().HaveCount(4);
+        var inFlight = surviving.Single(a => a.Id == inFlightId);
+        inFlight.Status.Should().Be(DeliveryAttempt.StatusDispatching,
+            "losing the marker turns an unknown outcome back into a blind re-send on a channel that cannot de-duplicate");
+        inFlight.CapSupersededAt.Should().BeNull("the in-flight row is not a spent attempt of the old budget");
+        surviving.Where(a => a.Id != inFlightId).Should().OnlyContain(a => a.CapSupersededAt != null);
 
-        // The operator's dispatch-past-the-cap intent still holds: the cap counts only TERMINAL
-        // attempts, so keeping this row costs the requeue nothing.
-        (await db.DeliveryAttempts.CountAsync(a =>
-            a.OrderId == order.Id && a.Status != DeliveryAttempt.StatusDispatching)).Should().Be(0);
+        // The operator's dispatch-past-the-cap intent still holds through the ONE cap predicate.
+        (await db.DeliveryAttempts
+            .Where(a => a.OrderId == order.Id)
+            .Where(DeliveryAttempt.CountsAgainstCap)
+            .CountAsync()).Should().Be(0);
     }
 
     [Fact]

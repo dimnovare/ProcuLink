@@ -50,15 +50,24 @@ public sealed class StrandedFailedDeliveryDetectionService : IStrandedFailedDeli
         //     legitimately-scheduled retry — which fires within minutes and moves the order out of
         //     delivery_failed — is never raced; only a genuinely LOST reschedule ages this long.
         //   • routed orders (SupplierId set — an unrouted order has no delivery config to retry).
-        //   • with delivery attempts still REMAINING (terminal attempts below the cap; an in-flight
-        //     'dispatching' row is not a completed attempt, matching RetryDeliveryAsync's count).
+        //   • with delivery attempts still REMAINING in the CURRENT budget — the correlated
+        //     subquery composes DeliveryAttempt.CountsAgainstCap (the one cap definition), so an
+        //     ops-requeued order's surviving-but-superseded rows do not pin it at the cap. Counting
+        //     raw terminal rows here would make an operator's Requeue silently do nothing forever
+        //     once rows survive the requeue. (EF 8 inlines the shared LambdaExpression through
+        //     DbSet.Where inside a correlated subquery — the HasDispatchMarker pattern; a
+        //     .Compile()d delegate would NOT translate.)
         //   • with NO in-flight 'dispatching' attempt (a send is mid-flight → not stranded).
+        //     This literal is NOT !CountsAgainstCap and must not be "simplified" into it: it asks
+        //     "is a send IN FLIGHT right now", a different business question that merely shares a
+        //     status constant — the negation also matches superseded rows, which are neither
+        //     in-flight nor relevant to it. Collapsing compiles and passes most tests; it is wrong.
         // Bounded by maxBatch (oldest strand first) so one sweep can never load an unbounded backlog.
         var candidates = await _db.PurchaseOrders
             .Where(o => o.Status == OrderStatusConstants.DeliveryFailed && o.UpdatedAt < cutoff)
             .Where(o => o.SupplierId != null)
-            .Where(o => _db.DeliveryAttempts.Count(a => a.OrderId == o.Id && a.OrgId == o.OrgId
-                        && a.Status != DeliveryAttempt.StatusDispatching) < maxAttempts)
+            .Where(o => _db.DeliveryAttempts.Where(DeliveryAttempt.CountsAgainstCap)
+                        .Count(a => a.OrderId == o.Id && a.OrgId == o.OrgId) < maxAttempts)
             .Where(o => !_db.DeliveryAttempts.Any(a => a.OrderId == o.Id && a.OrgId == o.OrgId
                         && a.Status == DeliveryAttempt.StatusDispatching))
             .OrderBy(o => o.UpdatedAt)

@@ -152,21 +152,41 @@ public sealed class OpsController : ControllerBase
             .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == orgId, ct);
         if (tracked is not null)
         {
-            // TERMINAL attempts only. An in-flight 'dispatching' row is not a spent attempt — it is
-            // the only evidence that a send was already started and never finalised, and the next
+            // Reset the cap WITHOUT erasing dispatch evidence: stamp CapSupersededAt on exactly
+            // the rows the cap counts (DeliveryAttempt.CountsAgainstCap — terminal, not already
+            // superseded). The rows and their dispatch markers (IdempotencyKey / ArtifactSha256)
+            // SURVIVE, so the webhook guard's premise "no marker ⇒ never dispatched" stays true
+            // through a requeue — the old RemoveRange let a genuinely-sent order present as
+            // never-dispatched, and a late supplier rejection was then refused and re-sent by the
+            // stranded-failed sweep (the refused-rejection re-send P1).
+            //
+            // The predicate already excludes the in-flight 'dispatching' row, which must ALSO stay
+            // unstamped: it is the only evidence a send was started and never finalised, the next
             // dispatch re-adopts it (same idempotency key) to PARK rather than re-send on a channel
-            // that cannot de-duplicate. Clearing it would make that re-drive look like a first send
-            // and hand the supplier a duplicate PO. Excluding it also costs the cap reset nothing:
-            // the cap counts terminal attempts only.
+            // that cannot de-duplicate, and it was never part of the spent budget anyway.
+            //
+            // Tracked mutation, not ExecuteUpdate: the stamp must commit ATOMICALLY with the status
+            // write + audit row below (ExecuteUpdate commits immediately, outside this SaveChanges),
+            // and the row set is bounded by the attempt cap.
+            //
+            // Known load→save window (same window the old RemoveRange had): a backoff retry firing
+            // concurrently — delivery_failed is claimable — could commit a new terminal row between
+            // this read and the SaveChanges. That row escapes the stamp and counts against the
+            // FRESH budget, so the reset starts at 1 instead of 0. Bounded, evidence-preserving,
+            // and no worse than the delete it replaced (a row added mid-delete survived that too);
+            // not worth a lock on a manual ops escalation.
             var priorAttempts = await _db.DeliveryAttempts
-                .Where(a => a.OrderId == id && a.OrgId == orgId
-                         && a.Status != DeliveryAttempt.StatusDispatching)
+                .Where(a => a.OrderId == id && a.OrgId == orgId)
+                .Where(DeliveryAttempt.CountsAgainstCap)
                 .ToListAsync(ct);
 
+            var now = DateTime.UtcNow;
+            foreach (var attempt in priorAttempts)
+                attempt.CapSupersededAt = now;
+
             var fromStatus = tracked.Status;
-            _db.DeliveryAttempts.RemoveRange(priorAttempts);         // reset the attempt cap
             tracked.Status    = OrderStatusConstants.DeliveryFailed; // claimable, send-ready idle state
-            tracked.UpdatedAt = DateTime.UtcNow;
+            tracked.UpdatedAt = now;
 
             _db.AuditEvents.Add(new AuditEvent
             {
@@ -178,35 +198,23 @@ public sealed class OpsController : ControllerBase
                 Action     = "DeliveryRequeuedByOperator",
                 Payload    = JsonDocument.Parse(JsonSerializer.Serialize(new
                 {
-                    reason               = "OpsRequeueDelivery",
+                    reason                  = "OpsRequeueDelivery",
                     fromStatus,
-                    toStatus             = OrderStatusConstants.DeliveryFailed,
-                    priorAttemptsCleared = priorAttempts.Count,
-                    // Forensic snapshot: the cleared attempt rows are hard-deleted to reset the cap,
-                    // so preserve their dead-letter evidence (codes / error bodies / timestamps) here
-                    // in the immutable audit log rather than losing it. Response bodies are already
-                    // bounded to DeliveryAttempt.MaxResponseBodyLength at write time.
-                    clearedAttempts = priorAttempts
-                        .OrderBy(a => a.AttemptNumber)
-                        .Select(a => new
-                        {
-                            attemptNumber   = a.AttemptNumber,
-                            status          = a.Status,
-                            channel         = a.Channel,
-                            destination     = a.Destination,
-                            responseCode    = a.ResponseCode,
-                            errorMessage    = a.ErrorMessage,
-                            rejectionReason = a.RejectionReason,
-                            responseBody    = a.ResponseBody,
-                            attemptedAt     = a.AttemptedAt,
-                            acknowledgedAt  = a.AcknowledgedAt,
-                        })
-                        .ToArray(),
-                    artifactId           = artifact.Id,
-                    requeuedAt           = DateTime.UtcNow,
-                    detail               = "Operator escalation: attempt cap reset and order left claimable so the re-enqueued delivery reaches the supplier past the dead-letter cap. Cleared attempts' forensics are snapshotted in clearedAttempts.",
+                    toStatus                = OrderStatusConstants.DeliveryFailed,
+                    priorAttemptsSuperseded = priorAttempts.Count,
+                    // No forensic row-copy here any more: the attempt rows themselves are the
+                    // record now — they survive this requeue. That holds because AuditEventDays
+                    // and DeliveryAttemptDays both default to 180 and are pruned by the same
+                    // disabled-by-default sweep (DataRetentionOptions.cs:18,:21,:30), so the copy
+                    // would not outlive the rows. If DeliveryAttemptDays is ever configured BELOW
+                    // AuditEventDays, the rows die first and this decision must be revisited —
+                    // the copy would then have been the record. The audit EVENT stays: "an
+                    // operator requeued this" is not recoverable from the rows.
+                    artifactId              = artifact.Id,
+                    requeuedAt              = now,
+                    detail                  = "Operator escalation: attempt cap reset (prior attempts superseded via CapSupersededAt — rows and dispatch evidence retained) and order left claimable so the re-enqueued delivery reaches the supplier past the dead-letter cap.",
                 })),
-                CreatedAt = DateTime.UtcNow,
+                CreatedAt = now,
             });
 
             // Commit the reset + claimable status BEFORE enqueuing, so the DeliverOrderJob can't run

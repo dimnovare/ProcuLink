@@ -173,15 +173,20 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
             Assert.IsType<Microsoft.AspNetCore.Mvc.AcceptedResult>(result);
         }
 
-        // Post-requeue state: NOT the claim-defeating fresh 'delivering'; a claimable idle status with
-        // the attempt cap reset.
+        // Post-requeue state: NOT the claim-defeating fresh 'delivering'; a claimable idle status
+        // with the attempt cap reset by SUPERSEDING the rows (they survive with their evidence —
+        // option B), so the cap predicate reads 0.
         await using (var verify = NewContext())
         {
             var status = await verify.PurchaseOrders.AsNoTracking()
                 .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
             Assert.NotEqual(OrderStatusConstants.Delivering, status);
             Assert.Equal(OrderStatusConstants.DeliveryFailed, status);
-            Assert.Equal(0, await verify.DeliveryAttempts.CountAsync(a => a.OrderId == ids.OrderId));
+            Assert.Equal(3, await verify.DeliveryAttempts.CountAsync(a => a.OrderId == ids.OrderId));
+            Assert.Equal(0, await verify.DeliveryAttempts
+                .Where(a => a.OrderId == ids.OrderId)
+                .Where(DeliveryAttempt.CountsAgainstCap)
+                .CountAsync());
         }
 
         // Simulate the re-enqueued DeliverOrderJob: the claim must SUCCEED and dispatch (the OLD
@@ -198,10 +203,14 @@ public sealed class LostOrderRecoveryPostgresTests : IAsyncLifetime
         Assert.Equal(1, dispatcher.Calls); // claim SUCCEEDED → dispatched (not a no-op)
         await using (var verify = NewContext())
         {
-            // Attempts were reset, so only the single new success attempt is on record.
+            // The three superseded rows survive; the new success attempt is the only row in the
+            // fresh budget, and its number ASCENDS past them (attempt 4 — ruling 1).
             var attempts = await verify.DeliveryAttempts.AsNoTracking()
                 .Where(a => a.OrderId == ids.OrderId && a.OrgId == ids.OrgId).ToListAsync();
-            Assert.Equal("success", Assert.Single(attempts).Status);
+            Assert.Equal(4, attempts.Count);
+            var newest = attempts.Single(a => a.CapSupersededAt == null);
+            Assert.Equal("success", newest.Status);
+            Assert.Equal(4, newest.AttemptNumber);
             var status = await verify.PurchaseOrders.AsNoTracking()
                 .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
             Assert.Equal(OrderStatusConstants.Delivered, status);

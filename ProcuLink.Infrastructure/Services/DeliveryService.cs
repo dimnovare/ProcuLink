@@ -408,8 +408,14 @@ public sealed class DeliveryService : IDeliveryService
             return (existing, true);
 
         // Next 1-based attempt index. Only TERMINAL attempts count toward the number (a stale
-        // 'dispatching' row for a DIFFERENT artifact must not inflate it) — consistent with the
-        // retry attempt-cap count.
+        // 'dispatching' row for a DIFFERENT artifact must not inflate it).
+        //
+        // Deliberately NOT DeliveryAttempt.CountsAgainstCap: numbering counts attempts EVER, so it
+        // must IGNORE CapSupersededAt — an ops requeue grants a fresh BUDGET, not a fresh HISTORY.
+        // Filtering superseded rows here would restart the number at 1 after a requeue, which lies
+        // in supplier-visible provenance ("attempt 1" for the fourth real send) and breaks
+        // OpsController's OrderBy(AttemptNumber) total order. The two predicates agreeing before
+        // CapSupersededAt existed was coincidence, not equivalence.
         var attemptNumber = (await _db.DeliveryAttempts
             .CountAsync(a => a.OrderId == order.Id && a.OrgId == order.OrgId
                           && a.Status != DeliveryAttempt.StatusDispatching, ct)) + 1;
@@ -775,7 +781,8 @@ public sealed class DeliveryService : IDeliveryService
         {
             // Fresh terminal row — the pre-dispatch failure paths (no send happened, so no in-flight
             // marker). 1-based index counts only TERMINAL attempts so a dangling 'dispatching' row
-            // never inflates the number.
+            // never inflates the number. NOT the cap predicate — numbering counts attempts EVER and
+            // ignores CapSupersededAt (see OpenDispatchAttemptAsync's numbering comment).
             var attemptNumber = (await _db.DeliveryAttempts
                 .CountAsync(a => a.OrderId == order.Id && a.OrgId == order.OrgId
                               && a.Status != DeliveryAttempt.StatusDispatching, ct)) + 1;
@@ -1063,12 +1070,14 @@ public sealed class DeliveryService : IDeliveryService
             }
 
             // Count is read inside the SAME transaction as the claim, so the cap decision is
-            // made against the row this worker now exclusively holds. Only TERMINAL attempts count:
-            // an in-flight 'dispatching' row (a crash-recovery re-adopt of THIS send) must not burn a
-            // retry-budget slot — it is the same logical attempt, not a new one.
+            // made against the row this worker now exclusively holds. Composes the ONE cap
+            // predicate (DeliveryAttempt.CountsAgainstCap): an in-flight 'dispatching' row (a
+            // crash-recovery re-adopt of THIS send) must not burn a retry-budget slot, and an
+            // ops-requeue-superseded row belongs to a PREVIOUS budget.
             priorAttempts = await _db.DeliveryAttempts
-                .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId
-                              && a.Status != DeliveryAttempt.StatusDispatching, ct);
+                .Where(a => a.OrderId == orderId && a.OrgId == orgId)
+                .Where(DeliveryAttempt.CountsAgainstCap)
+                .CountAsync(ct);
 
             await claimTx.CommitAsync(ct);
 
@@ -1091,8 +1100,9 @@ public sealed class DeliveryService : IDeliveryService
             await _db.SaveChangesAsync(ct);
 
             priorAttempts = await _db.DeliveryAttempts
-                .CountAsync(a => a.OrderId == orderId && a.OrgId == orgId
-                              && a.Status != DeliveryAttempt.StatusDispatching, ct);
+                .Where(a => a.OrderId == orderId && a.OrgId == orgId)
+                .Where(DeliveryAttempt.CountsAgainstCap)
+                .CountAsync(ct);
         }
 
         if (priorAttempts >= maxAttempts)
@@ -1144,10 +1154,13 @@ public sealed class DeliveryService : IDeliveryService
     }
 
     public Task<int> CountDeliveryAttemptsAsync(Guid orgId, Guid orderId, CancellationToken ct) =>
-        // Only TERMINAL attempts (an in-flight 'dispatching' marker is not yet a completed attempt),
-        // so the retry-queue backoff step + cap detection agree with RetryDeliveryAsync's cap count.
-        _db.DeliveryAttempts.CountAsync(a => a.OrderId == orderId && a.OrgId == orgId
-                                          && a.Status != DeliveryAttempt.StatusDispatching, ct);
+        // THE cap count — composes DeliveryAttempt.CountsAgainstCap (the one definition: terminal
+        // AND not superseded by an ops requeue), so the retry-queue backoff step + cap detection
+        // agree with RetryDeliveryAsync's count and the stranded-failed sweep's subquery.
+        _db.DeliveryAttempts
+            .Where(a => a.OrderId == orderId && a.OrgId == orgId)
+            .Where(DeliveryAttempt.CountsAgainstCap)
+            .CountAsync(ct);
 
     public async Task<bool> HoldForBillingAsync(Guid orgId, Guid orderId, CancellationToken ct)
     {

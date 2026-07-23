@@ -427,30 +427,28 @@ public sealed class WebhookIngressController : ControllerBase
         AlreadyRejected,
 
         /// <summary>
-        /// No attempt row carries a dispatch marker, so we cannot prove a send was ever begun.
-        /// USUALLY that means none was. It does NOT mean that: the evidence can be ERASED from an
-        /// order that genuinely WAS dispatched — OpsController's requeue hard-deletes its attempt
-        /// rows to reset the cap, and DataRetentionService prunes them for terminal statuses
-        /// (disabled by default, 180d).
+        /// No attempt row carries a dispatch marker, so we cannot prove a send was ever begun —
+        /// and since the option-B cut, no-marker ⇒ never-dispatched holds BY CONSTRUCTION on the
+        /// operational paths: OpsController's requeue now resets the cap by stamping
+        /// <c>CapSupersededAt</c> and never deletes rows, so a genuinely-dispatched order keeps its
+        /// evidence through a requeue and a late supplier rejection is ACCEPTED, not refused
+        /// (<c>CapWithoutErasingEvidencePostgresTests.C2</c> pins the whole compound path).
+        ///
+        /// <para><b>The remaining erasure caveat is RETENTION-ONLY, and it is deliberately not
+        /// claimed shut:</b> <c>DataRetentionService</c> (disabled by default, 180d) prunes attempt
+        /// rows for terminal order statuses. It cannot produce the refused-rejection re-send —
+        /// <c>delivery_failed</c> is not in its <c>TerminalOrderStatuses</c> — but it can still
+        /// erase evidence from a <c>delivered</c> / <c>rejected_by_supplier</c> order, whose late
+        /// callbacks would then refuse with this reason.</para>
         ///
         /// <para><b>Refusing is NOT automatically the safe direction — that claim was wrong and is
-        /// worth stating plainly, because it hid a real regression.</b> A refusal writes nothing, so
-        /// the order keeps whatever status it had, and what happens next depends on which status
-        /// that is:</para>
-        /// <list type="bullet">
-        ///   <item>refusing a <c>delivered</c> report leaves the order re-drivable — the PO gets
-        ///     sent, which is what we want. Safe.</item>
-        ///   <item>refusing a <c>rejected</c> report ALSO leaves it re-drivable — and if it is
-        ///     sitting in <c>delivery_failed</c>, <c>StrandedFailedDeliveryDetectionService</c>
-        ///     sweeps it and re-sends the PO the supplier just told us they REJECTED. That sweeper
-        ///     justifies its predicate on rejections landing in <c>rejected_by_supplier</c>; a
-        ///     refusal breaks that premise. Harmful.</item>
-        /// </list>
-        /// <para>So "fails closed" describes the WRITE, not the OUTCOME. The reachable path is
-        /// compound (ops requeue erases the rows → a pre-dispatch failure on the requeued job leaves
-        /// a markerless row → a late supplier rejection), which is why it is tracked as a follow-up
-        /// rather than patched here: closing it properly means not erasing the evidence in the first
-        /// place, so that no-marker ⇒ never-dispatched becomes true by construction.</para>
+        /// worth keeping stated plainly, because it hid a real regression.</b> A refusal writes
+        /// nothing, so the order keeps whatever status it had: refusing a <c>delivered</c> report
+        /// leaves the order re-drivable (the PO gets sent — what we want), while refusing a
+        /// <c>rejected</c> report on a <c>delivery_failed</c> order left it inside
+        /// <c>StrandedFailedDeliveryDetectionService</c>'s sweep, which re-sent the PO the supplier
+        /// just refused. "Fails closed" describes the WRITE, not the OUTCOME. The cut exists
+        /// because of that asymmetry.</para>
         /// </summary>
         NeverDispatched,
 
@@ -522,9 +520,10 @@ public sealed class WebhookIngressController : ControllerBase
             // NO dispatch marker on any attempt row. That is USUALLY "never sent" — the parse/review
             // pipeline, the two reportable-but-idle states (ready_to_deliver awaiting a Send,
             // delivery_held by the pre-send billing gate), and an order whose only rows came from a
-            // pre-dispatch gate. But it is NOT ALWAYS: the evidence can be ERASED from an order that
-            // genuinely WAS sent (see RefusalReason.NeverDispatched). The absence of evidence is not
-            // evidence of absence, so this reason means "we cannot prove this was sent" — never
+            // pre-dispatch gate. The ops requeue no longer erases evidence (it supersedes rows via
+            // CapSupersededAt), so the one remaining erasure path is retention pruning of terminal
+            // orders (see RefusalReason.NeverDispatched). The absence of evidence is still not
+            // evidence of absence: this reason means "we cannot prove this was sent" — never
             // "this was not sent". The supplier-facing sentence must not claim more than that.
             : !hasDispatchEvidence
                 ? RefusalReason.NeverDispatched
@@ -542,12 +541,13 @@ public sealed class WebhookIngressController : ControllerBase
             // Says only what is TRUE in every shape that reaches here, which is exactly: we have no
             // record of a send. It does NOT say "this was never sent" — that is unprovable from
             // here. Usually it is an order still awaiting its Send, but the evidence can also have
-            // been ERASED from an order that genuinely WAS dispatched (an ops requeue clears its
-            // attempt rows), and the status cannot tell the two apart: ready_to_deliver and
-            // delivery_held are each reachable BOTH before a dispatch and after one (MV-1 reset; A5
-            // hold). The previous wording asserted the order had "not been sent yet (it is
-            // 'delivered')" — self-contradictory, with a dead-end fix, sent to a counterparty.
-            // Both fixes are offered because we cannot tell the caller which case they are in.
+            // been ERASED from an order that genuinely WAS dispatched (retention pruning of a
+            // terminal order — the ops requeue no longer erases), and the status cannot tell the
+            // two apart: ready_to_deliver and delivery_held are each reachable BOTH before a
+            // dispatch and after one (MV-1 reset; A5 hold). The previous wording asserted the order
+            // had "not been sent yet (it is 'delivered')" — self-contradictory, with a dead-end
+            // fix, sent to a counterparty. Both fixes are offered because we cannot tell the caller
+            // which case they are in.
             RefusalReason.NeverDispatched =>
                 $"This order is '{orderStatus}', and we have no record of it having been sent to a supplier, "
               + $"so a '{reportedStatus}' update cannot be applied to it. Check that the orderId in the "
@@ -613,14 +613,22 @@ public sealed class WebhookIngressController : ControllerBase
     /// InvocationExpressionRemovingExpressionVisitor inlines it. Keep this an
     /// <c>Expression&lt;Func&lt;…&gt;&gt;</c>.</para>
     ///
-    /// <para>Do NOT fold the cap's countable-set predicate into this one. They ask different
+    /// <para>Do NOT fold the cap's countable-set predicate
+    /// (<see cref="DeliveryAttempt.CountsAgainstCap"/>) into this one. They ask different
     /// questions of the same table: this asks "was a send ever BEGUN for this order, ever?"
     /// (order-scoped, artifact- and budget-agnostic — a supplier may report against ANY past
-    /// dispatch), while the cap asks "how many attempts count against the CURRENT budget?". See
-    /// <c>StrandedReadyOrderDetectionService</c> for the sibling distinction it makes for the same
-    /// reason. Collapsing them reopens the never-dispatched hole under a new name.</para>
+    /// dispatch), while the cap asks "how many attempts count against the CURRENT budget?". In
+    /// particular this predicate must NEVER reference <c>CapSupersededAt</c>: an ops requeue
+    /// stamps it to grant a fresh budget, and evidence that a send was begun does not expire with
+    /// a budget — filtering on it would make a requeued-then-reported order read as never sent,
+    /// reopening the erasure hole this design closed. See <c>StrandedReadyOrderDetectionService</c>
+    /// for the sibling distinction it makes for the same reason.
+    /// <c>CapPredicatesTests.EvidenceAndCap_DisagreeOnAPostRequeueRow</c> turns a merge red rather
+    /// than trusting this paragraph to be read.</para>
+    ///
+    /// <para><c>internal</c> (not private) for that assert-the-difference test only.</para>
     /// </summary>
-    private static readonly Expression<Func<DeliveryAttempt, bool>> HasDispatchMarker =
+    internal static readonly Expression<Func<DeliveryAttempt, bool>> HasDispatchMarker =
         a => a.IdempotencyKey != null || a.ArtifactSha256 != null;
 
     /// <summary>

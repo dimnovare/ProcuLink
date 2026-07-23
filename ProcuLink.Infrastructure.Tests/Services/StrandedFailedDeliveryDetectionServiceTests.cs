@@ -80,6 +80,32 @@ public class StrandedFailedDeliveryDetectionServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_DeliveryFailed_AtCap_ButAllAttemptsSuperseded_IsRedriven()
+    {
+        // Option B: an ops requeue no longer deletes attempt rows — it stamps CapSupersededAt, and
+        // the cap subquery composes DeliveryAttempt.CountsAgainstCap. An order whose 3 terminal
+        // rows are ALL superseded therefore has a FRESH budget (0 < 3) and must be re-driven, rows
+        // intact. Counting raw terminal rows here would pin it at the cap forever — an operator's
+        // Requeue would silently do nothing. This is the InMemory half of the provider matrix;
+        // CapWithoutErasingEvidencePostgresTests.C3 proves the same subquery translates on Npgsql.
+        await using var db = CreateDb();
+        var (orgId, orderId) = await SeedFailedAsync(db, updatedMinutesAgo: 240, terminalAttempts: MaxAttempts);
+        var superseded = await db.DeliveryAttempts.Where(a => a.OrderId == orderId).ToListAsync();
+        superseded.Should().HaveCount(MaxAttempts);
+        foreach (var attempt in superseded)
+            attempt.CapSupersededAt = DateTime.UtcNow.AddMinutes(-5);
+        await db.SaveChangesAsync();
+        var enqueuer = new RecordingRetryEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        acted.Should().Be(1);
+        enqueuer.Calls.Should().ContainSingle().Which.Should().Be((orderId, orgId));
+        (await db.DeliveryAttempts.CountAsync(a => a.OrderId == orderId)).Should().Be(MaxAttempts,
+            "the re-drive must not need the rows gone — they are the dispatch evidence");
+    }
+
+    [Fact]
     public async Task RunAsync_DeliveryFailed_WithInFlightDispatchingAttempt_IsUntouched()
     {
         // A 'dispatching' row means a send is mid-flight (crash backstop) — never re-drive on top of it.

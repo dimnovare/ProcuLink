@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+
 namespace ProcuLink.Core.Entities;
 
 public class DeliveryAttempt
@@ -40,8 +42,24 @@ public class DeliveryAttempt
     /// (HTTP 2xx / successful dispatch). Null until the delivery is confirmed.
     /// </summary>
     public DateTime? AcknowledgedAt { get; set; }
-    /// <summary>1-based attempt index within an order's delivery retry sequence; 0 for test-fire rows.</summary>
+    /// <summary>
+    /// 1-based attempt index within an order's delivery sequence; 0 for test-fire rows.
+    /// ASCENDS across operator requeues (never restarts): if a supplier was hit four times,
+    /// "attempt 4" is true and "attempt 1" is a lie — in supplier-visible provenance, the last
+    /// place a number should lie. Ascending is also load-bearing: OpsController orders prior
+    /// attempts by this column, which stops being a total order if generations restart at 1.
+    /// </summary>
     public int AttemptNumber { get; set; }
+
+    /// <summary>
+    /// Set (UTC) when an operator requeue excluded this attempt from the CURRENT retry budget
+    /// (OpsController requeue-delivery). NOT "superseded" as a send — the send happened, and its
+    /// dispatch evidence (<see cref="IdempotencyKey"/> / <see cref="ArtifactSha256"/> / forensic
+    /// columns) is untouched; the row merely stops counting against the attempt cap. Null = counts.
+    /// Replaces the old hard-delete cap reset, which erased dispatch evidence and let a
+    /// genuinely-sent order present as never-dispatched (the refused-rejection re-send P1).
+    /// </summary>
+    public DateTime? CapSupersededAt { get; set; }
 
     // ── Provenance (launch batch 3 — nullable; legacy rows stay null) ────────────
     /// <summary>
@@ -96,6 +114,31 @@ public class DeliveryAttempt
     /// </para>
     /// </summary>
     public const string StatusUnconfirmed = "unconfirmed";
+
+    /// <summary>
+    /// THE cap predicate — the ONE definition of "counts against the CURRENT delivery attempt
+    /// budget". Every cap site composes this via <c>Where(DeliveryAttempt.CountsAgainstCap)</c>
+    /// (DeliveryService.CountDeliveryAttemptsAsync, RetryDeliveryAsync's two counts,
+    /// StrandedFailedDeliveryDetectionService's correlated subquery); OpsController's requeue
+    /// resets the budget by stamping <see cref="CapSupersededAt"/>, never by deleting rows.
+    /// Keep this an <c>Expression</c> — EF inlines a LambdaExpression passed to
+    /// <c>DbSet.Where</c>, including inside correlated subqueries, while a <c>.Compile()</c>d
+    /// delegate does not translate (see WebhookIngressController.HasDispatchMarker's warning).
+    ///
+    /// <para>Two DELIBERATE non-unifications — same table, different questions; each is pinned
+    /// by an assert-the-difference test, not just this comment:</para>
+    /// <para>• NOT the webhook dispatch-evidence predicate
+    /// (<c>WebhookIngressController.HasDispatchMarker</c>). Evidence asks "was a send ever
+    /// BEGUN for this order, ever" — epoch-agnostic, so it must IGNORE
+    /// <see cref="CapSupersededAt"/>. Folding the two reopens the never-dispatched erasure
+    /// hole under a new name: a requeued-then-reported order would read as never sent.</para>
+    /// <para>• NOT attempt NUMBERING (the <c>AttemptNumber</c> counts in DeliveryService).
+    /// Numbering counts attempts EVER — ascending across requeues (see
+    /// <see cref="AttemptNumber"/>) — so it keeps only the <see cref="StatusDispatching"/>
+    /// exclusion and must IGNORE <see cref="CapSupersededAt"/>.</para>
+    /// </summary>
+    public static readonly Expression<Func<DeliveryAttempt, bool>> CountsAgainstCap =
+        a => a.Status != StatusDispatching && a.CapSupersededAt == null;
 
     // Navigation — Order is optional (null for test-fire rows)
     public PurchaseOrderEntity? Order { get; set; }
