@@ -49,8 +49,8 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   passed); terminal webhook writes now close the SLA window (`DeliveryDueAt`/`SlaBreached`) in
   the same atomic claim; the `unconfirmed` attempt row is never rewritten to success. TDD
   RED-first, 3 InMemory + 1 real-Postgres tests; Api 1514 / Infra 999 / Transform 1218 green.
-  Adjacent pre-existing gap chip'd, not fixed: dispatch-4xx → `rejected_by_supplier` keeps a
-  live `DeliveryDueAt` (SLA sweep can flag a settled order).
+  Adjacent pre-existing gap found here (dispatch-4xx keeps a live `DeliveryDueAt`) now FIXED —
+  see the #39 bullet below.
 - **2026-07-23: billing-held park restores truthfully — BE PR #40 (open, awaiting founder
   merge), queue item 4.** `PurchaseOrderEntity.HeldFromStatus` (nullable, migration
   `20260723135012`) records a hold's origin on the LIVE row; `ReleaseBillingHeldOrdersAsync`
@@ -62,6 +62,18 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   TDD RED-first (6 red observed); real-Postgres migration round trip
   (`BillingHeldParkRestorePostgresTests`). Api 1515 / Infra 1002 / Transform 1218 green.
   Pre-existing release-vs-webhook write window named in the method doc + chip'd toward #36.
+- **2026-07-23: SLA window closes on supplier rejection — BE PR #39 (merged, `160bd63`).** The
+  adjacent gap found during #38: a dispatch 4xx moved the order to `rejected_by_supplier` but
+  `PersistAttemptAsync` cleared `DeliveryDueAt`/`SlaBreached` only on success, so once the
+  deadline passed the SLA sweep could raise a false "delivery overdue" on a settled order. Now
+  closed on `result.Success || isSupplierRejection` (5xx/transient stays open — that order still
+  owes a delivery); manual `MarkRejectedAsync` clears the window too; `rejected_by_supplier` added
+  to `DeliverySlaService.ExcludedStatuses` belt-and-braces for legacy rows (both the sweep SELECT
+  and the atomic claim). TDD RED-first, 2 InMemory + 1 real-Postgres
+  (`DeliverySlaConcurrencyPostgresTests.RunAsync_RejectedBySupplierOrder_IsNotFlagged`). Suites on
+  the #39 branch green: Api 1512 / Infra 1000 / Transform 1218. NOTE: this worktree's base
+  predated #38's code; the squash applied cleanly onto the #38-containing main and #38's webhook
+  SLA-close was verified intact post-merge (WebhookIngressController lines 325/347/377).
 - **Founder gates:** sweep hand-back design call (stuck sweep returns `delivering`+fresh
   timestamp; 4 tests pin it). ~~Preimage relocation~~ DONE 2026-07-23: moved (not deleted) to
   `C:\Users\Dmitri.REDACTED-PARTY\Documents\proculink-private\`, SHA256-verified, tree clean.
