@@ -29,8 +29,9 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   (design merged, #36 — note the B cut shipped `DeliveryAttempt.CountsAgainstCap` as the cap's
   canonical predicate; the claim-set work should reuse that pattern; the billing-release
   load-then-save window is chip'd toward it, see the PR #40 entry); (2) one remaining park
-  follow-up: the ~50% park race vs Hangfire refetch (queue item 5 — do NOT start until PR #40
-  and the SLA dispatch-4xx chip's PR both land; all three touch DeliveryService park semantics).
+  follow-up: the ~50% park race vs Hangfire refetch (queue item 5 — UNBLOCKED as of
+  2026-07-23: #39 `160bd63` and #40 `c85f127` are both on main; it was gated on those two
+  because all three touch DeliveryService park semantics).
   Supplier-ACK park resolution (#38) and billing-held park truthful resolution (#40) shipped.
 - **2026-07-23: the B cut SHIPPED — BE PR #37 (merged, `7052053`).** Ops requeue supersedes
   attempt rows (`CapSupersededAt`) instead of deleting them; `DeliveryAttempt.CountsAgainstCap`
@@ -51,8 +52,8 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   RED-first, 3 InMemory + 1 real-Postgres tests; Api 1514 / Infra 999 / Transform 1218 green.
   Adjacent pre-existing gap found here (dispatch-4xx keeps a live `DeliveryDueAt`) now FIXED —
   see the #39 bullet below.
-- **2026-07-23: billing-held park restores truthfully — BE PR #40 (open, awaiting founder
-  merge), queue item 4.** `PurchaseOrderEntity.HeldFromStatus` (nullable, migration
+- **2026-07-23: billing-held park restores truthfully — BE PR #40 (merged, `c85f127`),
+  queue item 4.** `PurchaseOrderEntity.HeldFromStatus` (nullable, migration
   `20260723135012`) records a hold's origin on the LIVE row; `ReleaseBillingHeldOrdersAsync`
   now RESTORES a held park to `delivery_unconfirmed` (SLA nag reopened, NO re-drive — the
   auto re-send of an unknown-outcome PO was the duplicate the park exists to prevent) while
