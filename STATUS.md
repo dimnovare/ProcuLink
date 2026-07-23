@@ -30,7 +30,11 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   money-path, founder-visible, closes the refused-rejection re-send P1); (2) canonical
   delivery-claim predicate implementation (design merged, #36); (3) three park follow-ups
   (supplier ACK auto-resolves a park; billing-held park truthful resolution; the ~50% park
-  race vs Hangfire refetch); (4) `StatusJourney` errDot (rejection draws its X on Validate).
+  race vs Hangfire refetch).
+- **2026-07-23:** `StatusJourney` errDot DONE — FE PR #27 (awaiting merge): the red X now sits
+  on the node that failed (`{ failed: n }` stage variant; bare `failed`→Parse per
+  ParseOrderJob.cs:67-73, `transform_failed`→Transform, delivery failures→Deliver);
+  845/845 vitest + tsc + build green.
 - **Founder gates:** sweep hand-back design call (stuck sweep returns `delivering`+fresh
   timestamp; 4 tests pin it); relocate `docs/proposals/2026-07-11-orphan-org-75abde9a-preimage.json`
   OUT of this public repo's tree (org-data preimage, untracked — `git add -A` risk).
