@@ -629,8 +629,9 @@ builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 // Re-drive seam: the reactivation webhook (BillingController → ReleaseBillingHeldOrdersAsync)
-// re-enqueues delivery for billing-held orders. The Hangfire adapter needs only
-// IBackgroundJobClient, which the Api already provides. Also injected into DeliveryService.
+// re-enqueues delivery for billing-held orders (held parks are restored, not re-enqueued). The
+// Hangfire adapter needs only IBackgroundJobClient, which the Api already provides. Also injected
+// into DeliveryService.
 builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
 builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();

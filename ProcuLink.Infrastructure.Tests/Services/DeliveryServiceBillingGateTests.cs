@@ -103,15 +103,19 @@ public class DeliveryServiceBillingGateTests
         var released = await service.ReleaseBillingHeldOrdersAsync(ids.OrgId, default);
 
         released.Should().Be(1);
-        (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status
+        var releasedOrder = await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId);
+        releasedOrder.Status
             .Should().Be(OrderStatusConstants.ReadyToDeliver, "the held order is re-driven, never stranded");
+        releasedOrder.HeldFromStatus.Should().BeNull("the hold is over; the origin marker is cleared");
     }
 
     // ── The park + a lapsed org (I1) ─────────────────────────────────────────
     // Only an operator "Send again" can bring a parked order here: RetryDeliveryAsync refuses
     // 'delivery_unconfirmed' before its own billing gate, so the automatic queue can never turn a
-    // park into a hold. The human already accepted the duplicate risk the park exists to defer —
-    // the hold just pauses that authorised send until the org can pay for it.
+    // park into a hold. The hold pauses that send until the org can pay — but it does NOT bank the
+    // operator's decision: while held there is no way to revisit it (MarkDelivered gates on
+    // delivery_unconfirmed), and billing can recover days later, so the release RESTORES the park
+    // instead of completing a stale "Send again" nobody can cancel.
 
     [Fact]
     public async Task HoldForBilling_ParkedOrder_HoldsExplicitly_NotLeftParked()
@@ -132,14 +136,19 @@ public class DeliveryServiceBillingGateTests
         var held = await service.HoldForBillingAsync(ids.OrgId, ids.OrderId, default);
 
         held.Should().BeTrue("a parked order is holdable — the operator's Send again must not be swallowed");
-        (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status
+        var heldOrder = await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId);
+        heldOrder.Status
             .Should().Be(OrderStatusConstants.DeliveryHeld, "the order moves to the explicit, auto-releasing hold");
+        // The live row remembers it was a park — without this, the release cannot tell a held park
+        // (restore for a human) from a send-ready hold (re-drive), and the audit payload alone is
+        // not queryable state.
+        heldOrder.HeldFromStatus.Should().Be(OrderStatusConstants.DeliveryUnconfirmed);
         (await db.AuditEvents.CountAsync(e => e.EntityId == ids.OrderId && e.Action == "DeliveryHeldForBilling"))
             .Should().Be(1, "the hold is on the record — the operator's click left a trace");
     }
 
     [Fact]
-    public async Task HeldParkedOrder_IsReleasedByReactivationFlow_NotStrandedInThePark()
+    public async Task HeldParkedOrder_ReleaseRestoresThePark_NeverAutoResends()
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
@@ -151,33 +160,39 @@ public class DeliveryServiceBillingGateTests
         billing.Setup(b => b.CanProcessOrdersAsync(ids.OrgId, It.IsAny<CancellationToken>()))
                .ReturnsAsync(false);
 
-        var service = CreateService(db, new CountingDispatcher(new DeliveryResult(true, null, 202)), encryption, billing.Object);
+        var enqueuer = new RecordingRetryEnqueuer();
+        var service = CreateService(db, new CountingDispatcher(new DeliveryResult(true, null, 202)), encryption, billing.Object, enqueuer);
 
         await service.HoldForBillingAsync(ids.OrgId, ids.OrderId, default);
         (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status
             .Should().Be(OrderStatusConstants.DeliveryHeld);
 
-        // Org returns to good standing → the reactivation flow rescues it. An order left parked
-        // would be invisible to this sweep (it only scans delivery_held) and never re-driven.
+        // Org returns to good standing → the release RESTORES the park instead of completing the
+        // stale "Send again". The operator chose to send days ago, against the billing state of
+        // that moment, and could not revisit the choice while held (MarkDelivered gates on
+        // delivery_unconfirmed) — auto-sending now would be an automatic re-send of an
+        // unknown-outcome PO on a channel that cannot de-duplicate: the duplicate the park exists
+        // to prevent. The human re-decides from the restored park, where both buttons work again.
         var released = await service.ReleaseBillingHeldOrdersAsync(ids.OrgId, default);
 
-        released.Should().Be(1);
-        (await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId)).Status
-            .Should().Be(OrderStatusConstants.ReadyToDeliver, "the operator's Send again resumes once billing settles");
+        released.Should().Be(1, "the park left the hold — it is not stranded in delivery_held");
+        var restored = await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId);
+        restored.Status.Should().Be(OrderStatusConstants.DeliveryUnconfirmed,
+            "a held park is restored for its human, never auto re-sent");
+        restored.HeldFromStatus.Should().BeNull();
+        restored.DeliveryDueAt.Should().NotBeNull("a restored park resumes the SLA nag until a human acts");
+        restored.SlaBreached.Should().BeFalse();
+        enqueuer.Calls.Should().BeEmpty("no automatic re-drive may claim a restored park");
     }
 
-    // ── The invariant that makes releasing a held park to ready_to_deliver SAFE ──────────────
-    // ReleaseBillingHeldOrdersAsync restores every delivery_held order to ready_to_deliver and
-    // re-drives it, without recording where it came from. That is correct ONLY while a park can
-    // reach delivery_held by an operator's decision alone: releasing then COMPLETES the "Send
-    // again" they already chose. It would become a real bug the moment the AUTOMATIC queue could
-    // hold a park — the release would send with no human, which is the one thing the park exists
-    // to prevent.
-    //
-    // That invariant rests entirely on RetryDeliveryAsync refusing a parked order BEFORE its
-    // billing gate. Moving the gate above the non-retryable check — a plausible tidy-up — silently
-    // converts the automatic queue into a park-holder and turns the unconditional release into a
-    // duplicate PO. Pin it here rather than in a comment nobody runs.
+    // ── The invariant that keeps the hold/park interplay safe ────────────────────────────────
+    // ReleaseBillingHeldOrdersAsync branches on HeldFromStatus: a held park is RESTORED to
+    // delivery_unconfirmed (no re-drive), every other hold is released to ready_to_deliver and
+    // re-driven. The park check in RetryDeliveryAsync still matters independently: it must refuse
+    // a parked order BEFORE its billing gate, or the automatic queue could turn a park into a
+    // hold — and although the release would now restore it, the queue would still have burned a
+    // requeue budget slot and churned hold/restore audit rows for a decision no human made.
+    // Pin it here rather than in a comment nobody runs.
     [Fact]
     public async Task Retry_OnParkedOrder_WithLapsedOrg_RefusesBeforeTheBillingGate_AndNeverHolds()
     {
@@ -283,7 +298,8 @@ public class DeliveryServiceBillingGateTests
 
     private static DeliveryService CreateService(
         ProcuLinkDbContext db, IDeliveryDispatcher dispatcher,
-        DeliveryEncryptionService encryption, IBillingService billing) =>
+        DeliveryEncryptionService encryption, IBillingService billing,
+        IRetryDeliveryEnqueuer? enqueuer = null) =>
         new(
             db,
             new FakeFileStorage(),
@@ -293,7 +309,19 @@ public class DeliveryServiceBillingGateTests
             new FakeAnalyticsService(),
             new OrderExceptionService(db),
             NullLogger<DeliveryService>.Instance,
-            billing: billing);
+            billing: billing,
+            retryEnqueuer: enqueuer);
+
+    private sealed class RecordingRetryEnqueuer : IRetryDeliveryEnqueuer
+    {
+        public List<(Guid OrderId, Guid OrgId)> Calls { get; } = new();
+
+        public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
+        {
+            Calls.Add((orderId, orgId));
+            return Task.CompletedTask;
+        }
+    }
 
     private static SupplierDeliveryConfig MakeConfig(Guid orgId, Guid supplierId, DeliveryEncryptionService encryption) =>
         new()

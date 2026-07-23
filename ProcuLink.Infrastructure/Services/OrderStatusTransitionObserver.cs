@@ -101,10 +101,14 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
                 OrderStatusConstants.DeliveryHeld, OrderStatusConstants.RejectedBySupplier),
             // Billing hold → released back to ready_to_deliver (re-driven) on reactivation, or a
-            // late supplier ACK for an order that was already sent before the hold landed.
+            // late supplier ACK for an order that was already sent before the hold landed. A held
+            // PARK (HeldFromStatus == delivery_unconfirmed) is instead RESTORED to
+            // delivery_unconfirmed on release — never re-driven. Mirrors OrderStatusMachine —
+            // both maps or neither (the d4d6eac drift lesson).
             [OrderStatusConstants.DeliveryHeld] = Set(
                 OrderStatusConstants.ReadyToDeliver, OrderStatusConstants.Ready,
-                OrderStatusConstants.Delivered, OrderStatusConstants.RejectedBySupplier),
+                OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryUnconfirmed,
+                OrderStatusConstants.RejectedBySupplier),
             [OrderStatusConstants.Delivering] = Set(
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
                 OrderStatusConstants.DeliveryUnconfirmed,
