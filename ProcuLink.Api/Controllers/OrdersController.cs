@@ -2042,8 +2042,8 @@ public sealed class OrdersController : ControllerBase
             return BadRequest(new { error = "No outbound artifact found. Transform the order before retrying delivery." });
 
         // B2 (lost-order): DO NOT pre-flip to 'delivering'. RetryDeliveryAsync's atomic claim only
-        // accepts delivery_failed / ready_to_deliver / STALE-delivering (UpdatedAt older than the
-        // reclaim window); an optimistic pre-flip stamps UpdatedAt = now, so the enqueued
+        // accepts OrderStatusMachine.ClaimableForRetryFrom or a STALE 'delivering' (UpdatedAt older
+        // than the reclaim window); an optimistic pre-flip stamps UpdatedAt = now, so the enqueued
         // RetryDeliveryJob's own claim matches 0 rows and returns "already in progress". The job then
         // schedules a backoff (~30 min) — by which point the row IS stale, so it eventually delivers.
         // Net effect of the pre-flip: the operator's "Retry now" click sent nothing for half an hour
