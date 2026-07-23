@@ -307,6 +307,141 @@ public class OrderStatusMachineTests
         OrderStatusMachine.WebhookReportableFrom.Should().NotContain(RejectedBySupplier);
     }
 
+    // ── The canonical delivery-claim sets (#36) ──────────────────────────────────────────────
+    // Five hand-written status gates (the dispatch claim's relational + InMemory copies, the retry
+    // claim, HoldForBillingAsync's holdable set, and OrdersController.RetryDelivery's admission
+    // guard) drifted apart four times on one branch, always silently: a status present in one list
+    // and absent from a sibling makes the claim match 0 rows, which reads as "someone else has it"
+    // and logs SUCCESS having sent nothing. These tests pin the sets AND their deliberate deltas.
+
+    /// <summary>
+    /// The 52c6431 regression, pinned. delivery_unconfirmed was added to RedeliverableFrom — so
+    /// OrdersController.Redeliver began returning 202 for it — but not to the claim, so the claim
+    /// matched 0 rows and DispatchArtifactAsync took its BENIGN no-op branch: the job logged SUCCESS
+    /// having sent nothing and the order stayed parked while the operator was told it was sent.
+    /// A code review caught it once. This assertion catches it every time.
+    /// (Redeliver enqueues with requireAutoDeliver: false, so the OPERATOR set is the one that must
+    /// contain it — an automatic activation deliberately cannot claim a park, see the delta test.)
+    /// </summary>
+    [Fact]
+    public void RedeliverableFrom_IsSubsetOf_ClaimableForDispatchFrom()
+        => OrderStatusMachine.RedeliverableFrom.Should().BeSubsetOf(
+            OrderStatusMachine.ClaimableForDispatchFrom,
+            "every status OrdersController.Redeliver accepts (202 + enqueue DeliverOrderJob) must be a " +
+            "status the operator dispatch claim can actually claim. A status in RedeliverableFrom but " +
+            "not in ClaimableForDispatchFrom strands the order SILENTLY — 0 rows claimed reads as " +
+            "'someone else has it', so there is no error, no retry, and no exception to notice");
+
+    /// <summary>
+    /// The #42 conditional member, pinned as an EXACT delta. The dispatch claim admits
+    /// delivery_unconfirmed only for a human activation (requireAutoDeliver: false); an automatic
+    /// activation (TransformOrderJob, the stranded-ready sweep, or a Hangfire refetch of either)
+    /// must never claim a park — a dead activation refetched ~30 min later would otherwise re-send
+    /// a PO the stuck sweep parked in the meantime, the exact duplicate the park exists to prevent.
+    /// Flattening the two sets back into one unconditional set reintroduces that race
+    /// (AutomaticParkClaimPostgresTests pins the behaviour; this pins the declaration).
+    /// </summary>
+    [Fact]
+    public void OperatorAndAutomaticDispatchClaimSets_DifferExactlyBy_DeliveryUnconfirmed()
+    {
+        OrderStatusMachine.ClaimableForAutomaticDispatchFrom.Should().BeSubsetOf(
+            OrderStatusMachine.ClaimableForDispatchFrom,
+            "an automatic activation may never claim a status a human's could not");
+        OrderStatusMachine.ClaimableForDispatchFrom
+            .Except(OrderStatusMachine.ClaimableForAutomaticDispatchFrom)
+            .Should().BeEquivalentTo(new[] { DeliveryUnconfirmed },
+                "the park is the ONE status only a human activation may claim — widening or narrowing " +
+                "this delta is a product decision, so it must be a deliberate edit to this test");
+    }
+
+    /// <summary>
+    /// The retry claim is deliberately the CONSERVATIVE set: it excludes delivery_unconfirmed so
+    /// only a human "Send again" re-drives a parked order, never the automatic backoff queue. This
+    /// pins the direction of that asymmetry — retry may narrow the dispatch set, never widen it.
+    /// </summary>
+    [Fact]
+    public void DispatchAndRetryClaimSets_DifferExactlyBy_DeliveryUnconfirmed()
+    {
+        OrderStatusMachine.ClaimableForRetryFrom.Should().BeSubsetOf(
+            OrderStatusMachine.ClaimableForDispatchFrom,
+            "RetryDeliveryAsync's claim must never accept a status the operator dispatch claim rejects");
+        OrderStatusMachine.ClaimableForDispatchFrom
+            .Except(OrderStatusMachine.ClaimableForRetryFrom)
+            .Should().BeEquivalentTo(new[] { DeliveryUnconfirmed },
+                "a parked (delivery_unconfirmed) order is re-driven ONLY by a human Send again — the " +
+                "automatic backoff queue must never pick it up");
+    }
+
+    /// <summary>
+    /// The automatic dispatch set and the retry set are the SAME product rule stated at two gates:
+    /// no automatic path — first-deliver, sweep re-drive, backoff retry, or a Hangfire refetch of
+    /// any of them — may claim a park; everything else send-ready is fair game for both. They are
+    /// equal by that shared rule, not by coincidence, so diverging them must be a deliberate edit
+    /// here with a new rule to justify it.
+    /// </summary>
+    [Fact]
+    public void AutomaticDispatchAndRetryClaimSets_AreTheSameSet()
+        => OrderStatusMachine.ClaimableForAutomaticDispatchFrom.Should().BeEquivalentTo(
+            OrderStatusMachine.ClaimableForRetryFrom,
+            "both encode 'an automatic activation never claims a park'; if they ever differ, one of " +
+            "the two automatic legs has quietly acquired a claim the other refuses");
+
+    /// <summary>
+    /// The FOURTH list. HoldForBillingAsync sits downstream of DeliverOrderJob's billing gate, on
+    /// the path "Send again" takes when the org has lapsed. Its drift is worse than the claim's: a
+    /// refused status holds nothing, sends nothing, audits nothing, and never reaches
+    /// delivery_held — so ReleaseBillingHeldOrdersAsync never rescues it on reactivation.
+    /// Permanent strand, no self-heal. Hand-fixed once in 392b5a4; this assertion stops a repeat.
+    /// </summary>
+    [Fact]
+    public void RedeliverableFrom_IsSubsetOf_HoldableForBillingFrom()
+        => OrderStatusMachine.RedeliverableFrom.Should().BeSubsetOf(
+            OrderStatusMachine.HoldableForBillingFrom,
+            "a lapsed org's Send again reaches the billing gate BEFORE the claim. A status the hold " +
+            "set refuses is held nowhere, sent nowhere and audited nowhere, and never becomes " +
+            "delivery_held — so the reactivation re-drive never finds it. That strand is permanent, " +
+            "unlike a lost claim");
+
+    /// <summary>
+    /// The FIFTH list. OrdersController.RetryDelivery admits only delivery_failed and mints a 400
+    /// for anything else; the retry claim must be able to claim whatever it admits, or the 202 is a
+    /// lie in the 52c6431 shape. Passes today — this is drift prevention, not a fix.
+    /// </summary>
+    [Fact]
+    public void RetryableFrom_IsSubsetOf_ClaimableForRetryFrom()
+        => OrderStatusMachine.RetryableFrom.Should().BeSubsetOf(
+            OrderStatusMachine.ClaimableForRetryFrom,
+            "OrdersController.RetryDelivery returns 202 for every status in RetryableFrom and " +
+            "enqueues RetryDeliveryJob; a status it admits but the retry claim rejects is the " +
+            "52c6431 shape again");
+
+    /// <summary>
+    /// TransformOrderJob enqueues delivery straight after a successful transform, and
+    /// StrandedReadyOrderDetectionService re-drives orders it finds parked there — both are
+    /// AUTOMATIC activations (requireAutoDeliver: true), so it is the automatic set that must
+    /// accept ready_to_deliver, not merely the operator one.
+    /// </summary>
+    [Fact]
+    public void ReadyToDeliver_IsClaimableForAutomaticDispatch()
+        => OrderStatusMachine.ClaimableForAutomaticDispatchFrom.Should().Contain(ReadyToDeliver,
+            "TransformOrderJob and StrandedReadyOrderDetectionService both enqueue DeliverOrderJob " +
+            "for a ready_to_deliver order with requireAutoDeliver: true; if the automatic claim " +
+            "rejected it, every fresh auto-delivery would strand");
+
+    /// <summary>
+    /// OpsController.RequeueDelivery's guard set accepts delivery_dead_letter, which is NOT
+    /// claimable. It is safe only because the requeue normalizes the row to delivery_failed and
+    /// commits BEFORE enqueuing. The invariant therefore holds over the NORMALIZED TARGET, not over
+    /// the guard set — assert the thing that is actually true, so this test does not quietly become
+    /// a lie if the normalizing write moves. (The requeue enqueues EnqueueRedeliver —
+    /// requireAutoDeliver: false — so the operator set is the one it claims through.)
+    /// </summary>
+    [Fact]
+    public void OpsRequeue_NormalizedTarget_IsClaimableForDispatch()
+        => OrderStatusMachine.ClaimableForDispatchFrom.Should().Contain(DeliveryFailed,
+            "OpsController.RequeueDelivery rewrites the order to delivery_failed before enqueuing " +
+            "DeliverOrderJob");
+
     [Fact]
     public void Machine_KnowsEveryDeclaredStatusConstant()
     {
