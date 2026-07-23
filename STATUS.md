@@ -36,8 +36,8 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   ParseOrderJob.cs:67-73, `transform_failed`→Transform, delivery failures→Deliver);
   845/845 vitest + tsc + build green.
 - **Founder gates:** sweep hand-back design call (stuck sweep returns `delivering`+fresh
-  timestamp; 4 tests pin it); relocate `docs/proposals/2026-07-11-orphan-org-75abde9a-preimage.json`
-  OUT of this public repo's tree (org-data preimage, untracked — `git add -A` risk).
+  timestamp; 4 tests pin it). ~~Preimage relocation~~ DONE 2026-07-23: moved (not deleted) to
+  `C:\Users\Dmitri.REDACTED-PARTY\Documents\proculink-private\`, SHA256-verified, tree clean.
 - **Ops note 2026-07-23:** GitHub Actions went silent ~07:00–08:15 UTC+3 and Vercel dropped one
   main-push webhook (recovered; interim prod deploy went out via `vercel deploy --prod`).
 - **Process rules earned this wave** (durable memory has detail): a comment that JUSTIFIES is a
