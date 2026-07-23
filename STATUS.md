@@ -29,8 +29,8 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   (design merged, #36 — note the B cut shipped `DeliveryAttempt.CountsAgainstCap` as the cap's
   canonical predicate; the claim-set work should reuse that pattern; the billing-release
   load-then-save window is chip'd toward it, see the PR #40 entry). All three park follow-ups
-  are done: supplier-ACK resolution (#38), billing-held truthful restore (#40), and the park
-  race fix (#42, open — see below).
+  are done and merged: supplier-ACK resolution (#38, `2459de1`), billing-held truthful restore
+  (#40, `c85f127`), park race fix (#42, `77820b5`).
 - **2026-07-23: the B cut SHIPPED — BE PR #37 (merged, `7052053`).** Ops requeue supersedes
   attempt rows (`CapSupersededAt`) instead of deleting them; `DeliveryAttempt.CountsAgainstCap`
   is the ONE cap predicate (all five sites); numbering ascends across requeues; evidence
@@ -73,8 +73,8 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   the #39 branch green: Api 1512 / Infra 1000 / Transform 1218. NOTE: this worktree's base
   predated #38's code; the squash applied cleanly onto the #38-containing main and #38's webhook
   SLA-close was verified intact post-merge (WebhookIngressController lines 325/347/377).
-- **2026-07-23: automatic activation never claims a park — BE PR #42 (open, awaiting founder
-  merge), queue item 5.** The dispatch claim admitted `delivery_unconfirmed` unconditionally
+- **2026-07-23: automatic activation never claims a park — BE PR #42 (merged, `77820b5`),
+  queue item 5.** The dispatch claim admitted `delivery_unconfirmed` unconditionally
   (both relational + InMemory branches); a Hangfire refetch (~30-min non-sliding invisibility,
   bare `UseNpgsqlConnection`, Worker Program.cs:133) of a dead automatic activation could
   therefore claim a park the stuck sweep created meanwhile, find no `dispatching` row to
