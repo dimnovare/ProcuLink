@@ -27,9 +27,9 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   mapping view** in the workshop; polish + gate-context pass.
 - **Open engineering, in order:** (1) canonical delivery-claim predicate implementation
   (design merged, #36 — note the B cut shipped `DeliveryAttempt.CountsAgainstCap` as the cap's
-  canonical predicate; the claim-set work should reuse that pattern); (2) three park follow-ups
-  (supplier ACK auto-resolves a park; billing-held park truthful resolution; the ~50% park
-  race vs Hangfire refetch).
+  canonical predicate; the claim-set work should reuse that pattern); (2) two remaining park
+  follow-ups (billing-held park truthful resolution; the ~50% park race vs Hangfire refetch —
+  supplier-ACK park resolution shipped, see below).
 - **2026-07-23: the B cut SHIPPED — BE PR #37 (merged, `7052053`).** Ops requeue supersedes
   attempt rows (`CapSupersededAt`) instead of deleting them; `DeliveryAttempt.CountsAgainstCap`
   is the ONE cap predicate (all five sites); numbering ascends across requeues; evidence
@@ -41,6 +41,14 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   on the node that failed (`{ failed: n }` stage variant; bare `failed`→Parse per
   ParseOrderJob.cs:67-73, `transform_failed`→Transform, delivery failures→Deliver);
   845/845 vitest + tsc + build green.
+- **2026-07-23: supplier ACK resolves a park — BE PR #38 (awaiting merge), queue item 3.**
+  `delivery_unconfirmed` added to `WebhookReportableFrom` (status proxy SOUND for this member:
+  sole writer `ParkUnconfirmedAsync` always leaves a marker row, so the evidence half already
+  passed); terminal webhook writes now close the SLA window (`DeliveryDueAt`/`SlaBreached`) in
+  the same atomic claim; the `unconfirmed` attempt row is never rewritten to success. TDD
+  RED-first, 3 InMemory + 1 real-Postgres tests; Api 1514 / Infra 999 / Transform 1218 green.
+  Adjacent pre-existing gap chip'd, not fixed: dispatch-4xx → `rejected_by_supplier` keeps a
+  live `DeliveryDueAt` (SLA sweep can flag a settled order).
 - **Founder gates:** sweep hand-back design call (stuck sweep returns `delivering`+fresh
   timestamp; 4 tests pin it). ~~Preimage relocation~~ DONE 2026-07-23: moved (not deleted) to
   `C:\Users\Dmitri.REDACTED-PARTY\Documents\proculink-private\`, SHA256-verified, tree clean.
