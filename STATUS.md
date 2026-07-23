@@ -28,11 +28,9 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - **Open engineering, in order:** (1) canonical delivery-claim predicate implementation
   (design merged, #36 — note the B cut shipped `DeliveryAttempt.CountsAgainstCap` as the cap's
   canonical predicate; the claim-set work should reuse that pattern; the billing-release
-  load-then-save window is chip'd toward it, see the PR #40 entry); (2) one remaining park
-  follow-up: the ~50% park race vs Hangfire refetch (queue item 5 — UNBLOCKED as of
-  2026-07-23: #39 `160bd63` and #40 `c85f127` are both on main; it was gated on those two
-  because all three touch DeliveryService park semantics).
-  Supplier-ACK park resolution (#38) and billing-held park truthful resolution (#40) shipped.
+  load-then-save window is chip'd toward it, see the PR #40 entry). All three park follow-ups
+  are done: supplier-ACK resolution (#38), billing-held truthful restore (#40), and the park
+  race fix (#42, open — see below).
 - **2026-07-23: the B cut SHIPPED — BE PR #37 (merged, `7052053`).** Ops requeue supersedes
   attempt rows (`CapSupersededAt`) instead of deleting them; `DeliveryAttempt.CountsAgainstCap`
   is the ONE cap predicate (all five sites); numbering ascends across requeues; evidence
@@ -75,6 +73,22 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   the #39 branch green: Api 1512 / Infra 1000 / Transform 1218. NOTE: this worktree's base
   predated #38's code; the squash applied cleanly onto the #38-containing main and #38's webhook
   SLA-close was verified intact post-merge (WebhookIngressController lines 325/347/377).
+- **2026-07-23: automatic activation never claims a park — BE PR #42 (open, awaiting founder
+  merge), queue item 5.** The dispatch claim admitted `delivery_unconfirmed` unconditionally
+  (both relational + InMemory branches); a Hangfire refetch (~30-min non-sliding invisibility,
+  bare `UseNpgsqlConnection`, Worker Program.cs:133) of a dead automatic activation could
+  therefore claim a park the stuck sweep created meanwhile, find no `dispatching` row to
+  re-adopt, open a FRESH attempt and SEND — defeating the park. Fix = the handover's candidate,
+  verified correct: the claim gates the `delivery_unconfirmed` member on
+  `!requireAutoDeliver`, so only an operator activation can claim a park (Redeliver +
+  ops requeue are the only `requireAutoDeliver:false` producers, verified exhaustively).
+  Bug proven live RED on real Postgres before the fix (`AutomaticParkClaimPostgresTests`);
+  refusal shape is benign `Success + ClaimLost` (predicate is the enforcement — no advisory
+  pre-read, which the sweep could invalidate anyway). Also corrected `HoldForBillingAsync`'s
+  false "automatic queue can never hold a park" justification (billing gate runs pre-claim;
+  safe post-#40). Residual documented: a refetch of a dead OPERATOR redeliver may re-execute
+  that one accepted human send (pre-existing at-least-once semantics). Api 1519 / Infra 1004 /
+  Transform 1218 green. "~50%" mechanism confirmed, probability not measured.
 - **Founder gates:** sweep hand-back design call (stuck sweep returns `delivering`+fresh
   timestamp; 4 tests pin it). ~~Preimage relocation~~ DONE 2026-07-23: moved (not deleted) to
   `C:\Users\Dmitri.REDACTED-PARTY\Documents\proculink-private\`, SHA256-verified, tree clean.
