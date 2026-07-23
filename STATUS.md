@@ -25,12 +25,13 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `unrouted`, full failed-bucket — nothing renders as "New" falsely); **order-page chrome 5 rows
   → 2 (~348px → ~148px)**; navbar de-dup + dashboard context line; **Fields|Lines per-line
   mapping view** in the workshop; polish + gate-context pass.
-- **Open engineering, in order:** (1) canonical delivery-claim predicate implementation
-  (design merged, #36 — note the B cut shipped `DeliveryAttempt.CountsAgainstCap` as the cap's
-  canonical predicate; the claim-set work should reuse that pattern; the billing-release
-  load-then-save window is chip'd toward it, see the PR #40 entry). All three park follow-ups
-  are done and merged: supplier-ACK resolution (#38, `2459de1`), billing-held truthful restore
-  (#40, `c85f127`), park race fix (#42, `77820b5`).
+- **Open engineering: the 2026-07 delivery-reliability queue is EMPTY.** Canonical claim
+  predicate shipped (#43, `97fd19b` — see below; it also closed the billing-release
+  load-then-save window). All three park follow-ups merged: supplier-ACK resolution (#38,
+  `2459de1`), billing-held truthful restore (#40, `c85f127`), park race fix (#42, `77820b5`).
+  Remaining engineering is the long-deferred list below (RLS, invoice rerouting, …) + one
+  small chip: harden `DockerProbe` against a wedged engine (docker info exits 0 while every
+  API route 500s → Docker-gated tests fail confusingly instead of skipping).
 - **2026-07-23: the B cut SHIPPED — BE PR #37 (merged, `7052053`).** Ops requeue supersedes
   attempt rows (`CapSupersededAt`) instead of deleting them; `DeliveryAttempt.CountsAgainstCap`
   is the ONE cap predicate (all five sites); numbering ascends across requeues; evidence
@@ -38,7 +39,8 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   (`CapWithoutErasingEvidencePostgresTests.C2` pins the compound path; KNOWN_GAP deleted —
   it stayed green because its seed never included the erasure step, documented in the PR).
   Suites: Api 1512 / Infra 999 / Transform 1218 green.
-- **2026-07-23:** `StatusJourney` errDot DONE — FE PR #27 (awaiting merge): the red X now sits
+- **2026-07-23:** `StatusJourney` errDot — FE PR #27 MERGED (`f590402`) + Vercel prod deploy
+  verified Ready (same minute — the morning's webhook drop did not recur): the red X now sits
   on the node that failed (`{ failed: n }` stage variant; bare `failed`→Parse per
   ParseOrderJob.cs:67-73, `transform_failed`→Transform, delivery failures→Deliver);
   845/845 vitest + tsc + build green.
@@ -89,6 +91,22 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   safe post-#40). Residual documented: a refetch of a dead OPERATOR redeliver may re-execute
   that one accepted human send (pre-existing at-least-once semantics). Api 1519 / Infra 1004 /
   Transform 1218 green. "~50%" mechanism confirmed, probability not measured.
+- **2026-07-23: the canonical claim predicate — BE PR #43 (merged, `97fd19b`), #36 done.**
+  New `DeliveryClaim` factory (Core): `ClaimableForDispatch(requireAutoDeliver,…)` /
+  `ClaimableForRetry`, org-scoping inside the predicate, #42's conditional park member encoded
+  in the factory (flattening structurally impossible); five named claim sets on
+  `OrderStatusMachine`. Five sites repointed: dispatch relational + InMemory (InMemory now
+  enforces the staleness gate), retry relational + InMemory (InMemory previously had NO gate —
+  now returns the exact relational lost-claim contract), `HoldForBillingAsync`, Retry
+  endpoint's bare literal. Asymmetries preserved + pinned (27 unit tests: operator-vs-auto
+  differ exactly by the park; dispatch-vs-retry likewise; subset invariants with non-vacuity
+  RAN); 64-case real-Postgres matrix pins Npgsql translation ≡ C# evaluation.
+  **Secondary closed: `ReleaseBillingHeldOrdersAsync` per-row atomic claims** — release now
+  loses the race to a supplier callback (old overwrite-backwards bug proven RED live via
+  deterministic interceptor interleave, `BillingReleaseWebhookRacePostgresTests`); #40 restore
+  semantics byte-exact. Suites: Api 1585 / Infra 1031 / Transform 1218 — the chip's full-Api
+  run had 28 Testcontainers-contention fails (all re-ran green), so a clean single-run
+  1585/1585 was re-verified before merge. Docker-wedge incident → DockerProbe chip filed.
 - **Founder gates:** sweep hand-back design call (stuck sweep returns `delivering`+fresh
   timestamp; 4 tests pin it). ~~Preimage relocation~~ DONE 2026-07-23: moved (not deleted) to
   `C:\Users\Dmitri.REDACTED-PARTY\Documents\proculink-private\`, SHA256-verified, tree clean.
