@@ -184,26 +184,28 @@ public sealed class DeliveryService : IDeliveryService
         // already flipped the row to a FRESH 'delivering'), so it skips the claim and only stamps
         // the SLA window.
         //
-        // Claimable = ready_to_deliver / delivery_failed (idle, send-ready), delivery_unconfirmed
-        // (parked — HUMAN activations only, see below), OR a STALE 'delivering' (UpdatedAt older
-        // than the reclaim window — crash recovery). A 'delivered'/terminal order is NOT claimable,
-        // so a redeliver on an already-delivered order affects 0 rows and no-ops.
+        // The claim predicate is the CANONICAL DeliveryClaim.ClaimableForDispatch — the idle set
+        // (OrderStatusMachine.ClaimableForDispatchFrom / ClaimableForAutomaticDispatchFrom, picked
+        // by requireAutoDeliver) plus the shared stale-'delivering' reclaim (crash recovery). A
+        // 'delivered'/terminal order is NOT claimable, so a redeliver on an already-delivered order
+        // affects 0 rows and no-ops. A status missing from the set fails SILENTLY — the claim
+        // matches 0 rows and returns the benign no-op success below, so the job logs success having
+        // sent nothing (52c6431) — which is why the sets are named, pinned, and consumed by BOTH
+        // provider branches from the one factory.
         //
         // delivery_unconfirmed is claimable ONLY when requireAutoDeliver is false — which is true
         // exactly when a human pressed a button: every requireAutoDeliver:false enqueue is
         // DeliverOrderJob.EnqueueRedeliver (OrdersController.Redeliver — the park's "Send again" —
         // and OpsController.RequeueDelivery), while every automatic activation goes through
         // DeliverOrderJob.Enqueue with true (TransformOrderJob, HangfireDeliveryDispatchEnqueuer /
-        // the stranded-ready sweep). The human path must claim it, and a status missing here fails
-        // SILENTLY: the claim matches 0 rows and returns the benign no-op success below, so the job
-        // logs success having sent nothing and the order stays parked forever.
+        // the stranded-ready sweep).
         //
-        // The requireAutoDeliver gate exists because unconditional admission re-opened the park to
-        // one automatic path the retry queue's park refusal (RetryDeliveryAsync) never sees: a dead
-        // Worker's in-flight DeliverOrderJob is REFETCHED by Hangfire ~30 min later (see the
-        // Attempts=0 note on DeliverOrderJob) and re-runs this claim AFTER the stuck sweep's
-        // re-drive has already parked the order. The parked attempt row is terminal ('unconfirmed'),
-        // so OpenDispatchAttemptAsync re-adopts nothing, the re-adopt park guard below never fires,
+        // That gate exists because unconditional admission re-opened the park to one automatic
+        // path the retry queue's park refusal (RetryDeliveryAsync) never sees: a dead Worker's
+        // in-flight DeliverOrderJob is REFETCHED by Hangfire ~30 min later (see the Attempts=0
+        // note on DeliverOrderJob) and re-runs this claim AFTER the stuck sweep's re-drive has
+        // already parked the order. The parked attempt row is terminal ('unconfirmed'), so
+        // OpenDispatchAttemptAsync re-adopts nothing, the re-adopt park guard below never fires,
         // and the refetch would open a fresh attempt and SEND the parked PO automatically — the
         // exact duplicate the park exists to prevent. This predicate, not the pre-claim status
         // reads, is the enforcement: the sweep can park the order between those reads and this
@@ -226,11 +228,7 @@ public sealed class DeliveryService : IDeliveryService
                 await using var claimTx = await _db.Database.BeginTransactionAsync(ct);
 
                 var claimed = await _db.PurchaseOrders
-                    .Where(x => x.Id == orderId && x.OrgId == orgId
-                             && (x.Status == OrderStatusConstants.ReadyToDeliver
-                              || x.Status == OrderStatusConstants.DeliveryFailed
-                              || (!requireAutoDeliver && x.Status == OrderStatusConstants.DeliveryUnconfirmed)
-                              || (x.Status == OrderStatusConstants.Delivering && x.UpdatedAt < staleBefore)))
+                    .Where(DeliveryClaim.ClaimableForDispatch(orgId, orderId, requireAutoDeliver, staleBefore))
                     .ExecuteUpdateAsync(s => s
                         .SetProperty(o => o.Status, OrderStatusConstants.Delivering)
                         .SetProperty(o => o.DeliveryDueAt, dueAt)
@@ -275,15 +273,14 @@ public sealed class DeliveryService : IDeliveryService
                 // emulate the claim through the change tracker (InMemory tests are single-threaded,
                 // so the race the relational claim defends against cannot occur there). A non-claimable
                 // status (e.g. already delivered) still no-ops, matching the relational 0-rows branch.
-                // Mirrors the relational predicate above INCLUDING the requireAutoDeliver gate on
-                // delivery_unconfirmed — these two lists drifting is the four-hardcoded-status-list
-                // class that has bitten four times (AutomaticParkClaimPostgresTests pins the
-                // relational branch; DeliveryServiceUnconfirmedParkTests pins this one).
-                var claimable = order.Status is OrderStatusConstants.ReadyToDeliver
-                                             or OrderStatusConstants.DeliveryFailed
-                                             or OrderStatusConstants.Delivering
-                             || (!requireAutoDeliver && order.Status == OrderStatusConstants.DeliveryUnconfirmed);
-                if (!claimable)
+                // THE SAME predicate as the relational claim above, compiled and evaluated against
+                // the loaded entity — the two branches drifting is the four-hardcoded-status-list
+                // class that bit four times (AutomaticParkClaimPostgresTests pins the relational
+                // branch; DeliveryServiceUnconfirmedParkTests pins this one). Deriving it means
+                // this branch now enforces the staleness gate too: it previously accepted ANY
+                // 'delivering' row, i.e. it was more permissive than production.
+                if (!DeliveryClaim.ClaimableForDispatch(orgId, orderId, requireAutoDeliver, staleBefore)
+                        .Compile()(order))
                 {
                     _logger.LogInformation(
                         "Delivery {OrderId}: not claimed (status '{Status}' not claimable for this activation) — skipping dispatch.",
