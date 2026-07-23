@@ -997,9 +997,17 @@ public sealed class DeliveryService : IDeliveryService
         // Not retryable = terminal, or waiting on something only another actor can clear:
         // 'delivery_held' waits on the billing reactivation release (ReleaseBillingHeldOrdersAsync —
         // which re-drives it, or restores a held park to its human), never on a backoff attempt.
-        if (order.Status is not (OrderStatusConstants.DeliveryFailed
-                              or OrderStatusConstants.ReadyToDeliver
-                              or OrderStatusConstants.Delivering))
+        //
+        // Derived from the canonical retry set, PLUS 'delivering' — deliberately admitted here
+        // WITHOUT the claim's staleness check, because this advisory gate classifies transient vs
+        // terminal while the CLAIM below decides ownership. A fresh 'delivering' must fall through
+        // to the claim and come back ClaimLost (transient — keep rescheduling), never be refused
+        // here as NotRetryable (terminal): the stuck sweep stamps UpdatedAt = now before enqueuing
+        // its re-drive, so the re-driven retry ALWAYS meets a fresh row, and refusing it here would
+        // turn "delivered one backoff later" into "never delivered". Pinned by
+        // CrashedHolderRecoveryCompositionPostgresTests.
+        if (!OrderStatusMachine.ClaimableForRetryFrom.Contains(order.Status)
+            && order.Status != OrderStatusConstants.Delivering)
             return new DeliveryResult(false, $"Order status '{order.Status}' is not retryable.",
                 Outcome: DeliveryOutcome.NotRetryable);
 
@@ -1051,7 +1059,9 @@ public sealed class DeliveryService : IDeliveryService
         // independently of a later SaveChanges, so it must enlist in ONE transaction to be
         // atomic with the count read.)
         //
-        // Claimable = delivery_failed / ready_to_deliver (an idle, retry-ready order), OR a
+        // The claim predicate is the CANONICAL DeliveryClaim.ClaimableForRetry —
+        // OrderStatusMachine.ClaimableForRetryFrom (an idle, retry-ready order; deliberately
+        // excludes the delivery_unconfirmed park, which only a human's redeliver claims) OR a
         // 'delivering' row that has gone STALE (UpdatedAt older than the reclaim window). The
         // staleness gate is what makes the claim mutually exclusive against a CONCURRENT retry:
         // a fresh claim stamps UpdatedAt = now, so the racing worker that unblocks and sees the
@@ -1067,10 +1077,7 @@ public sealed class DeliveryService : IDeliveryService
 
             var claimedAt = DateTime.UtcNow;
             var claimed = await _db.PurchaseOrders
-                .Where(x => x.Id == orderId && x.OrgId == orgId
-                         && (x.Status == OrderStatusConstants.DeliveryFailed
-                          || x.Status == OrderStatusConstants.ReadyToDeliver
-                          || (x.Status == OrderStatusConstants.Delivering && x.UpdatedAt < staleBefore)))
+                .Where(DeliveryClaim.ClaimableForRetry(orgId, orderId, staleBefore))
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.Status, OrderStatusConstants.Delivering)
                     .SetProperty(o => o.UpdatedAt, claimedAt), ct);
@@ -1119,7 +1126,16 @@ public sealed class DeliveryService : IDeliveryService
         {
             // EF InMemory test provider cannot translate ExecuteUpdateAsync / transactions —
             // emulate the claim through the change tracker (InMemory tests are single-threaded,
-            // so the race the relational claim defends against cannot occur there).
+            // so the race the relational claim defends against cannot occur there). THE SAME
+            // predicate as the relational claim above, compiled against the loaded entity. This
+            // branch previously flipped UNCONDITIONALLY — no status gate at all — so InMemory
+            // could never reproduce a lost claim and was more permissive than production.
+            // Mirrors the relational 0-rows return exactly: ClaimLost, never NotRetryable — the
+            // reschedule it triggers IS crash recovery (see the relational branch's comment).
+            if (!DeliveryClaim.ClaimableForRetry(orgId, orderId, staleBefore).Compile()(order))
+                return new DeliveryResult(false, "Delivery for this order is already in progress.",
+                    Outcome: DeliveryOutcome.ClaimLost);
+
             order.Status    = OrderStatusConstants.Delivering;
             order.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
