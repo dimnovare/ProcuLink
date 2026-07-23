@@ -41,7 +41,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   on the node that failed (`{ failed: n }` stage variant; bare `failed`→Parse per
   ParseOrderJob.cs:67-73, `transform_failed`→Transform, delivery failures→Deliver);
   845/845 vitest + tsc + build green.
-- **2026-07-23: supplier ACK resolves a park — BE PR #38 (awaiting merge), queue item 3.**
+- **2026-07-23: supplier ACK resolves a park — BE PR #38 (merged, `2459de1`), queue item 3.**
   `delivery_unconfirmed` added to `WebhookReportableFrom` (status proxy SOUND for this member:
   sole writer `ParkUnconfirmedAsync` always leaves a marker row, so the evidence half already
   passed); terminal webhook writes now close the SLA window (`DeliveryDueAt`/`SlaBreached`) in
