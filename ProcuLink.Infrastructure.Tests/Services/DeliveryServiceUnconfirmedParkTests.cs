@@ -25,13 +25,22 @@ public class DeliveryServiceUnconfirmedParkTests
 {
     private const int MaxAttempts = 3;
 
+    // A crashed worker's orphan is STALE by definition — the claim's reclaim window is 2 minutes
+    // and StuckDeliveryDetectionService only re-drives rows stuck far longer. These tests used to
+    // seed the 'delivering' order with UpdatedAt = now, a state production never re-drives (the
+    // relational claim rejects a fresh 'delivering'); they passed only because the InMemory retry
+    // branch flipped unconditionally. Now that both branches share the canonical predicate, the
+    // seed is aged to match the state the tests describe — and the Postgres twins
+    // (DeliveryCrashRecoveryPostgresTests), which age the identical scenario by 30 minutes.
+    private static readonly DateTime CrashedAt = DateTime.UtcNow.AddMinutes(-30);
+
     // The whole point: an Unsafe channel whose in-flight row is re-adopted must NOT be re-sent.
     [Fact]
     public async Task ReAdopt_OnUnsafeChannel_DoesNotReSend_AndParksOrderUnconfirmed()
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering, updatedAt: CrashedAt);
         db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "erp_erply"));
 
         // The exact post-crash state: order still 'delivering', an in-flight 'dispatching' row
@@ -76,7 +85,7 @@ public class DeliveryServiceUnconfirmedParkTests
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering, updatedAt: CrashedAt);
         db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "http"));
 
         var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
@@ -141,7 +150,7 @@ public class DeliveryServiceUnconfirmedParkTests
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering, updatedAt: CrashedAt);
         db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "erp_erply"));
 
         // Two prior TERMINAL attempts already recorded (priorAttempts == 2), so with
@@ -305,7 +314,7 @@ public class DeliveryServiceUnconfirmedParkTests
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering, updatedAt: CrashedAt);
         db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "erp_directo"));
         var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
         db.DeliveryAttempts.Add(new DeliveryAttempt
@@ -336,7 +345,7 @@ public class DeliveryServiceUnconfirmedParkTests
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering, updatedAt: CrashedAt);
         db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "email"));
 
         var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
@@ -491,7 +500,7 @@ public class DeliveryServiceUnconfirmedParkTests
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering, updatedAt: CrashedAt);
         db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "erp_erply"));
 
         // Attempt 1 genuinely failed and opened a 'delivery_failed' exception (PersistAttemptAsync's
@@ -549,7 +558,7 @@ public class DeliveryServiceUnconfirmedParkTests
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
-        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering, updatedAt: CrashedAt);
         db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol: "email"));
 
         var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
@@ -627,7 +636,7 @@ public class DeliveryServiceUnconfirmedParkTests
     }
 
     private static async Task<(Guid OrgId, Guid SupplierId, Guid OrderId, Guid ArtifactId)> SeedOrderAsync(
-        ProcuLinkDbContext db, string status)
+        ProcuLinkDbContext db, string status, DateTime? updatedAt = null)
     {
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
@@ -645,7 +654,7 @@ public class DeliveryServiceUnconfirmedParkTests
             Currency = "EUR",
             Status = status,
             CreatedAt = now,
-            UpdatedAt = now,
+            UpdatedAt = updatedAt ?? now,
         });
         db.OutboundArtifacts.Add(new OutboundArtifact
         {

@@ -78,7 +78,14 @@ public class DeliveryServiceIdempotencyTests
 
         // Reproduce the EXACT post-crash state: the order is still 'delivering' and a committed
         // 'dispatching' attempt row (opened just before the supplier ACK) was never finalised.
-        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering);
+        // A crashed worker's orphan is STALE by definition — StuckDeliveryDetectionService only
+        // re-drives rows stuck for many minutes, and the claim's reclaim window is 2. Seeding
+        // UtcNow described a state production never re-drives (the relational claim rejects a
+        // fresh 'delivering'); it passed only while the InMemory retry branch flipped
+        // unconditionally. Matches the Postgres twin in DeliveryCrashRecoveryPostgresTests,
+        // which ages the identical scenario by 30 minutes.
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering,
+            updatedAt: DateTime.UtcNow.AddMinutes(-30));
         db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
         var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
         db.DeliveryAttempts.Add(new DeliveryAttempt
@@ -134,7 +141,7 @@ public class DeliveryServiceIdempotencyTests
     }
 
     private static async Task<(Guid OrgId, Guid SupplierId, Guid OrderId, Guid ArtifactId)> SeedOrderAsync(
-        ProcuLinkDbContext db, string status)
+        ProcuLinkDbContext db, string status, DateTime? updatedAt = null)
     {
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
@@ -152,7 +159,7 @@ public class DeliveryServiceIdempotencyTests
             Currency = "EUR",
             Status = status,
             CreatedAt = now,
-            UpdatedAt = now,
+            UpdatedAt = updatedAt ?? now,
         });
         db.OutboundArtifacts.Add(new OutboundArtifact
         {

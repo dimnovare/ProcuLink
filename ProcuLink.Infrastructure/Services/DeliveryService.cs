@@ -184,26 +184,28 @@ public sealed class DeliveryService : IDeliveryService
         // already flipped the row to a FRESH 'delivering'), so it skips the claim and only stamps
         // the SLA window.
         //
-        // Claimable = ready_to_deliver / delivery_failed (idle, send-ready), delivery_unconfirmed
-        // (parked — HUMAN activations only, see below), OR a STALE 'delivering' (UpdatedAt older
-        // than the reclaim window — crash recovery). A 'delivered'/terminal order is NOT claimable,
-        // so a redeliver on an already-delivered order affects 0 rows and no-ops.
+        // The claim predicate is the CANONICAL DeliveryClaim.ClaimableForDispatch — the idle set
+        // (OrderStatusMachine.ClaimableForDispatchFrom / ClaimableForAutomaticDispatchFrom, picked
+        // by requireAutoDeliver) plus the shared stale-'delivering' reclaim (crash recovery). A
+        // 'delivered'/terminal order is NOT claimable, so a redeliver on an already-delivered order
+        // affects 0 rows and no-ops. A status missing from the set fails SILENTLY — the claim
+        // matches 0 rows and returns the benign no-op success below, so the job logs success having
+        // sent nothing (52c6431) — which is why the sets are named, pinned, and consumed by BOTH
+        // provider branches from the one factory.
         //
         // delivery_unconfirmed is claimable ONLY when requireAutoDeliver is false — which is true
         // exactly when a human pressed a button: every requireAutoDeliver:false enqueue is
         // DeliverOrderJob.EnqueueRedeliver (OrdersController.Redeliver — the park's "Send again" —
         // and OpsController.RequeueDelivery), while every automatic activation goes through
         // DeliverOrderJob.Enqueue with true (TransformOrderJob, HangfireDeliveryDispatchEnqueuer /
-        // the stranded-ready sweep). The human path must claim it, and a status missing here fails
-        // SILENTLY: the claim matches 0 rows and returns the benign no-op success below, so the job
-        // logs success having sent nothing and the order stays parked forever.
+        // the stranded-ready sweep).
         //
-        // The requireAutoDeliver gate exists because unconditional admission re-opened the park to
-        // one automatic path the retry queue's park refusal (RetryDeliveryAsync) never sees: a dead
-        // Worker's in-flight DeliverOrderJob is REFETCHED by Hangfire ~30 min later (see the
-        // Attempts=0 note on DeliverOrderJob) and re-runs this claim AFTER the stuck sweep's
-        // re-drive has already parked the order. The parked attempt row is terminal ('unconfirmed'),
-        // so OpenDispatchAttemptAsync re-adopts nothing, the re-adopt park guard below never fires,
+        // That gate exists because unconditional admission re-opened the park to one automatic
+        // path the retry queue's park refusal (RetryDeliveryAsync) never sees: a dead Worker's
+        // in-flight DeliverOrderJob is REFETCHED by Hangfire ~30 min later (see the Attempts=0
+        // note on DeliverOrderJob) and re-runs this claim AFTER the stuck sweep's re-drive has
+        // already parked the order. The parked attempt row is terminal ('unconfirmed'), so
+        // OpenDispatchAttemptAsync re-adopts nothing, the re-adopt park guard below never fires,
         // and the refetch would open a fresh attempt and SEND the parked PO automatically — the
         // exact duplicate the park exists to prevent. This predicate, not the pre-claim status
         // reads, is the enforcement: the sweep can park the order between those reads and this
@@ -226,11 +228,7 @@ public sealed class DeliveryService : IDeliveryService
                 await using var claimTx = await _db.Database.BeginTransactionAsync(ct);
 
                 var claimed = await _db.PurchaseOrders
-                    .Where(x => x.Id == orderId && x.OrgId == orgId
-                             && (x.Status == OrderStatusConstants.ReadyToDeliver
-                              || x.Status == OrderStatusConstants.DeliveryFailed
-                              || (!requireAutoDeliver && x.Status == OrderStatusConstants.DeliveryUnconfirmed)
-                              || (x.Status == OrderStatusConstants.Delivering && x.UpdatedAt < staleBefore)))
+                    .Where(DeliveryClaim.ClaimableForDispatch(orgId, orderId, requireAutoDeliver, staleBefore))
                     .ExecuteUpdateAsync(s => s
                         .SetProperty(o => o.Status, OrderStatusConstants.Delivering)
                         .SetProperty(o => o.DeliveryDueAt, dueAt)
@@ -275,15 +273,14 @@ public sealed class DeliveryService : IDeliveryService
                 // emulate the claim through the change tracker (InMemory tests are single-threaded,
                 // so the race the relational claim defends against cannot occur there). A non-claimable
                 // status (e.g. already delivered) still no-ops, matching the relational 0-rows branch.
-                // Mirrors the relational predicate above INCLUDING the requireAutoDeliver gate on
-                // delivery_unconfirmed — these two lists drifting is the four-hardcoded-status-list
-                // class that has bitten four times (AutomaticParkClaimPostgresTests pins the
-                // relational branch; DeliveryServiceUnconfirmedParkTests pins this one).
-                var claimable = order.Status is OrderStatusConstants.ReadyToDeliver
-                                             or OrderStatusConstants.DeliveryFailed
-                                             or OrderStatusConstants.Delivering
-                             || (!requireAutoDeliver && order.Status == OrderStatusConstants.DeliveryUnconfirmed);
-                if (!claimable)
+                // THE SAME predicate as the relational claim above, compiled and evaluated against
+                // the loaded entity — the two branches drifting is the four-hardcoded-status-list
+                // class that bit four times (AutomaticParkClaimPostgresTests pins the relational
+                // branch; DeliveryServiceUnconfirmedParkTests pins this one). Deriving it means
+                // this branch now enforces the staleness gate too: it previously accepted ANY
+                // 'delivering' row, i.e. it was more permissive than production.
+                if (!DeliveryClaim.ClaimableForDispatch(orgId, orderId, requireAutoDeliver, staleBefore)
+                        .Compile()(order))
                 {
                     _logger.LogInformation(
                         "Delivery {OrderId}: not claimed (status '{Status}' not claimable for this activation) — skipping dispatch.",
@@ -1000,9 +997,17 @@ public sealed class DeliveryService : IDeliveryService
         // Not retryable = terminal, or waiting on something only another actor can clear:
         // 'delivery_held' waits on the billing reactivation release (ReleaseBillingHeldOrdersAsync —
         // which re-drives it, or restores a held park to its human), never on a backoff attempt.
-        if (order.Status is not (OrderStatusConstants.DeliveryFailed
-                              or OrderStatusConstants.ReadyToDeliver
-                              or OrderStatusConstants.Delivering))
+        //
+        // Derived from the canonical retry set, PLUS 'delivering' — deliberately admitted here
+        // WITHOUT the claim's staleness check, because this advisory gate classifies transient vs
+        // terminal while the CLAIM below decides ownership. A fresh 'delivering' must fall through
+        // to the claim and come back ClaimLost (transient — keep rescheduling), never be refused
+        // here as NotRetryable (terminal): the stuck sweep stamps UpdatedAt = now before enqueuing
+        // its re-drive, so the re-driven retry ALWAYS meets a fresh row, and refusing it here would
+        // turn "delivered one backoff later" into "never delivered". Pinned by
+        // CrashedHolderRecoveryCompositionPostgresTests.
+        if (!OrderStatusMachine.ClaimableForRetryFrom.Contains(order.Status)
+            && order.Status != OrderStatusConstants.Delivering)
             return new DeliveryResult(false, $"Order status '{order.Status}' is not retryable.",
                 Outcome: DeliveryOutcome.NotRetryable);
 
@@ -1054,7 +1059,9 @@ public sealed class DeliveryService : IDeliveryService
         // independently of a later SaveChanges, so it must enlist in ONE transaction to be
         // atomic with the count read.)
         //
-        // Claimable = delivery_failed / ready_to_deliver (an idle, retry-ready order), OR a
+        // The claim predicate is the CANONICAL DeliveryClaim.ClaimableForRetry —
+        // OrderStatusMachine.ClaimableForRetryFrom (an idle, retry-ready order; deliberately
+        // excludes the delivery_unconfirmed park, which only a human's redeliver claims) OR a
         // 'delivering' row that has gone STALE (UpdatedAt older than the reclaim window). The
         // staleness gate is what makes the claim mutually exclusive against a CONCURRENT retry:
         // a fresh claim stamps UpdatedAt = now, so the racing worker that unblocks and sees the
@@ -1070,10 +1077,7 @@ public sealed class DeliveryService : IDeliveryService
 
             var claimedAt = DateTime.UtcNow;
             var claimed = await _db.PurchaseOrders
-                .Where(x => x.Id == orderId && x.OrgId == orgId
-                         && (x.Status == OrderStatusConstants.DeliveryFailed
-                          || x.Status == OrderStatusConstants.ReadyToDeliver
-                          || (x.Status == OrderStatusConstants.Delivering && x.UpdatedAt < staleBefore)))
+                .Where(DeliveryClaim.ClaimableForRetry(orgId, orderId, staleBefore))
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.Status, OrderStatusConstants.Delivering)
                     .SetProperty(o => o.UpdatedAt, claimedAt), ct);
@@ -1122,7 +1126,16 @@ public sealed class DeliveryService : IDeliveryService
         {
             // EF InMemory test provider cannot translate ExecuteUpdateAsync / transactions —
             // emulate the claim through the change tracker (InMemory tests are single-threaded,
-            // so the race the relational claim defends against cannot occur there).
+            // so the race the relational claim defends against cannot occur there). THE SAME
+            // predicate as the relational claim above, compiled against the loaded entity. This
+            // branch previously flipped UNCONDITIONALLY — no status gate at all — so InMemory
+            // could never reproduce a lost claim and was more permissive than production.
+            // Mirrors the relational 0-rows return exactly: ClaimLost, never NotRetryable — the
+            // reschedule it triggers IS crash recovery (see the relational branch's comment).
+            if (!DeliveryClaim.ClaimableForRetry(orgId, orderId, staleBefore).Compile()(order))
+                return new DeliveryResult(false, "Delivery for this order is already in progress.",
+                    Outcome: DeliveryOutcome.ClaimLost);
+
             order.Status    = OrderStatusConstants.Delivering;
             order.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
@@ -1196,29 +1209,14 @@ public sealed class DeliveryService : IDeliveryService
             .Where(o => o.Id == orderId && o.OrgId == orgId)
             .FirstOrDefaultAsync(ct);
 
-        // Holdable = an idle, send-ready order that has NOT yet been claimed for this dispatch:
-        //   • ready_to_deliver     — DeliverOrderJob's first-delivery billing gate (transform just done).
-        //   • delivery_failed      — RetryDeliveryAsync's billing gate (A5): a backoff retry for an order
-        //                            that previously failed, now blocked because the org lapsed.
-        //   • delivery_unconfirmed — the same case reached from the park: an operator clicked
-        //                            "Send again" for an org that lapsed since the park. The backoff
-        //                            queue never lands here (RetryDeliveryAsync refuses this status
-        //                            before its own billing gate), but one AUTOMATIC path does: a
-        //                            Hangfire-refetched DeliverOrderJob checks billing BEFORE the
-        //                            dispatch claim that would refuse its park claim, so a lapsed
-        //                            org's refetch holds the park instead of no-oping. That is safe,
-        //                            not a leak: holding pauses the nag without sending, and release
-        //                            RESTORES a held park (HeldFromStatus below) rather than
-        //                            re-driving it. Omitting the status here would hold NOTHING and
-        //                            leave the order parked: invisible to ReleaseBillingHeldOrdersAsync
-        //                            (it sweeps delivery_held only), so billing settling would never
-        //                            rescue it.
-        // Any other status (delivering / delivered / dead-letter / already held) is a benign no-op —
-        // the billing gate simply returns without holding, and never delivers.
-        if (order is null ||
-            order.Status is not (OrderStatusConstants.ReadyToDeliver
-                              or OrderStatusConstants.DeliveryFailed
-                              or OrderStatusConstants.DeliveryUnconfirmed))
+        // The FOURTH canonical list — see OrderStatusMachine.HoldableForBillingFrom for the
+        // per-status rationale (including why the park is holdable, and how a refetched automatic
+        // activation can legitimately reach this gate with one). Deriving it here is what stops
+        // the drift that bit in 392b5a4: a status this gate refuses is held nowhere, sent nowhere
+        // and audited nowhere, and never reaches delivery_held — so the reactivation release never
+        // rescues it. Any non-holdable status (delivering / delivered / dead-letter / already
+        // held) is a benign no-op — the billing gate returns without holding, and never delivers.
+        if (order is null || !OrderStatusMachine.HoldableForBillingFrom.Contains(order.Status))
             return false;
 
         var fromStatus = order.Status;
@@ -1294,18 +1292,33 @@ public sealed class DeliveryService : IDeliveryService
     /// deliberate pause).
     /// </para>
     /// <para>
-    /// KNOWN WINDOW (pre-existing — the previous unconditional release had the identical
-    /// load-then-<c>SaveChanges</c> shape): the rows are read tracked and written back without a
-    /// concurrency token, so a supplier status callback that claims one of them via
-    /// <c>ExecuteUpdateAsync</c> (<c>WebhookIngressController</c> — <c>delivery_held</c> is
-    /// webhook-reportable) in the milliseconds between this SELECT and the save is overwritten
-    /// backwards. Closing it means per-row atomic claims — the canonical delivery-claim predicate
-    /// work (#36) owns that shape; tracked as a follow-up, not silently.
+    /// Each row is released through an ATOMIC per-row claim — an <c>ExecuteUpdateAsync</c> guarded
+    /// on <c>Status == delivery_held</c>, committed in one transaction with that row's audit
+    /// event. <c>delivery_held</c> is webhook-reportable, so a supplier status callback can claim
+    /// a held order terminal (<c>WebhookIngressController</c>'s own guarded update) between this
+    /// method's list read and its writes; the guard makes the release LOSE that race — 0 rows
+    /// claimed means the webhook answered first, and the row is skipped: not counted, not audited,
+    /// not re-driven. The previous tracked-load + <c>SaveChanges</c> shape (no concurrency token)
+    /// overwrote the webhook's write BACKWARDS — a just-delivered order re-driven, or a
+    /// just-delivered park "restored" with its nag reopened. Pinned per branch by
+    /// <c>BillingReleaseWebhookRacePostgresTests</c>, which lands the webhook write deterministically
+    /// inside the window.
+    /// </para>
+    /// <para>
+    /// Returns the number of orders actually released — a row lost to the webhook race is not
+    /// counted (callers only log the figure).
     /// </para>
     /// </summary>
     public async Task<int> ReleaseBillingHeldOrdersAsync(Guid orgId, CancellationToken ct)
     {
+        // Read-only listing: every write below goes through the per-row guarded claim, never the
+        // change tracker (the tracked-entity + SaveChanges shape is exactly the window this
+        // method closes). HeldFromStatus is safe to read here even though the row may move
+        // between this read and the claim: its only writer is HoldForBillingAsync, webhook/MV-1
+        // exits leave it stale by design, and the claim's status guard decides whether the row is
+        // still ours to release at all.
         var held = await _db.PurchaseOrders
+            .AsNoTracking()
             .Where(o => o.OrgId == orgId && o.Status == OrderStatusConstants.DeliveryHeld)
             .ToListAsync(ct);
 
@@ -1313,56 +1326,102 @@ public sealed class DeliveryService : IDeliveryService
             return 0;
 
         var now = DateTime.UtcNow;
+        var relational = _db.Database.IsRelational();
         var toReDrive = new List<PurchaseOrderEntity>();
+        var released = 0;
         foreach (var order in held)
         {
             var isPark = order.HeldFromStatus == OrderStatusConstants.DeliveryUnconfirmed;
             var toStatus = isPark ? OrderStatusConstants.DeliveryUnconfirmed : OrderStatusConstants.ReadyToDeliver;
+            var dueAt = now + _reliability.SlaWindow;
 
-            order.Status = toStatus;
-            order.HeldFromStatus = null;
-            order.UpdatedAt = now;
-            if (isPark)
+            bool claimed;
+            if (relational)
             {
-                // Resume the park's nag (see the method doc above).
-                order.DeliveryDueAt = now + _reliability.SlaWindow;
-                order.SlaBreached = false;
+                // One transaction per row: the guarded claim and its audit event commit together
+                // (ExecuteUpdate otherwise auto-commits independently of the later SaveChanges).
+                await using var releaseTx = await _db.Database.BeginTransactionAsync(ct);
+
+                // The park restore and the re-drive release are two DIFFERENT writes sharing one
+                // guard shape; both restore semantics are #40's, unchanged: a held park goes back
+                // to its human (SLA nag reopened, NO re-drive), everything else goes to
+                // ready_to_deliver and re-drives.
+                var rows = isPark
+                    ? await _db.PurchaseOrders
+                        .Where(o => o.Id == order.Id && o.OrgId == orgId
+                                 && o.Status == OrderStatusConstants.DeliveryHeld)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(o => o.Status, toStatus)
+                            .SetProperty(o => o.HeldFromStatus, (string?)null)
+                            .SetProperty(o => o.UpdatedAt, now)
+                            // Resume the park's nag (see the method doc above).
+                            .SetProperty(o => o.DeliveryDueAt, dueAt)
+                            .SetProperty(o => o.SlaBreached, false), ct)
+                    : await _db.PurchaseOrders
+                        .Where(o => o.Id == order.Id && o.OrgId == orgId
+                                 && o.Status == OrderStatusConstants.DeliveryHeld)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(o => o.Status, toStatus)
+                            .SetProperty(o => o.HeldFromStatus, (string?)null)
+                            .SetProperty(o => o.UpdatedAt, now), ct);
+
+                if (rows == 0)
+                {
+                    // The webhook (or another release) moved this row first — its write wins.
+                    await releaseTx.RollbackAsync(ct);
+                    claimed = false;
+                }
+                else
+                {
+                    AddReleaseAudit(orgId, order.Id, isPark, toStatus, now);
+                    await _db.SaveChangesAsync(ct);
+                    await releaseTx.CommitAsync(ct);
+                    claimed = true;
+                }
             }
             else
             {
-                toReDrive.Add(order);
+                // EF InMemory test provider cannot translate ExecuteUpdateAsync / transactions —
+                // emulate the guarded claim through the change tracker (InMemory tests are
+                // single-threaded, so the race the guard defends against cannot occur there).
+                var tracked = await _db.PurchaseOrders
+                    .FirstOrDefaultAsync(o => o.Id == order.Id && o.OrgId == orgId, ct);
+                if (tracked is null || tracked.Status != OrderStatusConstants.DeliveryHeld)
+                {
+                    claimed = false;
+                }
+                else
+                {
+                    tracked.Status = toStatus;
+                    tracked.HeldFromStatus = null;
+                    tracked.UpdatedAt = now;
+                    if (isPark)
+                    {
+                        tracked.DeliveryDueAt = dueAt;
+                        tracked.SlaBreached = false;
+                    }
+                    AddReleaseAudit(orgId, order.Id, isPark, toStatus, now);
+                    await _db.SaveChangesAsync(ct);
+                    claimed = true;
+                }
             }
 
-            var payload = System.Text.Json.JsonSerializer.Serialize(new
+            if (!claimed)
             {
-                reason = "DeliveryHoldReleased",
-                fromStatus = OrderStatusConstants.DeliveryHeld,
-                toStatus,
-                releasedAt = now,
-                detail = isPark
-                    ? "Org returned to a processing state — the hold is over, and the order is back "
-                      + "where it was: waiting for someone to decide whether to send it again or mark "
-                      + "it delivered. It was NOT sent automatically."
-                    : "Org returned to a processing state — delivery hold released and re-driven.",
-            });
+                _logger.LogInformation(
+                    "DeliveryHoldReleased: order {OrderId} (org {OrgId}) left 'delivery_held' between the release's read and its claim (supplier callback) — leaving its new status untouched.",
+                    order.Id, orgId);
+                continue;
+            }
 
-            _db.AuditEvents.Add(new AuditEvent
-            {
-                Id = Guid.NewGuid(),
-                OrgId = orgId,
-                UserId = null,
-                EntityType = "Order",
-                EntityId = order.Id,
-                Action = "DeliveryHoldReleased",
-                Payload = System.Text.Json.JsonDocument.Parse(payload),
-                CreatedAt = now,
-            });
+            released++;
+            if (!isPark)
+                toReDrive.Add(order);
         }
 
-        // Commit the ready_to_deliver resets BEFORE enqueuing re-drives, so a retry job can't
-        // start on a still-'delivery_held' row and bow out (RetryDeliveryAsync claims from
+        // Each row's reset committed with its claim, BEFORE the enqueues below, so a retry job
+        // can't start on a still-'delivery_held' row and bow out (RetryDeliveryAsync claims from
         // ready_to_deliver, not delivery_held).
-        await _db.SaveChangesAsync(ct);
 
         if (_retryEnqueuer is null)
         {
@@ -1379,8 +1438,37 @@ public sealed class DeliveryService : IDeliveryService
 
         _logger.LogWarning(
             "DeliveryHoldReleased: released {Count} billing-held order(s) for org {OrgId} — {ReDriven} re-driven, {Restored} restored to their park for an operator decision.",
-            held.Count, orgId, toReDrive.Count, held.Count - toReDrive.Count);
-        return held.Count;
+            released, orgId, toReDrive.Count, released - toReDrive.Count);
+        return released;
+    }
+
+    /// <summary>One release audit event, identical for both provider branches.</summary>
+    private void AddReleaseAudit(Guid orgId, Guid orderId, bool isPark, string toStatus, DateTime now)
+    {
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            reason = "DeliveryHoldReleased",
+            fromStatus = OrderStatusConstants.DeliveryHeld,
+            toStatus,
+            releasedAt = now,
+            detail = isPark
+                ? "Org returned to a processing state — the hold is over, and the order is back "
+                  + "where it was: waiting for someone to decide whether to send it again or mark "
+                  + "it delivered. It was NOT sent automatically."
+                : "Org returned to a processing state — delivery hold released and re-driven.",
+        });
+
+        _db.AuditEvents.Add(new AuditEvent
+        {
+            Id = Guid.NewGuid(),
+            OrgId = orgId,
+            UserId = null,
+            EntityType = "Order",
+            EntityId = orderId,
+            Action = "DeliveryHoldReleased",
+            Payload = System.Text.Json.JsonDocument.Parse(payload),
+            CreatedAt = now,
+        });
     }
 
     private async Task DeadLetterAsync(

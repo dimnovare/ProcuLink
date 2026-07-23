@@ -340,6 +340,19 @@ public sealed class DockerRequiredFactAttribute : FactAttribute
     }
 }
 
+/// <summary>
+/// <see cref="DockerRequiredFactAttribute"/>'s Theory twin — statically skips every case when
+/// Docker is unreachable.
+/// </summary>
+public sealed class DockerRequiredTheoryAttribute : TheoryAttribute
+{
+    public DockerRequiredTheoryAttribute()
+    {
+        if (DockerProbe.UnavailableReason is { } reason)
+            Skip = $"Requires Docker/Testcontainers — {reason}";
+    }
+}
+
 [Collection("postgres-container")]
 public sealed class EndToEndPipelineTests : IAsyncLifetime
 {
