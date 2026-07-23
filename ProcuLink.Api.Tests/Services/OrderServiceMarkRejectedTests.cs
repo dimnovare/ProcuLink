@@ -132,6 +132,29 @@ public class OrderServiceMarkRejectedTests
     }
 
     [Fact]
+    public async Task MarkRejectedAsync_ClosesSlaWindow()
+    {
+        var (db, orgId, orderId) = await SeedOrderAsync(OrderStatusConstants.Delivering);
+
+        // Order was mid-delivery with a live, overdue SLA window the sweep had already flagged.
+        var seeded = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        seeded.DeliveryDueAt = DateTime.UtcNow.AddMinutes(-5);
+        seeded.SlaBreached   = true;
+        await db.SaveChangesAsync();
+
+        var svc = BuildService(db);
+        var result = await svc.MarkRejectedAsync(
+            orgId, orderId, "Wrong item codes in payload", CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+
+        var order = await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId);
+        // A manual terminal rejection settles the order — it must not keep nagging "delivery overdue".
+        Assert.Null(order.DeliveryDueAt);
+        Assert.False(order.SlaBreached);
+    }
+
+    [Fact]
     public async Task MarkRejectedAsync_WithExistingDeliveryAttempt_WritesRejectionReasonOnAttempt()
     {
         var (db, orgId, orderId) = await SeedOrderAsync();
