@@ -25,12 +25,18 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `unrouted`, full failed-bucket — nothing renders as "New" falsely); **order-page chrome 5 rows
   → 2 (~348px → ~148px)**; navbar de-dup + dashboard context line; **Fields|Lines per-line
   mapping view** in the workshop; polish + gate-context pass.
-- **Open engineering, in order:** (1) the **B cut** — reset the delivery attempt cap WITHOUT
-  erasing dispatch evidence (spec: `docs/superpowers/specs/2026-07-17-delivery-cap-without-erasing-evidence.md`;
-  money-path, founder-visible, closes the refused-rejection re-send P1); (2) canonical
-  delivery-claim predicate implementation (design merged, #36); (3) three park follow-ups
+- **Open engineering, in order:** (1) canonical delivery-claim predicate implementation
+  (design merged, #36 — note the B cut shipped `DeliveryAttempt.CountsAgainstCap` as the cap's
+  canonical predicate; the claim-set work should reuse that pattern); (2) three park follow-ups
   (supplier ACK auto-resolves a park; billing-held park truthful resolution; the ~50% park
   race vs Hangfire refetch).
+- **2026-07-23: the B cut SHIPPED — BE PR #37 (merged, `7052053`).** Ops requeue supersedes
+  attempt rows (`CapSupersededAt`) instead of deleting them; `DeliveryAttempt.CountsAgainstCap`
+  is the ONE cap predicate (all five sites); numbering ascends across requeues; evidence
+  predicate untouched + assert-the-difference tests; refused-rejection re-send P1 CLOSED
+  (`CapWithoutErasingEvidencePostgresTests.C2` pins the compound path; KNOWN_GAP deleted —
+  it stayed green because its seed never included the erasure step, documented in the PR).
+  Suites: Api 1512 / Infra 999 / Transform 1218 green.
 - **2026-07-23:** `StatusJourney` errDot DONE — FE PR #27 (awaiting merge): the red X now sits
   on the node that failed (`{ failed: n }` stage variant; bare `failed`→Parse per
   ParseOrderJob.cs:67-73, `transform_failed`→Transform, delivery failures→Deliver);
