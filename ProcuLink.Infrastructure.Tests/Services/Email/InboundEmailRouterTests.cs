@@ -813,7 +813,7 @@ public class InboundEmailRouterTests
             AccountStatusConstants.Active,
             new[] { new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }) });
 
-        log.LevelOf("created order").Should().Be(LogLevel.Information,
+        log.LevelOf("created routed order").Should().Be(LogLevel.Information,
             "one line per order actually created is the operational trail, not chatter");
     }
 
