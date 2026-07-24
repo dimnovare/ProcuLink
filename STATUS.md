@@ -11,6 +11,20 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-24, late) — BE-6 fixed
+
+- **BE-6 (P1) closed — the generic XML catalog parser no longer drops every second field.**
+  `SupplierCatalogFileParser.FlattenElement` double-advanced the `XmlReader` per scalar child,
+  so `a,b,c,d` flattened to `[a|c]`; Jarltech's 14,713 items would have imported with no name
+  and no price. Fixed by the guard the cXML path already carried. 3 RED-first tests, each with
+  ≥4 scalar children — the pre-existing XML fixtures topped out at 2 children, which is exactly
+  why the suite never caught it. **This lifts the "do not enable element-based XML feeds" gate
+  on OPS-2** once the PR merges. Attribute feeds (100MEGA) and cXML Index were never affected.
+  **BE PR #55 — open, not merged. CI green: 3,863 passed / 0 failed / 2 skipped** (the 2 are
+  the env-gated live-feed tests). Local Api.Tests skipped its 130 Postgres tests — the Docker
+  Desktop engine wedged under cross-worktree Testcontainers load and the runner still printed
+  `Passed!`; CI on Linux ran all 1596 with 0 skips, which is the result that counts.
+
 ## Snapshot (2026-07-24, evening) — wave MERGED
 
 - **All 14 wave PRs are merged and both repos have zero open PRs.** FE #28–#33 (catalog-tab
@@ -23,9 +37,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   Postgres coverage). Item-level detail in the struck queue + bullets below.
 - **Open after the train:** FOUNDER P0 — the founder org is `account_status=read_only`
   (Stripe cancel test), every ingest channel dead on it; lift it, then re-fire the parked
-  Postmark message. Queue: BE-6 (P1 XML parser drops every second field), the
-  schema-fingerprint learning gap (S, P0 in the auto-detect spec), FE `lint:vocab`
-  pre-existing red. Founder halves: OpenAI DPA/EU project, OPS-2 creds.
+  Postmark message. Queue: ~~BE-6~~ (fixed, snapshot above), ~~BE-1's 422-retry
+  residual~~ (fixed, #56 below), ~~the schema-fingerprint learning gap~~ (fixed, #54
+  below), FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU project,
+  OPS-2 creds.
 - **2026-07-24: inbound-webhook retry contract fixed — BE PR #56 (open), BE-1 residual
   closed.** OPS-1 measured that 422 does not stop Postmark; the documented policy is 10
   retries over ~10.5 h on any non-200, then the message is filed `Failed` (still re-fireable
@@ -39,6 +54,14 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   comment is deleted; the `rejected_read_only` audit row is pinned by a test.
   **Not fixed, noted:** the CF inbound-verify Worker's 403 on IP-allowlist drift is the one
   status that stops Postmark retrying immediately — stale list ⇒ real mail dropped.
+- **2026-07-24: the schema fingerprint now learns from operator corrections (BE-5 P0, PR #54).**
+  `assign-supplier` re-parses, but the recorder short-circuited on the order's existing
+  `SchemaFingerprintHash`, so `SchemaFingerprint.SupplierIdsCsv` could only ever accumulate
+  suppliers already known at ingest — every human routing correction was discarded. The
+  guard is now supplier-aware (bind the unknown supplier, return, never touch
+  `ParseSuccessCount`/`LastSeenAt`) rather than the hash being cleared, which would have
+  re-armed the count and double-counted the layout. Proven RED-first on real Postgres
+  through the endpoint itself.
 
 ## Snapshot (2026-07-24) — routing/catalog/ops wave queued
 

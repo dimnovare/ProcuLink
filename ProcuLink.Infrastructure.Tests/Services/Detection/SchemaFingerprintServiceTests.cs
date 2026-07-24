@@ -147,6 +147,79 @@ public class SchemaFingerprintServiceTests
         match.IsSharedLayout.Should().BeFalse();
     }
 
+    private static async Task<Guid> SeedUnroutedOrderAsync(ProcuLinkDbContext db, Guid orgId, string key)
+    {
+        var orderId = Guid.NewGuid();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = orderId, OrgId = orgId, SupplierId = null,
+            PoNumber = "PO-U1", Currency = "EUR", Status = OrderStatusConstants.Unrouted,
+            SourceFileKey = key, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        return orderId;
+    }
+
+    /// <summary>
+    /// The layout→supplier binding must learn from an operator correction. An unrouted order
+    /// fingerprints with no supplier (there is none to bind). The operator then assigns one via
+    /// POST /orders/{id}/assign-supplier, which re-enqueues the parse job — and the recorder
+    /// re-enters for the same order. If that re-entry only short-circuits, SupplierIdsCsv can
+    /// never accumulate anything but suppliers already known at ingest, i.e. exactly the orders
+    /// that never needed routing help. The correction must be learned; the layout must NOT be
+    /// re-counted (the same document re-parsed is not a new sighting).
+    /// </summary>
+    [Fact]
+    public async Task RecordParseSuccess_AfterOperatorAssignsSupplier_LearnsBinding_WithoutRecounting()
+    {
+        using var db = NewDb();
+        var svc = NewService(db);
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var orderId = await SeedUnroutedOrderAsync(db, orgId, "k/unrouted.csv");
+
+        // 1. First parse — unrouted, so there is no supplier to bind.
+        await svc.RecordParseSuccessAsync(orgId, orderId, LayoutAHeaders, "csv", CancellationToken.None);
+        (await svc.LookupAsync(orgId, LayoutAHeaders, CancellationToken.None))!
+            .SupplierIds.Should().BeEmpty("an unrouted order has no supplier to bind");
+
+        // 2. The operator assigns a supplier (what assign-supplier writes) …
+        db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "Corrected Supplier" });
+        var order = await db.PurchaseOrders.FirstAsync(o => o.Id == orderId);
+        order.SupplierId = supplierId;
+        order.Status = OrderStatusConstants.Parsing;
+        await db.SaveChangesAsync();
+
+        // 3. … and the endpoint re-enqueues the parse, so the recorder re-enters for this order.
+        await svc.RecordParseSuccessAsync(orgId, orderId, LayoutAHeaders, "csv", CancellationToken.None);
+
+        var match = await svc.LookupAsync(orgId, LayoutAHeaders, CancellationToken.None);
+        match!.SupplierIds.Should().ContainSingle(
+            "the human correction is the only training signal this heuristic ever gets")
+            .Which.Should().Be(supplierId);
+        match.IsBoundTo(supplierId).Should().BeTrue();
+        match.IsSharedLayout.Should().BeFalse();
+        match.SeenCount.Should().Be(1, "re-parsing the same document is not a new sighting of the layout");
+        match.SampleSupplierName.Should().Be("Corrected Supplier",
+            "a layout first seen unrouted has no sample name until the correction supplies one");
+    }
+
+    [Fact]
+    public async Task RecordParseSuccess_ReParsedWhileStillUnrouted_ChangesNothing()
+    {
+        using var db = NewDb();
+        var svc = NewService(db);
+        var orgId = Guid.NewGuid();
+        var orderId = await SeedUnroutedOrderAsync(db, orgId, "k/unrouted.csv");
+
+        await svc.RecordParseSuccessAsync(orgId, orderId, LayoutAHeaders, "csv", CancellationToken.None);
+        await svc.RecordParseSuccessAsync(orgId, orderId, LayoutAHeaders, "csv", CancellationToken.None);
+
+        var match = await svc.LookupAsync(orgId, LayoutAHeaders, CancellationToken.None);
+        match!.SeenCount.Should().Be(1, "a retry for the same order must not double-count");
+        match.SupplierIds.Should().BeEmpty("there is still no supplier to learn");
+    }
+
     [Fact]
     public async Task RecordParseSuccess_CreatesFingerprint_OnFirstParse()
     {
