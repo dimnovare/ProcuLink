@@ -178,9 +178,12 @@ public sealed class InboundEmailController : ControllerBase
     /// log. The <c>ignored</c> marker is what separates it from an ingested message,
     /// since both are 200s.
     ///
-    /// Deliberately not 403 — Postmark stops retrying on that too, but the inbound
-    /// Cloudflare Worker already spends 403 on its source-IP gate, and one meaning per
-    /// status is worth more than the extra shade of refusal.
+    /// Deliberately not 403. It would suppress the retries too, but only by leaving the
+    /// message out of <c>Failed</c> as well, so an operator could never re-fire one that
+    /// was refused by mistake — 200 keeps that door open. The inbound Cloudflare Worker
+    /// (docs/infra/postmark-inbound-verify-worker) spends no 403 either, for the mirrored
+    /// reason: its refusals are all operator-fixable, so they answer 503 and keep the
+    /// retry window rather than dropping real orders on a stale IP allowlist.
     /// </remarks>
     private OkObjectResult Ignored(string? reason, Guid? orgId) =>
         Ok(new { status = "ignored", reason, orgId });

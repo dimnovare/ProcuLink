@@ -40,7 +40,26 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   Postmark message. Queue: ~~BE-6~~ (fixed, snapshot above), ~~BE-1's 422-retry
   residual~~ (fixed, #56 below), ~~the schema-fingerprint learning gap~~ (fixed, #54
   below), FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU project,
-  OPS-2 creds.
+  OPS-2 creds, and — once the Worker 403→503 PR merges — a **hand-redeploy of the CF
+  inbound-verify Worker** (nothing else ships it; see that entry below).
+- **2026-07-24: the CF inbound-verify Worker no longer drops mail on IP drift — BE PR #57
+  (open). ⚠️ NEEDS A HAND-REDEPLOY BY THE FOUNDER.** `worker.js`'s source-IP gate answered
+  **403**, the one status that makes Postmark stop retrying on the first attempt *and* never
+  file the message as `Failed` — so a purchase order refused there was gone by both routes,
+  automatic and manual. The allowlist is hardcoded and Postmark has changed its published
+  webhook IPs before, so the most likely failure in that file was silent, total order loss.
+  Now **503** `source address not allowed`: same refusal, full ~10.5 h retry window, message
+  lands in `Failed` and stays re-fireable for 45 days. 429 was rejected because the token
+  bucket four lines down already owns it. The Worker now spends neither 200 nor 403 —
+  nothing it refuses is a decision a retry cannot change — which mirrors
+  `InboundEmailController`'s model (its stale "the Worker already spends 403" comment is
+  corrected). Pinned by `worker.test.mjs` (8 tests, `node --test`, no deps, not in CI —
+  this repo has no JS pipeline). **Cloudflare is not wired to this repo: merging changes
+  nothing until the founder redeploys** (`bunx wrangler deploy`, or dashboard →
+  `postmark-inbound-verify` → Edit code → paste → Deploy), then re-runs the README smoke
+  test and confirms the refusal reads 503. No Postmark/Railway/DNS change needed; rollback
+  is the Worker's Deployments → Rollback. README also de-staled: it said "PREPARED, NOT
+  DEPLOYED" and "API-side change NOT implemented" — both live since OPS-1.
 - **2026-07-24: inbound-webhook retry contract fixed — BE PR #56 (open), BE-1 residual
   closed.** OPS-1 measured that 422 does not stop Postmark; the documented policy is 10
   retries over ~10.5 h on any non-200, then the message is filed `Failed` (still re-fireable
@@ -52,8 +71,8 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   a read-only freeze is reversible in minutes, so the retries are the grace window). An
   unlabelled rejection keeps its retries. The false "422 keeps Postmark from retrying"
   comment is deleted; the `rejected_read_only` audit row is pinned by a test.
-  **Not fixed, noted:** the CF inbound-verify Worker's 403 on IP-allowlist drift is the one
-  status that stops Postmark retrying immediately — stale list ⇒ real mail dropped.
+  ~~**Not fixed, noted:** the CF inbound-verify Worker's 403 on IP-allowlist drift~~ —
+  **fixed, see the entry above.**
 - **2026-07-24: the schema fingerprint now learns from operator corrections (BE-5 P0, PR #54).**
   `assign-supplier` re-parses, but the recorder short-circuited on the order's existing
   `SchemaFingerprintHash`, so `SchemaFingerprint.SupplierIdsCsv` could only ever accumulate
