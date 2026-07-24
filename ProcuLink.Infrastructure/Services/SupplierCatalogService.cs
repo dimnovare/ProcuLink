@@ -128,18 +128,25 @@ public sealed class SupplierCatalogService : ISupplierCatalogService
             .CountAsync(ct);
 
     /// <inheritdoc/>
-    public async Task<int> DeleteAsync(Guid orgId, Guid supplierId, CancellationToken ct)
-    {
-        var rows = await _db.SupplierProducts
+    /// <remarks>
+    /// Set-based on purpose: one <c>DELETE … WHERE org_id = … AND supplier_id = …</c>, so
+    /// clearing a catalog at the 200,000-row cap (<c>SupplierCatalogFileParser.MaxCatalogRows</c>)
+    /// costs no per-row memory. Loading the rows first cost ~976 B per tracked SupplierProduct —
+    /// a ~200 MB spike on a full catalog.
+    ///
+    /// <c>ExecuteDelete</c> commits IMMEDIATELY and outside the context's pending changes: it
+    /// neither participates in a later <c>SaveChanges</c> nor flushes whatever else the caller
+    /// has tracked. The only caller (<c>SuppliersController.ClearCatalog</c>) tracks nothing
+    /// across the call, so there is no half-apply window. A future caller that mutates tracked
+    /// entities around this one must wrap both in a single explicit transaction.
+    ///
+    /// Covered by <c>SupplierCatalogDeletePostgresTests</c> on real Postgres — the EF InMemory
+    /// provider does not implement <c>ExecuteDelete</c> and throws on it.
+    /// </remarks>
+    public Task<int> DeleteAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
+        _db.SupplierProducts
             .Where(p => p.OrgId == orgId && p.SupplierId == supplierId)
-            .ToListAsync(ct);
-
-        if (rows.Count == 0) return 0;
-
-        _db.SupplierProducts.RemoveRange(rows);
-        await _db.SaveChangesAsync(ct);
-        return rows.Count;
-    }
+            .ExecuteDeleteAsync(ct);
 
     private static string? Clean(string? v) =>
         string.IsNullOrWhiteSpace(v) ? null : v.Trim();

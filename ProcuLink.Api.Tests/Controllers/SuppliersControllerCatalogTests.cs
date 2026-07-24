@@ -219,26 +219,11 @@ public class SuppliersControllerCatalogTests
 
     // ── clear ────────────────────────────────────────────────────────────────
 
-    [Fact]
-    public async Task ClearCatalog_DeletesAll_ForThatSupplier()
-    {
-        var (controller, orgId, db) = BuildController();
-        var supplier = AddSupplier(db, orgId);
-        await db.SaveChangesAsync();
-
-        await new SupplierCatalogService(db).UpsertManyAsync(orgId, supplier.Id, new[]
-        {
-            new SupplierProduct { Code = "A" },
-            new SupplierProduct { Code = "B" },
-        }, CancellationToken.None);
-
-        var result = await controller.ClearCatalog(supplier.Id, CancellationToken.None);
-
-        var ok = result.Should().BeOfType<OkObjectResult>().Subject;
-        int deleted = ((dynamic)ok.Value!).deleted;
-        deleted.Should().Be(2);
-        (await db.SupplierProducts.CountAsync()).Should().Be(0);
-    }
+    // The happy path (ClearCatalog_DeletesAll_ForThatSupplier) moved to
+    // Integration/SupplierCatalogDeletePostgresTests.ClearCatalogEndpoint_DeletesAll_ForThatSupplier:
+    // SupplierCatalogService.DeleteAsync is set-based (ExecuteDelete) so a 200,000-row catalog
+    // clear costs no per-row memory, and the EF InMemory provider does not implement
+    // ExecuteDelete — it throws. The 404 path below never reaches the service, so it stays here.
 
     [Fact]
     public async Task ClearCatalog_ForeignSupplier_Returns404()

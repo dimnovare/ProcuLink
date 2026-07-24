@@ -199,22 +199,11 @@ public class SupplierCatalogServiceTests
         (await svc.CountAsync(orgB, supplier1, CancellationToken.None)).Should().Be(1);
     }
 
-    [Fact]
-    public async Task DeleteAsync_RemovesOnlyTheScopedSupplier()
-    {
-        await using var db = NewDb();
-        var orgId = Guid.NewGuid();
-        var supplier1 = Guid.NewGuid();
-        var supplier2 = Guid.NewGuid();
-        var svc = new SupplierCatalogService(db);
-
-        await svc.UpsertManyAsync(orgId, supplier1, new[] { Draft("X"), Draft("Y") }, CancellationToken.None);
-        await svc.UpsertManyAsync(orgId, supplier2, new[] { Draft("Z") }, CancellationToken.None);
-
-        var deleted = await svc.DeleteAsync(orgId, supplier1, CancellationToken.None);
-
-        deleted.Should().Be(2);
-        (await svc.CountAsync(orgId, supplier1, CancellationToken.None)).Should().Be(0);
-        (await svc.CountAsync(orgId, supplier2, CancellationToken.None)).Should().Be(1); // untouched
-    }
+    // DeleteAsync has NO test here on purpose. It is set-based (ExecuteDelete) so a full
+    // 200,000-row catalog clear costs no per-row memory, and the EF InMemory provider does
+    // not implement ExecuteDelete — it throws. The scoping coverage that used to live here
+    // (DeleteAsync_RemovesOnlyTheScopedSupplier) moved verbatim to
+    // ProcuLink.Api.Tests/Integration/SupplierCatalogDeletePostgresTests.cs on real Postgres,
+    // where it is joined by a cross-ORG case, a discontinued-rows case, and the two
+    // assertions that pin the set-based behaviour itself.
 }
