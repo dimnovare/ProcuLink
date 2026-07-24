@@ -7,7 +7,8 @@
  * HMAC-signed, so the accepted mitigation is this Cloudflare Worker, which:
  *
  *   1. Allows only requests originating from Postmark's published webhook
- *      source IPs (403 for everything else).
+ *      source IPs (503 for everything else — see "Responses" below for why the
+ *      refusal is deliberately retryable and not a 403).
  *   2. Forwards valid requests to the origin API with an added
  *      `X-Inbound-Proxy-Secret` header, which the API can be configured to
  *      require in addition to the existing `?token=` shared token.
@@ -40,8 +41,10 @@
 //   ("These IPs apply for every webhook sent by Postmark (inbound, bounce,
 //    open, etc).")
 // Verified current: 2026-07-09. If legitimate inbound emails start failing in
-// Postmark's Activity log with 403 "source address not allowed", re-check that
-// page — Postmark has changed/added IPs before and announces it there.
+// Postmark's Activity log with 503 "source address not allowed", re-check that
+// page — Postmark has changed/added IPs before and announces it there. Until
+// the list is refreshed and the Worker redeployed, those messages keep retrying
+// and end up as Failed, which is re-fireable by hand — nothing is lost.
 //
 // Entries may be single IPv4 addresses or CIDR blocks ("a.b.c.d/nn").
 const POSTMARK_WEBHOOK_SOURCES = [
@@ -133,6 +136,26 @@ function ipAllowed(ip) {
 // nothing (path/method are public knowledge; an IP rejection is self-evident)
 // and they tell the founder at a glance whether a legitimate Postmark POST was
 // blocked because the IP list drifted (=> refresh POSTMARK_WEBHOOK_SOURCES).
+//
+// The STATUS is a retry instruction, not a verdict — same model the API uses
+// (ProcuLink.Api/Controllers/InboundEmailController.cs). Postmark retries any
+// non-200 inbound webhook response ten times over ~10.5 hours and then files
+// the message as Failed, which stays manually re-fireable for the 45-day
+// retention. Two statuses break that: 200 settles the message as Processed
+// (unrecoverable), and 403 stops the retries on the first attempt AND never
+// reaches Failed, so the message is unrecoverable by either route.
+//   https://postmarkapp.com/support/article/understanding-inbound-webhook-retries-in-postmark
+//
+// So this Worker spends neither. Every refusal here is a condition an operator
+// fixes — a stale IP allowlist, a mis-set webhook URL, a burst — and none of
+// them is a judgement about the mail, which the Worker never even reads. The
+// IP gate in particular is the most likely thing in this file to go stale
+// (Postmark has changed its published IPs before), and 403 would turn that
+// drift into silent loss of real purchase orders on the first attempt. 503
+// ("cannot accept this right now") keeps the full retry window and the Failed
+// landing; 429 is not reused for it, because the token bucket below already
+// means that, and one meaning per status is what makes the activity log
+// readable at a glance.
 
 function deny(status, reason) {
   return new Response(JSON.stringify({ error: reason }), {
@@ -159,9 +182,11 @@ export default {
 
     // 3. Source-IP allowlist. CF-Connecting-IP is set by Cloudflare and
     //    cannot be spoofed by the client on proxied/custom-domain traffic.
+    //    Retryable on purpose (see "Responses"): a legitimate Postmark POST
+    //    lands here whenever the hardcoded allowlist has gone stale.
     const clientIp = request.headers.get("CF-Connecting-IP") || "";
     if (!ipAllowed(clientIp)) {
-      return deny(403, "source address not allowed");
+      return deny(503, "source address not allowed");
     }
 
     // 4. Best-effort rate limit (per-isolate — see caveat above).

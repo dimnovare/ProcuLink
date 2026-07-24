@@ -1,0 +1,8 @@
+{
+  "name": "postmark-inbound-verify-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

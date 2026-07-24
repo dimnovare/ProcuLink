@@ -1,8 +1,13 @@
 # Postmark inbound-webhook hardening — Cloudflare Worker
 
-**Status: PREPARED, NOT DEPLOYED** (written 2026-07-09). Deployment needs the
-founder's Cloudflare access — nothing in this folder has been deployed, and no
-backend code has been changed.
+**Status: DEPLOYED** (written 2026-07-09; live on `inbound.proculink.eu` and
+proven end-to-end with real mail on 2026-07-24 — see STATUS.md, OPS-1). Variant
+B was taken and the API-side gate is on: `Inbound__Postmark__ProxySecret` is set
+on the Railway API service.
+
+> ⚠️ **The Worker is deployed by hand.** Cloudflare has no CI hook to this repo,
+> so editing `worker.js` here changes nothing in production until the founder
+> redeploys — see [Redeploying after a change to `worker.js`](#redeploying-after-a-change-to-workerjs).
 
 ## Why this exists
 
@@ -26,16 +31,75 @@ the internet.
 The accepted mitigation (deferred at inbound-email launch, prepared here) is a
 small Cloudflare Worker in front of the webhook that:
 
-1. **Allows only Postmark's published webhook source IPs** — everything else
-   gets 403 before it ever reaches the API.
+1. **Allows only Postmark's published webhook source IPs** — everything else is
+   refused with **503** before it ever reaches the API (retryable on purpose —
+   see [Status codes are retry instructions](#status-codes-are-retry-instructions)).
 2. **Adds a second secret header** (`X-Inbound-Proxy-Secret`) that the API is
    then configured to *require* — this is what actually closes the
    direct-to-origin path (see "Honesty notes").
 3. **Rate-limits** — best-effort in the Worker, properly via a Cloudflare WAF
    rate-limiting rule (below).
 
-The Worker itself is `worker.js` in this folder — dependency-free, ~180 lines,
-readable top to bottom.
+The Worker itself is `worker.js` in this folder — dependency-free and readable
+top to bottom; `worker.test.mjs` next to it pins its behaviour.
+
+---
+
+## Status codes are retry instructions
+
+Postmark retries **any non-200** inbound webhook response ten times over ~10.5
+hours, then files the message as **Failed** — which stays manually re-fireable
+for the 45-day inbound retention. Two statuses opt out of that safety net:
+
+| Response | Postmark's behaviour | Recoverable? |
+|---|---|---|
+| **200** | message settles as `Processed` | ❌ never re-delivered, cannot be re-fired |
+| **403** | **retries stop on the first attempt**, message never reaches `Failed` | ❌ gone by both routes |
+| any other non-200 | 10 attempts over ~10.5 h → `Failed` | ✅ automatic retries **and** manual re-fire |
+
+Source: [Understanding inbound webhook retries](https://postmarkapp.com/support/article/understanding-inbound-webhook-retries-in-postmark).
+(Confirmed in production on 2026-07-24: one 422'd message produced three
+attempts in six minutes and stayed `Scheduled`.)
+
+**This Worker therefore spends neither 200 nor 403.** Every refusal it can emit
+is a condition an operator fixes — a stale IP allowlist, a mis-set webhook URL,
+a burst — and none of them is a judgement about the mail, which the Worker never
+reads. Its full response surface:
+
+| Gate | Status | Reason string |
+|---|---|---|
+| Path is not `/api/inbound-email/postmark` | `404` | `not found` |
+| Method is not POST | `405` | `method not allowed` |
+| **`CF-Connecting-IP` not in `POSTMARK_WEBHOOK_SOURCES`** | **`503`** | `source address not allowed` |
+| Per-isolate token bucket empty | `429` | `rate limited` |
+
+The IP gate gets **503, not 403**, because the hardcoded allowlist is the single
+most likely thing in this file to go stale — Postmark has changed its published
+IPs before. Under 403 that drift would destroy every real purchase order on its
+first attempt, with no retry and nothing in `Failed` to re-fire, and the only
+evidence would be entries in an activity log nobody is watching. Under 503 the
+same drift costs ~10.5 hours of delay and then parks each message in `Failed`,
+where it survives for 45 days and can be re-fired the moment the list is
+refreshed. 429 is deliberately **not** reused for it: the token bucket already
+means that, and one meaning per status is what keeps Postmark's activity log
+readable at a glance. The reason strings stay terse and distinct for the same
+reason — `source address not allowed` is the founder's IP-drift signal.
+
+This matches the model the API itself uses — see the `Postmark` action and the
+`Ignored` helper in `ProcuLink.Api\Controllers\InboundEmailController.cs`, where
+200 means "no re-delivery could ever change this" and non-200 means "try again".
+
+### Running the Worker's tests
+
+`worker.test.mjs` pins that contract (no dependencies, no CI wiring — this repo
+has no JS pipeline). Re-prove it before any hand-deploy:
+
+```bash
+node --test docs/infra/postmark-inbound-verify-worker/worker.test.mjs
+```
+
+(or `node --test` from inside this folder — the local `package.json` exists only
+to mark `worker.js` as an ES module for Node; wrangler ignores it.)
 
 ---
 
@@ -53,7 +117,7 @@ gives two deployment variants; **Variant B is recommended**.
 
 ---
 
-## Decision point 1 — Variant A or Variant B
+## Decision point 1 — Variant A or Variant B  ✅ *decided: Variant B, shipped*
 
 ### Variant B (recommended): dedicated proxied hostname `inbound.proculink.eu`
 
@@ -175,14 +239,18 @@ openssl rand -base64 32
 ### Then, for either option
 
 4. **Smoke-test the front door** (from your own machine — you are *not* a
-   Postmark IP, so a 403 here is the success signal):
+   Postmark IP, so a 503 here is the success signal):
 
    ```bash
    curl -i -X POST "https://inbound.proculink.eu/api/inbound-email/postmark?token=x" -d '{}' -H "Content-Type: application/json"
-   # expect: 403 {"error":"source address not allowed"}
+   # expect: 503 {"error":"source address not allowed"}
    curl -i "https://inbound.proculink.eu/anything-else"
    # expect: 404 {"error":"not found"}
    ```
+
+   A **403 here means an old build of the Worker is still live** — redeploy.
+   (503 is the IP gate refusing you while keeping Postmark's retry window open;
+   see [Status codes are retry instructions](#status-codes-are-retry-instructions).)
 
 5. **Point Postmark at the Worker**: Postmark dashboard → server → Message
    Streams → **Inbound** stream → Settings → change the webhook URL host from
@@ -232,7 +300,7 @@ rules** → Create:
    (or dashboard: Worker → Settings → Domains & Routes → *Route* →
    `api.proculink.eu/api/inbound-email/*`, zone `proculink.eu`.)
 4. No Postmark URL change needed. Smoke-test with the same curl as Variant B
-   but against `api.proculink.eu/api/inbound-email/postmark` (expect 403), and
+   but against `api.proculink.eu/api/inbound-email/postmark` (expect 503), and
    confirm an unrelated API endpoint is **not** intercepted.
 5. Note: the Worker rewrites the request to `ORIGIN_HOST` = the same hostname;
    same-zone subrequests go straight to origin and cannot re-trigger the
@@ -252,7 +320,12 @@ Do **not** set this until the API-side change below is deployed *and* the
 Cloudflare Worker is live in front of Postmark — the check is opt-in-by-config
 precisely so the rollout order can never break inbound mail.
 
-## API-side change (NOT implemented in this task — description only)
+## API-side change  ✅ *shipped and live*
+
+Implemented in `ProcuLink.Api\Controllers\InboundEmailController.cs`, action
+`Postmark` (`POST /api/inbound-email/postmark`), section *1b. Edge-proxy secret*,
+and `Inbound__Postmark__ProxySecret` is set on the Railway API service. The
+original specification is kept below as the record of what was built.
 
 **File:** `ProcuLink.Api\Controllers\InboundEmailController.cs`, action
 `Postmark` (`POST /api/inbound-email/postmark`).
@@ -345,8 +418,30 @@ failed webhook deliveries and shows failures in the Activity log).
 - **Postmark IP drift:** the allowlist is hardcoded in `worker.js`
   (`POSTMARK_WEBHOOK_SOURCES`, marked `REFRESH-ME`). Source of truth:
   <https://postmarkapp.com/support/article/800-ips-for-firewalls>. Symptom of
-  drift: inbound emails failing in Postmark → Activity with 403
-  `source address not allowed`. Fix: update the array, redeploy the Worker.
+  drift: inbound emails failing in Postmark → Activity with 503
+  `source address not allowed`. Fix: update the array, redeploy the Worker,
+  then re-fire the affected messages — they retry for ~10.5 hours on their own
+  and any that ran out of attempts are sitting in **Failed** (filter the inbound
+  activity list by that status; the default view hides them) and can be re-fired
+  with `POST /messages/inbound/{id}/retry` or the **Retry** button. Nothing is
+  lost for 45 days.
+
+### Redeploying after a change to `worker.js`
+
+**Nothing here deploys itself.** Cloudflare is not wired to this repo — merging
+a change to `worker.js` leaves production running the old code until the founder
+redeploys by hand:
+
+- **wrangler:** `bunx wrangler deploy` from a folder containing `worker.js` +
+  the `wrangler.toml` above. Secrets and the custom domain survive; only the
+  script is replaced.
+- **dashboard:** Cloudflare → **Workers & Pages** → `postmark-inbound-verify` →
+  **Edit code** → paste the new `worker.js` in full → **Deploy**.
+
+Then re-run the step-4 smoke test above and confirm the IP refusal reads
+**503**, not 403. No Postmark, Railway, or DNS change is needed for a
+`worker.js`-only change, and rollback is Cloudflare → the Worker → **Deployments**
+→ *Rollback* to the previous version.
 - **Secret rotation:** generate a new value, update the Railway env **and**
   the Worker secret in quick succession (order: Worker first, then Railway —
   or briefly unset the Railway var to disable the check during rotation).
