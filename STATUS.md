@@ -94,6 +94,19 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   (inbound address on Email intake tab, 851/851 green); BE PR #45 open (PunchOut L1
   spec + queue strikes); Stripe test coupon deleted (0 remain); FE `feat/design-system-v1`
   deleted per founder (archived at tag `archive/design-system-v1`).
+- **2026-07-24 OPS-1 — live inbound-email transport PROVEN with real mail; ingest blocked.**
+  Postmark `/email` → `redacted@example.invalid` (MessageID
+  `c4fe887c-…`) delivered `250 Ok: queued as 28384453CA4`, and the API logged the routed
+  webhook **~2 s later** — so MX → Postmark inbound → `inbound.proculink.eu` CF verify-Worker
+  → API, incl. `Inbound__Postmark__ProxySecret`, are all correct end-to-end. **No order was
+  created:** the founder org is `account_status=read_only` since 06:35:50 UTC (the Stripe
+  cancel test's "frozen Pilot"), so `InboundEmailRouter.cs:136` refuses ingest
+  (`inbound_email.rejected_read_only` ×3, 0 orders — nothing to clean up). **P0 for the
+  founder:** that org's every ingest channel is dead until the status is lifted; then re-fire
+  the still-`Scheduled` message via `POST /messages/inbound/d7dcf55d-…/retry` — no resend.
+  Measured side-finding: **422 does not stop Postmark retrying** (3 attempts in 6 min for one
+  message), so `InboundEmailController.cs:134`'s "422 keeps Postmark from retrying" comment is
+  false — folded into BE-1's scope.
 - **2026-07-24 OPS-2 (real vendor catalog feeds on prod): BLOCKED on founder auth** — prod
   is signed out in Chrome and only `sk_test_`/`pk_test_` Clerk keys exist locally, so no
   authed `GET /api/suppliers/{id}/catalog/source` was possible; no prod state was touched.
@@ -251,6 +264,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   billing pipeline proven on live Stripe with zero money moved. Coupon self-expired (1/1);
   left in Stripe as the audit record. Remaining untested: `amount > 0` invoice branches
   (needs a real charge + refund, ~€4–5 in non-returned Stripe fees).
+  **Unintended live side effect, found by OPS-1:** the cancellation left the founder org at
+  `account_status=read_only` ("frozen Pilot"), which blocks every ingest channel for that org
+  — the OPS-1 test email was refused at the router. Un-freeze the org before any further prod
+  live-ops, and treat "cancel a live subscription" as a state-changing act, not a free probe.
 
 ## Snapshot (2026-07-04)
 
