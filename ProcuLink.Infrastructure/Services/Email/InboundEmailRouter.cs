@@ -30,6 +30,16 @@ namespace ProcuLink.Infrastructure.Services.Email;
 /// (subdomain; needs a wildcard MX). An explicit <c>Inbound:Postmark:TenantMapping:{slug}</c>
 /// config entry is still honoured as an override/fallback. (Live receipt also needs the
 /// inbound MX + Postmark domain configured — that is one-time infra, not per-org.)
+///
+/// Log levels: this runs once per inbound message an org receives, so the expected
+/// cases — no attachments, an unsupported attachment (signature images ride along on
+/// most mail), body extraction yielding no order — are <c>Debug</c>. API production
+/// runs at <c>Default=Information</c>, so those stay out of the log unless someone
+/// turns them on; the two attachment cases still write their audit row, so demoting
+/// them loses no evidence. <c>Warning</c> is what an operator has to act on: every
+/// message-level reject, and an attachment dropped for a content reason (empty,
+/// oversized, stub creation failed). An order actually created is <c>Information</c>
+/// — one line per order, not per message.
 /// </remarks>
 public sealed class InboundEmailRouter : IInboundEmailRouter
 {
@@ -142,7 +152,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
 
         if (BlockedAccountStatuses.Contains(org.AccountStatus))
         {
-            _logger.LogInformation(
+            _logger.LogWarning(
                 "Inbound email for org {OrgId} ignored: account_status={Status} blocks ingest.",
                 org.Id, org.AccountStatus);
             await WriteAuditAsync(org.Id, "inbound_email.rejected_read_only", payload, ct);
@@ -176,7 +186,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         // body-NLP fallback below may still produce an order from prose text.
         if (payload.Attachments.Count == 0)
         {
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Inbound email for org {OrgId} carried no attachments; the email-body NLP fallback runs if a body is present and a supplier is known.",
                 org.Id);
             await WriteAuditAsync(org.Id, "inbound_email.no_attachments", payload, ct);
@@ -189,7 +199,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             var extension = Path.GetExtension(att.FileName ?? string.Empty).ToLowerInvariant();
             if (!SupportedExtensions.Contains(extension))
             {
-                _logger.LogInformation(
+                _logger.LogDebug(
                     "Inbound email attachment {FileName} ({Ext}) for org {OrgId} skipped: unsupported type.",
                     att.FileName, extension, org.Id);
                 await WriteAuditAsync(
@@ -303,7 +313,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 }
                 else
                 {
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         "Inbound email body extraction for org {OrgId} did not yield an order (confidence={Confidence:F2}, reason={Reason}).",
                         org.Id, extraction.Confidence, extraction.FailureReason ?? "n/a");
                 }

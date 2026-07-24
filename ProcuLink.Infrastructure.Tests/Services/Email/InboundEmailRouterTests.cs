@@ -2,6 +2,7 @@ using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
@@ -754,7 +755,96 @@ public class InboundEmailRouterTests
             "the sender is stored only as a one-way hash for correlation/diagnostics");
     }
 
+    // ── 12. Log levels — routine chatter at Debug, rejects at Warning ────────
+    // The webhook fires on every message an org receives (including the ones that
+    // carry nothing but a signature image). Production runs at Default=Information,
+    // so anything routine must sit at Debug to stay out of the log; anything an
+    // operator has to act on must sit at Warning to stay visible.
+
+    [Fact]
+    public async Task NoAttachmentsNotice_IsLoggedAtDebug()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.Active,
+            Array.Empty<InboundAttachment>());
+
+        log.LevelOf("carried no attachments").Should().Be(LogLevel.Debug,
+            "an attachment-less email is routine — the body-NLP fallback note is diagnostics, not news");
+    }
+
+    [Fact]
+    public async Task UnsupportedAttachmentSkip_IsLoggedAtDebug()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.Active,
+            new[] { new InboundAttachment("signature.png", "image/png", new byte[] { 1, 2, 3 }) });
+
+        log.LevelOf("skipped: unsupported type").Should().Be(LogLevel.Debug,
+            "email signatures and logos ride along on nearly every message — skipping them is expected");
+    }
+
+    [Fact]
+    public async Task BodyExtractionYieldingNoOrder_IsLoggedAtDebug()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.Active,
+            Array.Empty<InboundAttachment>(),
+            body: "Hi, just checking in on last week's order. Thanks!");
+
+        log.LevelOf("did not yield an order").Should().Be(LogLevel.Debug,
+            "most prose emails are not orders, and the extractor is a no-op without an AI key");
+    }
+
+    [Fact]
+    public async Task BlockedAccountStatus_IsLoggedAtWarning()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.ReadOnly,
+            new[] { new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }) });
+
+        log.LevelOf("blocks ingest").Should().Be(LogLevel.Warning,
+            "the message is rejected and the sender is never told — the operator must see it");
+    }
+
+    [Fact]
+    public async Task CreatedOrder_StaysAtInformation()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.Active,
+            new[] { new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }) });
+
+        log.LevelOf("created order").Should().Be(LogLevel.Information,
+            "one line per order actually created is the operational trail, not chatter");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Routes one payload through a router wired to a <see cref="RecordingLogger"/>
+    /// and returns the captured log so a test can assert the level of a single line.
+    /// </summary>
+    private static async Task<RecordingLogger> RunAndCaptureLogAsync(
+        string accountStatus,
+        IReadOnlyList<InboundAttachment> attachments,
+        string? body = null)
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, accountStatus);
+        await SeedSupplierAsync(db, orgId);
+
+        var logger = new RecordingLogger();
+        var router = MakeRouter(db, new FakeOrderService(), new RecordingEnqueuer(),
+            slug: Slug, orgId: orgId, logger: logger);
+
+        await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO #12345",
+            Attachments: attachments,
+            Body: body), default);
+
+        return logger;
+    }
 
     private static InboundEmailRouter MakeRouter(
         ProcuLinkDbContext db,
@@ -763,7 +853,8 @@ public class InboundEmailRouterTests
         string slug,
         Guid orgId,
         IEmailBodyOrderExtractor? extractor = null,
-        string? inboundDomain = null)
+        string? inboundDomain = null,
+        ILogger<InboundEmailRouter>? logger = null)
     {
         var settings = new Dictionary<string, string?>
         {
@@ -780,7 +871,7 @@ public class InboundEmailRouterTests
             db, orders, enqueuer,
             extractor ?? FakeBodyExtractor.NoOp,
             config,
-            NullLogger<InboundEmailRouter>.Instance);
+            logger ?? NullLogger<InboundEmailRouter>.Instance);
     }
 
     private static async Task<Guid> SeedOrgAsync(ProcuLinkDbContext db, string accountStatus)
@@ -942,6 +1033,37 @@ public class InboundEmailRouterTests
         {
             Calls++;
             return Task.FromResult(_result);
+        }
+    }
+
+    /// <summary>
+    /// Captures every log line with its level so tests can pin the level of one
+    /// message. <see cref="LevelOf"/> fails loudly when the message is absent or
+    /// ambiguous — a renamed template must break the test, not silently pass it.
+    /// </summary>
+    private sealed class RecordingLogger : ILogger<InboundEmailRouter>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
+
+        public LogLevel LevelOf(string messageFragment)
+        {
+            var matches = Entries
+                .Where(e => e.Message.Contains(messageFragment, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            matches.Should().ContainSingle(
+                $"exactly one log line should contain '{messageFragment}'; captured: "
+                + string.Join(" | ", Entries.Select(e => $"[{e.Level}] {e.Message}")));
+
+            return matches[0].Level;
         }
     }
 
