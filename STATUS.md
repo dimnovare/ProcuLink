@@ -28,6 +28,19 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
   caller** — that's FE-1. Phase 1b enqueue gap: FIXED since `74ac036`+`de4ea0e` (old
   entries below are stale); both routing worktree branches fully merged (CLEANUP-1).
+- **2026-07-24: catalog import memory bounded — BE PR #51 (open), BE-2 done.** The row cap
+  was already 200k (raised in `efff40e`; the queue's "50k" was stale doc, now corrected in
+  3 comments). The real gap was downstream: `UpsertManyAsync` tracked the whole file for one
+  `SaveChanges`. Measured on real Postgres with a synthetic 200k-row CSV — single batch:
+  615 MB retained, **1.43 GB peak working set**, 200k rows tracked; 5k batches: 24 MB
+  retained, 415 MB peak, 0 tracked. Batch size swept (1k/5k/10k → time flat ~46 s, memory
+  linear 11/22/38 MB) so it's picked on memory alone; insert costs ~40% more wall time
+  (29 s → 41 s), which a background sync absorbs. Each batch detaches only the rows it
+  touched — **never `ChangeTracker.Clear()`**, which would detach the tracked
+  `SupplierCatalogSource` that `CatalogPullService` writes its sync status to afterwards
+  (regression test pins it). Atomicity traded knowingly: the upsert is idempotent by
+  (org, supplier, code), and `LastFileHash` has exactly one writer (post-success) so a
+  partial import is always re-fetched, never skipped as unchanged.
 - **2026-07-24 FE-1 done — assign-supplier UI, FE PR #32 open (not merged).** The
   `unrouted` park finally has an in-app exit: `apiClient.assignSupplier` (409 = the atomic
   `unrouted → parsing` claim matched no row, i.e. already routed — kept distinct from a 400

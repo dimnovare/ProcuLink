@@ -775,8 +775,8 @@ public class SuppliersController : ControllerBase
         try
         {
             // Shared parser (extension routing identical to the previous in-controller logic;
-            // no/unknown extension falls back to CSV parsing). Also enforces the 50k row cap
-            // and the XLSX zip-bomb guard.
+            // no/unknown extension falls back to CSV parsing). Also enforces the row cap
+            // (SupplierCatalogFileParser.MaxCatalogRows) and the XLSX zip-bomb guard.
             await using var stream = file.OpenReadStream();
             var parseResult = await SupplierCatalogFileParser.ParseByFileNameAsync(stream, file.FileName, ct);
             drafts = parseResult.Drafts;

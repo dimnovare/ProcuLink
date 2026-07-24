@@ -13,7 +13,7 @@ namespace ProcuLink.Transform.Catalog;
 /// catalog files byte-for-byte identically.
 ///
 /// Hardening added at extraction time (plan 2026-06-12, finding H4):
-///  • <see cref="MaxCatalogRows"/> row cap (50,000 data rows) — both formats abort with
+///  • <see cref="MaxCatalogRows"/> row cap — both formats abort with
 ///    <see cref="CatalogTooLargeException"/> instead of materializing unbounded drafts.
 ///  • XLSX zip-bomb pre-guard: BEFORE <c>XLWorkbook</c> touches the stream, the file is
 ///    opened as a plain <see cref="ZipArchive"/> and rejected when any entry declares an

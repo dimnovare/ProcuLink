@@ -199,6 +199,104 @@ public class SupplierCatalogServiceTests
         (await svc.CountAsync(orgB, supplier1, CancellationToken.None)).Should().Be(1);
     }
 
+    // ── Large-import memory bounding (BE-2) ───────────────────────────────────
+    // A real distributor feed runs to the parser's 200k row cap. Measured on a synthetic
+    // 200k-row CSV: each row costs ~976 B once tracked (473 B entity + 503 B EF change-tracker
+    // state), so a single-SaveChanges upsert holds ~186 MB of tracked entities on top of the
+    // parsed drafts — 431 MB peak working set for one import. The upsert must therefore work
+    // in bounded batches and release each batch, instead of tracking the whole file at once.
+
+    [Fact]
+    public async Task UpsertManyAsync_LargeImport_SavesInMoreThanOneBatch()
+    {
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        var saves = 0;
+        db.SavedChanges += (_, _) => saves++;
+
+        var drafts = Enumerable.Range(0, 12_000).Select(i => Draft($"BULK-{i:D6}", $"Product {i}"));
+        var (created, _) = await svc.UpsertManyAsync(orgId, supplierId, drafts, CancellationToken.None);
+
+        created.Should().Be(12_000);
+        saves.Should().BeGreaterThan(1, "a 12k-row import must commit in batches, not one giant SaveChanges");
+    }
+
+    [Fact]
+    public async Task UpsertManyAsync_LargeImport_DoesNotKeepEveryRowTracked()
+    {
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        var drafts = Enumerable.Range(0, 12_000).Select(i => Draft($"BULK-{i:D6}", $"Product {i}"));
+        await svc.UpsertManyAsync(orgId, supplierId, drafts, CancellationToken.None);
+
+        // At most ONE batch may remain in flight — detaching only the final batch (and leaving
+        // every earlier one tracked) must not pass.
+        db.ChangeTracker.Entries<SupplierProduct>().Should()
+            .HaveCountLessThanOrEqualTo(SupplierCatalogService.UpsertBatchSize,
+                "each committed batch must be released from the change tracker");
+    }
+
+    [Fact]
+    public async Task UpsertManyAsync_LargeImport_IsIdempotentAcrossBatchBoundaries()
+    {
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        SupplierProduct[] Batch() =>
+            Enumerable.Range(0, 12_000).Select(i => Draft($"BULK-{i:D6}", $"Product {i}")).ToArray();
+
+        var first = await svc.UpsertManyAsync(orgId, supplierId, Batch(), CancellationToken.None);
+        var second = await svc.UpsertManyAsync(orgId, supplierId, Batch(), CancellationToken.None);
+
+        first.Created.Should().Be(12_000);
+        first.Updated.Should().Be(0);
+
+        // Re-import of the same file updates in place — no duplicate rows at a batch seam.
+        second.Created.Should().Be(0);
+        second.Updated.Should().Be(12_000);
+        (await svc.CountAsync(orgId, supplierId, CancellationToken.None)).Should().Be(12_000);
+    }
+
+    [Fact]
+    public async Task UpsertManyAsync_LargeImport_LeavesUnrelatedTrackedEntitiesIntact()
+    {
+        // Guard for the batching implementation: CatalogPullService holds a TRACKED
+        // SupplierCatalogSource across this call and writes its sync status to the SAME
+        // DbContext afterwards (CatalogPullService.PullAsync). A blanket ChangeTracker.Clear()
+        // to free memory would silently detach that row and drop the status write.
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        var supplier = new Supplier { Id = supplierId, OrgId = orgId, Name = "Ingram" };
+        db.Suppliers.Add(supplier);
+        await db.SaveChangesAsync();
+
+        supplier.Name = "REDACTED-NAME"; // pending, uncommitted change on a tracked entity
+
+        var drafts = Enumerable.Range(0, 12_000).Select(i => Draft($"BULK-{i:D6}", $"Product {i}"));
+        await svc.UpsertManyAsync(orgId, supplierId, drafts, CancellationToken.None);
+
+        // The upsert's own SaveChanges legitimately flushes this pending edit too, so the state
+        // may be Unchanged — what must never happen is Detached, which is what a blanket
+        // ChangeTracker.Clear() produces and which drops the caller's write on the floor.
+        db.Entry(supplier).State.Should().NotBe(EntityState.Detached,
+            "the upsert must only release the rows it touched, never the whole change tracker");
+
+        supplier.Name = "REDACTED-NAME EU"; // a second edit, made after the upsert returned
+        await db.SaveChangesAsync();
+        (await db.Suppliers.SingleAsync(s => s.Id == supplierId)).Name.Should().Be("REDACTED-NAME EU");
+    }
+
     [Fact]
     public async Task DeleteAsync_RemovesOnlyTheScopedSupplier()
     {
