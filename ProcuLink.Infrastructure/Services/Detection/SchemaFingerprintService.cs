@@ -44,9 +44,17 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
         // Idempotency guard: a non-null hash means this order was already counted. This survives
         // Hangfire at-least-once delivery — even a crash *after* the previous commit re-enters here
         // and short-circuits, because the hash and the increment were saved in one transaction.
+        //
+        // What the guard protects is the COUNT, not the supplier binding. An order fingerprinted
+        // while unrouted bound no supplier because there was none; when the operator later resolves
+        // the routing, assign-supplier re-enqueues the parse and we re-enter here with a supplier
+        // the layout has never seen. Learn it — that human correction is the only way SupplierIdsCsv
+        // ever accumulates a supplier that was not already known at ingest, i.e. the only orders that
+        // ever needed routing help. Clearing the hash in assign-supplier instead would re-arm the
+        // increment and double-count the layout, so the guard is made supplier-aware here instead.
         if (order.SchemaFingerprintHash is not null)
         {
-            _logger.LogDebug("Fingerprint skipped — order {OrderId} already fingerprinted", orderId);
+            await LearnSupplierFromCorrectionAsync(organisationId, orderId, order, ct);
             return;
         }
 
@@ -141,6 +149,41 @@ public sealed class SchemaFingerprintService : ISchemaFingerprintService
         _logger.LogInformation(
             "Recorded schema fingerprint for order {OrderId} (org {OrgId}): hash {Hash} now seen {Count} time(s)",
             orderId, organisationId, hash, existing?.ParseSuccessCount ?? 1);
+    }
+
+    /// <summary>
+    /// Re-entry path for an order that was already fingerprinted (and therefore already counted):
+    /// bind a supplier this layout does not know yet. No-ops when the order still has no supplier,
+    /// when the layout row is gone, or when the supplier is already bound. <c>ParseSuccessCount</c>
+    /// and <c>LastSeenAt</c> are deliberately left alone — the same document being re-parsed is not
+    /// a new sighting of the layout. A lost set-update under concurrency is the safe direction here,
+    /// same as the first-parse binding above.
+    /// </summary>
+    private async Task LearnSupplierFromCorrectionAsync(
+        Guid organisationId, Guid orderId, PurchaseOrderEntity order, CancellationToken ct)
+    {
+        if (order.SupplierId is not { } supplierId || supplierId == Guid.Empty)
+        {
+            _logger.LogDebug("Fingerprint skipped — order {OrderId} already fingerprinted", orderId);
+            return;
+        }
+
+        var fpRow = await _db.SchemaFingerprints.FirstOrDefaultAsync(
+            f => f.OrganisationId == organisationId && f.ColumnNameHash == order.SchemaFingerprintHash, ct);
+
+        if (fpRow is null || !BindSupplier(fpRow, supplierId))
+        {
+            _logger.LogDebug("Fingerprint skipped — order {OrderId} already fingerprinted", orderId);
+            return;
+        }
+
+        // A layout first seen unrouted has no sample name; the correction is what supplies one.
+        fpRow.SampleSupplierName ??= order.Supplier?.Name;
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Learned supplier {SupplierId} for layout {Hash} from order {OrderId} (org {OrgId}) — count unchanged",
+            supplierId, order.SchemaFingerprintHash, orderId, organisationId);
     }
 
     private static SchemaFingerprint NewFingerprint(

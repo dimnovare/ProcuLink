@@ -24,8 +24,16 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - **Open after the train:** FOUNDER P0 — the founder org is `account_status=read_only`
   (Stripe cancel test), every ingest channel dead on it; lift it, then re-fire the parked
   Postmark message. Queue: BE-6 (P1 XML parser drops every second field), BE-1's
-  422-retry residual, the schema-fingerprint learning gap (S, P0 in the auto-detect spec),
-  FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU project, OPS-2 creds.
+  422-retry residual, FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU
+  project, OPS-2 creds.
+- **2026-07-24: the schema fingerprint now learns from operator corrections (BE-5 P0).**
+  `assign-supplier` re-parses, but the recorder short-circuited on the order's existing
+  `SchemaFingerprintHash`, so `SchemaFingerprint.SupplierIdsCsv` could only ever accumulate
+  suppliers already known at ingest — every human routing correction was discarded. The
+  guard is now supplier-aware (bind the unknown supplier, return, never touch
+  `ParseSuccessCount`/`LastSeenAt`) rather than the hash being cleared, which would have
+  re-armed the count and double-counted the layout. Proven RED-first on real Postgres
+  through the endpoint itself.
 
 ## Snapshot (2026-07-24) — routing/catalog/ops wave queued
 
