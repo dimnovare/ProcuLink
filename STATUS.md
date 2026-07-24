@@ -40,6 +40,59 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   (regression test pins it). Atomicity traded knowingly: the upsert is idempotent by
   (org, supplier, code), and `LastFileHash` has exactly one writer (post-success) so a
   partial import is always re-fetched, never skipped as unchanged.
+- **2026-07-24 FE-1 done — assign-supplier UI, FE PR #32 open (not merged).** The
+  `unrouted` park finally has an in-app exit: `apiClient.assignSupplier` (409 = the atomic
+  `unrouted → parsing` claim matched no row, i.e. already routed — kept distinct from a 400
+  "Supplier not found" via `ApiHttpError`), `AssignSupplierBanner` on the order page keyed on
+  `order.status` (NOT the issue count — that screen's badge reads "Needs review" for these
+  orders), and the inbox row action in place of the blank supplier name. The banner is a
+  banner, not a gate: the extracted lines underneath are the evidence for "whose order is
+  this?". `SupplierPicker` extracted from `UploadWorkbench` for reuse; `ord-004` mock fixture
+  added (mock mode previously could not reach the flow). Deviation: the inbox action
+  NAVIGATES to the order page — `InboxView` has no per-row action cells, so inline assign
+  would mean a second copy of the picker + 409 handling. 20 new tests; 869 vitest green
+  (90 files); tsc + `bun run build` green; browser-verified at 1440/390 in mock mode.
+- **2026-07-24 FE-2 done — double-navbar dedup, FE PR #31 open (not merged).** Real cause
+  was NOT a one-tab hub (no hub has <2 tabs): on top-level routes the topbar's context row
+  rendered a lone unlinked crumb ("Dashboard") directly under the active nav item of the
+  same name. New `isLonePageCrumb()` (breadcrumb.ts) hides that row at `md+` only — where
+  the primary nav row is visible; below `md` the nav row is behind the hamburger and the
+  crumb is the sole page label (those pages ship `PageHeader titleHidden`). Hub strips and
+  ancestor trails ("Workbench / Drafts") untouched. Single-tab-hub guard added anyway
+  (`hubShowsTabs`) + `>=2 tabs` invariant pinned in BridgeSidebar.test.tsx. Browser-verified
+  at 1440/768/767/390px; 861 vitest green (88 files), `bun run build` green.
+- **2026-07-24 FE-3 done — catalog picker scale, FE PR #33 open (not merged).** All three
+  gaps land on one shared seam: `src/lib/catalogCodes.ts` (query-key contract + the pure
+  `catalogPageClaim` verdict), `useCatalogCodeSearch` (250ms-debounced server-side lookup),
+  `CatalogCodeResults` (shared option list + status line). (a) the review picker searched
+  only the 1000 rows it had fetched — now `?q=` server-side. (b) `MagicMappingPreview`'s
+  manual entry is a combobox over the same lookup, delivering the typeahead the help pages
+  already promised (supplier read from the existing `["order", orderId]` cache — the
+  mapping-preview payload carries no supplier id). (c) orphaned `CatalogHintCard` mounted in
+  `OrderWorkshop`: desktop Issues tab + a new `MobileTriage` `hintSlot`, fed server truth
+  (`exceptionCount`, order lines). Search keys extend the empty-query probe's prefix, so the
+  existing `["supplier-catalog-codes", supplierId]` invalidation after import/sync/clear
+  still sweeps them, and an order view fires one catalog request. Honesty: the "Searched
+  only the first N of M" hedge is gone (the server searches the whole catalog), "no catalog
+  for this supplier" now requires a settled zero-row page, a full page says "showing the
+  first N". Also fixed a mock/API divergence — mock `getSupplierCatalog` returned the MATCH
+  count as `total` while the API returns the whole-catalog count (`SupplierCatalogService
+  .CountAsync` ignores `?q=`), which is the exact number "no catalog" vs "no match" turns
+  on, so mock-mode QA of that copy proved nothing. 875 vitest green (91 files, was 849),
+  tsc/lint/build clean. Browser-verified on a 121-row seeded catalog: typing `CROSS` finds
+  row 121 — unreachable under the old client-side filter — and a miss reads "No product
+  matches". Geometry NOT measured: the browser pane reports zero-width rects while hidden,
+  so responsive checks were CSS-reasoned only.
+- **2026-07-24 FE-4 done — marketing SEO, FE PR #30 open (not merged).** Prod-verified
+  defects, now fixed: all 33 help articles canonicalised to `/help` (children inherit the
+  layout's `alternates.canonical`); pages declaring their own `openGraph` served NO
+  `og:image` (a page-level block REPLACES the root's, never merges); `/` + legal/support
+  pages had no canonical at all. `src/lib/seo.ts` `pageMetadata()`/`helpArticleMetadata()`
+  now drive 50 pages; landing moved into a `(home)` route group so a server layout can
+  carry its metadata (route still `/`). Sitemap unchanged + test-pinned against the page
+  tree. 964 vitest green (89 files), `bun run build` 77/77 pages. NOTE: `bun run lint:vocab`
+  is red on main already — "Proton Bridge" ×2 + "Wiring it from Zapier" in help prose this
+  PR did not touch; no CI runs that gate.
 - **2026-07-24 done:** FE #28 merged (`a5c2404`, catalog-tab polish); FE PR #29 open
   (inbound address on Email intake tab, 851/851 green); BE PR #45 open (PunchOut L1
   spec + queue strikes); Stripe test coupon deleted (0 remain); FE `feat/design-system-v1`
