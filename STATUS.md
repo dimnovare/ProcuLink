@@ -11,6 +11,22 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-24, evening) — wave MERGED
+
+- **All 14 wave PRs are merged and both repos have zero open PRs.** FE #28–#33 (catalog-tab
+  polish, inbound-address card, SEO, navbar dedup, assign-supplier UI, catalog-picker scale)
+  and BE #45–#53 (PunchOut + auto-detect specs, OPS-1/OPS-2 findings, store:false, log
+  levels, email-park-unrouted, upsert batching, set-based clear). Merge train was
+  sequential with per-PR conflict weaves on the shared queue docs; two real collisions:
+  BE-4's level-pin test vs BE-1's `{Mode}` log template (test updated, all green) and
+  #51's InMemory DeleteAsync test vs #53's ExecuteDelete (dropped in favour of the
+  Postgres coverage). Item-level detail in the struck queue + bullets below.
+- **Open after the train:** FOUNDER P0 — the founder org is `account_status=read_only`
+  (Stripe cancel test), every ingest channel dead on it; lift it, then re-fire the parked
+  Postmark message. Queue: BE-6 (P1 XML parser drops every second field), BE-1's
+  422-retry residual, the schema-fingerprint learning gap (S, P0 in the auto-detect spec),
+  FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU project, OPS-2 creds.
+
 ## Snapshot (2026-07-24) — routing/catalog/ops wave queued
 
 - **Active queue: `docs/prompts/2026-07-24-open-queue-handover.md`** — 9 parallel chip
