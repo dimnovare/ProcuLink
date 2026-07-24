@@ -72,12 +72,7 @@ public sealed class OpenAiProductCodeSearch : IProductCodeSearch
 
         try
         {
-            var options = new CreateResponseOptions(
-                _model, new[] { ResponseItem.CreateUserMessageItem(BuildPrompt(description, brandHint)) });
-            options.Tools.Add(ResponseTool.CreateWebSearchTool());
-            options.MaxOutputTokenCount = MaxOutputTokens;
-
-            var result = await _client.CreateResponseAsync(options, ct);
+            var result = await _client.CreateResponseAsync(BuildOptions(_model, description, brandHint), ct);
             var response = result.Value;
 
             // Token usage is billable either way; log it for observability (the per-org cap is
@@ -94,6 +89,26 @@ public sealed class OpenAiProductCodeSearch : IProductCodeSearch
             _logger.LogWarning(ex, "Product web search failed for description '{Description}'.", Truncate(description, 120));
             return null;
         }
+    }
+
+    /// <summary>
+    /// Builds the Responses request. Pure seam (no network) so the request shape — above all
+    /// <c>store:false</c> — is unit-testable.
+    ///
+    /// <para><b>Storage opt-out.</b> The Responses API persists request + response payloads on
+    /// OpenAI's side by default (Chat Completions does not). The prompt carries customer PO line
+    /// descriptions, so <see cref="CreateResponseOptions.StoredOutputEnabled"/> ("store" in the
+    /// JSON payload) is set false on every call. Nothing here reads a stored response back, so
+    /// opting out costs no functionality.</para>
+    /// </summary>
+    internal static CreateResponseOptions BuildOptions(string model, string description, string? brandHint)
+    {
+        var options = new CreateResponseOptions(
+            model, new[] { ResponseItem.CreateUserMessageItem(BuildPrompt(description, brandHint)) });
+        options.Tools.Add(ResponseTool.CreateWebSearchTool());
+        options.MaxOutputTokenCount = MaxOutputTokens;
+        options.StoredOutputEnabled = false;
+        return options;
     }
 
     private static string BuildPrompt(string description, string? brandHint)
