@@ -80,6 +80,16 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   tree. 964 vitest green (89 files), `bun run build` 77/77 pages. NOTE: `bun run lint:vocab`
   is red on main already — "Proton Bridge" ×2 + "Wiring it from Zapier" in help prose this
   PR did not touch; no CI runs that gate.
+- **2026-07-24: supplier auto-detect SPEC (BE-5) — BE PR #48 open, spec only, no code.**
+  `docs/superpowers/specs/2026-07-24-supplier-auto-detect-from-document-design.md`. Signal
+  audit: header parties EXIST; supplier-name match HALF and VAT match BLOCKED (`Supplier`
+  carries no VAT/reg-nr/EDI/domain); catalog overlap needs a cross-supplier query +
+  `(OrgId, Code)` index; sender address is SHA-256-only by GDPR design. Strongest signal
+  already ships and wasn't on the brief: `SchemaFingerprint.SupplierIdsCsv`. **New defect:**
+  that binding never learns from a correction — `assign-supplier` leaves
+  `SchemaFingerprintHash` set, so the re-parse short-circuits and the chosen supplier is
+  never bound. S-sized P0, worth shipping alone. Six founder decisions in the spec; #1
+  (supplier identity columns) and #2 (sender-domain persistence) block signals outright.
 - **2026-07-24 done:** FE #28 merged (`a5c2404`, catalog-tab polish); FE PR #29 open
   (inbound address on Email intake tab, 851/851 green); BE PR #45 open (PunchOut L1
   spec + queue strikes); Stripe test coupon deleted (0 remain); FE `feat/design-system-v1`
