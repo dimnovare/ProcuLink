@@ -30,7 +30,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - **2026-07-24 done:** FE #28 merged (`a5c2404`, catalog-tab polish); FE PR #29 open
   (inbound address on Email intake tab, 851/851 green); BE PR #45 open (PunchOut L1
   spec + queue strikes); Stripe test coupon deleted (0 remain); FE `feat/design-system-v1`
-  deleted per founder (archived at tag `archive/design-system-v1`); **BE-4 done** —
+  deleted per founder (archived at tag `archive/design-system-v1`); **BE-4 done (BE PR #49)** —
   inbound-email webhook log levels: routine per-message narration → Debug (prod runs
   `Default=Information`), blocked-account reject raised Information → Warning, order-created
   stays Information; 5 level tests pin it. `InboundEmailController` needed no change (it
