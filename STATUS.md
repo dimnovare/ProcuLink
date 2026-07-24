@@ -117,7 +117,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `git merge-base --is-ancestor` LIES about squash-merged PRs (grep main for content instead);
   worktree grep hits are copies of main, not evidence of a separate track.
 
-- **2026-07-24: queue items 7+8 DONE, both awaiting founder merge.** Item 7 (Catalog-tab
+- **2026-07-24: queue items 7+8 DONE.** Item 7 — FE PR #28 **MERGED** (`a5c2404`, founder
+  grant in-session); item 8 — BE PR #45 open. Also founder-requested cleanup done: the
+  Stripe test coupon (`zFUfTMBz` / promo `REDACTED-TAXID`, redeemed 1/1, already inactive)
+  deleted via live Stripe API — 0 coupons remain. Item 7 (Catalog-tab
   polish) — FE PR #28: logicom out of the generic protocol picker (offer⇔works held — a
   saved logicom source keeps its tile; keyboard nav follows the visible set), tile labels
   left-aligned, empty-state dashed border 1px→2px (root cause was NOT overlap — geometry
