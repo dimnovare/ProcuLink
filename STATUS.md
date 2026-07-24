@@ -191,10 +191,37 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `git merge-base --is-ancestor` LIES about squash-merged PRs (grep main for content instead);
   worktree grep hits are copies of main, not evidence of a separate track.
 
-- **2026-07-24: new queue items** (see `docs/prompts/2026-07-23-open-queue-handover.md`
-  items 7–8): supplier Catalog-tab polish (Logicom QuickConnect out of the generic protocol
-  picker; tile label alignment; empty-state dashed-border gap) and a **PunchOut L1 spec**
-  (founder idea — spec only, no implementation).
+- **2026-07-24 routing/catalog recon (code-verified) — three STALE claims in this file
+  corrected:** (1) the Phase 1b "SFTP/S3 enqueue gap" was FIXED long ago (`74ac036`
+  2026-06-30 enqueues ParseOrderJob; `de4ea0e` 2026-07-09 ships unrouted import for
+  SFTP/S3/IMAP pull) — the §06-26 line below and the deferred-list entry are outdated;
+  (2) the "two routing worktrees in flight" are fully merged (both tips are ancestors of
+  main, zero unique commits) — branches are stale pointers, safe to delete; (3) Postmark
+  inbound is no longer "token-only, verification deferred": prod sets
+  `Inbound__Postmark__ProxySecret`, so the CF verify-Worker edge gate appears deployed
+  (verify with one real email). **Known operator gap found:** BE
+  `POST /api/orders/{id}/assign-supplier` exists (OrdersController.cs:583) but the FE has
+  NO control calling it — an `unrouted` order shows "Needs supplier" with no in-app way
+  to resolve it. Also: review-picker catalog typeahead is client-side over the first
+  1000 rows only; upload-preview manual entry has no typeahead; `CatalogHintCard` is
+  orphaned (never rendered).
+- **2026-07-24: queue items 7+8 DONE.** Item 7 — FE PR #28 **MERGED** (`a5c2404`, founder
+  grant in-session); item 8 — BE PR #45 open. Also founder-requested cleanup done: the
+  Stripe test coupon (`zFUfTMBz` / promo `REDACTED-TAXID`, redeemed 1/1, already inactive)
+  deleted via live Stripe API — 0 coupons remain. Item 7 (Catalog-tab
+  polish) — FE PR #28: logicom out of the generic protocol picker (offer⇔works held — a
+  saved logicom source keeps its tile; keyboard nav follows the visible set), tile labels
+  left-aligned, empty-state dashed border 1px→2px (root cause was NOT overlap — geometry
+  showed a 12px clear gap; Windows 125% scaling renders 1px as a 0.8px hairline Chromium
+  can drop per-edge). 849/849 vitest (4 new, RED first) + tsc + build green; verified
+  live at 1440px/390px via computed styles (no screenshots — Browser pane can't composite
+  hidden; note: pane DOM/JS tools DO work now, only Playwright CDP stays blocked). Item 8
+  (PunchOut L1) — BE PR #45, spec only:
+  `docs/superpowers/specs/2026-07-24-punchout-l1-supplier-hosted-catalog-design.md`
+  (revision-bundle fit, no-local-code-list AI implications with the allow-list guard kept
+  strict, BuyerCookie-correlated browser cart return, ~3.5–4.5 wk estimate, decisions
+  D1–D5). Fact-check against the handover pointer: PunchOut exists only as FE copy — no
+  vocabulary in `standards/catalog.ts`, no protocol code in either repo.
 - **Stripe LIVE webhook verified end-to-end (2026-07-24, founder-present):** real checkout on
   prod with a 100%-forever coupon (`REDACTED-TAXID`, max 1 redemption) — €0.00 invoice paid, webhook
   endpoint `api.proculink.eu/api/billing/webhook` delivered with 0% errors, org flipped to
