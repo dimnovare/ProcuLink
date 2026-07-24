@@ -27,6 +27,18 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   channels); BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
   caller** — that's FE-1. Phase 1b enqueue gap: FIXED since `74ac036`+`de4ea0e` (old
   entries below are stale); both routing worktree branches fully merged (CLEANUP-1).
+- **2026-07-24 FE-1 done — assign-supplier UI, FE PR #32 open (not merged).** The
+  `unrouted` park finally has an in-app exit: `apiClient.assignSupplier` (409 = the atomic
+  `unrouted → parsing` claim matched no row, i.e. already routed — kept distinct from a 400
+  "Supplier not found" via `ApiHttpError`), `AssignSupplierBanner` on the order page keyed on
+  `order.status` (NOT the issue count — that screen's badge reads "Needs review" for these
+  orders), and the inbox row action in place of the blank supplier name. The banner is a
+  banner, not a gate: the extracted lines underneath are the evidence for "whose order is
+  this?". `SupplierPicker` extracted from `UploadWorkbench` for reuse; `ord-004` mock fixture
+  added (mock mode previously could not reach the flow). Deviation: the inbox action
+  NAVIGATES to the order page — `InboxView` has no per-row action cells, so inline assign
+  would mean a second copy of the picker + 409 handling. 20 new tests; 869 vitest green
+  (90 files); tsc + `bun run build` green; browser-verified at 1440/390 in mock mode.
 - **2026-07-24 FE-2 done — double-navbar dedup, FE PR #31 open (not merged).** Real cause
   was NOT a one-tab hub (no hub has <2 tabs): on top-level routes the topbar's context row
   rendered a lone unlinked crumb ("Dashboard") directly under the active nav item of the
