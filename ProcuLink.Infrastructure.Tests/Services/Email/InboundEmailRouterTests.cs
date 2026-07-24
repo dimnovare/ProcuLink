@@ -435,14 +435,14 @@ public class InboundEmailRouterTests
     }
 
     [Fact]
-    public async Task NoSupplierConfigured_BodyOnlyEmail_SucceedsButCreatesNoOrder()
+    public async Task NoSupplierConfigured_BodyOnlyEmail_CreatesUnroutedOrder()
     {
-        // KNOWN GAP, pinned deliberately: the body-NLP fallback persists through
-        // CreateStubFromParsedOrderAsync, which requires a supplier id — there is no
-        // supplier-less overload. A prose-only email to an org with no supplier
-        // therefore still yields no order. It is no longer a 422 (the message is
-        // accepted and audited), and any attachment on the same mail IS parked
-        // unrouted. Closing this needs an unrouted CreateStubFromParsedOrderAsync.
+        // The gap this used to pin is closed. The body-NLP fallback no longer needs a
+        // supplier to persist: with none configured it takes the unrouted sibling
+        // (CreateUnroutedStubFromParsedOrderAsync), exactly as the attachment path takes
+        // CreateUnroutedStubAsync. A prose-only email to a supplier-less org now lands as
+        // a real order parked 'unrouted' for the assign-supplier flow to resolve, instead
+        // of being accepted, audited and silently dropped.
         await using var db = CreateDb();
         var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
 
@@ -471,10 +471,23 @@ public class InboundEmailRouterTests
         var result = await router.RouteAsync(payload, default);
 
         result.Success.Should().BeTrue("the message is accepted — Postmark must not retry it");
-        result.CreatedOrderIds.Should().BeEmpty();
-        orders.ParsedOrderCalls.Should().BeEmpty(
-            "the body-NLP persist path needs a supplier id; it must not invent one");
-        extractor.Calls.Should().Be(0, "the extractor is not worth calling when the result cannot be persisted");
+        result.CreatedOrderIds.Should().HaveCount(1,
+            "a prose-only order to a supplier-less org is held for routing, not dropped");
+        extractor.Calls.Should().Be(1, "the extraction is now persistable, so it is worth running");
+
+        // The ROUTED persist path must not have been used — it would have needed a
+        // supplier id, and there is none to invent.
+        orders.ParsedOrderCalls.Should().BeEmpty();
+        orders.UnroutedParsedOrderCalls.Should().HaveCount(1);
+        orders.UnroutedParsedOrderCalls[0].OrgId.Should().Be(orgId);
+        orders.UnroutedParsedOrderCalls[0].Source.Should().Be("email_body_nlp");
+        orders.UnroutedParsedOrderCalls[0].Order.PoNumber.Should().Be("PO-BODY-NOSUP");
+
+        // No parse job — the order is already populated; there is no source file to parse.
+        enqueuer.Calls.Should().BeEmpty();
+
+        var actions = await db.AuditEvents.Select(a => a.Action).ToListAsync();
+        actions.Should().Contain("inbound_email.processed");
     }
 
     [Fact]
@@ -1077,6 +1090,7 @@ public class InboundEmailRouterTests
         /// <summary>Only the unrouted-hold calls — <c>CreateUnroutedStubAsync</c>, no supplier.</summary>
         public List<(Guid OrgId, string FileName, string ContentType, long Size)> UnroutedCalledWith { get; } = new();
         public List<(Guid OrgId, Guid SupplierId, ExtractedOrder Order, string Source)> ParsedOrderCalls { get; } = new();
+        public List<(Guid OrgId, ExtractedOrder Order, string Source)> UnroutedParsedOrderCalls { get; } = new();
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
             Guid organisationId, Guid supplierId, Stream fileStream,
@@ -1124,19 +1138,30 @@ public class InboundEmailRouterTests
             Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
         {
             ParsedOrderCalls.Add((organisationId, supplierId, order, source));
-
-            var stub = new PurchaseOrderEntity
-            {
-                Id = Guid.NewGuid(),
-                OrgId = organisationId,
-                SupplierId = supplierId,
-                Status = "pending_review",
-                SourceFileKey = null,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            };
-            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(
+                ParsedStub(organisationId, supplierId, "pending_review")));
         }
+
+        // Supplier-less sibling of the above — the body-NLP path takes this when the org has
+        // no resolvable supplier. Recorded separately so a test can assert WHICH path ran.
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(
+            Guid organisationId, ExtractedOrder order, string source, CancellationToken ct)
+        {
+            UnroutedParsedOrderCalls.Add((organisationId, order, source));
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(
+                ParsedStub(organisationId, supplierId: null, "unrouted")));
+        }
+
+        private static PurchaseOrderEntity ParsedStub(Guid organisationId, Guid? supplierId, string status) => new()
+        {
+            Id = Guid.NewGuid(),
+            OrgId = organisationId,
+            SupplierId = supplierId,
+            Status = status,
+            SourceFileKey = null,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
 
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException();

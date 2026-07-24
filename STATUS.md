@@ -11,6 +11,42 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-25) — BE-1's KNOWN GAP closed
+
+- **A prose-only email to a supplier-less org now becomes a real, resolvable order.** PR #52 left
+  this pinned as a KNOWN GAP: the body-NLP fallback persisted through
+  `CreateStubFromParsedOrderAsync`, which required a supplier, so such a message was accepted (200)
+  and audited but produced NO ORDER — while an attachment on the same message was parked `unrouted`.
+  Closed with `IOrderService.CreateUnroutedStubFromParsedOrderAsync`, a separate entry point rather
+  than a nullable id on the routed method, so `IngressController` (REST push, which must have a
+  supplier) still fails to COMPILE if it ever loses one. Parked with NULL supplier, NULL
+  `ConnectionRevisionId` — a revision belongs to a supplier connection, and borrowing the org's only
+  other supplier's revision would bind the order to a counterparty nobody chose; `assign-supplier`
+  pins it when the operator picks.
+- **The bigger half was RESOLVABILITY, and it was not in the brief.** A prose order has no source
+  file. `assign-supplier` resolves an unrouted order by flipping it to `parsing` and re-enqueueing
+  `ParseOrderJob` → `ParseStoredFileAsync`, which began by downloading the source file and returned
+  `Fail("Order has no source file key.")`. Shipping only the create half would have made the
+  operator's assignment WEDGE the order in `parsing` permanently: the job throws, burns its 3
+  Hangfire retries, lands red, and can never be re-assigned because `assign-supplier` accepts only
+  an `unrouted` order. A file-less order's persisted lines ARE its parsed data, so that branch now
+  re-resolves them against the chosen supplier (header untouched — there is no file to re-read it
+  from, and the extractor's copy is the only one). A file-less order with NO lines still fails loudly.
+- **Trap found and fixed (would have shipped silently):** `ExecuteDeleteAsync` removes rows but tells
+  the change tracker nothing. `ParseStoredFileAsync` Includes the order's lines, and a file-less order
+  always has some, so reflecting the new set onto `entity.Lines` severed the stale ones from their
+  required parent, EF cascaded them to `Deleted`, and the *passport emit's* `SaveChanges` then issued
+  a DELETE matching 0 rows → `DbUpdateConcurrencyException` raised AFTER the persist had already
+  committed, i.e. an order correctly resolved in the database but reported as a failed parse. Stale
+  entries are now detached the moment their rows go. The file-backed re-parse escapes this only by
+  emitting its passport event BEFORE its in-memory reflection — I suspected it had the same defect,
+  tested it, and the suspicion was **refuted**; that behaviour is now pinned by a regression test
+  (with its precondition asserted, so it cannot pass vacuously).
+- Tests: 5 InMemory (`OrderIngestionUnroutedParsedOrderTests`) + 4 real-Postgres
+  (`UnroutedParsedOrderAssignSupplierPostgresTests`); the PR #52 pinning test
+  `NoSupplierConfigured_BodyOnlyEmail_SucceedsButCreatesNoOrder` was flipped RED-first to
+  `…_CreatesUnroutedOrder`. **BE PR — open, not merged.**
+
 ## Snapshot (2026-07-24, late) — BE-6 fixed
 
 - **BE-6 (P1) closed — the generic XML catalog parser no longer drops every second field.**
@@ -172,8 +208,9 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `inbound_email.unrouted_no_supplier`. 422 kept for unparseable recipient / unknown slug /
   org-not-found / blocked account status. `InboundEmailRouter` is now the FOURTH writer of
   `unrouted` (first PUSH channel) — `OrderStatusConstants` reachability doc updated.
-  KNOWN GAP: body-NLP fallback still skipped without a supplier (no supplier-less
-  `CreateStubFromParsedOrderAsync`); pinned by a test, not silent.
+  ~~KNOWN GAP: body-NLP fallback still skipped without a supplier (no supplier-less
+  `CreateStubFromParsedOrderAsync`); pinned by a test, not silent.~~ **CLOSED 2026-07-25 —
+  see the snapshot at the top of this file.**
 - **2026-07-24 BE-3 done — Responses API opts out of server-side storage, BE PR #50 open
   (not merged).** `OpenAiProductCodeSearch` (flag-gated product web search) is the only
   Responses API caller, and that API stores request + response payloads by default; the

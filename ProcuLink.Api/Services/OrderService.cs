@@ -101,6 +101,10 @@ public sealed class OrderService : IOrderService, IStubOrderCreator
         Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
         => _ingestion.CreateStubFromParsedOrderAsync(organisationId, supplierId, order, source, ct);
 
+    public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(
+        Guid organisationId, ExtractedOrder order, string source, CancellationToken ct)
+        => _ingestion.CreateStubFromParsedOrderAsync(organisationId, supplierId: null, order, source, ct);
+
     public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(
         Guid organisationId, Guid orderId, CancellationToken ct)
         => _ingestion.ParseStoredFileAsync(organisationId, orderId, ct);

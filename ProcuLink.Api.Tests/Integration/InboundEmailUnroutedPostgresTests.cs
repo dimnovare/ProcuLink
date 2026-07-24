@@ -327,6 +327,10 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
             => throw new NotImplementedException();
+        // Body-NLP paths, routed and unrouted: these cases are all about attachments and the
+        // extractor here is a no-op, so either call means the router took a path it should not.
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(Guid organisationId, ExtractedOrder order, string source, CancellationToken ct)
+            => throw new NotImplementedException();
         public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid organisationId, Guid orderId, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid organisationId, Guid orderId, CancellationToken ct)
