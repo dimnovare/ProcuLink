@@ -117,10 +117,20 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `git merge-base --is-ancestor` LIES about squash-merged PRs (grep main for content instead);
   worktree grep hits are copies of main, not evidence of a separate track.
 
-- **2026-07-24: new queue items** (see `docs/prompts/2026-07-23-open-queue-handover.md`
-  items 7–8): supplier Catalog-tab polish (Logicom QuickConnect out of the generic protocol
-  picker; tile label alignment; empty-state dashed-border gap) and a **PunchOut L1 spec**
-  (founder idea — spec only, no implementation).
+- **2026-07-24: queue items 7+8 DONE, both awaiting founder merge.** Item 7 (Catalog-tab
+  polish) — FE PR #28: logicom out of the generic protocol picker (offer⇔works held — a
+  saved logicom source keeps its tile; keyboard nav follows the visible set), tile labels
+  left-aligned, empty-state dashed border 1px→2px (root cause was NOT overlap — geometry
+  showed a 12px clear gap; Windows 125% scaling renders 1px as a 0.8px hairline Chromium
+  can drop per-edge). 849/849 vitest (4 new, RED first) + tsc + build green; verified
+  live at 1440px/390px via computed styles (no screenshots — Browser pane can't composite
+  hidden; note: pane DOM/JS tools DO work now, only Playwright CDP stays blocked). Item 8
+  (PunchOut L1) — BE PR #45, spec only:
+  `docs/superpowers/specs/2026-07-24-punchout-l1-supplier-hosted-catalog-design.md`
+  (revision-bundle fit, no-local-code-list AI implications with the allow-list guard kept
+  strict, BuyerCookie-correlated browser cart return, ~3.5–4.5 wk estimate, decisions
+  D1–D5). Fact-check against the handover pointer: PunchOut exists only as FE copy — no
+  vocabulary in `standards/catalog.ts`, no protocol code in either repo.
 - **Stripe LIVE webhook verified end-to-end (2026-07-24, founder-present):** real checkout on
   prod with a 100%-forever coupon (`REDACTED-TAXID`, max 1 redemption) — €0.00 invoice paid, webhook
   endpoint `api.proculink.eu/api/billing/webhook` delivered with 0% errors, org flipped to
