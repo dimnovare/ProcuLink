@@ -45,7 +45,12 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 - Tests: 5 InMemory (`OrderIngestionUnroutedParsedOrderTests`) + 4 real-Postgres
   (`UnroutedParsedOrderAssignSupplierPostgresTests`); the PR #52 pinning test
   `NoSupplierConfigured_BodyOnlyEmail_SucceedsButCreatesNoOrder` was flipped RED-first to
-  `…_CreatesUnroutedOrder`. **BE PR — open, not merged.**
+  `…_CreatesUnroutedOrder`, and the re-resolve's RED output was the predicted
+  `Order has no source file key.` exactly. **BE PR #60 — open, not merged. MERGEABLE/CLEAN,
+  CI green: 3,888 passed / 0 failed / 2 skipped** (the 2 are the env-gated live-feed tests).
+  Locally Infrastructure showed 1 red — `FireIntegrationTriggerJobReliabilityTests.
+  TwoConcurrentFinalFailures_OnPostgres…`, `Npgsql: Timeout during reading attempt`, the known
+  Testcontainers contention flake; it passed 6/6 in isolation and 1054/1054 on CI's Linux runner.
 
 ## Snapshot (2026-07-24, late) — BE-6 fixed
 
