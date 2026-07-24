@@ -290,6 +290,9 @@ public sealed class E2EPipelineFactory : WebApplicationFactory<Program>
 /// so a custom <see cref="DockerRequiredFactAttribute"/> reads this and statically
 /// marks the test skipped when Docker is unreachable — keeping the suite green on
 /// machines/CI without Docker instead of erroring on container start.
+/// Availability requires an actual engine response (non-empty server version), not
+/// just a zero exit code — a wedged Docker Desktop engine can exit 0 while every
+/// container start would fail.
 /// </summary>
 internal static class DockerProbe
 {
@@ -311,15 +314,31 @@ internal static class DockerProbe
             if (proc is null)
                 return "Docker CLI could not be started.";
 
+            // Drain both pipes concurrently so WaitForExit cannot deadlock on a full buffer.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+
             if (!proc.WaitForExit(15_000))
             {
                 try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 return "Docker probe timed out.";
             }
 
-            return proc.ExitCode == 0
-                ? null
-                : $"`docker info` exited {proc.ExitCode} — Docker daemon not reachable.";
+            if (proc.ExitCode != 0)
+                return $"`docker info` exited {proc.ExitCode} — Docker daemon not reachable.";
+
+            // A wedged Docker Desktop engine can exit 0 with no server version, so an
+            // exit-code check alone reports "available" and every container start fails.
+            var serverVersion = stdoutTask.GetAwaiter().GetResult().Trim();
+            if (serverVersion.Length == 0)
+            {
+                var stderr = stderrTask.GetAwaiter().GetResult().Trim();
+                return stderr.Length > 0
+                    ? $"`docker info` returned no server version — engine not responding ({stderr})."
+                    : "`docker info` returned no server version — engine not responding.";
+            }
+
+            return null;
         }
         catch (Exception ex)
         {
