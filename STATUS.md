@@ -13,7 +13,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ## Snapshot (2026-07-25) — frozen orgs are recoverable from the product
 
-- **`POST /api/admin/organisations/{id}/account-status` — BE PR #58 (open, not merged).**
+- **`POST /api/admin/organisations/{id}/account-status` — BE PR #59 (open, not merged).**
   Closes the gap the founder org exposed on 2026-07-24: an org frozen by a Stripe cancel
   (`account_status=read_only`) could only be lifted with a raw production UPDATE. `[AdminOnly]`,
   cross-tenant by route id, same shape as `SetOrganisationLimits`. **Exactly one transition is
