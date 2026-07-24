@@ -11,6 +11,27 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-24) — routing/catalog/ops wave queued
+
+- **Active queue: `docs/prompts/2026-07-24-open-queue-handover.md`** — 9 parallel chip
+  items (FE: assign-supplier UI [doc: `2026-07-24-assign-supplier-ui.md`], navbar dedup,
+  catalog-picker scale, marketing SEO; BE: email-park-unrouted, row-cap raise,
+  Responses `store:false`, webhook log level, supplier-auto-detect SPEC; OPS: live
+  inbound-email e2e, prod vendor-feed test) + founder actions. Chips run **Opus 4.8
+  Extra** per founder. Same-day verification findings: **P0 — CF Email Routing
+  forwarding is broken for all 12 addresses ("Destination address not found"; support@
+  mail is being lost; only inbound@→Worker Active)**; OpenAI org is an unverified
+  Personal account (API-call-logging Disabled, no EU project, no ZDR/DPA); the June CF
+  API token is dead (401). Routing truth (code-verified): every channel either requires
+  a supplier (upload 400, ingress 400, push-email 422-reject) or parks `unrouted` (pull
+  channels); BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
+  caller** — that's FE-1. Phase 1b enqueue gap: FIXED since `74ac036`+`de4ea0e` (old
+  entries below are stale); both routing worktree branches fully merged (CLEANUP-1).
+- **2026-07-24 done:** FE #28 merged (`a5c2404`, catalog-tab polish); FE PR #29 open
+  (inbound address on Email intake tab, 851/851 green); BE PR #45 open (PunchOut L1
+  spec + queue strikes); Stripe test coupon deleted (0 remain); FE `feat/design-system-v1`
+  deleted per founder (archived at tag `archive/design-system-v1`).
+
 ## Snapshot (2026-07-23) — delivery-reliability + UI waves shipped
 
 - **Delivery reliability (BE #28–#36, 2026-07-16→17, all merged + live):** supplier rejections
