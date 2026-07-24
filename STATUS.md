@@ -23,8 +23,9 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   mail is being lost; only inbound@→Worker Active)**; OpenAI org is an unverified
   Personal account (API-call-logging Disabled, no EU project, no ZDR/DPA); the June CF
   API token is dead (401). Routing truth (code-verified): every channel either requires
-  a supplier (upload 400, ingress 400, push-email 422-reject) or parks `unrouted` (pull
-  channels); BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
+  a supplier (upload 400, REST ingress 400) or parks `unrouted` (the three pull channels,
+  and — since BE-1 below — the inbound-email webhook, which used to 422-reject);
+  BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
   caller** — that's FE-1. Phase 1b enqueue gap: FIXED since `74ac036`+`de4ea0e` (old
   entries below are stale); both routing worktree branches fully merged (CLEANUP-1).
 - **2026-07-24 FE-1 done — assign-supplier UI, FE PR #32 open (not merged).** The
@@ -80,6 +81,15 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   tree. 964 vitest green (89 files), `bun run build` 77/77 pages. NOTE: `bun run lint:vocab`
   is red on main already — "Proton Bridge" ×2 + "Wiring it from Zapier" in help prose this
   PR did not touch; no CI runs that gate.
+- **2026-07-24 — BE-1 done (BE PR #52, open):** the Postmark inbound webhook no longer
+  422-rejects a message whose org has no supplier. It imports the attachments via
+  `CreateUnroutedStubAsync` + ParseOrderJob (parked `unrouted`, resolvable by FE-1's
+  assign-supplier UI) and answers 200; audit `inbound_email.rejected_no_supplier` →
+  `inbound_email.unrouted_no_supplier`. 422 kept for unparseable recipient / unknown slug /
+  org-not-found / blocked account status. `InboundEmailRouter` is now the FOURTH writer of
+  `unrouted` (first PUSH channel) — `OrderStatusConstants` reachability doc updated.
+  KNOWN GAP: body-NLP fallback still skipped without a supplier (no supplier-less
+  `CreateStubFromParsedOrderAsync`); pinned by a test, not silent.
 - **2026-07-24 BE-3 done — Responses API opts out of server-side storage, BE PR #50 open
   (not merged).** `OpenAiProductCodeSearch` (flag-gated product web search) is the only
   Responses API caller, and that API stores request + response payloads by default; the
