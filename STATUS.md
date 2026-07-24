@@ -20,6 +20,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   ≥4 scalar children — the pre-existing XML fixtures topped out at 2 children, which is exactly
   why the suite never caught it. **This lifts the "do not enable element-based XML feeds" gate
   on OPS-2** once the PR merges. Attribute feeds (100MEGA) and cXML Index were never affected.
+  **BE PR #55 — open, not merged. CI green: 3,863 passed / 0 failed / 2 skipped** (the 2 are
+  the env-gated live-feed tests). Local Api.Tests skipped its 130 Postgres tests — the Docker
+  Desktop engine wedged under cross-worktree Testcontainers load and the runner still printed
+  `Passed!`; CI on Linux ran all 1596 with 0 skips, which is the result that counts.
 
 ## Snapshot (2026-07-24, evening) — wave MERGED
 
