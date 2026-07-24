@@ -117,6 +117,15 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `git merge-base --is-ancestor` LIES about squash-merged PRs (grep main for content instead);
   worktree grep hits are copies of main, not evidence of a separate track.
 
+- **Stripe LIVE webhook verified end-to-end (2026-07-24, founder-present):** real checkout on
+  prod with a 100%-forever coupon (`REDACTED-TAXID`, max 1 redemption) — €0.00 invoice paid, webhook
+  endpoint `api.proculink.eu/api/billing/webhook` delivered with 0% errors, org flipped to
+  Growth (`upgraded to growth via Stripe checkout cs_live_…` in API logs), then cancellation
+  reverted it (`subscription cancelled — reverted to frozen Pilot`). BOTH directions of the
+  billing pipeline proven on live Stripe with zero money moved. Coupon self-expired (1/1);
+  left in Stripe as the audit record. Remaining untested: `amount > 0` invoice branches
+  (needs a real charge + refund, ~€4–5 in non-returned Stripe fees).
+
 ## Snapshot (2026-07-04)
 
 - **Production is LIVE** at `proculink.eu` + `api.proculink.eu` (launched 2026-06-09 window).
