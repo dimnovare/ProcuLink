@@ -29,9 +29,9 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   predicate shipped (#43, `97fd19b` — see below; it also closed the billing-release
   load-then-save window). All three park follow-ups merged: supplier-ACK resolution (#38,
   `2459de1`), billing-held truthful restore (#40, `c85f127`), park race fix (#42, `77820b5`).
-  Remaining engineering is the long-deferred list below (RLS, invoice rerouting, …) + one
-  small chip: harden `DockerProbe` against a wedged engine (docker info exits 0 while every
-  API route 500s → Docker-gated tests fail confusingly instead of skipping).
+  Remaining engineering is the long-deferred list below (RLS, invoice rerouting, …).
+  ~~DockerProbe wedged-engine chip~~ DONE (#44, `bbaf2ae`): probe now requires a non-empty
+  `{{.ServerVersion}}` response, not just exit 0 — gated tests skip instead of erroring.
 - **2026-07-23: the B cut SHIPPED — BE PR #37 (merged, `7052053`).** Ops requeue supersedes
   attempt rows (`CapSupersededAt`) instead of deleting them; `DeliveryAttempt.CountsAgainstCap`
   is the ONE cap predicate (all five sites); numbering ascends across requeues; evidence
