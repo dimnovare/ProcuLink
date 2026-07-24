@@ -27,6 +27,16 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   channels); BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
   caller** — that's FE-1. Phase 1b enqueue gap: FIXED since `74ac036`+`de4ea0e` (old
   entries below are stale); both routing worktree branches fully merged (CLEANUP-1).
+- **2026-07-24 FE-4 done — marketing SEO, FE PR #30 open (not merged).** Prod-verified
+  defects, now fixed: all 33 help articles canonicalised to `/help` (children inherit the
+  layout's `alternates.canonical`); pages declaring their own `openGraph` served NO
+  `og:image` (a page-level block REPLACES the root's, never merges); `/` + legal/support
+  pages had no canonical at all. `src/lib/seo.ts` `pageMetadata()`/`helpArticleMetadata()`
+  now drive 50 pages; landing moved into a `(home)` route group so a server layout can
+  carry its metadata (route still `/`). Sitemap unchanged + test-pinned against the page
+  tree. 964 vitest green (89 files), `bun run build` 77/77 pages. NOTE: `bun run lint:vocab`
+  is red on main already — "Proton Bridge" ×2 + "Wiring it from Zapier" in help prose this
+  PR did not touch; no CI runs that gate.
 - **2026-07-24 done:** FE #28 merged (`a5c2404`, catalog-tab polish); FE PR #29 open
   (inbound address on Email intake tab, 851/851 green); BE PR #45 open (PunchOut L1
   spec + queue strikes); Stripe test coupon deleted (0 remain); FE `feat/design-system-v1`
