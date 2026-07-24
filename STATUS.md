@@ -26,7 +26,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   Postmark message. Queue: BE-6 (P1 XML parser drops every second field), the
   schema-fingerprint learning gap (S, P0 in the auto-detect spec), FE `lint:vocab`
   pre-existing red. Founder halves: OpenAI DPA/EU project, OPS-2 creds.
-- **2026-07-24: inbound-webhook retry contract fixed — BE PR #54 (open), BE-1 residual
+- **2026-07-24: inbound-webhook retry contract fixed — BE PR #56 (open), BE-1 residual
   closed.** OPS-1 measured that 422 does not stop Postmark; the documented policy is 10
   retries over ~10.5 h on any non-200, then the message is filed `Failed` (still re-fireable
   by hand for 45 days), while 200 marks it `Processed` and unrecoverable. The status is
