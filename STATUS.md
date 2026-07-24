@@ -48,6 +48,28 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   ancestor trails ("Workbench / Drafts") untouched. Single-tab-hub guard added anyway
   (`hubShowsTabs`) + `>=2 tabs` invariant pinned in BridgeSidebar.test.tsx. Browser-verified
   at 1440/768/767/390px; 861 vitest green (88 files), `bun run build` green.
+- **2026-07-24 FE-3 done — catalog picker scale, FE PR #33 open (not merged).** All three
+  gaps land on one shared seam: `src/lib/catalogCodes.ts` (query-key contract + the pure
+  `catalogPageClaim` verdict), `useCatalogCodeSearch` (250ms-debounced server-side lookup),
+  `CatalogCodeResults` (shared option list + status line). (a) the review picker searched
+  only the 1000 rows it had fetched — now `?q=` server-side. (b) `MagicMappingPreview`'s
+  manual entry is a combobox over the same lookup, delivering the typeahead the help pages
+  already promised (supplier read from the existing `["order", orderId]` cache — the
+  mapping-preview payload carries no supplier id). (c) orphaned `CatalogHintCard` mounted in
+  `OrderWorkshop`: desktop Issues tab + a new `MobileTriage` `hintSlot`, fed server truth
+  (`exceptionCount`, order lines). Search keys extend the empty-query probe's prefix, so the
+  existing `["supplier-catalog-codes", supplierId]` invalidation after import/sync/clear
+  still sweeps them, and an order view fires one catalog request. Honesty: the "Searched
+  only the first N of M" hedge is gone (the server searches the whole catalog), "no catalog
+  for this supplier" now requires a settled zero-row page, a full page says "showing the
+  first N". Also fixed a mock/API divergence — mock `getSupplierCatalog` returned the MATCH
+  count as `total` while the API returns the whole-catalog count (`SupplierCatalogService
+  .CountAsync` ignores `?q=`), which is the exact number "no catalog" vs "no match" turns
+  on, so mock-mode QA of that copy proved nothing. 875 vitest green (91 files, was 849),
+  tsc/lint/build clean. Browser-verified on a 121-row seeded catalog: typing `CROSS` finds
+  row 121 — unreachable under the old client-side filter — and a miss reads "No product
+  matches". Geometry NOT measured: the browser pane reports zero-width rects while hidden,
+  so responsive checks were CSS-reasoned only.
 - **2026-07-24 FE-4 done — marketing SEO, FE PR #30 open (not merged).** Prod-verified
   defects, now fixed: all 33 help articles canonicalised to `/help` (children inherit the
   layout's `alternates.canonical`); pages declaring their own `openGraph` served NO
