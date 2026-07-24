@@ -42,7 +42,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   below), FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU project,
   OPS-2 creds, and — once the Worker 403→503 PR merges — a **hand-redeploy of the CF
   inbound-verify Worker** (nothing else ships it; see that entry below).
-- **2026-07-24: the CF inbound-verify Worker no longer drops mail on IP drift — BE PR
+- **2026-07-24: the CF inbound-verify Worker no longer drops mail on IP drift — BE PR #57
   (open). ⚠️ NEEDS A HAND-REDEPLOY BY THE FOUNDER.** `worker.js`'s source-IP gate answered
   **403**, the one status that makes Postmark stop retrying on the first attempt *and* never
   file the message as `Failed` — so a purchase order refused there was gone by both routes,
