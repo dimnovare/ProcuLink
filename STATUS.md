@@ -81,7 +81,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   tree. 964 vitest green (89 files), `bun run build` 77/77 pages. NOTE: `bun run lint:vocab`
   is red on main already — "Proton Bridge" ×2 + "Wiring it from Zapier" in help prose this
   PR did not touch; no CI runs that gate.
-- **2026-07-24 — BE-1 done (BE PR #46, open):** the Postmark inbound webhook no longer
+- **2026-07-24 — BE-1 done (BE PR #52, open):** the Postmark inbound webhook no longer
   422-rejects a message whose org has no supplier. It imports the attachments via
   `CreateUnroutedStubAsync` + ParseOrderJob (parked `unrouted`, resolvable by FE-1's
   assign-supplier UI) and answers 200; audit `inbound_email.rejected_no_supplier` →
