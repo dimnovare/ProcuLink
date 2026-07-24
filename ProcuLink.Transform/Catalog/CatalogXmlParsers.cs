@@ -331,25 +331,35 @@ public static partial class SupplierCatalogFileParser
 
         // Isolate the row's subtree so ReadElementContentAsString on scalar children never
         // desyncs the shared reader. rootDepth+1 children only; nested trees (100MEGA <ImgGal>)
-        // are skipped via ReadInnerXml (advances past the whole subtree).
+        // are skipped rather than recursed into.
         using var reader = outer.ReadSubtree();
         reader.Read(); // onto the row element itself
         var rootDepth = reader.Depth;
-        while (reader.Read())
+
+        // Same trap the cXML path guards (see ReadCxmlIndexItem): ReadElementContentAsString and
+        // Skip both advance PAST the child they consume, so the reader is already on the next
+        // sibling — reading again at the loop head would drop it. Children a,b,c,d flattened to
+        // [a|c] before this guard existed.
+        var moved = reader.Read();
+        while (moved)
         {
             ct.ThrowIfCancellationRequested();
-            if (reader.NodeType != XmlNodeType.Element) continue;
-            if (reader.Depth != rootDepth + 1) continue; // direct children only
+            if (reader.NodeType != XmlNodeType.Element || reader.Depth != rootDepth + 1)
+            {
+                moved = reader.Read(); // not a direct child element — step over it
+                continue;
+            }
 
             var childName = reader.LocalName;
             if (reader.IsEmptyElement)
             {
                 if (headerSeen.Add(childName)) headerOrder.Add(childName);
+                moved = reader.Read();
                 continue;
             }
 
             // A scalar child has only text content. ReadElementContentAsString throws on
-            // element/mixed content — treat that as a nested tree and skip it via ReadInnerXml.
+            // element/mixed content — treat that as a nested tree and skip it.
             try
             {
                 var text = reader.ReadElementContentAsString();
@@ -359,8 +369,16 @@ public static partial class SupplierCatalogFileParser
             catch (XmlException)
             {
                 if (headerSeen.Add(childName)) headerOrder.Add(childName);
-                reader.Skip(); // past the non-scalar subtree, staying streaming
+                // Where the throw leaves the reader inside the child is not contractually fixed, so
+                // Skip() is not guaranteed to clear the whole child. It does always move forward,
+                // and the depth filter above steps over any remainder until the next rootDepth+1
+                // sibling — which is what ParseGenericXml_ScalarChildrenAfterNestedTree_Survive pins.
+                reader.Skip();
             }
+
+            // Both branches above already advanced; re-inspect where we landed instead of reading
+            // again. Every path is strictly forward, so the loop still terminates at EOF.
+            moved = !reader.EOF;
         }
     }
 

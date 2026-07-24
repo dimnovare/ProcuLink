@@ -270,6 +270,95 @@ public class CatalogFormatAndMappingTests
         result.Drafts[0].Name.Should().Be("Widget");
     }
 
+    [Fact]
+    public async Task ParseGenericXml_ChildElementFeed_KeepsEveryScalarChild()
+    {
+        // BE-6 regression: ReadElementContentAsString already advances past the child's end tag,
+        // so a bare `while (reader.Read())` loop head skipped every second sibling — a,b,c,d
+        // flattened to [a|c]. Needs FOUR children: a two-child row passes even when broken.
+        var xml = "<root>"
+                + "<item><a>1</a><b>2</b><c>3</c><d>4</d></item>"
+                + "<item><a>5</a><b>6</b><c>7</c><d>8</d></item>"
+                + "</root>";
+        var overrides = new Dictionary<string, string>
+        {
+            ["a"] = "code", ["b"] = "name", ["c"] = "price", ["d"] = "barcode",
+        };
+        var result = await SupplierCatalogFileParser.ParseGenericXmlAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes(xml)), CancellationToken.None, overrides);
+
+        result.HeaderColumns.Should().Equal("a", "b", "c", "d");
+        result.Drafts.Should().HaveCount(2);
+        result.Drafts[0].Code.Should().Be("1");
+        result.Drafts[0].Name.Should().Be("2");
+        result.Drafts[0].Price.Should().Be(3m);
+        result.Drafts[0].Barcode.Should().Be("4");
+        result.Drafts[1].Code.Should().Be("5");
+        result.Drafts[1].Name.Should().Be("6");
+        result.Drafts[1].Price.Should().Be(7m);
+        result.Drafts[1].Barcode.Should().Be("8");
+    }
+
+    [Fact]
+    public async Task ParseGenericXml_JarltechShape_MapsNameAndPrice()
+    {
+        // Real feed shape (14,713 items): <priceinfo> → repeating <item> with scalar children.
+        // SHORT_EN and YOUR_PRICE_NET sit at odd positions, so the drop hit exactly name+price.
+        var xml = "<priceinfo>"
+                + "<item><ARTNUM>10001</ARTNUM><MANUFACTURER>Zebra</MANUFACTURER><STOCK_QTY>7</STOCK_QTY>"
+                + "<YOUR_PRICE_NET>130,41</YOUR_PRICE_NET><SHORT_EN>Zebra ZD421</SHORT_EN>"
+                + "<ORIGINAL_ART_NO>ZD4A042</ORIGINAL_ART_NO></item>"
+                + "<item><ARTNUM>10002</ARTNUM><MANUFACTURER>REDACTED-PARTY</MANUFACTURER><STOCK_QTY>3</STOCK_QTY>"
+                + "<YOUR_PRICE_NET>89,90</YOUR_PRICE_NET><SHORT_EN>REDACTED-PARTY QD2430</SHORT_EN>"
+                + "<ORIGINAL_ART_NO>REDACTED-ITEM</ORIGINAL_ART_NO></item>"
+                + "</priceinfo>";
+        var overrides = new Dictionary<string, string>
+        {
+            ["ARTNUM"] = "code",
+            ["SHORT_EN"] = "name",
+            ["YOUR_PRICE_NET"] = "price",
+            ["ORIGINAL_ART_NO"] = "external_id",
+        };
+        var result = await SupplierCatalogFileParser.ParseGenericXmlAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes(xml)), CancellationToken.None, overrides);
+
+        result.Drafts.Should().HaveCount(2);
+        var d = result.Drafts[0];
+        d.Code.Should().Be("10001");
+        d.Name.Should().Be("Zebra ZD421");
+        d.Price.Should().Be(130.41m); // comma decimal, locale-tolerant
+        d.ExternalId.Should().Be("ZD4A042");
+        result.Drafts[1].Name.Should().Be("REDACTED-PARTY QD2430");
+        result.Drafts[1].Price.Should().Be(89.90m);
+    }
+
+    [Fact]
+    public async Task ParseGenericXml_ScalarChildrenAfterNestedTree_Survive()
+    {
+        // The nested-tree branch must not swallow the sibling that follows it either.
+        var xml = "<root>"
+                + "<item><sku>A-1</sku><gallery><img u=\"x\"/><img u=\"y\"/></gallery>"
+                + "<title>Widget</title><cost>9.50</cost><ean>111</ean></item>"
+                + "<item><sku>B-2</sku><gallery><img u=\"z\"/></gallery>"
+                + "<title>Gadget</title><cost>4.25</cost><ean>222</ean></item>"
+                + "</root>";
+        var overrides = new Dictionary<string, string>
+        {
+            ["sku"] = "code", ["title"] = "name", ["cost"] = "price", ["ean"] = "barcode",
+        };
+        var result = await SupplierCatalogFileParser.ParseGenericXmlAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes(xml)), CancellationToken.None, overrides);
+
+        result.Drafts.Should().HaveCount(2);
+        result.Drafts[0].Code.Should().Be("A-1");
+        result.Drafts[0].Name.Should().Be("Widget");
+        result.Drafts[0].Price.Should().Be(9.50m);
+        result.Drafts[0].Barcode.Should().Be("111");
+        result.Drafts[1].Name.Should().Be("Gadget");
+        result.Drafts[1].Price.Should().Be(4.25m);
+        result.Drafts[1].Barcode.Should().Be("222");
+    }
+
     // ── CIF 3.0 ───────────────────────────────────────────────────────────────
 
     [Fact]
