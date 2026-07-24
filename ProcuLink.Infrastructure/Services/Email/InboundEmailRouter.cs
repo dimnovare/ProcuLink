@@ -20,8 +20,10 @@ namespace ProcuLink.Infrastructure.Services.Email;
 /// imported via <c>IOrderService.CreateUnroutedStubAsync</c> and the parse job parks them
 /// <c>unrouted</c> for <c>POST /api/orders/{id}/assign-supplier</c> — the same hold the pull
 /// channels use. The caller therefore answers 200; a false <c>InboundEmailResult.Success</c>
-/// (and the webhook's 422) is reserved for genuinely unprocessable messages: an unparseable
-/// recipient, an unknown tenant slug, and an organisation whose account status blocks ingest.
+/// is reserved for messages this product cannot act on: an unparseable recipient, an unknown
+/// tenant slug, a missing organisation, and an organisation whose account status blocks
+/// ingest. Each of those also carries an <c>InboundEmailRejectionKind</c>, which is what
+/// decides whether the mail provider re-delivers the message — see that enum.
 ///
 /// Tenant resolution routes on the organisation's own unique <c>Slug</c> (auto-generated
 /// at org creation), so any org can receive orders with no per-org setup. Two recipient
@@ -123,7 +125,8 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 "Inbound email rejected: recipient address {To} does not match orders@{{slug}}{HostSuffix}.",
                 payload.ToEmail, GetHostSuffix());
             return new InboundEmailResult(false, OrgId: null, Array.Empty<Guid>(),
-                $"Recipient '{payload.ToEmail}' does not look like an inbound ProcuLink address.");
+                $"Recipient '{payload.ToEmail}' does not look like an inbound ProcuLink address.",
+                InboundEmailRejectionKind.Permanent);
         }
 
         var orgId = await ResolveOrgIdFromSlugAsync(slug, ct);
@@ -131,7 +134,8 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         {
             _logger.LogWarning("Inbound email rejected: no tenant mapping for slug {Slug}.", slug);
             return new InboundEmailResult(false, OrgId: null, Array.Empty<Guid>(),
-                $"Unknown tenant slug '{slug}'.");
+                $"Unknown tenant slug '{slug}'.",
+                InboundEmailRejectionKind.Permanent);
         }
 
         // ── 2. Load the organisation + verify account-status gate ───────────
@@ -147,7 +151,11 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 "Inbound email rejected: slug {Slug} mapped to org {OrgId} but no such organisation exists.",
                 slug, orgId.Value);
             return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
-                $"Organisation '{orgId.Value}' not found.");
+                $"Organisation '{orgId.Value}' not found.",
+                // Our own misconfiguration: a TenantMapping entry outliving its org.
+                // Retries give the operator a window in which repairing it lands the
+                // order untouched, so this is not the sender's problem to fix.
+                InboundEmailRejectionKind.Transient);
         }
 
         if (BlockedAccountStatuses.Contains(org.AccountStatus))
@@ -157,7 +165,12 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 org.Id, org.AccountStatus);
             await WriteAuditAsync(org.Id, "inbound_email.rejected_read_only", payload, ct);
             return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
-                $"Organisation is in '{org.AccountStatus}' status and cannot ingest new orders.");
+                $"Organisation is in '{org.AccountStatus}' status and cannot ingest new orders.",
+                // A billing state, not a bad message: lifting it is a founder action of
+                // minutes, and Postmark keeps re-delivering for ~10.5 hours before filing
+                // the mail under Failed, where it stays re-fireable by hand. Refusing the
+                // retries here would turn a reversible freeze into a lost purchase order.
+                InboundEmailRejectionKind.Transient);
         }
 
         // ── 3. Resolve a default supplier for the org ────────────────────────
@@ -170,8 +183,8 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         // through the UNROUTED hold instead — the same path the pull channels use
         // (SftpIngressService / S3IngressService / EmailPollOrgJob) — so the order
         // lands in the inbox parked 'unrouted' and POST /api/orders/{id}/assign-supplier
-        // routes and re-parses it. The webhook answers 200; 422 is reserved for
-        // genuinely unprocessable messages (unknown tenant slug, blocked org).
+        // routes and re-parses it. The webhook answers 200; a reject is reserved for
+        // messages this product cannot act on (unknown tenant slug, blocked org).
         var supplierId = await ResolveSupplierIdAsync(org.Id, org.EmailConfigJson, ct);
         if (supplierId is null)
         {

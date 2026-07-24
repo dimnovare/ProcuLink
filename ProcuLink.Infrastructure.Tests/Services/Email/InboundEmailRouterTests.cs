@@ -817,6 +817,155 @@ public class InboundEmailRouterTests
             "one line per order actually created is the operational trail, not chatter");
     }
 
+    // ── 13. Retry contract — what the mail provider is told to do next ───────
+    // Postmark retries every non-200 response ten times over ~10.5 hours and only
+    // then files the message under Failed (where a human can still re-fire it).
+    // So each reject branch has to answer one question: could re-sending this exact
+    // message ever work? Sender-side faults say no; our own outages say yes.
+
+    [Fact]
+    public async Task UnparseableRecipient_IsPermanent_BecauseNoRetryCanChangeTheAddress()
+    {
+        await using var db = CreateDb();
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: Guid.NewGuid());
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   "redacted@example.invalid",
+            Subject:   "Not for us",
+            Attachments: Array.Empty<InboundAttachment>());
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeFalse();
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Permanent,
+            "the address is not a ProcuLink inbound address — the tenth delivery reads exactly like the first");
+    }
+
+    [Fact]
+    public async Task UnknownTenantSlug_IsPermanent_SoStrayMailIsNotDeliveredTenTimes()
+    {
+        await using var db = CreateDb();
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: Guid.NewGuid());
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   "orders@unknown-tenant.proculink.eu",
+            Subject:   "Mystery PO",
+            Attachments: Array.Empty<InboundAttachment>());
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeFalse();
+        result.OrgId.Should().BeNull();
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Permanent,
+            "anything can be mailed to a made-up slug; retrying it ten times only multiplies the noise");
+    }
+
+    [Fact]
+    public async Task MissingOrganisation_IsTransient_SoFixingTheMappingStillLandsTheOrder()
+    {
+        // The slug resolved through Inbound:Postmark:TenantMapping but the org row is
+        // gone — that is our own misconfiguration, not a bad address, and the operator
+        // can repair it inside the retry window.
+        await using var db = CreateDb();
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: Guid.NewGuid());
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO for a vanished org",
+            Attachments: Array.Empty<InboundAttachment>());
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeFalse();
+        result.OrgId.Should().NotBeNull("the slug did resolve — the organisation behind it is what is missing");
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
+    }
+
+    [Fact]
+    public async Task ReadOnlyTenant_IsTransient_SoLiftingTheBlockLandsTheOrder()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.ReadOnly);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO during read-only",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeFalse();
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient,
+            "a frozen account is a billing state a human clears in minutes — the retries are the grace window");
+    }
+
+    [Fact]
+    public async Task TrialExpiredTenant_IsTransient_ForTheSameReasonAsReadOnly()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.TrialExpired);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO after the trial ran out",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeFalse();
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
+    }
+
+    [Fact]
+    public async Task BlockedAccountStatus_WritesItsAuditRow_SoTheRefusalIsNeverInvisible()
+    {
+        // The audit row is the only product-side evidence that a message arrived and
+        // was refused — the sender is never told, and no order exists to look at.
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.ReadOnly);
+        await SeedSupplierAsync(db, orgId);
+
+        var router = MakeRouter(db, new FakeOrderService(), new RecordingEnqueuer(), slug: Slug, orgId: orgId);
+
+        await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO for a frozen account",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
+            }), default);
+
+        var actions = await db.AuditEvents.AsNoTracking()
+            .Where(a => a.OrgId == orgId)
+            .Select(a => a.Action)
+            .ToListAsync();
+
+        actions.Should().Contain("inbound_email.rejected_read_only");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>

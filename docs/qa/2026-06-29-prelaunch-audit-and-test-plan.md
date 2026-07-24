@@ -697,6 +697,7 @@ Five inbound channels exist. Three are wired end-to-end (browser upload, hosted 
 - **[EMAIL-HOST-2] Inbound email to an unknown tenant / blocked org / no supplier** _(error · env: external-dep)_
   - Steps: (1) Send to orders@bogus-slug.proculink.eu (2) Send to a valid org that is read-only/trial-expired (3) Send to a valid org that has zero suppliers
   - Expected: 422 in each case with a specific error (unknown slug / account-status blocked / no supplier configured). Postmark does not retry on 422; operator sees it in Postmark's activity log.
+  - **CORRECTION (2026-07-24):** two of the three expectations above are obsolete. (a) Postmark retries *any* non-200 — ten times over ~10.5 h, then files the message `Failed`; the "does not retry on 422" premise was measured false on prod. (b) No supplier is no longer a reject at all (BE PR #52): the attachments import `unrouted` and the webhook answers 200. Current contract: unknown slug → **200** `{status:"ignored"}` (no retry); read-only / trial-expired org → **422** (retries are deliberate — the block is reversible); no supplier → **200** + order held unrouted.
   - Prereq: Postmark inbound configured.
 - **[EMAIL-HOST-3] Inbound email with bad/missing webhook token** _(security · env: external-dep)_
   - Steps: (1) POST to /api/inbound-email/postmark with a wrong or absent X-Postmark-Server-Token

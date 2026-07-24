@@ -50,6 +50,14 @@ public sealed class InboundEmailController : ControllerBase
     /// The body is a single JSON object — multiple-recipient delivery is fanned
     /// out by Postmark into multiple POSTs, so we treat each request as one
     /// envelope with one <c>To</c>.
+    ///
+    /// The status code is a retry instruction, not a verdict on the mail: 200 ends
+    /// Postmark's interest in the message, anything else schedules ten more attempts
+    /// over ~10.5 hours. So the endpoint answers 200 both when a message is ingested
+    /// and when nothing could ever ingest it, and reserves non-200 for the cases where
+    /// re-delivery is the point — our own outages (5xx), load shed by the rate limiter
+    /// (429), a token the operator still has to fix (401), and a tenant that is only
+    /// temporarily unable to accept orders (422).
     /// </remarks>
     [HttpPost("postmark")]
     [EnableRateLimiting("upload")]
@@ -100,17 +108,19 @@ public sealed class InboundEmailController : ControllerBase
         }
 
         // ── 2. Payload validation ────────────────────────────────────────────
+        // Both branches answer 200 (see Ignored): a re-delivery carries the same
+        // bytes, so it would reach the same verdict ten more times.
         if (body is null)
         {
             _logger.LogWarning("Postmark inbound webhook rejected: empty body.");
-            return UnprocessableEntity(new { error = "Empty webhook body." });
+            return Ignored("Empty webhook body.", orgId: null);
         }
 
         var toAddress = ResolveRecipient(body);
         if (string.IsNullOrWhiteSpace(toAddress))
         {
             _logger.LogWarning("Postmark inbound webhook rejected: no recipient on payload.");
-            return UnprocessableEntity(new { error = "Missing recipient address." });
+            return Ignored("Missing recipient address.", orgId: null);
         }
 
         // ── 3. Map to provider-neutral shape ─────────────────────────────────
@@ -133,10 +143,12 @@ public sealed class InboundEmailController : ControllerBase
 
         if (!result.Success)
         {
-            // 422 keeps Postmark from retrying — the message is genuinely
-            // unprocessable (bad tenant slug, blocked status, etc.). The
-            // operator will see it in Postmark's inbound activity log.
-            return UnprocessableEntity(new { error = result.Error, orgId = result.OrgId });
+            return result.RejectionKind == InboundEmailRejectionKind.Permanent
+                ? Ignored(result.Error, result.OrgId)
+                // Transient — and an unlabelled rejection lands here too, because
+                // duplicate webhook calls are the cheaper mistake. Any non-200 puts
+                // the message back in Postmark's retry schedule.
+                : UnprocessableEntity(new { error = result.Error, orgId = result.OrgId });
         }
 
         return Ok(new
@@ -145,6 +157,33 @@ public sealed class InboundEmailController : ControllerBase
             createdOrderIds = result.CreatedOrderIds,
         });
     }
+
+    /// <summary>
+    /// Accepts a message the product will never turn into an order, and tells the
+    /// provider to stop re-delivering it.
+    /// </summary>
+    /// <remarks>
+    /// Postmark retries on any status other than 200, ten times over roughly 10.5
+    /// hours, then files the message as <c>Failed</c>. (An earlier comment here
+    /// claimed 422 suppressed retries; production measurement on 2026-07-24 disproved
+    /// it — one 422'd message produced three webhook attempts in six minutes and
+    /// stayed <c>Scheduled</c>.) For a message whose rejection no re-delivery can
+    /// change — an address that is not ours, a tenant slug that does not exist — those
+    /// retries are pure noise, so we answer 200 and the message settles as
+    /// <c>Processed</c>.
+    ///
+    /// The evidence does not disappear with the retries: every reject branch logs at
+    /// Warning, the router writes an audit row wherever an organisation exists to own
+    /// one, and this response body carries the reason into Postmark's inbound activity
+    /// log. The <c>ignored</c> marker is what separates it from an ingested message,
+    /// since both are 200s.
+    ///
+    /// Deliberately not 403 — Postmark stops retrying on that too, but the inbound
+    /// Cloudflare Worker already spends 403 on its source-IP gate, and one meaning per
+    /// status is worth more than the extra shade of refusal.
+    /// </remarks>
+    private OkObjectResult Ignored(string? reason, Guid? orgId) =>
+        Ok(new { status = "ignored", reason, orgId });
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
