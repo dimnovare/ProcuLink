@@ -2,6 +2,7 @@ using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
@@ -318,6 +319,193 @@ public class InboundEmailRouterTests
         enqueuer.Calls.Should().BeEmpty();
     }
 
+    // ── 8c. No supplier at all → UNROUTED hold, not a reject ─────────────────
+    //    The webhook used to answer 422 "no supplier configured" and drop the mail
+    //    (audit inbound_email.rejected_no_supplier). It now mirrors the pull channels
+    //    (SftpIngressService / S3IngressService / EmailPollOrgJob): the attachment is
+    //    imported via CreateUnroutedStubAsync, the parse job parks it 'unrouted', and
+    //    POST /api/orders/{id}/assign-supplier resolves it later.
+
+    [Fact]
+    public async Task NoSupplierConfigured_Attachment_ImportedUnrouted_AndParseEnqueued()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        // Deliberately NO supplier seeded for this org.
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO #98765",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,qty\r\nUNROUTED-1,5\r\n")),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeTrue(
+            "an org with no supplier is not an unprocessable message — the webhook must answer 200 so Postmark stops");
+        result.OrgId.Should().Be(orgId);
+        result.CreatedOrderIds.Should().HaveCount(1);
+
+        orders.UnroutedCalledWith.Should().HaveCount(1,
+            "with no supplier the attachment must go through the unrouted hold path");
+        orders.UnroutedCalledWith[0].OrgId.Should().Be(orgId);
+        orders.UnroutedCalledWith[0].FileName.Should().Be("po.csv");
+        orders.RoutedCalledWith.Should().BeEmpty(
+            "an order must never be routed to a supplier that does not exist");
+
+        enqueuer.Calls.Should().HaveCount(1,
+            "the unrouted order still needs a parse job — the parse parks it 'unrouted'");
+        enqueuer.Calls[0].OrderId.Should().Be(result.CreatedOrderIds[0]);
+    }
+
+    [Fact]
+    public async Task NoSupplierConfigured_WritesUnroutedAudit_NotRejectedAudit()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO #98765",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,qty\r\nA,1\r\n")),
+            });
+
+        await router.RouteAsync(payload, default);
+
+        var actions = await db.AuditEvents.AsNoTracking()
+            .Where(a => a.OrgId == orgId)
+            .Select(a => a.Action)
+            .ToListAsync();
+
+        actions.Should().Contain("inbound_email.unrouted_no_supplier",
+            "operators need an audit trail explaining why the order arrived without a supplier");
+        actions.Should().NotContain("inbound_email.rejected_no_supplier",
+            "the reject is gone — the message is held, not dropped");
+        actions.Should().Contain("inbound_email.processed");
+    }
+
+    [Fact]
+    public async Task OnlySoftDeletedSupplier_ImportsUnrouted_NeverRoutesToDeletedSupplier()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        db.Suppliers.Add(new Supplier
+        {
+            Id = Guid.NewGuid(),
+            OrgId = orgId,
+            Name = "Retired supplier",
+            CreatedAt = DateTime.UtcNow.AddDays(-30),
+            DeletedAt = DateTime.UtcNow.AddMinutes(-5),
+        });
+        await db.SaveChangesAsync();
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO after supplier removal",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,qty\r\nB,2\r\n")),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeTrue();
+        orders.UnroutedCalledWith.Should().HaveCount(1,
+            "a soft-deleted supplier degrades to the unrouted hold instead of dropping the mail");
+        orders.RoutedCalledWith.Should().BeEmpty();
+        enqueuer.Calls.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task NoSupplierConfigured_BodyOnlyEmail_SucceedsButCreatesNoOrder()
+    {
+        // KNOWN GAP, pinned deliberately: the body-NLP fallback persists through
+        // CreateStubFromParsedOrderAsync, which requires a supplier id — there is no
+        // supplier-less overload. A prose-only email to an org with no supplier
+        // therefore still yields no order. It is no longer a 422 (the message is
+        // accepted and audited), and any attachment on the same mail IS parked
+        // unrouted. Closing this needs an unrouted CreateStubFromParsedOrderAsync.
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        var extractor = new FakeBodyExtractor(new EmailBodyExtractionResult(
+            Success: true,
+            Confidence: 0.9,
+            Order: new ExtractedOrder(
+                PoNumber: "PO-BODY-NOSUP",
+                OrderDate: new DateTime(2026, 7, 24),
+                BuyerName: "Acme Buyer",
+                Currency: "EUR",
+                Lines: new[] { new ExtractedOrderLine(1, "WIDGET-A", "Widget A", 1m, "pcs", 1m) }),
+            FailureReason: null));
+
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId, extractor: extractor);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "Order request (no attachment)",
+            Attachments: Array.Empty<InboundAttachment>(),
+            Body: "Please send 1 WIDGET-A.");
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeTrue("the message is accepted — Postmark must not retry it");
+        result.CreatedOrderIds.Should().BeEmpty();
+        orders.ParsedOrderCalls.Should().BeEmpty(
+            "the body-NLP persist path needs a supplier id; it must not invent one");
+        extractor.Calls.Should().Be(0, "the extractor is not worth calling when the result cannot be persisted");
+    }
+
+    [Fact]
+    public async Task ReadOnlyTenant_WithNoSupplier_StillReturnsFailure()
+    {
+        // The unrouted hold must not weaken the account-status gate: a read-only org
+        // is still an unprocessable message, supplier or no supplier.
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.ReadOnly);
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO for a frozen account",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,qty\r\nC,3\r\n")),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeFalse();
+        orders.UnroutedCalledWith.Should().BeEmpty();
+        orders.RoutedCalledWith.Should().BeEmpty();
+        enqueuer.Calls.Should().BeEmpty();
+    }
+
     // ── 9. Email-body NLP fallback ───────────────────────────────────────────
 
     [Fact]
@@ -567,7 +755,96 @@ public class InboundEmailRouterTests
             "the sender is stored only as a one-way hash for correlation/diagnostics");
     }
 
+    // ── 12. Log levels — routine chatter at Debug, rejects at Warning ────────
+    // The webhook fires on every message an org receives (including the ones that
+    // carry nothing but a signature image). Production runs at Default=Information,
+    // so anything routine must sit at Debug to stay out of the log; anything an
+    // operator has to act on must sit at Warning to stay visible.
+
+    [Fact]
+    public async Task NoAttachmentsNotice_IsLoggedAtDebug()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.Active,
+            Array.Empty<InboundAttachment>());
+
+        log.LevelOf("carried no attachments").Should().Be(LogLevel.Debug,
+            "an attachment-less email is routine — the body-NLP fallback note is diagnostics, not news");
+    }
+
+    [Fact]
+    public async Task UnsupportedAttachmentSkip_IsLoggedAtDebug()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.Active,
+            new[] { new InboundAttachment("signature.png", "image/png", new byte[] { 1, 2, 3 }) });
+
+        log.LevelOf("skipped: unsupported type").Should().Be(LogLevel.Debug,
+            "email signatures and logos ride along on nearly every message — skipping them is expected");
+    }
+
+    [Fact]
+    public async Task BodyExtractionYieldingNoOrder_IsLoggedAtDebug()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.Active,
+            Array.Empty<InboundAttachment>(),
+            body: "Hi, just checking in on last week's order. Thanks!");
+
+        log.LevelOf("did not yield an order").Should().Be(LogLevel.Debug,
+            "most prose emails are not orders, and the extractor is a no-op without an AI key");
+    }
+
+    [Fact]
+    public async Task BlockedAccountStatus_IsLoggedAtWarning()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.ReadOnly,
+            new[] { new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }) });
+
+        log.LevelOf("blocks ingest").Should().Be(LogLevel.Warning,
+            "the message is rejected and the sender is never told — the operator must see it");
+    }
+
+    [Fact]
+    public async Task CreatedOrder_StaysAtInformation()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.Active,
+            new[] { new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }) });
+
+        log.LevelOf("created routed order").Should().Be(LogLevel.Information,
+            "one line per order actually created is the operational trail, not chatter");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Routes one payload through a router wired to a <see cref="RecordingLogger"/>
+    /// and returns the captured log so a test can assert the level of a single line.
+    /// </summary>
+    private static async Task<RecordingLogger> RunAndCaptureLogAsync(
+        string accountStatus,
+        IReadOnlyList<InboundAttachment> attachments,
+        string? body = null)
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, accountStatus);
+        await SeedSupplierAsync(db, orgId);
+
+        var logger = new RecordingLogger();
+        var router = MakeRouter(db, new FakeOrderService(), new RecordingEnqueuer(),
+            slug: Slug, orgId: orgId, logger: logger);
+
+        await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO #12345",
+            Attachments: attachments,
+            Body: body), default);
+
+        return logger;
+    }
 
     private static InboundEmailRouter MakeRouter(
         ProcuLinkDbContext db,
@@ -576,7 +853,8 @@ public class InboundEmailRouterTests
         string slug,
         Guid orgId,
         IEmailBodyOrderExtractor? extractor = null,
-        string? inboundDomain = null)
+        string? inboundDomain = null,
+        ILogger<InboundEmailRouter>? logger = null)
     {
         var settings = new Dictionary<string, string?>
         {
@@ -593,7 +871,7 @@ public class InboundEmailRouterTests
             db, orders, enqueuer,
             extractor ?? FakeBodyExtractor.NoOp,
             config,
-            NullLogger<InboundEmailRouter>.Instance);
+            logger ?? NullLogger<InboundEmailRouter>.Instance);
     }
 
     private static async Task<Guid> SeedOrgAsync(ProcuLinkDbContext db, string accountStatus)
@@ -643,19 +921,45 @@ public class InboundEmailRouterTests
     /// </summary>
     private sealed class FakeOrderService : IOrderService
     {
+        /// <summary>Every stub creation, routed and unrouted alike (unrouted records Guid.Empty).</summary>
         public List<(Guid OrgId, Guid SupplierId, string FileName, string ContentType, long Size)> CalledWith { get; } = new();
+        /// <summary>Only the routed calls — <c>CreateStubAsync</c> with a real supplier.</summary>
+        public List<(Guid OrgId, Guid SupplierId, string FileName, string ContentType, long Size)> RoutedCalledWith { get; } = new();
+        /// <summary>Only the unrouted-hold calls — <c>CreateUnroutedStubAsync</c>, no supplier.</summary>
+        public List<(Guid OrgId, string FileName, string ContentType, long Size)> UnroutedCalledWith { get; } = new();
         public List<(Guid OrgId, Guid SupplierId, ExtractedOrder Order, string Source)> ParsedOrderCalls { get; } = new();
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
             Guid organisationId, Guid supplierId, Stream fileStream,
             string filename, string contentType, CancellationToken ct)
         {
+            var stub = Record(organisationId, supplierId, fileStream, filename, contentType, out var size);
+            RoutedCalledWith.Add((organisationId, supplierId, filename, contentType, size));
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
+        }
+
+        // Unrouted hold path records a Guid.Empty supplier in CalledWith and its own
+        // UnroutedCalledWith entry, so a test can assert WHICH creation path ran.
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
+            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+        {
+            var stub = Record(organisationId, Guid.Empty, fileStream, filename, contentType, out var size);
+            stub.SupplierId = null;
+            UnroutedCalledWith.Add((organisationId, filename, contentType, size));
+            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
+        }
+
+        private PurchaseOrderEntity Record(
+            Guid organisationId, Guid supplierId, Stream fileStream,
+            string filename, string contentType, out long size)
+        {
             // Drain the stream so we record the actual byte count the router sent.
             using var ms = new MemoryStream();
             fileStream.CopyTo(ms);
-            CalledWith.Add((organisationId, supplierId, filename, contentType, ms.Length));
+            size = ms.Length;
+            CalledWith.Add((organisationId, supplierId, filename, contentType, size));
 
-            var stub = new PurchaseOrderEntity
+            return new PurchaseOrderEntity
             {
                 Id = Guid.NewGuid(),
                 OrgId = organisationId,
@@ -665,13 +969,7 @@ public class InboundEmailRouterTests
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             };
-            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
         }
-
-        // Unrouted hold path records a Guid.Empty supplier so tests can assert it was used.
-        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
-            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
-            => CreateStubAsync(organisationId, Guid.Empty, fileStream, filename, contentType, ct);
 
         public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
             Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
@@ -735,6 +1033,37 @@ public class InboundEmailRouterTests
         {
             Calls++;
             return Task.FromResult(_result);
+        }
+    }
+
+    /// <summary>
+    /// Captures every log line with its level so tests can pin the level of one
+    /// message. <see cref="LevelOf"/> fails loudly when the message is absent or
+    /// ambiguous — a renamed template must break the test, not silently pass it.
+    /// </summary>
+    private sealed class RecordingLogger : ILogger<InboundEmailRouter>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
+
+        public LogLevel LevelOf(string messageFragment)
+        {
+            var matches = Entries
+                .Where(e => e.Message.Contains(messageFragment, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            matches.Should().ContainSingle(
+                $"exactly one log line should contain '{messageFragment}'; captured: "
+                + string.Join(" | ", Entries.Select(e => $"[{e.Level}] {e.Message}")));
+
+            return matches[0].Level;
         }
     }
 

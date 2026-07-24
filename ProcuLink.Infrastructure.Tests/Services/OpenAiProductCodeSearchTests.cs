@@ -1,3 +1,4 @@
+#pragma warning disable OPENAI001 // OpenAI Responses API is marked experimental in 2.10.0.
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -94,6 +95,30 @@ public class OpenAiProductCodeSearchTests
         var result = await service.FindPartNumberAsync("   ", null, CancellationToken.None);
 
         result.Should().BeNull();
+    }
+
+    // ── Request-shape seam (no network) ─────────────────────────────────────────
+
+    [Fact]
+    public void BuildOptions_DisablesServerSideStorage()
+    {
+        // The Responses API stores request/response payloads by default (unlike Chat
+        // Completions). PO line descriptions are customer data, so the request must opt out
+        // explicitly: StoredOutputEnabled maps to the "store" property in the JSON payload.
+        var options = OpenAiProductCodeSearch.BuildOptions("gpt-5-mini", "Apple iPhone 15 case", null);
+
+        options.StoredOutputEnabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void BuildOptions_CarriesModelWebSearchToolAndOutputCap()
+    {
+        var options = OpenAiProductCodeSearch.BuildOptions("gpt-5-mini", "Apple iPhone 15 case", "Apple");
+
+        options.Model.Should().Be("gpt-5-mini");
+        options.Tools.Should().ContainSingle();
+        options.MaxOutputTokenCount.Should().Be(600);
+        options.InputItems.Should().ContainSingle();
     }
 
     // ── Pure JSON parse seam (no network) ───────────────────────────────────────

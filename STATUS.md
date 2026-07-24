@@ -23,10 +23,24 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   mail is being lost; only inbound@→Worker Active)**; OpenAI org is an unverified
   Personal account (API-call-logging Disabled, no EU project, no ZDR/DPA); the June CF
   API token is dead (401). Routing truth (code-verified): every channel either requires
-  a supplier (upload 400, ingress 400, push-email 422-reject) or parks `unrouted` (pull
-  channels); BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
+  a supplier (upload 400, REST ingress 400) or parks `unrouted` (the three pull channels,
+  and — since BE-1 below — the inbound-email webhook, which used to 422-reject);
+  BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
   caller** — that's FE-1. Phase 1b enqueue gap: FIXED since `74ac036`+`de4ea0e` (old
   entries below are stale); both routing worktree branches fully merged (CLEANUP-1).
+- **2026-07-24: catalog import memory bounded — BE PR #51 (open), BE-2 done.** The row cap
+  was already 200k (raised in `efff40e`; the queue's "50k" was stale doc, now corrected in
+  3 comments). The real gap was downstream: `UpsertManyAsync` tracked the whole file for one
+  `SaveChanges`. Measured on real Postgres with a synthetic 200k-row CSV — single batch:
+  615 MB retained, **1.43 GB peak working set**, 200k rows tracked; 5k batches: 24 MB
+  retained, 415 MB peak, 0 tracked. Batch size swept (1k/5k/10k → time flat ~46 s, memory
+  linear 11/22/38 MB) so it's picked on memory alone; insert costs ~40% more wall time
+  (29 s → 41 s), which a background sync absorbs. Each batch detaches only the rows it
+  touched — **never `ChangeTracker.Clear()`**, which would detach the tracked
+  `SupplierCatalogSource` that `CatalogPullService` writes its sync status to afterwards
+  (regression test pins it). Atomicity traded knowingly: the upsert is idempotent by
+  (org, supplier, code), and `LastFileHash` has exactly one writer (post-success) so a
+  partial import is always re-fetched, never skipped as unchanged.
 - **2026-07-24 FE-1 done — assign-supplier UI, FE PR #32 open (not merged).** The
   `unrouted` park finally has an in-app exit: `apiClient.assignSupplier` (409 = the atomic
   `unrouted → parsing` claim matched no row, i.e. already routed — kept distinct from a 400
@@ -80,10 +94,67 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   tree. 964 vitest green (89 files), `bun run build` 77/77 pages. NOTE: `bun run lint:vocab`
   is red on main already — "Proton Bridge" ×2 + "Wiring it from Zapier" in help prose this
   PR did not touch; no CI runs that gate.
+- **2026-07-24 — BE-1 done (BE PR #52, open):** the Postmark inbound webhook no longer
+  422-rejects a message whose org has no supplier. It imports the attachments via
+  `CreateUnroutedStubAsync` + ParseOrderJob (parked `unrouted`, resolvable by FE-1's
+  assign-supplier UI) and answers 200; audit `inbound_email.rejected_no_supplier` →
+  `inbound_email.unrouted_no_supplier`. 422 kept for unparseable recipient / unknown slug /
+  org-not-found / blocked account status. `InboundEmailRouter` is now the FOURTH writer of
+  `unrouted` (first PUSH channel) — `OrderStatusConstants` reachability doc updated.
+  KNOWN GAP: body-NLP fallback still skipped without a supplier (no supplier-less
+  `CreateStubFromParsedOrderAsync`); pinned by a test, not silent.
+- **2026-07-24 BE-3 done — Responses API opts out of server-side storage, BE PR #50 open
+  (not merged).** `OpenAiProductCodeSearch` (flag-gated product web search) is the only
+  Responses API caller, and that API stores request + response payloads by default; the
+  prompt carries customer PO line descriptions. Request construction moved to the pure
+  `BuildOptions` seam with `StoredOutputEnabled = false` ("store" in the payload); 2 new
+  tests pin the storage opt-out and the rest of the request shape. The four Chat
+  Completions callers are untouched (that API defaults to store=false). Infrastructure
+  1033/1033 + Transform 1218/1218 green; the 25 Api.Tests reds were all Testcontainers
+  container-start failures under cross-chip Docker contention, none in this path. Code
+  half only — the founder half (DPA, EU-residency project, ZDR) is still open.
+- **2026-07-24: supplier auto-detect SPEC (BE-5) — BE PR #48 open, spec only, no code.**
+  `docs/superpowers/specs/2026-07-24-supplier-auto-detect-from-document-design.md`. Signal
+  audit: header parties EXIST; supplier-name match HALF and VAT match BLOCKED (`Supplier`
+  carries no VAT/reg-nr/EDI/domain); catalog overlap needs a cross-supplier query +
+  `(OrgId, Code)` index; sender address is SHA-256-only by GDPR design. Strongest signal
+  already ships and wasn't on the brief: `SchemaFingerprint.SupplierIdsCsv`. **New defect:**
+  that binding never learns from a correction — `assign-supplier` leaves
+  `SchemaFingerprintHash` set, so the re-parse short-circuits and the chosen supplier is
+  never bound. S-sized P0, worth shipping alone. Six founder decisions in the spec; #1
+  (supplier identity columns) and #2 (sender-domain persistence) block signals outright.
 - **2026-07-24 done:** FE #28 merged (`a5c2404`, catalog-tab polish); FE PR #29 open
   (inbound address on Email intake tab, 851/851 green); BE PR #45 open (PunchOut L1
   spec + queue strikes); Stripe test coupon deleted (0 remain); FE `feat/design-system-v1`
-  deleted per founder (archived at tag `archive/design-system-v1`).
+  deleted per founder (archived at tag `archive/design-system-v1`); **BE-4 done (BE PR #49)** —
+  inbound-email webhook log levels: routine per-message narration → Debug (prod runs
+  `Default=Information`), blocked-account reject raised Information → Warning, order-created
+  stays Information; 5 level tests pin it. `InboundEmailController` needed no change (it
+  already logs only rejects/misconfig).
+- **2026-07-24 OPS-1 — live inbound-email transport PROVEN with real mail; ingest blocked.**
+  Postmark `/email` → `redacted@example.invalid` (MessageID
+  `c4fe887c-…`) delivered `250 Ok: queued as 28384453CA4`, and the API logged the routed
+  webhook **~2 s later** — so MX → Postmark inbound → `inbound.proculink.eu` CF verify-Worker
+  → API, incl. `Inbound__Postmark__ProxySecret`, are all correct end-to-end. **No order was
+  created:** the founder org is `account_status=read_only` since 06:35:50 UTC (the Stripe
+  cancel test's "frozen Pilot"), so `InboundEmailRouter.cs:136` refuses ingest
+  (`inbound_email.rejected_read_only` ×3, 0 orders — nothing to clean up). **P0 for the
+  founder:** that org's every ingest channel is dead until the status is lifted; then re-fire
+  the still-`Scheduled` message via `POST /messages/inbound/d7dcf55d-…/retry` — no resend.
+  Measured side-finding: **422 does not stop Postmark retrying** (3 attempts in 6 min for one
+  message), so `InboundEmailController.cs:134`'s "422 keeps Postmark from retrying" comment is
+  false — folded into BE-1's scope.
+- **2026-07-24 OPS-2 (real vendor catalog feeds on prod): BLOCKED on founder auth** — prod
+  is signed out in Chrome and only `sk_test_`/`pk_test_` Clerk keys exist locally, so no
+  authed `GET /api/suppliers/{id}/catalog/source` was possible; no prod state was touched.
+  Off-prod findings: **P1 defect BE-6** — the generic XML catalog parser silently drops
+  every second scalar child (`CatalogXmlParsers.cs:338-364` double-advances;
+  repro `a,b,c,d` → `[a|c]`), so element-based XML feeds import with no name/price;
+  attribute feeds (100MEGA) and cXML Index unaffected. **Jarltech un-blocked** (was 503,
+  now 200 / 19.5 MB / 14,713 items) but must not be enabled until BE-6 lands. **BE-2's
+  50k-cap premise is stale** — cap is already 200k + 256 MB. Handoff (per-vendor config
+  values + paste-ready read-only prod probe):
+  `docs/qa/2026-07-fable5-push/2026-07-24-ops2-vendor-feed-prod-test.md`.
 
 ## Snapshot (2026-07-23) — delivery-reliability + UI waves shipped
 
@@ -191,10 +262,37 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `git merge-base --is-ancestor` LIES about squash-merged PRs (grep main for content instead);
   worktree grep hits are copies of main, not evidence of a separate track.
 
-- **2026-07-24: new queue items** (see `docs/prompts/2026-07-23-open-queue-handover.md`
-  items 7–8): supplier Catalog-tab polish (Logicom QuickConnect out of the generic protocol
-  picker; tile label alignment; empty-state dashed-border gap) and a **PunchOut L1 spec**
-  (founder idea — spec only, no implementation).
+- **2026-07-24 routing/catalog recon (code-verified) — three STALE claims in this file
+  corrected:** (1) the Phase 1b "SFTP/S3 enqueue gap" was FIXED long ago (`74ac036`
+  2026-06-30 enqueues ParseOrderJob; `de4ea0e` 2026-07-09 ships unrouted import for
+  SFTP/S3/IMAP pull) — the §06-26 line below and the deferred-list entry are outdated;
+  (2) the "two routing worktrees in flight" are fully merged (both tips are ancestors of
+  main, zero unique commits) — branches are stale pointers, safe to delete; (3) Postmark
+  inbound is no longer "token-only, verification deferred": prod sets
+  `Inbound__Postmark__ProxySecret`, so the CF verify-Worker edge gate appears deployed
+  (verify with one real email). **Known operator gap found:** BE
+  `POST /api/orders/{id}/assign-supplier` exists (OrdersController.cs:583) but the FE has
+  NO control calling it — an `unrouted` order shows "Needs supplier" with no in-app way
+  to resolve it. Also: review-picker catalog typeahead is client-side over the first
+  1000 rows only; upload-preview manual entry has no typeahead; `CatalogHintCard` is
+  orphaned (never rendered).
+- **2026-07-24: queue items 7+8 DONE.** Item 7 — FE PR #28 **MERGED** (`a5c2404`, founder
+  grant in-session); item 8 — BE PR #45 open. Also founder-requested cleanup done: the
+  Stripe test coupon (`zFUfTMBz` / promo `REDACTED-TAXID`, redeemed 1/1, already inactive)
+  deleted via live Stripe API — 0 coupons remain. Item 7 (Catalog-tab
+  polish) — FE PR #28: logicom out of the generic protocol picker (offer⇔works held — a
+  saved logicom source keeps its tile; keyboard nav follows the visible set), tile labels
+  left-aligned, empty-state dashed border 1px→2px (root cause was NOT overlap — geometry
+  showed a 12px clear gap; Windows 125% scaling renders 1px as a 0.8px hairline Chromium
+  can drop per-edge). 849/849 vitest (4 new, RED first) + tsc + build green; verified
+  live at 1440px/390px via computed styles (no screenshots — Browser pane can't composite
+  hidden; note: pane DOM/JS tools DO work now, only Playwright CDP stays blocked). Item 8
+  (PunchOut L1) — BE PR #45, spec only:
+  `docs/superpowers/specs/2026-07-24-punchout-l1-supplier-hosted-catalog-design.md`
+  (revision-bundle fit, no-local-code-list AI implications with the allow-list guard kept
+  strict, BuyerCookie-correlated browser cart return, ~3.5–4.5 wk estimate, decisions
+  D1–D5). Fact-check against the handover pointer: PunchOut exists only as FE copy — no
+  vocabulary in `standards/catalog.ts`, no protocol code in either repo.
 - **Stripe LIVE webhook verified end-to-end (2026-07-24, founder-present):** real checkout on
   prod with a 100%-forever coupon (`REDACTED-TAXID`, max 1 redemption) — €0.00 invoice paid, webhook
   endpoint `api.proculink.eu/api/billing/webhook` delivered with 0% errors, org flipped to
@@ -203,6 +301,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   billing pipeline proven on live Stripe with zero money moved. Coupon self-expired (1/1);
   left in Stripe as the audit record. Remaining untested: `amount > 0` invoice branches
   (needs a real charge + refund, ~€4–5 in non-returned Stripe fees).
+  **Unintended live side effect, found by OPS-1:** the cancellation left the founder org at
+  `account_status=read_only` ("frozen Pilot"), which blocks every ingest channel for that org
+  — the OPS-1 test email was refused at the router. Un-freeze the org before any further prod
+  live-ops, and treat "cancel a live subscription" as a state-changing act, not a free probe.
 
 ## Snapshot (2026-07-04)
 
@@ -334,8 +436,7 @@ enforced by `StartupConfigurationValidator` + `appsettings.Production.json` — 
   counterproductive pre-revenue; don't do without a fresh reason.
 - Neon pooler + `DataRetentionSweepJob` enablement — env-only flips; both dormant safe-by-default.
 - Full app CSP (script/style/connect — needs Clerk/Stripe/PostHog/Sentry testing); per-page
-  SEO metadata on the remaining marketing pages; Sentry stale-issue resolve; Postmark webhook
-  log level.
+  SEO metadata on the remaining marketing pages; Sentry stale-issue resolve.
 - Supplier-routing Phase 1b (SFTP/S3 enqueue gap) + integrating the two in-flight routing
   worktrees (`routing-phase0-nullable-supplier` @ `056aff6`, `routing-phase1-hold-assign`
   @ `2fed48e`).
