@@ -26,7 +26,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   Postmark message. Queue: BE-6 (P1 XML parser drops every second field), BE-1's
   422-retry residual, FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU
   project, OPS-2 creds.
-- **2026-07-24: the schema fingerprint now learns from operator corrections (BE-5 P0).**
+- **2026-07-24: the schema fingerprint now learns from operator corrections (BE-5 P0, PR #54).**
   `assign-supplier` re-parses, but the recorder short-circuited on the order's existing
   `SchemaFingerprintHash`, so `SchemaFingerprint.SupplierIdsCsv` could only ever accumulate
   suppliers already known at ingest — every human routing correction was discarded. The
