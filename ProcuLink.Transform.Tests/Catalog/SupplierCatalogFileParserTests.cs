@@ -15,7 +15,7 @@ namespace ProcuLink.Transform.Tests.Catalog;
 ///    comma-decimal handling must match the original in-controller logic byte-for-byte
 ///    (the controller-level <c>SuppliersControllerCatalogTests</c> stay green unmodified
 ///    as the upload-path regression gate).
-///  • New hardening (H4): 50k row cap on both formats, XLSX zip-bomb entry-size guard,
+///  • New hardening (H4): the row cap on both formats, XLSX zip-bomb entry-size guard,
 ///    and forged-dimension rejection BEFORE the workbook is loaded.
 /// </summary>
 public class SupplierCatalogFileParserTests
