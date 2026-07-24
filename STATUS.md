@@ -31,6 +31,17 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   (inbound address on Email intake tab, 851/851 green); BE PR #45 open (PunchOut L1
   spec + queue strikes); Stripe test coupon deleted (0 remain); FE `feat/design-system-v1`
   deleted per founder (archived at tag `archive/design-system-v1`).
+- **2026-07-24 OPS-2 (real vendor catalog feeds on prod): BLOCKED on founder auth** — prod
+  is signed out in Chrome and only `sk_test_`/`pk_test_` Clerk keys exist locally, so no
+  authed `GET /api/suppliers/{id}/catalog/source` was possible; no prod state was touched.
+  Off-prod findings: **P1 defect BE-6** — the generic XML catalog parser silently drops
+  every second scalar child (`CatalogXmlParsers.cs:338-364` double-advances;
+  repro `a,b,c,d` → `[a|c]`), so element-based XML feeds import with no name/price;
+  attribute feeds (100MEGA) and cXML Index unaffected. **Jarltech un-blocked** (was 503,
+  now 200 / 19.5 MB / 14,713 items) but must not be enabled until BE-6 lands. **BE-2's
+  50k-cap premise is stale** — cap is already 200k + 256 MB. Handoff (per-vendor config
+  values + paste-ready read-only prod probe):
+  `docs/qa/2026-07-fable5-push/2026-07-24-ops2-vendor-feed-prod-test.md`.
 
 ## Snapshot (2026-07-23) — delivery-reliability + UI waves shipped
 
