@@ -27,6 +27,15 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   channels); BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
   caller** — that's FE-1. Phase 1b enqueue gap: FIXED since `74ac036`+`de4ea0e` (old
   entries below are stale); both routing worktree branches fully merged (CLEANUP-1).
+- **2026-07-24 FE-2 done — double-navbar dedup, FE PR #31 open (not merged).** Real cause
+  was NOT a one-tab hub (no hub has <2 tabs): on top-level routes the topbar's context row
+  rendered a lone unlinked crumb ("Dashboard") directly under the active nav item of the
+  same name. New `isLonePageCrumb()` (breadcrumb.ts) hides that row at `md+` only — where
+  the primary nav row is visible; below `md` the nav row is behind the hamburger and the
+  crumb is the sole page label (those pages ship `PageHeader titleHidden`). Hub strips and
+  ancestor trails ("Workbench / Drafts") untouched. Single-tab-hub guard added anyway
+  (`hubShowsTabs`) + `>=2 tabs` invariant pinned in BridgeSidebar.test.tsx. Browser-verified
+  at 1440/768/767/390px; 861 vitest green (88 files), `bun run build` green.
 - **2026-07-24 FE-4 done — marketing SEO, FE PR #30 open (not merged).** Prod-verified
   defects, now fixed: all 33 help articles canonicalised to `/help` (children inherit the
   layout's `alternates.canonical`); pages declaring their own `openGraph` served NO
