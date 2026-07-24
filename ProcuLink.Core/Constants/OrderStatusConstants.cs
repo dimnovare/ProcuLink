@@ -54,9 +54,11 @@ public static class OrderStatusConstants
     /// <para>
     /// REACHABLE IN PRODUCTION TODAY — do not treat this as a future state. The single writer is
     /// <c>OrderIngestionService.cs</c> (<c>if (entity.SupplierId is null) newStatus = Unrouted</c>) on
-    /// the main parse path, fed by the three pull-ingress channels when an org has no valid default
-    /// supplier (unset, or soft-deleted after ingress was enabled): <c>SftpIngressService</c>,
-    /// <c>S3IngressService</c> and <c>EmailPollOrgJob</c> each import such files via
+    /// the main parse path, fed by four ingress channels when an org has no valid default supplier
+    /// (unset, or soft-deleted after ingress was enabled): the three pull channels
+    /// <c>SftpIngressService</c>, <c>S3IngressService</c> and <c>EmailPollOrgJob</c>, plus the
+    /// PUSH channel <c>InboundEmailRouter</c> (the Postmark inbound webhook — added 2026-07-24;
+    /// it previously answered 422 and dropped the mail). Each imports such files via
     /// <c>IOrderService.CreateUnroutedStubAsync</c> rather than dropping them. Corroborating live
     /// consumers: <c>OrdersController</c>'s assign-supplier endpoint is gated on this status,
     /// <c>OpsHealthService</c> reports it as <c>PendingRouting</c>, and <c>OrderExceptionService</c>

@@ -16,6 +16,13 @@ namespace ProcuLink.Infrastructure.Services.Email;
 /// Inbound Parse) into the existing CreateStub + ParseOrderJob pipeline.
 /// </summary>
 /// <remarks>
+/// A message whose organisation has no supplier is HELD, not rejected: its attachments are
+/// imported via <c>IOrderService.CreateUnroutedStubAsync</c> and the parse job parks them
+/// <c>unrouted</c> for <c>POST /api/orders/{id}/assign-supplier</c> — the same hold the pull
+/// channels use. The caller therefore answers 200; a false <c>InboundEmailResult.Success</c>
+/// (and the webhook's 422) is reserved for genuinely unprocessable messages: an unparseable
+/// recipient, an unknown tenant slug, and an organisation whose account status blocks ingest.
+///
 /// Tenant resolution routes on the organisation's own unique <c>Slug</c> (auto-generated
 /// at org creation), so any org can receive orders with no per-org setup. Two recipient
 /// schemes are supported: the preferred <c>{slug}@{InboundDomain}</c> (local-part; single
@@ -147,15 +154,21 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         // The inbound webhook does not carry the supplier identity directly.
         // Prefer the supplier configured for IMAP polling (same JSONB column);
         // otherwise fall back to the org's first non-deleted supplier.
+        //
+        // No supplier at all is NOT a rejection. This used to answer 422 and the
+        // message vanished from the product's view. Attachments are now imported
+        // through the UNROUTED hold instead — the same path the pull channels use
+        // (SftpIngressService / S3IngressService / EmailPollOrgJob) — so the order
+        // lands in the inbox parked 'unrouted' and POST /api/orders/{id}/assign-supplier
+        // routes and re-parses it. The webhook answers 200; 422 is reserved for
+        // genuinely unprocessable messages (unknown tenant slug, blocked org).
         var supplierId = await ResolveSupplierIdAsync(org.Id, org.EmailConfigJson, ct);
         if (supplierId is null)
         {
-            _logger.LogWarning(
-                "Inbound email for org {OrgId} rejected: organisation has no supplier configured for inbound email.",
+            _logger.LogInformation(
+                "Inbound email for org {OrgId} has no supplier configured — importing attachments unrouted for operator assignment.",
                 org.Id);
-            await WriteAuditAsync(org.Id, "inbound_email.rejected_no_supplier", payload, ct);
-            return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
-                "Organisation has no supplier configured for inbound email ingestion.");
+            await WriteAuditAsync(org.Id, "inbound_email.unrouted_no_supplier", payload, ct);
         }
 
         // ── 4. Filter attachments ────────────────────────────────────────────
@@ -164,7 +177,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         if (payload.Attachments.Count == 0)
         {
             _logger.LogInformation(
-                "Inbound email for org {OrgId} carried no attachments; will try email-body NLP fallback if a body is present.",
+                "Inbound email for org {OrgId} carried no attachments; the email-body NLP fallback runs if a body is present and a supplier is known.",
                 org.Id);
             await WriteAuditAsync(org.Id, "inbound_email.no_attachments", payload, ct);
         }
@@ -215,9 +228,14 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 : att.ContentType;
 
             // IOrderService.CreateStubAsync uploads to R2 and creates the stub.
-            // It is the same call browser-upload and IMAP-poll use today.
-            var stubResult = await _orders.CreateStubAsync(
-                org.Id, supplierId.Value, ms, att.FileName ?? "attachment", contentType, ct);
+            // It is the same call browser-upload and IMAP-poll use today. With no
+            // supplier we take the unrouted sibling instead: same upload, NULL
+            // supplier_id, and the parse job parks the order 'unrouted'.
+            var stubResult = supplierId is { } routedSupplierId
+                ? await _orders.CreateStubAsync(
+                    org.Id, routedSupplierId, ms, att.FileName ?? "attachment", contentType, ct)
+                : await _orders.CreateUnroutedStubAsync(
+                    org.Id, ms, att.FileName ?? "attachment", contentType, ct);
 
             if (!stubResult.IsSuccess)
             {
@@ -232,8 +250,8 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             created.Add(orderId);
 
             _logger.LogInformation(
-                "Inbound email created order {OrderId} for org {OrgId} (attachment={FileName}).",
-                orderId, org.Id, att.FileName);
+                "Inbound email created {Mode} order {OrderId} for org {OrgId} (attachment={FileName}).",
+                supplierId is null ? "unrouted" : "routed", orderId, org.Id, att.FileName);
         }
 
         // ── 6. Email-body NLP fallback ───────────────────────────────────────
@@ -244,7 +262,17 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         // local dev where the body field is set but the AI provider is absent.
         // No-egress orgs are excluded: the body extractor sends the prose to OpenAI,
         // which would violate the no-data-leaves guarantee.
-        if (created.Count == 0 && !string.IsNullOrWhiteSpace(payload.Body) && !org.SelfHostedOcr)
+        //
+        // KNOWN GAP: this path is skipped when the org has no supplier. The persist call
+        // (CreateStubFromParsedOrderAsync) takes a non-nullable supplier id and there is no
+        // unrouted sibling for it, so a prose-only email to a supplier-less org still yields
+        // no order — it is accepted (200) and audited rather than 422'd, and any ATTACHMENT on
+        // the same message is parked unrouted above. Closing it needs an unrouted overload of
+        // CreateStubFromParsedOrderAsync; do not fabricate a supplier id here.
+        if (created.Count == 0
+            && supplierId is { } bodySupplierId
+            && !string.IsNullOrWhiteSpace(payload.Body)
+            && !org.SelfHostedOcr)
         {
             try
             {
@@ -253,7 +281,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 {
                     var stubResult = await _orders.CreateStubFromParsedOrderAsync(
                         org.Id,
-                        supplierId.Value,
+                        bodySupplierId,
                         extraction.Order,
                         EmailBodyNlpSourceTag,
                         ct);
@@ -287,6 +315,13 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                     "Inbound email body extraction for org {OrgId} threw; treating message as having no orders.",
                     org.Id);
             }
+        }
+        else if (created.Count == 0 && supplierId is null && !string.IsNullOrWhiteSpace(payload.Body))
+        {
+            _logger.LogInformation(
+                "Inbound email for org {OrgId} produced no order: nothing importable was attached and the "
+                + "body-NLP fallback needs a supplier, which this organisation has not configured.",
+                org.Id);
         }
 
         // Key the processed-audit row to the created order when exactly one was created

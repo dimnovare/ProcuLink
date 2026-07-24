@@ -69,10 +69,16 @@ public sealed record InboundAttachment(
 /// <summary>
 /// Outcome of a router call. <see cref="Success"/> is <c>true</c> when the
 /// tenant resolved and processing completed without infrastructure failure —
-/// even if no order was created (e.g. all attachments were unsupported).
-/// <see cref="Success"/> is <c>false</c> when the tenant could not be resolved,
-/// the tenant is in a non-ingest account status, or no attachments were present
-/// on the message.
+/// even if no order was created (e.g. all attachments were unsupported, or the
+/// message carried no attachment at all).
+/// <para>
+/// <see cref="Success"/> is <c>false</c> only for a message the product can never
+/// act on: the recipient address does not parse, the tenant slug is unknown, the
+/// resolved organisation does not exist, or its account status blocks ingest. The
+/// webhook maps that to 422. An organisation with NO supplier is deliberately NOT
+/// in that set — its attachments are imported unrouted and held for assignment,
+/// so the call succeeds and the webhook answers 200.
+/// </para>
 /// </summary>
 /// <param name="Success">True if routing completed; false if the message was rejected outright.</param>
 /// <param name="OrgId">The resolved organisation id, or null if tenant resolution failed.</param>
