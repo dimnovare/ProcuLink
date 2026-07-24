@@ -117,6 +117,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `git merge-base --is-ancestor` LIES about squash-merged PRs (grep main for content instead);
   worktree grep hits are copies of main, not evidence of a separate track.
 
+- **2026-07-24: new queue items** (see `docs/prompts/2026-07-23-open-queue-handover.md`
+  items 7–8): supplier Catalog-tab polish (Logicom QuickConnect out of the generic protocol
+  picker; tile label alignment; empty-state dashed-border gap) and a **PunchOut L1 spec**
+  (founder idea — spec only, no implementation).
 - **Stripe LIVE webhook verified end-to-end (2026-07-24, founder-present):** real checkout on
   prod with a 100%-forever coupon (`REDACTED-TAXID`, max 1 redemption) — €0.00 invoice paid, webhook
   endpoint `api.proculink.eu/api/billing/webhook` delivered with 0% errors, org flipped to
