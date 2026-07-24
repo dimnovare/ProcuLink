@@ -80,6 +80,16 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   tree. 964 vitest green (89 files), `bun run build` 77/77 pages. NOTE: `bun run lint:vocab`
   is red on main already — "Proton Bridge" ×2 + "Wiring it from Zapier" in help prose this
   PR did not touch; no CI runs that gate.
+- **2026-07-24 BE-3 done — Responses API opts out of server-side storage, BE PR #50 open
+  (not merged).** `OpenAiProductCodeSearch` (flag-gated product web search) is the only
+  Responses API caller, and that API stores request + response payloads by default; the
+  prompt carries customer PO line descriptions. Request construction moved to the pure
+  `BuildOptions` seam with `StoredOutputEnabled = false` ("store" in the payload); 2 new
+  tests pin the storage opt-out and the rest of the request shape. The four Chat
+  Completions callers are untouched (that API defaults to store=false). Infrastructure
+  1033/1033 + Transform 1218/1218 green; the 25 Api.Tests reds were all Testcontainers
+  container-start failures under cross-chip Docker contention, none in this path. Code
+  half only — the founder half (DPA, EU-residency project, ZDR) is still open.
 - **2026-07-24: supplier auto-detect SPEC (BE-5) — BE PR #48 open, spec only, no code.**
   `docs/superpowers/specs/2026-07-24-supplier-auto-detect-from-document-design.md`. Signal
   audit: header parties EXIST; supplier-name match HALF and VAT match BLOCKED (`Supplier`
