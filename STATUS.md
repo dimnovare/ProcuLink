@@ -27,6 +27,69 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   channels); BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
   caller** — that's FE-1. Phase 1b enqueue gap: FIXED since `74ac036`+`de4ea0e` (old
   entries below are stale); both routing worktree branches fully merged (CLEANUP-1).
+- **2026-07-24 FE-1 done — assign-supplier UI, FE PR #32 open (not merged).** The
+  `unrouted` park finally has an in-app exit: `apiClient.assignSupplier` (409 = the atomic
+  `unrouted → parsing` claim matched no row, i.e. already routed — kept distinct from a 400
+  "Supplier not found" via `ApiHttpError`), `AssignSupplierBanner` on the order page keyed on
+  `order.status` (NOT the issue count — that screen's badge reads "Needs review" for these
+  orders), and the inbox row action in place of the blank supplier name. The banner is a
+  banner, not a gate: the extracted lines underneath are the evidence for "whose order is
+  this?". `SupplierPicker` extracted from `UploadWorkbench` for reuse; `ord-004` mock fixture
+  added (mock mode previously could not reach the flow). Deviation: the inbox action
+  NAVIGATES to the order page — `InboxView` has no per-row action cells, so inline assign
+  would mean a second copy of the picker + 409 handling. 20 new tests; 869 vitest green
+  (90 files); tsc + `bun run build` green; browser-verified at 1440/390 in mock mode.
+- **2026-07-24 FE-2 done — double-navbar dedup, FE PR #31 open (not merged).** Real cause
+  was NOT a one-tab hub (no hub has <2 tabs): on top-level routes the topbar's context row
+  rendered a lone unlinked crumb ("Dashboard") directly under the active nav item of the
+  same name. New `isLonePageCrumb()` (breadcrumb.ts) hides that row at `md+` only — where
+  the primary nav row is visible; below `md` the nav row is behind the hamburger and the
+  crumb is the sole page label (those pages ship `PageHeader titleHidden`). Hub strips and
+  ancestor trails ("Workbench / Drafts") untouched. Single-tab-hub guard added anyway
+  (`hubShowsTabs`) + `>=2 tabs` invariant pinned in BridgeSidebar.test.tsx. Browser-verified
+  at 1440/768/767/390px; 861 vitest green (88 files), `bun run build` green.
+- **2026-07-24 FE-3 done — catalog picker scale, FE PR #33 open (not merged).** All three
+  gaps land on one shared seam: `src/lib/catalogCodes.ts` (query-key contract + the pure
+  `catalogPageClaim` verdict), `useCatalogCodeSearch` (250ms-debounced server-side lookup),
+  `CatalogCodeResults` (shared option list + status line). (a) the review picker searched
+  only the 1000 rows it had fetched — now `?q=` server-side. (b) `MagicMappingPreview`'s
+  manual entry is a combobox over the same lookup, delivering the typeahead the help pages
+  already promised (supplier read from the existing `["order", orderId]` cache — the
+  mapping-preview payload carries no supplier id). (c) orphaned `CatalogHintCard` mounted in
+  `OrderWorkshop`: desktop Issues tab + a new `MobileTriage` `hintSlot`, fed server truth
+  (`exceptionCount`, order lines). Search keys extend the empty-query probe's prefix, so the
+  existing `["supplier-catalog-codes", supplierId]` invalidation after import/sync/clear
+  still sweeps them, and an order view fires one catalog request. Honesty: the "Searched
+  only the first N of M" hedge is gone (the server searches the whole catalog), "no catalog
+  for this supplier" now requires a settled zero-row page, a full page says "showing the
+  first N". Also fixed a mock/API divergence — mock `getSupplierCatalog` returned the MATCH
+  count as `total` while the API returns the whole-catalog count (`SupplierCatalogService
+  .CountAsync` ignores `?q=`), which is the exact number "no catalog" vs "no match" turns
+  on, so mock-mode QA of that copy proved nothing. 875 vitest green (91 files, was 849),
+  tsc/lint/build clean. Browser-verified on a 121-row seeded catalog: typing `CROSS` finds
+  row 121 — unreachable under the old client-side filter — and a miss reads "No product
+  matches". Geometry NOT measured: the browser pane reports zero-width rects while hidden,
+  so responsive checks were CSS-reasoned only.
+- **2026-07-24 FE-4 done — marketing SEO, FE PR #30 open (not merged).** Prod-verified
+  defects, now fixed: all 33 help articles canonicalised to `/help` (children inherit the
+  layout's `alternates.canonical`); pages declaring their own `openGraph` served NO
+  `og:image` (a page-level block REPLACES the root's, never merges); `/` + legal/support
+  pages had no canonical at all. `src/lib/seo.ts` `pageMetadata()`/`helpArticleMetadata()`
+  now drive 50 pages; landing moved into a `(home)` route group so a server layout can
+  carry its metadata (route still `/`). Sitemap unchanged + test-pinned against the page
+  tree. 964 vitest green (89 files), `bun run build` 77/77 pages. NOTE: `bun run lint:vocab`
+  is red on main already — "Proton Bridge" ×2 + "Wiring it from Zapier" in help prose this
+  PR did not touch; no CI runs that gate.
+- **2026-07-24: supplier auto-detect SPEC (BE-5) — BE PR #48 open, spec only, no code.**
+  `docs/superpowers/specs/2026-07-24-supplier-auto-detect-from-document-design.md`. Signal
+  audit: header parties EXIST; supplier-name match HALF and VAT match BLOCKED (`Supplier`
+  carries no VAT/reg-nr/EDI/domain); catalog overlap needs a cross-supplier query +
+  `(OrgId, Code)` index; sender address is SHA-256-only by GDPR design. Strongest signal
+  already ships and wasn't on the brief: `SchemaFingerprint.SupplierIdsCsv`. **New defect:**
+  that binding never learns from a correction — `assign-supplier` leaves
+  `SchemaFingerprintHash` set, so the re-parse short-circuits and the chosen supplier is
+  never bound. S-sized P0, worth shipping alone. Six founder decisions in the spec; #1
+  (supplier identity columns) and #2 (sender-domain persistence) block signals outright.
 - **2026-07-24 done:** FE #28 merged (`a5c2404`, catalog-tab polish); FE PR #29 open
   (inbound address on Email intake tab, 851/851 green); BE PR #45 open (PunchOut L1
   spec + queue strikes); Stripe test coupon deleted (0 remain); FE `feat/design-system-v1`
@@ -44,6 +107,17 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   Measured side-finding: **422 does not stop Postmark retrying** (3 attempts in 6 min for one
   message), so `InboundEmailController.cs:134`'s "422 keeps Postmark from retrying" comment is
   false — folded into BE-1's scope.
+- **2026-07-24 OPS-2 (real vendor catalog feeds on prod): BLOCKED on founder auth** — prod
+  is signed out in Chrome and only `sk_test_`/`pk_test_` Clerk keys exist locally, so no
+  authed `GET /api/suppliers/{id}/catalog/source` was possible; no prod state was touched.
+  Off-prod findings: **P1 defect BE-6** — the generic XML catalog parser silently drops
+  every second scalar child (`CatalogXmlParsers.cs:338-364` double-advances;
+  repro `a,b,c,d` → `[a|c]`), so element-based XML feeds import with no name/price;
+  attribute feeds (100MEGA) and cXML Index unaffected. **Jarltech un-blocked** (was 503,
+  now 200 / 19.5 MB / 14,713 items) but must not be enabled until BE-6 lands. **BE-2's
+  50k-cap premise is stale** — cap is already 200k + 256 MB. Handoff (per-vendor config
+  values + paste-ready read-only prod probe):
+  `docs/qa/2026-07-fable5-push/2026-07-24-ops2-vendor-feed-prod-test.md`.
 
 ## Snapshot (2026-07-23) — delivery-reliability + UI waves shipped
 
@@ -151,10 +225,37 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `git merge-base --is-ancestor` LIES about squash-merged PRs (grep main for content instead);
   worktree grep hits are copies of main, not evidence of a separate track.
 
-- **2026-07-24: new queue items** (see `docs/prompts/2026-07-23-open-queue-handover.md`
-  items 7–8): supplier Catalog-tab polish (Logicom QuickConnect out of the generic protocol
-  picker; tile label alignment; empty-state dashed-border gap) and a **PunchOut L1 spec**
-  (founder idea — spec only, no implementation).
+- **2026-07-24 routing/catalog recon (code-verified) — three STALE claims in this file
+  corrected:** (1) the Phase 1b "SFTP/S3 enqueue gap" was FIXED long ago (`74ac036`
+  2026-06-30 enqueues ParseOrderJob; `de4ea0e` 2026-07-09 ships unrouted import for
+  SFTP/S3/IMAP pull) — the §06-26 line below and the deferred-list entry are outdated;
+  (2) the "two routing worktrees in flight" are fully merged (both tips are ancestors of
+  main, zero unique commits) — branches are stale pointers, safe to delete; (3) Postmark
+  inbound is no longer "token-only, verification deferred": prod sets
+  `Inbound__Postmark__ProxySecret`, so the CF verify-Worker edge gate appears deployed
+  (verify with one real email). **Known operator gap found:** BE
+  `POST /api/orders/{id}/assign-supplier` exists (OrdersController.cs:583) but the FE has
+  NO control calling it — an `unrouted` order shows "Needs supplier" with no in-app way
+  to resolve it. Also: review-picker catalog typeahead is client-side over the first
+  1000 rows only; upload-preview manual entry has no typeahead; `CatalogHintCard` is
+  orphaned (never rendered).
+- **2026-07-24: queue items 7+8 DONE.** Item 7 — FE PR #28 **MERGED** (`a5c2404`, founder
+  grant in-session); item 8 — BE PR #45 open. Also founder-requested cleanup done: the
+  Stripe test coupon (`zFUfTMBz` / promo `REDACTED-TAXID`, redeemed 1/1, already inactive)
+  deleted via live Stripe API — 0 coupons remain. Item 7 (Catalog-tab
+  polish) — FE PR #28: logicom out of the generic protocol picker (offer⇔works held — a
+  saved logicom source keeps its tile; keyboard nav follows the visible set), tile labels
+  left-aligned, empty-state dashed border 1px→2px (root cause was NOT overlap — geometry
+  showed a 12px clear gap; Windows 125% scaling renders 1px as a 0.8px hairline Chromium
+  can drop per-edge). 849/849 vitest (4 new, RED first) + tsc + build green; verified
+  live at 1440px/390px via computed styles (no screenshots — Browser pane can't composite
+  hidden; note: pane DOM/JS tools DO work now, only Playwright CDP stays blocked). Item 8
+  (PunchOut L1) — BE PR #45, spec only:
+  `docs/superpowers/specs/2026-07-24-punchout-l1-supplier-hosted-catalog-design.md`
+  (revision-bundle fit, no-local-code-list AI implications with the allow-list guard kept
+  strict, BuyerCookie-correlated browser cart return, ~3.5–4.5 wk estimate, decisions
+  D1–D5). Fact-check against the handover pointer: PunchOut exists only as FE copy — no
+  vocabulary in `standards/catalog.ts`, no protocol code in either repo.
 - **Stripe LIVE webhook verified end-to-end (2026-07-24, founder-present):** real checkout on
   prod with a 100%-forever coupon (`REDACTED-TAXID`, max 1 redemption) — €0.00 invoice paid, webhook
   endpoint `api.proculink.eu/api/billing/webhook` delivered with 0% errors, org flipped to
