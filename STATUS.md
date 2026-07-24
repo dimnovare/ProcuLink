@@ -117,6 +117,20 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `git merge-base --is-ancestor` LIES about squash-merged PRs (grep main for content instead);
   worktree grep hits are copies of main, not evidence of a separate track.
 
+- **2026-07-24 routing/catalog recon (code-verified) — three STALE claims in this file
+  corrected:** (1) the Phase 1b "SFTP/S3 enqueue gap" was FIXED long ago (`74ac036`
+  2026-06-30 enqueues ParseOrderJob; `de4ea0e` 2026-07-09 ships unrouted import for
+  SFTP/S3/IMAP pull) — the §06-26 line below and the deferred-list entry are outdated;
+  (2) the "two routing worktrees in flight" are fully merged (both tips are ancestors of
+  main, zero unique commits) — branches are stale pointers, safe to delete; (3) Postmark
+  inbound is no longer "token-only, verification deferred": prod sets
+  `Inbound__Postmark__ProxySecret`, so the CF verify-Worker edge gate appears deployed
+  (verify with one real email). **Known operator gap found:** BE
+  `POST /api/orders/{id}/assign-supplier` exists (OrdersController.cs:583) but the FE has
+  NO control calling it — an `unrouted` order shows "Needs supplier" with no in-app way
+  to resolve it. Also: review-picker catalog typeahead is client-side over the first
+  1000 rows only; upload-preview manual entry has no typeahead; `CatalogHintCard` is
+  orphaned (never rendered).
 - **2026-07-24: queue items 7+8 DONE.** Item 7 — FE PR #28 **MERGED** (`a5c2404`, founder
   grant in-session); item 8 — BE PR #45 open. Also founder-requested cleanup done: the
   Stripe test coupon (`zFUfTMBz` / promo `REDACTED-TAXID`, redeemed 1/1, already inactive)
