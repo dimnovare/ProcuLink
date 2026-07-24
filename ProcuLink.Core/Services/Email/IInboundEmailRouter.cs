@@ -67,28 +67,79 @@ public sealed record InboundAttachment(
     byte[] Content);
 
 /// <summary>
+/// Why a message was rejected — and therefore whether the sending provider should
+/// try again. The webhook maps this to the HTTP status, because that status is the
+/// only thing a provider's retry engine reads.
+/// </summary>
+/// <remarks>
+/// Postmark retries any non-200 response 10 times over roughly 10.5 hours and then
+/// files the message under <c>Failed</c>, where a human can re-fire it with
+/// <c>PUT /messages/inbound/{id}/retry</c> for the 45 days it is retained. A 200
+/// marks the message <c>Processed</c>: no retry, and nothing left to re-fire. So the
+/// choice is not cosmetic — it decides whether a rejected message stays recoverable.
+/// </remarks>
+public enum InboundEmailRejectionKind
+{
+    /// <summary>
+    /// Not stated. Treated as <see cref="Transient"/> by the webhook: an unlabelled
+    /// rejection keeps its retries, so a branch added without thinking about this
+    /// costs duplicate webhook calls rather than a silently dropped purchase order.
+    /// </summary>
+    Unspecified = 0,
+
+    /// <summary>
+    /// The failure is on the sending side and no retry of this same message can fix
+    /// it — the address is not one of ours, or names a tenant that does not exist.
+    /// Re-sending the identical payload re-runs the identical decision, so the
+    /// webhook stops the retries.
+    /// </summary>
+    Permanent,
+
+    /// <summary>
+    /// The message is fine; we are the ones who cannot take it right now (the
+    /// organisation is missing from the database, or its account status blocks
+    /// ingest). Retries are wanted: they give the operator a window in which fixing
+    /// the cause lands the order with no further action, and the provider's failed
+    /// bucket keeps the message re-fireable afterwards.
+    /// </summary>
+    Transient,
+}
+
+/// <summary>
 /// Outcome of a router call. <see cref="Success"/> is <c>true</c> when the
 /// tenant resolved and processing completed without infrastructure failure —
 /// even if no order was created (e.g. all attachments were unsupported, or the
 /// message carried no attachment at all).
 /// <para>
-/// <see cref="Success"/> is <c>false</c> only for a message the product can never
-/// act on: the recipient address does not parse, the tenant slug is unknown, the
-/// resolved organisation does not exist, or its account status blocks ingest. The
-/// webhook maps that to 422. An organisation with NO supplier is deliberately NOT
-/// in that set — its attachments are imported unrouted and held for assignment,
-/// so the call succeeds and the webhook answers 200.
+/// <see cref="Success"/> is <c>false</c> only for a message the product cannot act
+/// on: the recipient address does not parse, the tenant slug is unknown, the
+/// resolved organisation does not exist, or its account status blocks ingest.
+/// <see cref="RejectionKind"/> then says whether the sender should try again — see
+/// <see cref="InboundEmailRejectionKind"/>. An organisation with NO supplier is
+/// deliberately not in that set — its attachments are imported unrouted and held for
+/// assignment, so the call succeeds and the webhook answers 200.
+/// </para>
+/// <para>
+/// A returned result always means the decision is durable. To ask the provider to
+/// deliver the message again after an infrastructure fault (database down, storage
+/// unreachable), let the exception escape instead: the resulting 5xx is what the
+/// retry engine reads.
 /// </para>
 /// </summary>
 /// <param name="Success">True if routing completed; false if the message was rejected outright.</param>
 /// <param name="OrgId">The resolved organisation id, or null if tenant resolution failed.</param>
 /// <param name="CreatedOrderIds">Order stub ids created — one per successfully ingested attachment.</param>
 /// <param name="Error">Human-readable failure reason when <see cref="Success"/> is false.</param>
+/// <param name="RejectionKind">
+/// Whether a rejected message is worth re-sending. Ignored when <see cref="Success"/>
+/// is true.
+/// </param>
 public sealed record InboundEmailResult(
     bool Success,
     Guid? OrgId,
     IReadOnlyList<Guid> CreatedOrderIds,
-    string? Error);
+    string? Error,
+    InboundEmailRejectionKind RejectionKind = InboundEmailRejectionKind.Unspecified);
 
 /// <summary>
 /// Decouples the router (which lives in <c>ProcuLink.Infrastructure</c>) from

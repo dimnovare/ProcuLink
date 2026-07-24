@@ -37,9 +37,23 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   Postgres coverage). Item-level detail in the struck queue + bullets below.
 - **Open after the train:** FOUNDER P0 — the founder org is `account_status=read_only`
   (Stripe cancel test), every ingest channel dead on it; lift it, then re-fire the parked
-  Postmark message. Queue: ~~BE-6~~ (fixed, see the snapshot above), BE-1's
-  422-retry residual, ~~the schema-fingerprint learning gap~~ (fixed, #54 below),
-  FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU project, OPS-2 creds.
+  Postmark message. Queue: ~~BE-6~~ (fixed, snapshot above), ~~BE-1's 422-retry
+  residual~~ (fixed, #56 below), ~~the schema-fingerprint learning gap~~ (fixed, #54
+  below), FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU project,
+  OPS-2 creds.
+- **2026-07-24: inbound-webhook retry contract fixed — BE PR #56 (open), BE-1 residual
+  closed.** OPS-1 measured that 422 does not stop Postmark; the documented policy is 10
+  retries over ~10.5 h on any non-200, then the message is filed `Failed` (still re-fireable
+  by hand for 45 days), while 200 marks it `Processed` and unrecoverable. The status is
+  therefore split by whose fault the failure is, via a new `InboundEmailRejectionKind`:
+  **200 `{status:"ignored"}`** for sender-side-permanent (address not ours, unknown tenant
+  slug, empty body, missing recipient) and **422 with its retries intact** for
+  our-side-transient (org row missing behind a `TenantMapping`, blocked account status —
+  a read-only freeze is reversible in minutes, so the retries are the grace window). An
+  unlabelled rejection keeps its retries. The false "422 keeps Postmark from retrying"
+  comment is deleted; the `rejected_read_only` audit row is pinned by a test.
+  **Not fixed, noted:** the CF inbound-verify Worker's 403 on IP-allowlist drift is the one
+  status that stops Postmark retrying immediately — stale list ⇒ real mail dropped.
 - **2026-07-24: the schema fingerprint now learns from operator corrections (BE-5 P0, PR #54).**
   `assign-supplier` re-parses, but the recorder short-circuited on the order's existing
   `SchemaFingerprintHash`, so `SchemaFingerprint.SupplierIdsCsv` could only ever accumulate
