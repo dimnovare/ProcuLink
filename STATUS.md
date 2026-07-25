@@ -27,6 +27,15 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   **Founder-org recipe is TWO calls, in order:** extend the trial via `.../limits` first (while
   still `read_only` the arbiter early-returns, so nothing moves), *then* this endpoint —
   otherwise the lapsed Pilot window re-expires it immediately, which the response says out loud.
+  20 unit tests + 3 real-Postgres; **local Api.Tests 1627/1627, 0 failed, 0 skipped.** An earlier
+  run of the same commit showed 17 failures — all `Npgsql: Timeout during reading attempt` in
+  `InitializeAsync`, 15 of them in pre-existing suites this change does not touch, caused by a
+  sibling session leaving 76 orphan Testcontainers on the Docker host. Reaping them (label
+  `org.testcontainers=true` only; the four named dev DBs are unlabelled and were untouched)
+  returned the identical commit to green. New Postgres fixtures should be **class-scoped** —
+  the repo's per-test `IAsyncLifetime` convention starts and migrates one container PER TEST,
+  which is the load `PostgresContainerCollection` itself warns about.
+
 ## Snapshot (2026-07-24, late) — Postmark IP drift is now DETECTED
 
 - **The Worker's hardcoded Postmark IP allowlist is watched — BE PR #58 (open).** #57
