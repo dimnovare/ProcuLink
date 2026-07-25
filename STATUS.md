@@ -114,8 +114,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   Postmark message. Queue: ~~BE-6~~ (fixed, snapshot above), ~~BE-1's 422-retry
   residual~~ (fixed, #56 below), ~~the schema-fingerprint learning gap~~ (fixed, #54
   below), FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU project,
-  OPS-2 creds, and — once the Worker 403→503 PR merges — a **hand-redeploy of the CF
-  inbound-verify Worker** (nothing else ships it; see that entry below).
+  **OPS-2's remaining five vendor cred pastes** (the Jarltech half is DONE — org is on
+  Growth and the scheduled pull landed 14,713 rows; see the OPS-2 entry below), and —
+  once the Worker 403→503 PR merges — a **hand-redeploy of the CF inbound-verify
+  Worker** (nothing else ships it; see that entry below).
 - **2026-07-24: the CF inbound-verify Worker no longer drops mail on IP drift — BE PR #57
   (MERGED, `52d9961`). ⚠️ STILL NEEDS A HAND-REDEPLOY BY THE FOUNDER.** `worker.js`'s source-IP gate answered
   **403**, the one status that makes Postmark stop retrying on the first attempt *and* never
@@ -290,10 +292,71 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   Measured side-finding: **422 does not stop Postmark retrying** (3 attempts in 6 min for one
   message), so `InboundEmailController.cs:134`'s "422 keeps Postmark from retrying" comment is
   false — folded into BE-1's scope.
-- **2026-07-24 OPS-2 (real vendor catalog feeds on prod): BLOCKED on founder auth** — prod
-  is signed out in Chrome and only `sk_test_`/`pk_test_` Clerk keys exist locally, so no
-  authed `GET /api/suppliers/{id}/catalog/source` was possible; no prod state was touched.
-  Off-prod findings: **P1 defect BE-6** — the generic XML catalog parser silently drops
+- **2026-07-24 OPS-2 re-run: prod auth SOLVED, now BLOCKED on the PLAN GATE (not read-only).**
+  The founder's Chrome is signed in to prod as `redacted@example.invalid`, org **Dim's
+  Organization** (`org_3EVIvV7ecKosZoL0fvYnhLdXNow`) — the only org on that Clerk user, so
+  the frozen `personal-workspace-d3be` is not reachable and its `read_only` state is *not*
+  what blocks this item. That org is `plan=pilot`, `accountStatus=trialing`, admin-overridden
+  limits (100k orders, 30 suppliers, 17 used). **Enabling a catalog source is gated on
+  `BillingFeature.SftpIngestion`, whose minimum plan is Growth** (`PlanConstants.cs:286`),
+  so `HasFeatureAsync` returns false on Pilot and `PUT …/catalog/source` with
+  `IsEnabled:true` 403s `catalog_sync_requires_integration`
+  (`SuppliersController.cs:957`). Config-save (`IsEnabled:false`), `test-fetch`, and
+  `catalog/import` are **not** gated. Lifting this is a founder billing decision.
+  **Prod inventory:** none of the six vendors exists as a supplier — all 18 are demo/`ZZ`-test/
+  sample, and only "FastParts Inc" has any catalog source (https, disabled, no creds). So
+  nothing was pre-configured and nothing could be verified by reading prod.
+  **Vendor creds recovered** from the archived audit transcript for 5 of 6 (Logicom's
+  `ConsumerSecret`/`CustomerId` are not present in recoverable form). **All five probed
+  read-only, off-prod, and all authenticate today:** Ingram `PRICE.ZIP` 2,728,550 B ·
+  Also/Actebis `pricelist-1.txt.zip` 516,383 B · REDACTED-PARTY `redacted-fixture` 6,202,918 B ·
+  100MEGA HTTP 200 but **109 s to first byte** (5-min `CatalogPullService.OverallDeadline`
+  covers it, but it is the tightest feed) · Jarltech HTTP 200 `<priceinfo>` XML.
+  **Second pass (founder supplied Logicom creds + authorised a plan bump): BE-6 PROVEN IN
+  PROD.** `36ccd9e` (#55) is deployed; a live `test-fetch` of the real Jarltech feed returned
+  HTTP 200 in 8.2 s, 19,515,097 B, 14,713/14,713 rows with code, **all 20 header columns**,
+  and `SHORT_EN→name` + `YOUR_PRICE_NET→price` both mapped — the two fields the bug used to
+  eat. Comma decimals parse (`130,41`→`130.41`). **Jarltech gate lifted.** Six vendor supplier
+  records now exist on prod; Jarltech's source is configured and test-fetched (`isEnabled:false`).
+  The other five stay unconfigured: extracting a Clerk token was refused by the permission
+  classifier, and every remaining route needs the agent to handle creds in the clear — a
+  handling constraint, not a knowledge gap. The plan bump was authorised but **not performed**:
+  no admin route sets `Plan` (`AdminController.cs:315-397` is limits-only), so the only path is
+  a live Stripe Checkout that collects a payment method even at 100% off — a founder act, and
+  cancelling it is what froze `personal-workspace-d3be` this morning.
+  **Third pass: rows + typeahead PROVEN on prod with no billing change.** `catalog/import` is
+  not billing-gated, so a 38-row subset of the **real** Jarltech feed was imported
+  (`created:38`) and verified live: `total=38` with code/name/price/currency, `take` honoured,
+  `q=CounterCache`→4 (name), `q=8070`→15 (code prefix), `q=zzzznope`→**0** (no fall-back), and
+  the Catalog tab renders "Product catalog · 38". Proves parse → `UpsertManyAsync` → catalog
+  list → typeahead → UI on real vendor data; does **not** prove the scheduled pull job, which
+  the plan gate still blocks. Param gotcha: that endpoint takes **`q`/`take`**, not
+  `search`/`page`/`pageSize` — unknown params are silently ignored.
+  **No payment action was taken** — the classifier refused Clerk token extraction,
+  Checkout-session creation, and the 1.35 MB file upload; none was routed around.
+  **Fourth pass: 100%-off coupon created on LIVE Stripe** (founder-authorised). This morning's
+  `REDACTED-TAXID` was gone, so a new one exists on `acct_1TbeHcLSwazJxGKo`:
+  `OPS-2 catalog sync test — 100% off`, **100% off forever, max redemptions 1**, customer-facing
+  code kept out of git. Cap is deliberate — 100%-off-forever + unlimited redemptions on a live
+  account is a standing liability if leaked. A coupon moves no money; **the checkout itself was
+  left to the founder** (`Mode="subscription"` collects a payment method even at 100% off).
+  ⚠️ Plan the exit before redeeming — cancelling is what froze `personal-workspace-d3be` today.
+  The six new vendor suppliers moved the org to **23/30** suppliers.
+  **Fifth pass — OPS-2's Jarltech half is DONE, scheduled pull proven end-to-end on prod.**
+  Founder redeemed the coupon: `plan=growth`, `accountStatus=active`, live `cs_live_…` session
+  — so Checkout → webhook → plan-flip is verified on real infra as well. Enable then returned
+  **200 `syncEnqueued:true`** (403 gone — "plan tier, never `account_status`" was exactly right)
+  and the Worker's pull finished in seconds: **`lastSyncStatus=ok`, created 14,675, updated 38,
+  skipped 0, total 14,713.** 14,675+38=14,713 — the 38 manual-import rows were matched by code
+  and **updated, not duplicated**, so idempotent upsert on `(org,supplier,code)` is proven too.
+  600 rows sampled from pull-created records: **600/600 with name AND price** — BE-6 at full
+  scale, versus a pre-fix prediction of "14,713 products with no name and no price". Catalog
+  typeahead works at 14,713 rows. **Not exercised:** order-review-screen typeahead (no Jarltech
+  PO on prod) — the backing endpoint is proven, the review binding is not; don't conflate them.
+  **Not a bug:** fast synthetic typing drops all but the first char in that search box
+  (debounced controlled input) — automation artifact, verified by appending one char at a time.
+  Five vendors still need a founder cred paste; the plan gate no longer blocks them.
+  Off-prod findings from the first run stand: **P1 defect BE-6** — the generic XML catalog parser silently drops
   every second scalar child (`CatalogXmlParsers.cs:338-364` double-advances;
   repro `a,b,c,d` → `[a|c]`), so element-based XML feeds import with no name/price;
   attribute feeds (100MEGA) and cXML Index unaffected. **Jarltech un-blocked** (was 503,
