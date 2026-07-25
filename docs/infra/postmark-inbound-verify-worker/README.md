@@ -91,15 +91,30 @@ This matches the model the API itself uses — see the `Postmark` action and the
 
 ### Running the Worker's tests
 
-`worker.test.mjs` pins that contract (no dependencies, no CI wiring — this repo
-has no JS pipeline). Re-prove it before any hand-deploy:
+`worker.test.mjs` pins that contract and `check-postmark-ips.test.mjs` pins the
+drift checker below (no dependencies — Node's built-in test runner only).
+Re-prove them before any hand-deploy — from **inside this folder**:
 
 ```bash
-node --test docs/infra/postmark-inbound-verify-worker/worker.test.mjs
+node --test
 ```
 
-(or `node --test` from inside this folder — the local `package.json` exists only
-to mark `worker.js` as an ES module for Node; wrangler ignores it.)
+(the local `package.json` exists only to mark `worker.js` as an ES module for
+Node; wrangler ignores it.) From the repo root, name the files explicitly:
+
+```bash
+node --test docs/infra/postmark-inbound-verify-worker/*.test.mjs
+```
+
+Passing the *directory* instead (`node --test path/to/folder/`) fails on
+Windows — Node tries to load it as a module and reports
+`Cannot find module`, which reads like a broken test rather than a bad
+invocation. Both forms above were run on Node 22.
+
+These now run in GitHub Actions too — `.github/workflows/postmark-ip-drift.yml`
+executes them on every pull request that touches this folder, and on the weekly
+schedule. The .NET `ci.yml` still ignores them; this folder is the repo's only
+JavaScript.
 
 ---
 
@@ -424,7 +439,46 @@ failed webhook deliveries and shows failures in the Activity log).
   and any that ran out of attempts are sitting in **Failed** (filter the inbound
   activity list by that status; the default view hides them) and can be re-fired
   with `POST /messages/inbound/{id}/retry` or the **Retry** button. Nothing is
-  lost for 45 days.
+  lost for 45 days. **You should not be the one who notices — see below.**
+
+### Drift detection (automated)
+
+`.github/workflows/postmark-ip-drift.yml` runs `check-postmark-ips.mjs` every
+Monday at 06:00 UTC (plus on demand from the Actions tab). It re-reads
+Postmark's support article, extracts the IPs under its `Webhooks` heading, and
+compares them with `POSTMARK_WEBHOOK_SOURCES` in `worker.js`. Any difference —
+in either direction — fails the job, and GitHub notifies whoever watches this
+repo's Actions failures. That delivery path is the same one `uptime.yml`
+depends on, and it is worth being clear-eyed about: **nothing here pages
+anyone**, so this alert is exactly as good as the founder's GitHub notification
+settings.
+
+Run it locally any time:
+
+```bash
+node docs/infra/postmark-inbound-verify-worker/check-postmark-ips.mjs
+```
+
+Two honesty notes, because this is a scraper and scrapers rot:
+
+- **Postmark publishes no machine-readable list.** No JSON, no API, no `.txt`
+  (verified 2026-07-24) — the support article is the only source there is. The
+  extraction is scoped to the `<h2 id="webhooks">` section on purpose: the page
+  lists ~48 addresses across SMTP / MX / DKIM / inbound sections and only four
+  are webhook sources, so matching every IP on the page would report permanent
+  false drift and get the job muted.
+- **Every "cannot tell" outcome fails, none of them passes.** Fetch error,
+  non-200, renamed heading, empty list, a bullet that is not an IP, an
+  unreadable `POSTMARK_WEBHOOK_SOURCES` — all exit non-zero. A monitor that
+  shrugged at a page redesign would report "no drift" forever afterwards, which
+  is precisely the failure it exists to prevent. Expect the occasional
+  genuinely-worth-reading red run rather than a green one you cannot trust.
+
+**What it does not cover:** whether the *deployed* Worker matches this repo.
+Cloudflare is hand-deployed, so a refreshed array here is still inert in
+production until someone runs the redeploy below — the job checks the source of
+truth in git, not the live script. The `curl` smoke test in step 4 above is what
+confirms the deployed build.
 
 ### Redeploying after a change to `worker.js`
 
