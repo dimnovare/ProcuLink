@@ -51,6 +51,39 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   Locally Infrastructure showed 1 red — `FireIntegrationTriggerJobReliabilityTests.
   TwoConcurrentFinalFailures_OnPostgres…`, `Npgsql: Timeout during reading attempt`, the known
   Testcontainers contention flake; it passed 6/6 in isolation and 1054/1054 on CI's Linux runner.
+## Snapshot (2026-07-25) — frozen orgs are recoverable from the product
+
+- **`POST /api/admin/organisations/{id}/account-status` — BE PR #59 (open, not merged).**
+  Closes the gap the founder org exposed on 2026-07-24: an org frozen by a Stripe cancel
+  (`account_status=read_only`) could only be lifted with a raw production UPDATE. `[AdminOnly]`,
+  cross-tenant by route id, same shape as `SetOrganisationLimits`. **Exactly one transition is
+  permitted — `read_only` → `trialing`, and only on a Pilot org with no live
+  `StripeSubscriptionId`** (the reconciliation sweep skips a blank subscription id, so nothing
+  fights the write; with a live id it would be re-derived from Stripe, so the endpoint refuses
+  rather than lie). Every other status stays owned by its writer. The endpoint keeps NO copy of
+  the trial-expiry rule: it writes `trialing`, then calls `MarkPilotExpiredIfNeededAsync` and
+  returns whatever that leaves behind, so the response can never claim a status the DB does not
+  hold. Audit row `admin.org.account_status_changed` (who/when/from/to + effective).
+  **Founder-org recipe is TWO calls, in order:** extend the trial via `.../limits` first (while
+  still `read_only` the arbiter early-returns, so nothing moves), *then* this endpoint —
+  otherwise the lapsed Pilot window re-expires it immediately, which the response says out loud.
+## Snapshot (2026-07-24, late) — Postmark IP drift is now DETECTED
+
+- **The Worker's hardcoded Postmark IP allowlist is watched — BE PR #58 (open).** #57
+  (now merged, `52d9961`) made drift *survivable* (503 → ~10.5 h of retries → `Failed`,
+  re-fireable 45 days); it did not make anyone *notice*. `.github/workflows/postmark-ip-drift.yml`
+  runs `check-postmark-ips.mjs` weekly (Mon 06:00 UTC + on demand), re-reading Postmark's
+  support article and failing loudly on any difference from `POSTMARK_WEBHOOK_SOURCES`.
+  Verified rather than assumed: Postmark publishes **no** machine-readable IP list (no JSON/
+  API/txt), and the article mixes ~48 SMTP/MX/DKIM addresses with the 4 webhook ones — so the
+  extraction is scoped to its `<h2 id="webhooks">` anchor, and every "cannot tell" outcome
+  (fetch error, renamed heading, non-IP bullet) exits non-zero rather than reporting no drift.
+  A Worker-side 503 counter was rejected: no sink exists (no KV/DO/Analytics Engine binding)
+  and it could only fire after mail was already refused. Proven both ways — green against the
+  live article, and red on a simulated drift. 12 new tests (20 in the folder), now CI-run on
+  PRs touching it. **This PR needs no redeploy** (worker.js changes are comments only); the
+  #57 hand-redeploy is still outstanding. Found in passing: `uptime.yml` cites
+  `docs/deployment/monitoring-runbook.md` twice — that file does not exist.
 
 ## Snapshot (2026-07-24, late) — BE-6 fixed
 
@@ -84,7 +117,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   OPS-2 creds, and — once the Worker 403→503 PR merges — a **hand-redeploy of the CF
   inbound-verify Worker** (nothing else ships it; see that entry below).
 - **2026-07-24: the CF inbound-verify Worker no longer drops mail on IP drift — BE PR #57
-  (open). ⚠️ NEEDS A HAND-REDEPLOY BY THE FOUNDER.** `worker.js`'s source-IP gate answered
+  (MERGED, `52d9961`). ⚠️ STILL NEEDS A HAND-REDEPLOY BY THE FOUNDER.** `worker.js`'s source-IP gate answered
   **403**, the one status that makes Postmark stop retrying on the first attempt *and* never
   file the message as `Failed` — so a purchase order refused there was gone by both routes,
   automatic and manual. The allowlist is hardcoded and Postmark has changed its published

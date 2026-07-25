@@ -1,0 +1,90 @@
+name: Postmark webhook IP drift
+
+# Watches for drift between Postmark's published webhook source IPs and the
+# hardcoded POSTMARK_WEBHOOK_SOURCES allowlist in the Cloudflare inbound-verify
+# Worker (docs/infra/postmark-inbound-verify-worker/worker.js).
+#
+# WHY: that allowlist is hardcoded and Postmark has changed its published IPs
+# before. The Worker refuses unknown sources with 503, so drift no longer
+# destroys mail — Postmark retries for ~10.5 h and then parks each message in
+# Failed, re-fireable for 45 days (PR #57). What was still missing is
+# DETECTION: without this job nobody learns about drift until a customer's
+# purchase orders are already queueing behind the 503. This job runs against
+# the published list on a schedule, so drift surfaces before any message is
+# refused.
+#
+# WHAT HAPPENS WHEN IT FAILS: GitHub notifies whoever watches this repo's
+# Actions failures — the same (and only) delivery path uptime.yml relies on.
+# Note that is a real limit: nothing here pages anyone, so the alert is as good
+# as the founder's GitHub notification settings. The failure annotation names
+# the exact IPs and the fix, including the hand-deploy step: editing worker.js
+# in this repo changes NOTHING in production until the Worker is redeployed by
+# hand. Runbook: docs/infra/postmark-inbound-verify-worker/README.md.
+
+on:
+  schedule:
+    # Weekly, Mondays 06:00 UTC. Postmark's IP list changes rarely (the article
+    # was last edited in March 2025), and a refused message survives ~10.5 h of
+    # retries plus 45 days in Failed — so a worst-case 7-day detection lag sits
+    # comfortably inside the recovery window, while daily polling of a
+    # third-party support page would mostly buy noise.
+    - cron: '0 6 * * 1'
+  # Run on demand from the Actions tab (e.g. right after a hand-deploy).
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/infra/postmark-inbound-verify-worker/**'
+      - '.github/workflows/postmark-ip-drift.yml'
+
+concurrency:
+  group: postmark-ip-drift-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Offline and deterministic — safe to gate pull requests on.
+  worker-tests:
+    name: Worker + checker tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # node:test only — the Worker folder is dependency-free by design, so
+      # there is nothing to install and no lockfile to cache.
+      - name: Run Worker tests
+        working-directory: docs/infra/postmark-inbound-verify-worker
+        run: node --test
+
+  # Hits postmarkapp.com, so it is NOT wired to pull_request: a PR must never
+  # go red because a third-party support page had a bad minute. The scheduled
+  # run is the monitor; the PR run above only proves the code still works.
+  drift:
+    name: Compare published IPs against worker.js
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Exits non-zero on drift AND on every "cannot tell" outcome (fetch
+      # failure, missing/renamed Webhooks section, unparsable entry, allowlist
+      # unreadable). A silent pass after a page redesign would be the exact
+      # failure this job exists to prevent — see the checker's header comment.
+      - name: Check for Postmark webhook IP drift
+        run: node docs/infra/postmark-inbound-verify-worker/check-postmark-ips.mjs

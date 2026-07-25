@@ -40,11 +40,19 @@
 //   https://postmarkapp.com/support/article/800-ips-for-firewalls
 //   ("These IPs apply for every webhook sent by Postmark (inbound, bounce,
 //    open, etc).")
-// Verified current: 2026-07-09. If legitimate inbound emails start failing in
+// Verified current: 2026-07-24. If legitimate inbound emails start failing in
 // Postmark's Activity log with 503 "source address not allowed", re-check that
 // page — Postmark has changed/added IPs before and announces it there. Until
 // the list is refreshed and the Worker redeployed, those messages keep retrying
 // and end up as Failed, which is re-fireable by hand — nothing is lost.
+//
+// You should not be the one who notices, though: this array is WATCHED. The
+// weekly `.github/workflows/postmark-ip-drift.yml` job re-reads that article
+// and fails loudly the moment it stops matching this list — see
+// `check-postmark-ips.mjs` next to this file. Keep the constant's name and its
+// plain array-of-string-literals shape: the checker parses this file as text
+// (deliberately — so monitoring never forces an export into hand-deployed
+// code), and a test pins that it can still read it.
 //
 // Entries may be single IPv4 addresses or CIDR blocks ("a.b.c.d/nn").
 const POSTMARK_WEBHOOK_SOURCES = [
