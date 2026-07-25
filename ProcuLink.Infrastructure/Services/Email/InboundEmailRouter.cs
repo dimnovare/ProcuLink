@@ -286,14 +286,11 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         // No-egress orgs are excluded: the body extractor sends the prose to OpenAI,
         // which would violate the no-data-leaves guarantee.
         //
-        // KNOWN GAP: this path is skipped when the org has no supplier. The persist call
-        // (CreateStubFromParsedOrderAsync) takes a non-nullable supplier id and there is no
-        // unrouted sibling for it, so a prose-only email to a supplier-less org still yields
-        // no order — it is accepted (200) and audited rather than 422'd, and any ATTACHMENT on
-        // the same message is parked unrouted above. Closing it needs an unrouted overload of
-        // CreateStubFromParsedOrderAsync; do not fabricate a supplier id here.
+        // A supplier is NOT required. With none resolvable the extracted order takes the unrouted
+        // sibling, exactly as the attachment path above takes CreateUnroutedStubAsync: the order is
+        // parked for a human to route rather than dropped. Do not fabricate a supplier id here —
+        // the null is the signal that routing is still owed.
         if (created.Count == 0
-            && supplierId is { } bodySupplierId
             && !string.IsNullOrWhiteSpace(payload.Body)
             && !org.SelfHostedOcr)
         {
@@ -302,20 +299,19 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 var extraction = await _bodyExtractor.ExtractAsync(payload.Body!, ct);
                 if (extraction.Success && extraction.Order is not null)
                 {
-                    var stubResult = await _orders.CreateStubFromParsedOrderAsync(
-                        org.Id,
-                        bodySupplierId,
-                        extraction.Order,
-                        EmailBodyNlpSourceTag,
-                        ct);
+                    var stubResult = supplierId is { } bodySupplierId
+                        ? await _orders.CreateStubFromParsedOrderAsync(
+                            org.Id, bodySupplierId, extraction.Order, EmailBodyNlpSourceTag, ct)
+                        : await _orders.CreateUnroutedStubFromParsedOrderAsync(
+                            org.Id, extraction.Order, EmailBodyNlpSourceTag, ct);
 
                     if (stubResult.IsSuccess)
                     {
                         var orderId = stubResult.Value!.Id;
                         created.Add(orderId);
                         _logger.LogInformation(
-                            "Inbound email created order {OrderId} for org {OrgId} from email body NLP (confidence={Confidence:F2}).",
-                            orderId, org.Id, extraction.Confidence);
+                            "Inbound email created {Mode} order {OrderId} for org {OrgId} from email body NLP (confidence={Confidence:F2}).",
+                            supplierId is null ? "unrouted" : "routed", orderId, org.Id, extraction.Confidence);
                     }
                     else
                     {
@@ -338,13 +334,6 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                     "Inbound email body extraction for org {OrgId} threw; treating message as having no orders.",
                     org.Id);
             }
-        }
-        else if (created.Count == 0 && supplierId is null && !string.IsNullOrWhiteSpace(payload.Body))
-        {
-            _logger.LogInformation(
-                "Inbound email for org {OrgId} produced no order: nothing importable was attached and the "
-                + "body-NLP fallback needs a supplier, which this organisation has not configured.",
-                org.Id);
         }
 
         // Key the processed-audit row to the created order when exactly one was created

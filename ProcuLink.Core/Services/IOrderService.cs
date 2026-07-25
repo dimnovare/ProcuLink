@@ -81,6 +81,27 @@ public interface IOrderService
         CancellationToken ct);
 
     /// <summary>
+    /// Routing: the supplier-less sibling of <see cref="CreateStubFromParsedOrderAsync"/>. Persists
+    /// an already-parsed order for an org where no supplier could be resolved — the order is parked
+    /// <see cref="Constants.OrderStatusConstants.Unrouted"/> with a NULL supplier and NO pinned
+    /// connection revision (a revision belongs to a supplier connection; there is none to pin), and
+    /// <c>POST /api/orders/{id}/assign-supplier</c> later assigns one and resolves the lines.
+    /// <para>
+    /// This is to <see cref="CreateStubFromParsedOrderAsync"/> what
+    /// <see cref="CreateUnroutedStubAsync"/> is to <see cref="CreateStubAsync"/>. It exists as a
+    /// separate entry point rather than a nullable supplier id on the routed method so that callers
+    /// which MUST have a supplier — the REST ingress push in <c>IngressController</c> — keep failing
+    /// to compile if they ever try to pass one that is absent. Like the routed sibling this does NOT
+    /// enqueue <c>ParseOrderJob</c>: the order arrives already populated and has no source file.
+    /// </para>
+    /// </summary>
+    Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(
+        Guid organisationId,
+        ExtractedOrder order,
+        string source,
+        CancellationToken ct);
+
+    /// <summary>
     /// Parse the stored source file for an order in "parsing" status,
     /// auto-resolve item mappings, persist lines, and advance status to
     /// "pending_review" or "ready".  Idempotent — skips if status != "parsing".

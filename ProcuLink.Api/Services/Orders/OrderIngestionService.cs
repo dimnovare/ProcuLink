@@ -386,7 +386,7 @@ internal sealed class OrderIngestionService
 
     public async Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
         Guid organisationId,
-        Guid supplierId,
+        Guid? supplierId,
         ExtractedOrder order,
         string source,
         CancellationToken ct)
@@ -398,10 +398,18 @@ internal sealed class OrderIngestionService
         // a user in org A reference org B's supplier (cross-tenant injection).
         // DeletedAt == null: a soft-deleted supplier must not receive new orders
         // through the structured-extraction (PDF/AI) ingest path either.
-        var supplier = await _db.Suppliers
-            .FirstOrDefaultAsync(s => s.Id == supplierId && s.OrgId == organisationId && s.DeletedAt == null, ct);
-        if (supplier is null)
-            return Result<PurchaseOrderEntity>.Fail("Supplier not found.");
+        // Routing: supplierId may be null — the order arrived on a content-routed channel (the
+        // email-body NLP fallback) with no resolvable supplier. Validate only when one was supplied;
+        // a null supplier parks the order 'unrouted' below until assign-supplier picks one. Callers
+        // that MUST have a supplier reach this through the non-nullable IOrderService method.
+        Supplier? supplier = null;
+        if (supplierId is { } sid)
+        {
+            supplier = await _db.Suppliers
+                .FirstOrDefaultAsync(s => s.Id == sid && s.OrgId == organisationId && s.DeletedAt == null, ct);
+            if (supplier is null)
+                return Result<PurchaseOrderEntity>.Fail("Supplier not found.");
+        }
 
         // Field-by-field map: ExtractedOrder → Transform.ParsedOrder so the
         // existing auto-resolve / AI-suggest path can be reused unchanged.
@@ -426,9 +434,18 @@ internal sealed class OrderIngestionService
             NetAmount:              l.NetAmount
         )).ToList();
 
-        var aiCandidates  = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
+        // Guid.Empty for an unrouted order — the same convention the async parse path uses for a
+        // supplier-less order (`entity.SupplierId ?? Guid.Empty`). Nothing resolves against it, so
+        // every line lands NeedsReview, which is exactly right: there is no supplier's catalogue to
+        // resolve item codes against until one is assigned.
+        var resolveSupplierId = supplierId ?? Guid.Empty;
+        // Empty name, never null: BuildLineEntitiesAsync takes a non-nullable supplierName (it
+        // reaches the AI suggest call), and every other caller already guarantees one —
+        // GetSupplierNameAsync falls back to string.Empty rather than returning null.
+        var resolveSupplierName = supplier?.Name ?? string.Empty;
+        var aiCandidates  = await GetAiMappingCandidatesAsync(organisationId, resolveSupplierId, ct);
         var lineEntities  = await BuildLineEntitiesAsync(
-            organisationId, supplierId, supplier.Name, parsedLines, aiCandidates, ct);
+            organisationId, resolveSupplierId, resolveSupplierName, parsedLines, aiCandidates, ct);
 
         var anyUnresolved     = lineEntities.Any(l => l.NeedsReview);
         var aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
@@ -471,14 +488,19 @@ internal sealed class OrderIngestionService
         var canonicalJson = JsonDocument.Parse(JsonSerializer.Serialize(canonicalPayload));
 
         // V1: pin the supplier's active connection revision (null = fall back to live config).
-        var connectionRevisionId = await ResolveConnectionRevisionAsync(organisationId, supplierId, ct);
+        // No supplier => no revision to pin: a revision belongs to a SUPPLIER connection, and
+        // borrowing some other supplier's would bind the order to a counterparty nobody chose.
+        // assign-supplier pins it when the operator picks one (mirrors CreateStubAsync).
+        var connectionRevisionId = supplierId is { } sidRev
+            ? await ResolveConnectionRevisionAsync(organisationId, sidRev, ct)
+            : (Guid?)null;
 
         var entity = new PurchaseOrderEntity
         {
             Id            = orderId,
             OrgId         = organisationId,
             SupplierId    = supplierId,
-            Supplier      = supplier,
+            Supplier      = supplier!,
             ConnectionRevisionId = connectionRevisionId,
             PoNumber      = string.IsNullOrWhiteSpace(order.PoNumber)
                                 ? $"PO-{now:yyyyMMddHHmmss}"
@@ -490,7 +512,13 @@ internal sealed class OrderIngestionService
                                 ? DateOnly.FromDateTime(order.OrderDate.Value)
                                 : DateOnly.FromDateTime(now),
             Currency      = order.Currency ?? "EUR",
-            Status        = (anyUnresolved || isInvoice) ? "pending_review" : "ready",
+            // Routing: a supplier-less order is PARKED 'unrouted' — it cannot reach 'ready' because
+            // there is no supplier to resolve item codes against. Mirrors the async parse path's
+            // `if (entity.SupplierId is null) newStatus = Unrouted`. Overrides the review/ready
+            // decision only when no supplier is set.
+            Status        = supplierId is null
+                                ? OrderStatusConstants.Unrouted
+                                : (anyUnresolved || isInvoice) ? "pending_review" : "ready",
             SourceFileKey = null,
             CanonicalJson = canonicalJson,
             CreatedAt     = now,
@@ -619,8 +647,16 @@ internal sealed class OrderIngestionService
             return Result<ParsedFileOutput>.Ok(new ParsedFileOutput(entity, null, "unknown"));
         }
 
+        // ── File-less orders: re-resolve instead of re-parse ──────────────────
+        // A SYNC-ingested order (email-body NLP) arrived as prose, not as a file: it was persisted
+        // whole, lines and all, and has no SourceFileKey. There is nothing to download or parse —
+        // but such an order CAN be parked 'unrouted', and assign-supplier resolves an unrouted order
+        // by flipping it to 'parsing' and re-enqueueing this job. Failing here would leave that
+        // order WEDGED in 'parsing' for good: the job burns its retries and lands red, and
+        // assign-supplier can never be tried again because it only accepts an 'unrouted' order.
+        // Its persisted lines ARE its parsed data, so re-resolve those against the chosen supplier.
         if (string.IsNullOrWhiteSpace(entity.SourceFileKey))
-            return Result<ParsedFileOutput>.Fail("Order has no source file key.");
+            return await ResolvePersistedLinesAsync(entity, organisationId, orderId, ct);
 
         // Download file from R2/local storage
         Stream fileStream;
@@ -1117,6 +1153,152 @@ internal sealed class OrderIngestionService
 
         return Result<ParsedFileOutput>.Ok(
             new ParsedFileOutput(entity, detected?.ColumnHeaders, detected?.Format ?? "unknown"));
+    }
+
+    // ── ResolvePersistedLinesAsync (file-less re-resolve) ──────────────────────
+
+    /// <summary>
+    /// The <see cref="ParseStoredFileAsync"/> branch for an order with no source file. Such an order
+    /// was ingested whole by the SYNC path (<see cref="CreateStubFromParsedOrderAsync"/> — email-body
+    /// NLP), so its persisted lines are its parsed data. Re-resolves those lines against the order's
+    /// CURRENT supplier — the one <c>assign-supplier</c> just set — and advances the status, so an
+    /// order parked <c>unrouted</c> because its prose named no supplier becomes resolvable by the
+    /// same operator flow that resolves a parked attachment.
+    ///
+    /// <para>Deliberately does NOT touch the header: there is no file to re-read it from, and the
+    /// extractor's PO number / buyer / totals are the only copy that exists. Only the line resolution
+    /// and the status change.</para>
+    /// </summary>
+    private async Task<Result<ParsedFileOutput>> ResolvePersistedLinesAsync(
+        PurchaseOrderEntity entity,
+        Guid organisationId,
+        Guid orderId,
+        CancellationToken ct)
+    {
+        // No file AND no lines is a genuine defect upstream, not a file-less ingest — keep it loud
+        // rather than reporting an empty success and advancing an order that holds nothing.
+        if (entity.Lines is null || entity.Lines.Count == 0)
+            return Result<ParsedFileOutput>.Fail("Order has no source file key.");
+
+        var parsedLines = entity.Lines
+            .OrderBy(l => l.LineNumber)
+            .Select(l => new ParsedOrderLine(
+                LineNumber:    l.LineNumber,
+                BuyerItemCode: l.BuyerItemCode,
+                Description:   l.Description,
+                Quantity:      l.Quantity,
+                Unit:          l.Unit,
+                UnitPrice:     l.UnitPrice,
+                LineAmount:    l.LineAmount,
+                TaxRate:       l.TaxRate,
+                TaxAmount:     l.TaxAmount,
+                DeliveryDate:  l.DeliveryDate,
+                ManufacturerPartNumber: l.ManufacturerPartNumber,
+                CustomerPartNumber:     l.CustomerPartNumber,
+                DiscountPercent:        l.DiscountPercent,
+                Unspsc:                 l.Unspsc,
+                Recipient:              l.Recipient,
+                ContractNumber:         l.ContractNumber,
+                NetAmount:              l.NetAmount))
+            .ToList();
+
+        var supplierId   = entity.SupplierId ?? Guid.Empty;
+        var supplierName = entity.Supplier?.Name ?? await GetSupplierNameAsync(organisationId, supplierId, ct);
+        var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
+        var lineEntities = await BuildLineEntitiesAsync(
+            organisationId, supplierId, supplierName, parsedLines, aiCandidates, ct);
+
+        var anyUnresolved     = lineEntities.Any(l => l.NeedsReview);
+        var aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
+        // The document type was classified at ingest and no re-read can change it; an invoice still
+        // forces review so it is never silently transformed and delivered as a purchase order.
+        var isInvoice = NormalizeDocumentType(entity.DocumentType) == "invoice";
+        var newStatus = entity.SupplierId is null
+            ? OrderStatusConstants.Unrouted
+            : (anyUnresolved || isInvoice) ? OrderStatusConstants.PendingReview : OrderStatusConstants.Ready;
+
+        var now = DateTime.UtcNow;
+
+        // Same all-or-nothing shape as the file-backed persist above: the status flip
+        // (ExecuteUpdateAsync) and the line delete-then-insert (ExecuteDeleteAsync + SaveChanges)
+        // each auto-commit, so without one wrapping transaction a crash between them would leave a
+        // resolved status with NO lines — and the status != 'parsing' guard would then block every
+        // retry from backfilling them. Npgsql-only, like the block it mirrors.
+        await using var persistTx = await _db.Database.BeginTransactionAsync(ct);
+
+        var updated = await _db.PurchaseOrders
+            // Atomic claim: only overwrite a row STILL in 'parsing'. The read-guard at the top of
+            // ParseStoredFileAsync is advisory (TOCTOU) — a concurrent write could have moved the
+            // order since. 0 rows ⇒ it left 'parsing' under us ⇒ do NOT clobber it.
+            .Where(o => o.Id == orderId && o.OrgId == organisationId
+                     && o.Status == OrderStatusConstants.Parsing)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(o => o.Status, newStatus)
+                .SetProperty(o => o.UpdatedAt, now), ct);
+
+        if (updated == 0)
+        {
+            _logger.LogWarning(
+                "ResolvePersistedLinesAsync: order {OrderId} left 'parsing' before the claim "
+                + "(concurrent update or deletion) — not overwriting.",
+                orderId);
+            return Result<ParsedFileOutput>.Fail("Order is no longer parsing — a concurrent update took precedence.");
+        }
+
+        // Delete-then-insert, exactly as the file-backed re-parse does: assign-supplier can drive
+        // this path more than once (assign → resolve → …), and appending would DUPLICATE the lines.
+        await _db.PurchaseOrderLines
+            .Where(l => l.OrderId == orderId)
+            .ExecuteDeleteAsync(ct);
+
+        // ExecuteDeleteAsync removes the ROWS but tells the change tracker nothing, so this order's
+        // previously-loaded lines (ParseStoredFileAsync Includes them, and a file-less order always
+        // HAS some — they are its parsed data) are now phantoms tracked against rows that no longer
+        // exist. Reflecting the new set onto entity.Lines below severs them from their required
+        // parent, EF cascades that to Deleted, and the NEXT SaveChanges — the passport emit — issues
+        // a DELETE matching 0 rows and throws DbUpdateConcurrencyException. That fires AFTER this
+        // method's own commit, so the order would be correctly resolved in the database yet reported
+        // as a failed parse, and the Hangfire retry would then be refused by the status guard.
+        // Detach them the moment their rows go.
+        foreach (var phantom in _db.ChangeTracker.Entries<PurchaseOrderLineEntity>()
+                     .Where(e => e.State != EntityState.Added && e.Entity.OrderId == orderId)
+                     .ToList())
+        {
+            phantom.State = EntityState.Detached;
+        }
+
+        foreach (var line in lineEntities) line.OrderId = orderId;
+        _db.PurchaseOrderLines.AddRange(lineEntities);
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Parsed", new
+        {
+            lineCount       = lineEntities.Count,
+            unresolvedCount = lineEntities.Count(l => l.NeedsReview),
+            aiSuggestionCount,
+            newStatus,
+            documentType    = NormalizeDocumentType(entity.DocumentType),
+            classifiedAsInvoice = isInvoice,
+            note = "Re-resolved from the persisted lines — this order has no source file.",
+        }));
+
+        await _db.SaveChangesAsync(ct);
+        await persistTx.CommitAsync(ct);
+
+        entity.Status    = newStatus;
+        entity.UpdatedAt = now;
+        entity.Lines     = lineEntities;
+
+        await _shared.EmitPassportEventAsync(organisationId, orderId, "Parse", "Parsed",
+            payload: new { lineCount = lineEntities.Count, newStatus }, ct: ct);
+        await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
+
+        _logger.LogInformation(
+            "Order {OrderId} re-resolved from its persisted lines (no source file): {LineCount} lines, "
+            + "{Unresolved} unresolved, status={Status}",
+            orderId, lineEntities.Count, lineEntities.Count(l => l.NeedsReview), newStatus);
+
+        // No column headers and no detected format: prose has neither. The schema-fingerprint
+        // recorder treats a null header list as "nothing to fingerprint" and skips.
+        return Result<ParsedFileOutput>.Ok(new ParsedFileOutput(entity, null, "unknown"));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
