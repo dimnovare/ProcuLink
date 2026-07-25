@@ -27,6 +27,23 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   **Founder-org recipe is TWO calls, in order:** extend the trial via `.../limits` first (while
   still `read_only` the arbiter early-returns, so nothing moves), *then* this endpoint —
   otherwise the lapsed Pilot window re-expires it immediately, which the response says out loud.
+## Snapshot (2026-07-24, late) — Postmark IP drift is now DETECTED
+
+- **The Worker's hardcoded Postmark IP allowlist is watched — BE PR #58 (open).** #57
+  (now merged, `52d9961`) made drift *survivable* (503 → ~10.5 h of retries → `Failed`,
+  re-fireable 45 days); it did not make anyone *notice*. `.github/workflows/postmark-ip-drift.yml`
+  runs `check-postmark-ips.mjs` weekly (Mon 06:00 UTC + on demand), re-reading Postmark's
+  support article and failing loudly on any difference from `POSTMARK_WEBHOOK_SOURCES`.
+  Verified rather than assumed: Postmark publishes **no** machine-readable IP list (no JSON/
+  API/txt), and the article mixes ~48 SMTP/MX/DKIM addresses with the 4 webhook ones — so the
+  extraction is scoped to its `<h2 id="webhooks">` anchor, and every "cannot tell" outcome
+  (fetch error, renamed heading, non-IP bullet) exits non-zero rather than reporting no drift.
+  A Worker-side 503 counter was rejected: no sink exists (no KV/DO/Analytics Engine binding)
+  and it could only fire after mail was already refused. Proven both ways — green against the
+  live article, and red on a simulated drift. 12 new tests (20 in the folder), now CI-run on
+  PRs touching it. **This PR needs no redeploy** (worker.js changes are comments only); the
+  #57 hand-redeploy is still outstanding. Found in passing: `uptime.yml` cites
+  `docs/deployment/monitoring-runbook.md` twice — that file does not exist.
 
 ## Snapshot (2026-07-24, late) — BE-6 fixed
 
@@ -60,7 +77,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   OPS-2 creds, and — once the Worker 403→503 PR merges — a **hand-redeploy of the CF
   inbound-verify Worker** (nothing else ships it; see that entry below).
 - **2026-07-24: the CF inbound-verify Worker no longer drops mail on IP drift — BE PR #57
-  (open). ⚠️ NEEDS A HAND-REDEPLOY BY THE FOUNDER.** `worker.js`'s source-IP gate answered
+  (MERGED, `52d9961`). ⚠️ STILL NEEDS A HAND-REDEPLOY BY THE FOUNDER.** `worker.js`'s source-IP gate answered
   **403**, the one status that makes Postmark stop retrying on the first attempt *and* never
   file the message as `Failed` — so a purchase order refused there was gone by both routes,
   automatic and manual. The allowlist is hardcoded and Postmark has changed its published
