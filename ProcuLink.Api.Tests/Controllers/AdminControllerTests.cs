@@ -455,6 +455,286 @@ public class AdminControllerTests
             .Should().NotBeNull("the admin limits endpoint must exist on the gated controller");
     }
 
+    // ── manual account-status transition ──────────────────────────────────
+    //
+    // The 2026-07-24 gap: an org frozen by a Stripe cancel (account_status=read_only,
+    // plan reverted to Pilot, subscription id nulled) had NO product surface to come back
+    // — only a raw production UPDATE. read_only -> trialing is the ONE permitted transition;
+    // everything else is refused because another writer owns it (see the endpoint's doc
+    // comment and docs/superpowers/specs/2026-07-24-admin-account-status-endpoint-design.md).
+
+    /// <summary>A frozen-Pilot org exactly as the cancel paths leave it:
+    /// read_only + Pilot + no live subscription id, still inside its trial window.</summary>
+    private static Organisation FrozenPilotOrg(string name = "Frozen Co")
+    {
+        var org = Org(name, PlanConstants.Pilot, AccountStatusConstants.ReadOnly);
+        org.StripeCustomerId = "cus_live_kept";     // both cancel paths KEEP the customer id
+        org.StripeSubscriptionId = null;            // ...and null the subscription id
+        org.StripeSubscriptionStatus = "canceled";
+        return org;
+    }
+
+    [Fact]
+    public async Task SetOrganisationAccountStatus_ReadOnlyToTrialing_UnfreezesTheOrg()
+    {
+        var db = MakeDb();
+        var org = FrozenPilotOrg();                 // TrialStartedAt = now-10d ⇒ 4 days left
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest(AccountStatusConstants.Trialing), CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<OrgAccountStatusResponse>().Subject;
+        dto.PreviousAccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
+        dto.RequestedAccountStatus.Should().Be(AccountStatusConstants.Trialing);
+        dto.AccountStatus.Should().Be(AccountStatusConstants.Trialing);
+        dto.RevertedByTrialWindow.Should().BeFalse("the org still has 4 days of Pilot window left");
+
+        var saved = await db.Organisations.FindAsync(org.Id);
+        saved!.AccountStatus.Should().Be(AccountStatusConstants.Trialing);
+    }
+
+    [Fact]
+    public async Task SetOrganisationAccountStatus_ExpiredTrialWindow_ReportsTheArbitersVerdict_NotALie()
+    {
+        // The endpoint does not own a copy of the expiry predicate — it hands the decision
+        // back to MarkPilotExpiredIfNeededAsync (the canonical arbiter), which immediately
+        // re-expires an org whose Pilot window has elapsed. The response must report what
+        // the DB actually holds, and point the operator at the endpoint that really fixes it.
+        var db = MakeDb();
+        var org = FrozenPilotOrg("Long Lapsed Co");
+        org.TrialStartedAt = DateTime.UtcNow.AddDays(-400);   // window long gone
+        org.TrialEndsAt = DateTime.UtcNow.AddDays(-386);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest(AccountStatusConstants.Trialing), CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<OrgAccountStatusResponse>().Subject;
+        dto.RequestedAccountStatus.Should().Be(AccountStatusConstants.Trialing);
+        dto.AccountStatus.Should().Be(AccountStatusConstants.TrialExpired, "the trial arbiter re-expired it");
+        dto.RevertedByTrialWindow.Should().BeTrue();
+        dto.Note.Should().Contain("limits", "the note must name the endpoint that extends the trial");
+
+        var saved = await db.Organisations.FindAsync(org.Id);
+        saved!.AccountStatus.Should().Be(AccountStatusConstants.TrialExpired,
+            "the response must never claim a status the database does not hold");
+    }
+
+    [Theory]
+    [InlineData(AccountStatusConstants.Active)]        // Stripe-owned; would be a lie / free paid features
+    [InlineData(AccountStatusConstants.PastDue)]       // Stripe-derived
+    [InlineData(AccountStatusConstants.Cancelled)]     // Stripe-derived
+    [InlineData(AccountStatusConstants.ReadOnly)]      // no proven need for a manual freeze
+    [InlineData(AccountStatusConstants.TrialExpired)]  // the trial arbiter owns this
+    public async Task SetOrganisationAccountStatus_TargetOutsideThePermittedSet_Returns400(string target)
+    {
+        var db = MakeDb();
+        var org = FrozenPilotOrg();
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest(target), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        var saved = await db.Organisations.FindAsync(org.Id);
+        saved!.AccountStatus.Should().Be(AccountStatusConstants.ReadOnly, "a refused transition must not write");
+    }
+
+    [Fact]
+    public async Task SetOrganisationAccountStatus_UnknownStatusString_Returns400()
+    {
+        var db = MakeDb();
+        var org = FrozenPilotOrg();
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest("unfrozen"), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        var saved = await db.Organisations.FindAsync(org.Id);
+        saved!.AccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
+    }
+
+    [Theory]
+    [InlineData(AccountStatusConstants.Active)]
+    [InlineData(AccountStatusConstants.Trialing)]
+    [InlineData(AccountStatusConstants.PastDue)]
+    [InlineData(AccountStatusConstants.TrialExpired)]
+    public async Task SetOrganisationAccountStatus_SourceOutsideThePermittedSet_Returns400(string from)
+    {
+        // Only read_only is a permitted SOURCE. trial_expired in particular is already handled
+        // automatically by the trial arbiter once an admin extends the trial via .../limits.
+        var db = MakeDb();
+        var org = FrozenPilotOrg();
+        org.AccountStatus = from;
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest(AccountStatusConstants.Trialing), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        var saved = await db.Organisations.FindAsync(org.Id);
+        saved!.AccountStatus.Should().Be(from);
+    }
+
+    [Fact]
+    public async Task SetOrganisationAccountStatus_OrgWithLiveSubscription_Returns400_ReconcilerOwnsIt()
+    {
+        // With a subscription id present the org is IN the reconciliation sweep
+        // (StripeSubscriptionReconciliationService.ReconcileOrgAsync only early-returns when
+        // the id is blank), so any status we wrote here would be re-derived from Stripe on the
+        // next run. Refuse rather than write something that silently reverts.
+        var db = MakeDb();
+        var org = FrozenPilotOrg("Paused Co");
+        org.StripeSubscriptionId = "sub_live_123";
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest(AccountStatusConstants.Trialing), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        var saved = await db.Organisations.FindAsync(org.Id);
+        saved!.AccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
+    }
+
+    [Fact]
+    public async Task SetOrganisationAccountStatus_NonPilotPlan_Returns400()
+    {
+        // trialing on a paid plan is not a state any writer produces.
+        var db = MakeDb();
+        var org = FrozenPilotOrg("Growth Frozen");
+        org.Plan = PlanConstants.Growth;
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest(AccountStatusConstants.Trialing), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        var saved = await db.Organisations.FindAsync(org.Id);
+        saved!.AccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
+    }
+
+    [Fact]
+    public async Task SetOrganisationAccountStatus_MissingBodyOrStatus_Returns400()
+    {
+        var db = MakeDb();
+        var org = FrozenPilotOrg();
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+
+        (await ctrl.SetOrganisationAccountStatus(org.Id, null!, CancellationToken.None))
+            .Should().BeOfType<BadRequestObjectResult>();
+        (await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest(AccountStatus: null), CancellationToken.None))
+            .Should().BeOfType<BadRequestObjectResult>();
+        (await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest("   "), CancellationToken.None))
+            .Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task SetOrganisationAccountStatus_UnknownOrg_Returns404()
+    {
+        var ctrl = Build(MakeDb());
+        var result = await ctrl.SetOrganisationAccountStatus(
+            Guid.NewGuid(), new SetOrgAccountStatusRequest(AccountStatusConstants.Trialing), CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Fact]
+    public async Task SetOrganisationAccountStatus_IsCaseInsensitiveOnTheTargetStatus()
+    {
+        var db = MakeDb();
+        var org = FrozenPilotOrg();
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest(" Trialing "), CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var saved = await db.Organisations.FindAsync(org.Id);
+        saved!.AccountStatus.Should().Be(AccountStatusConstants.Trialing, "account_status is persisted lowercase");
+    }
+
+    [Fact]
+    public async Task SetOrganisationAccountStatus_WritesDurableAuditEvent_WithWhoWhenFromTo()
+    {
+        var db = MakeDb();
+        var org = FrozenPilotOrg();
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = WithAdmin(Build(db), "user_admin_1", "founder@proculink.eu");
+        var result = await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest(AccountStatusConstants.Trialing), CancellationToken.None);
+        result.Should().BeOfType<OkObjectResult>();
+
+        var audit = await db.AuditEvents.SingleAsync(e => e.Action == "admin.org.account_status_changed");
+        audit.OrgId.Should().Be(org.Id);
+        audit.EntityId.Should().Be(org.Id);
+        audit.EntityType.Should().Be("Organisation");
+        audit.CreatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+
+        var payload = audit.Payload!.RootElement;
+        payload.GetProperty("actor").GetProperty("sub").GetString().Should().Be("user_admin_1");
+        payload.GetProperty("actor").GetProperty("email").GetString().Should().Be("founder@proculink.eu");
+        var detail = payload.GetProperty("detail");
+        detail.GetProperty("from").GetString().Should().Be(AccountStatusConstants.ReadOnly);
+        detail.GetProperty("to").GetString().Should().Be(AccountStatusConstants.Trialing);
+        detail.GetProperty("requested").GetString().Should().Be(AccountStatusConstants.Trialing);
+    }
+
+    [Fact]
+    public async Task SetOrganisationAccountStatus_RefusedTransition_WritesNoAuditEvent()
+    {
+        var db = MakeDb();
+        var org = FrozenPilotOrg();
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var ctrl = WithAdmin(Build(db), "user_admin_1", "founder@proculink.eu");
+        var result = await ctrl.SetOrganisationAccountStatus(
+            org.Id, new SetOrgAccountStatusRequest(AccountStatusConstants.Active), CancellationToken.None);
+        result.Should().BeOfType<BadRequestObjectResult>();
+
+        (await db.AuditEvents.CountAsync(e => e.Action == "admin.org.account_status_changed"))
+            .Should().Be(0, "a refused transition changed nothing — it must not fabricate an audit row");
+    }
+
+    [Fact]
+    public void SetOrganisationAccountStatus_IsOnTheAdminOnlyGatedController()
+    {
+        typeof(AdminController)
+            .GetCustomAttributes(typeof(ProcuLink.Api.Auth.AdminOnlyAttribute), inherit: true)
+            .Should().NotBeEmpty();
+
+        typeof(AdminController)
+            .GetMethod(nameof(AdminController.SetOrganisationAccountStatus))
+            .Should().NotBeNull("the account-status endpoint must exist on the gated controller");
+    }
+
     // ── bulk erase ─────────────────────────────────────────────────────────
 
     [Fact]

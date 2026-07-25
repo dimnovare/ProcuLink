@@ -396,6 +396,152 @@ public sealed class AdminController : ControllerBase
             EffectiveTrialEndsAt:   effectiveTrialEnd));
     }
 
+    // ── POST /api/admin/organisations/{id}/account-status ─────────────────
+    /// <summary>
+    /// Manual account-status transition: the product surface for un-freezing an organisation
+    /// whose Stripe subscription was cancelled. Before this existed, an org left at
+    /// <c>read_only</c> by a cancel could only be recovered with a raw production UPDATE.
+    /// Cross-tenant by design (org targeted by route id) and gated by the class-level
+    /// <see cref="AdminOnlyAttribute"/>, same as <see cref="SetOrganisationLimits"/>.
+    ///
+    /// <para><b>Exactly one transition is permitted: <c>read_only</c> → <c>trialing</c></b>, and
+    /// only for a Pilot-plan org with no live Stripe subscription. Every other account status is
+    /// OWNED by another writer, and a manual write would be silently re-derived:</para>
+    /// <list type="bullet">
+    /// <item><c>active</c> / <c>past_due</c> / <c>cancelled</c> come from Stripe, via the billing
+    /// webhook and <see cref="StripeSubscriptionReconciliationService"/> (both through
+    /// <see cref="StripeBillingMapping.MapStatusToAccountStatus"/>). Setting <c>active</c> by hand
+    /// either gets overwritten on the next reconcile or grants paid entitlements with no
+    /// subscription behind them.</item>
+    /// <item><c>trial_expired</c> ⇄ <c>trialing</c> is owned by the Pilot trial-window arbiter,
+    /// <c>IBillingService.MarkPilotExpiredIfNeededAsync</c>, which ALREADY reactivates an expired
+    /// Pilot on its own once an admin extends the window via <c>.../limits</c>.</item>
+    /// <item>A manual freeze (<c>→ read_only</c>) has no proven operational need; cancel in Stripe
+    /// instead, so the billing record and the account status stay in agreement.</item>
+    /// </list>
+    ///
+    /// <para><b>Why the no-live-subscription precondition:</b> the reconciliation sweep skips an
+    /// org whose <c>StripeSubscriptionId</c> is blank (<c>ReconcileOrgAsync</c>'s early return), so
+    /// for a cancelled org this write survives. With a subscription id present the sweep re-derives
+    /// the status from Stripe, so we refuse rather than write something that quietly reverts —
+    /// a paused subscription is un-paused in Stripe, not papered over here.</para>
+    ///
+    /// <para><b>Why this cannot lie:</b> the endpoint owns no copy of the trial-expiry rule. After
+    /// writing <c>trialing</c> it calls the canonical arbiter, which immediately re-expires the org
+    /// if its Pilot window has elapsed or its order cap is spent. The response reports the
+    /// EFFECTIVE status, flags <c>revertedByTrialWindow</c>, and names the endpoint that actually
+    /// fixes it. So the returned status is always the one the database holds.</para>
+    /// </summary>
+    [HttpPost("organisations/{id:guid}/account-status")]
+    [ProducesResponseType(typeof(OrgAccountStatusResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetOrganisationAccountStatus(
+        Guid id,
+        [FromBody] SetOrgAccountStatusRequest request,
+        CancellationToken ct)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.AccountStatus))
+            return BadRequest(new { error = "accountStatus is required." });
+
+        // account_status is persisted lowercase — normalise before comparing or writing.
+        var requested = request.AccountStatus.Trim().ToLowerInvariant();
+
+        // Cross-tenant by design — the org is targeted by route id (admin surface).
+        var org = await _db.Organisations.FirstOrDefaultAsync(o => o.Id == id, ct);
+        if (org is null)
+            return NotFound(new { error = $"Organisation {id} not found." });
+
+        if (requested != AccountStatusConstants.Trialing)
+            return BadRequest(new
+            {
+                error = $"'{request.AccountStatus}' cannot be set by hand. The only manual transition is "
+                      + "'read_only' to 'trialing' (un-freezing an organisation whose subscription was "
+                      + "cancelled). Every other account status is derived from Stripe or from the Pilot "
+                      + "trial window, and a manual value would be overwritten by the next reconcile.",
+            });
+
+        if (!string.Equals(org.AccountStatus, AccountStatusConstants.ReadOnly, StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new
+            {
+                error = $"This organisation is '{org.AccountStatus}', and only a 'read_only' organisation "
+                      + "can be moved to 'trialing'. An expired trial does not need this endpoint: extend "
+                      + $"the trial with POST /api/admin/organisations/{org.Id}/limits and it reactivates "
+                      + "on its own.",
+            });
+
+        if (!string.IsNullOrWhiteSpace(org.StripeSubscriptionId))
+            return BadRequest(new
+            {
+                error = "This organisation still has a live Stripe subscription, so its account status is "
+                      + "maintained from Stripe — anything set here would be overwritten by the next "
+                      + "reconciliation. Fix the subscription in Stripe instead (resume it, or let the "
+                      + "cancellation complete, which frees this organisation for a manual reset).",
+            });
+
+        if (!string.Equals(org.Plan, PlanConstants.Pilot, StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new
+            {
+                error = $"'trialing' is a Pilot state, but this organisation is on the '{org.Plan}' plan. "
+                      + "A paid plan's account status comes from its Stripe subscription.",
+            });
+
+        var previous = org.AccountStatus;
+        org.AccountStatus = AccountStatusConstants.Trialing;
+        await _db.SaveChangesAsync(ct);
+
+        // Hand the final say straight back to the canonical trial-window arbiter rather than
+        // re-implementing its predicate here (a fourth copy of that rule is exactly how status
+        // drift gets shipped). It re-expires the org immediately when the Pilot window has already
+        // elapsed or the order cap is spent — and it can only see the org now that it is no longer
+        // read_only, which is the early return that made the frozen state unrecoverable.
+        await _billing.MarkPilotExpiredIfNeededAsync(org.Id, ct);
+
+        // Read back what the database ACTUALLY holds (no-tracking, so this is the stored value and
+        // not the change tracker's opinion) — the response must never claim more than that.
+        var refreshed = await _db.Organisations.AsNoTracking().FirstAsync(o => o.Id == org.Id, ct);
+        var effective = refreshed.AccountStatus;
+        var reverted = !string.Equals(effective, AccountStatusConstants.Trialing, StringComparison.OrdinalIgnoreCase);
+        var effectiveTrialEnd = refreshed.TrialEndsAtOverride
+            ?? refreshed.TrialEndsAt
+            ?? refreshed.TrialStartedAt.Add(PlanConstants.PilotDuration);
+
+        var note = reverted
+            ? "The organisation was un-frozen, but its Pilot window has already ended (or its order "
+              + $"allowance is used up), so the trial check returned it to '{effective}' straight away. "
+              + $"Give it more time or headroom with POST /api/admin/organisations/{org.Id}/limits, then "
+              + "run this again."
+            : null;
+
+        _logger.LogInformation(
+            "Admin set account status for org {OrgId}: {From} -> requested {Requested}, effective {Effective}.",
+            org.Id, previous, requested, effective);
+
+        // Durable accountability trail (GDPR Art.5(2)) — who/when/from/to for a privileged change
+        // to a tenant's ability to process orders. Records the EFFECTIVE outcome, not the wish.
+        await WriteAdminAuditAsync(org.Id, org.Id, "Organisation", "admin.org.account_status_changed",
+            new
+            {
+                from = previous,
+                requested,
+                to = effective,
+                revertedByTrialWindow = reverted,
+                plan = refreshed.Plan,
+            },
+            ct);
+
+        return Ok(new OrgAccountStatusResponse(
+            Id:                     refreshed.Id,
+            Name:                   refreshed.Name,
+            Plan:                   refreshed.Plan,
+            PreviousAccountStatus:  previous,
+            RequestedAccountStatus: requested,
+            AccountStatus:          effective,
+            RevertedByTrialWindow:  reverted,
+            EffectiveTrialEndsAt:   effectiveTrialEnd,
+            Note:                   note));
+    }
+
     // ── POST /api/admin/organisations/{id}/retention ──────────────────────
     /// <summary>
     /// Sets (or clears) the per-org BLOB-retention window. NULL/cleared = retention

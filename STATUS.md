@@ -11,6 +11,22 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-25) — frozen orgs are recoverable from the product
+
+- **`POST /api/admin/organisations/{id}/account-status` — BE PR #59 (open, not merged).**
+  Closes the gap the founder org exposed on 2026-07-24: an org frozen by a Stripe cancel
+  (`account_status=read_only`) could only be lifted with a raw production UPDATE. `[AdminOnly]`,
+  cross-tenant by route id, same shape as `SetOrganisationLimits`. **Exactly one transition is
+  permitted — `read_only` → `trialing`, and only on a Pilot org with no live
+  `StripeSubscriptionId`** (the reconciliation sweep skips a blank subscription id, so nothing
+  fights the write; with a live id it would be re-derived from Stripe, so the endpoint refuses
+  rather than lie). Every other status stays owned by its writer. The endpoint keeps NO copy of
+  the trial-expiry rule: it writes `trialing`, then calls `MarkPilotExpiredIfNeededAsync` and
+  returns whatever that leaves behind, so the response can never claim a status the DB does not
+  hold. Audit row `admin.org.account_status_changed` (who/when/from/to + effective).
+  **Founder-org recipe is TWO calls, in order:** extend the trial via `.../limits` first (while
+  still `read_only` the arbiter early-returns, so nothing moves), *then* this endpoint —
+  otherwise the lapsed Pilot window re-expires it immediately, which the response says out loud.
 ## Snapshot (2026-07-24, late) — Postmark IP drift is now DETECTED
 
 - **The Worker's hardcoded Postmark IP allowlist is watched — BE PR #58 (open).** #57

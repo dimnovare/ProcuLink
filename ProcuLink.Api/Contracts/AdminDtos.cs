@@ -90,6 +90,35 @@ public sealed record OrgLimitsResponse(
     DateTime? EffectiveTrialEndsAt);
 
 /// <summary>
+/// Request body for POST /api/admin/organisations/{id}/account-status — the manual
+/// account-status transition. Exactly ONE transition is permitted (<c>read_only</c> →
+/// <c>trialing</c>, on a Pilot org with no live Stripe subscription); anything else is a
+/// 400. See <c>AdminController.SetOrganisationAccountStatus</c> for why.
+/// </summary>
+public sealed record SetOrgAccountStatusRequest(string? AccountStatus = null);
+
+/// <summary>
+/// Response for POST /api/admin/organisations/{id}/account-status.
+///
+/// <para><see cref="AccountStatus"/> is the EFFECTIVE status after the canonical trial-window
+/// arbiter (<c>IBillingService.MarkPilotExpiredIfNeededAsync</c>) has had its say — it can
+/// differ from <see cref="RequestedAccountStatus"/> when the org's Pilot window has already
+/// elapsed or its order cap is spent, in which case <see cref="RevertedByTrialWindow"/> is
+/// true and <see cref="Note"/> explains what to do instead. The endpoint never reports a
+/// status the database does not actually hold.</para>
+/// </summary>
+public sealed record OrgAccountStatusResponse(
+    Guid Id,
+    string Name,
+    string Plan,
+    string PreviousAccountStatus,
+    string RequestedAccountStatus,
+    string AccountStatus,
+    bool RevertedByTrialWindow,
+    DateTime? EffectiveTrialEndsAt,
+    string? Note);
+
+/// <summary>
 /// Request body for POST /api/admin/organisations/{id}/retention (admin-only — org admins
 /// cannot self-serve retention yet). Set <see cref="RetentionDays"/> (≥ 1) to enable the
 /// blob-retention sweep for the org, or <see cref="Clear"/> = true to disable it (NULL —
