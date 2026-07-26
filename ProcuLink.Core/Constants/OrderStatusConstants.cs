@@ -59,7 +59,20 @@ public static class OrderStatusConstants
     /// <c>SftpIngressService</c>, <c>S3IngressService</c> and <c>EmailPollOrgJob</c>, plus the
     /// PUSH channel <c>InboundEmailRouter</c> (the Postmark inbound webhook — added 2026-07-24;
     /// it previously answered 422 and dropped the mail). Each imports such files via
-    /// <c>IOrderService.CreateUnroutedStubAsync</c> rather than dropping them. Corroborating live
+    /// <c>IOrderService.CreateUnroutedStubAsync</c> rather than dropping them.
+    /// <para>
+    /// Reachability caveat, now closed — cite this before trusting the paragraph above for a
+    /// date before 2026-07-26. Between 2026-07-24 and 2026-07-26 <c>InboundEmailRouter</c> was
+    /// listed as a producer but could not actually reach this status on any org owning at least
+    /// one supplier: its resolver fell back to the org's OLDEST ACTIVE SUPPLIER, so instead of
+    /// parking, mail was attributed to a counterparty nobody chose. Measured on production
+    /// (finding F1 of <c>docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md</c>);
+    /// since upload and REST ingress both reject a supplier-less request outright and the pull
+    /// channels were not configured on production, the practical effect was that NOTHING reached
+    /// this status in production. The fallback has been deleted, so the four-producer list above
+    /// is true for the push channel as well as the pull ones.
+    /// </para>
+    /// Corroborating live
     /// consumers: <c>OrdersController</c>'s assign-supplier endpoint is gated on this status,
     /// <c>OpsHealthService</c> reports it as <c>PendingRouting</c>, and <c>OrderExceptionService</c>
     /// opens an <c>unrouted_order</c> exception for it with precedence over unresolved lines.
