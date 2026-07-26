@@ -249,7 +249,7 @@ public class SupplierSuggestionServiceTests
 
         var result = await NewService(db).SuggestAsync(Input(headers: Headers), default);
 
-        Assert.Equal(result.Select(r => r.Score).Distinct().Count(), 1);
+        Assert.Equal(1, result.Select(r => r.Score).Distinct().Count());
     }
 
     [Fact]
