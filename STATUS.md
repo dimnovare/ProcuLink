@@ -11,6 +11,21 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-26) — setup docs: step-by-step guide framework (frontend PR #36, OPEN)
+
+- **Frontend `feat/guide-framework-and-exemplars` → [PR #36](https://github.com/dimnovare/project-proculink/pull/36), not merged.** Phase 1 = framework +
+  two exemplar guides so the format can be judged before the other ~30 articles migrate:
+  `/help/guides/receive-orders-by-email` (client) and `/admin/guides/onboard-a-new-client`
+  (admin, server-side allowlist gate — 404 not 403, prose never reaches a non-admin bundle).
+  Guides stay plain `.mdx`; `bun run guides:capture` writes real screenshots to
+  `public/guides/` and regenerates its manifest from disk. Playwright launches fine on the
+  founder machine, so the shipped shots are real, not placeholders.
+- **Two backend follow-ups the runbook had to document around.** (a) The catalog-sync 403 code
+  is `catalog_sync_requires_integration` but the gate is `BillingFeature.SftpIngestion` =
+  **Growth** (`PlanConstants.cs:286`) — the code name is misleading. (b) `CLAUDE.md` §11.5 has
+  drifted from `PlanConstants.cs`: Integration is 1,500 orders (not 1,000) and **Distributor**
+  is missing from the documented ladder.
+
 ## Snapshot (2026-07-26) — OPS-3: routing matrix proven per channel; two P1s found
 
 - **`docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md`.** All three PUSH
