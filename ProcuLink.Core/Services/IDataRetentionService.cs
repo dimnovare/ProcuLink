@@ -31,10 +31,17 @@ public sealed record DataRetentionResult(
     int PassportEvents,
     int IdempotencyKeys,
     int DeliveryAttempts,
-    int OrderExceptions = 0)
+    int OrderExceptions = 0,
+    int InboundSenderDomainsScrubbed = 0)
 {
     public static readonly DataRetentionResult Empty = new(0, 0, 0, 0);
 
-    /// <summary>Total rows deleted across every pruned table.</summary>
-    public int Total => AuditEvents + PassportEvents + IdempotencyKeys + DeliveryAttempts + OrderExceptions;
+    /// <summary>
+    /// Total rows AFFECTED across every table the sweep touched. Includes the sender-domain
+    /// scrub, which is an update rather than a delete — it is still a row the retention policy
+    /// acted on, and leaving it out of the total would under-report what the sweep did.
+    /// </summary>
+    public int Total =>
+        AuditEvents + PassportEvents + IdempotencyKeys + DeliveryAttempts + OrderExceptions
+        + InboundSenderDomainsScrubbed;
 }

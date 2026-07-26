@@ -1081,6 +1081,84 @@ public class InboundEmailRouterTests
     /// and returns a successful stub. Other methods throw — the router must
     /// not touch them.
     /// </summary>
+    // ── Sender-domain capture (founder ruling D2) ────────────────────────────
+
+    [Theory]
+    [InlineData("redacted@example.invalid", "acme.com")]
+    [InlineData("redacted@example.invalid", "acme.com")]
+    [InlineData("\"Acme Orders\" <redacted@example.invalid>", "example.invalid")]
+    [InlineData("redacted@example.invalid", "acme.com")]
+    public void ExtractSenderDomain_keepsOnlyTheDomain(string from, string expected)
+    {
+        // The local part is the half that identifies a PERSON. It must not survive this call —
+        // the full address keeps its existing SHA-256-only treatment and nothing else.
+        Assert.Equal(expected, InboundEmailRouter.ExtractSenderDomain(from));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-an-address")]
+    [InlineData("someone@localhost")]   // no dot: a host name, never a shared match key
+    [InlineData("someone@")]
+    public void ExtractSenderDomain_returnsNull_forAnythingThatIsNotClearlyADomain(string? from)
+    {
+        Assert.Null(InboundEmailRouter.ExtractSenderDomain(from));
+    }
+
+    [Fact]
+    public async Task RoutedAttachment_passesTheSenderDomainToOrderCreation()
+    {
+        // Captured on ROUTED orders too, and that is the point: an order whose supplier is already
+        // known is exactly what teaches the domain→supplier history the next UNROUTED one is
+        // scored against. Capture only the unrouted ones and the signal never accumulates.
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "redacted@example.invalid",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO #12345",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,date\r\n001,2026-05-28")),
+            });
+
+        var result = await router.RouteAsync(payload, default);
+
+        result.Success.Should().BeTrue();
+        orders.SenderDomains.Should().ContainSingle().Which.Should().Be("acme.com");
+    }
+
+    [Fact]
+    public async Task Attachment_fromAnUnparseableSenderAddress_passesNoDomain()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
+
+        var payload = new InboundEmailPayload(
+            FromEmail: "not-an-address",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO #12345",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,date\r\n001,2026-05-28")),
+            });
+
+        await router.RouteAsync(payload, default);
+
+        orders.SenderDomains.Should().ContainSingle().Which.Should().BeNull();
+    }
+
     private sealed class FakeOrderService : IOrderService
     {
         /// <summary>Every stub creation, routed and unrouted alike (unrouted records Guid.Empty).</summary>
@@ -1091,11 +1169,14 @@ public class InboundEmailRouterTests
         public List<(Guid OrgId, string FileName, string ContentType, long Size)> UnroutedCalledWith { get; } = new();
         public List<(Guid OrgId, Guid SupplierId, ExtractedOrder Order, string Source)> ParsedOrderCalls { get; } = new();
         public List<(Guid OrgId, ExtractedOrder Order, string Source)> UnroutedParsedOrderCalls { get; } = new();
+        /// <summary>Sender domain handed to EVERY creation path, in call order. Null entries are real.</summary>
+        public List<string?> SenderDomains { get; } = new();
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
             Guid organisationId, Guid supplierId, Stream fileStream,
-            string filename, string contentType, CancellationToken ct)
+            string filename, string contentType, CancellationToken ct, string? inboundSenderDomain = null)
         {
+            SenderDomains.Add(inboundSenderDomain);
             var stub = Record(organisationId, supplierId, fileStream, filename, contentType, out var size);
             RoutedCalledWith.Add((organisationId, supplierId, filename, contentType, size));
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
@@ -1104,8 +1185,10 @@ public class InboundEmailRouterTests
         // Unrouted hold path records a Guid.Empty supplier in CalledWith and its own
         // UnroutedCalledWith entry, so a test can assert WHICH creation path ran.
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
-            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct,
+            string? inboundSenderDomain = null)
         {
+            SenderDomains.Add(inboundSenderDomain);
             var stub = Record(organisationId, Guid.Empty, fileStream, filename, contentType, out var size);
             stub.SupplierId = null;
             UnroutedCalledWith.Add((organisationId, filename, contentType, size));
@@ -1135,8 +1218,10 @@ public class InboundEmailRouterTests
         }
 
         public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
-            Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
+            Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct,
+            string? inboundSenderDomain = null)
         {
+            SenderDomains.Add(inboundSenderDomain);
             ParsedOrderCalls.Add((organisationId, supplierId, order, source));
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(
                 ParsedStub(organisationId, supplierId, "pending_review")));
@@ -1145,8 +1230,10 @@ public class InboundEmailRouterTests
         // Supplier-less sibling of the above — the body-NLP path takes this when the org has
         // no resolvable supplier. Recorded separately so a test can assert WHICH path ran.
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(
-            Guid organisationId, ExtractedOrder order, string source, CancellationToken ct)
+            Guid organisationId, ExtractedOrder order, string source, CancellationToken ct,
+            string? inboundSenderDomain = null)
         {
+            SenderDomains.Add(inboundSenderDomain);
             UnroutedParsedOrderCalls.Add((organisationId, order, source));
             return Task.FromResult(Result<PurchaseOrderEntity>.Ok(
                 ParsedStub(organisationId, supplierId: null, "unrouted")));

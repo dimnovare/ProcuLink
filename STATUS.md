@@ -11,6 +11,42 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-26) — supplier auto-detect backend (BE-5 P1+P2+P3)
+
+- **An order that arrives without a supplier now comes with ranked candidates and a reason.**
+  Spec + founder rulings: `docs/superpowers/specs/2026-07-24-supplier-auto-detect-from-document-design.md`
+  (D1 identity columns YES · D2 sender DOMAIN only, 12-month retention · D3 suggest-only, never
+  auto-assign · D4 shared layouts suggest all bound suppliers · D5 upload unchanged). New
+  `order_supplier_suggestions` table, `Supplier` identity columns (VAT / registration number /
+  EDI-GLN / primary domain, live in the supplier API contract — the profile form is a separate FE
+  chip), and one additive migration `AddSupplierAutoDetect`.
+- **Six deterministic signals, no LLM, no spend:** identity (0.45), sender domain (0.35), layout
+  fingerprint (0.30), catalog overlap (≤0.25), name (0.20), sender-domain history (≤0.20), summed
+  and capped at the existing 0.99 ceiling. A SHARED layout splits its weight evenly across every
+  bound supplier, so it offers all of them and can never break a tie between them. Candidates below
+  0.10 are dropped rather than shown as noise. Weights are a documented prior, not a measurement —
+  the decision rows are what will replace them.
+- **Nothing auto-assigns at any score.** The routing write stays exclusively in `assign-supplier`,
+  which now takes an optional `suggestionId` and records `accepted` / `rejected` / `manual`. A
+  supplier the scorer never named gets a `manual` row *including when it suggested nothing at all* —
+  how often we stay silent is as much a measurement as how often we are wrong.
+- **Two gaps the spec did not anticipate, both closed:** (1) a prose-only unrouted order (BE-1's
+  case) is persisted whole and never enqueues `ParseOrderJob`, so the `ParseStoredFileAsync` hook
+  could never see it — it would have been the one class of unrouted order silently getting no
+  suggestions while the UI offered them everywhere else; it now has its own hook. (2) The sender
+  domain must be captured on ROUTED orders too, or the domain→supplier history has nothing to learn
+  from — capture only the unrouted ones and the signal never accumulates.
+- **Retention is wired but DORMANT.** The 12-month sender-domain scrub is a column update (never an
+  order delete) inside `DataRetentionService`, whose `Enabled` defaults to **false** — so on a
+  deploy that has not set `DataRetention:Enabled=true`, the clock does not actually run. Pinned by a
+  test rather than left as a comment.
+- Tests: 41 pure-scoring + 25 service (InMemory) + 8 parse-hook + 3 DTO read-path + 5 retention +
+  6 router sender-domain, plus **11 real-Postgres** (migration round-trip, the partial unique
+  `WHERE decision IS NULL` index, re-score-in-place, the cross-supplier catalog probe, domain
+  history, and all of `assign-supplier`'s decision recording — which cannot run on InMemory at all,
+  because the atomic `unrouted → parsing` claim is an untranslatable `ExecuteUpdateAsync`).
+  The new Postgres fixture is **class-scoped** per the 2026-07-25 lesson, not one container per test.
+
 ## Snapshot (2026-07-25) — BE-1's KNOWN GAP closed
 
 - **A prose-only email to a supplier-less org now becomes a real, resolvable order.** PR #52 left

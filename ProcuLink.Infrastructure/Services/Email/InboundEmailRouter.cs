@@ -256,9 +256,11 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             // supplier_id, and the parse job parks the order 'unrouted'.
             var stubResult = supplierId is { } routedSupplierId
                 ? await _orders.CreateStubAsync(
-                    org.Id, routedSupplierId, ms, att.FileName ?? "attachment", contentType, ct)
+                    org.Id, routedSupplierId, ms, att.FileName ?? "attachment", contentType, ct,
+                    ExtractSenderDomain(payload.FromEmail))
                 : await _orders.CreateUnroutedStubAsync(
-                    org.Id, ms, att.FileName ?? "attachment", contentType, ct);
+                    org.Id, ms, att.FileName ?? "attachment", contentType, ct,
+                    ExtractSenderDomain(payload.FromEmail));
 
             if (!stubResult.IsSuccess)
             {
@@ -301,9 +303,11 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 {
                     var stubResult = supplierId is { } bodySupplierId
                         ? await _orders.CreateStubFromParsedOrderAsync(
-                            org.Id, bodySupplierId, extraction.Order, EmailBodyNlpSourceTag, ct)
+                            org.Id, bodySupplierId, extraction.Order, EmailBodyNlpSourceTag, ct,
+                            ExtractSenderDomain(payload.FromEmail))
                         : await _orders.CreateUnroutedStubFromParsedOrderAsync(
-                            org.Id, extraction.Order, EmailBodyNlpSourceTag, ct);
+                            org.Id, extraction.Order, EmailBodyNlpSourceTag, ct,
+                            ExtractSenderDomain(payload.FromEmail));
 
                     if (stubResult.IsSuccess)
                     {
@@ -534,6 +538,39 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         }),
         extra,
     };
+
+    /// <summary>
+    /// The DOMAIN part of an inbound sender address — "redacted@example.invalid" ⇒ "acme.com". Returns null
+    /// for anything that is not clearly a domain (no "@", nothing after it, no dot).
+    ///
+    /// <para>This method IS the privacy boundary for founder ruling D2. The local part — the half
+    /// that identifies a PERSON — is dropped here and never reaches the order row; the full address
+    /// keeps its existing treatment, a one-way SHA-256 in the audit payload and nothing else. What
+    /// is persisted is the counterparty organisation the mail came from, which is the routing
+    /// evidence a supplier-less order is missing, and it is scrubbed after 12 months by the
+    /// data-retention sweep. <c>internal</c> for testing.</para>
+    /// </summary>
+    internal static string? ExtractSenderDomain(string? fromEmail)
+    {
+        if (string.IsNullOrWhiteSpace(fromEmail)) return null;
+
+        var at = fromEmail.LastIndexOf('@');
+        if (at < 0) return null;
+
+        // A From header may arrive as a display-name form — `"Acme Orders" <redacted@example.invalid>` —
+        // so keep only the leading run of characters that can legally appear in a host name and
+        // drop the closing bracket and anything after it.
+        var tail = fromEmail[(at + 1)..].Trim();
+        var end = 0;
+        while (end < tail.Length && (char.IsLetterOrDigit(tail[end]) || tail[end] is '-' or '.')) end++;
+
+        var domain = ProcuLink.Core.Services.Detection.SupplierSuggestionScoring
+            .NormalizeDomain(tail[..end]);
+
+        // A domain with no dot is a local/host name, not something two organisations could share
+        // a match on — better to store nothing than a value that can only ever be noise.
+        return domain is not null && domain.Contains('.') ? domain : null;
+    }
 
     /// <summary>
     /// Lower-case hex SHA-256 of <paramref name="value"/>; null/blank ⇒ null. Used to

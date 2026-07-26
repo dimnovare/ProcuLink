@@ -56,8 +56,37 @@ public record OrderDto(
     /// <summary>Ordering contact (as extracted). All nullable.</summary>
     string?    ContactName = null,
     string?    ContactEmail = null,
-    string?    ContactPhone = null
+    string?    ContactPhone = null,
+    /// <summary>
+    /// Ranked supplier candidates for an order that arrived with no supplier, best first, at most
+    /// three. Null/empty for every routed order and for any unrouted order nothing pointed at.
+    /// <para>Advisory only: the order is still <c>unrouted</c> and stays that way until a human
+    /// posts to <c>assign-supplier</c>. Nothing here has changed any routing.</para>
+    /// </summary>
+    IReadOnlyList<SupplierSuggestionDto>? SupplierSuggestions = null
 );
+
+/// <summary>
+/// One ranked supplier candidate for an unrouted order, as the assign-supplier banner renders it.
+/// </summary>
+/// <param name="Id">The suggestion row's id. Pass it back as <c>suggestionId</c> on assign-supplier so the acceptance is attributable.</param>
+/// <param name="Score">0..0.99. Never 1.0 — this is a heuristic and says so.</param>
+/// <param name="Reason">One plain-language sentence naming the supplier and the evidence.</param>
+/// <param name="Signals">Per-signal breakdown behind the score — the "why", for an operator who wants to check the reasoning rather than trust it.</param>
+public record SupplierSuggestionDto(
+    Guid   Id,
+    Guid   SupplierId,
+    string SupplierName,
+    int    Rank,
+    double Score,
+    string Reason,
+    IReadOnlyList<SupplierSignalDto> Signals
+);
+
+/// <summary>One signal's contribution to a supplier suggestion's score.</summary>
+/// <param name="Signal">Stable slug: "identity" | "sender_domain" | "sender_domain_history" | "layout_fingerprint" | "catalog_overlap" | "supplier_name".</param>
+/// <param name="Detail">The human-readable clause for this signal, already plain-language.</param>
+public record SupplierSignalDto(string Signal, double Contribution, string Detail);
 
 /// <summary>Single purchase order line in the API response.</summary>
 public record OrderLineDto(

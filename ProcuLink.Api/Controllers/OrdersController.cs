@@ -10,6 +10,7 @@ using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
@@ -417,7 +418,11 @@ public sealed class OrdersController : ControllerBase
         // confidence. No-op (empty map → raw passthrough) when calibration is unwired.
         var calibrations = await BuildLineCalibrationsAsync(entity, ct);
 
-        return Ok(MapToDto(entity, errorMessage, calibrations));
+        // Ranked supplier candidates, for an unrouted order only — that is the one screen where
+        // they mean anything, and a routed order pays nothing for the lookup.
+        var suggestions = await LoadSupplierSuggestionsAsync(entity, ct);
+
+        return Ok(MapToDto(entity, errorMessage, calibrations, suggestions));
     }
 
     /// <summary>
@@ -621,6 +626,20 @@ public sealed class OrdersController : ControllerBase
             if (!exists)
                 return NotFound();
             return Conflict(new { error = "Order is not awaiting routing (it already has a supplier or is in another state)." });
+        }
+
+        // The claim succeeded, so this operator is the one who routed the order — record what their
+        // choice says about the candidates we offered. Advisory bookkeeping: a failure here must not
+        // undo a routing that has already committed, so it is logged rather than surfaced.
+        try
+        {
+            await RecordSupplierRoutingDecisionAsync(orgId, id, request.SupplierId, request.SuggestionId, now, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Recording the supplier routing decision for order {OrderId} failed (non-fatal — the order IS routed).",
+                id);
         }
 
         // Re-run the parse with the chosen supplier → resolves the lines through the normal path.
@@ -2411,7 +2430,8 @@ public sealed class OrdersController : ControllerBase
     private static OrderDto MapToDto(
         PurchaseOrderEntity e,
         string? errorMessage = null,
-        IReadOnlyDictionary<int, ProcuLink.Core.Services.CalibrationResult>? calibrations = null) => new(
+        IReadOnlyDictionary<int, ProcuLink.Core.Services.CalibrationResult>? calibrations = null,
+        IReadOnlyList<SupplierSuggestionDto>? supplierSuggestions = null) => new(
         Id:            e.Id,
         PoNumber:      e.PoNumber,
         // Phase-0 routing: SupplierId is nullable on the entity; an unrouted order has none yet.
@@ -2474,8 +2494,138 @@ public sealed class OrdersController : ControllerBase
         BillToPhone:          e.BillToPhone,
         ContactName:          e.ContactName,
         ContactEmail:         e.ContactEmail,
-        ContactPhone:         e.ContactPhone
+        ContactPhone:         e.ContactPhone,
+        SupplierSuggestions:  supplierSuggestions
     );
+
+    // ── Supplier auto-detect: read + decision recording ───────────────────────
+
+    /// <summary>
+    /// The still-undecided supplier candidates for an <c>unrouted</c> order, best first.
+    /// Empty for every other status: a routed order has nothing to resolve, and leftover rows from
+    /// when it WAS unrouted must not resurface next to a settled routing.
+    /// </summary>
+    private async Task<IReadOnlyList<SupplierSuggestionDto>> LoadSupplierSuggestionsAsync(
+        PurchaseOrderEntity entity, CancellationToken ct)
+    {
+        if (entity.Status != OrderStatusConstants.Unrouted)
+            return Array.Empty<SupplierSuggestionDto>();
+
+        var orgId = _tenant.OrganisationId;
+
+        var rows = await _db.OrderSupplierSuggestions
+            .AsNoTracking()
+            .Where(s => s.OrgId == orgId && s.OrderId == entity.Id && s.Decision == null)
+            .OrderBy(s => s.Rank)
+            .Take(SupplierSuggestionScoring.MaxSuggestions)
+            // DeletedAt == null: a supplier soft-deleted after being suggested must drop out of the
+            // banner. assign-supplier refuses a deleted supplier with a 400, so offering one would
+            // be a candidate the operator cannot actually accept.
+            .Join(_db.Suppliers.AsNoTracking().Where(x => x.OrgId == orgId && x.DeletedAt == null),
+                  s => s.SupplierId, x => x.Id,
+                  (s, x) => new { Row = s, SupplierName = x.Name })
+            .ToListAsync(ct);
+
+        return rows
+            .OrderBy(r => r.Row.Rank)
+            .Select(r => new SupplierSuggestionDto(
+                Id:           r.Row.Id,
+                SupplierId:   r.Row.SupplierId,
+                SupplierName: r.SupplierName,
+                Rank:         r.Row.Rank,
+                Score:        r.Row.Score,
+                Reason:       SupplierSuggestionScoring.BuildReason(r.SupplierName, DeserializeSignals(r.Row.SignalsJson)),
+                Signals:      DeserializeSignals(r.Row.SignalsJson)
+                                  .Select(s => new SupplierSignalDto(s.Signal, s.Contribution, s.Detail))
+                                  .ToList()))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Reads back the stored provenance. A malformed or absent payload yields no signals rather
+    /// than an error — the suggestion's score and supplier are still worth showing, and a read of
+    /// an order must never 500 over a display detail.
+    /// </summary>
+    private static IReadOnlyList<SupplierSignalContribution> DeserializeSignals(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return Array.Empty<SupplierSignalContribution>();
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<SupplierSignalContribution>>(json)
+                   ?? (IReadOnlyList<SupplierSignalContribution>)Array.Empty<SupplierSignalContribution>();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return Array.Empty<SupplierSignalContribution>();
+        }
+    }
+
+    /// <summary>
+    /// Records what the operator's routing choice says about the candidates we offered, and audits
+    /// it. Called only AFTER the atomic <c>unrouted → parsing</c> claim succeeded: a claim that
+    /// matched no row means no supplier changed hands, so no decision was made and none may be
+    /// written.
+    ///
+    /// <para>The verdict turns on whether the CHOSEN supplier was among the candidates, not on
+    /// whether the caller cited a <c>suggestionId</c> — an operator who ignores the banner and
+    /// picks the same supplier from the list has still confirmed the scorer was right. Whether
+    /// they cited one is recorded on the audit event, which is where interaction detail belongs.</para>
+    /// </summary>
+    private async Task RecordSupplierRoutingDecisionAsync(
+        Guid orgId, Guid orderId, Guid chosenSupplierId, Guid? citedSuggestionId, DateTime now, CancellationToken ct)
+    {
+        var live = await _db.OrderSupplierSuggestions
+            .Where(s => s.OrgId == orgId && s.OrderId == orderId && s.Decision == null)
+            .ToListAsync(ct);
+
+        var userId = string.IsNullOrWhiteSpace(_tenant.ClerkUserId) ? null : _tenant.ClerkUserId;
+        var accepted = live.FirstOrDefault(s => s.SupplierId == chosenSupplierId);
+
+        foreach (var row in live)
+        {
+            row.Decision  = ReferenceEquals(row, accepted)
+                ? OrderSupplierSuggestionDecision.Accepted
+                : OrderSupplierSuggestionDecision.Rejected;
+            row.DecidedBy = userId;
+            row.DecidedAt = now;
+        }
+
+        if (accepted is null)
+        {
+            // The operator went somewhere we did not point. Recorded against the supplier they
+            // actually chose — including when we offered nothing at all, because how often the
+            // scorer stays silent matters as much as how often it is wrong.
+            _db.OrderSupplierSuggestions.Add(new OrderSupplierSuggestion
+            {
+                Id           = Guid.NewGuid(),
+                OrgId        = orgId,
+                OrderId      = orderId,
+                SupplierId   = chosenSupplierId,
+                Rank         = 0,
+                Score        = 0,
+                ModelVersion = SupplierSuggestionScoring.ModelVersion,
+                Decision     = OrderSupplierSuggestionDecision.Manual,
+                DecidedBy    = userId,
+                DecidedAt    = now,
+                CreatedAt    = now,
+            });
+        }
+
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(
+            orgId, orderId,
+            accepted is not null ? "SupplierSuggestionAccepted" : "SupplierAssignedManually",
+            new
+            {
+                supplierId = chosenSupplierId,
+                citedSuggestion = citedSuggestionId is not null,
+                suggestionId = citedSuggestionId,
+                acceptedRank = accepted?.Rank,
+                acceptedScore = accepted is null ? (double?)null : Math.Round(accepted.Score, 4),
+                rejectedCount = live.Count - (accepted is not null ? 1 : 0),
+            }));
+
+        await _db.SaveChangesAsync(ct);
+    }
 
     /// <summary>
     /// Extracts BuyerName from the denormalized column (set by the async parse job)

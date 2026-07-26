@@ -2,8 +2,26 @@
 
 **Date:** 2026-07-24
 **Source:** `docs/prompts/2026-07-24-open-queue-handover.md` — BE-5
-**Status:** SPEC ONLY. No product code in this deliverable.
+**Status:** **DECIDED 2026-07-25, BACKEND IMPLEMENTED 2026-07-26.** P0 shipped separately
+(BE PR #54). P1 + P2 + P3 built together on the rulings below. The frontend half — supplier
+profile fields for the new identity columns, and rendering the suggestions in
+`AssignSupplierBanner` — is a separate FE chip; the API contract it consumes is live.
 **Every file:line below was read against the tree at commit `59e2721`.**
+
+## Founder rulings — 2026-07-25 ("take your defaults")
+
+The six decision points at the bottom of this document were ruled on as follows. The ruling
+text is authoritative; where the body of the spec above still reads as undecided
+("Phase 2, founder decision #1", "Deferred"), these rulings supersede it.
+
+| # | Ruling | Consequence for the build |
+|---|---|---|
+| **D1** | **YES** — add identity columns to `Supplier`: VAT, registration number, GLN/EDI code, primary domain. | Columns + migration ship now, and they are exposed in the supplier API contract (list, detail, create, update) immediately so the FE chip has something to bind to. The FE profile fields themselves are that separate chip. Unblocks the VAT / reg-nr / EDI signal, which is therefore **in v1**, not Phase 2. |
+| **D2** | **Sender DOMAIN only, 12-month retention.** | The full address keeps its existing SHA-256-only treatment — the GDPR posture at `InboundEmailRouter.cs:469-479` is unchanged. Only the domain part is persisted, as a separate column with its own capture timestamp, and the 12-month scrub is wired into the existing data-retention sweep. Phase 3 is therefore **in v1**. |
+| **D3** | **Suggest-only. NEVER auto-assign in v1**, at any score. | No threshold, no auto-apply path, no configuration flag that could become one. The routing write stays exclusively in `assign-supplier`. P4 stays unscoped until the accumulated decision rows make a threshold defensible. |
+| **D4** | **Shared layouts suggest ALL bound suppliers, ranked.** | The fingerprint contribution goes to every bound supplier equally, so it can never break a tie between them — which is what `SchemaFingerprint.cs:33-38` demands. Suppressing the signal entirely was the alternative and was rejected: on a shared layout the bound set is still the best evidence available, it just cannot discriminate *within* itself. |
+| **D5** | **Upload keeps its required `supplierId`.** | `OrdersController` upload is untouched — no behaviour change, no FE consequence. Suggestions exist for orders that arrive without a supplier through the pull/push channels, which is where the unrouted park actually happens. |
+| **D6** | Ship P0 independently — **already done**, BE PR #54, merged. | This build depends on it and does not redo it: an operator's correction is what teaches `SupplierIdsCsv` the supplier a layout belongs to, which is the input the strongest signal reads. |
 
 ## Problem
 
@@ -190,7 +208,10 @@ P0 + P1 is one focused chip. P2 onward are separate and each need a founder answ
 | P1 | Scorer throws → parse still succeeds and the order still lands `unrouted`. | `ProcuLink.Api.Tests` |
 | P1 | `assign-supplier` with `suggestionId` writes `accepted` + audit; without it writes `manual`; unshown suppliers write nothing. | `ProcuLink.Api.Tests` |
 
-## Founder decision points
+## Founder decision points — ALL RULED 2026-07-25
+
+The questions as originally posed are kept below for the record. Every one of them is answered in
+the rulings table at the top of this document; where the two disagree, the rulings win.
 
 1. **Add identity columns to `Supplier`** (VAT, reg-nr, EDI/GLN code, primary domain)?
    Without them the VAT-match signal has no right-hand side and cannot ship. Also implies

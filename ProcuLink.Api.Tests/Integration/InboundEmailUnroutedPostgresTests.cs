@@ -285,14 +285,16 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
         public int UnroutedCalls => Volatile.Read(ref _unrouted);
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
-            Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType,
+            CancellationToken ct, string? inboundSenderDomain = null)
         {
             Interlocked.Increment(ref _routed);
             return PersistAsync(organisationId, supplierId, filename, ct);
         }
 
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
-            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct,
+            string? inboundSenderDomain = null)
         {
             Interlocked.Increment(ref _unrouted);
             return PersistAsync(organisationId, supplierId: null, filename, ct);
@@ -325,11 +327,11 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
 
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
+        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct, string? inboundSenderDomain = null)
             => throw new NotImplementedException();
         // Body-NLP paths, routed and unrouted: these cases are all about attachments and the
         // extractor here is a no-op, so either call means the router took a path it should not.
-        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(Guid organisationId, ExtractedOrder order, string source, CancellationToken ct)
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(Guid organisationId, ExtractedOrder order, string source, CancellationToken ct, string? inboundSenderDomain = null)
             => throw new NotImplementedException();
         public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid organisationId, Guid orderId, CancellationToken ct)
             => throw new NotImplementedException();
