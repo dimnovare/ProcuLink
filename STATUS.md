@@ -38,11 +38,12 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   **no** default and asserted routing, i.e. it pinned the fallback; replaced by
   `ConfiguredDefaultSupplier_Routes`. `SeedSupplierAsync` in the unit suite now names the default
   explicitly, because owning a supplier no longer routes anything.
-- ⚠️ **Coordination — open PR #65 needs a one-cell edit before it merges.** Its matrix asserts
-  cell **`3b` "inbound email, no default, 2 suppliers (oldest wins)" → `RoutingOutcome.Routed`**.
-  That is exactly the behaviour removed here, so 3b becomes **`ParkedUnrouted`** (header comment
-  line and the `new("3b", …)` row). Not edited from here — #65 is unmerged and its files do not
-  exist on this branch.
+- **#65's routing matrix updated in the same PR** (it merged as `adfa00b` mid-task, so this
+  rebase picked it up). Cell **`3b`** asserted *"inbound email, no default, 2 suppliers (oldest
+  wins)" → `Routed`* — it pinned the fallback as intended behaviour — and is now
+  **`ParkedUnrouted`**, with the seeded expectation, the header table, the reachability caveat on
+  cells 3c/3d/6b, and the mutation-testing row rewritten to match. The other 26 cells are
+  untouched.
 - `OrderStatusConstants.Unrouted`'s reachability contract (read by the frontend repo) now records
   that the push channel was a listed producer that could not actually reach the status, and why.
 
