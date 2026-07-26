@@ -46,6 +46,15 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   history, and all of `assign-supplier`'s decision recording — which cannot run on InMemory at all,
   because the atomic `unrouted → parsing` claim is an untranslatable `ExecuteUpdateAsync`).
   The new Postgres fixture is **class-scoped** per the 2026-07-25 lesson, not one container per test.
+  **BE PR #70 — open, not merged. MERGEABLE/CLEAN, CI green: 4,049 passed / 0 failed / 2 skipped**
+  (Transform 1,221 + Infrastructure 1,138 + Api 1,690 with **zero** skips, so every Postgres test
+  ran on the Linux runner). Locally the full Api.Tests Postgres set could NOT be completed: this
+  host's Docker VM is 1.86 GB and the pre-existing convention starts one container per test, which
+  wedged the engine twice and left 36 orphan containers. Every local failure was
+  `Docker.DotNet.DockerApiException` or `Npgsql: Timeout during reading attempt` — **zero assertion
+  failures** — and reaping by `label=org.testcontainers=true` (the four named dev DBs carry no such
+  label; verified before deleting) returned this feature's 23 tests to green. CI is the authority,
+  and CI ran all 1,690.
 ## Snapshot (2026-07-26) — F1 FIXED: inbound email never guesses a supplier again
 
 - **The oldest-active-supplier fallback in `InboundEmailRouter.ResolveSupplierIdAsync` is
