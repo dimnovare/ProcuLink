@@ -11,6 +11,45 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-26) — truth pass: seven stale claims corrected, two of them P0
+
+Chasing five founder replies re-measured the standing gap list. **Seven claims in these docs
+were wrong**; five were "still broken" items that had in fact been fixed, one was a guess
+never checked, and one was my own error. Corrected in place, each with its evidence:
+
+| Claim | Reality (measured 2026-07-26) |
+|---|---|
+| **P0** CF Email Routing broken, support@ mail lost | **Resolved** — 12/12 rules Active; 30-day log = 15 received / **15 forwarded** / 0 failures |
+| **P0** founder org frozen `read_only`, ingest dead | **Resolved** — `personal-workspace-d3be` is `plan=growth, accountStatus=active` |
+| #57 Worker "STILL NEEDS A HAND-REDEPLOY" | **Already deployed** — non-Postmark IP gets **503** (was 403); health + site both 200, so not a coincidental outage |
+| OpenAI "DPA presumably unsigned" | **Signed** — Ironclad *"Complete — DPA (Diip Solutions OÜ and OpenAI)"* to `legal@` |
+| OPS-2 blocked on a plan bump + Logicom creds | **Both done** — org on Growth; 14,713 rows synced |
+| CLEANUP-1: delete two BE branches | **Already gone** from the remote |
+| Merge queue: FE #29, BE #45 | **Both merged** |
+
+- **My own error, corrected:** OPS-2's docs claimed the frozen `personal-workspace-d3be` was
+  *a different org, unreachable from the browser session*. **There is only one org.** The
+  **Clerk** slug (`dim-s-organization-…`) and the **ProcuLink DB** slug
+  (`personal-workspace-d3be`, `7a3b01e1-…`) name the same tenant — admin
+  `GET /api/admin/organisations` shows it holding exactly the 23 suppliers that work created.
+  **Never infer org identity from a Clerk slug; match on DB slug or org id.** The conclusion
+  built on it survives: the org read `trialing` when measured, so the **plan tier** really was
+  the blocker, which is why raising it to Growth unblocked the sync.
+- ⚠️ **New standing hazard from that same fact:** the live Growth subscription sits on the
+  **primary production org** — the one receiving real mail at
+  `redacted@example.invalid`. **Cancelling it re-freezes real order
+  ingest**, not a throwaway workspace. Plan the exit before ending it.
+- **Persona/OpenAI verification is NOT an email problem.** No Persona message reached
+  Cloudflare at all in 30 days, while every message CF did receive was forwarded. Check which
+  address OpenAI holds on the account rather than re-checking routing.
+- **Genuinely still open:** the five vendor cred pastes (OPS-2's last piece), OpenAI EU
+  project + ZDR + org verification, config gaps (`NEXT_PUBLIC_BOOK_DEMO_URL`, status page,
+  subprocessors, cookie banner), OPS-3's CSP/Sentry sweep, cred rotation, and the
+  order-review-screen typeahead (untested — needs a Jarltech PO on prod).
+- **Method note worth keeping:** every one of these was a doc trusted past its expiry date.
+  Cheap live probes settled them in minutes — a `curl` for the Worker, the CF activity log for
+  mail, `GET /api/admin/organisations` for org state. Re-measure before re-planning.
+
 ## Snapshot (2026-07-26) — OPS-3: routing matrix proven per channel; two P1s found
 
 - **`docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md`.** All three PUSH
@@ -124,7 +163,8 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   and it could only fire after mail was already refused. Proven both ways — green against the
   live article, and red on a simulated drift. 12 new tests (20 in the folder), now CI-run on
   PRs touching it. **This PR needs no redeploy** (worker.js changes are comments only); the
-  #57 hand-redeploy is still outstanding. Found in passing: `uptime.yml` cites
+  #57 hand-redeploy **is now done — measured 2026-07-26** (see the #57 entry). Found in
+  passing: `uptime.yml` cites
   `docs/deployment/monitoring-runbook.md` twice — that file does not exist.
 
 ## Snapshot (2026-07-24, late) — BE-6 fixed
@@ -161,7 +201,12 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   once the Worker 403→503 PR merges — a **hand-redeploy of the CF inbound-verify
   Worker** (nothing else ships it; see that entry below).
 - **2026-07-24: the CF inbound-verify Worker no longer drops mail on IP drift — BE PR #57
-  (MERGED, `52d9961`). ⚠️ STILL NEEDS A HAND-REDEPLOY BY THE FOUNDER.** `worker.js`'s source-IP gate answered
+  (MERGED, `52d9961`). ✅ DEPLOYED — verified 2026-07-26:** a `POST` to
+  `inbound.proculink.eu/api/inbound-email/postmark` from a non-Postmark IP returns **503**
+  (the #57 retryable refusal) where the old code returned 403; `api.proculink.eu/health` and
+  `proculink.eu` both answered 200 in the same check, ruling out a coincidental upstream 503.
+  That one-line probe re-verifies the deployed Worker any time, without CF dashboard access.
+  Previously: `worker.js`'s source-IP gate answered
   **403**, the one status that makes Postmark stop retrying on the first attempt *and* never
   file the message as `Failed` — so a purchase order refused there was gone by both routes,
   automatic and manual. The allowlist is hardcoded and Postmark has changed its published
@@ -207,11 +252,15 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   catalog-picker scale, marketing SEO; BE: email-park-unrouted, row-cap raise,
   Responses `store:false`, webhook log level, supplier-auto-detect SPEC; OPS: live
   inbound-email e2e, prod vendor-feed test) + founder actions. Chips run **Opus 4.8
-  Extra** per founder. Same-day verification findings: **P0 — CF Email Routing
-  forwarding is broken for all 12 addresses ("Destination address not found"; support@
-  mail is being lost; only inbound@→Worker Active)**; OpenAI org is an unverified
-  Personal account (API-call-logging Disabled, no EU project, no ZDR/DPA); the June CF
-  API token is dead (401). Routing truth (code-verified): every channel either requires
+  Extra** per founder. Same-day verification findings: ~~**P0 — CF Email Routing
+  forwarding is broken for all 12 addresses**~~ — **RESOLVED, re-verified 2026-07-26:
+  all 12 forwarding rules Active, and the 30-day activity log shows 15 received / 15
+  forwarded / 0 failures**; OpenAI org is an unverified Personal account
+  (API-call-logging Disabled, no EU project, no ZDR) — **but the DPA IS signed**
+  (Ironclad "Complete" mail to `legal@`, corrected 2026-07-26; the old "no DPA" was a
+  guess). Org verification is blocked upstream: **Persona has sent nothing to `info@`**
+  in 30 days of CF logs, so that is an OpenAI-side problem, not an email one.
+  The June CF API token is dead (401). Routing truth (code-verified): every channel either requires
   a supplier (upload 400, REST ingress 400) or parks `unrouted` (the three pull channels,
   and — since BE-1 below — the inbound-email webhook, which used to 422-reject);
   BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE
