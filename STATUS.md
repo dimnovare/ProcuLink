@@ -11,6 +11,35 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-26) — OPS-3: routing matrix proven per channel; two P1s found
+
+- **`docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md`.** All three PUSH
+  channels route to the right vendor **on prod** (upload → explicit supplierId; REST ingress →
+  supplier by NAME; inbound email → org default, order visible ~3 s after Postmark accepted it).
+  All three PULL channels route to their configured default **LOCALLY** (atmoz/sftp, MinIO,
+  Ethereal), each with a RED negative control — those tests return silently without their env,
+  so a bare green proves nothing. **P1 F1: `unrouted` is unreachable on production.** With the
+  org default cleared, an emailed PO did not park — `InboundEmailRouter.cs:464-472` falls back to
+  the org's **oldest active supplier** (measured: it landed on "ProcuLink Sample Supplier"), so
+  BE #52's park and FE #32's banner have no reachable prod trigger while an org has ≥1 supplier;
+  no pull channel has this fallback. **P1 F2: BE #54's learn-from-correction silently fails on the
+  real path** — assign-supplier routed the order correctly but `SupplierIdsCsv` stayed empty;
+  `LearnSupplierFromCorrectionAsync`'s SaveChanges threw `DbUpdateConcurrencyException` (0 rows)
+  and `ParseOrderJob.cs:150-153` swallowed it. PR #60's phantom-row detach landed on the
+  **file-less** branch only; the file-backed re-parse (`OrderIngestionService.cs:1025-1027`) still
+  leaves `Deleted` phantoms and the *next* writer in the scope — the fingerprint — is the victim
+  (#60 correctly refuted the passport emit being one; it saves *before* the reflection). Net
+  effect is worse than "did not learn": the layout ended up bound to the supplier F1 guessed,
+  with the human's choice dropped. **F3:** the binding has no consumer at all — `LookupAsync`'s
+  only caller is `/api/upload/detect-format` and `FingerprintBoost.Apply` drops `SupplierIds`, so
+  "the fingerprint suggests a supplier" is not a claim the product can make yet. **F4 (fixed
+  here):** `Live_ImapIngress` has been dead since `de4ea0e` (seeded no `Supplier`, so it hit the
+  unrouted branch and NRE'd on an unstubbed mock) — env-gated, so CI's "2 skipped" hid it.
+  **F5 doc fix:** "Dim's Organization" **is** `personal-workspace-d3be` (one org row, two slugs);
+  OPS-2's claim they were different orgs is wrong, and the DB slug is what
+  `IngressController.cs:47-53` matches. Test data to delete: 2 ROUTETEST suppliers + 4
+  ROUTETEST- orders (ids in the doc); API keys already revoked, email default restored to null.
+
 ## Snapshot (2026-07-25) — BE-1's KNOWN GAP closed
 
 - **A prose-only email to a supplier-less org now becomes a real, resolvable order.** PR #52 left
