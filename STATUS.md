@@ -51,9 +51,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   Locally Infrastructure showed 1 red — `FireIntegrationTriggerJobReliabilityTests.
   TwoConcurrentFinalFailures_OnPostgres…`, `Npgsql: Timeout during reading attempt`, the known
   Testcontainers contention flake; it passed 6/6 in isolation and 1054/1054 on CI's Linux runner.
+
 ## Snapshot (2026-07-25) — frozen orgs are recoverable from the product
 
-- **`POST /api/admin/organisations/{id}/account-status` — BE PR #59 (open, not merged).**
+- **`POST /api/admin/organisations/{id}/account-status` — BE PR #59, MERGED `0e1ac58`.**
   Closes the gap the founder org exposed on 2026-07-24: an org frozen by a Stripe cancel
   (`account_status=read_only`) could only be lifted with a raw production UPDATE. `[AdminOnly]`,
   cross-tenant by route id, same shape as `SetOrganisationLimits`. **Exactly one transition is
@@ -67,6 +68,18 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   **Founder-org recipe is TWO calls, in order:** extend the trial via `.../limits` first (while
   still `read_only` the arbiter early-returns, so nothing moves), *then* this endpoint —
   otherwise the lapsed Pilot window re-expires it immediately, which the response says out loud.
+  20 unit tests + 3 real-Postgres; **local Api.Tests 1627/1627, 0 failed, 0 skipped** — the
+  `0 skipped` is half the result, since a wedged Docker probe skips the Postgres tests and still
+  prints `Passed!`. An earlier run of the same commit showed 17 failures, all
+  `Npgsql: Timeout during reading attempt` in `InitializeAsync` and 15 of them in pre-existing
+  suites the change does not touch: a sibling session had left **76 orphan Testcontainers** on the
+  host. Reaping those (filter `label=org.testcontainers=true` ONLY — the four named dev DBs carry
+  no such label and were verified absent from the set before deleting) returned the identical
+  commit to green. **Lesson for new Postgres fixtures: make them class-scoped.** xUnit builds one
+  test-class instance per test, so the repo's per-test `IAsyncLifetime` convention starts AND
+  migrates one container PER TEST — the exact load `PostgresContainerCollection`'s own comment
+  warns about. This paragraph missed the #59 merge window by one commit, hence the follow-up.
+
 ## Snapshot (2026-07-24, late) — Postmark IP drift is now DETECTED
 
 - **The Worker's hardcoded Postmark IP allowlist is watched — BE PR #58 (open).** #57
