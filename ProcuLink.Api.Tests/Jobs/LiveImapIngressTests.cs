@@ -71,6 +71,16 @@ public class LiveImapIngressTests
             Slug = "live-imap",
             EmailConfigJson = cfg.ToJson(),
         });
+        // The configured default supplier must EXIST and be un-deleted, or
+        // ResolveDefaultSupplierIdAsync resolves to null and the job imports the attachment
+        // through the unrouted path instead — which is not what this test asserts.
+        db.Set<Supplier>().Add(new Supplier
+        {
+            Id = supplierId,
+            OrgId = orgId,
+            Name = "Live IMAP supplier",
+            CreatedAt = DateTime.UtcNow,
+        });
         await db.SaveChangesAsync();
 
         // ── Seed: send a CSV-attachment email into the mailbox via the real SMTP relay ──
@@ -125,6 +135,14 @@ public class LiveImapIngressTests
                 It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(stub));
+        // Taking the unrouted branch means supplier resolution failed, which this test exists to
+        // rule out. Fail with that sentence rather than the NullReferenceException an unstubbed
+        // Moq member produces two frames deeper inside the job.
+        orders.Setup(o => o.CreateUnroutedStubAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException(
+                "the poll imported the attachment UNROUTED — the configured default supplier did not resolve"));
 
         var billing = new Mock<IBillingService>();
         billing.Setup(b => b.HasFeatureAsync(It.IsAny<Guid>(), BillingFeature.EmailIngestion, It.IsAny<CancellationToken>()))

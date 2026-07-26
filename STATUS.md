@@ -46,6 +46,163 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   history, and all of `assign-supplier`'s decision recording — which cannot run on InMemory at all,
   because the atomic `unrouted → parsing` claim is an untranslatable `ExecuteUpdateAsync`).
   The new Postgres fixture is **class-scoped** per the 2026-07-25 lesson, not one container per test.
+## Snapshot (2026-07-26) — F1 FIXED: inbound email never guesses a supplier again
+
+- **The oldest-active-supplier fallback in `InboundEmailRouter.ResolveSupplierIdAsync` is
+  deleted.** Contract now: the org's configured Email-intake default (`email_config`
+  `defaultSupplierId`) routes the mail; with none configured — or one that no longer resolves —
+  the message imports **`unrouted`** via BE #52's park (`CreateUnroutedStubAsync` + ParseOrderJob),
+  answers Postmark **200**, and is resolvable through assign-supplier + FE #32's banner. The
+  resolver is now byte-for-byte the same contract as the three pull channels
+  (`SftpIngressService` / `S3IngressService` / `EmailPollOrgJob`), each verified fallback-free.
+  **This makes `unrouted` reachable on production for the first time** — the OPS-3 proof showed
+  it was not, while an org held ≥1 supplier.
+- **The one-time backfill was evaluated and deliberately NOT shipped.** Measured read-only on
+  the production database (9 orgs): **0** orgs have a default that resolves; 3 already park
+  (zero suppliers); 1 parks correctly (many suppliers, genuinely ambiguous — the founder org);
+  **5** would flip from silently-routed to parked. All 5 are dormant pre-launch orgs created the
+  same day (2026-06-03), all `pilot`/`trialing`, and **every one has 0 lifetime orders** — so no
+  production mail flow changes. One of the 5 would have had its **sample** supplier pinned as a
+  permanent email default, which is the guess-written-down failure mode rather than a fix for it.
+  A data migration only ever touches state at deploy time (orgs created later get park semantics
+  from birth), so it would have been permanently dead code. Parking costs a dormant org one
+  click, and it is the click that asks the right question.
+- Tests: 4 new real-Postgres cases + 1 Docker-free unit test, RED-first (control: with the
+  fallback restored, the unit test reports `UnroutedCalledWith … found 0`). The old
+  `ActiveSupplier_StillRoutes_UnchangedBehaviour` was mislabelled — it seeded one supplier with
+  **no** default and asserted routing, i.e. it pinned the fallback; replaced by
+  `ConfiguredDefaultSupplier_Routes`. `SeedSupplierAsync` in the unit suite now names the default
+  explicitly, because owning a supplier no longer routes anything.
+- **#65's routing matrix updated in the same PR** (it merged as `adfa00b` mid-task, so this
+  rebase picked it up). Cell **`3b`** asserted *"inbound email, no default, 2 suppliers (oldest
+  wins)" → `Routed`* — it pinned the fallback as intended behaviour — and is now
+  **`ParkedUnrouted`**, with the seeded expectation, the header table, the reachability caveat on
+  cells 3c/3d/6b, and the mutation-testing row rewritten to match. The other 26 cells are
+  untouched.
+- `OrderStatusConstants.Unrouted`'s reachability contract (read by the frontend repo) now records
+  that the push channel was a listed producer that could not actually reach the status, and why.
+
+## Snapshot (2026-07-26) — truth pass: seven stale claims corrected, two of them P0
+
+Chasing five founder replies re-measured the standing gap list. **Seven claims in these docs
+were wrong**; five were "still broken" items that had in fact been fixed, one was a guess
+never checked, and one was my own error. Corrected in place, each with its evidence:
+
+| Claim | Reality (measured 2026-07-26) |
+|---|---|
+| **P0** CF Email Routing broken, support@ mail lost | **Resolved** — 12/12 rules Active; 30-day log = 15 received / **15 forwarded** / 0 failures |
+| **P0** founder org frozen `read_only`, ingest dead | **Resolved** — `personal-workspace-d3be` is `plan=growth, accountStatus=active` |
+| #57 Worker "STILL NEEDS A HAND-REDEPLOY" | **Already deployed** — non-Postmark IP gets **503** (was 403); health + site both 200, so not a coincidental outage |
+| OpenAI "DPA presumably unsigned" | **Signed** — Ironclad *"Complete — DPA (Diip Solutions OÜ and OpenAI)"* to `legal@` |
+| OPS-2 blocked on a plan bump + Logicom creds | **Both done** — org on Growth; 14,713 rows synced |
+| CLEANUP-1: delete two BE branches | **Already gone** from the remote |
+| Merge queue: FE #29, BE #45 | **Both merged** |
+
+- **My own error, corrected:** OPS-2's docs claimed the frozen `personal-workspace-d3be` was
+  *a different org, unreachable from the browser session*. **There is only one org.** The
+  **Clerk** slug (`dim-s-organization-…`) and the **ProcuLink DB** slug
+  (`personal-workspace-d3be`, `7a3b01e1-…`) name the same tenant — admin
+  `GET /api/admin/organisations` shows it holding exactly the 23 suppliers that work created.
+  **Never infer org identity from a Clerk slug; match on DB slug or org id.** The conclusion
+  built on it survives: the org read `trialing` when measured, so the **plan tier** really was
+  the blocker, which is why raising it to Growth unblocked the sync.
+- ⚠️ **New standing hazard from that same fact:** the live Growth subscription sits on the
+  **primary production org** — the one receiving real mail at
+  `redacted@example.invalid`. **Cancelling it re-freezes real order
+  ingest**, not a throwaway workspace. Plan the exit before ending it.
+- **Persona/OpenAI verification is NOT an email problem.** No Persona message reached
+  Cloudflare at all in 30 days, while every message CF did receive was forwarded. Check which
+  address OpenAI holds on the account rather than re-checking routing.
+- **Genuinely still open:** the five vendor cred pastes (OPS-2's last piece), OpenAI EU
+  project + ZDR + org verification, config gaps (`NEXT_PUBLIC_BOOK_DEMO_URL`, status page,
+  subprocessors, cookie banner), OPS-3's CSP/Sentry sweep, cred rotation, and the
+  order-review-screen typeahead (untested — needs a Jarltech PO on prod).
+- **Method note worth keeping:** every one of these was a doc trusted past its expiry date.
+  Cheap live probes settled them in minutes — a `curl` for the Worker, the CF activity log for
+  mail, `GET /api/admin/organisations` for org state. Re-measure before re-planning.
+
+## Snapshot (2026-07-26) — OPS-3: routing matrix proven per channel; two P1s found
+
+- **`docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md`.** All three PUSH
+  channels route to the right vendor **on prod** (upload → explicit supplierId; REST ingress →
+  supplier by NAME; inbound email → org default, order visible ~3 s after Postmark accepted it).
+  All three PULL channels route to their configured default **LOCALLY** (atmoz/sftp, MinIO,
+  Ethereal), each with a RED negative control — those tests return silently without their env,
+  so a bare green proves nothing. **P1 F1: `unrouted` is unreachable on production.** With the
+  org default cleared, an emailed PO did not park — `InboundEmailRouter.cs:464-472` falls back to
+  the org's **oldest active supplier** (measured: it landed on "ProcuLink Sample Supplier"), so
+  BE #52's park and FE #32's banner have no reachable prod trigger while an org has ≥1 supplier;
+  no pull channel has this fallback. **P1 F2: BE #54's learn-from-correction silently fails on the
+  real path** — assign-supplier routed the order correctly but `SupplierIdsCsv` stayed empty;
+  `LearnSupplierFromCorrectionAsync`'s SaveChanges threw `DbUpdateConcurrencyException` (0 rows)
+  and `ParseOrderJob.cs:150-153` swallowed it. PR #60's phantom-row detach landed on the
+  **file-less** branch only; the file-backed re-parse (`OrderIngestionService.cs:1025-1027`) still
+  leaves `Deleted` phantoms and the *next* writer in the scope — the fingerprint — is the victim
+  (#60 correctly refuted the passport emit being one; it saves *before* the reflection). Net
+  effect is worse than "did not learn": the layout ended up bound to the supplier F1 guessed,
+  with the human's choice dropped. **F3:** the binding has no consumer at all — `LookupAsync`'s
+  only caller is `/api/upload/detect-format` and `FingerprintBoost.Apply` drops `SupplierIds`, so
+  "the fingerprint suggests a supplier" is not a claim the product can make yet. **F4 (fixed
+  here):** `Live_ImapIngress` has been dead since `de4ea0e` (seeded no `Supplier`, so it hit the
+  unrouted branch and NRE'd on an unstubbed mock) — env-gated, so CI's "2 skipped" hid it.
+  **F5 doc fix:** "Dim's Organization" **is** `personal-workspace-d3be` (one org row, two slugs);
+  OPS-2's claim they were different orgs is wrong, and the DB slug is what
+  `IngressController.cs:47-53` matches. Test data to delete: 2 ROUTETEST suppliers + 4
+  ROUTETEST- orders (ids in the doc); API keys already revoked, email default restored to null.
+
+
+## Snapshot (2026-07-26) — supplier routing is proven per channel, in one table
+
+- **Every ingress channel's routing is now one re-runnable matrix**, real Postgres, 27/27 green:
+  `ProcuLink.Api.Tests/Integration/SupplierRoutingMatrixPostgresTests.cs`. Cells cover manual
+  upload, REST ingress (GUID + case-insensitive name), inbound email (org default → oldest-supplier
+  fallback → park), SFTP/S3/IMAP pull (valid / NULL / soft-deleted default), `assign-supplier`
+  (claim + revision pin, 409), fingerprint learning, and DESADV's 501. Each assertion names its
+  cell. Test-only — no production code touched. Handover:
+  [`docs/qa/2026-07-fable5-push/2026-07-26-supplier-routing-matrix.md`](docs/qa/2026-07-fable5-push/2026-07-26-supplier-routing-matrix.md).
+  **BE PR #65 — open, not merged. MERGEABLE, CI green: `Build + test (213 baseline)` PASS 13m45s,
+  Api.Tests 1,663 passed on the Linux runner and all 27 cells `Passed` there.** Locally the same
+  commit showed 2 reds — `DeliveryClaimEquivalencePostgresTests` +
+  `DeliveryConfigRepublishPostgresTests`, both `Npgsql: Exception while reading from stream` — and
+  CI's 1,663 is exactly the local 1,661 plus those two, so they were this host's contention. Run
+  ALONE with the matrix excluded, the claim-equivalence suite fails **19/64** with the failing
+  cases moving between runs: it is `IAsyncLifetime` + a 64-case theory, i.e. one container PER
+  CASE. Making it class-scoped is queued as separate work.
+- **Fingerprint auto-routing is NOT shipped, and the matrix now pins that.** The only production
+  consumer of `SchemaFingerprint.SupplierIdsCsv` is `FormatDetectionController.cs:58`, and even
+  there `FingerprintBoost.Apply` returns `detected with { Confidence, Reasoning, SeenCount }` —
+  `match.SupplierIds` and `SampleSupplierName` are DROPPED, so even "suggest-only" overstates it:
+  the layout is recognised, the supplier is never offered. (Independently measured live by the
+  OPS-3 pass / PR #64.) A repeat layout arriving supplier-less still parks `unrouted`; cell 6b
+  fails the day anything starts auto-binding. Caveat: that park needs an org with no usable
+  supplier — inbound email otherwise falls back to the oldest active supplier (cell 3b).
+- **Proven load-bearing, not just green:** three deliberate mutations (email oldest→newest fallback,
+  SFTP resolver dropping the soft-delete filter, a 6b auto-bind probe) failed exactly cells 3b, 4c,
+  6b with no collateral, then were reverted.
+- **New Postgres-only trap:** `SupplierConnection.ActiveRevisionId` ↔
+  `SupplierConnectionRevision.ConnectionId` cannot be inserted in ONE `SaveChanges` — EF cannot
+  order the cycle ("circular dependency was detected"). Seed as connection-unpinned → revision →
+  pin. InMemory accepts the single write, so the InMemory revision-authority tests never see it.
+- **The class-scoped-fixture lesson from #59 was applied, and it mattered more here:** xUnit builds
+  a fresh test-class instance per *theory case*, so a per-class `IAsyncLifetime` container would
+  have started and migrated **27** containers. `IClassFixture` keeps it to one; the 27 cells run
+  in ~3 s.
+
+---
+- **Cross-check with the OPS-3 live pass above (independent provenance, same conclusions).** That
+  pass measured prod; this suite reads and exercises the code — they agree without either being
+  told the other's answer. Its **F3** is the same finding as this suite's fingerprint correction
+  (`FingerprintBoost.Apply` drops `SupplierIds`), reached from the opposite direction. Its **F1**
+  (email falls back to the oldest active supplier, so `unrouted` is unreachable on prod for an org
+  with ≥1 supplier) is what matrix cell **3b** asserts as intended behaviour — read the two
+  together: 3b proves the fallback works, F1 says the fallback is why the park cannot be reached.
+- **KNOWN LIMIT of cell 6a, given OPS-3's F2.** Cell 6a drives
+  `SchemaFingerprintService.RecordParseSuccessAsync` directly, as the sibling suite does, so it
+  proves the recorder binds the operator's choice on re-entry. It does **not** prove the real
+  `ParseOrderJob` file-backed re-parse ever reaches that recorder — and F2 measured that it does
+  not (phantom `Deleted` rows → `DbUpdateConcurrencyException` → swallowed at
+  `ParseOrderJob.cs:150-153`). **So cell 6a is green while production does not learn.** Closing F2
+  is the fix; this cell is the unit-level guard, not the end-to-end proof.
 
 ## Snapshot (2026-07-25) — BE-1's KNOWN GAP closed
 
@@ -131,7 +288,8 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   and it could only fire after mail was already refused. Proven both ways — green against the
   live article, and red on a simulated drift. 12 new tests (20 in the folder), now CI-run on
   PRs touching it. **This PR needs no redeploy** (worker.js changes are comments only); the
-  #57 hand-redeploy is still outstanding. Found in passing: `uptime.yml` cites
+  #57 hand-redeploy **is now done — measured 2026-07-26** (see the #57 entry). Found in
+  passing: `uptime.yml` cites
   `docs/deployment/monitoring-runbook.md` twice — that file does not exist.
 
 ## Snapshot (2026-07-24, late) — BE-6 fixed
@@ -168,7 +326,12 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   once the Worker 403→503 PR merges — a **hand-redeploy of the CF inbound-verify
   Worker** (nothing else ships it; see that entry below).
 - **2026-07-24: the CF inbound-verify Worker no longer drops mail on IP drift — BE PR #57
-  (MERGED, `52d9961`). ⚠️ STILL NEEDS A HAND-REDEPLOY BY THE FOUNDER.** `worker.js`'s source-IP gate answered
+  (MERGED, `52d9961`). ✅ DEPLOYED — verified 2026-07-26:** a `POST` to
+  `inbound.proculink.eu/api/inbound-email/postmark` from a non-Postmark IP returns **503**
+  (the #57 retryable refusal) where the old code returned 403; `api.proculink.eu/health` and
+  `proculink.eu` both answered 200 in the same check, ruling out a coincidental upstream 503.
+  That one-line probe re-verifies the deployed Worker any time, without CF dashboard access.
+  Previously: `worker.js`'s source-IP gate answered
   **403**, the one status that makes Postmark stop retrying on the first attempt *and* never
   file the message as `Failed` — so a purchase order refused there was gone by both routes,
   automatic and manual. The allowlist is hardcoded and Postmark has changed its published
@@ -214,11 +377,15 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   catalog-picker scale, marketing SEO; BE: email-park-unrouted, row-cap raise,
   Responses `store:false`, webhook log level, supplier-auto-detect SPEC; OPS: live
   inbound-email e2e, prod vendor-feed test) + founder actions. Chips run **Opus 4.8
-  Extra** per founder. Same-day verification findings: **P0 — CF Email Routing
-  forwarding is broken for all 12 addresses ("Destination address not found"; support@
-  mail is being lost; only inbound@→Worker Active)**; OpenAI org is an unverified
-  Personal account (API-call-logging Disabled, no EU project, no ZDR/DPA); the June CF
-  API token is dead (401). Routing truth (code-verified): every channel either requires
+  Extra** per founder. Same-day verification findings: ~~**P0 — CF Email Routing
+  forwarding is broken for all 12 addresses**~~ — **RESOLVED, re-verified 2026-07-26:
+  all 12 forwarding rules Active, and the 30-day activity log shows 15 received / 15
+  forwarded / 0 failures**; OpenAI org is an unverified Personal account
+  (API-call-logging Disabled, no EU project, no ZDR) — **but the DPA IS signed**
+  (Ironclad "Complete" mail to `legal@`, corrected 2026-07-26; the old "no DPA" was a
+  guess). Org verification is blocked upstream: **Persona has sent nothing to `info@`**
+  in 30 days of CF logs, so that is an OpenAI-side problem, not an email one.
+  The June CF API token is dead (401). Routing truth (code-verified): every channel either requires
   a supplier (upload 400, REST ingress 400) or parks `unrouted` (the three pull channels,
   and — since BE-1 below — the inbound-email webhook, which used to 422-reject);
   BE `assign-supplier` endpoint live at OrdersController.cs:583 with **no FE

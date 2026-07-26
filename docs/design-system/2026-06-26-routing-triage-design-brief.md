@@ -16,7 +16,7 @@ Design the **target** experience below, but know which parts are real so nothing
 
 **Exists today (deterministic, channel-bound):**
 - An SFTP folder / S3 prefix is bound to **one** supplier (`DefaultSupplierId`). Every file in it → that supplier.
-- A hosted-email address `orders@{slug}.proculink.eu` resolves the **organisation**; the supplier is a configured default (or the oldest active supplier).
+- A hosted-email address `orders@{slug}.proculink.eu` resolves the **organisation**; the supplier is the org's configured default, and **only** that. With no default configured — or one that no longer resolves — the message parks `unrouted` for a human to route. (Until 2026-07-26 it fell back to the org's oldest active supplier; that guess was deleted, since an emailed order carries no supplier identity of its own.)
 - The REST API **requires** the caller to name the supplier in the payload.
 - Browser upload: the user picks the supplier.
 - The order's parsed content **captures** supplier identity — name, **tax-id/VAT**, **EDI/network code**, address — as structured data (`OrderParty`), and a **schema fingerprint** (column-layout hash) records **which supplier(s) have used that exact layout**, with **collision detection** when a layout is shared by more than one supplier.

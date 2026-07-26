@@ -234,3 +234,8 @@ NEXT_PUBLIC_SENTRY_DSN=
 - ❌ Hardwire AI mapping to one vendor — keep the provider-neutral `IAiMappingService` seam
 - ❌ Skip `/superpowers:brainstorm` for tasks touching ≥3 files, or `/code-review` at group end
 - ❌ Ship UI/marketing claims for untested capabilities (offer ⇔ works)
+- ❌ **Create a Neon database branch, or re-enable an integration that creates them.** The
+  Vercel↔Neon and Neon↔GitHub integrations were removed 2026-07-25 after 22 auto-created
+  preview branches accumulated and billed compute; the project now has exactly ONE branch,
+  `production`. Use local Postgres (`:5435`) or Testcontainers for tests. If a branch ever
+  looks genuinely necessary, ask the founder first and delete it in the same session.
