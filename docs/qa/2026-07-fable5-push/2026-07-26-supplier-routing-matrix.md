@@ -19,7 +19,7 @@ channel and asserts the created order's `SupplierId` + status.
 | 2c | REST ingress | `SupplierId` = unknown name | 400, no order | ✓ |
 | 2d | REST ingress | `SupplierId` = another org's supplier GUID | 400, no order | ✓ |
 | 3a | inbound email | org default supplier set | routed **to the default** | ✓ |
-| 3b | inbound email | no default, 2 suppliers | routed **to the oldest** | ✓ |
+| 3b | inbound email | no default, 2 suppliers | **parked `unrouted`** (200) | ✓ |
 | 3c | inbound email | no supplier at all | parks `unrouted`, **200** | ✓ |
 | 3d | inbound email | only a soft-deleted supplier | parks `unrouted`, 200 | ✓ |
 | 3e | inbound email | prose-only body NLP, no supplier | parks `unrouted`, 200 | ✓ |
@@ -73,9 +73,12 @@ So cell 6b asserts the two things that ARE true: a repeat layout arriving suppli
 (`match.IsBoundTo(supplierId)`, `SeenCount > 1`). It fails the day something starts
 auto-binding — precisely when a human should be asked to review that choice.
 
-**Reachability caveat.** This park needs an org with no usable supplier. Inbound email falls
-back to the oldest active supplier (cell 3b), so an org holding at least one supplier never
-reaches it in production — the cell arranges a supplier-less arrival explicitly.
+**Reachability note (updated 2026-07-26).** This park used to need an org with no usable
+supplier: inbound email fell back to the oldest active supplier, so an org holding at least one
+supplier never reached it in production. That fallback was deleted (F1), and **cell 3b now parks
+with two active suppliers present**. The cell still arranges a supplier-less arrival explicitly,
+because what it pins is that the learned binding does not auto-route — not how the order became
+unrouted.
 
 ## Proof the matrix is load-bearing
 
@@ -86,6 +89,11 @@ failed, no collateral**, then all three were reverted:
 | mutation | expected | actual |
 |---|---|---|
 | `InboundEmailRouter` fallback `OrderBy(CreatedAt)` → `OrderByDescending` | 3b fails | 3b failed |
+
+That first mutation is no longer runnable as written — the fallback it perturbs was deleted on
+2026-07-26. Its replacement, applied when 3b was re-pointed at `ParkedUnrouted`: restoring the
+fallback makes **3b fail** (it routes instead of parking), which was observed on the sibling unit
+test as `Expected orders.UnroutedCalledWith to contain 1 item(s), but found 0`.
 | `SftpIngressService` resolver drops `s.DeletedAt == null` | 4c fails | 4c failed |
 | 6b probe: auto-bind the 2nd order from the fingerprint | 6b fails | 6b failed |
 
@@ -168,9 +176,12 @@ where they agree it is corroboration rather than an echo.
   measured that a repeat layout went to the wrong supplier; this suite read
   `FingerprintBoost.Apply` and found `SupplierIds` dropped. Same conclusion: the product cannot
   yet claim the fingerprint suggests a supplier.
-- **Its F1 is the reachability caveat on cells 3c/3d/6b.** Inbound email falls back to the oldest
-  active supplier, so `unrouted` is unreachable on prod for an org holding at least one supplier.
-  Cell 3b asserts that fallback as intended behaviour; F1 is its consequence. Read them together.
+- **Its F1 was the reachability caveat on cells 3c/3d/6b — now FIXED (2026-07-26).** Inbound email
+  fell back to the oldest active supplier, so `unrouted` was unreachable on prod for an org holding
+  at least one supplier, and **cell 3b asserted that fallback as intended behaviour**. The fallback
+  is deleted: a configured Email-intake default routes the mail, anything else parks. 3b now
+  asserts `ParkedUnrouted`, and the caveat on 3c/3d/6b is lifted — those cells still arrange a
+  supplier-less arrival, but no longer *have* to.
 - **Its F2 is a KNOWN LIMIT of cell 6a.** Cell 6a calls `RecordParseSuccessAsync` directly (as the
   sibling suite does), so it proves the recorder binds on re-entry — **not** that the real
   `ParseOrderJob` file-backed re-parse reaches it. F2 measured that it does not: phantom `Deleted`

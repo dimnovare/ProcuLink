@@ -52,7 +52,7 @@ namespace ProcuLink.Api.Tests.Integration;
 //   2c    REST ingress       SupplierId = unknown name                   rejected 400
 //   2d    REST ingress       SupplierId = another org's supplier GUID    rejected 400
 //   3a    inbound email      org default supplier set                    routed (to default)
-//   3b    inbound email      no default, 2 suppliers                     routed (to oldest)
+//   3b    inbound email      no default, 2 suppliers                     parked unrouted (200)
 //   3c    inbound email      no supplier at all                          parked unrouted (200)
 //   3d    inbound email      only a soft-deleted supplier                parked unrouted (200)
 //   3e    inbound email      prose-only body NLP, no supplier            parked unrouted (200)
@@ -226,7 +226,7 @@ public sealed class SupplierRoutingMatrixPostgresTests
         new("2d", "REST ingress",    "SupplierId = another org's supplier GUID",  RoutingOutcome.Rejected,       400),
 
         new("3a", "inbound email",   "org default supplier set",                  RoutingOutcome.Routed,         200),
-        new("3b", "inbound email",   "no default, 2 suppliers (oldest wins)",     RoutingOutcome.Routed,         200),
+        new("3b", "inbound email",   "no default, 2 suppliers (never guesses)",   RoutingOutcome.ParkedUnrouted, 200),
         new("3c", "inbound email",   "no supplier at all",                        RoutingOutcome.ParkedUnrouted, 200),
         new("3d", "inbound email",   "only a soft-deleted supplier",              RoutingOutcome.ParkedUnrouted, 200),
         new("3e", "inbound email",   "prose-only body NLP, no supplier",          RoutingOutcome.ParkedUnrouted, 200),
@@ -426,8 +426,10 @@ public sealed class SupplierRoutingMatrixPostgresTests
         var slug  = $"routing-{cell.Id}-{orgId:N}";
         var now   = DateTime.UtcNow;
 
-        // Two suppliers, deliberately different ages, so "oldest wins" and "the configured
-        // default wins" are distinguishable outcomes rather than the same guess.
+        // Two suppliers, deliberately different ages. Age used to decide the outcome — the router
+        // took the oldest when no default was configured. It no longer picks either, so the ages
+        // now serve the opposite purpose: cell 3a's configured default is the NEWER supplier, so
+        // a resurrected "oldest wins" fallback would route 3a to the wrong one and park 3b.
         var oldestSupplierId = Guid.NewGuid();
         var newerSupplierId  = Guid.NewGuid();
         Guid? expectedSupplierId = null;
@@ -450,7 +452,8 @@ public sealed class SupplierRoutingMatrixPostgresTests
                 case EmailOrgShape.TwoSuppliersNoDefault:
                     seed.Suppliers.Add(NewSupplier(oldestSupplierId, orgId, "Oldest", now.AddDays(-30)));
                     seed.Suppliers.Add(NewSupplier(newerSupplierId,  orgId, "Newer",  now.AddDays(-1)));
-                    expectedSupplierId = oldestSupplierId;
+                    // expectedSupplierId stays null: owning suppliers is not the same as saying
+                    // which one an unaddressed email belongs to, so this parks.
                     break;
 
                 case EmailOrgShape.NoSupplier:
@@ -767,9 +770,12 @@ public sealed class SupplierRoutingMatrixPostgresTests
     /// binding exists at the service — and it fails the day anything starts auto-binding, which is
     /// exactly when a human must review that choice.</para>
     ///
-    /// <para>Reachability caveat: this park needs an org with no usable supplier. Inbound email
-    /// falls back to the OLDEST active supplier (cell 3b), so an org holding at least one supplier
-    /// never reaches it — which is why the cell arranges a supplier-less arrival explicitly.</para>
+    /// <para>Reachability note: this park no longer needs an org with no usable supplier. Inbound
+    /// email used to fall back to the OLDEST active supplier, so an org holding at least one
+    /// supplier could never reach it; that fallback was deleted 2026-07-26 (F1 of the routing-matrix
+    /// live proof) and cell 3b now parks with two active suppliers present. The cell still arranges
+    /// a supplier-less arrival explicitly, because what it is pinning is that the LEARNED binding
+    /// does not auto-route — not how the order came to be unrouted.</para>
     /// </summary>
     private async Task<(CellActual, Guid?)> LearningDoesNotAutoRouteCellAsync(RoutingCell cell)
     {

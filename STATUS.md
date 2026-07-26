@@ -11,6 +11,42 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-26) — F1 FIXED: inbound email never guesses a supplier again
+
+- **The oldest-active-supplier fallback in `InboundEmailRouter.ResolveSupplierIdAsync` is
+  deleted.** Contract now: the org's configured Email-intake default (`email_config`
+  `defaultSupplierId`) routes the mail; with none configured — or one that no longer resolves —
+  the message imports **`unrouted`** via BE #52's park (`CreateUnroutedStubAsync` + ParseOrderJob),
+  answers Postmark **200**, and is resolvable through assign-supplier + FE #32's banner. The
+  resolver is now byte-for-byte the same contract as the three pull channels
+  (`SftpIngressService` / `S3IngressService` / `EmailPollOrgJob`), each verified fallback-free.
+  **This makes `unrouted` reachable on production for the first time** — the OPS-3 proof showed
+  it was not, while an org held ≥1 supplier.
+- **The one-time backfill was evaluated and deliberately NOT shipped.** Measured read-only on
+  the production database (9 orgs): **0** orgs have a default that resolves; 3 already park
+  (zero suppliers); 1 parks correctly (many suppliers, genuinely ambiguous — the founder org);
+  **5** would flip from silently-routed to parked. All 5 are dormant pre-launch orgs created the
+  same day (2026-06-03), all `pilot`/`trialing`, and **every one has 0 lifetime orders** — so no
+  production mail flow changes. One of the 5 would have had its **sample** supplier pinned as a
+  permanent email default, which is the guess-written-down failure mode rather than a fix for it.
+  A data migration only ever touches state at deploy time (orgs created later get park semantics
+  from birth), so it would have been permanently dead code. Parking costs a dormant org one
+  click, and it is the click that asks the right question.
+- Tests: 4 new real-Postgres cases + 1 Docker-free unit test, RED-first (control: with the
+  fallback restored, the unit test reports `UnroutedCalledWith … found 0`). The old
+  `ActiveSupplier_StillRoutes_UnchangedBehaviour` was mislabelled — it seeded one supplier with
+  **no** default and asserted routing, i.e. it pinned the fallback; replaced by
+  `ConfiguredDefaultSupplier_Routes`. `SeedSupplierAsync` in the unit suite now names the default
+  explicitly, because owning a supplier no longer routes anything.
+- **#65's routing matrix updated in the same PR** (it merged as `adfa00b` mid-task, so this
+  rebase picked it up). Cell **`3b`** asserted *"inbound email, no default, 2 suppliers (oldest
+  wins)" → `Routed`* — it pinned the fallback as intended behaviour — and is now
+  **`ParkedUnrouted`**, with the seeded expectation, the header table, the reachability caveat on
+  cells 3c/3d/6b, and the mutation-testing row rewritten to match. The other 26 cells are
+  untouched.
+- `OrderStatusConstants.Unrouted`'s reachability contract (read by the frontend repo) now records
+  that the push channel was a listed producer that could not actually reach the status, and why.
+
 ## Snapshot (2026-07-26) — truth pass: seven stale claims corrected, two of them P0
 
 Chasing five founder replies re-measured the standing gap list. **Seven claims in these docs

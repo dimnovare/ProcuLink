@@ -36,6 +36,14 @@ PROD = production `proculink.eu` / `api.proculink.eu`, org **Dim's Organization*
 
 ## F1 (P1) — the inbound-email channel guesses a supplier instead of parking `unrouted`
 
+> **FIXED 2026-07-26** (founder ruling "do recommended"). The fallback quoted below is deleted:
+> a configured Email-intake default routes the mail, and with none configured the message parks
+> `unrouted` and answers 200. `unrouted` is reachable on production for the first time. The
+> one-time backfill considered alongside it was **not** shipped — a read-only census of the
+> production database showed the 5 orgs it would have covered are dormant pre-launch tenants
+> with **0 lifetime orders between them**, and one of the 5 would have had its *sample* supplier
+> pinned as a permanent default. See the STATUS.md entry of the same date for the full count.
+
 **Measured on production.** With the org's default supplier cleared, a purchase order emailed to
 `redacted@example.invalid` did **not** park. It was attributed to
 **ProcuLink Sample Supplier** — a counterparty nobody chose — and went straight to
