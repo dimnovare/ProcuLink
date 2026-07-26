@@ -150,6 +150,14 @@ merged.
   quiet host: 27/27. The `0 skipped` above matters as much as the pass count: a wedged Docker
   probe skips every Postgres test and still prints `Passed!`.
 
+### CI settled the contention question
+
+**PR #65, `Build + test (213 baseline)`: PASS, 13 m 45 s.** On the Linux runner
+`ProcuLink.Api.Tests` reported **1,663 passed** — that is the local 1,661 *plus the exact two
+that failed locally*. Both delivery suites are green on CI, which confirms those failures were
+this Windows host's container contention and nothing else. All **27 matrix cells passed on CI**
+(27 `Passed`, 0 `Failed` in the run log), so Testcontainers really runs there and the cells were
+executed, not silently skipped. Solution totals: 1,221 (+2 env-gated skips) / 1,054 / 1,663.
 ## Cross-check against the OPS-3 live pass (PR #64)
 
 `docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md` asked the same question on

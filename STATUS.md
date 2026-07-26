@@ -51,6 +51,14 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   (claim + revision pin, 409), fingerprint learning, and DESADV's 501. Each assertion names its
   cell. Test-only — no production code touched. Handover:
   [`docs/qa/2026-07-fable5-push/2026-07-26-supplier-routing-matrix.md`](docs/qa/2026-07-fable5-push/2026-07-26-supplier-routing-matrix.md).
+  **BE PR #65 — open, not merged. MERGEABLE, CI green: `Build + test (213 baseline)` PASS 13m45s,
+  Api.Tests 1,663 passed on the Linux runner and all 27 cells `Passed` there.** Locally the same
+  commit showed 2 reds — `DeliveryClaimEquivalencePostgresTests` +
+  `DeliveryConfigRepublishPostgresTests`, both `Npgsql: Exception while reading from stream` — and
+  CI's 1,663 is exactly the local 1,661 plus those two, so they were this host's contention. Run
+  ALONE with the matrix excluded, the claim-equivalence suite fails **19/64** with the failing
+  cases moving between runs: it is `IAsyncLifetime` + a 64-case theory, i.e. one container PER
+  CASE. Making it class-scoped is queued as separate work.
 - **Fingerprint auto-routing is NOT shipped, and the matrix now pins that.** The only production
   consumer of `SchemaFingerprint.SupplierIdsCsv` is `FormatDetectionController.cs:58`, and even
   there `FingerprintBoost.Apply` returns `detected with { Confidence, Reasoning, SeenCount }` —
