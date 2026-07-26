@@ -11,6 +11,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+
 ## Snapshot (2026-07-26) — OPS-3: routing matrix proven per channel; two P1s found
 
 - **`docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md`.** All three PUSH
@@ -39,6 +40,52 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   OPS-2's claim they were different orgs is wrong, and the DB slug is what
   `IngressController.cs:47-53` matches. Test data to delete: 2 ROUTETEST suppliers + 4
   ROUTETEST- orders (ids in the doc); API keys already revoked, email default restored to null.
+
+
+## Snapshot (2026-07-26) — supplier routing is proven per channel, in one table
+
+- **Every ingress channel's routing is now one re-runnable matrix**, real Postgres, 27/27 green:
+  `ProcuLink.Api.Tests/Integration/SupplierRoutingMatrixPostgresTests.cs`. Cells cover manual
+  upload, REST ingress (GUID + case-insensitive name), inbound email (org default → oldest-supplier
+  fallback → park), SFTP/S3/IMAP pull (valid / NULL / soft-deleted default), `assign-supplier`
+  (claim + revision pin, 409), fingerprint learning, and DESADV's 501. Each assertion names its
+  cell. Test-only — no production code touched. Handover:
+  [`docs/qa/2026-07-fable5-push/2026-07-26-supplier-routing-matrix.md`](docs/qa/2026-07-fable5-push/2026-07-26-supplier-routing-matrix.md).
+- **Fingerprint auto-routing is NOT shipped, and the matrix now pins that.** The only production
+  consumer of `SchemaFingerprint.SupplierIdsCsv` is `FormatDetectionController.cs:58`, and even
+  there `FingerprintBoost.Apply` returns `detected with { Confidence, Reasoning, SeenCount }` —
+  `match.SupplierIds` and `SampleSupplierName` are DROPPED, so even "suggest-only" overstates it:
+  the layout is recognised, the supplier is never offered. (Independently measured live by the
+  OPS-3 pass / PR #64.) A repeat layout arriving supplier-less still parks `unrouted`; cell 6b
+  fails the day anything starts auto-binding. Caveat: that park needs an org with no usable
+  supplier — inbound email otherwise falls back to the oldest active supplier (cell 3b).
+- **Proven load-bearing, not just green:** three deliberate mutations (email oldest→newest fallback,
+  SFTP resolver dropping the soft-delete filter, a 6b auto-bind probe) failed exactly cells 3b, 4c,
+  6b with no collateral, then were reverted.
+- **New Postgres-only trap:** `SupplierConnection.ActiveRevisionId` ↔
+  `SupplierConnectionRevision.ConnectionId` cannot be inserted in ONE `SaveChanges` — EF cannot
+  order the cycle ("circular dependency was detected"). Seed as connection-unpinned → revision →
+  pin. InMemory accepts the single write, so the InMemory revision-authority tests never see it.
+- **The class-scoped-fixture lesson from #59 was applied, and it mattered more here:** xUnit builds
+  a fresh test-class instance per *theory case*, so a per-class `IAsyncLifetime` container would
+  have started and migrated **27** containers. `IClassFixture` keeps it to one; the 27 cells run
+  in ~3 s.
+
+---
+- **Cross-check with the OPS-3 live pass above (independent provenance, same conclusions).** That
+  pass measured prod; this suite reads and exercises the code — they agree without either being
+  told the other's answer. Its **F3** is the same finding as this suite's fingerprint correction
+  (`FingerprintBoost.Apply` drops `SupplierIds`), reached from the opposite direction. Its **F1**
+  (email falls back to the oldest active supplier, so `unrouted` is unreachable on prod for an org
+  with ≥1 supplier) is what matrix cell **3b** asserts as intended behaviour — read the two
+  together: 3b proves the fallback works, F1 says the fallback is why the park cannot be reached.
+- **KNOWN LIMIT of cell 6a, given OPS-3's F2.** Cell 6a drives
+  `SchemaFingerprintService.RecordParseSuccessAsync` directly, as the sibling suite does, so it
+  proves the recorder binds the operator's choice on re-entry. It does **not** prove the real
+  `ParseOrderJob` file-backed re-parse ever reaches that recorder — and F2 measured that it does
+  not (phantom `Deleted` rows → `DbUpdateConcurrencyException` → swallowed at
+  `ParseOrderJob.cs:150-153`). **So cell 6a is green while production does not learn.** Closing F2
+  is the fix; this cell is the unit-level guard, not the end-to-end proof.
 
 ## Snapshot (2026-07-25) — BE-1's KNOWN GAP closed
 
