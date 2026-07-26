@@ -66,11 +66,13 @@ public static class OrderStatusConstants
     /// listed as a producer but could not actually reach this status on any org owning at least
     /// one supplier: its resolver fell back to the org's OLDEST ACTIVE SUPPLIER, so instead of
     /// parking, mail was attributed to a counterparty nobody chose. Measured on production
-    /// (finding F1 of <c>docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md</c>);
-    /// since upload and REST ingress both reject a supplier-less request outright and the pull
-    /// channels were not configured on production, the practical effect was that NOTHING reached
-    /// this status in production. The fallback has been deleted, so the four-producer list above
-    /// is true for the push channel as well as the pull ones.
+    /// (finding F1 of <c>docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md</c>).
+    /// Upload and REST ingress both reject a supplier-less request outright and the pull channels
+    /// were not configured on production, so email was the only push route to this status — and it
+    /// guessed. The sole exception was an org owning NO supplier at all, where the fallback found
+    /// nothing to pick; production had three such orgs, none of which had ever ingested an order.
+    /// The fallback has been deleted, so the four-producer list above is true for the push channel
+    /// as well as the pull ones.
     /// </para>
     /// Corroborating live
     /// consumers: <c>OrdersController</c>'s assign-supplier endpoint is gated on this status,
