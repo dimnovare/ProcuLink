@@ -11,6 +11,33 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-27) — full app CSP + Sentry hygiene (frontend PR #38, OPEN)
+
+- **Frontend `feat/full-app-csp-and-sentry-hygiene` → [PR #38](https://github.com/dimnovare/project-proculink/pull/38), not merged.**
+  `src/lib/security/csp.ts` builds every security header; the allowlist is derived from env
+  (Clerk publishable key → Frontend API host, API base URL, PostHog host, Sentry DSN, R2 media
+  URLs), so it can't drift. Stripe needs no directive (Checkout/Portal are top-level
+  `window.location` navigations). Ships **report-only**: full policy as
+  `Content-Security-Policy-Report-Only` reporting to Sentry, plus an enforced
+  `frame-ancestors/base-uri/object-src` subset; `CSP_MODE=enforce` flips it. `script-src` keeps
+  `'unsafe-inline'` — Next's per-page inline hydration chunks can't be hashed and a nonce would
+  deopt the prerendered marketing pages. 22 unit + 14 Playwright tests; a local production build
+  with `CSP_MODE=enforce` against a real Clerk instance/PostHog/Sentry/R2 gave **0 violations on
+  13 routes**. Enforce is deferred because Vercel previews are SSO-gated, so the authed app shell
+  on the production Clerk instance and the Stripe hand-off were not exercised.
+- **Sentry:** all three DSNs ingest (FE 07-27, Api 07-26, Worker 07-10 — one shared project,
+  `dotnet-aspnetcore`). Resolved 3 stale issues (1× stale-deploy `UnrecognizedActionError`,
+  2× Worker EF `Failed executing DbCommand`); left the 2 real N+1 perf issues open
+  (`/library/suppliers` FE, `GET /api/connections` Api). Source-map upload **works** (bundles on
+  nearly every release) but the currently deployed release `bb97186` has none and the build log
+  said nothing — the plugin ran `silent: true`. PR makes it log when a token is present and adds
+  the missing `onRequestError` hook (RSC errors were never reaching Sentry).
+- **Backend follow-up:** the two Worker `DbCommand` issues are EF *log records* at Error level,
+  no exception attached — raise the Sentry .NET `MinimumEventLevel` for
+  `Microsoft.EntityFrameworkCore.Database.Command` or they'll come back.
+- **Founder cleanup:** throwaway Sentry release `csp-sourcemap-verify-01` (3 artifact bundles)
+  from the upload verification — safe to delete.
+
 ## Snapshot (2026-07-27) — supplier auto-detect, frontend half (frontend PR #37, OPEN)
 
 - **Frontend `feat/supplier-auto-detect-fe` → [PR #37](https://github.com/dimnovare/project-proculink/pull/37), not merged.** Consumes BE #70 (`7ef2ed5`).
@@ -716,8 +743,10 @@ enforced by `StartupConfigurationValidator` + `appsettings.Production.json` — 
 - Frontend `api-client.ts` split, retry-consolidation, denormalize/partition — audit-flagged
   counterproductive pre-revenue; don't do without a fresh reason.
 - Neon pooler + `DataRetentionSweepJob` enablement — env-only flips; both dormant safe-by-default.
-- Full app CSP (script/style/connect — needs Clerk/Stripe/PostHog/Sentry testing); per-page
-  SEO metadata on the remaining marketing pages; Sentry stale-issue resolve.
+- Full app CSP — **done in frontend PR #38 (open), shipping report-only**; the remaining step is
+  flipping `CSP_MODE=enforce` in Vercel once the Sentry CSP reports stay empty. Sentry
+  stale-issue resolve — **done** (see the 2026-07-27 snapshot). Per-page SEO metadata on the
+  remaining marketing pages is still open.
 - Supplier-routing Phase 1b (SFTP/S3 enqueue gap) + integrating the two in-flight routing
   worktrees (`routing-phase0-nullable-supplier` @ `056aff6`, `routing-phase1-hold-assign`
   @ `2fed48e`).
