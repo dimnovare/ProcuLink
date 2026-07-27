@@ -61,6 +61,13 @@ internal sealed class OrderIngestionService
     /// </summary>
     private const float AiSuggestionConfidenceFloor = 0.65f;
 
+    /// <summary>
+    /// Process-wide latch for the "supplier auto-detect is not wired" warning. Static because the
+    /// fault it reports is a composition-root fault: one line per process is the whole signal, and
+    /// one line per unrouted order would be noise that gets filtered and then ignored.
+    /// </summary>
+    private static int _missingScorerWarned;
+
     public OrderIngestionService(
         ProcuLinkDbContext         db,
         IFileStorageService        fileStorage,
@@ -684,7 +691,24 @@ internal sealed class OrderIngestionService
         string? inboundSenderDomain,
         CancellationToken ct)
     {
-        if (_supplierSuggestions is null) return Array.Empty<SupplierSuggestion>();
+        if (_supplierSuggestions is null)
+        {
+            // An absent scorer and "no candidate cleared the floor" produce the SAME observable
+            // outcome — an unrouted order with no suggestion rows — and until 2026-07-27 they were
+            // equally silent. That is how BE #70 ran for a day in production, registered in both
+            // composition roots and never once reached, with no error and no log line to say so.
+            // Warn loudly enough that the next unwired dependency is one grep away, but only once
+            // per process: this is a startup-shaped fault, not a per-order one.
+            if (Interlocked.Exchange(ref _missingScorerWarned, 1) == 0)
+                _logger.LogWarning(
+                    "Supplier auto-detect is NOT wired: no ISupplierSuggestionService reached "
+                    + "OrderIngestionService, so no order in this process will EVER receive supplier "
+                    + "suggestions. This is a composition-root wiring fault, not an absence of "
+                    + "candidates. First seen on order {OrderId} (org {OrgId}).",
+                    orderId, organisationId);
+
+            return Array.Empty<SupplierSuggestion>();
+        }
 
         try
         {
@@ -713,6 +737,8 @@ internal sealed class OrderIngestionService
     private async Task SafeRecordSupplierSuggestionsAsync(
         Guid organisationId, Guid orderId, IReadOnlyList<SupplierSuggestion> suggestions, CancellationToken ct)
     {
+        // No warning on the null branch: a null scorer always yields an empty suggestion list, so
+        // SafeSuggestSuppliersAsync has already said so once for this process.
         if (_supplierSuggestions is null || suggestions.Count == 0) return;
 
         try
