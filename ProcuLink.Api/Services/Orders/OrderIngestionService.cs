@@ -1026,8 +1026,27 @@ internal sealed class OrderIngestionService
                 .Where(l => l.OrderId == orderId)
                 .ExecuteDeleteAsync(ct);
 
-            // Set the FK on each line before inserting (EF relationship fixup
-            // can't run because we detached the parent from tracking above).
+            // ExecuteDeleteAsync removes the ROWS but tells the change tracker nothing, so the lines
+            // this method loaded tracked (.Include(x => x.Lines) at the top) are now phantoms pointing
+            // at rows that are gone. `entity.Lines = lineEntities` below severs them from their
+            // required parent, EF cascades that to Deleted, and every LATER SaveChanges in this scope
+            // issues a DELETE matching 0 rows and throws DbUpdateConcurrencyException. This method's
+            // own persist and passport emit both run BEFORE that reflection and so escape it — which
+            // is why the defect was invisible from here. The victims are downstream, in the SAME
+            // Hangfire scope: SafeReconcileExceptionsAsync (swallowed at Error) and then
+            // ParseOrderJob's schema-fingerprint recorder (swallowed at Warning), which is how the
+            // operator's assign-supplier correction was silently lost on every file-backed re-parse.
+            // Only a re-parse can trip this — a first parse has no prior lines to go stale.
+            // Detach them the moment their rows go (mirrors ResolvePersistedLinesAsync).
+            foreach (var phantom in _db.ChangeTracker.Entries<PurchaseOrderLineEntity>()
+                         .Where(e => e.State != EntityState.Added && e.Entity.OrderId == orderId)
+                         .ToList())
+            {
+                phantom.State = EntityState.Detached;
+            }
+
+            // Set the FK on each line before inserting — the new entities are not reachable from the
+            // tracked parent's navigation yet, so EF relationship fixup cannot supply it.
             foreach (var line in lineEntities) line.OrderId = orderId;
             _db.PurchaseOrderLines.AddRange(lineEntities);
             _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Parsed", new
