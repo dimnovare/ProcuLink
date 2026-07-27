@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProcuLink.Infrastructure;
@@ -12,9 +13,11 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Infrastructure.Migrations
 {
     [DbContext(typeof(ProcuLinkDbContext))]
-    partial class ProcuLinkDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260727091412_AddManufacturerPartNumberToCatalog")]
+    partial class AddManufacturerPartNumberToCatalog
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1385,70 +1388,6 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("order_parties", (string)null);
                 });
 
-            modelBuilder.Entity("ProcuLink.Core.Entities.OrderSupplierSuggestion", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("created_at");
-
-                    b.Property<DateTime?>("DecidedAt")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("decided_at");
-
-                    b.Property<string>("DecidedBy")
-                        .HasColumnType("text")
-                        .HasColumnName("decided_by");
-
-                    b.Property<string>("Decision")
-                        .HasColumnType("text")
-                        .HasColumnName("decision");
-
-                    b.Property<string>("ModelVersion")
-                        .HasColumnType("text")
-                        .HasColumnName("model_version");
-
-                    b.Property<Guid>("OrderId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("order_id");
-
-                    b.Property<Guid>("OrgId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("org_id");
-
-                    b.Property<int>("Rank")
-                        .HasColumnType("integer")
-                        .HasColumnName("rank");
-
-                    b.Property<double>("Score")
-                        .HasColumnType("double precision")
-                        .HasColumnName("score");
-
-                    b.Property<string>("SignalsJson")
-                        .HasColumnType("jsonb")
-                        .HasColumnName("signals_json");
-
-                    b.Property<Guid>("SupplierId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("supplier_id");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OrgId", "OrderId", "Rank")
-                        .HasDatabaseName("IX_order_supplier_suggestions_org_id_order_id_rank");
-
-                    b.HasIndex("OrgId", "OrderId", "SupplierId")
-                        .IsUnique()
-                        .HasDatabaseName("IX_order_supplier_suggestions_live_idempotency")
-                        .HasFilter("decision IS NULL");
-
-                    b.ToTable("order_supplier_suggestions", (string)null);
-                });
-
             modelBuilder.Entity("ProcuLink.Core.Entities.OrderValidationResult", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1980,14 +1919,6 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Property<string>("HeldFromStatus")
                         .HasColumnType("text");
 
-                    b.Property<string>("InboundSenderDomain")
-                        .HasColumnType("text")
-                        .HasColumnName("inbound_sender_domain");
-
-                    b.Property<DateTime?>("InboundSenderDomainCapturedAt")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("inbound_sender_domain_captured_at");
-
                     b.Property<string>("Incoterms")
                         .HasColumnType("text")
                         .HasColumnName("incoterms");
@@ -2112,9 +2043,6 @@ namespace ProcuLink.Infrastructure.Migrations
 
                     b.HasIndex("OrgId", "CreatedAt")
                         .HasDatabaseName("IX_purchase_orders_org_id_created_at");
-
-                    b.HasIndex("OrgId", "InboundSenderDomain")
-                        .HasDatabaseName("IX_purchase_orders_org_id_inbound_sender_domain");
 
                     b.HasIndex("OrgId", "Status")
                         .HasDatabaseName("IX_purchase_orders_org_id_status");
@@ -2630,10 +2558,6 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("timestamptz")
                         .HasColumnName("deleted_at");
 
-                    b.Property<string>("EdiCode")
-                        .HasColumnType("text")
-                        .HasColumnName("edi_code");
-
                     b.Property<bool>("IsSample")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
@@ -2648,18 +2572,6 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Property<Guid>("OrgId")
                         .HasColumnType("uuid")
                         .HasColumnName("org_id");
-
-                    b.Property<string>("PrimaryDomain")
-                        .HasColumnType("text")
-                        .HasColumnName("primary_domain");
-
-                    b.Property<string>("RegistrationNumber")
-                        .HasColumnType("text")
-                        .HasColumnName("registration_number");
-
-                    b.Property<string>("VatNumber")
-                        .HasColumnType("text")
-                        .HasColumnName("vat_number");
 
                     b.HasKey("Id");
 
@@ -3277,9 +3189,6 @@ namespace ProcuLink.Infrastructure.Migrations
 
                     b.HasIndex("SupplierId");
 
-                    b.HasIndex("OrgId", "Code")
-                        .HasDatabaseName("IX_supplier_products_org_id_code");
-
                     b.HasIndex("OrgId", "SupplierId", "Barcode")
                         .HasDatabaseName("IX_supplier_products_org_id_supplier_id_barcode");
 
@@ -3731,17 +3640,6 @@ namespace ProcuLink.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Order");
-                });
-
-            modelBuilder.Entity("ProcuLink.Core.Entities.OrderSupplierSuggestion", b =>
-                {
-                    b.HasOne("ProcuLink.Core.Entities.Organisation", "Organisation")
-                        .WithMany()
-                        .HasForeignKey("OrgId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Organisation");
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.OrderValidationResult", b =>

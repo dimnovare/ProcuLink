@@ -38,5 +38,11 @@ public record ParsedOrderLine(
     string? Unspsc = null,
     string? Recipient = null,
     string? ContractNumber = null,
-    decimal? NetAmount = null
+    decimal? NetAmount = null,
+    // The manufacturer / brand the source names alongside the part number (cXML
+    // <ManufacturerName>, e.g. "REDACTED-PARTY"). Advisory context for the operator and for AI
+    // grounding — never a match predicate, because feeds spell one brand many ways
+    // ("REDACTED-PARTY" / "REDACTED-PARTY" / "REDACTED-PARTY S.p.A."). Appended LAST so every existing
+    // positional construction of this record keeps its current meaning.
+    string? ManufacturerName = null
 );

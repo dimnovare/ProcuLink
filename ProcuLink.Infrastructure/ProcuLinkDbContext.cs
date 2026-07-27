@@ -573,6 +573,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.DeliveryDate).HasColumnName("delivery_date");
             // Phase 1 lossless capture (nullable additive columns).
             b.Property(x => x.ManufacturerPartNumber).HasColumnName("manufacturer_part_number");
+            b.Property(x => x.ManufacturerName).HasColumnName("manufacturer_name");
             b.Property(x => x.CustomerPartNumber).HasColumnName("customer_part_number");
             b.Property(x => x.DiscountPercent).HasColumnName("discount_percent").HasColumnType("numeric(7,4)");
             b.Property(x => x.Unspsc).HasColumnName("unspsc");
@@ -673,6 +674,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Currency).HasColumnName("currency");
             b.Property(x => x.Barcode).HasColumnName("barcode");
             b.Property(x => x.ExternalId).HasColumnName("external_id");
+            b.Property(x => x.ManufacturerPartNumber).HasColumnName("manufacturer_part_number");
+            b.Property(x => x.ManufacturerPartNumberNormalized)
+             .HasColumnName("manufacturer_part_number_normalized");
+            b.Property(x => x.ManufacturerName).HasColumnName("manufacturer_name");
             b.Property(x => x.IsActive).HasColumnName("is_active").HasDefaultValue(true);
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
@@ -694,6 +699,15 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // because EF model config cannot express the gin_trgm_ops operator class.
             b.HasIndex(x => new { x.OrgId, x.SupplierId, x.Barcode })
              .HasDatabaseName("IX_supplier_products_org_id_supplier_id_barcode");
+            // Manufacturer-part-number fallback lookup: when a line's supplier code resolves
+            // against nothing (punchout orders carry the buying network's internal id), the
+            // manufacturer part number is the only usable key. Btree on the NORMALISED column
+            // so the query is a plain equality — never a function over every row. Deliberately
+            // NOT unique: one manufacturer part legitimately appears under several supplier
+            // codes (kit vs bare unit, regional variants), and the resolver treats that
+            // multiplicity as "ambiguous, suggest nothing" rather than picking one.
+            b.HasIndex(x => new { x.OrgId, x.SupplierId, x.ManufacturerPartNumberNormalized })
+             .HasDatabaseName("IX_supplier_products_org_id_supplier_id_mpn_normalized");
             b.HasOne(x => x.Organisation)
              .WithMany()
              .HasForeignKey(x => x.OrgId);

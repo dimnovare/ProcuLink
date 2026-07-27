@@ -88,7 +88,10 @@ public static partial class SupplierCatalogFileParser
     // ── cXML Index / catalog (bare + SOAP) ─────────────────────────────────────
 
     private static readonly string[] CxmlIndexHeaderColumns =
-        { "SupplierPartID", "SupplierPartAuxiliaryID", "Description", "UnitOfMeasure", "UnitPrice", "currency", "ManufacturerPartID" };
+    {
+        "SupplierPartID", "SupplierPartAuxiliaryID", "Description", "UnitOfMeasure", "UnitPrice",
+        "currency", "ManufacturerPartID", "ManufacturerName",
+    };
 
     /// <summary>
     /// Parses a cXML Index: iterate <c>&lt;IndexItem&gt;</c> (by LocalName, namespace-agnostic),
@@ -180,6 +183,9 @@ public static partial class SupplierCatalogFileParser
                     break;
                 case "ManufacturerPartID":
                     raw["ManufacturerPartID"] = reader.ReadElementContentAsString().Trim(); consumed = true;
+                    break;
+                case "ManufacturerName":
+                    raw["ManufacturerName"] = reader.ReadElementContentAsString().Trim(); consumed = true;
                     break;
                 case "Money":
                     // <UnitPrice><Money currency="EUR">7.01</Money></UnitPrice>
@@ -428,6 +434,11 @@ public static partial class SupplierCatalogFileParser
             ["UnitOfMeasure"] = "unit",
             ["UnitPrice"] = "price",
             ["SupplierPartAuxiliaryID"] = "external_id",
+            // ManufacturerPartID was already being READ off the wire (see ReadCxmlIndexItem) but
+            // had nowhere canonical to land, so every cXML catalog index silently threw away the
+            // one identifier a punchout order can be matched on.
+            ["ManufacturerPartID"] = "manufacturer_part_number",
+            ["ManufacturerName"] = "manufacturer_name",
             // "currency" is already stored canonical (from Money@currency).
         };
 

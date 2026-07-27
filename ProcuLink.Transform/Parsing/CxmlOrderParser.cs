@@ -160,6 +160,10 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
             // guessed downstream. ManufacturerPartNumber is the catalog/enrichment key
             // and the high-confidence source for a supplier-code suggestion.
             var mpn = GetDescendant(itemDetailEl, "ManufacturerPartID")?.Value?.Trim();
+            // The brand that goes WITH the part number. Punchout orders (Ariba/Coupa) routinely
+            // carry it — "REDACTED-PARTY" alongside "REDACTED-ORDER-DATA" — and without it the review UI
+            // can only show a bare code the operator has to look up by hand.
+            var manufacturerName = GetDescendant(itemDetailEl, "ManufacturerName")?.Value?.Trim();
             var auxId = GetDescendant(itemIdEl, "SupplierPartAuxiliaryID")?.Value?.Trim();
             var unspsc = GetDescendant(itemDetailEl, "Classification")?.Value?.Trim();
             if (string.Equals(unspsc, "unknown", StringComparison.OrdinalIgnoreCase))
@@ -179,7 +183,8 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
                 ReviewReason:  NumberParsing.BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous),
                 ManufacturerPartNumber: NullIfEmpty(mpn),
                 CustomerPartNumber:     NullIfEmpty(auxId),
-                Unspsc:                 NullIfEmpty(unspsc)));
+                Unspsc:                 NullIfEmpty(unspsc),
+                ManufacturerName:       NullIfEmpty(manufacturerName)));
 
             autoLine++;
         }

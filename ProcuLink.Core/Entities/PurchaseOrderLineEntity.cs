@@ -45,6 +45,15 @@ public class PurchaseOrderLineEntity
 
     // ── Phase 1 lossless capture (nullable). ManufacturerPartNumber = the catalog key (Phase 2). ──
     public string? ManufacturerPartNumber { get; set; }
+
+    /// <summary>
+    /// The manufacturer / brand as the source document states it (cXML
+    /// <c>&lt;ManufacturerName&gt;</c>, e.g. "REDACTED-PARTY"). Captured so the review UI can show
+    /// "REDACTED-PARTY REDACTED-ORDER-DATA" rather than a bare part number, and so a manufacturer-part
+    /// match can be sanity-checked at a glance. Advisory only — never part of the match predicate.
+    /// </summary>
+    public string? ManufacturerName { get; set; }
+
     public string? CustomerPartNumber { get; set; }
     public decimal? DiscountPercent { get; set; }
     public string? Unspsc { get; set; }

@@ -8,7 +8,17 @@ namespace ProcuLink.Core.Services;
 /// <see cref="LineNumber"/> only for callers that want to correlate; retrieval itself is
 /// order-independent.
 /// </summary>
-public sealed record CatalogRetrievalQuery(int LineNumber, string BuyerItemCode, string? Description);
+/// <remarks>
+/// <paramref name="ManufacturerPartNumber"/> is a THIRD exact key alongside the buyer code and
+/// barcode. It is the only one that survives a punchout order, whose buyer code is the buying
+/// network's internal id. Appended last + defaulted so existing positional constructions are
+/// unaffected.
+/// </remarks>
+public sealed record CatalogRetrievalQuery(
+    int LineNumber,
+    string BuyerItemCode,
+    string? Description,
+    string? ManufacturerPartNumber = null);
 
 /// <summary>
 /// Group V10 — indexed catalog retrieval at scale. For large supplier catalogs (Baltic IT

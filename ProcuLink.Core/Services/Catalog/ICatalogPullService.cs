@@ -70,4 +70,9 @@ public sealed record CatalogSampleRow(
     decimal? Price,
     string? Currency,
     string? Barcode,
-    string? ExternalId);
+    string? ExternalId,
+    // Shown in the test-fetch honesty report so a founder configuring a vendor feed can SEE
+    // whether the manufacturer part column landed — the whole point of the report is that a
+    // mis-mapped column is visible before the feed is enabled, not after 14,000 rows import.
+    string? ManufacturerPartNumber = null,
+    string? ManufacturerName = null);

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 
@@ -100,6 +101,38 @@ public sealed class CatalogRetrievalService : ICatalogRetrievalService
                 }
             }
 
+            // ── Pass 1b — EXACT MANUFACTURER PART NUMBER match (indexed) ──────────────────
+            // Compared on the normalised key (upper-cased, separators stripped) so the same part
+            // written "REDACTED-ORDER-DATA" by the buyer and "qbt2500 bk btk1" by the distributor
+            // still meets. Served by (org_id, supplier_id, manufacturer_part_number_normalized).
+            var manufacturerKeys = queries
+                .Select(q => ProductKeyNormalizer.Normalize(q.ManufacturerPartNumber))
+                .Where(k => k is not null)
+                .Select(k => k!)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            if (manufacturerKeys.Count > 0 && ordered.Count < overallCap)
+            {
+                var byManufacturerPart = await _db.SupplierProducts
+                    .AsNoTracking()
+                    .Where(p => p.OrgId == orgId && p.SupplierId == supplierId && p.IsActive
+                        && p.ManufacturerPartNumberNormalized != null
+                        && manufacturerKeys.Contains(p.ManufacturerPartNumberNormalized))
+                    .OrderBy(p => p.Code)
+                    .Take(overallCap)
+                    .Select(p => Project(p))
+                    .ToListAsync(ct);
+
+                foreach (var p in byManufacturerPart)
+                {
+                    var code = (p.Code ?? string.Empty).Trim();
+                    if (code.Length == 0 || !seen.Add(code)) continue;
+                    ordered.Add(p);
+                    if (ordered.Count >= overallCap) return ordered;
+                }
+            }
+
             // ── Pass 2 — TRIGRAM similarity ranking (pg_trgm GIN), per line ────────────────
             // For each unresolved line, rank the catalog by trigram similarity of the product
             // code+name against the line's "buyer code + description" query text, taking the top
@@ -158,5 +191,10 @@ public sealed class CatalogRetrievalService : ICatalogRetrievalService
     private static SupplierProduct Project(SupplierProduct p) => new()
     {
         Code = p.Code, Name = p.Name, Unit = p.Unit, Price = p.Price, Barcode = p.Barcode,
+        // Carried so the grounded candidate can tell the model "this catalog product IS
+        // manufacturer part X" — without it a manufacturer-code match is unexpressible.
+        ManufacturerPartNumber = p.ManufacturerPartNumber,
+        ManufacturerPartNumberNormalized = p.ManufacturerPartNumberNormalized,
+        ManufacturerName = p.ManufacturerName,
     };
 }

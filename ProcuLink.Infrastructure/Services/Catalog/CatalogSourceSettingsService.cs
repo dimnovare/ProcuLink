@@ -252,9 +252,14 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
         static bool NotBlank(string? v) => !string.IsNullOrWhiteSpace(v);
     }
 
-    /// <summary>Canonical catalog fields a mapping value may target.</summary>
+    /// <summary>
+    /// Canonical catalog fields a mapping value may target. Derived from the parser's own list
+    /// rather than restated here: this used to be a hand-copied duplicate, so a field added to
+    /// the parser was silently DROPPED from any saved column mapping until someone remembered to
+    /// update it too — with no error to notice.
+    /// </summary>
     private static readonly HashSet<string> CanonicalFields =
-        new(StringComparer.OrdinalIgnoreCase) { "code", "name", "unit", "price", "currency", "barcode", "external_id" };
+        new(ProcuLink.Transform.Catalog.SupplierCatalogFileParser.CanonicalFields, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Normalizes a per-source column mapping (plan 2026-07-02 D3) to storable JSON: trims keys,

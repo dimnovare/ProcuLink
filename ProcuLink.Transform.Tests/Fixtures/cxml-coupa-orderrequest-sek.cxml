@@ -14,7 +14,7 @@
     <Sender>
       <Credential domain="Networkid">
         <Identity>REDACTED-NETWORK-ID</Identity>
-        <SharedSecret>eatap2ple</SharedSecret>
+        <SharedSecret>REDACTED</SharedSecret>
       </Credential>
       <UserAgent>Coupa Procurement 1.0</UserAgent>
     </Sender>

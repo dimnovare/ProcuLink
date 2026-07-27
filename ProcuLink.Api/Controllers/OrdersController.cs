@@ -2457,7 +2457,11 @@ public sealed class OrdersController : ControllerBase
                 TaxAmount:    l.TaxAmount,
                 DeliveryDate: l.DeliveryDate?.ToString("yyyy-MM-dd"),
                 // P2 hardening: why the line was flagged for review (null when never flagged).
-                ReviewReason: l.ReviewReason))
+                ReviewReason: l.ReviewReason,
+                // The identifiers a punchout order actually carries — the review UI shows these
+                // beside the (meaningless) buyer item code so the operator can check a match.
+                ManufacturerPartNumber: l.ManufacturerPartNumber,
+                ManufacturerName:       l.ManufacturerName))
             .ToList(),
         Artifacts: e.OutboundArtifacts
             .OrderByDescending(a => a.CreatedAt)

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Mapping;
 using Scriban.Runtime;
@@ -150,6 +151,12 @@ internal static class ScribanOrderModel
         obj["DeliveryDate"]     = line.DeliveryDate.HasValue
             ? line.DeliveryDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
             : string.Empty;
+        // The manufacturer's identifiers. Read below as a catalog lookup key, but also bound as
+        // top-level fields: several supplier formats want the manufacturer part number emitted on
+        // the line (cXML <ManufacturerPartID>, UBL ManufacturersItemIdentification), and without
+        // a binding a template had no way to reach a value the order was already carrying.
+        obj["ManufacturerPartNumber"] = line.ManufacturerPartNumber ?? string.Empty;
+        obj["ManufacturerName"]       = line.ManufacturerName ?? string.Empty;
 
         // ── Phase 2 catalog accessor (read-only suggestion; NEVER overwrites the PO value) ──
         // The catalog row is pre-resolved by the caller (no DB access here → sandbox preserved).
@@ -162,7 +169,16 @@ internal static class ScribanOrderModel
             if (!string.IsNullOrWhiteSpace(line.SupplierItemCode))
                 catalogLookup.TryGetValue(line.SupplierItemCode, out product);
             if (product is null && !string.IsNullOrWhiteSpace(line.ManufacturerPartNumber))
+            {
                 catalogLookup.TryGetValue(line.ManufacturerPartNumber, out product);
+                // Then the normalised form, so "REDACTED-ORDER-DATA" still finds a catalog row that
+                // spells it "QBT2500BKBTK1" (the lookup carries both keys).
+                if (product is null)
+                {
+                    var normalised = ProductKeyNormalizer.Normalize(line.ManufacturerPartNumber);
+                    if (normalised is not null) catalogLookup.TryGetValue(normalised, out product);
+                }
+            }
         }
         if (product is not null)
         {
@@ -173,6 +189,11 @@ internal static class ScribanOrderModel
             catalogObj["price"]    = product.Price.HasValue ? (object)product.Price.Value : string.Empty;
             catalogObj["currency"] = product.Currency ?? string.Empty;
             catalogObj["barcode"]  = product.Barcode ?? string.Empty;
+            // The catalog's own manufacturer identifiers — a supplier format that wants the
+            // manufacturer part number emitted should prefer the CATALOG's spelling of it over
+            // whatever the buyer typed on the order line.
+            catalogObj["manufacturer_part_number"] = product.ManufacturerPartNumber ?? string.Empty;
+            catalogObj["manufacturer_name"]        = product.ManufacturerName ?? string.Empty;
         }
         obj["catalog"] = catalogObj; // empty object when no match → relaxed access renders ""
 

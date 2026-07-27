@@ -224,7 +224,9 @@ public class CatalogPullService : ICatalogPullService
             ParsedRows: parse.Drafts.Count,
             RowsWithCode: withCode,
             SampleRows: parse.Drafts.Take(5)
-                .Select(d => new CatalogSampleRow(d.Code, d.Name, d.Unit, d.Price, d.Currency, d.Barcode, d.ExternalId))
+                .Select(d => new CatalogSampleRow(
+                    d.Code, d.Name, d.Unit, d.Price, d.Currency, d.Barcode, d.ExternalId,
+                    d.ManufacturerPartNumber, d.ManufacturerName))
                 .ToList());
     }
 

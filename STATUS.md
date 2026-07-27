@@ -11,6 +11,54 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-27) — manufacturer part number is a real matching key (BE PR, OPEN)
+
+- **`feat/manufacturer-part-matching`, PR open, not merged.** Two real customer POs (sanitised,
+  now fixtures) drove it: a punchout Ariba/KSB order whose `SupplierPartID` is the buying
+  network's internal id and whose only usable key is `<ManufacturerPartID>REDACTED-ORDER-DATA`
+  (REDACTED-PARTY). The resolver used to **echo that part number back as the supplier item code at
+  0.95** — right by luck in the Maersk order (where the two identifiers are the same string),
+  wrong in the punchout one, and it bypassed the catalog allow-list. `SupplierProduct` now has
+  `manufacturer_part_number` (+ a normalised key column and index) and `manufacturer_name`; an
+  unresolved line falls back to an exact manufacturer-part lookup and suggests the supplier's
+  OWN code. Suggest-only; an ambiguous part number (two supplier codes) suggests nothing.
+- **Import alias `manufacturer part id` was retargeted** from `external_id` (the idempotent
+  re-sync key) to the new field; Jarltech's `ORIGINAL_ART_NO` / `MANUFACTURER` now land properly.
+  `CanonicalFields` had **two hand-copied duplicates** (`SuppliersController`,
+  `CatalogSourceSettingsService`) that would have 400'd / silently dropped the new targets —
+  both now derive from the parser's list.
+- **Still cannot match:** UBL `ManufacturersItemIdentification`, X12 `PO1` `MG`, EDIFACT `PIA`
+  are unread, so only cXML and the LLM PDF path supply a manufacturer part number today.
+
+## Snapshot (2026-07-27) — supplier auto-detect, frontend half (frontend PR #37, OPEN)
+
+- **Frontend `feat/supplier-auto-detect-fe` → [PR #37](https://github.com/dimnovare/project-proculink/pull/37), not merged.** Consumes BE #70 (`7ef2ed5`).
+  `AssignSupplierBanner` renders up to 3 ranked candidates from `OrderDto.supplierSuggestions`
+  (score chip, plain-language reason, collapsed per-signal breakdown, one-click Assign that
+  posts `suggestionId` so the acceptance is attributable). Suggest-only: no preselection, no
+  auto-assign, manual picker stays. Supplier profile Overview gains an Identifiers card (VAT /
+  registration / EDI-GLN / primary domain) saved through `PUT /api/suppliers/{id}` — patch
+  semantics honoured (always strings, never null) and re-rendered from the server's normalised
+  response. Not AI-branded: heuristic scores reuse the ConfidenceChip ramp, never the `ai` token.
+  Mock `ord-004` carries 3 DTO-shaped candidates. tsc + 1096/1096 vitest + build + lint green;
+  browser QA at 1280/768/390 with no overflow.
+- **Left out on purpose:** suggestions in the inbox row — `OrdersController` loads them in
+  `Get(id)` only, so per-row rendering costs one order fetch per unrouted row.
+
+## Snapshot (2026-07-26) — setup docs: step-by-step guide framework (frontend PR #36, OPEN)
+
+- **Frontend `feat/guide-framework-and-exemplars` → [PR #36](https://github.com/dimnovare/project-proculink/pull/36), not merged.** Phase 1 = framework +
+  two exemplar guides so the format can be judged before the other ~30 articles migrate:
+  `/help/guides/receive-orders-by-email` (client) and `/admin/guides/onboard-a-new-client`
+  (admin, server-side allowlist gate — 404 not 403, prose never reaches a non-admin bundle).
+  Guides stay plain `.mdx`; `bun run guides:capture` writes real screenshots to
+  `public/guides/` and regenerates its manifest from disk. Playwright launches fine on the
+  founder machine, so the shipped shots are real, not placeholders.
+- **Two backend follow-ups the runbook had to document around.** (a) The catalog-sync 403 code
+  is `catalog_sync_requires_integration` but the gate is `BillingFeature.SftpIngestion` =
+  **Growth** (`PlanConstants.cs:286`) — the code name is misleading. (b) `CLAUDE.md` §11.5 has
+  drifted from `PlanConstants.cs`: Integration is 1,500 orders (not 1,000) and **Distributor**
+  is missing from the documented ladder.
 ## Snapshot (2026-07-27) — P0: supplier auto-detect was registered but never wired (PR open)
 
 - **BE #70 produced zero suggestions on production, on every path, since it shipped.** `OrderService`

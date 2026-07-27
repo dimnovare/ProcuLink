@@ -68,12 +68,64 @@ public static partial class SupplierCatalogFileParser
             // them up with zero per-source config.
             ["supplier part id"] = "code", ["item description"] = "name",
             ["unit price"] = "price", ["unit of measure"] = "unit",
-            ["manufacturer part id"] = "external_id",
+
+            // ── manufacturer part number (MPN) ────────────────────────────────────────────
+            // The cross-party key. A distributor sells one manufacturer part under its OWN
+            // code, so when a punchout order names only the manufacturer part this is the
+            // single column that can still resolve the line. Note: "manufacturer part id"
+            // previously landed in external_id — external_id is the idempotent RE-SYNC key,
+            // so the MPN was both useless for matching and able to collide with a real ERP id.
+            ["mpn"] = "manufacturer_part_number",
+            ["manufacturer_part_number"] = "manufacturer_part_number",
+            ["manufacturerpartnumber"] = "manufacturer_part_number",
+            ["manufacturer part number"] = "manufacturer_part_number",
+            ["manufacturer_part"] = "manufacturer_part_number",
+            ["manufacturerpart"] = "manufacturer_part_number",
+            ["manufacturer_part_no"] = "manufacturer_part_number",
+            ["manufacturer part id"] = "manufacturer_part_number",   // CIF 3.0 / cXML spelling
+            ["manufacturerpartid"] = "manufacturer_part_number",
+            ["mfr_part"] = "manufacturer_part_number",
+            ["mfr_part_no"] = "manufacturer_part_number",
+            ["mfr_part_number"] = "manufacturer_part_number",
+            ["mfrpartnumber"] = "manufacturer_part_number",
+            ["mfg_part"] = "manufacturer_part_number",
+            ["mfg_part_number"] = "manufacturer_part_number",
+            ["mfgpartnumber"] = "manufacturer_part_number",
+            ["oem_part"] = "manufacturer_part_number",
+            ["oem_part_number"] = "manufacturer_part_number",
+            // Jarltech's price feed (measured 2026-07-24): ARTNUM is Jarltech's own code,
+            // ORIGINAL_ART_NO is the manufacturer part.
+            ["original_art_no"] = "manufacturer_part_number",
+            ["originalartno"] = "manufacturer_part_number",
+            ["original_article_number"] = "manufacturer_part_number",
+            // German feeds. "Artikelnummer" is deliberately ABSENT: in German catalogues it
+            // means the VENDOR's own article number (= code), not the manufacturer's, so
+            // aliasing it here would file every supplier code as an MPN.
+            ["herstellernummer"] = "manufacturer_part_number",
+            ["hersteller_nr"] = "manufacturer_part_number",
+            ["herstellernr"] = "manufacturer_part_number",
+            ["herstellerartikelnummer"] = "manufacturer_part_number",
+            ["hersteller_artikelnummer"] = "manufacturer_part_number",
+            ["herstellerartikelnr"] = "manufacturer_part_number",
+
+            // ── manufacturer / brand name (advisory, never a match predicate) ─────────────
+            ["manufacturer"] = "manufacturer_name",          // Jarltech
+            ["manufacturer_name"] = "manufacturer_name",
+            ["manufacturername"] = "manufacturer_name",
+            ["manufacturer name"] = "manufacturer_name",
+            ["brand"] = "manufacturer_name",
+            ["brand_name"] = "manufacturer_name",
+            ["hersteller"] = "manufacturer_name",
+            ["marke"] = "manufacturer_name",
         };
 
     /// <summary>Canonical catalog fields a per-source mapping may target.</summary>
     public static readonly IReadOnlyCollection<string> CanonicalFields =
-        new[] { "code", "name", "unit", "price", "currency", "barcode", "external_id" };
+        new[]
+        {
+            "code", "name", "unit", "price", "currency", "barcode", "external_id",
+            "manufacturer_part_number", "manufacturer_name",
+        };
 
     /// <summary>
     /// Routes on the file extension exactly like the original upload endpoint:
@@ -184,6 +236,11 @@ public static partial class SupplierCatalogFileParser
             Currency   = Pick(fields, "currency"),
             Barcode    = Pick(fields, "barcode"),
             ExternalId = Pick(fields, "external_id"),
+            ManufacturerPartNumber = Pick(fields, "manufacturer_part_number"),
+            ManufacturerName       = Pick(fields, "manufacturer_name"),
+            // ManufacturerPartNumberNormalized is deliberately NOT set here. It has exactly one
+            // writer — SupplierCatalogService.UpsertManyAsync — so the stored key can never drift
+            // from the stored raw value depending on which parser produced the draft.
         };
 
         static string? Pick(IReadOnlyDictionary<string, string?> f, string key) =>
