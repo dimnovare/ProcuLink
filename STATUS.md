@@ -11,6 +11,29 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-27) — setup guides phase 2 (frontend PR #39, OPEN)
+
+- **Frontend `feat/help-guides-phase-2` → [PR #39](https://github.com/dimnovare/project-proculink/pull/39), not merged.**
+  13 new guides on the #36 framework (14 live client guides + the admin runbook): every intake
+  channel one guide each (upload · email · IMAP · API · SFTP · S3/R2), supplier + identity fields
+  (#37), catalog by file, catalog auto-sync, review + ranked suggestions (#37/BE #70), item codes,
+  PO field mapping, and one delivery guide covering HTTP/cXML/SFTP/FTPS/email/ERP + test-fire.
+  23 reference articles gained a callout into their guide; `first-upload` and `email-polling`
+  retired into the pages that replace them (permanent redirects, videos re-homed, no dead links).
+  13 screenshots captured. Only `set-up-your-workspace` stays "coming soon".
+- **Two pre-existing bugs found while verifying, fixed in the same PR.** (1) The MDX pipeline had
+  no `remark-gfm`, so **every markdown table in the help centre rendered as literal `|---|` text**
+  — including the format-support matrix on `/help/output-templates` that states EDIFACT output
+  does not exist and Peppol BIS is partial. `mdx-components.tsx` had styled `table/th/td`
+  overrides that were never reached. (2) Settings → API keys said "POST order files here"; the
+  ingress endpoint binds `[FromBody] IngressOrderRequest` and has no file route.
+- **Doc drift corrected:** the in-app nav is **Partners** / **Rules & formats**, not "Library" —
+  20 stale paths across 14 help files fixed. `CLAUDE.md` §4 still carries the old table.
+- **Known gap:** two screenshot slots stay empty because mock mode cannot reach them — the New
+  supplier panel (mock billing sits at the Pilot 1-supplier limit) and the Delivery tab
+  (`getDeliveryConfig` has no mock, so it renders its load-failure branch). Both need a live
+  session; `GuideShot` renders nothing in production for an uncaptured slot.
+
 ## Snapshot (2026-07-27) — full app CSP + Sentry hygiene (frontend PR #38, OPEN)
 
 - **Frontend `feat/full-app-csp-and-sentry-hygiene` → [PR #38](https://github.com/dimnovare/project-proculink/pull/38), not merged.**
