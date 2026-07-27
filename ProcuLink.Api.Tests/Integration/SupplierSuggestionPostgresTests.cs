@@ -1,6 +1,7 @@
 using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Contracts;
@@ -43,16 +44,69 @@ public sealed class SupplierSuggestionPostgresFixture : IAsyncLifetime
             .Build();
         await _pg.StartAsync();
 
-        ConnectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var csb = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
         {
             Pooling = false,
-        }.ConnectionString;
+            Timeout = 10,
+        };
+
+        // Two verified facts, not a diagnosis: `docker inspect` shows Testcontainers publishing the
+        // port on IPv4 only ("0.0.0.0:55267->5432/tcp", no "[::]" mapping), and on this Windows host
+        // Dns.GetHostAddresses("localhost") returns ::1 first. Pinning the loopback literal removes
+        // one variable from a connection that has no reason to depend on resolver order. Applied
+        // only when the host already IS loopback, so a remote DOCKER_HOST keeps working.
+        if (string.Equals(csb.Host, "localhost", StringComparison.OrdinalIgnoreCase))
+            csb.Host = "127.0.0.1";
+
+        ConnectionString = csb.ConnectionString;
+
+        await WaitUntilAcceptingTcpAsync();
 
         // Runs the real AddSupplierAutoDetect migration — the new table, the four supplier identity
         // columns, the two sender-domain columns, the (org_id, code) index and the partial unique
         // index all have to actually apply for anything below to run at all.
         await using var migrateDb = new ProcuLinkDbContext(Options());
         await migrateDb.Database.MigrateAsync();
+    }
+
+    /// <summary>
+    /// Retries the first connection instead of letting the migration below be the thing that
+    /// discovers the container is not answering yet.
+    ///
+    /// <para>Testcontainers' PostgreSql wait strategy is <c>pg_isready</c>, which answers over the
+    /// UNIX socket and can go green before the postmaster is usable over TCP; the docker port proxy
+    /// accepts the connection anyway and nothing replies, so EF dies with "Timeout during reading
+    /// attempt" — a message this repo has (correctly) learned to read as container contention. On
+    /// 2026-07-27 that message appeared with 30+ Postgres containers alive from a parallel session,
+    /// and the class failed in <c>InitializeAsync</c>, which reports as every test in the class
+    /// erroring rather than as one slow start. This loop does not make a starved daemon work; it
+    /// gives a briefly-unready container time to answer, and turns the starved case into one
+    /// explicit error instead of a stack that points at the migration.</para>
+    /// </summary>
+    private async Task WaitUntilAcceptingTcpAsync()
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(90);
+        Exception? last = null;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                await using var probe = new Npgsql.NpgsqlConnection(ConnectionString);
+                await probe.OpenAsync();
+                await using var cmd = new Npgsql.NpgsqlCommand("SELECT 1", probe);
+                await cmd.ExecuteScalarAsync();
+                return;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                await Task.Delay(TimeSpan.FromSeconds(1));
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Postgres testcontainer never accepted a TCP connection within 90s.", last);
     }
 
     public async Task DisposeAsync()
@@ -469,5 +523,82 @@ public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSugg
 
         await using var verify = new ProcuLinkDbContext(Options());
         Assert.Null((await verify.OrderSupplierSuggestions.AsNoTracking().SingleAsync(s => s.Id == theirs.Id)).Decision);
+    }
+
+    // ── The live production path, end to end ──────────────────────────────────
+
+    [DockerRequiredFact]
+    public async Task FileBackedParse_resolvedFromTheContainer_writesSuggestionsForAnUnroutedOrder()
+    {
+        // Reproduces the 2026-07-27 production scenario exactly: an emailed CSV parks 'unrouted'
+        // with no supplier, and its three line codes are real codes in ONE supplier's catalog.
+        //
+        // Everything below the entry point is the real thing — real Postgres, the real parse
+        // transaction, the real scorer, and IOrderService resolved from a DI container rather than
+        // hand-built. That last part is the whole point: on prod this wrote ZERO suggestion rows
+        // while the feature's own tests were green, because they constructed the ingestion service
+        // themselves and OrderService's positional call never forwarded the scorer.
+        await using var db = new ProcuLinkDbContext(Options());
+        var orgId = await SeedOrgAsync(db, "wiring");
+
+        var carrier = AddSupplier(db, orgId, "REDACTED-PARTY");
+        var other   = AddSupplier(db, orgId, "Unrelated Ltd");
+
+        void Catalog(Guid supplierId, params string[] codes)
+        {
+            foreach (var code in codes)
+                db.SupplierProducts.Add(new SupplierProduct
+                {
+                    Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId, Code = code,
+                    IsActive = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+                });
+        }
+
+        Catalog(carrier.Id, "ETI292", "BIXCABPAR2", "ETTAEZC1X-5");
+        Catalog(other.Id, "NOTHING-ALIKE");
+
+        var order = AddOrder(db, orgId, status: OrderStatusConstants.Parsing, supplierId: null,
+            senderDomain: "example.invalid");
+        order.SourceFileKey = $"orders/{order.Id}/AUTODETECT-1.csv";
+        await db.SaveChangesAsync();
+
+        const string csv =
+            "ponumber,currency,buyername,linenumber,buyeritemcode,description,quantity,unitprice\n" +
+            "AUTODETECT-1,EUR,Buyer Ltd,1,ETI292,Scanner,1,10.00\n" +
+            "AUTODETECT-1,EUR,Buyer Ltd,2,BIXCABPAR2,Cable,2,5.00\n" +
+            "AUTODETECT-1,EUR,Buyer Ltd,3,ETTAEZC1X-5,Terminal,1,99.00\n";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(csv);
+
+        var storage = new Mock<IFileStorageService>();
+        storage.Setup(f => f.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync(() => new MemoryStream(bytes));
+
+        await using var sp = Composition.OrderServiceCompositionRootTests.BuildContainer(
+            s => s.AddSingleton<IFileStorageService>(storage.Object),
+            postgresConnectionString: _fx.ConnectionString);
+
+        using var scope = sp.CreateScope();
+        var parsed = await scope.ServiceProvider.GetRequiredService<IOrderService>()
+            .ParseStoredFileAsync(orgId, order.Id, default);
+
+        Assert.True(parsed.IsSuccess, parsed.Error);
+
+        await using var verify = new ProcuLinkDbContext(Options());
+
+        var rows = await verify.OrderSupplierSuggestions.AsNoTracking()
+            .Where(s => s.OrderId == order.Id)
+            .OrderBy(s => s.Rank)
+            .ToListAsync();
+
+        Assert.NotEmpty(rows);
+        Assert.Equal(carrier.Id, rows[0].SupplierId);
+        Assert.DoesNotContain(rows, r => r.SupplierId == other.Id);
+        Assert.All(rows, r => Assert.Null(r.Decision));
+
+        // Suggest, never assign (founder ruling D3): the order still waits for a human.
+        var reparked = await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == order.Id);
+        Assert.Null(reparked.SupplierId);
+        Assert.Equal(OrderStatusConstants.Unrouted, reparked.Status);
+        Assert.Equal(3, await verify.PurchaseOrderLines.CountAsync(l => l.OrderId == order.Id));
     }
 }

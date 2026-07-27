@@ -11,6 +11,28 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-27) — P0: supplier auto-detect was registered but never wired (PR open)
+
+- **BE #70 produced zero suggestions on production, on every path, since it shipped.** `OrderService`
+  hand-constructs `OrderIngestionService` with a positional argument list and never forwarded
+  `ISupplierSuggestionService`, so DI resolved the scorer into `OrderService` and it was dropped —
+  `SafeSuggestSuppliersAsync` then early-returned empty, silently. Both the file-backed parse
+  (`ParseStoredFileAsync`, every emailed/ingested order) and the prose-only sync path
+  (`CreateStubFromParsedOrderAsync`) were dead. Live proof: `order_supplier_suggestions` had 0 rows
+  for all time. Fixed by forwarding it; the whole call now uses named arguments.
+- **Audited the same class of bug across every optional ingestion dependency.**
+  `structuredExtractor`, `aiDecisions`, `catalogRetrieval`, `effectiveConfig`, `productCodeSearch`,
+  `aiUsage`, `cxmlResolver` all reach their sub-service — `supplierSuggestions` was the only dead
+  one. Separately, `ICatalogRetrievalService` is not registered in the Worker (only the API); the
+  ingestion service self-constructs it there, so behaviour matches.
+- **Silence is no longer possible:** a missing scorer now logs Warning once per process naming it as
+  a composition-root wiring fault, not an absence of candidates.
+- Tests: 2 composition-root tests resolving `IOrderService` from a real container (one behavioural,
+  one that walks the ingestion constructor and fails on ANY unforwarded dependency) + 1 real-Postgres
+  test reproducing the live scenario. All three RED first, verified by re-unwiring after the fix.
+
+---
+
 ## Snapshot (2026-07-26) — supplier auto-detect backend (BE-5 P1+P2+P3)
 
 - **An order that arrives without a supplier now comes with ranked candidates and a reason.**

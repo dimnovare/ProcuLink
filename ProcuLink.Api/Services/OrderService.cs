@@ -44,7 +44,8 @@ public sealed class OrderService : IOrderService, IStubOrderCreator
         ProcuLink.Transform.Tokenizing.ISourceTokenizer? sourceTokenizer = null,
         ICxmlCredentialResolver?       cxmlResolver = null,
         IProductCodeSearch?            productCodeSearch = null,
-        IAiUsageTracker?               aiUsage = null)
+        IAiUsageTracker?               aiUsage = null,
+        ISupplierSuggestionService?    supplierSuggestions = null)
     {
         // Shared helpers (best-effort exception reconcile, passport events, audit-event
         // builder, extraction-review flagging) used by more than one sub-service.
@@ -55,10 +56,21 @@ public sealed class OrderService : IOrderService, IStubOrderCreator
         // when present, otherwise we build the stateless concrete tokenizer here.
         var tokenizer = sourceTokenizer ?? new ProcuLink.Transform.Tokenizing.SourceTokenizer();
 
+        // NOTE: named arguments from here on. This call is the composition root for the ingestion
+        // path — a positional list is what let supplier auto-detect (BE #70) ship registered in DI,
+        // resolved into THIS constructor, and then silently dropped on the floor: an omitted
+        // optional argument is not a compile error, and the feature's own tests all constructed
+        // OrderIngestionService directly, so nothing caught it. Every new optional dependency must
+        // be forwarded here by name, and
+        // ProcuLink.Api.Tests/Composition/OrderServiceCompositionRootTests asserts it arrived.
         _ingestion = new OrderIngestionService(
             db, fileStorage, parserFactory, mappings, poMappingService, aiMappings,
             logger, integrationTrigger, formatDetector, tokenizer, structuredExtractor, shared,
-            catalogRetrieval, effectiveConfig, productCodeSearch, aiUsage);
+            catalogRetrieval:     catalogRetrieval,
+            effectiveConfig:      effectiveConfig,
+            productCodeSearch:    productCodeSearch,
+            aiUsage:              aiUsage,
+            supplierSuggestions:  supplierSuggestions);
 
         _query = new OrderQueryService(db, fileStorage);
 
