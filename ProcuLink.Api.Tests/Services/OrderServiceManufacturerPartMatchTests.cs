@@ -59,6 +59,9 @@ public class OrderServiceManufacturerPartMatchTests
             Id = orgId,
             Name = "Markit",
             Slug = $"markit-{orgId:N}",
+            // Unique per org: ClerkOrgId defaults to "" and carries a UNIQUE index. EF InMemory
+            // ignores unique indexes, so a collision here would only ever surface on Postgres.
+            ClerkOrgId = $"org_{orgId:N}",
             CreatedAt = DateTime.UtcNow,
         });
         db.Suppliers.Add(new Supplier
@@ -338,7 +341,8 @@ public class OrderServiceManufacturerPartMatchTests
         var otherSupplierId = Guid.NewGuid();
         db.Organisations.Add(new Organisation
         {
-            Id = otherOrgId, Name = "Other", Slug = $"other-{otherOrgId:N}", CreatedAt = DateTime.UtcNow,
+            Id = otherOrgId, Name = "Other", Slug = $"other-{otherOrgId:N}",
+            ClerkOrgId = $"org_{otherOrgId:N}", CreatedAt = DateTime.UtcNow,
         });
         db.Suppliers.Add(new Supplier
         {

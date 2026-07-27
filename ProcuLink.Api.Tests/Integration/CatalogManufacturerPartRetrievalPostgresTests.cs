@@ -84,7 +84,12 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests : IAsyncLifeti
         {
             db.Organisations.Add(new Organisation
             {
-                Id = orgId, Name = "Markit", Slug = $"markit-{orgId:N}", CreatedAt = DateTime.UtcNow,
+                Id = orgId, Name = "Markit", Slug = $"markit-{orgId:N}",
+                // ClerkOrgId defaults to "" and carries a UNIQUE index, so two orgs seeded in one
+                // test (the cross-tenant case) collide on it. Only Postgres enforces this — EF
+                // InMemory ignores unique indexes entirely, which is why it passed locally.
+                ClerkOrgId = $"org_{orgId:N}",
+                CreatedAt = DateTime.UtcNow,
             });
             db.Suppliers.Add(new Supplier
             {
