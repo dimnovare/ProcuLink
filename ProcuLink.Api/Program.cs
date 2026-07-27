@@ -722,6 +722,7 @@ else
 }
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
+builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISupplierSuggestionService, ProcuLink.Infrastructure.Services.Detection.SupplierSuggestionService>();
 // Stateless source-column extractor used by the magic-mapping UI (GET /api/suppliers/{id}/mapping/source-columns).
 builder.Services.AddSingleton<ProcuLink.Core.Services.Detection.ISourceColumnExtractor, ProcuLink.Transform.Detection.SourceColumnExtractor>();
 // SourceMap engine tokenizer: extracts every addressable value from a source file (CSV + XML concrete;

@@ -1155,19 +1155,23 @@ public sealed class SupplierRoutingMatrixPostgresTests
         public RoutingRecorder(DbContextOptions<ProcuLinkDbContext> options) => _options = options;
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
-            Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType,
+            CancellationToken ct, string? inboundSenderDomain = null)
             => PersistAsync(organisationId, supplierId, filename, ct);
 
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
-            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct,
+            string? inboundSenderDomain = null)
             => PersistAsync(organisationId, supplierId: null, filename, ct);
 
         public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
-            Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
+            Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct,
+            string? inboundSenderDomain = null)
             => PersistAsync(organisationId, supplierId, source, ct);
 
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(
-            Guid organisationId, ExtractedOrder order, string source, CancellationToken ct)
+            Guid organisationId, ExtractedOrder order, string source, CancellationToken ct,
+            string? inboundSenderDomain = null)
             => PersistAsync(organisationId, supplierId: null, source, ct);
 
         private async Task<Result<PurchaseOrderEntity>> PersistAsync(

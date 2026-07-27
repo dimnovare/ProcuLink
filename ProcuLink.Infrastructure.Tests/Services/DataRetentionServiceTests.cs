@@ -214,6 +214,101 @@ public class DataRetentionServiceTests
         (await db.AuditEvents.CountAsync()).Should().Be(0);
     }
 
+    // ── inbound_sender_domain (D2: 12-month scrub, never a delete) ───────────────
+
+    [Fact]
+    public async Task RunAsync_ScrubsSenderDomainsPastTwelveMonths_KeepsRecentOnes()
+    {
+        await using var db = CreateDb();
+        var expired = await SeedOrderWithSenderDomainAsync(db, ageDays: 400);   // past the 365-day window
+        var recent  = await SeedOrderWithSenderDomainAsync(db, ageDays: 30);
+
+        var result = await CreateService(db, EnabledOptions()).RunAsync(default);
+
+        result.InboundSenderDomainsScrubbed.Should().Be(1);
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == expired)).InboundSenderDomain.Should().BeNull();
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == recent)).InboundSenderDomain.Should().Be("acme.com");
+    }
+
+    [Fact]
+    public async Task RunAsync_ScrubbingASenderDomain_KeepsTheOrderItself()
+    {
+        // The order is the customer's business data. Only the captured sender domain has a clock.
+        await using var db = CreateDb();
+        var orderId = await SeedOrderWithSenderDomainAsync(db, ageDays: 400);
+
+        await CreateService(db, EnabledOptions()).RunAsync(default);
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        order.Should().NotBeNull();
+        order.PoNumber.Should().Be("PO-RETAINED");
+        order.InboundSenderDomain.Should().BeNull();
+        order.InboundSenderDomainCapturedAt.Should().BeNull("the timestamp must not outlive the value it dates");
+    }
+
+    [Fact]
+    public async Task RunAsync_SenderDomainScrub_IsIdempotent()
+    {
+        await using var db = CreateDb();
+        await SeedOrderWithSenderDomainAsync(db, ageDays: 400);
+        var service = CreateService(db, EnabledOptions());
+
+        (await service.RunAsync(default)).InboundSenderDomainsScrubbed.Should().Be(1);
+        (await service.RunAsync(default)).InboundSenderDomainsScrubbed.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RunAsync_Disabled_ScrubsNoSenderDomain()
+    {
+        // Honest note for operators: DataRetention:Enabled defaults to FALSE, so on a deploy that
+        // has not turned the sweep on, the 12-month clock does not actually run. This pins that
+        // the disabled sweep touches nothing rather than silently half-running.
+        await using var db = CreateDb();
+        var orderId = await SeedOrderWithSenderDomainAsync(db, ageDays: 400);
+
+        var result = await CreateService(db, new DataRetentionOptions { Enabled = false }).RunAsync(default);
+
+        result.InboundSenderDomainsScrubbed.Should().Be(0);
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).InboundSenderDomain.Should().Be("acme.com");
+    }
+
+    [Fact]
+    public async Task RunAsync_NeverScrubsAnOrderThatHasNoSenderDomain()
+    {
+        await using var db = CreateDb();
+        var orderId = Guid.NewGuid();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = orderId, OrgId = Guid.NewGuid(), PoNumber = "PO-NO-EMAIL", Currency = "EUR",
+            Status = OrderStatusConstants.Ready, OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            CreatedAt = DateTime.UtcNow.AddDays(-400), UpdatedAt = DateTime.UtcNow.AddDays(-400),
+        });
+        await db.SaveChangesAsync();
+
+        (await CreateService(db, EnabledOptions()).RunAsync(default)).InboundSenderDomainsScrubbed.Should().Be(0);
+    }
+
+    private static async Task<Guid> SeedOrderWithSenderDomainAsync(ProcuLinkDbContext db, int ageDays)
+    {
+        var id = Guid.NewGuid();
+        var capturedAt = DateTime.UtcNow.AddDays(-ageDays);
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = id,
+            OrgId = Guid.NewGuid(),
+            PoNumber = "PO-RETAINED",
+            Currency = "EUR",
+            Status = OrderStatusConstants.Ready,
+            OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            InboundSenderDomain = "acme.com",
+            InboundSenderDomainCapturedAt = capturedAt,
+            CreatedAt = capturedAt,
+            UpdatedAt = capturedAt,
+        });
+        await db.SaveChangesAsync();
+        return id;
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
     private static ProcuLinkDbContext CreateDb() =>
@@ -358,6 +453,24 @@ public class DataRetentionServiceTests
             if (rows.Count == 0)
                 return 0;
             _db.Set<T>().RemoveRange(rows);
+            await _db.SaveChangesAsync(ct);
+            return rows.Count;
+        }
+
+        // Same swap for the sender-domain SCRUB: InMemory cannot translate ExecuteUpdate either,
+        // so the physical update is done tracked while the production selection predicate — the
+        // load-bearing "past the 12-month window" logic — runs exactly as it does in production.
+        protected override async Task<int> ScrubOldestSenderDomainsAsync(
+            IQueryable<PurchaseOrderEntity> query, int batchSize, CancellationToken ct)
+        {
+            var rows = await query.Take(batchSize).ToListAsync(ct);
+            if (rows.Count == 0)
+                return 0;
+            foreach (var row in rows)
+            {
+                row.InboundSenderDomain = null;
+                row.InboundSenderDomainCapturedAt = null;
+            }
             await _db.SaveChangesAsync(ct);
             return rows.Count;
         }

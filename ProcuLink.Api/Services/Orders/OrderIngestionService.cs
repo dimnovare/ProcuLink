@@ -46,6 +46,12 @@ internal sealed class OrderIngestionService
     private readonly IAiUsageTracker?            _aiUsage;
 
     /// <summary>
+    /// Ranks candidate suppliers for an order that arrived without one. Optional: null simply
+    /// means no suggestions are produced, which is exactly the state before this feature existed.
+    /// </summary>
+    private readonly ISupplierSuggestionService? _supplierSuggestions;
+
+    /// <summary>
     /// Minimum confidence for an AI / fuzzy-catalog supplier-code suggestion to be surfaced on a
     /// line. Below this floor the suggestion is dropped (AiSuggested* left null) so the reviewer
     /// sees "no confident match — enter manually" rather than an unrelated catalog code. Does NOT
@@ -70,8 +76,10 @@ internal sealed class OrderIngestionService
         ICatalogRetrievalService?  catalogRetrieval = null,
         IEffectiveConnectionConfigResolver? effectiveConfig = null,
         IProductCodeSearch?        productCodeSearch = null,
-        IAiUsageTracker?           aiUsage = null)
+        IAiUsageTracker?           aiUsage = null,
+        ISupplierSuggestionService? supplierSuggestions = null)
     {
+        _supplierSuggestions = supplierSuggestions;
         _db                  = db;
         _fileStorage         = fileStorage;
         _parserFactory       = parserFactory;
@@ -251,7 +259,8 @@ internal sealed class OrderIngestionService
         string filename,
         string contentType,
         CancellationToken ct,
-        Guid? orderId = null)
+        Guid? orderId = null,
+        string? inboundSenderDomain = null)
     {
         var safeFilename = FileNameSanitiser.Sanitise(filename);
         var extension    = FileNameSanitiser.GetExtension(filename);
@@ -344,6 +353,13 @@ internal sealed class OrderIngestionService
             SourceFileKey = sourceFileKey,
             CreatedAt     = now,
             UpdatedAt     = now,
+            // Sender domain (email ingest only; null everywhere else). Written HERE rather than by
+            // the router after the fact because the parse job is enqueued immediately afterwards
+            // and reads this column — a later write would race it. Captured on ROUTED orders too:
+            // an order that already knows its supplier is precisely what teaches the domain→supplier
+            // history the next unrouted one is scored against.
+            InboundSenderDomain = NormalizeSenderDomain(inboundSenderDomain),
+            InboundSenderDomainCapturedAt = inboundSenderDomain is null ? null : now,
         };
 
         _db.PurchaseOrders.Add(entity);
@@ -389,7 +405,8 @@ internal sealed class OrderIngestionService
         Guid? supplierId,
         ExtractedOrder order,
         string source,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? inboundSenderDomain = null)
     {
         if (order is null || order.Lines is null || order.Lines.Count == 0)
             return Result<PurchaseOrderEntity>.Fail("Extracted order contains no line items.");
@@ -573,7 +590,26 @@ internal sealed class OrderIngestionService
                 Reference = p.Reference, ContactName = p.ContactName, Email = p.Email, Phone = p.Phone,
             }).ToList(),
             SourceCapture  = BuildSourceCapture(order.RawFields, organisationId, "pdf", now),
+            InboundSenderDomain = NormalizeSenderDomain(inboundSenderDomain),
+            InboundSenderDomainCapturedAt = inboundSenderDomain is null ? null : now,
         };
+
+        // ── Supplier auto-detect, sync path ───────────────────────────────────
+        // This order is persisted whole and NEVER enqueues ParseOrderJob, so the hook in
+        // ParseStoredFileAsync can never see it. Without this call the prose-only unrouted order —
+        // the exact case BE-1 created, and the one with the least other evidence, since it has no
+        // file and therefore no column layout to fingerprint — would be the one class of unrouted
+        // order that silently gets no suggestions while the UI offers them everywhere else.
+        var supplierSuggestions = supplierId is null
+            ? await SafeSuggestSuppliersAsync(
+                organisationId, orderId,
+                documentSupplierName: order.SupplierName,
+                parties:              ToSuggestionParties(order.Parties),
+                lineCodes:            order.Lines.Select(l => l.BuyerItemCode).ToList(),
+                columnHeaders:        null,   // prose has no columns
+                inboundSenderDomain:  inboundSenderDomain,
+                ct)
+            : Array.Empty<SupplierSuggestion>();
 
         _db.PurchaseOrders.Add(entity);
         _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Created", new
@@ -594,6 +630,8 @@ internal sealed class OrderIngestionService
                 grandTotal = order.GrandTotal,
             }));
         }
+
+        await SafeRecordSupplierSuggestionsAsync(organisationId, orderId, supplierSuggestions, ct);
 
         await _db.SaveChangesAsync(ct);
 
@@ -621,6 +659,122 @@ internal sealed class OrderIngestionService
 
         return Result<PurchaseOrderEntity>.Ok(entity);
     }
+
+    // ── Supplier auto-detect (unrouted orders only) ───────────────────────────
+
+    /// <summary>
+    /// Ranks candidate suppliers for an order that is about to be parked <c>unrouted</c>.
+    ///
+    /// <para><b>Never throws.</b> A suggestion is a convenience; a parse is the product. A scorer
+    /// fault must not turn a document we successfully read into a failed order, so every failure
+    /// degrades to "no suggestions" — the same treatment the schema-fingerprint call already gets
+    /// in <c>ParseOrderJob</c>.</para>
+    ///
+    /// <para>Callers must invoke this only when the order has NO supplier. A routed order pays
+    /// nothing for this feature: no queries, no rows.</para>
+    /// </summary>
+    private async Task<IReadOnlyList<SupplierSuggestion>> SafeSuggestSuppliersAsync(
+        Guid organisationId,
+        Guid orderId,
+        string? documentSupplierName,
+        IReadOnlyList<SupplierSuggestionParty>? parties,
+        IReadOnlyList<string>? lineCodes,
+        IReadOnlyList<string>? columnHeaders,
+        string? inboundSenderDomain,
+        CancellationToken ct)
+    {
+        if (_supplierSuggestions is null) return Array.Empty<SupplierSuggestion>();
+
+        try
+        {
+            return await _supplierSuggestions.SuggestAsync(
+                new SupplierSuggestionInput(
+                    organisationId, orderId, columnHeaders, documentSupplierName,
+                    parties, lineCodes, inboundSenderDomain),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Supplier auto-detect failed for order {OrderId} (non-fatal — the order still parks unrouted).",
+                orderId);
+            return Array.Empty<SupplierSuggestion>();
+        }
+    }
+
+    /// <summary>
+    /// Stages the suggestion rows into the caller's open transaction and adds the audit event.
+    ///
+    /// <para>Also never throws: on failure the rows it staged are detached, so the caller's
+    /// SaveChanges cannot inherit a half-built suggestion set and fail a parse that otherwise
+    /// succeeded.</para>
+    /// </summary>
+    private async Task SafeRecordSupplierSuggestionsAsync(
+        Guid organisationId, Guid orderId, IReadOnlyList<SupplierSuggestion> suggestions, CancellationToken ct)
+    {
+        if (_supplierSuggestions is null || suggestions.Count == 0) return;
+
+        try
+        {
+            await _supplierSuggestions.RecordAsync(organisationId, orderId, suggestions, ct);
+            _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "SupplierSuggested", new
+            {
+                count = suggestions.Count,
+                modelVersion = SupplierSuggestionScoring.ModelVersion,
+                candidates = suggestions.Select(s => new
+                {
+                    supplierId = s.SupplierId,
+                    rank = s.Rank,
+                    score = Math.Round(s.Score, 4),
+                    signals = s.Signals.Select(x => x.Signal),
+                }),
+            }));
+        }
+        catch (Exception ex)
+        {
+            // Undo everything RecordAsync staged, both directions: drop the rows it added AND roll
+            // back the supersede flags it set on existing rows. Detaching only the additions would
+            // leave a half-applied supersede to commit with the parse.
+            foreach (var staged in _db.ChangeTracker.Entries<OrderSupplierSuggestion>()
+                                      .Where(e => e.State is EntityState.Added or EntityState.Modified).ToList())
+            {
+                if (staged.State == EntityState.Added)
+                {
+                    staged.State = EntityState.Detached;
+                }
+                else
+                {
+                    staged.CurrentValues.SetValues(staged.OriginalValues);
+                    staged.State = EntityState.Unchanged;
+                }
+            }
+
+            _logger.LogWarning(ex,
+                "Recording supplier suggestions for order {OrderId} failed (non-fatal — suggestions dropped, parse continues).",
+                orderId);
+        }
+    }
+
+    /// <summary>
+    /// Canonicalises an inbound sender domain for storage so the history probe is a plain equality
+    /// match and the same sender never lands under two spellings. Null in ⇒ null out.
+    /// </summary>
+    private static string? NormalizeSenderDomain(string? raw) =>
+        SupplierSuggestionScoring.NormalizeDomain(raw);
+
+    /// <summary>Maps parsed parties onto the Core-local shape the scorer takes.</summary>
+    private static IReadOnlyList<SupplierSuggestionParty> ToSuggestionParties(IReadOnlyList<ParsedParty>? parties) =>
+        parties is null
+            ? Array.Empty<SupplierSuggestionParty>()
+            : parties.Select(p => new SupplierSuggestionParty(
+                p.Role, p.Name, p.Vat, p.RegNr, p.EdiCode, p.Email)).ToList();
+
+    /// <summary>Maps the structured-extraction parties (Core shape) onto the scorer's.</summary>
+    private static IReadOnlyList<SupplierSuggestionParty> ToSuggestionParties(IReadOnlyList<ExtractedParty>? parties) =>
+        parties is null
+            ? Array.Empty<SupplierSuggestionParty>()
+            : parties.Select(p => new SupplierSuggestionParty(
+                p.Role, p.Name, p.Vat, p.RegNr, p.EdiCode, p.Email)).ToList();
 
     // ── ParseStoredFileAsync ──────────────────────────────────────────────────
 
@@ -844,6 +998,26 @@ internal sealed class OrderIngestionService
 
             bool anyUnresolved    = lineEntities.Any(l => l.NeedsReview);
             var  aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
+
+            // ── Supplier auto-detect ──────────────────────────────────────────
+            // Only for an order with no supplier — i.e. exactly the one that is about to be parked
+            // 'unrouted' below. Everything the scorer reads is in scope here and nothing is written
+            // yet: the parsed header + parties, the line codes, the detected column layout, and the
+            // sender domain captured at ingest. The rows are staged inside the transaction further
+            // down so they commit with the parse or not at all.
+            //
+            // This changes NO status. The order still parks 'unrouted'; a suggestion is a sibling
+            // row, never a routing decision (founder ruling D3 — suggest, never auto-assign).
+            var supplierSuggestions = entity.SupplierId is null
+                ? await SafeSuggestSuppliersAsync(
+                    organisationId, orderId,
+                    documentSupplierName: parsedOrder.SupplierName,
+                    parties:              ToSuggestionParties(parsedOrder.Parties),
+                    lineCodes:            parsedOrder.Lines.Select(l => l.BuyerItemCode).ToList(),
+                    columnHeaders:        detected?.ColumnHeaders,
+                    inboundSenderDomain:  entity.InboundSenderDomain,
+                    ct)
+                : Array.Empty<SupplierSuggestion>();
 
             // ── Persist parsed results ────────────────────────────────────────
             // Use ExecuteUpdateAsync for the parent row so we bypass EF's change
@@ -1112,6 +1286,10 @@ internal sealed class OrderIngestionService
             await UpsertSourceCaptureAsync(
                 orderId, organisationId, capturedFormat,
                 tokens: sourceTokens, parsedOrder, rawText: null, now, ct);
+
+            // Ranked supplier candidates for the unrouted park, staged into this transaction so an
+            // operator never sees suggestions for a parse that did not land.
+            await SafeRecordSupplierSuggestionsAsync(organisationId, orderId, supplierSuggestions, ct);
 
             await _db.SaveChangesAsync(ct);
             // Commit the status flip + lines + parties + SourceCapture as one unit. Everything

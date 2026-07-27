@@ -78,6 +78,26 @@ public class PurchaseOrderEntity
     public string? SchemaFingerprintHash { get; set; }
 
     /// <summary>
+    /// DOMAIN ONLY of the address this order's email arrived from (e.g. "acme.com") — never the
+    /// local part, never the full address. Null for every non-email ingest path.
+    ///
+    /// <para><b>Privacy posture (founder ruling D2, 2026-07-25).</b> The full sender address stays
+    /// exactly as it was: a one-way SHA-256 in the audit payload and nowhere else. A bare domain is
+    /// an organisation, not a person — it identifies a counterparty the org already does business
+    /// with, which is precisely the routing evidence a supplier-less order lacks. Retention is 12
+    /// months from <see cref="InboundSenderDomainCapturedAt"/>, enforced by the data-retention
+    /// sweep, which SCRUBS this column rather than deleting the order.</para>
+    /// </summary>
+    public string? InboundSenderDomain { get; set; }
+
+    /// <summary>
+    /// When <see cref="InboundSenderDomain"/> was captured (UTC). The retention clock: this exists
+    /// as its own column rather than reusing <c>CreatedAt</c> so the scrub's cutoff is about the
+    /// personal-ish datum's age and cannot be moved by anything that touches the order.
+    /// </summary>
+    public DateTime? InboundSenderDomainCapturedAt { get; set; }
+
+    /// <summary>
     /// SLA timer: UTC deadline by which this order must be confirmed delivered. Set when delivery
     /// first starts (status → <c>delivering</c>), using the configured SLA window. Cleared (null)
     /// once the order is confirmed delivered. Null for orders that have not begun delivery.

@@ -87,7 +87,18 @@ public class SuppliersController : ControllerBase
             .AsNoTracking()
             .Where(s => s.OrgId == orgId && s.DeletedAt == null)
             .OrderBy(s => s.Name)
-            .Select(s => new { id = s.Id, name = s.Name })
+            .Select(s => new
+            {
+                id = s.Id,
+                name = s.Name,
+                // Identity fields (D1). Null until an org fills them in; the supplier-profile form
+                // that writes them is a separate FE chip, but the contract is live now so that chip
+                // has something to bind to and supplier auto-detect has a right-hand side.
+                vatNumber = s.VatNumber,
+                registrationNumber = s.RegistrationNumber,
+                ediCode = s.EdiCode,
+                primaryDomain = s.PrimaryDomain,
+            })
             .ToListAsync(ct);
         return Ok(suppliers);
     }
@@ -136,6 +147,10 @@ public class SuppliersController : ControllerBase
             OrgId     = orgId,
             Name      = nameTrimmed,
             CreatedAt = DateTime.UtcNow,
+            VatNumber          = Trimmed(request.VatNumber),
+            RegistrationNumber = Trimmed(request.RegistrationNumber),
+            EdiCode            = Trimmed(request.EdiCode),
+            PrimaryDomain      = NormalizedDomain(request.PrimaryDomain),
         };
 
         _db.Suppliers.Add(supplier);
@@ -154,7 +169,7 @@ public class SuppliersController : ControllerBase
                 ct: ct);
         }
 
-        var result = new { id = supplier.Id, name = supplier.Name };
+        var result = SupplierDetails(supplier);
         return CreatedAtAction(nameof(GetSuppliers), result);
     }
 
@@ -190,9 +205,18 @@ public class SuppliersController : ControllerBase
             return Conflict(new { error = $"A supplier named '{nameTrimmed}' already exists." });
 
         supplier.Name = nameTrimmed;
+
+        // Patch-style: only a value that was actually supplied is written. An empty string is the
+        // explicit "clear this" and normalises to null. See RenameSupplierRequest for why a plain
+        // overwrite would be destructive here.
+        if (request.VatNumber is not null)          supplier.VatNumber = Trimmed(request.VatNumber);
+        if (request.RegistrationNumber is not null) supplier.RegistrationNumber = Trimmed(request.RegistrationNumber);
+        if (request.EdiCode is not null)            supplier.EdiCode = Trimmed(request.EdiCode);
+        if (request.PrimaryDomain is not null)      supplier.PrimaryDomain = NormalizedDomain(request.PrimaryDomain);
+
         await _db.SaveChangesAsync(ct);
 
-        return Ok(new { id = supplier.Id, name = supplier.Name });
+        return Ok(SupplierDetails(supplier));
     }
 
     // ── DELETE /api/suppliers/{id} ────────────────────────────────────────────
@@ -1022,6 +1046,43 @@ public class SuppliersController : ControllerBase
 
     private Task<bool> SupplierExistsAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
         _db.Suppliers.AnyAsync(s => s.Id == supplierId && s.OrgId == orgId && s.DeletedAt == null, ct);
+
+    // ── Supplier identity fields (D1) ─────────────────────────────────────────
+
+    /// <summary>Trims an optional identity value; blank becomes null so "" reads as "cleared", not as an empty match key.</summary>
+    private static string? Trimmed(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>
+    /// Stores a primary domain in the same canonical form inbound sender domains are stored in, so
+    /// the two are comparable by plain equality. A user who types "https://www.Acme.com/" or
+    /// "redacted@example.invalid" gets "acme.com" either way.
+    /// </summary>
+    private static string? NormalizedDomain(string? value)
+    {
+        var trimmed = Trimmed(value);
+        if (trimmed is null) return null;
+
+        // Tolerate a pasted URL: drop scheme and anything from the first slash on.
+        var withoutScheme = trimmed
+            .Replace("https://", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("http://", string.Empty, StringComparison.OrdinalIgnoreCase);
+        var slash = withoutScheme.IndexOf('/');
+        if (slash >= 0) withoutScheme = withoutScheme[..slash];
+
+        return SupplierSuggestionScoring.NormalizeDomain(withoutScheme);
+    }
+
+    /// <summary>The supplier shape returned by create and update — same fields the list returns.</summary>
+    private static object SupplierDetails(Supplier s) => new
+    {
+        id = s.Id,
+        name = s.Name,
+        vatNumber = s.VatNumber,
+        registrationNumber = s.RegistrationNumber,
+        ediCode = s.EdiCode,
+        primaryDomain = s.PrimaryDomain,
+    };
 }
 
 public record TestPoMappingRequest(

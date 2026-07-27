@@ -186,8 +186,8 @@ public class ApiKeyAuthHandlerTenantUnificationTests
         orders
             .Setup(s => s.CreateStubFromParsedOrderAsync(
                 It.IsAny<Guid>(), supplierId, It.IsAny<ExtractedOrder>(),
-                "ingress_api", It.IsAny<CancellationToken>()))
-            .Callback<Guid, Guid, ExtractedOrder, string, CancellationToken>((o, _, _, _, _) => observedOrgId = o)
+                "ingress_api", It.IsAny<CancellationToken>(), It.IsAny<string?>()))
+            .Callback<Guid, Guid, ExtractedOrder, string, CancellationToken, string?>((o, _, _, _, _, _) => observedOrgId = o)
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(createdEntity));
         orders
             .Setup(s => s.GetByIdAsync(orgId, createdOrderId, It.IsAny<CancellationToken>()))
@@ -219,7 +219,7 @@ public class ApiKeyAuthHandlerTenantUnificationTests
         orders.Verify(
             s => s.CreateStubFromParsedOrderAsync(
                 It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<ExtractedOrder>(),
-                It.IsAny<string>(), It.IsAny<CancellationToken>()),
+                It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()),
             Times.Once);
 
         var keyRows = await db.IdempotencyKeys.Where(k => k.OrgId == orgId).ToListAsync();
