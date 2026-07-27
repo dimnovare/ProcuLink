@@ -4,6 +4,7 @@ using CsvHelper;
 using CsvHelper.Configuration;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Helpers;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -1623,7 +1624,9 @@ internal sealed class OrderIngestionService
                 l.BuyerItemCode,
                 l.Description,
                 l.Quantity,
-                l.Unit))
+                l.Unit,
+                l.ManufacturerPartNumber,
+                l.ManufacturerName))
             .ToList();
 
         IReadOnlyDictionary<int, AiMappingSuggestion> suggestions =
@@ -1666,6 +1669,16 @@ internal sealed class OrderIngestionService
                 ct);
         }
 
+        // Pass 3 — manufacturer-part-number fallback against the supplier's REAL catalog.
+        // Runs after the AI call (which is the expensive, batched one) but takes precedence over
+        // it below: a deterministic exact match on a manufacturer part number beats any fuzzy
+        // guess. One indexed query for the whole order.
+        var mpnLookups = await ResolveByManufacturerPartAsync(
+            organisationId,
+            supplierId,
+            lines.Where(l => string.IsNullOrWhiteSpace(ResolveFromMap(resolvedMap, l.BuyerItemCode))).ToList(),
+            ct);
+
         // Materialise entities from the in-memory dictionaries — no further I/O.
         var entities = new List<PurchaseOrderLineEntity>(lines.Count);
         foreach (var line in lines)
@@ -1682,14 +1695,39 @@ internal sealed class OrderIngestionService
             AiMappingSuggestion? suggestion = null;
             if (!resolved)
             {
-                // Prefer a REAL code the source document already states — e.g. a cXML
-                // <ManufacturerPartID> like "REDACTED-ORDER-DATA" (a genuine Apple part number) — over a
-                // fuzzy catalog guess. The founder's complaint was that the resolver surfaced a
-                // random catalog code (e.g. "ACME-JSON-2 @ 90%") for a clearly-identified product
-                // while the manufacturer part number sat unused in the source. This is a suggestion
-                // only (the line still needs review / a one-click accept); it never auto-resolves,
-                // and it is byte-identical for sources that carry no manufacturer part number.
-                if (!string.IsNullOrWhiteSpace(line.ManufacturerPartNumber))
+                mpnLookups.TryGetValue(line.LineNumber, out var mpnLookup);
+
+                // (a) The manufacturer part number RESOLVED against the supplier's catalog. This is
+                // the punchout case: the buyer's SupplierPartID was the buying network's internal
+                // id ("29954596") and matched nothing, but <ManufacturerPartID>REDACTED-ORDER-DATA is a
+                // product this supplier stocks under its OWN code. Suggest that code — translating
+                // the manufacturer's number into the supplier's is the entire point; echoing the
+                // manufacturer's number back would hand the supplier a code it does not sell under.
+                if (mpnLookup is { Match: not null })
+                {
+                    suggestion = new AiMappingSuggestion(
+                        SupplierItemCode: mpnLookup.Match.Code.Trim(),
+                        Confidence:       0.95f,
+                        Reason:           BuildManufacturerPartReason(line, mpnLookup),
+                        Provenance:       mpnLookup.MatchedOnManufacturerPartNumber
+                            ? "catalog: manufacturer part number"
+                            : "catalog: supplier code equals the manufacturer part number");
+                }
+                // (b) The catalog knows this manufacturer part number but sells it under MORE THAN
+                // ONE code (bare unit vs kit, regional variant). There is no honest way to choose,
+                // and showing a 0.95 suggestion would invite a wrong one-click accept — so show
+                // none and let the operator pick. Note this also suppresses the (c) echo below:
+                // once the catalog has told us this part number maps to several supplier codes,
+                // echoing it back as if it were one of them is provably wrong.
+                else if (mpnLookup is { Ambiguous: true })
+                {
+                    suggestion = null;
+                }
+                // (c) A manufacturer part number is stated but the catalog cannot translate it
+                // (no catalog at all, or the product is not in it). Unchanged behaviour: surface
+                // the real code the document states rather than a fuzzy catalog guess. It is still
+                // only a suggestion — the line needs review and a one-click accept.
+                else if (!string.IsNullOrWhiteSpace(line.ManufacturerPartNumber))
                 {
                     suggestion = new AiMappingSuggestion(
                         SupplierItemCode: line.ManufacturerPartNumber!.Trim(),
@@ -1737,6 +1775,7 @@ internal sealed class OrderIngestionService
                 DeliveryDate = line.DeliveryDate,
                 // Phase 1 lossless capture (carried from the parsed line; null for parsers that don't emit it).
                 ManufacturerPartNumber = line.ManufacturerPartNumber,
+                ManufacturerName       = line.ManufacturerName,
                 CustomerPartNumber     = line.CustomerPartNumber,
                 DiscountPercent        = line.DiscountPercent,
                 Unspsc                 = line.Unspsc,
@@ -2038,6 +2077,175 @@ internal sealed class OrderIngestionService
     // rejects any code outside them. When the supplier has NO catalog, the original mapping
     // candidates are returned unchanged — behaviour is byte-for-byte today's (offer ⇔ works).
 
+    // ── Manufacturer part number as a matching key ────────────────────────────────
+    //
+    // A distributor sells one manufacturer part under its OWN code. When an order names only the
+    // manufacturer part — which is exactly what a punchout order does, because its SupplierPartID
+    // is the buying network's internal id — the manufacturer part number is the only key that can
+    // still reach the right product. This block turns it into a real lookup instead of the blind
+    // echo it used to be.
+    //
+    // Two ways a line's manufacturer part number can hit a catalog row, in strict priority order:
+    //   1. the row's own manufacturer part number, compared on the NORMALISED form
+    //      (ProductKeyNormalizer: upper-cased, every non-alphanumeric character stripped, so
+    //      "REDACTED-ORDER-DATA" == "qbt2500 bk btk1" == "QBT2500BKBTK1"). Indexed on
+    //      (org_id, supplier_id, manufacturer_part_number_normalized);
+    //   2. failing that, the row's supplier CODE, compared case-insensitively but WITHOUT
+    //      separator stripping. This covers the very common feed that predates manufacturer-part
+    //      support and simply resells under the manufacturer's number (the Maersk order's
+    //      "REDACTED-ORDER-DATA" is both). Separators are NOT stripped here on purpose: supplier codes
+    //      are a namespace the supplier controls, and collapsing "AB-123"/"AB123" inside it would
+    //      be a real risk of matching the wrong SKU — whereas for manufacturer part numbers the
+    //      punctuation genuinely is noise added by whoever re-typed it.
+    //
+    // Multiplicity is treated as information, not an obstacle: a manufacturer part number that
+    // maps to several supplier codes yields NO suggestion (see the (b) branch above), because a
+    // 0.95-confidence guess between two real products invites a wrong one-click accept.
+
+    /// <summary>One line's manufacturer-part-number lookup outcome. See the block comment above.</summary>
+    private sealed record ManufacturerPartLookup(
+        SupplierProduct? Match,
+        bool Ambiguous,
+        bool MatchedOnManufacturerPartNumber);
+
+    /// <summary>
+    /// Upper bound on catalog rows pulled back by the manufacturer-part lookup. The query is an
+    /// indexed equality over a bounded key set (at most one key per order line), so this is a
+    /// backstop against a pathological catalog that files thousands of products under one
+    /// manufacturer part number — not an expected limit.
+    /// </summary>
+    private const int ManufacturerPartMatchCap = 500;
+
+    /// <summary>
+    /// Resolves each unresolved line's manufacturer part number against the supplier's catalog in
+    /// ONE org+supplier-scoped query. Lines with no manufacturer part number, and lines whose part
+    /// number hits nothing, are simply absent from the returned map (the caller then keeps the
+    /// existing source-echo behaviour). Never cross-tenant.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<int, ManufacturerPartLookup>> ResolveByManufacturerPartAsync(
+        Guid organisationId,
+        Guid supplierId,
+        IReadOnlyList<ParsedOrderLine> unresolvedLines,
+        CancellationToken ct)
+    {
+        var empty = (IReadOnlyDictionary<int, ManufacturerPartLookup>)
+            new Dictionary<int, ManufacturerPartLookup>();
+
+        // Only lines that actually state a manufacturer part number can participate.
+        var candidates = unresolvedLines
+            .Where(l => !string.IsNullOrWhiteSpace(l.ManufacturerPartNumber))
+            .ToList();
+        if (candidates.Count == 0) return empty;
+
+        // Normalised keys hit the manufacturer-part column; raw lower-cased keys hit the code
+        // column. Both sets are tiny (one entry per distinct part number in the order).
+        var normalisedKeys = new HashSet<string>(StringComparer.Ordinal);
+        var rawLoweredKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var line in candidates)
+        {
+            var normalised = ProductKeyNormalizer.Normalize(line.ManufacturerPartNumber);
+            if (normalised is not null) normalisedKeys.Add(normalised);
+            // ToLower(), not ToLowerInvariant(): this set is compared against `p.Code.ToLower()`,
+            // which EF translates to SQL lower(). Lower-casing the two sides by different rules
+            // would let an exotic code fall out of the fetch (fail-safe, but silently). Mirrors
+            // CatalogRetrievalService's exact-match pass, which lower-cases both sides the same way.
+            rawLoweredKeys.Add(line.ManufacturerPartNumber!.Trim().ToLower());
+        }
+        if (normalisedKeys.Count == 0 && rawLoweredKeys.Count == 0) return empty;
+
+        // ToLower() rather than EF.Functions.ILike: it translates on Npgsql AND on the EF
+        // InMemory provider the unit tests use, mirroring CatalogRetrievalService's exact pass.
+        var rows = await _db.SupplierProducts
+            .AsNoTracking()
+            .Where(p => p.OrgId == organisationId && p.SupplierId == supplierId && p.IsActive
+                && ((p.ManufacturerPartNumberNormalized != null
+                        && normalisedKeys.Contains(p.ManufacturerPartNumberNormalized))
+                    || rawLoweredKeys.Contains(p.Code.ToLower())))
+            .OrderBy(p => p.Code)
+            .Take(ManufacturerPartMatchCap)
+            .ToListAsync(ct);
+
+        if (rows.Count == 0) return empty;
+
+        var result = new Dictionary<int, ManufacturerPartLookup>();
+        foreach (var line in candidates)
+        {
+            var normalised = ProductKeyNormalizer.Normalize(line.ManufacturerPartNumber);
+            // Not lower-cased: the comparison below is OrdinalIgnoreCase, so pre-folding the case
+            // would only add a second, differently-specified folding rule to reason about.
+            var rawTrimmed = line.ManufacturerPartNumber!.Trim();
+
+            // (1) the catalog's own manufacturer part number — the stronger signal, so it wins.
+            var hits = normalised is null
+                ? new List<SupplierProduct>()
+                : rows.Where(p => string.Equals(
+                        p.ManufacturerPartNumberNormalized, normalised, StringComparison.Ordinal))
+                      .ToList();
+            var matchedOnManufacturerPart = hits.Count > 0;
+
+            // (2) otherwise the supplier's own code, exact (case-insensitive) — no separator strip.
+            if (hits.Count == 0)
+            {
+                hits = rows
+                    .Where(p => string.Equals(p.Code?.Trim(), rawTrimmed, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+
+            if (hits.Count == 0) continue;
+
+            // Several ROWS carrying the same supplier code cannot happen (unique index), but be
+            // explicit: ambiguity means several distinct CODES, i.e. a genuine choice to make.
+            var distinctCodes = hits
+                .Select(p => p.Code?.Trim() ?? string.Empty)
+                .Where(c => c.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (distinctCodes.Count == 1)
+            {
+                result[line.LineNumber] = new ManufacturerPartLookup(
+                    hits[0], Ambiguous: false, MatchedOnManufacturerPartNumber: matchedOnManufacturerPart);
+            }
+            else if (distinctCodes.Count > 1)
+            {
+                _logger.LogInformation(
+                    "Manufacturer part number {Mpn} on line {LineNumber} matches {Count} catalog codes for supplier {SupplierId}; suggesting none.",
+                    line.ManufacturerPartNumber, line.LineNumber, distinctCodes.Count, supplierId);
+                result[line.LineNumber] = new ManufacturerPartLookup(
+                    Match: null, Ambiguous: true, MatchedOnManufacturerPartNumber: matchedOnManufacturerPart);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// One human sentence naming what matched what, so the reviewer can accept (or reject) the
+    /// suggestion without opening the catalog. Names the manufacturer when the document or the
+    /// catalog states it — "REDACTED-PARTY REDACTED-ORDER-DATA" is checkable at a glance, a bare part
+    /// number is not.
+    /// </summary>
+    private static string BuildManufacturerPartReason(ParsedOrderLine line, ManufacturerPartLookup lookup)
+    {
+        var product = lookup.Match!;
+        var partNumber = line.ManufacturerPartNumber!.Trim();
+        var maker = !string.IsNullOrWhiteSpace(line.ManufacturerName)
+            ? line.ManufacturerName!.Trim()
+            : product.ManufacturerName?.Trim();
+
+        var subject = string.IsNullOrWhiteSpace(maker)
+            ? $"Manufacturer part number {partNumber}"
+            : $"Manufacturer part number {partNumber} ({maker})";
+
+        var productName = string.IsNullOrWhiteSpace(product.Name)
+            ? string.Empty
+            : $" — \"{product.Name!.Trim()}\"";
+
+        return lookup.MatchedOnManufacturerPartNumber
+            ? $"{subject} matches catalog product {product.Code.Trim()}{productName}."
+            : $"{subject} is itself a catalog product code{productName}.";
+    }
+
     /// <summary>Hard cap on catalog rows loaded for in-memory retrieval, to keep the read bounded.</summary>
     private const int CatalogRetrievalPoolCap = 2000;
 
@@ -2072,7 +2280,8 @@ internal sealed class OrderIngestionService
                 organisationId, supplierId, CatalogRetrievalPoolCap, ct))
         {
             var queries = unresolvedContexts
-                .Select(l => new CatalogRetrievalQuery(l.LineNumber, l.BuyerItemCode, l.Description))
+                .Select(l => new CatalogRetrievalQuery(
+                    l.LineNumber, l.BuyerItemCode, l.Description, l.ManufacturerPartNumber))
                 .ToList();
 
             var retrieved = await _catalogRetrieval.RetrieveCandidatesAsync(
@@ -2099,6 +2308,9 @@ internal sealed class OrderIngestionService
             .Select(p => new SupplierProduct
             {
                 Code = p.Code, Name = p.Name, Unit = p.Unit, Price = p.Price, Barcode = p.Barcode,
+                ManufacturerPartNumber = p.ManufacturerPartNumber,
+                ManufacturerPartNumberNormalized = p.ManufacturerPartNumberNormalized,
+                ManufacturerName = p.ManufacturerName,
             })
             .ToListAsync(ct);
 
@@ -2240,7 +2452,11 @@ internal sealed class OrderIngestionService
                 Name: product.Name,
                 Unit: product.Unit,
                 Price: product.Price,
-                Barcode: product.Barcode));
+                Barcode: product.Barcode,
+                // The manufacturer's own number for this catalog product. Without it the model
+                // cannot recognise a punchout line, whose only real identifier IS that number.
+                ManufacturerPartNumber: product.ManufacturerPartNumber,
+                ManufacturerName: product.ManufacturerName));
         }
 
         foreach (var m in mappingCandidates)

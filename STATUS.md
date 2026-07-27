@@ -11,6 +11,25 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-27) — manufacturer part number is a real matching key (BE PR, OPEN)
+
+- **`feat/manufacturer-part-matching`, PR open, not merged.** Two real customer POs (sanitised,
+  now fixtures) drove it: a punchout Ariba/KSB order whose `SupplierPartID` is the buying
+  network's internal id and whose only usable key is `<ManufacturerPartID>REDACTED-ORDER-DATA`
+  (REDACTED-PARTY). The resolver used to **echo that part number back as the supplier item code at
+  0.95** — right by luck in the Maersk order (where the two identifiers are the same string),
+  wrong in the punchout one, and it bypassed the catalog allow-list. `SupplierProduct` now has
+  `manufacturer_part_number` (+ a normalised key column and index) and `manufacturer_name`; an
+  unresolved line falls back to an exact manufacturer-part lookup and suggests the supplier's
+  OWN code. Suggest-only; an ambiguous part number (two supplier codes) suggests nothing.
+- **Import alias `manufacturer part id` was retargeted** from `external_id` (the idempotent
+  re-sync key) to the new field; Jarltech's `ORIGINAL_ART_NO` / `MANUFACTURER` now land properly.
+  `CanonicalFields` had **two hand-copied duplicates** (`SuppliersController`,
+  `CatalogSourceSettingsService`) that would have 400'd / silently dropped the new targets —
+  both now derive from the parser's list.
+- **Still cannot match:** UBL `ManufacturersItemIdentification`, X12 `PO1` `MG`, EDIFACT `PIA`
+  are unread, so only cXML and the LLM PDF path supply a manufacturer part number today.
+
 ## Snapshot (2026-07-27) — supplier auto-detect, frontend half (frontend PR #37, OPEN)
 
 - **Frontend `feat/supplier-auto-detect-fe` → [PR #37](https://github.com/dimnovare/project-proculink/pull/37), not merged.** Consumes BE #70 (`7ef2ed5`).

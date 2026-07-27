@@ -27,6 +27,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The real-customer cXML fixtures live in the Transform test project (they are parser
+         fixtures first). Linked rather than duplicated so there is exactly one copy to sanitise. -->
+    <None Include="..\ProcuLink.Transform.Tests\Fixtures\real-*.xml"
+          Link="Fixtures\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ProcuLink.Api\ProcuLink.Api.csproj" />
     <ProjectReference Include="..\ProcuLink.Infrastructure\ProcuLink.Infrastructure.csproj" />
     <ProjectReference Include="..\ProcuLink.Core\ProcuLink.Core.csproj" />

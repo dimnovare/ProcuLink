@@ -1,0 +1,167 @@
+<!-- Real customer purchase order (Ariba / KSB → Markit, captured 2026-07-13), sanitised for the repo:
+     <SharedSecret> redacted, and the named REDACTED-ORDER-DATA' e-mail addresses / phone numbers replaced
+     with placeholders. Company names, item codes and money are VERBATIM — they are the test signal.
+
+     Why this fixture exists: the order came through a PUNCHOUT session, so the buyer's
+     <SupplierPartID> ("29954596") is the buying network's own internal id and resolves against
+     nothing in the supplier's catalog. The only usable key is
+     <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID> + <ManufacturerName>REDACTED-PARTY</ManufacturerName>.
+     Blindly echoing the manufacturer part number back as the supplier item code is WRONG here —
+     it has to be looked up in the catalog and translated into the supplier's own code. -->
+<!DOCTYPE cXML SYSTEM "http://xml.cxml.org/schemas/cXML/1.2.069/cXML.dtd"[]>
+<cXML payloadID="1784010704800.1757656243.000016630@example.invalid" timestamp="2026-07-13T23:31:44-07:00" version="1.2.069" xml:lang="en-US">
+  <Header>
+    <From>
+      <Credential domain="NetworkId">
+        <Identity>REDACTED-NETWORK-ID</Identity>
+      </Credential>
+      <Credential domain="SystemID">
+        <Identity>CHILD1</Identity>
+      </Credential>
+    </From>
+    <To>
+      <Credential domain="NetworkId">
+        <Identity>REDACTED-NETWORK-ID</Identity>
+      </Credential>
+      <Credential domain="internalsupplierid">
+        <Identity>REDACTED-NETWORK-ID</Identity>
+      </Credential>
+      <Credential domain="buyersystemid">
+        <Identity>REDACTED-NETWORK-ID</Identity>
+      </Credential>
+      <Credential domain="sap">
+        <Identity>REDACTED-NETWORK-ID</Identity>
+      </Credential>
+      <Correspondent preferredLanguage="de-DE">
+        <Contact role="correspondent">
+          <Name xml:lang="de">REDACTED-PARTY</Name>
+          <PostalAddress name="Standardwert">
+            <Street>REDACTED-ADDRESS</Street>
+            <City>Köln</City>
+            <PostalCode>50672</PostalCode>
+            <Country isoCountryCode="DE">Deutschland</Country>
+          </PostalAddress>
+          <Email name="work" preferredLang="de-DE">support@example.invalid</Email>
+          <Email name="routing" preferredLang="de-DE">support@example.invalid</Email>
+          <Phone name="work">
+            <TelephoneNumber>
+              <CountryCode isoCountryCode="DE">49</CountryCode>
+              <AreaOrCityCode>0000</AreaOrCityCode>
+              <Number>0000000</Number>
+            </TelephoneNumber>
+          </Phone>
+        </Contact>
+      </Correspondent>
+    </To>
+    <Sender>
+      <Credential domain="AribaNetworkUserId">
+        <Identity>sysadmin@example.invalid</Identity>
+        <SharedSecret>REDACTED</SharedSecret>
+      </Credential>
+      <UserAgent>Buyer 14s2</UserAgent>
+    </Sender>
+  </Header>
+  <Request deploymentMode="production">
+    <OrderRequest>
+      <OrderRequestHeader orderDate="2026-07-13T23:31:35-07:00" orderID="4180201556" orderType="regular" orderVersion="1" type="new">
+        <Total>
+          <Money alternateAmount="" alternateCurrency="" currency="EUR">164.1</Money>
+        </Total>
+        <ShipTo>
+          <Address addressID="1440" isoCountryCode="DE">
+            <Name xml:lang="en">REDACTED-PARTY</Name>
+            <PostalAddress name="Standardwert">
+              <DeliverTo>Ship-To Contact</DeliverTo>
+              <DeliverTo>REDACTED-PARTY</DeliverTo>
+              <Street>REDACTED-ADDRESS</Street>
+              <City>Bremen</City>
+              <State>04</State>
+              <PostalCode>28199</PostalCode>
+              <Country isoCountryCode="DE">Deutschland</Country>
+            </PostalAddress>
+            <Email name="Standardwert" preferredLang="de-DE">shipto@example.invalid</Email>
+            <Phone name="work">
+              <TelephoneNumber>
+                <CountryCode isoCountryCode="DE">49</CountryCode>
+                <AreaOrCityCode>000</AreaOrCityCode>
+                <Number>00000</Number>
+              </TelephoneNumber>
+            </Phone>
+            <Fax name="work">
+              <TelephoneNumber>
+                <CountryCode isoCountryCode="DE">49</CountryCode>
+                <AreaOrCityCode>000</AreaOrCityCode>
+                <Number>00000000</Number>
+              </TelephoneNumber>
+            </Fax>
+          </Address>
+        </ShipTo>
+        <BillTo>
+          <Address addressID="1140" isoCountryCode="DE">
+            <Name xml:lang="en">REDACTED-PARTY</Name>
+            <PostalAddress name="Standardwert">
+              <Street>Westring 7-Tor 2-WE 2</Street>
+              <City>Frankenthal</City>
+              <State>07</State>
+              <PostalCode>67227</PostalCode>
+              <Country isoCountryCode="DE">Deutschland</Country>
+            </PostalAddress>
+            <Phone name="work">
+              <TelephoneNumber>
+                <CountryCode isoCountryCode="DE">49</CountryCode>
+                <AreaOrCityCode>0000</AreaOrCityCode>
+                <Number>000</Number>
+              </TelephoneNumber>
+            </Phone>
+            <Fax name="work">
+              <TelephoneNumber>
+                <CountryCode isoCountryCode="DE">49</CountryCode>
+                <AreaOrCityCode>0000</AreaOrCityCode>
+                <Number>000000</Number>
+              </TelephoneNumber>
+            </Fax>
+          </Address>
+        </BillTo>
+        <Shipping>
+          <Money alternateAmount="" alternateCurrency="" currency="EUR">0.00</Money>
+          <Description xml:lang="en">Shipping &amp; Handling</Description>
+        </Shipping>
+        <PaymentTerm payInNumberOfDays="30"></PaymentTerm>
+        <Comments>
+Comment Type: Terms and Conditions
+Body:COMPLIANCE: Standard buyer compliance terms (redacted for the fixture).
+</Comments>
+        <Extrinsic name="CompanyCode">1009</Extrinsic>
+        <Extrinsic name="PUName">REDACTED-SYSTEM</Extrinsic>
+        <Extrinsic name="LegalConditions">Terms &amp; conditions: standard purchase conditions (redacted for the fixture).</Extrinsic>
+        <Extrinsic name="InvoicingConditions">Invoicing address (redacted for the fixture).</Extrinsic>
+      </OrderRequestHeader>
+      <ItemOut quantity="1" requestedDeliveryDate="2026-07-17T03:30:00-07:00" lineNumber="1">
+        <ItemID>
+          <SupplierPartID>29954596</SupplierPartID>
+          <SupplierPartAuxiliaryID>233746496</SupplierPartAuxiliaryID>
+        </ItemID>
+        <ItemDetail>
+          <UnitPrice>
+            <Money alternateCurrency="" alternateAmount="" currency="EUR">164.1</Money>
+          </UnitPrice>
+          <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
+          <UnitOfMeasure>EA</UnitOfMeasure>
+          <Classification domain="CUSTOM">7810</Classification>
+          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
+          <ManufacturerName>REDACTED-PARTY</ManufacturerName>
+          <URL name="__lr2bb">https://www.example.invalid/cXML.ashx</URL>
+          <LeadTime>3</LeadTime>
+          <Extrinsic name="Req. Line No.">1</Extrinsic>
+          <Extrinsic name="Requester">Requester Name</Extrinsic>
+          <Extrinsic name="PR No.">REDACTED-DOCNO</Extrinsic>
+          <Extrinsic name="incoTerm"></Extrinsic>
+          <Extrinsic name="incoTermLocation"></Extrinsic>
+          <Extrinsic name="QuoteReference"></Extrinsic>
+          <Extrinsic name="QuoteLineReference"></Extrinsic>
+        </ItemDetail>
+      </ItemOut>
+    </OrderRequest>
+  </Request>
+  <EDICustomerID>00000000-0000-0000-0000-000000000000</EDICustomerID>
+</cXML>

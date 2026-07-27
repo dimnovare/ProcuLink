@@ -38,6 +38,34 @@ public class SupplierProduct
     /// <summary>Source system identifier (e.g. ERP product id) for idempotent re-sync.</summary>
     public string? ExternalId { get; set; }
 
+    /// <summary>
+    /// The MANUFACTURER's part number for this product, exactly as the supplier's feed prints it
+    /// (e.g. <c>REDACTED-ORDER-DATA</c>). Distinct from <see cref="Code"/>: a distributor sells the
+    /// same manufacturer part under its own internal code. This is the only key that survives a
+    /// punchout order, where the buyer's SupplierPartID is the buying network's internal id and
+    /// matches nothing. Never used for comparison directly — compare on
+    /// <see cref="ManufacturerPartNumberNormalized"/>.
+    /// </summary>
+    public string? ManufacturerPartNumber { get; set; }
+
+    /// <summary>
+    /// <see cref="ManufacturerPartNumber"/> run through
+    /// <see cref="ProcuLink.Core.Catalog.ProductKeyNormalizer.Normalize"/> (upper-cased, every
+    /// non-alphanumeric character stripped). Persisted rather than computed at query time so the
+    /// lookup is served by a plain btree index instead of a full scan with a function applied to
+    /// every row. Written by <c>ISupplierCatalogService.UpsertManyAsync</c> — no caller sets it.
+    /// </summary>
+    public string? ManufacturerPartNumberNormalized { get; set; }
+
+    /// <summary>
+    /// The manufacturer / brand (e.g. <c>REDACTED-PARTY</c>). Advisory: shown to the operator alongside
+    /// a manufacturer-part-number match so they can sanity-check it at a glance, and passed to the
+    /// AI as candidate evidence. Deliberately NOT part of the match predicate — feeds spell the
+    /// same brand a dozen ways ("REDACTED-PARTY" / "REDACTED-PARTY" / "REDACTED-PARTY S.p.A.") and requiring
+    /// it to agree would reject correct matches.
+    /// </summary>
+    public string? ManufacturerName { get; set; }
+
     /// <summary>Discontinued products stay for audit but are excluded from active listings.</summary>
     public bool IsActive { get; set; } = true;
 

@@ -745,6 +745,8 @@ public class SuppliersController : ControllerBase
                 currency   = p.Currency,
                 barcode    = p.Barcode,
                 externalId = p.ExternalId,
+                manufacturerPartNumber = p.ManufacturerPartNumber,
+                manufacturerName       = p.ManufacturerName,
             }),
         });
     }
@@ -885,7 +887,10 @@ public class SuppliersController : ControllerBase
         // (plus the __noheader__ / __encoding__ directives). Reject unknown targets early.
         if (request.ColumnMapping is not null)
         {
-            var validTargets = new[] { "code", "name", "unit", "price", "currency", "barcode", "external_id" };
+            // Derived from the parser's own list rather than restated here: this check used to be
+            // a hand-copied duplicate, so every field added to the parser silently 400'd until
+            // someone remembered to update it too.
+            var validTargets = ProcuLink.Transform.Catalog.SupplierCatalogFileParser.CanonicalFields.ToArray();
             foreach (var (key, value) in request.ColumnMapping)
             {
                 if (key is "__noheader__" or "__encoding__") continue;

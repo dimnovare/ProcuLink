@@ -84,7 +84,15 @@ public record OrderLineDto(
     /// <summary>Short human-readable explanation of why the line was flagged for review
     /// (unresolved code / numeric ambiguity / AI anti-hallucination / scanned-PDF vision).
     /// Null for never-flagged lines and rows created before the column existed.</summary>
-    string?  ReviewReason = null
+    string?  ReviewReason = null,
+    /// <summary>The manufacturer's own part number as the source document states it
+    /// (cXML <c>&lt;ManufacturerPartID&gt;</c>). For a punchout order this is the only identifier
+    /// that means anything outside the buying network, so the review UI must be able to show it
+    /// next to the buyer's item code. Null for sources that carry none.</summary>
+    string?  ManufacturerPartNumber = null,
+    /// <summary>The manufacturer / brand the source names (e.g. "REDACTED-PARTY"). Advisory context
+    /// so the reviewer can check a manufacturer-part match at a glance. Null when not stated.</summary>
+    string?  ManufacturerName = null
 );
 
 /// <summary>

@@ -22,7 +22,8 @@ public class SupplierCatalogServiceTests
             .Options);
 
     private static SupplierProduct Draft(string code, string? name = null, decimal? price = null,
-        string? unit = null, string? barcode = null) =>
+        string? unit = null, string? barcode = null,
+        string? manufacturerPartNumber = null, string? manufacturerName = null) =>
         new()
         {
             Code = code,
@@ -30,6 +31,10 @@ public class SupplierCatalogServiceTests
             Price = price,
             Unit = unit,
             Barcode = barcode,
+            // Deliberately never sets ManufacturerPartNumberNormalized — a parsed feed row does
+            // not carry one, and UpsertManyAsync is its single writer.
+            ManufacturerPartNumber = manufacturerPartNumber,
+            ManufacturerName = manufacturerName,
         };
 
     [Fact]
@@ -303,5 +308,192 @@ public class SupplierCatalogServiceTests
         supplier.Name = "REDACTED-NAME EU"; // a second edit, made after the upsert returned
         await db.SaveChangesAsync();
         (await db.Suppliers.SingleAsync(s => s.Id == supplierId)).Name.Should().Be("REDACTED-NAME EU");
+    }
+
+    // ── Manufacturer part number (MPN) ──────────────────────────────────────────
+    // The MPN is the only identifier a punchout / distributor line reliably shares with the
+    // supplier's catalog, so it is a first-class matching key. Lookups compare the NORMALISED
+    // key (ProductKeyNormalizer: separators stripped, upper-cased), and UpsertManyAsync is its
+    // SINGLE writer — both branches derive it from the raw value in the same statement, so the
+    // key can never drift away from the number an operator sees on screen.
+
+    private static Task<SupplierProduct> RowAsync(ProcuLinkDbContext db, string code) =>
+        db.SupplierProducts.AsNoTracking().SingleAsync(p => p.Code == code);
+
+    [Fact]
+    public async Task UpsertManyAsync_Insert_DerivesNormalizedManufacturerPartNumberFromTheRawValue()
+    {
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA",
+                manufacturerName: "Zebra"),
+        }, CancellationToken.None);
+
+        var row = await RowAsync(db, "REDACTED-ITEM");
+        row.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA", "the raw value is stored verbatim for humans");
+        row.ManufacturerPartNumberNormalized.Should().Be("QBT2500BKBTK1",
+            "the lookup key is the raw value with separators stripped and upper-cased");
+        row.ManufacturerName.Should().Be("Zebra");
+    }
+
+    [Fact]
+    public async Task UpsertManyAsync_Update_RewritesTheNormalizedKey_WhenAReimportChangesTheRawMpn()
+    {
+        // THE DRIFT GUARD. A distributor correcting an MPN in the next feed must move the lookup
+        // key with it. If the update branch wrote the raw value but left the key alone, the
+        // product would still be found by its OLD manufacturer number and never by its new one —
+        // a silent, permanent mismatch that no screen shows.
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA"),
+        }, CancellationToken.None);
+
+        var (created, updated) = await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA"),
+        }, CancellationToken.None);
+
+        created.Should().Be(0);
+        updated.Should().Be(1);
+
+        var row = await RowAsync(db, "REDACTED-ITEM");
+        row.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");
+        row.ManufacturerPartNumberNormalized.Should().Be("P1058930010");
+        row.ManufacturerPartNumberNormalized.Should().NotBe("QBT2500BKBTK1",
+            "the stale key from the previous import must not survive the re-import");
+    }
+
+    [Fact]
+    public async Task UpsertManyAsync_Update_ClearsTheNormalizedKey_WhenAReimportDropsTheMpn()
+    {
+        // The other direction of the same drift: a feed that stops carrying the MPN must not
+        // leave the old key behind, or the product keeps matching a part it no longer claims.
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA"),
+        }, CancellationToken.None);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: null),
+        }, CancellationToken.None);
+
+        var row = await RowAsync(db, "REDACTED-ITEM");
+        row.ManufacturerPartNumber.Should().BeNull();
+        row.ManufacturerPartNumberNormalized.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpsertManyAsync_IsTheSingleWriterOfTheKey_IgnoringAnyCallerSuppliedValue()
+    {
+        // A draft that arrives with a hand-set (or stale) normalized key must not be trusted on
+        // EITHER branch — the service always re-derives it, which is what makes "single writer"
+        // an enforced property rather than a convention.
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        var insert = Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA");
+        insert.ManufacturerPartNumberNormalized = "WRONG-KEY-FROM-CALLER";
+        await svc.UpsertManyAsync(orgId, supplierId, new[] { insert }, CancellationToken.None);
+
+        (await RowAsync(db, "REDACTED-ITEM")).ManufacturerPartNumberNormalized
+            .Should().Be("QBT2500BKBTK1", "the insert branch derives the key, it does not copy it");
+
+        var update = Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA");
+        update.ManufacturerPartNumberNormalized = "WRONG-KEY-FROM-CALLER";
+        await svc.UpsertManyAsync(orgId, supplierId, new[] { update }, CancellationToken.None);
+
+        (await RowAsync(db, "REDACTED-ITEM")).ManufacturerPartNumberNormalized
+            .Should().Be("P1058930010", "the update branch derives the key too");
+    }
+
+    [Fact]
+    public async Task UpsertManyAsync_BlankOrPunctuationOnlyMpn_StoresANullKey_NeverAnEmptyString()
+    {
+        // An empty-string key is the dangerous failure mode: every MPN-less product would carry
+        // it, so the first MPN lookup that normalised to "" would match the whole catalog. The
+        // assertion is written as the lookup Pass 1b actually performs (an IN over the key
+        // column), so an empty-string key would show up as three bogus matches.
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("NO-MPN-NULL",  "Cable tie",   manufacturerPartNumber: null),
+            Draft("NO-MPN-BLANK", "Cable clip",  manufacturerPartNumber: "   "),
+            Draft("NO-MPN-PUNCT", "Cable gland", manufacturerPartNumber: "---"),
+            Draft("HAS-MPN",      "Scanner",     manufacturerPartNumber: "REDACTED-ORDER-DATA"),
+        }, CancellationToken.None);
+
+        foreach (var code in new[] { "NO-MPN-NULL", "NO-MPN-BLANK", "NO-MPN-PUNCT" })
+        {
+            var row = await RowAsync(db, code);
+            row.ManufacturerPartNumberNormalized.Should().BeNull(
+                $"{code} carries no comparable manufacturer part number");
+        }
+
+        // The MPN-less rows are unreachable by key lookup …
+        (await db.SupplierProducts.AsNoTracking()
+                .Where(p => p.OrgId == orgId && p.SupplierId == supplierId
+                         && p.ManufacturerPartNumberNormalized == "")
+                .ToListAsync())
+            .Should().BeEmpty("an empty-string key would match every product that has no MPN");
+
+        // … while the row that does have one is found by exactly that key.
+        (await db.SupplierProducts.AsNoTracking()
+                .Where(p => p.OrgId == orgId && p.SupplierId == supplierId
+                         && p.ManufacturerPartNumberNormalized == "QBT2500BKBTK1")
+                .ToListAsync())
+            .Should().ContainSingle(p => p.Code == "HAS-MPN");
+    }
+
+    [Fact]
+    public async Task ListAsync_FindsAProductBySubstringOfItsManufacturerPartNumber()
+    {
+        // An operator reviewing a punchout line has the MANUFACTURER's number in front of them,
+        // not the supplier's code. The search needle below appears in NO other column of either
+        // row, so a match can only come from the manufacturer-part predicate.
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("REDACTED-ITEM", "Handheld scanner", barcode: "4001234000010",
+                manufacturerPartNumber: "REDACTED-ORDER-DATA"),
+            Draft("REDACTED-ITEM",  "Label printer",    barcode: "4001234000027",
+                manufacturerPartNumber: "REDACTED-ITEM"),
+        }, CancellationToken.None);
+
+        (await svc.ListAsync(orgId, supplierId, "2500-bk", null, CancellationToken.None))
+            .Should().ContainSingle(p => p.Code == "REDACTED-ITEM");
+
+        (await svc.ListAsync(orgId, supplierId, "ZD421", null, CancellationToken.None))
+            .Should().ContainSingle(p => p.Code == "REDACTED-ITEM");
+
+        // A manufacturer number no product carries still finds nothing — the predicate widened
+        // the search, it did not make it match everything.
+        (await svc.ListAsync(orgId, supplierId, "LS2208", null, CancellationToken.None))
+            .Should().BeEmpty();
     }
 }

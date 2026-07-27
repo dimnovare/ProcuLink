@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenAI.Chat;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Services.Ai;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -740,9 +741,16 @@ public sealed class OpenAiMappingService : IAiMappingService
 
     private const string CatalogSystemPrompt = """
         You match an unresolved B2B purchase-order line to the supplier's REAL product catalog.
-        The candidates list contains the supplier's actual products (code + name + barcode + unit).
+        The candidates list contains the supplier's actual products (code + name + barcode + unit,
+        and where known manufacturerPartNumber + manufacturerName).
         You MUST set supplierItemCode to one of the supplierItemCode values present in candidates,
         choosing the closest real product to the buyer's line. You may NOT invent or modify a code.
+        The line's manufacturerPartNumber, when present, is the strongest evidence available: it is
+        the manufacturer's own number and is often the only identifier a punchout order carries,
+        because the buyer's item code is then the buying network's internal id and means nothing to
+        the supplier. A candidate whose manufacturerPartNumber matches the line's — ignoring case,
+        spaces and hyphens — is a match even when its supplierItemCode looks nothing like the line.
+        Answer with that candidate's supplierItemCode, never with the manufacturer's part number.
         If no candidate is a reasonable match, return an empty supplierItemCode and confidence 0.
         Never claim a mapping is confirmed. Suggestions are human review hints only.
         Keep reason and provenance concise.
@@ -760,11 +768,18 @@ public sealed class OpenAiMappingService : IAiMappingService
 
     private const string CatalogBatchSystemPrompt = """
         You match unresolved B2B purchase-order lines to the supplier's REAL product catalog.
-        The candidates list contains the supplier's actual products (code + name + barcode + unit).
+        The candidates list contains the supplier's actual products (code + name + barcode + unit,
+        and where known manufacturerPartNumber + manufacturerName).
         The input contains multiple lines; return one suggestion object per line, echoing each
         line's lineNumber so the caller can match them.
         For each line you MUST set supplierItemCode to one of the supplierItemCode values present
         in candidates, choosing the closest real product. You may NOT invent or modify a code.
+        A line's manufacturerPartNumber, when present, is the strongest evidence available: it is
+        the manufacturer's own number and is often the only identifier a punchout order carries,
+        because the buyer's item code is then the buying network's internal id and means nothing to
+        the supplier. A candidate whose manufacturerPartNumber matches the line's — ignoring case,
+        spaces and hyphens — is a match even when its supplierItemCode looks nothing like the line.
+        Answer with that candidate's supplierItemCode, never with the manufacturer's part number.
         If no candidate is a reasonable match for a line, return an empty supplierItemCode and
         confidence 0 for that line. Never claim a mapping is confirmed. Suggestions are human
         review hints only. Keep reason and provenance concise.
@@ -782,15 +797,27 @@ public sealed class OpenAiMappingService : IAiMappingService
     {
         public static readonly CatalogAllowList None = new(
             new HashSet<string>(StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, AiMappingCandidate>(StringComparer.OrdinalIgnoreCase));
+            new Dictionary<string, AiMappingCandidate>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, string>(StringComparer.Ordinal));
 
         private readonly HashSet<string> _codes;
         private readonly Dictionary<string, AiMappingCandidate> _byCode;
 
-        private CatalogAllowList(HashSet<string> codes, Dictionary<string, AiMappingCandidate> byCode)
+        /// <summary>
+        /// Normalised manufacturer part number → the supplier code that owns it. Populated only
+        /// for part numbers held by exactly ONE catalog candidate: a part number sold under two
+        /// supplier codes names no single product, so it must not silently resolve to either.
+        /// </summary>
+        private readonly Dictionary<string, string> _codeByManufacturerPart;
+
+        private CatalogAllowList(
+            HashSet<string> codes,
+            Dictionary<string, AiMappingCandidate> byCode,
+            Dictionary<string, string> codeByManufacturerPart)
         {
             _codes = codes;
             _byCode = byCode;
+            _codeByManufacturerPart = codeByManufacturerPart;
         }
 
         public bool HasCatalog => _codes.Count > 0;
@@ -801,17 +828,55 @@ public sealed class OpenAiMappingService : IAiMappingService
         public AiMappingCandidate? Match(string? code) =>
             !string.IsNullOrWhiteSpace(code) && _byCode.TryGetValue(code.Trim(), out var row) ? row : null;
 
+        /// <summary>
+        /// Translates a model answer that named the MANUFACTURER's part number into the supplier
+        /// code that actually identifies the product, or null when it names no single catalog
+        /// product. This is what makes a manufacturer-code match count as a real match instead of
+        /// being thrown away by the allow-list — while still never letting a manufacturer's number
+        /// leave here as if it were the supplier's own code.
+        /// </summary>
+        public string? ResolveManufacturerPart(string? candidateCode)
+        {
+            var key = ProductKeyNormalizer.Normalize(candidateCode);
+            return key is not null && _codeByManufacturerPart.TryGetValue(key, out var code) ? code : null;
+        }
+
         public static CatalogAllowList From(IEnumerable<AiMappingCandidate> candidates)
         {
             var codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var byCode = new Dictionary<string, AiMappingCandidate>(StringComparer.OrdinalIgnoreCase);
+            // Two passes' worth of information in one: a part number seen a second time under a
+            // different supplier code is marked ambiguous and removed rather than overwritten.
+            var codeByManufacturerPart = new Dictionary<string, string>(StringComparer.Ordinal);
+            var ambiguousManufacturerParts = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var c in candidates)
             {
                 if (!c.IsCatalogProduct || string.IsNullOrWhiteSpace(c.SupplierItemCode)) continue;
                 var code = c.SupplierItemCode.Trim();
                 if (codes.Add(code)) byCode[code] = c;
+
+                var manufacturerKey = ProductKeyNormalizer.Normalize(c.ManufacturerPartNumber);
+                if (manufacturerKey is null) continue;
+                if (ambiguousManufacturerParts.Contains(manufacturerKey)) continue;
+
+                if (codeByManufacturerPart.TryGetValue(manufacturerKey, out var existing))
+                {
+                    if (!string.Equals(existing, code, StringComparison.OrdinalIgnoreCase))
+                    {
+                        codeByManufacturerPart.Remove(manufacturerKey);
+                        ambiguousManufacturerParts.Add(manufacturerKey);
+                    }
+                }
+                else
+                {
+                    codeByManufacturerPart[manufacturerKey] = code;
+                }
             }
-            return codes.Count == 0 ? None : new CatalogAllowList(codes, byCode);
+
+            return codes.Count == 0
+                ? None
+                : new CatalogAllowList(codes, byCode, codeByManufacturerPart);
         }
     }
 
@@ -830,7 +895,17 @@ public sealed class OpenAiMappingService : IAiMappingService
         CatalogAllowList catalog, string? suggestedCode, float confidence, string? reason, string? provenance)
     {
         if (string.IsNullOrWhiteSpace(suggestedCode)) return null;
-        if (catalog.HasCatalog && !catalog.Contains(suggestedCode)) return null;
+
+        if (catalog.HasCatalog && !catalog.Contains(suggestedCode))
+        {
+            // The model may legitimately have identified the product by the MANUFACTURER's part
+            // number — for a punchout line that is the only identifier the order carries. Resolve
+            // it to the supplier code that owns it; only a part number naming no single catalog
+            // product still falls through to the allow-list rejection below.
+            var resolved = catalog.ResolveManufacturerPart(suggestedCode);
+            if (resolved is null) return null;
+            suggestedCode = resolved;
+        }
 
         return new AiMappingSuggestion(
             suggestedCode.Trim(),

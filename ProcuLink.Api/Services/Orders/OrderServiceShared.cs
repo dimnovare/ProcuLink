@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -86,11 +87,17 @@ internal sealed class OrderServiceShared
     /// <summary>
     /// Phase 2: batch-load one supplier's ACTIVE catalog ONCE, keyed for the
     /// <c>{{ catalog.* }}</c> Scriban accessor / <c>LoadCatalogProduct</c> manipulator and the
-    /// connection price-variance guard. Keyed by <c>Code</c> AND <c>Barcode</c> AND
-    /// <c>ExternalId</c> (the manufacturer-part fallback) so a line resolves by supplier item code
-    /// or manufacturer part number without an N+1. ALWAYS org+supplier scoped — never cross-tenant.
+    /// connection price-variance guard. Keyed by <c>Code</c>, <c>Barcode</c>,
+    /// <c>ManufacturerPartNumber</c> (raw AND normalised), and <c>ExternalId</c>, so a line
+    /// resolves by supplier item code or manufacturer part number without an N+1.
+    /// ALWAYS org+supplier scoped — never cross-tenant.
     /// Shared by <see cref="OrderTransformService"/> (template catalog accessor) and
     /// <see cref="OrderResolutionService"/> (variance guard) so the query lives in exactly one place.
+    ///
+    /// <c>ExternalId</c> stays a key for BACK-COMPAT only: before there was a manufacturer-part
+    /// column, the import alias "manufacturer part id" landed in <c>external_id</c>, so catalogs
+    /// imported before this change hold their manufacturer part numbers there. It is keyed LAST so
+    /// a real manufacturer part number always wins over a stale one parked in external_id.
     /// </summary>
     public static async Task<IReadOnlyDictionary<string, SupplierProduct>> BuildCatalogLookupAsync(
         ProcuLinkDbContext db, Guid organisationId, Guid supplierId, CancellationToken ct)
@@ -104,6 +111,15 @@ internal sealed class OrderServiceShared
         {
             if (!string.IsNullOrWhiteSpace(p.Code))       dict.TryAdd(p.Code, p);
             if (!string.IsNullOrWhiteSpace(p.Barcode))    dict.TryAdd(p.Barcode!, p);
+            if (!string.IsNullOrWhiteSpace(p.ManufacturerPartNumber))
+            {
+                dict.TryAdd(p.ManufacturerPartNumber!, p);
+                // The normalised key too, so a line whose part number differs only in separators
+                // or case still reaches the product (callers try raw first, then normalised).
+                var normalised = p.ManufacturerPartNumberNormalized
+                                 ?? ProductKeyNormalizer.Normalize(p.ManufacturerPartNumber);
+                if (normalised is not null) dict.TryAdd(normalised, p);
+            }
             if (!string.IsNullOrWhiteSpace(p.ExternalId)) dict.TryAdd(p.ExternalId!, p);
         }
         return dict;

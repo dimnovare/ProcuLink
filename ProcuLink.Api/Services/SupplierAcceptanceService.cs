@@ -409,6 +409,7 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
             "quantity"               => l.Quantity.ToString(CultureInfo.InvariantCulture),
             "unitPrice"              => l.UnitPrice.ToString(CultureInfo.InvariantCulture),
             "manufacturerPartNumber" => l.ManufacturerPartNumber,
+            "manufacturerName"       => l.ManufacturerName,
             "lineAmount"             => (l.LineAmount ?? (l.Quantity * l.UnitPrice)).ToString(CultureInfo.InvariantCulture),
             _                        => null,
         };

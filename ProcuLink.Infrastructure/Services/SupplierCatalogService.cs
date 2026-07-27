@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 
@@ -55,7 +56,12 @@ public sealed class SupplierCatalogService : ISupplierCatalogService
             q = q.Where(p =>
                 p.Code.ToLower().Contains(needle)
                 || (p.Name != null && p.Name.ToLower().Contains(needle))
-                || (p.Barcode != null && p.Barcode.ToLower().Contains(needle)));
+                || (p.Barcode != null && p.Barcode.ToLower().Contains(needle))
+                // An operator reviewing a punchout line has the MANUFACTURER's part number in
+                // front of them, not the supplier's code — searching the catalog for it has to
+                // find the product, or the manual fallback is "grep the whole catalog by eye".
+                || (p.ManufacturerPartNumber != null
+                    && p.ManufacturerPartNumber.ToLower().Contains(needle)));
         }
 
         return await q
@@ -115,6 +121,12 @@ public sealed class SupplierCatalogService : ISupplierCatalogService
                     row.Currency   = Clean(draft.Currency);
                     row.Barcode    = Clean(draft.Barcode);
                     row.ExternalId = Clean(draft.ExternalId);
+                    // Manufacturer part number + its normalised lookup key are written together,
+                    // here and nowhere else, so the key can never drift from the raw value.
+                    row.ManufacturerPartNumber = Clean(draft.ManufacturerPartNumber);
+                    row.ManufacturerPartNumberNormalized =
+                        ProductKeyNormalizer.Normalize(row.ManufacturerPartNumber);
+                    row.ManufacturerName = Clean(draft.ManufacturerName);
                     row.IsActive   = true; // re-import reactivates a previously discontinued code
                     row.UpdatedAt  = now;
                     updated++;
@@ -134,6 +146,10 @@ public sealed class SupplierCatalogService : ISupplierCatalogService
                         Currency   = Clean(draft.Currency),
                         Barcode    = Clean(draft.Barcode),
                         ExternalId = Clean(draft.ExternalId),
+                        ManufacturerPartNumber = Clean(draft.ManufacturerPartNumber),
+                        ManufacturerPartNumberNormalized =
+                            ProductKeyNormalizer.Normalize(Clean(draft.ManufacturerPartNumber)),
+                        ManufacturerName = Clean(draft.ManufacturerName),
                         IsActive   = true,
                         CreatedAt  = now,
                         UpdatedAt  = now,

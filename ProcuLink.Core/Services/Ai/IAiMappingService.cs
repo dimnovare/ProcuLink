@@ -61,7 +61,13 @@ public sealed record AiMappingLineContext(
     string BuyerItemCode,
     string? Description,
     decimal Quantity,
-    string? Unit);
+    string? Unit,
+    // The manufacturer part number + brand the source document states for this line, when it
+    // states any. For a punchout order this is the ONLY identifier that means anything outside
+    // the buying network, so withholding it from the model throws away the strongest signal on
+    // the line. Appended last + defaulted so existing positional constructions are unaffected.
+    string? ManufacturerPartNumber = null,
+    string? ManufacturerName = null);
 
 /// <summary>
 /// A candidate supplier item code the model may suggest, plus the evidence behind it.
@@ -73,6 +79,13 @@ public sealed record AiMappingLineContext(
 /// the model to those real codes and REJECT any suggested code absent from the catalog set
 /// (the allow-list guard). When no catalog candidate is present, behaviour is unchanged
 /// (free suggestion grounded only by past mappings + the buyer line) — offer ⇔ works.
+///
+/// <see cref="ManufacturerPartNumber"/> makes a MANUFACTURER-code match count as a real match:
+/// the model can recognise a catalog product by the manufacturer's number even when the
+/// supplier's own code looks nothing like anything on the order line. The implementation MUST
+/// treat a returned manufacturer part number as naming that candidate — resolving it back to the
+/// candidate's <see cref="SupplierItemCode"/> — rather than rejecting it as a non-catalog code.
+/// A manufacturer part number is NEVER itself a valid answer: the supplier's own code is.
 /// </summary>
 public sealed record AiMappingCandidate(
     string BuyerItemCode,
@@ -82,7 +95,9 @@ public sealed record AiMappingCandidate(
     string? Name = null,
     string? Unit = null,
     decimal? Price = null,
-    string? Barcode = null);
+    string? Barcode = null,
+    string? ManufacturerPartNumber = null,
+    string? ManufacturerName = null);
 
 public sealed record AiMappingSuggestion(
     string SupplierItemCode,
