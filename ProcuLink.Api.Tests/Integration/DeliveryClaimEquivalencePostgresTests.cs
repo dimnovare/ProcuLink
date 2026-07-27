@@ -10,6 +10,67 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Integration;
 
 /// <summary>
+/// ONE postgres:16 + migrated schema shared by every case of the equivalence matrix.
+///
+/// <para>xUnit builds a fresh test-class instance per THEORY CASE, so the usual
+/// <c>IAsyncLifetime</c>-on-the-test-class pattern started and migrated a container per case —
+/// 64 of them for this one class, the heaviest Docker load in the repo. Measured 2026-07-26:
+/// run alone, 19 of 64 cases failed, every one of them an Npgsql
+/// "Timeout during reading attempt" inside <c>InitializeAsync</c> with zero assertion failures,
+/// and the failing cases DIFFERED between runs — the moving-target signature of host contention,
+/// not of a defect. A class fixture is created once and shared by all 64.</para>
+///
+/// <para>Sharing is safe because every case seeds its OWN organisation and order under fresh
+/// <see cref="Guid"/>s and the claim predicate filters on both (see <c>SeedOrderAsync</c>) — no
+/// case can read or claim another's row.</para>
+/// </summary>
+public sealed class DeliveryClaimEquivalencePostgresFixture : IAsyncLifetime
+{
+    private PostgreSqlContainer? _pg;
+
+    /// <summary>Null when Docker is unavailable — the Docker-gated theory skips before touching it.</summary>
+    public DbContextOptions<ProcuLinkDbContext>? Options { get; private set; }
+
+    public async Task InitializeAsync()
+    {
+        if (DockerProbe.UnavailableReason is not null)
+            return;
+
+        _pg = new PostgreSqlBuilder()
+            .WithImage("postgres:16")
+            .WithDatabase($"proculink_claimeq_{Guid.NewGuid():N}")
+            .WithUsername("postgres")
+            .WithPassword("postgres")
+            .Build();
+
+        await _pg.StartAsync();
+
+        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        {
+            Pooling = false,
+            // Both timeouts are about the Docker HOST's load, never about anything under test:
+            // opening the first connection to a cold container, and running the whole migration
+            // chain over it, both outlive the 15 s / 30 s defaults on a busy machine.
+            Timeout = 60,
+            CommandTimeout = 180,
+        }.ConnectionString;
+
+        Options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseNpgsql(connectionString, npgsql => npgsql.CommandTimeout(180))
+            .Options;
+
+        await using var migrateDb = new ProcuLinkDbContext(Options);
+        await migrateDb.Database.MigrateAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        if (_pg is not null)
+            await _pg.DisposeAsync();
+    }
+}
+
+/// <summary>
 /// The relational-vs-compiled equivalence matrix for the canonical delivery-claim predicate.
 ///
 /// <para>The shared <see cref="DeliveryClaim"/> factory guarantees the relational
@@ -32,40 +93,15 @@ namespace ProcuLink.Api.Tests.Integration;
 /// upgrade — this matrix is what pins it. Docker-gated; skips where Docker is absent.</para>
 /// </summary>
 [Collection("postgres-container")]
-public sealed class DeliveryClaimEquivalencePostgresTests : IAsyncLifetime
+public sealed class DeliveryClaimEquivalencePostgresTests
+    : IClassFixture<DeliveryClaimEquivalencePostgresFixture>
 {
-    private PostgreSqlContainer? _pg;
-    private DbContextOptions<ProcuLinkDbContext>? _options;
+    private readonly DeliveryClaimEquivalencePostgresFixture _fixture;
 
-    public async Task InitializeAsync()
-    {
-        if (DockerProbe.UnavailableReason is not null)
-            return;
+    public DeliveryClaimEquivalencePostgresTests(DeliveryClaimEquivalencePostgresFixture fixture)
+        => _fixture = fixture;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_claimeq_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
-
-        await _pg.StartAsync();
-
-        _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
-            .UseNpgsql(_pg.GetConnectionString())
-            .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
-    }
-
-    public async Task DisposeAsync()
-    {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
-    }
-
-    private ProcuLinkDbContext NewContext() => new(_options!);
+    private ProcuLinkDbContext NewContext() => new(_fixture.Options!);
 
     public static IEnumerable<object[]> StatusMatrix() =>
         from status in OrderStatusMachine.AllStatuses
@@ -105,6 +141,11 @@ public sealed class DeliveryClaimEquivalencePostgresTests : IAsyncLifetime
     /// <summary>
     /// One order per matrix case, in its own org, so the 64 cases cannot interfere: an
     /// <c>ExecuteUpdateAsync</c> that claims in one case mutates a row no other case reads.
+    ///
+    /// <para>This is load-bearing, not belt-and-braces: the cases now share ONE database
+    /// (<see cref="DeliveryClaimEquivalencePostgresFixture"/>), so the fresh <see cref="Guid"/>s
+    /// here — not a fresh schema — are the whole of the isolation. Every read and every claim in
+    /// the theory is filtered on both ids. Do not replace them with constants.</para>
     /// </summary>
     private async Task<(Guid OrgId, Guid OrderId)> SeedOrderAsync(string status, bool stale)
     {

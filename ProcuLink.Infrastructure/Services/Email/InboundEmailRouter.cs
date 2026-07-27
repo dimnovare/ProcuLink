@@ -173,10 +173,13 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 InboundEmailRejectionKind.Transient);
         }
 
-        // ── 3. Resolve a default supplier for the org ────────────────────────
-        // The inbound webhook does not carry the supplier identity directly.
-        // Prefer the supplier configured for IMAP polling (same JSONB column);
-        // otherwise fall back to the org's first non-deleted supplier.
+        // ── 3. Resolve the org's configured default supplier ─────────────────
+        // The inbound webhook does not carry the supplier identity, so the ONLY
+        // thing that can route it is the supplier the org configured in
+        // Settings → Email intake (same JSONB column IMAP polling uses). With
+        // none configured the message parks — the router never picks a supplier
+        // on the org's behalf. See ResolveSupplierIdAsync for the measurement
+        // that removed the old "oldest active supplier" fallback.
         //
         // No supplier at all is NOT a rejection. This used to answer 422 and the
         // message vanished from the product's view. Attachments are now imported
@@ -256,9 +259,11 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             // supplier_id, and the parse job parks the order 'unrouted'.
             var stubResult = supplierId is { } routedSupplierId
                 ? await _orders.CreateStubAsync(
-                    org.Id, routedSupplierId, ms, att.FileName ?? "attachment", contentType, ct)
+                    org.Id, routedSupplierId, ms, att.FileName ?? "attachment", contentType, ct,
+                    ExtractSenderDomain(payload.FromEmail))
                 : await _orders.CreateUnroutedStubAsync(
-                    org.Id, ms, att.FileName ?? "attachment", contentType, ct);
+                    org.Id, ms, att.FileName ?? "attachment", contentType, ct,
+                    ExtractSenderDomain(payload.FromEmail));
 
             if (!stubResult.IsSuccess)
             {
@@ -301,9 +306,11 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 {
                     var stubResult = supplierId is { } bodySupplierId
                         ? await _orders.CreateStubFromParsedOrderAsync(
-                            org.Id, bodySupplierId, extraction.Order, EmailBodyNlpSourceTag, ct)
+                            org.Id, bodySupplierId, extraction.Order, EmailBodyNlpSourceTag, ct,
+                            ExtractSenderDomain(payload.FromEmail))
                         : await _orders.CreateUnroutedStubFromParsedOrderAsync(
-                            org.Id, extraction.Order, EmailBodyNlpSourceTag, ct);
+                            org.Id, extraction.Order, EmailBodyNlpSourceTag, ct,
+                            ExtractSenderDomain(payload.FromEmail));
 
                     if (stubResult.IsSuccess)
                     {
@@ -448,28 +455,38 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
 
     // ── Supplier resolution ──────────────────────────────────────────────────
 
+    /// <summary>
+    /// Resolves the org's configured Email-intake default supplier (the <c>defaultSupplierId</c>
+    /// in the same <c>email_config</c> JSONB column IMAP polling uses), or null when the message
+    /// must be imported unrouted. Org-scoped and not-deleted, so a wrong-org or soft-deleted id
+    /// resolves to unrouted rather than cross-tenant — the same contract as the three
+    /// pull-ingress resolvers (<c>SftpIngressService</c>, <c>S3IngressService</c>,
+    /// <c>EmailPollOrgJob</c>), each of which returns null on exactly these conditions.
+    /// <para>
+    /// There is deliberately NO fallback to "the org's only, or oldest, supplier". An inbound
+    /// message carries no supplier identity of its own, so any such pick is a guess, and a
+    /// guessed routing is indistinguishable in the product from one an operator chose.
+    /// Measured on production 2026-07-26 (finding F1 of
+    /// <c>docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md</c>): with the
+    /// default cleared, an emailed purchase order was attributed to the oldest active supplier
+    /// — a counterparty nobody had chosen — and reached <c>pending_review</c> as a normal,
+    /// actionable order with no audit row recording that it had been guessed. Returning null
+    /// parks it <c>unrouted</c> instead, where assign-supplier resolves it.
+    /// </para>
+    /// </summary>
     private async Task<Guid?> ResolveSupplierIdAsync(Guid orgId, string emailConfigJson, CancellationToken ct)
     {
-        // Prefer the IMAP-polling default supplier (same JSONB column) when set.
         var config = EmailPollingConfig.FromJson(emailConfigJson);
-        if (config.DefaultSupplierId is { } configured && configured != Guid.Empty)
+        if (config.DefaultSupplierId is not { } configured || configured == Guid.Empty)
         {
-            var exists = await _db.Suppliers
-                .AsNoTracking()
-                .AnyAsync(s => s.OrgId == orgId && s.Id == configured && s.DeletedAt == null, ct);
-            if (exists)
-                return configured;
+            return null;
         }
 
-        // Fall back to the oldest active supplier for the org.
-        var fallback = await _db.Suppliers
+        var exists = await _db.Suppliers
             .AsNoTracking()
-            .Where(s => s.OrgId == orgId && s.DeletedAt == null)
-            .OrderBy(s => s.CreatedAt)
-            .Select(s => (Guid?)s.Id)
-            .FirstOrDefaultAsync(ct);
+            .AnyAsync(s => s.OrgId == orgId && s.Id == configured && s.DeletedAt == null, ct);
 
-        return fallback;
+        return exists ? configured : null;
     }
 
     // ── Audit logging ────────────────────────────────────────────────────────
@@ -534,6 +551,39 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         }),
         extra,
     };
+
+    /// <summary>
+    /// The DOMAIN part of an inbound sender address — "redacted@example.invalid" ⇒ "acme.com". Returns null
+    /// for anything that is not clearly a domain (no "@", nothing after it, no dot).
+    ///
+    /// <para>This method IS the privacy boundary for founder ruling D2. The local part — the half
+    /// that identifies a PERSON — is dropped here and never reaches the order row; the full address
+    /// keeps its existing treatment, a one-way SHA-256 in the audit payload and nothing else. What
+    /// is persisted is the counterparty organisation the mail came from, which is the routing
+    /// evidence a supplier-less order is missing, and it is scrubbed after 12 months by the
+    /// data-retention sweep. <c>internal</c> for testing.</para>
+    /// </summary>
+    internal static string? ExtractSenderDomain(string? fromEmail)
+    {
+        if (string.IsNullOrWhiteSpace(fromEmail)) return null;
+
+        var at = fromEmail.LastIndexOf('@');
+        if (at < 0) return null;
+
+        // A From header may arrive as a display-name form — `"Acme Orders" <redacted@example.invalid>` —
+        // so keep only the leading run of characters that can legally appear in a host name and
+        // drop the closing bracket and anything after it.
+        var tail = fromEmail[(at + 1)..].Trim();
+        var end = 0;
+        while (end < tail.Length && (char.IsLetterOrDigit(tail[end]) || tail[end] is '-' or '.')) end++;
+
+        var domain = ProcuLink.Core.Services.Detection.SupplierSuggestionScoring
+            .NormalizeDomain(tail[..end]);
+
+        // A domain with no dot is a local/host name, not something two organisations could share
+        // a match on — better to store nothing than a value that can only ever be noise.
+        return domain is not null && domain.Contains('.') ? domain : null;
+    }
 
     /// <summary>
     /// Lower-case hex SHA-256 of <paramref name="value"/>; null/blank ⇒ null. Used to

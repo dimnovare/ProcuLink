@@ -175,12 +175,19 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
         Assert.Equal(0, orders.RoutedCalls);
     }
 
-    // ── 5. Regression: an org WITH an active supplier still routes ──────────
+    // ── 5. The org's configured default supplier routes the mail ────────────
+    //
+    // This is now the ONLY thing that routes an inbound email. The org sets it in
+    // Settings → Email intake (EmailConfigJson defaultSupplierId), and the router
+    // honours it — unchanged behaviour, and the single supported way to get
+    // zero-touch email ingest.
 
     [DockerRequiredFact]
-    public async Task ActiveSupplier_StillRoutes_UnchangedBehaviour()
+    public async Task ConfiguredDefaultSupplier_Routes()
     {
         var (orgId, slug) = await SeedOrgAsync(suppliers: 1);
+        var supplierId = Assert.Single(await ActiveSupplierIdsAsync(orgId));
+        await SetEmailDefaultSupplierAsync(orgId, supplierId);
 
         var orders = new PersistingOrderService(_options!);
         await using var db = new ProcuLinkDbContext(_options!);
@@ -195,8 +202,119 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
         var orderId = Assert.Single(result.CreatedOrderIds);
         await using var read = new ProcuLinkDbContext(_options!);
         var order = await read.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId);
-        Assert.NotNull(order.SupplierId);
+        Assert.Equal(supplierId, order.SupplierId);
         Assert.Equal(orgId, order.OrgId);
+    }
+
+    // ── 6. One active supplier, no default → parks. Never guesses. ──────────
+    //
+    // The single-supplier case is where guessing looks most defensible — there is only
+    // one answer available. It is still a guess the operator never made, so the order
+    // parks. This case is what the removed fallback used to route silently, and it is
+    // the one measured on production (routing-matrix proof, F1): mail landed on
+    // "ProcuLink Sample Supplier", a counterparty nobody chose.
+
+    [DockerRequiredFact]
+    public async Task SingleActiveSupplier_NoDefault_ImportsUnrouted_NeverGuesses()
+    {
+        var (orgId, slug) = await SeedOrgAsync(suppliers: 1);
+
+        var orders = new PersistingOrderService(_options!);
+        await using var db = new ProcuLinkDbContext(_options!);
+        var router = MakeRouter(db, orders, new CountingParseEnqueuer());
+
+        var result = await router.RouteAsync(PayloadFor(slug, "po.csv"), CancellationToken.None);
+
+        Assert.True(result.Success,
+            "parking is not a rejection — the webhook still answers 200 so Postmark stops retrying");
+        Assert.Equal(1, orders.UnroutedCalls);
+        Assert.Equal(0, orders.RoutedCalls);
+
+        var orderId = Assert.Single(result.CreatedOrderIds);
+        await using var read = new ProcuLinkDbContext(_options!);
+        var order = await read.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId);
+        Assert.Null(order.SupplierId);
+    }
+
+    // ── 7. Several active suppliers, no default → parks ─────────────────────
+
+    [DockerRequiredFact]
+    public async Task MultipleActiveSuppliers_NoDefault_ImportsUnrouted()
+    {
+        var (orgId, slug) = await SeedOrgAsync(suppliers: 3);
+
+        var orders = new PersistingOrderService(_options!);
+        await using var db = new ProcuLinkDbContext(_options!);
+        var router = MakeRouter(db, orders, new CountingParseEnqueuer());
+
+        var result = await router.RouteAsync(PayloadFor(slug, "po.csv"), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, orders.UnroutedCalls);
+        Assert.Equal(0, orders.RoutedCalls);
+
+        var orderId = Assert.Single(result.CreatedOrderIds);
+        await using var read = new ProcuLinkDbContext(_options!);
+        var order = await read.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId);
+        Assert.Null(order.SupplierId);
+    }
+
+    // ── 8. The park is audited even when the org HAS suppliers ──────────────
+    //
+    // Case 3 pins this audit row for a supplier-LESS org, which was reachable before.
+    // An org with suppliers and no default never reached the row at all while the
+    // fallback existed, so the operator-visible trail for the case that actually
+    // happens in production needs its own pin.
+
+    [DockerRequiredFact]
+    public async Task ActiveSuppliersButNoDefault_WritesUnroutedAudit_NotRejectedAudit()
+    {
+        var (orgId, slug) = await SeedOrgAsync(suppliers: 2);
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        var router = MakeRouter(db, new PersistingOrderService(_options!), new CountingParseEnqueuer());
+
+        await router.RouteAsync(PayloadFor(slug, "po.csv"), CancellationToken.None);
+
+        await using var read = new ProcuLinkDbContext(_options!);
+        var actions = await read.AuditEvents.AsNoTracking()
+            .Where(a => a.OrgId == orgId)
+            .Select(a => a.Action)
+            .ToListAsync();
+
+        Assert.Contains("inbound_email.unrouted_no_supplier", actions);
+        Assert.DoesNotContain("inbound_email.rejected_no_supplier", actions);
+        Assert.Contains("inbound_email.processed", actions);
+    }
+
+    // ── 9. A default pointing at a soft-deleted supplier parks — it does not
+    //      slide onto the surviving active supplier ───────────────────────────
+    //
+    // The sharpest anti-guess case: the org DID configure a default, and that default
+    // has since been soft-deleted, while another perfectly usable supplier is active.
+    // Sliding onto it is exactly the failure mode being removed.
+
+    [DockerRequiredFact]
+    public async Task DefaultSupplierSoftDeleted_Parks_DoesNotSlideToSurvivingSupplier()
+    {
+        var (orgId, slug) = await SeedOrgAsync(suppliers: 1, softDeletedSupplier: true);
+        var retiredId = await SoftDeletedSupplierIdAsync(orgId);
+        await SetEmailDefaultSupplierAsync(orgId, retiredId);
+
+        var orders = new PersistingOrderService(_options!);
+        await using var db = new ProcuLinkDbContext(_options!);
+        var router = MakeRouter(db, orders, new CountingParseEnqueuer());
+
+        var result = await router.RouteAsync(PayloadFor(slug, "po.csv"), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, orders.UnroutedCalls);
+        Assert.Equal(0, orders.RoutedCalls);
+
+        var orderId = Assert.Single(result.CreatedOrderIds);
+        await using var read = new ProcuLinkDbContext(_options!);
+        var order = await read.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId);
+        Assert.Null(order.SupplierId);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
@@ -239,6 +357,39 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
 
         await db.SaveChangesAsync();
         return (orgId, slug);
+    }
+
+    /// <summary>
+    /// Writes the org's Email-intake default supplier the way the product writes it —
+    /// through <see cref="EmailPollingConfig"/>, the same record
+    /// <c>EmailSettingsService.UpdateAsync</c> serialises into the <c>email_config</c>
+    /// jsonb column — so these tests bind to the real config contract, not to a
+    /// hand-written JSON literal that could drift from it.
+    /// </summary>
+    private async Task SetEmailDefaultSupplierAsync(Guid orgId, Guid supplierId)
+    {
+        await using var db = new ProcuLinkDbContext(_options!);
+        var org = await db.Organisations.SingleAsync(o => o.Id == orgId);
+        org.EmailConfigJson = (EmailPollingConfig.Empty with { DefaultSupplierId = supplierId }).ToJson();
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<List<Guid>> ActiveSupplierIdsAsync(Guid orgId)
+    {
+        await using var db = new ProcuLinkDbContext(_options!);
+        return await db.Suppliers.AsNoTracking()
+            .Where(s => s.OrgId == orgId && s.DeletedAt == null)
+            .Select(s => s.Id)
+            .ToListAsync();
+    }
+
+    private async Task<Guid> SoftDeletedSupplierIdAsync(Guid orgId)
+    {
+        await using var db = new ProcuLinkDbContext(_options!);
+        return await db.Suppliers.AsNoTracking()
+            .Where(s => s.OrgId == orgId && s.DeletedAt != null)
+            .Select(s => s.Id)
+            .SingleAsync();
     }
 
     private static InboundEmailPayload PayloadFor(string slug, string fileName) => new(
@@ -285,14 +436,16 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
         public int UnroutedCalls => Volatile.Read(ref _unrouted);
 
         public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
-            Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType,
+            CancellationToken ct, string? inboundSenderDomain = null)
         {
             Interlocked.Increment(ref _routed);
             return PersistAsync(organisationId, supplierId, filename, ct);
         }
 
         public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
-            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
+            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct,
+            string? inboundSenderDomain = null)
         {
             Interlocked.Increment(ref _unrouted);
             return PersistAsync(organisationId, supplierId: null, filename, ct);
@@ -325,11 +478,11 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
 
         public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
             => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
+        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct, string? inboundSenderDomain = null)
             => throw new NotImplementedException();
         // Body-NLP paths, routed and unrouted: these cases are all about attachments and the
         // extractor here is a no-op, so either call means the router took a path it should not.
-        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(Guid organisationId, ExtractedOrder order, string source, CancellationToken ct)
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(Guid organisationId, ExtractedOrder order, string source, CancellationToken ct, string? inboundSenderDomain = null)
             => throw new NotImplementedException();
         public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid organisationId, Guid orderId, CancellationToken ct)
             => throw new NotImplementedException();

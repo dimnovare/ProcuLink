@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProcuLink.Infrastructure;
@@ -12,9 +13,11 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Infrastructure.Migrations
 {
     [DbContext(typeof(ProcuLinkDbContext))]
-    partial class ProcuLinkDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260726094835_AddSupplierAutoDetect")]
+    partial class AddSupplierAutoDetect
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2191,10 +2194,6 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("line_number");
 
-                    b.Property<string>("ManufacturerName")
-                        .HasColumnType("text")
-                        .HasColumnName("manufacturer_name");
-
                     b.Property<string>("ManufacturerPartNumber")
                         .HasColumnType("text")
                         .HasColumnName("manufacturer_part_number");
@@ -3237,18 +3236,6 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasDefaultValue(true)
                         .HasColumnName("is_active");
 
-                    b.Property<string>("ManufacturerName")
-                        .HasColumnType("text")
-                        .HasColumnName("manufacturer_name");
-
-                    b.Property<string>("ManufacturerPartNumber")
-                        .HasColumnType("text")
-                        .HasColumnName("manufacturer_part_number");
-
-                    b.Property<string>("ManufacturerPartNumberNormalized")
-                        .HasColumnType("text")
-                        .HasColumnName("manufacturer_part_number_normalized");
-
                     b.Property<string>("Name")
                         .HasColumnType("text")
                         .HasColumnName("name");
@@ -3287,9 +3274,6 @@ namespace ProcuLink.Infrastructure.Migrations
                         .IsUnique();
 
                     b.HasIndex("OrgId", "SupplierId", "IsActive");
-
-                    b.HasIndex("OrgId", "SupplierId", "ManufacturerPartNumberNormalized")
-                        .HasDatabaseName("IX_supplier_products_org_id_supplier_id_mpn_normalized");
 
                     b.ToTable("supplier_products", (string)null);
                 });

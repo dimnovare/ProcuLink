@@ -138,7 +138,7 @@ public class IngressControllerIdempotencyTests
         var orders = new Mock<IOrderService>();
         orders
             .Setup(s => s.CreateStubFromParsedOrderAsync(
-                orgId, supplierId, It.IsAny<ExtractedOrder>(), "ingress_api", It.IsAny<CancellationToken>()))
+                orgId, supplierId, It.IsAny<ExtractedOrder>(), "ingress_api", It.IsAny<CancellationToken>(), It.IsAny<string?>()))
             .ReturnsAsync(() =>
             {
                 createCalls++;
@@ -164,7 +164,7 @@ public class IngressControllerIdempotencyTests
         orders.Verify(
             s => s.CreateStubFromParsedOrderAsync(
                 It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<ExtractedOrder>(),
-                It.IsAny<string>(), It.IsAny<CancellationToken>()),
+                It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()),
             Times.Once);
 
         // Exactly one idempotency-key row was persisted for this org.
@@ -209,7 +209,7 @@ public class IngressControllerIdempotencyTests
         var orders = new Mock<IOrderService>();
         orders
             .Setup(s => s.CreateStubFromParsedOrderAsync(
-                orgId, supplierId, It.IsAny<ExtractedOrder>(), "ingress_api", It.IsAny<CancellationToken>()))
+                orgId, supplierId, It.IsAny<ExtractedOrder>(), "ingress_api", It.IsAny<CancellationToken>(), It.IsAny<string?>()))
             .ReturnsAsync(() =>
             {
                 createCalls++;

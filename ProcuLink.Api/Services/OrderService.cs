@@ -80,12 +80,16 @@ public sealed class OrderService : IOrderService, IStubOrderCreator
         => _ingestion.CreateFromFileAsync(organisationId, supplierId, fileStream, filename, contentType, ct);
 
     public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
-        Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
-        => _ingestion.CreateStubAsync(organisationId, supplierId, fileStream, filename, contentType, ct);
+        Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType,
+        CancellationToken ct, string? inboundSenderDomain = null)
+        => _ingestion.CreateStubAsync(organisationId, supplierId, fileStream, filename, contentType, ct,
+            inboundSenderDomain: inboundSenderDomain);
 
     public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
-        Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct)
-        => _ingestion.CreateStubAsync(organisationId, supplierId: null, fileStream, filename, contentType, ct);
+        Guid organisationId, Stream fileStream, string filename, string contentType,
+        CancellationToken ct, string? inboundSenderDomain = null)
+        => _ingestion.CreateStubAsync(organisationId, supplierId: null, fileStream, filename, contentType, ct,
+            inboundSenderDomain: inboundSenderDomain);
 
     // ── IStubOrderCreator (pull-ingress resume-on-conflict; explicit pre-generated order id) ──
 
@@ -98,12 +102,14 @@ public sealed class OrderService : IOrderService, IStubOrderCreator
         => _ingestion.CreateStubAsync(organisationId, supplierId: null, fileStream, filename, contentType, ct, orderId);
 
     public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
-        Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct)
-        => _ingestion.CreateStubFromParsedOrderAsync(organisationId, supplierId, order, source, ct);
+        Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct,
+        string? inboundSenderDomain = null)
+        => _ingestion.CreateStubFromParsedOrderAsync(organisationId, supplierId, order, source, ct, inboundSenderDomain);
 
     public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(
-        Guid organisationId, ExtractedOrder order, string source, CancellationToken ct)
-        => _ingestion.CreateStubFromParsedOrderAsync(organisationId, supplierId: null, order, source, ct);
+        Guid organisationId, ExtractedOrder order, string source, CancellationToken ct,
+        string? inboundSenderDomain = null)
+        => _ingestion.CreateStubFromParsedOrderAsync(organisationId, supplierId: null, order, source, ct, inboundSenderDomain);
 
     public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(
         Guid organisationId, Guid orderId, CancellationToken ct)

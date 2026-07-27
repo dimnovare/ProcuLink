@@ -69,6 +69,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<OrgPlanHistory>                 OrgPlanHistories              { get; set; } = null!;
     // ── Data retention: append-only evidence trail of the blob-retention sweep ─
     public DbSet<RetentionAuditLog>              RetentionAuditLogs            { get; set; } = null!;
+    // ── Supplier auto-detect: ranked candidates for an order that arrived unrouted ─
+    public DbSet<OrderSupplierSuggestion>        OrderSupplierSuggestions      { get; set; } = null!;
 
     // ── Org plan-history chokepoint ──────────────────────────────────────────
     // Overage metering must resolve the plan + order-limit override AS OF each
@@ -330,6 +332,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
             b.Property(x => x.Code).HasColumnName("code");
             b.Property(x => x.IsSample).HasColumnName("is_sample").HasDefaultValue(false);
+            // Identity columns (D1) — the right-hand side supplier auto-detect had no way to
+            // compare a document's VAT / registry code / EDI address / sender domain against.
+            // All nullable: an org that fills none of them in simply loses those signals.
+            b.Property(x => x.VatNumber).HasColumnName("vat_number");
+            b.Property(x => x.RegistrationNumber).HasColumnName("registration_number");
+            b.Property(x => x.EdiCode).HasColumnName("edi_code");
+            b.Property(x => x.PrimaryDomain).HasColumnName("primary_domain");
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.Suppliers)
              .HasForeignKey(x => x.OrgId);
@@ -450,6 +459,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // Delivery-phase re-drive counter — SEPARATE budget from requeue_count so a parse/transform
             // requeue never eats into the delivery stuck-recovery budget (StuckDeliveryDetectionService).
             b.Property(x => x.DeliveryRequeueCount).HasColumnName("delivery_requeue_count").HasDefaultValue(0);
+            // Inbound sender DOMAIN only (D2) — never the local part, never the full address,
+            // which stays SHA-256-only in the audit payload. Scrubbed by the data-retention sweep
+            // 12 months after capture; the capture timestamp is its own column so the retention
+            // clock cannot be reset by an unrelated write to the order.
+            b.Property(x => x.InboundSenderDomain).HasColumnName("inbound_sender_domain");
+            b.Property(x => x.InboundSenderDomainCapturedAt)
+             .HasColumnName("inbound_sender_domain_captured_at").HasColumnType("timestamptz");
             // Phase 4 enrichment + doc-type classification (nullable).
             b.Property(x => x.SupplierName).HasColumnName("supplier_name");
             b.Property(x => x.SubTotal).HasColumnName("sub_total").HasColumnType("numeric(18,4)");
@@ -511,6 +527,11 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // (OrgId, BuyerName): SQL-native buyer-name search in ListPagedAsync (ILike predicate).
             b.HasIndex(x => new { x.OrgId, x.BuyerName })
              .HasDatabaseName("IX_purchase_orders_org_id_buyer_name");
+            // (OrgId, InboundSenderDomain): supplier auto-detect's sender-domain history probe —
+            // "which suppliers did this org's earlier orders from this domain get routed to?".
+            // Also the retention scrub's selection predicate (domain IS NOT NULL, past the window).
+            b.HasIndex(x => new { x.OrgId, x.InboundSenderDomain })
+             .HasDatabaseName("IX_purchase_orders_org_id_inbound_sender_domain");
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.PurchaseOrders)
              .HasForeignKey(x => x.OrgId);
@@ -663,6 +684,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // One row per real code per (org, supplier) — the upsert key. Also serves the
             // V10 indexed EXACT code lookup (org_id, supplier_id, code) without a second btree.
             b.HasIndex(x => new { x.OrgId, x.SupplierId, x.Code }).IsUnique();
+            // Supplier auto-detect asks the one question the unique index above cannot answer:
+            // "WHICH suppliers sell these codes?" — org-scoped with supplier_id unconstrained.
+            // Against the (org, supplier, code) index that degenerates into scanning the org's
+            // entire slice, which on a 200k-row catalog is the wrong shape. Leading (org, code)
+            // makes it a direct probe.
+            b.HasIndex(x => new { x.OrgId, x.Code })
+             .HasDatabaseName("IX_supplier_products_org_id_code");
             // Active-catalog listing / typeahead read path.
             b.HasIndex(x => new { x.OrgId, x.SupplierId, x.IsActive });
             // V10 — indexed EXACT barcode (GTIN/EAN) lookup, the strongest match key when
@@ -763,6 +791,45 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasIndex(x => new { x.OrgId, x.OrderId, x.LineNumber, x.SuggestedSupplierItemCode, x.Decision })
              .IsUnique()
              .HasDatabaseName("IX_ai_suggestion_decisions_idempotency");
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
+        });
+
+        // ── order_supplier_suggestions ─────────────────────────────────
+        // Ranked supplier candidates for an order that arrived with no supplier, plus the
+        // operator's eventual verdict. Sibling of ai_suggestion_decisions, NOT a reuse of it:
+        // that table is line-scoped (line_number + suggested_supplier_item_code) and this concept
+        // is order-scoped routing. Same tenancy and snake_case conventions.
+        modelBuilder.Entity<OrderSupplierSuggestion>(b =>
+        {
+            b.ToTable("order_supplier_suggestions");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.OrderId).HasColumnName("order_id");
+            b.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            b.Property(x => x.Rank).HasColumnName("rank");
+            b.Property(x => x.Score).HasColumnName("score");
+            b.Property(x => x.SignalsJson).HasColumnName("signals_json").HasColumnType("jsonb");
+            b.Property(x => x.ModelVersion).HasColumnName("model_version");
+            // Nullable: NULL means "nobody has decided yet". See the entity doc for why that is a
+            // null rather than a fifth vocabulary word.
+            b.Property(x => x.Decision).HasColumnName("decision");
+            b.Property(x => x.DecidedBy).HasColumnName("decided_by");
+            b.Property(x => x.DecidedAt).HasColumnName("decided_at").HasColumnType("timestamptz");
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            // Read path: the operator banner asks for one order's live candidates, best first.
+            b.HasIndex(x => new { x.OrgId, x.OrderId, x.Rank })
+             .HasDatabaseName("IX_order_supplier_suggestions_org_id_order_id_rank");
+            // Idempotency key, PARTIAL: at most one UNDECIDED suggestion per (org, order, supplier),
+            // so a re-scored order cannot show the same supplier twice. Decided rows are history and
+            // accumulate freely — a full unique index would collide the second time a supplier was
+            // superseded for the same order, which is a legitimate sequence of events.
+            b.HasIndex(x => new { x.OrgId, x.OrderId, x.SupplierId })
+             .IsUnique()
+             .HasFilter("decision IS NULL")
+             .HasDatabaseName("IX_order_supplier_suggestions_live_idempotency");
             b.HasOne(x => x.Organisation)
              .WithMany()
              .HasForeignKey(x => x.OrgId);

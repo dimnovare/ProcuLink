@@ -33,7 +33,8 @@ public interface IOrderService
         Stream fileStream,
         string filename,
         string contentType,
-        CancellationToken ct);
+        CancellationToken ct,
+        string? inboundSenderDomain = null);
 
     /// <summary>
     /// Routing (Phase 1): upload a raw file and create an order stub with NO supplier yet.
@@ -47,7 +48,8 @@ public interface IOrderService
         Stream fileStream,
         string filename,
         string contentType,
-        CancellationToken ct);
+        CancellationToken ct,
+        string? inboundSenderDomain = null);
 
     /// <summary>
     /// Create a purchase order directly from an already-parsed order (e.g. from
@@ -78,7 +80,8 @@ public interface IOrderService
         Guid supplierId,
         ExtractedOrder order,
         string source,
-        CancellationToken ct);
+        CancellationToken ct,
+        string? inboundSenderDomain = null);
 
     /// <summary>
     /// Routing: the supplier-less sibling of <see cref="CreateStubFromParsedOrderAsync"/>. Persists
@@ -99,7 +102,8 @@ public interface IOrderService
         Guid organisationId,
         ExtractedOrder order,
         string source,
-        CancellationToken ct);
+        CancellationToken ct,
+        string? inboundSenderDomain = null);
 
     /// <summary>
     /// Parse the stored source file for an order in "parsing" status,

@@ -36,6 +36,14 @@ public sealed class DataRetentionOptions
     public int OrderExceptionDays { get; set; } = 180;
 
     /// <summary>
+    /// Retention window for <c>purchase_orders.inbound_sender_domain</c>. Default 365 days
+    /// (founder ruling D2, 2026-07-25). Unlike every other window here this SCRUBS a column rather
+    /// than deleting a row — the order is business data and stays; only the captured sender domain
+    /// ages out.
+    /// </summary>
+    public int InboundSenderDomainDays { get; set; } = 365;
+
+    /// <summary>
     /// Max rows deleted per table per sweep run. Keeps each delete bounded so a large backlog
     /// is drained over several runs rather than in one unbounded statement. Default 5,000.
     /// </summary>
@@ -63,6 +71,9 @@ public sealed class DataRetentionOptions
 
     /// <summary>Effective order-exception window (never non-positive).</summary>
     public TimeSpan OrderExceptionWindow => TimeSpan.FromDays(PositiveOr(OrderExceptionDays, 180));
+
+    /// <summary>Effective inbound-sender-domain window (never non-positive).</summary>
+    public TimeSpan InboundSenderDomainWindow => TimeSpan.FromDays(PositiveOr(InboundSenderDomainDays, 365));
 
     /// <summary>Effective per-table batch cap (never non-positive).</summary>
     public int EffectiveBatchSize => PositiveOr(BatchSize, 5_000);

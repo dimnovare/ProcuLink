@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -102,12 +103,25 @@ public class DataRetentionService : IDataRetentionService
                 && (e.State == "resolved" || e.State == "ignored")),
             batch, ct);
 
+        // purchase_orders.inbound_sender_domain: SCRUB, never delete. The order is business data
+        // the org owns; only the captured sender domain has a 12-month clock on it (founder ruling
+        // D2). Selected on the capture timestamp, not created_at, so nothing else that touches the
+        // order can push the deadline out.
+        var senderDomainCutoff = now - _options.InboundSenderDomainWindow;
+        var sendersScrubbed = await ScrubOldestSenderDomainsAsync(
+            _db.PurchaseOrders.Where(o =>
+                o.InboundSenderDomain != null
+                && o.InboundSenderDomainCapturedAt != null
+                && o.InboundSenderDomainCapturedAt < senderDomainCutoff),
+            batch, ct);
+
         var result = new DataRetentionResult(
             AuditEvents:      auditDeleted,
             PassportEvents:   passportDeleted,
             IdempotencyKeys:  idempotencyDeleted,
             DeliveryAttempts: deliveryDeleted,
-            OrderExceptions:  exceptionsDeleted);
+            OrderExceptions:  exceptionsDeleted,
+            InboundSenderDomainsScrubbed: sendersScrubbed);
 
         if (result.Total > 0)
             _logger.LogInformation(
@@ -148,4 +162,21 @@ public class DataRetentionService : IDataRetentionService
         IQueryable<T> query, int batchSize, CancellationToken ct)
         where T : class
         => query.Take(batchSize).ExecuteDeleteAsync(ct);
+
+    /// <summary>
+    /// Clears <c>inbound_sender_domain</c> (and its capture timestamp) on up to
+    /// <paramref name="batchSize"/> orders matched by <paramref name="query"/>, leaving every other
+    /// column untouched. Both fields are cleared together so an expired row can never be left with
+    /// a timestamp and no value, or a value the clock has lost track of.
+    /// <para>
+    /// Overridable for the same reason as <see cref="DeleteOldestBatchAsync{T}"/>: the InMemory
+    /// provider cannot translate <c>ExecuteUpdate</c>, and the predicate above is the load-bearing
+    /// part worth testing.
+    /// </para>
+    /// </summary>
+    protected virtual Task<int> ScrubOldestSenderDomainsAsync(
+        IQueryable<PurchaseOrderEntity> query, int batchSize, CancellationToken ct)
+        => query.Take(batchSize).ExecuteUpdateAsync(s => s
+            .SetProperty(o => o.InboundSenderDomain, (string?)null)
+            .SetProperty(o => o.InboundSenderDomainCapturedAt, (DateTime?)null), ct);
 }
