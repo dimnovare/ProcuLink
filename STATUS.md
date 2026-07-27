@@ -11,6 +11,21 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-27) — supplier auto-detect, frontend half (frontend PR #37, OPEN)
+
+- **Frontend `feat/supplier-auto-detect-fe` → [PR #37](https://github.com/dimnovare/project-proculink/pull/37), not merged.** Consumes BE #70 (`7ef2ed5`).
+  `AssignSupplierBanner` renders up to 3 ranked candidates from `OrderDto.supplierSuggestions`
+  (score chip, plain-language reason, collapsed per-signal breakdown, one-click Assign that
+  posts `suggestionId` so the acceptance is attributable). Suggest-only: no preselection, no
+  auto-assign, manual picker stays. Supplier profile Overview gains an Identifiers card (VAT /
+  registration / EDI-GLN / primary domain) saved through `PUT /api/suppliers/{id}` — patch
+  semantics honoured (always strings, never null) and re-rendered from the server's normalised
+  response. Not AI-branded: heuristic scores reuse the ConfidenceChip ramp, never the `ai` token.
+  Mock `ord-004` carries 3 DTO-shaped candidates. tsc + 1096/1096 vitest + build + lint green;
+  browser QA at 1280/768/390 with no overflow.
+- **Left out on purpose:** suggestions in the inbox row — `OrdersController` loads them in
+  `Get(id)` only, so per-row rendering costs one order fetch per unrouted row.
+
 ## Snapshot (2026-07-26) — setup docs: step-by-step guide framework (frontend PR #36, OPEN)
 
 - **Frontend `feat/guide-framework-and-exemplars` → [PR #36](https://github.com/dimnovare/project-proculink/pull/36), not merged.** Phase 1 = framework +
