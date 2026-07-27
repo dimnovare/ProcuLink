@@ -55,6 +55,22 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   failures** — and reaping by `label=org.testcontainers=true` (the four named dev DBs carry no such
   label; verified before deleting) returned this feature's 23 tests to green. CI is the authority,
   and CI ran all 1,690.
+## Snapshot (2026-07-26) — P1 F2 fixed: the fingerprint learns the operator's correction again
+
+- **The file-backed re-parse no longer poisons its own scope.** OPS-3's F2: `ExecuteDeleteAsync`
+  in `ParseStoredFileAsync` left the `Include`d lines tracked against deleted rows, and
+  `entity.Lines = lineEntities` (after the commit) cascaded them to `Deleted` — so every writer
+  that ran LATER in the same Hangfire scope threw `DbUpdateConcurrencyException` and was swallowed:
+  exception reconcile at Error, then the schema fingerprint at Warning, which is how the operator's
+  assign-supplier correction vanished on the normal path. PR #60's detach is now mirrored onto the
+  file-backed branch. The swallow in `ParseOrderJob` **stays** (a failed LEARN must not fail a
+  committed PARSE) and is pinned by tests for both halves — job survives, failure still reaches the
+  log at Warning with the exception attached. **Prod is NOT cleaned:** the OPS-3 run left one
+  poisoned `SchemaFingerprints` row — the layout bound to the supplier F1's since-deleted fallback
+  guessed — and it survives deleting the ROUTETEST orders (no FK), which #68 does not undo either.
+  Cleanup SQL is in PR #69's description and must run BEFORE those orders are deleted. **F3 remains
+  open:** the binding is now correct, but nothing reads it at ingest.
+
 ## Snapshot (2026-07-26) — F1 FIXED: inbound email never guesses a supplier again
 
 - **The oldest-active-supplier fallback in `InboundEmailRouter.ResolveSupplierIdAsync` is
@@ -129,7 +145,6 @@ never checked, and one was my own error. Corrected in place, each with its evide
 - **Method note worth keeping:** every one of these was a doc trusted past its expiry date.
   Cheap live probes settled them in minutes — a `curl` for the Worker, the CF activity log for
   mail, `GET /api/admin/organisations` for org state. Re-measure before re-planning.
-
 ## Snapshot (2026-07-26) — OPS-3: routing matrix proven per channel; two P1s found
 
 - **`docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md`.** All three PUSH
