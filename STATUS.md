@@ -596,6 +596,20 @@ never checked, and one was my own error. Corrected in place, each with its evide
   **Not a bug:** fast synthetic typing drops all but the first char in that search box
   (debounced controlled input) — automation artifact, verified by appending one char at a time.
   Five vendors still need a founder cred paste; the plan gate no longer blocks them.
+  **Sixth pass (2026-07-27) — all 5 remaining vendor endpoints ALIVE, all 5 blocked on the cred
+  paste (permanent: an agent must not type passwords/API keys).** Credential-free probes: Ingram
+  `SSH-2.0-Maverick_SSHD`, Also/Actebis `SSH-2.0-mod_sftp/0.9.9`, REDACTED-PARTY `220 SC-WEBSHOP3 FTP`,
+  100MEGA `401` (up + gating), Logicom TLS OK — **none dead**. Jarltech proved the piece the fifth
+  pass could not: the **unattended** sync ran `2026-07-26T22:00:28Z` (cron `0 * * * *`,
+  `syncIntervalHours=24`) with **created 0 / updated 14,713 / skipped 0, total still 14,713** —
+  idempotent upsert at full scale on a *scheduled* run. 800/800 sampled rows carry name AND price.
+  REDACTED-PARTY's **credential-free** config is pre-staged (`ftp` is the only protocol that saves without
+  a password), `isEnabled=false`, which also proved its host clears the SSRF guard — but its mapping
+  has **no `name` column**, so test-fetch before enabling or it imports ~10,782 nameless products.
+  100MEGA deliberately left unconfigured: its URL path is elided in the doc and was not guessed.
+  New API quirk: `https`/`logicom` saves still require `Host`/`RemotePath` (send `""`) — non-nullable
+  record params, implicit-required fires before the protocol branch. Per-vendor table, paste-ready
+  payloads, and a "how to add the next vendor" recipe are in the OPS-2 QA doc.
   Off-prod findings from the first run stand: **P1 defect BE-6** — the generic XML catalog parser silently drops
   every second scalar child (`CatalogXmlParsers.cs:338-364` double-advances;
   repro `a,b,c,d` → `[a|c]`), so element-based XML feeds import with no name/price;
