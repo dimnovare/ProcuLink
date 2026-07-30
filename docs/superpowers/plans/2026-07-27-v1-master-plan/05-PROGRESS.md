@@ -363,6 +363,58 @@ Order, once the round completes: **rebase WP-25 onto `origin/main` → rebase WP
 reachability guard AND the vocab gate.** Per protocol rule 6, the guard re-run is mandatory, not optional:
 #47 already invalidated one allowlist and turned main red.
 
+### 2026-07-30 — Wave 4 results, and a hole in the CI gate
+
+**Docker recovered.** `docker ps -a` returns nothing, 0 testcontainer-labelled containers. Rule 6b stands
+regardless — the containers bought no local coverage.
+
+| Packet | Branch | Verdict |
+|---|---|---|
+| WP-24 | `feat/wp24-recovery-ui @ 03bfa41` | **REFUTED — blocks merge** |
+| WP-25 | `feat/wp25-concept-reduction @ c13e24a` | built; **refuter DIED** (StructuredOutput retry cap) — needs re-run |
+| WP-26 | `feat/wp26-nav-restructure @ a4016c0` | built clean; held behind FE #47; rebase pending |
+
+**WP-24 has no vacuous tests — the refutation is COVERAGE, not vacuity.** All nine mutations were
+independently re-applied, run and hard-restored by exit code, not string match, in a disposable worktree that
+was then removed. 1265 vitest green (up 30). The gap: the contract test's guard walk does
+`if (a.kind !== "post") continue`, so it **skips every link action** — and **10 of the 15 controls across the
+eight states are links, 3 of them dead.**
+
+**F1 BLOCKS MERGE, and it is the pre-#47-base hazard landing exactly where we predicted.**
+`transform_failed`'s PRIMARY CTA points at `/library/templates`, which FE #47 (`ded9e04`, already on
+`origin/main`) retired — the page directory is gone, 0 files match on main, and it 308s to
+`/library/suppliers` with `supplierId` dropped. #47's own justification is the *opposite* of what the CTA
+promises. Fix with the rebase, not separately.
+
+**⚠️ NEW GAP — CI DOES NOT TYPECHECK.** `tsc`/`typecheck` appears **zero times** in `ci.yml` on `origin/main`.
+WP-01's gate runs test + lint + pageshell + vocab, and that is all. Worse: `src/lib/seo.test.ts` **already
+fails `tsc` on `origin/main`** (`Property 'card' does not exist on type 'Twitter'`), so nobody would notice
+the gate was missing. Combined with `tsconfig` having `strict: false` and `strictNullChecks: false` (audit
+§9, downgraded to P3 on measured impact), **a real type regression in app code passes CI today.** Those two
+findings are much worse together than either was alone. Small packet, high value: add a `tsc --noEmit` step
+and fix the one pre-existing failure.
+
+**Good judgement calls in WP-24, both worth keeping:**
+- It **refused to narrow `isRedeliverable`** as its spec asked, because that predicate is documented and
+  tested as a byte-for-byte mirror of the backend's `RedeliverableFrom` — narrowing it would make the mirror
+  lie. Added `isBulkSelectable` (`ClaimableForRetryFrom`) and pointed row selection at that: same
+  user-visible outcome, no false mirror. This is the exact defect I told the execution session I would not
+  ship, and the agent caught it unprompted.
+- It corrected its own brief: the Worker-outage escalation is **not** "orphaned on a route nothing links to"
+  — BridgeSidebar, HubTabs, CommandPalette and MagicMappingPreview all link `/operations/health`. The real
+  defect was that `workerHealthy` was **read** on only that one page.
+
+**Traps confirmed again by this round:**
+- TRAP 7 (page.tsx = 52%): the two files needing a copy fix here are **`page.mdx`** —
+  `help/dashboard-and-statuses` and `help/exceptions-and-stuck-orders`. The second **documented a recovery
+  path WP-24 makes false**: help was telling operators the order screen could not requeue an out-of-retries
+  order.
+- The audit named two statuses shipping a live-but-doomed Send (`delivery_dead_letter`,
+  `rejected_by_supplier`). **There were three** — `unrouted` behaved identically.
+- `AssignSupplierBanner.tsx:146` still renders `--amber` as 13px/700 on `--amber-soft` = **3.65:1**. The
+  audit's D5 contrast failure survives in that one file because WP-24 delegates `unrouted` to the shipped
+  banner rather than restyling it. One-line token swap to `--amber-text`.
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
