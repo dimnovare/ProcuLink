@@ -31,4 +31,21 @@ public interface ISupplierAcceptanceService
     /// </summary>
     Task<IReadOnlyList<OrderValidationResult>?> ValidateOrderAsync(
         Guid orgId, Guid orderId, CancellationToken ct, OutputFormat? outputFormat = null);
+
+    /// <summary>
+    /// WP-17 — the BLOCKING subset of <see cref="ValidateOrderAsync"/>, evaluated against the SAME
+    /// effective (pinned-revision-aware) acceptance profile, but PURE: it persists nothing, so the
+    /// transform path can consult it without rewriting the order's stored validation state.
+    ///
+    /// <para>A failure blocks when its rule's severity is <c>error</c> OR the rule sets
+    /// <c>BlockOnFail</c> — the exact promise the supplier-profile UI makes. Invariant
+    /// (<c>invariant.*</c>) and output-render (<c>output.*</c>) rows are deliberately EXCLUDED: they
+    /// carry no rule and are advisory, and enforcing them would start refusing orders that deliver
+    /// fine today.</para>
+    ///
+    /// <para>Returns null when the order does not exist for this organisation; an EMPTY list means
+    /// the order exists and nothing refuses it.</para>
+    /// </summary>
+    Task<IReadOnlyList<AcceptanceBlocker>?> GetBlockingFailuresAsync(
+        Guid orgId, Guid orderId, CancellationToken ct);
 }

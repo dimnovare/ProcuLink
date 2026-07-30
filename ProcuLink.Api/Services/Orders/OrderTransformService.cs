@@ -53,6 +53,7 @@ internal sealed class OrderTransformService
     private readonly OrderServiceShared              _shared;
     private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
     private readonly ICxmlCredentialResolver?        _cxmlResolver;
+    private readonly IAcceptanceGate                 _acceptanceGate;
 
     public OrderTransformService(
         ProcuLinkDbContext             db,
@@ -61,6 +62,7 @@ internal sealed class OrderTransformService
         ILogger<OrderService>          logger,
         IPoMappingService              poMappings,
         OrderServiceShared             shared,
+        IAcceptanceGate                acceptanceGate,
         IEffectiveConnectionConfigResolver? effectiveConfig = null,
         ICxmlCredentialResolver?       cxmlResolver = null)
     {
@@ -69,6 +71,12 @@ internal sealed class OrderTransformService
         _transformers = transformers;
         _logger       = logger;
         _poMappings   = poMappings;
+        // WP-17 — the server-side acceptance gate. NOT nullable on purpose: an optional gate that
+        // defaults to null is an enforcement switch that turns itself off in any host that forgets
+        // to register it, which is the exact failure this work package exists to close. OrderService
+        // constructs a real one when DI supplies none, so there is no "gate absent" state to reason
+        // about.
+        _acceptanceGate = acceptanceGate;
         // Best-effort exception reconcile — the terminal-failure path opens the operator-workable
         // transform_failed exception through the SAME helper the parse-failure path uses.
         _shared       = shared;
@@ -404,6 +412,104 @@ internal sealed class OrderTransformService
             var entry = _db.Entry(entity);
             entry.Property(x => x.Status).OriginalValue    = OrderStatusConstants.Transforming;
             entry.Property(x => x.UpdatedAt).OriginalValue = claimedAt;
+        }
+
+        // ── WP-17 — the server-side acceptance gate ────────────────────────────
+        // The supplier-profile UI promises that an error-severity acceptance rule BLOCKS delivery.
+        // Until now that promise was kept only in the browser: ValidateOrderAsync had exactly two
+        // production callers and both were HTTP controllers, so an order the profile refused still
+        // went out through inbox bulk-send, REST ingress, inbound email, or any auto-drive. This is
+        // the one place the promise is now kept, and because TransformAsync is the SINGLE
+        // server-side transform door (TransformOrderJob is the only enqueuer, and it is the only
+        // caller of IOrderService.TransformAsync), every one of those paths inherits the answer.
+        //
+        // WHY AFTER THE CLAIM, NOT BEFORE IT — this placement is deliberate:
+        //   • OrdersController.Transform ALREADY flipped ready → transforming before enqueueing this
+        //     job. Refusing before the claim and returning Fail would leave the order sitting in
+        //     'transforming' with no job to pick it up — the exact strand the claim exists to avoid,
+        //     and one nothing sweeps.
+        //   • Behind the claim exactly ONE runner evaluates the gate for an order, so a duplicated
+        //     Hangfire run cannot write two refusals or race a concurrent transform.
+        //   • It still runs BEFORE any document generation, upload, or artifact row, so a refused
+        //     order costs one read and produces nothing that could later be delivered.
+        // The refusal goes through the SAME FailTransformAsync the terminal template/mapping failures
+        // use, so it lands in transform_failed: visible in ops health, opens the operator-workable
+        // exception row, surfaces its message as the order's errorMessage, and stays re-claimable so
+        // a fix (or an override) plus another Send re-drives it.
+        //
+        // WHAT IF THE GATE ITSELF FAILS — refuse, visibly. EvaluateAsync runs two reads (the
+        // effective acceptance profile, the latest override audit row) and it sits AFTER the claim
+        // and OUTSIDE the try/catch below, so a throw here — a DB blip, a malformed pin — unwound
+        // straight through the Hangfire job and left the order in 'transforming': no artifact, no
+        // transform_failed, no sentence, and no sweep looking for it. A document we could not check
+        // against the supplier's rules is not one to send, so the failure is caught and routed
+        // through the SAME FailTransformAsync as every other terminal failure. That is recoverable
+        // by construction: transform_failed is re-claimable, and TransformOrderJob's own
+        // AutomaticRetry re-drives it, so a transient lookup failure heals itself on the next run.
+        // Cancellation is NOT swallowed — a cancelled request is not a refusal.
+        AcceptanceGateDecision? gate;
+        try
+        {
+            gate = await _acceptanceGate.EvaluateAsync(organisationId, orderId, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Order {OrderId} (org {OrgId}): the supplier acceptance gate could not be evaluated — refusing the "
+              + "transform rather than sending a document nobody checked. The order is marked transform_failed and "
+              + "stays re-claimable, so a retry re-drives it.",
+                orderId, organisationId);
+
+            const string reason =
+                "This order couldn't be checked against the supplier's rules, so it wasn't sent. "
+              + "Try sending it again in a moment.";
+
+            _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(
+                organisationId, orderId, AcceptanceGateAudit.BlockedAction, new
+                {
+                    blockers = Array.Empty<object>(),
+                    stage    = "transform",
+                    // The gate did not refuse this order — it could not answer. Recorded distinctly
+                    // so an operator reading the trail is never told the supplier rejected it.
+                    error    = "acceptance_gate_unavailable",
+                }));
+
+            await FailTransformAsync(entity, organisationId, orderId, reason, ct);
+            return Result<TransformResponse>.Fail(reason);
+        }
+
+        if (gate is { Blocked: true })
+        {
+            var reason = string.IsNullOrWhiteSpace(gate.Reason)
+                ? "This order wasn't sent because it doesn't meet what the supplier accepts."
+                : gate.Reason!;
+
+            _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(
+                organisationId, orderId, AcceptanceGateAudit.BlockedAction, new
+                {
+                    blockers = gate.Blockers.Select(b => new { code = b.Code, line = b.LineNumber, message = b.Message }).ToList(),
+                    stage    = "transform",
+                }));
+
+            await FailTransformAsync(entity, organisationId, orderId, reason, ct);
+            return Result<TransformResponse>.Fail(reason);
+        }
+
+        if (gate is { Overridden: true })
+        {
+            // The guarantee was waived in PRACTICE, not merely granted — a distinct, more
+            // interesting audit fact than the override itself. Queued on the change tracker and
+            // committed by whichever SaveChanges finishes this transform (the artifact commit, or
+            // FailTransformAsync if generation then fails for an unrelated reason): either way an
+            // attempt was admitted under the override, which is what the row records.
+            _db.AuditEvents.Add(AcceptanceGate.BuildOverrideUsedEvent(organisationId, orderId, gate));
+            _logger.LogWarning(
+                "Order {OrderId}: transforming despite {Count} blocking supplier acceptance rule(s) — operator override by {Actor}.",
+                orderId, gate.Blockers.Count, gate.OverriddenBy);
         }
 
         // Generate the document.
