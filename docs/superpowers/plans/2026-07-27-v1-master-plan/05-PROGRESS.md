@@ -262,6 +262,32 @@ execution session about its own work.
   products* writes line 1's supplier code onto line 2. Must be fixed before WP-14 merges. **Relevant to
   WP-17** — the acceptance engine sits downstream of that resolution.
 
+### 2026-07-30 — WP-26 held, and two guards worth keeping
+
+**WP-26 is BUILT BUT HELD FROM MERGE until FE #47 lands.** #47 deletes the `/drafts` entry from
+`BridgeSidebar.tsx` and three tabs from `HubTabs.tsx`; WP-26 restructures both wholesale. Worktrees prevent
+a working-tree collision, so the branch can be built safely — but the merge order is **FE #47 → rebase
+WP-26 → re-run the reachability test**, and the reachability test is what catches the real hazard: a bad
+conflict resolution silently resurrecting a route that was just retired behind a 308.
+
+**Vocab-gate exclusions — WP-25 must not sweep these.** `scripts/check-vocabulary.mjs` scans `(app)` and
+`(marketing)` render files, and it now runs in CI, so a careless jargon list turns main red for both
+sessions. A word that reads as jargon is legitimate in:
+- **`src/lib/standards/catalog.ts`** — it contains real EDI vocabulary and is the *conservative source of
+  truth for capability claims*. A rename sweep here damages the one anti-drift mechanism that already
+  works. **Do not touch it.**
+- test fixtures and mock payloads — they mirror wire formats, not user-facing copy;
+- quoted error strings in `docs/`;
+- `"version"` in a changelog entry;
+- code identifiers and comments.
+
+**A second case of the same case-sensitivity bug class, upstream of the known one.**
+`SupplierSuggestionService.cs:222-240` compares `SupplierProduct.Code` with `StringComparer.Ordinal`
+against the column the catalog now folds case-insensitively. Effect: a lower-cased export **scores 0 on
+supplier auto-detection while resolving fine once routed** — the order lands `unrouted` for a reason that
+looks like "we do not recognise this supplier" when in fact the codes match. So the WP-14 comparer defect
+has a sibling one layer up, and the class is "two comparers over one column". Both belong in the WP-14 fix.
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
