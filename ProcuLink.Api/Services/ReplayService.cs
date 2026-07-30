@@ -114,7 +114,15 @@ public sealed class ReplayService : IReplayService
         var orders = await LoadOrdersAsync(orgId, revision.SupplierId, request, ct);
 
         // The revision's output config + format (the "draft" side).
+        //
+        // WP-12: the STRUCTURED output tree rides inside InputMappingJson (a byte-identical snapshot of
+        // the whole PoMappingConfig), not in OutputMappingJson. Reading only the latter meant a
+        // connection whose entire output IS a designed layout replayed as the FIXED document on both
+        // sides — the diff screen answered "nothing changes" for a revision that changes everything,
+        // and OrderTransformService's own comment promising that replay reads the same snapshot
+        // identically stopped being true.
         var draftOutputConfig = DeserializeOutputConfig(revision.OutputMappingJson);
+        var draftOutputTree   = DeserializeSnapshotTree(revision.InputMappingJson);
         var draftFormat       = ParseFormat(revision.OutputFormat) ?? DefaultFormat;
 
         // The order's CURRENT output format: prefer the connection's active published revision's format,
@@ -135,11 +143,16 @@ public sealed class ReplayService : IReplayService
         // Loaded ONCE per replay; defensive — a missing/malformed/unusable supplier mapping yields
         // null and the current side keeps its existing (per-order override / fixed) behaviour.
         OutputMappingConfig? supplierPromotedOutput = null;
+        OutputNodeTemplate?  supplierPromotedTree   = null;
         try
         {
             var supplierConfig = await _poMappings.GetAsync(orgId, revision.SupplierId, ct);
             if (OrderMappingOverrideReader.HasUsablePromotedOutput(supplierConfig))
                 supplierPromotedOutput = supplierConfig!.Output;
+            // WP-12: the promoted TREE drives live delivery too, so the current side must see it or
+            // the diff invents a change that is not real.
+            if (OrderMappingOverrideReader.HasUsablePromotedOutputTree(supplierConfig))
+                supplierPromotedTree = supplierConfig!.OutputTree;
         }
         catch
         {
@@ -176,7 +189,8 @@ public sealed class ReplayService : IReplayService
             var effective = _effectiveConfig is null
                 ? EffectiveConnectionConfig.Live
                 : await _effectiveConfig.ResolveAsync(orgId, order.ConnectionRevisionId, ct);
-            var diff = BuildDiff(order, draftOutputConfig, draftFormat, currentFormat, currentProfile, draftProfile, now, supplierPromotedOutput, effective);
+            var diff = BuildDiff(order, draftOutputConfig, draftOutputTree, draftFormat, currentFormat,
+                                 currentProfile, draftProfile, now, supplierPromotedOutput, supplierPromotedTree, effective);
 
             // Opt-in parse-from-source leg: default-off keeps the existing contract byte-identical.
             if (request.IncludeParseLeg)
@@ -268,12 +282,14 @@ public sealed class ReplayService : IReplayService
     private ReplayOrderDiffDto BuildDiff(
         PurchaseOrderEntity order,
         OutputMappingConfig? draftOutputConfig,
+        OutputNodeTemplate? draftOutputTree,
         OutputFormat draftFormat,
         OutputFormat currentFormat,
         SupplierAcceptanceProfile? currentProfile,
         SupplierAcceptanceProfile? draftProfile,
         DateTime now,
         OutputMappingConfig? supplierPromotedOutput,
+        OutputNodeTemplate? supplierPromotedTree,
         EffectiveConnectionConfig effective)
     {
         // ── Output side ────────────────────────────────────────────────────────
@@ -292,25 +308,30 @@ public sealed class ReplayService : IReplayService
         if (effective.IsRevision)
         {
             currentEffective =
-                OrderMappingOverrideReader.HasUsableTemplate(currentOverride)
+                currentOverride?.OutputTree is not null
+                || OrderMappingOverrideReader.HasUsableTemplate(currentOverride)
                 || OrderMappingOverrideReader.HasUsableOutput(currentOverride)
                     ? currentOverride
                     // Unusable/null revision snapshot → the per-order override unchanged (a
                     // custom-fields-only override still falls through to the fixed transformer).
-                    : BuildRevisionOverride(currentOverride, DeserializeOutputConfig(effective.OutputMappingJson))
+                    // Both halves of the bundle are read, exactly as the transform reads them.
+                    : BuildRevisionOverride(
+                          currentOverride,
+                          DeserializeOutputConfig(effective.OutputMappingJson),
+                          DeserializeSnapshotTree(effective.InputMappingJson))
                       ?? currentOverride;
             currentSideFormat = ParseFormat(effective.OutputFormat) ?? currentFormat;
         }
         else
         {
-            currentEffective = ResolveCurrentEffectiveOverride(currentOverride, supplierPromotedOutput);
+            currentEffective = ResolveCurrentEffectiveOverride(currentOverride, supplierPromotedOutput, supplierPromotedTree);
         }
         var current = Render(order, currentEffective, currentSideFormat);
 
         // DRAFT/replayed: the revision's output config wrapped as an override, at the revision's format.
         // The order's existing CustomFields are preserved so custom-field references in the revision's
         // output rules still resolve; only the OUTPUT mapping + format come from the revision.
-        var draftOverride = BuildRevisionOverride(currentOverride, draftOutputConfig);
+        var draftOverride = BuildRevisionOverride(currentOverride, draftOutputConfig, draftOutputTree);
         var draft = Render(order, draftOverride, draftFormat);
 
         var outputChanged = current.Ok && draft.Ok && !string.Equals(current.Text, draft.Text, StringComparison.Ordinal);
@@ -354,19 +375,29 @@ public sealed class ReplayService : IReplayService
     {
         try
         {
-            var useTemplate = OrderMappingOverrideReader.HasUsableTemplate(@override);
+            // WP-12: the structured tree is the HIGHEST-precedence mode, exactly as in the transform —
+            // a cXML/X12 tree is the WS-12 exception and never routes to the emitter (it carries only
+            // envelope identity), so it keeps the fixed path below.
+            var tree = @override?.OutputTree;
+            var useOutputNode = tree is not null && !OrderMappingOverrideReader.IsFixedFormatTree(tree);
+            var useTemplate = !useOutputNode && OrderMappingOverrideReader.HasUsableTemplate(@override);
             var hasUsableOverride =
-                !useTemplate
+                !useOutputNode
+                && !useTemplate
                 && OrderMappingOverrideReader.HasUsableOutput(@override)
                 && MappedTransformService.SupportsOverrideFormat(format);
             var useNativeOverride = hasUsableOverride && MappedTransformService.SupportsOverride(format);
 
             var transformer = _transformers.FirstOrDefault(t => t.CanTransform(format));
-            if (!useTemplate && !useNativeOverride && transformer is null)
+            if (!useOutputNode && !useTemplate && !useNativeOverride && transformer is null)
                 return RenderResult.Failure($"No transform service registered for format '{format}'.");
 
             TransformResult result;
-            if (useTemplate)
+            if (useOutputNode)
+            {
+                result = new OutputTemplateEmitter().Emit(tree!, order, @override!);
+            }
+            else if (useTemplate)
             {
                 result = new ScribanTemplateTransformService().Build(order, @override!);
             }
@@ -420,17 +451,25 @@ public sealed class ReplayService : IReplayService
     /// exactly as before).
     /// </summary>
     private static OrderMappingOverride? ResolveCurrentEffectiveOverride(
-        OrderMappingOverride? currentOverride, OutputMappingConfig? supplierPromotedOutput)
+        OrderMappingOverride? currentOverride,
+        OutputMappingConfig? supplierPromotedOutput,
+        OutputNodeTemplate? supplierPromotedTree)
     {
-        if (supplierPromotedOutput is null
+        // The per-order seam wins as a WHOLE — including a per-order TREE, which the live transform
+        // treats as the highest-precedence mode of all.
+        if (currentOverride?.OutputTree is not null
             || OrderMappingOverrideReader.HasUsableTemplate(currentOverride)
             || OrderMappingOverrideReader.HasUsableOutput(currentOverride))
+            return currentOverride;
+
+        if (supplierPromotedOutput is null && supplierPromotedTree is null)
             return currentOverride;
 
         return new OrderMappingOverride
         {
             CustomFields = currentOverride?.CustomFields ?? new List<CustomField>(),
             Output       = supplierPromotedOutput,
+            OutputTree   = supplierPromotedTree,
         };
     }
 
@@ -446,18 +485,50 @@ public sealed class ReplayService : IReplayService
     /// Internal (not private) so the read-parity surfaces in <c>OrdersController</c> (mapping-override
     /// preview + conformance) wrap a PINNED revision's snapshot with the SAME logic — no second copy.
     /// </summary>
+    /// <param name="draftOutputTree">
+    /// WP-12 — the revision's structured output tree, snapshotted inside <c>InputMappingJson</c>
+    /// (read via <see cref="DeserializeSnapshotTree"/>). Optional so the pre-WP-12 two-argument call
+    /// sites stay byte-identical. Carried ALONGSIDE the flat config, never instead of it: which one
+    /// drives is decided at render time, mirroring the transform (a cXML/X12 tree never does).
+    /// </param>
     internal static OrderMappingOverride? BuildRevisionOverride(
-        OrderMappingOverride? currentOverride, OutputMappingConfig? draftOutputConfig)
+        OrderMappingOverride? currentOverride,
+        OutputMappingConfig? draftOutputConfig,
+        OutputNodeTemplate? draftOutputTree = null)
     {
-        if (draftOutputConfig is null
-            || (draftOutputConfig.Header.Count == 0 && draftOutputConfig.Lines.Count == 0))
+        var hasFlat = draftOutputConfig is not null
+                      && (draftOutputConfig.Header.Count > 0 || draftOutputConfig.Lines.Count > 0);
+
+        if (!hasFlat && draftOutputTree is null)
             return null;
 
         return new OrderMappingOverride
         {
             CustomFields = currentOverride?.CustomFields ?? new List<CustomField>(),
-            Output       = draftOutputConfig,
+            Output       = hasFlat ? draftOutputConfig : null,
+            OutputTree   = draftOutputTree,
         };
+    }
+
+    /// <summary>
+    /// Reads the promoted <see cref="PoMappingConfig.OutputTree"/> out of a revision's
+    /// <c>input_mapping_json</c> snapshot (WP-12) — the SAME read
+    /// <c>OrderTransformService.TryReadPinnedOutputTree</c> performs, so the replay engine and the
+    /// live transform agree on what a revision publishes. Returns null for a blank snapshot, a
+    /// snapshot with no tree, an unusable tree, or a malformed snapshot. Never throws.
+    /// </summary>
+    internal static OutputNodeTemplate? DeserializeSnapshotTree(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            var config = JsonSerializer.Deserialize<PoMappingConfig>(json, SerializerOptions);
+            return OrderMappingOverrideReader.HasUsablePromotedOutputTree(config) ? config!.OutputTree : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>

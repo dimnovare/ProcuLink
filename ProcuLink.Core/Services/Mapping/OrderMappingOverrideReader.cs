@@ -91,20 +91,84 @@ public static class OrderMappingOverrideReader
         && (output.Header.Count > 0 || output.Lines.Count > 0);
 
     /// <summary>
-    /// True only when a supplier-level <see cref="PoMappingConfig"/> carries a promoted structured
-    /// output tree that can actually emit something (WP-12): a root with at least one child, or a
-    /// root that is itself a leaf carrying a rule. A null config, a null
-    /// <see cref="PoMappingConfig.OutputTree"/>, or a tree whose root is an empty wrapper must NOT
-    /// divert the transform — an empty tree would emit an empty document, which is strictly worse
-    /// than the fixed transformer's complete one.
-    ///
-    /// <para>Mirrors <see cref="HasUsablePromotedOutput"/>. Within the supplier-promoted layer a
-    /// usable tree OUTRANKS a usable flat output config, mirroring the per-order ladder where
-    /// <see cref="OrderMappingOverride.OutputTree"/> outranks <see cref="OrderMappingOverride.Output"/>.</para>
+    /// Supplier-config wrapper over <see cref="HasUsableOutputTree"/> (WP-12). Mirrors
+    /// <see cref="HasUsablePromotedOutput"/>. Within the supplier-promoted layer a usable
+    /// NON-fixed-format tree OUTRANKS a usable flat output config, mirroring the per-order ladder
+    /// where <see cref="OrderMappingOverride.OutputTree"/> outranks
+    /// <see cref="OrderMappingOverride.Output"/>.
     /// </summary>
     public static bool HasUsablePromotedOutputTree(PoMappingConfig? config) =>
-        config?.OutputTree is { } tree
-        && (tree.Root.Children.Count > 0 || tree.Root.Rule is not null);
+        HasUsableOutputTree(config?.OutputTree);
+
+    /// <summary>
+    /// True only when an output template can actually contribute something to a delivered document.
+    /// Two different questions, because a template means two different things by format:
+    ///
+    /// <list type="bullet">
+    ///   <item><description><b>JSON / XML / CSV</b> — the tree IS the document, so it is usable when
+    ///     its root can emit: at least one child, or a root that is itself a leaf carrying a rule. An
+    ///     empty root would emit an empty document, strictly worse than the fixed transformer's
+    ///     complete one.</description></item>
+    ///   <item><description><b>cXML / X12</b> — the tree is NEVER rendered. The emitter refuses those
+    ///     formats (a generic node tree cannot carry a valid cXML Header/DOCTYPE or an X12 ISA/GS
+    ///     envelope) and the dedicated fixed transformer owns the document. The only part ever
+    ///     honoured is <see cref="OutputNodeTemplate.Envelope"/>, so ONLY an envelope carrying real
+    ///     identity makes such a template usable. Nodes drawn under it are decoration — reporting
+    ///     them as a saved layout would promise a capability that does not exist.</description></item>
+    /// </list>
+    ///
+    /// <para>Null-safe by construction. <see cref="OutputNodeTemplate.Root"/> and
+    /// <see cref="OutputNode.Children"/> are <c>init</c> properties with defaults, but
+    /// System.Text.Json ASSIGNS NULL over a default for <c>"root": null</c> / <c>"children": null</c>,
+    /// and both are reachable from the <c>[FromBody] PoMappingConfig</c> endpoint that writes
+    /// <c>SupplierPoMapping.ConfigJson</c> verbatim. Dereferencing them unguarded threw a
+    /// NullReferenceException out of the transform's "never throws" seam.</para>
+    /// </summary>
+    public static bool HasUsableOutputTree(OutputNodeTemplate? tree)
+    {
+        if (tree?.Root is not { } root) return false;
+
+        if (IsFixedFormatTree(tree))
+            return HasEnvelopeIdentity(tree.Envelope);
+
+        return root.Children is { Count: > 0 } || root.Rule is not null;
+    }
+
+    /// <summary>
+    /// True for the two formats whose documents a node tree can never render (cXML / X12) — the
+    /// WS-12 exception. Such a template contributes its <see cref="OutputNodeTemplate.Envelope"/> to
+    /// the dedicated fixed transformer and nothing else: it must never route to the emitter, never
+    /// replace a flat output config, and never be described to the user as a file layout.
+    /// </summary>
+    public static bool IsFixedFormatTree(OutputNodeTemplate? tree) =>
+        tree?.Format is OutputFormat.CXml or OutputFormat.X12;
+
+    /// <summary>
+    /// True when an <see cref="EnvelopeConfig"/> actually sets something the X12 / cXML transform
+    /// will use. An envelope whose every member is null/blank changes not one delivered byte, so it
+    /// is indistinguishable from having no envelope at all.
+    /// </summary>
+    public static bool HasEnvelopeIdentity(EnvelopeConfig? envelope)
+    {
+        if (envelope is null) return false;
+
+        if (envelope.Cxml is { } cxml
+            && (Set(cxml.FromDomain)   || Set(cxml.FromIdentity)
+             || Set(cxml.ToDomain)     || Set(cxml.ToIdentity)
+             || Set(cxml.SenderDomain) || Set(cxml.SenderIdentity)
+             || Set(cxml.DtdSystemId)  || Set(cxml.DtdPublicId)))
+            return true;
+
+        return envelope.X12 is { } x12
+            && (Set(x12.IsaSenderQualifier)   || Set(x12.IsaSenderId)
+             || Set(x12.IsaReceiverQualifier) || Set(x12.IsaReceiverId)
+             || Set(x12.Version)              || Set(x12.UsageIndicator)
+             || x12.ElementSeparator   is not null
+             || x12.SegmentSeparator   is not null
+             || x12.ComponentSeparator is not null);
+
+        static bool Set(string? value) => !string.IsNullOrWhiteSpace(value);
+    }
 
     /// <summary>
     /// True only when an override is present AND carries a non-blank whole-document

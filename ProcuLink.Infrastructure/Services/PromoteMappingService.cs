@@ -152,9 +152,17 @@ public sealed class PromoteMappingService : IPromoteMappingService
         // renders through the fixed transformer and every design decision is silently lost. Same
         // "only a usable value is stored" rule as the flat output above, so promoting an ordinary
         // order never wipes a layout a previous promote saved.
-        var tree           = @override?.OutputTree;
-        var hasUsableTree  = tree is not null
-                             && (tree.Root.Children.Count > 0 || tree.Root.Rule is not null);
+        //
+        // Usability is the SHARED predicate the transform consumes with, so promote can never report
+        // saving something delivery will not honour (offer ⇔ works). It is also the null-safe one: a
+        // hand-posted `"root": null` used to throw a NullReferenceException straight out of this
+        // endpoint as a 500.
+        var tree          = @override?.OutputTree;
+        var hasUsableTree = OrderMappingOverrideReader.HasUsableOutputTree(tree);
+
+        // A cXML/X12 template is never rendered — only its envelope identity is honoured — so the
+        // confirmation must name the identity, not a file layout that will never apply.
+        var treeIsIdentityOnly = hasUsableTree && OrderMappingOverrideReader.IsFixedFormatTree(tree);
 
         // Decide whether anything is actually promotable. If the order has no SourceMap entries that
         // map to a known canonical field AND no usable output mapping AND no usable output tree,
@@ -198,7 +206,7 @@ public sealed class PromoteMappingService : IPromoteMappingService
                                             headerCount, lineCount,
                                             hasUsableOutput ? outputHeaderCount : 0,
                                             hasUsableOutput ? outputLineCount   : 0,
-                                            hasUsableTree))
+                                            hasUsableTree, treeIsIdentityOnly))
         {
             OutputTreePromoted = hasUsableTree,
         };
@@ -241,7 +249,8 @@ public sealed class PromoteMappingService : IPromoteMappingService
     /// Only the non-zero halves are mentioned.
     /// </summary>
     private static string BuildPromotedMessage(
-        int headerCount, int lineCount, int outputHeaderCount, int outputLineCount, bool promotedTree)
+        int headerCount, int lineCount, int outputHeaderCount, int outputLineCount,
+        bool promotedTree, bool treeIsIdentityOnly)
     {
         var inbound = headerCount + lineCount;
         var output  = outputHeaderCount + outputLineCount;
@@ -249,8 +258,12 @@ public sealed class PromoteMappingService : IPromoteMappingService
         var parts = new List<string>();
         if (inbound > 0) parts.Add($"{inbound} source field{(inbound == 1 ? "" : "s")}");
         if (output  > 0) parts.Add($"{output} output field{(output == 1 ? "" : "s")}");
-        // Plain language: the operator drew a structure, so name the structure — not "a tree".
-        if (promotedTree) parts.Add("the file layout you designed");
+        // Plain language, and only ever a true claim: a cXML/X12 template never applies its layout —
+        // only the sender/receiver identity on it is used — so say THAT, not "the file layout".
+        if (promotedTree)
+            parts.Add(treeIsIdentityOnly
+                ? "the sender and receiver identity you set"
+                : "the file layout you designed");
 
         return $"Saved {string.Join(" and ", parts)} to this supplier's reusable mapping. " +
                "Future uploads from this supplier reuse it.";
@@ -266,6 +279,13 @@ public sealed class PromoteMappingService : IPromoteMappingService
         if (@override is null)
             return "Nothing to save — this order has no custom field mapping yet. " +
                    "Wire some fields (or edit the output mapping) first, then save.";
+
+        // The honest answer for a cXML/X12 template: its nodes are never used, so drawing them saved
+        // nothing. Say what WOULD be saved instead of implying the layout is the problem.
+        if (OrderMappingOverrideReader.IsFixedFormatTree(@override.OutputTree))
+            return "Nothing to save — a cXML or EDI document is built to the standard's own layout, " +
+                   "so the boxes drawn here are not used. Set this supplier's sender and receiver " +
+                   "identity (or wire some fields), then save.";
 
         return "Nothing to save — the current field mapping has no source or output rules that map " +
                "to a known field. Wire at least one field, then save.";

@@ -176,9 +176,9 @@ internal sealed class OrderTransformService
         // EnvelopeConfig (OutputNodeTemplate.Envelope) into the dedicated fixed transformer below, so we
         // keep the fixed-transformer path and read the envelope off the tree (see `envelope` resolution
         // further down). All other tree formats (JSON/XML/CSV) keep delivering through the emitter.
-        var outputTree      = mappingOverride?.OutputTree;
-        var treeIsFixedFormat = outputTree is { Format: OutputFormat.CXml or OutputFormat.X12 };
-        var useOutputNode   = outputTree is not null && !treeIsFixedFormat;
+        var perOrderTree    = mappingOverride?.OutputTree;
+        var outputTree      = perOrderTree;
+        var useOutputNode   = outputTree is not null && !OrderMappingOverrideReader.IsFixedFormatTree(outputTree);
         // The override the emitter resolves custom fields against. Normally the order's own; when the
         // tree arrives from the supplier's promoted config (WP-12, below) it becomes the synthetic
         // supplier override, which already carries this order's custom fields.
@@ -208,9 +208,13 @@ internal sealed class OrderTransformService
                 (supplierOverride, supplierOutputJson) =
                     await TryReadSupplierPromotedOutputAsync(organisationId, entity.SupplierId ?? Guid.Empty, mappingOverride, ct);
         }
-        var useRevisionOutput  = revisionOverride is not null;
+        // The FLAT builder runs at a promoted layer only when that layer actually carries a flat
+        // output config. A layer that contributed only a tree must never reach it: MappedTransformService
+        // throws "Override has no output mapping config" for a null Output, which the catch below turns
+        // into a TERMINAL transform_failed — failing an order the fixed transformer would have delivered.
+        var useRevisionOutput  = OrderMappingOverrideReader.HasUsableOutput(revisionOverride);
         var useRevisionNative  = useRevisionOutput && MappedTransformService.SupportsOverride(effectiveFormat);
-        var useSupplierMapping = supplierOverride is not null;
+        var useSupplierMapping = OrderMappingOverrideReader.HasUsableOutput(supplierOverride);
         var useSupplierNative  = useSupplierMapping && MappedTransformService.SupportsOverride(effectiveFormat);
 
         // ── WP-12 — the supplier-PROMOTED output tree ─────────────────────────────
@@ -220,32 +224,50 @@ internal sealed class OrderTransformService
         // transformer. Within the layer the tree OUTRANKS the promoted flat Output — the tree is the
         // richer concept, mirroring the per-order ladder at the top of this method.
         //
-        // Promoting the tree also promotes its cXML/X12 Envelope: `envelope` below reads
-        // outputTree?.Envelope, so a supplier's required sender/receiver identity survives promotion
-        // for exactly the same reason the structure does. The WS-12 exception still holds — a
-        // cXML/X12 tree does not route to the emitter, it only carries that identity.
+        // Promoting the tree also promotes its cXML/X12 Envelope: `envelope` below reads it, so a
+        // supplier's required sender/receiver identity survives promotion for exactly the same reason
+        // the structure does. The WS-12 exception still holds — a cXML/X12 tree does not route to the
+        // emitter, it only carries that identity.
+        //
+        // TWO precedence rules govern this block, and both were violated by assigning the promoted
+        // tree unconditionally:
+        //
+        //   1. THE PER-ORDER TREE ALWAYS WINS — in EVERY format, including when it carries nothing but
+        //      an Envelope. A per-order cXML/X12 tree sets useOutputNode = false (the WS-12 exception),
+        //      which is NOT the same thing as "this order has no tree": overwriting it replaced a
+        //      per-order sender identity with the supplier's, and a per-order cXML tree paired with a
+        //      promoted JSON tree flipped the whole transform onto the emitter, writing JSON bytes into
+        //      an artifact row that recorded 'cxml'. So a promoted tree is adopted ONLY when the order
+        //      has no per-order tree at all.
+        //   2. A FIXED-FORMAT (cXML/X12) PROMOTED TREE CONTRIBUTES ONLY ITS ENVELOPE. It must not drive
+        //      the document (the emitter refuses those formats) and must not suppress or replace the
+        //      flat output config at its own layer — the suppression below is therefore reached only by
+        //      a tree that actually renders.
+        //
         // A pinned order takes its tree from the revision snapshot; an unpinned one from the live
         // promoted config. The two are mutually exclusive by construction (only one of the two reads
         // above ran), so this reads whichever produced a tree.
         var useSupplierTree = false;
         var useRevisionTree = false;
-        var promotedSource  = supplierOverride?.OutputTree is not null ? supplierOverride
-                            : revisionOverride?.OutputTree is not null ? revisionOverride
-                            : null;
+        OutputNodeTemplate? promotedTree = null;
 
-        if (promotedSource?.OutputTree is { } promotedTree)
+        if (perOrderTree is null)
         {
-            useSupplierTree   = ReferenceEquals(promotedSource, supplierOverride);
-            useRevisionTree   = !useSupplierTree;
-            outputTree        = promotedTree;
-            treeIsFixedFormat = promotedTree.Format is OutputFormat.CXml or OutputFormat.X12;
-            useOutputNode     = !treeIsFixedFormat;
-            treeOverride      = promotedSource;
+            var promotedSource = supplierOverride?.OutputTree is not null ? supplierOverride
+                               : revisionOverride?.OutputTree is not null ? revisionOverride
+                               : null;
+            promotedTree = promotedSource?.OutputTree;
 
-            // A tree-driven layer must not ALSO run the flat builder for that same layer — the tree
-            // already describes the whole document, and running both would emit the flat layout.
-            if (useOutputNode)
+            if (promotedTree is not null && !OrderMappingOverrideReader.IsFixedFormatTree(promotedTree))
             {
+                useSupplierTree = ReferenceEquals(promotedSource, supplierOverride);
+                useRevisionTree = !useSupplierTree;
+                outputTree      = promotedTree;
+                useOutputNode   = true;
+                treeOverride    = promotedSource;
+
+                // A tree-driven layer must not ALSO run the flat builder for that same layer — the tree
+                // already describes the whole document, and running both would emit the flat layout.
                 if (useSupplierTree) { useSupplierMapping = false; useSupplierNative = false; }
                 else                 { useRevisionOutput  = false; useRevisionNative = false; }
             }
@@ -271,9 +293,21 @@ internal sealed class OrderTransformService
         // the pre-WS-12 output. The X12 transform ignores cxmlCredentials and cXML ignores nothing here;
         // see RunFixedTransform / MergeCxmlIdentity below for how the two cXML identity sources (live
         // delivery-config credentials vs the envelope) compose without dropping the shared secret.
+        //
+        // Precedence mirrors the ladder above: the ORDER's own tree owns the identity when it has one,
+        // and a promoted tree fills in only when the order carries no tree at all (`promotedTree` is
+        // null in every other case, by the guard above).
         EnvelopeConfig? envelope = null;
+        var envelopeFromPromotedTree = false;
         if (effectiveFormat is OutputFormat.CXml or OutputFormat.X12)
-            envelope = outputTree?.Envelope;
+        {
+            envelope = perOrderTree?.Envelope;
+            if (envelope is null && promotedTree?.Envelope is { } promotedEnvelope)
+            {
+                envelope                 = promotedEnvelope;
+                envelopeFromPromotedTree = true;
+            }
+        }
 
         // ── Idempotency / concurrency guard ────────────────────────────────────
         // Atomically claim the order by flipping ready → transforming only while it is
@@ -515,18 +549,35 @@ internal sealed class OrderTransformService
         try
         {
             artifactSha = ProvenanceHash.TrySha256Hex(artifactBytes);
+
             // WP-12: a PROMOTED tree also sets useOutputNode, but the config that drove it belongs to
             // the supplier or the pinned revision, not to this order — so it must digest under that
-            // source's prefix. Otherwise two orders rendered from the same promoted layout would
-            // carry different (or null) provenance, and the digest would stop identifying the config
-            // that actually produced the bytes.
-            var configDescriptor = ((useOutputNode && !useSupplierTree && !useRevisionTree) || useTemplate || useNativeOverride || hasUsableOverride)
-                ? OrderMappingOverrideReader.ReadRawJson(entity.CanonicalJson)
-                : (useRevisionOutput || useRevisionTree)
+            // source's prefix. The descriptor names the EXACT surface that produced these bytes:
+            //   • a promoted TREE digests THE TREE. Digesting the revision's OutputMappingJson instead
+            //     was worthless — a tree-only revision has none, so every layout on that revision
+            //     collapsed to the constant SHA256("revision:{id}:").
+            //   • a promoted FLAT config digests the flat config, even when a tree is also stored. The
+            //     tree only outranks it when the tree actually renders; digesting a tree that changed
+            //     nothing gave byte-identical artifacts different digests.
+            var configDescriptor =
+                ((useOutputNode && !useSupplierTree && !useRevisionTree) || useTemplate || useNativeOverride || hasUsableOverride)
+                    ? OrderMappingOverrideReader.ReadRawJson(entity.CanonicalJson)
+                : useRevisionTree
+                    ? $"revision:{effective.RevisionId}:{SerializeForDigest(revisionOverride!.OutputTree)}"
+                : useRevisionOutput
                     ? $"revision:{effective.RevisionId}:{effective.OutputMappingJson}"
-                    : (useSupplierMapping || useSupplierTree)
-                        ? $"supplier:{supplierOutputJson}"
-                        : $"fixed:{effectiveFormat.ToString().ToLowerInvariant()}";
+                : useSupplierTree
+                    ? $"supplier:{SerializeForDigest(supplierOverride!.OutputTree)}"
+                : useSupplierMapping
+                    ? $"supplier:{supplierOutputJson}"
+                    : $"fixed:{effectiveFormat.ToString().ToLowerInvariant()}";
+
+            // A cXML/X12 promoted tree contributes ONLY its envelope, which is invisible in every
+            // descriptor above yet changes the delivered sender/receiver identity. Name it, or two
+            // connections that differ solely by identity would share one digest.
+            if (envelopeFromPromotedTree && !useOutputNode && !useTemplate)
+                configDescriptor = $"{configDescriptor}|envelope:{SerializeForDigest(envelope)}";
+
             configDigest = ProvenanceHash.TrySha256HexUtf8(configDescriptor);
         }
         catch (Exception ex)
@@ -728,44 +779,60 @@ internal sealed class OrderTransformService
         // pinned order resolves ONLY its revision bundle. Without this read, promoting a designed
         // layout would work in every test and do nothing for any pinned order — the exact
         // "green locally, inert live" shape this packet exists to remove.
-        var pinnedTree = TryReadPinnedOutputTree(effective, orderId);
+        // BOTH halves of the pinned bundle are read, and BOTH ride on the returned override. Returning
+        // as soon as a tree was found DISCARDED a working published flat snapshot: for a cXML/X12 tree
+        // — which never renders anything — that left an override with a null Output, and the flat
+        // builder then threw, turning an order that had been delivering correctly into transform_failed.
+        // Which of the two actually drives is the caller's decision (see the WP-12 block in
+        // TransformAsync); this method's job is only to report what the revision snapshotted.
+        var pinnedTree   = TryReadPinnedOutputTree(effective, orderId);
+        var pinnedOutput = TryReadPinnedOutputConfig(effective, orderId);
 
-        if (pinnedTree is null && string.IsNullOrWhiteSpace(effective.OutputMappingJson))
+        if (pinnedTree is null && pinnedOutput is null)
             return null;
 
         if (pinnedTree is not null)
-        {
             _logger.LogInformation(
                 "Order {OrderId}: output structure taken from pinned {Source}.", orderId, effective.Source);
 
-            return new OrderMappingOverride
-            {
-                CustomFields = mappingOverride?.CustomFields ?? new List<CustomField>(),
-                OutputTree   = pinnedTree,
-            };
-        }
-
-        try
-        {
-            // Non-null here: the early return above covers a blank OutputMappingJson, and the
-            // pinned-tree branch has already returned when a tree was found.
-            var output = JsonSerializer.Deserialize<OutputMappingConfig>(
-                effective.OutputMappingJson!, RevisionOutputSerializerOptions);
-
-            if (output is null || (output.Header.Count == 0 && output.Lines.Count == 0))
-                return null; // empty snapshot — the fixed transformer stays in control
-
+        if (pinnedOutput is not null)
             _logger.LogInformation(
                 "Order {OrderId}: output mapping taken from pinned {Source}.", orderId, effective.Source);
 
-            return new OrderMappingOverride
-            {
-                CustomFields = mappingOverride?.CustomFields ?? new List<CustomField>(),
-                Output       = output,
-            };
-        }
-        catch (JsonException ex)
+        return new OrderMappingOverride
         {
+            CustomFields = mappingOverride?.CustomFields ?? new List<CustomField>(),
+            Output       = pinnedOutput,
+            OutputTree   = pinnedTree,
+        };
+    }
+
+    /// <summary>
+    /// Reads the FLAT <see cref="OutputMappingConfig"/> out of a pinned revision's
+    /// <c>output_mapping_json</c> snapshot. Returns null — meaning "this half contributes nothing" —
+    /// for a blank, empty (no header AND no line rules; matches a backfilled rev-1) or malformed
+    /// snapshot. Logged, never thrown.
+    /// </summary>
+    private OutputMappingConfig? TryReadPinnedOutputConfig(EffectiveConnectionConfig effective, Guid orderId)
+    {
+        if (string.IsNullOrWhiteSpace(effective.OutputMappingJson))
+            return null;
+
+        try
+        {
+            var output = JsonSerializer.Deserialize<OutputMappingConfig>(
+                effective.OutputMappingJson, RevisionOutputSerializerOptions);
+
+            return output is null || (output.Header.Count == 0 && output.Lines.Count == 0)
+                ? null // empty snapshot — the fixed transformer stays in control
+                : output;
+        }
+        catch (Exception ex)
+        {
+            // Deliberately NOT `catch (JsonException)`: the deserializer is only one of the ways a
+            // poisoned snapshot can fail, and this method sits behind no other guard — anything that
+            // escapes here escapes TransformAsync itself, BEFORE the status claim, leaving no
+            // transform_failed row and no exception row while Hangfire retries forever.
             _logger.LogWarning(ex,
                 "Order {OrderId}: pinned {Source} output mapping is malformed — using the fixed transformer.",
                 orderId, effective.Source);
@@ -795,14 +862,26 @@ internal sealed class OrderTransformService
                 ? config!.OutputTree
                 : null;
         }
-        catch (JsonException ex)
+        catch (Exception ex)
         {
+            // Same reason as TryReadPinnedOutputConfig: this is the LAST guard on the pinned path, so
+            // it must catch what the unpinned path catches (TryReadSupplierPromotedOutputAsync catches
+            // Exception). A JsonException-only filter let a NullReferenceException from a
+            // `"root": null` snapshot escape TransformAsync entirely.
             _logger.LogWarning(ex,
                 "Order {OrderId}: pinned {Source} input mapping snapshot is malformed — no output structure taken from it.",
                 orderId, effective.Source);
             return null;
         }
     }
+
+    /// <summary>
+    /// Serializes an output-config fragment for the provenance descriptor, using the SAME camelCase
+    /// shape <c>PoMappingService</c> persists, so the digested text is a stable representation of the
+    /// stored config rather than an incidental one.
+    /// </summary>
+    private static string SerializeForDigest(object? value) =>
+        JsonSerializer.Serialize(value, SupplierOutputSerializerOptions);
 
     // ── Supplier-promoted output mapping (launch batch 4A) ────────────────────
 
@@ -836,12 +915,13 @@ internal sealed class OrderTransformService
                 OutputTree   = hasTree ? supplierConfig!.OutputTree : null,
             };
 
-            // Provenance descriptor = the surface that will ACTUALLY drive the output. The tree
-            // outranks the flat config, so digest the tree when one is present; when there is no
-            // tree this is byte-identical to the pre-WP-12 descriptor.
-            var descriptor = hasTree
-                ? JsonSerializer.Serialize(supplierConfig!.OutputTree, SupplierOutputSerializerOptions)
-                : JsonSerializer.Serialize(supplierConfig!.Output,     SupplierOutputSerializerOptions);
+            // Provenance descriptor for the FLAT half only — byte-identical to the pre-WP-12 value.
+            // Whether the flat config or the tree actually drives the bytes is decided later (a
+            // cXML/X12 tree never does), so the caller picks the descriptor; deciding it here made
+            // the digest describe a tree that had changed nothing.
+            var descriptor = hasFlat
+                ? JsonSerializer.Serialize(supplierConfig!.Output, SupplierOutputSerializerOptions)
+                : null;
 
             return (synthetic, descriptor);
         }

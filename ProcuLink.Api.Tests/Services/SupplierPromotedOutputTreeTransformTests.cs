@@ -287,6 +287,15 @@ public class SupplierPromotedOutputTreeTransformTests
         using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(bytes));
         Assert.True(doc.RootElement.TryGetProperty("perOrderRef", out _));   // per-order layout
         Assert.False(doc.RootElement.TryGetProperty("orderNumber", out _));  // promoted layout NOT used
+
+        // Assert the DIFFERENCE. "The per-order tree wins" is trivially true if the promoted tree is
+        // never read at all, so the SAME supplier must render the promoted layout for an order that
+        // carries no per-order tree. This half fails the moment the consumption code is removed.
+        var untouchedOrder = await SeedIdenticalOrderAsync(db, orgId, supplierId);
+        using var promoted = JsonDocument.Parse(Encoding.UTF8.GetString(
+            await TransformAndCaptureAsync(db, orgId, untouchedOrder, OutputFormat.Json)));
+        Assert.True(promoted.RootElement.TryGetProperty("orderNumber", out _));
+        Assert.False(promoted.RootElement.TryGetProperty("perOrderRef", out _));
     }
 
     [Fact]
@@ -315,6 +324,15 @@ public class SupplierPromotedOutputTreeTransformTests
 
         Assert.StartsWith("PerOrderRef", csv);
         Assert.DoesNotContain("orderNumber", csv);
+
+        // Assert the DIFFERENCE (see PerOrderTree_OutranksPromotedTree): a sibling order with no
+        // per-order output of any kind must still get the promoted layout, so this test detects a
+        // promoted tree that is never consumed rather than one that merely loses.
+        var untouchedOrder = await SeedIdenticalOrderAsync(db, orgId, supplierId);
+        var promotedCsv = Encoding.UTF8.GetString(
+            await TransformAndCaptureAsync(db, orgId, untouchedOrder, OutputFormat.Json));
+        Assert.Contains("orderNumber", promotedCsv);
+        Assert.DoesNotContain("PerOrderRef", promotedCsv);
     }
 
     [Fact]
@@ -399,6 +417,18 @@ public class SupplierPromotedOutputTreeTransformTests
 
         Assert.True(result.IsSuccess, result.Error); // never a throw, never a failed order
         Assert.Equal(ms.ToArray(), captured());      // byte-identical fixed output
+
+        // Assert the DIFFERENCE. Falling back to the fixed transformer is what a transform with NO
+        // tree support does anyway, so repair the SAME supplier's config with a well-formed tree: the
+        // very next order must render through it. Only a transform that really reads the promoted tree
+        // can satisfy both halves.
+        await new PoMappingService(db).UpsertAsync(
+            orgId, supplierId, new PoMappingConfig { OutputTree = DesignedTree() }, CancellationToken.None);
+
+        var repairedOrder = await SeedIdenticalOrderAsync(db, orgId, supplierId);
+        using var repaired = JsonDocument.Parse(Encoding.UTF8.GetString(
+            await TransformAndCaptureAsync(db, orgId, repairedOrder, OutputFormat.Json)));
+        Assert.Equal("PO-WP12-1", repaired.RootElement.GetProperty("orderNumber").GetString());
     }
 
     // ── Pinned orders (Connections:RevisionAuthority — ON in production) ───────────────────────
@@ -535,6 +565,22 @@ public class SupplierPromotedOutputTreeTransformTests
         // (Compared by shape, not by bytes: the fixed JSON transform stamps a generatedAt timestamp,
         // so two renders of the same order are never byte-equal to each other.)
         Assert.Equal("PO-WP12-1", doc.RootElement.GetProperty("poNumber").GetString());
+
+        // Assert the DIFFERENCE. "A pinned order ignores the live tree" is free if NO tree is ever
+        // read, so a second order pinned to a revision that DID snapshot the layout must render
+        // through it — the same live config, the same run, opposite outcomes.
+        var pinnedWithTree = await SeedPublishedRevisionAsync(
+            db, orgId, supplierId, new PoMappingConfig { OutputTree = DesignedTree() });
+        var treeOrderId = await SeedIdenticalOrderAsync(db, orgId, supplierId);
+        var treeOrder   = await db.PurchaseOrders.SingleAsync(o => o.Id == treeOrderId);
+        treeOrder.ConnectionRevisionId = pinnedWithTree;
+        await db.SaveChangesAsync();
+
+        var (treeSvc, treeCaptured) = BuildWithAuthority(db);
+        var treeResult = await treeSvc.TransformAsync(orgId, treeOrderId, OutputFormat.Json, CancellationToken.None);
+        Assert.True(treeResult.IsSuccess, treeResult.Error);
+        using var treeDoc = JsonDocument.Parse(Encoding.UTF8.GetString(treeCaptured()!));
+        Assert.Equal("PO-WP12-1", treeDoc.RootElement.GetProperty("orderNumber").GetString());
     }
 
     [Fact]
