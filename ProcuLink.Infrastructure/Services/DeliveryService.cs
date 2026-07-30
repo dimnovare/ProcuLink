@@ -346,7 +346,11 @@ public sealed class DeliveryService : IDeliveryService
         // stuck re-drive REUSES that row (matched on the same key) instead of opening a fresh attempt,
         // so the lost-ACK re-send cannot create a second terminal attempt row or silently burn the
         // retry budget — and it carries the SAME idempotency key, which a supporting supplier
-        // de-duplicates (HTTP header / email Message-ID; SFTP/FTPS overwrite the deterministic file).
+        // de-duplicates (HTTP header / email Message-ID). SFTP/FTPS need no key at all: the remote
+        // path is a deterministic function of the order, so the re-drive targets its OWN file —
+        // which it replaces when overwriteExisting is on (the default) and refuses to touch when the
+        // operator has turned it off. That refusal is why the park below covers overwrite-off
+        // file-drop connections too.
         var idempotencyKey = BuildIdempotencyKey(order.Id, artifact.Id);
         var (attempt, reAdopted) = await OpenDispatchAttemptAsync(order, artifact, config, idempotencyKey, ct);
 
@@ -361,8 +365,20 @@ public sealed class DeliveryService : IDeliveryService
         // email: caller-supplied Message-ID dedup is best-effort), re-sending on that ambiguity
         // would risk handing the supplier a duplicate PO. So we do not guess: park the order and let
         // a human — who can ask the supplier — decide. Safe/BestEffort channels re-drive unchanged.
+        //
+        // ONE Safe channel parks too, and for the opposite reason. A file-drop connection whose
+        // operator turned overwriteExisting OFF cannot repair its own write: the re-drive finds the
+        // file its predecessor left, REFUSES (correctly — that is what the setting asks for), and the
+        // order walks the retry ladder into dead-letter while the supplier may be holding the
+        // complete purchase order. Reporting that as "failed" is a lie in one direction and
+        // re-sending it is impossible in the other, so it is exactly the case ParkUnconfirmedAsync
+        // exists for: stop, and ask the human who can ask the supplier. Nothing changes for the
+        // default (overwrite on), which repairs its own file and re-drives as before.
         if (reAdopted && dispatcher.ResendSafety == ResendSafety.Unsafe)
-            return await ParkUnconfirmedAsync(order, attempt, config, ct);
+            return await ParkUnconfirmedAsync(order, attempt, config, ParkReasonCannotDeduplicate, ct);
+
+        if (reAdopted && CannotRepairItsOwnFile(config))
+            return await ParkUnconfirmedAsync(order, attempt, config, ParkReasonCannotRepairOwnFile, ct);
 
         DeliveryResult result;
         try
@@ -486,10 +502,28 @@ public sealed class DeliveryService : IDeliveryService
     /// keep nagging until a human resolves it, just on a renewed timer rather than the old one.
     /// </para>
     /// </summary>
+    /// <summary>Why a crash-recovery re-drive was parked: the channel cannot de-duplicate a re-send.</summary>
+    internal const string ParkReasonCannotDeduplicate =
+        "Crash-recovery re-drive on a channel that cannot de-duplicate a re-send. "
+        + "The artifact may have been sent, but the outcome was never observed; "
+        + "re-sending could duplicate the PO, so the order is parked for an operator decision.";
+
+    /// <summary>
+    /// Why a crash-recovery re-drive was parked on a file-drop channel: it cannot DUPLICATE, but with
+    /// overwriteExisting off it cannot finish either — it would refuse, retry, and dead-letter an
+    /// order the supplier may already hold in full.
+    /// </summary>
+    internal const string ParkReasonCannotRepairOwnFile =
+        "Crash-recovery re-drive on a file-drop connection with \"replace existing files\" turned off. "
+        + "The artifact may have been written to the supplier's server, in full or in part, but the "
+        + "outcome was never observed; a re-send would refuse rather than replace it, so the order is "
+        + "parked for an operator decision instead of being retried into dead-letter.";
+
     private async Task<DeliveryResult> ParkUnconfirmedAsync(
         PurchaseOrderEntity order,
         DeliveryAttempt attempt,
         SupplierDeliveryConfig config,
+        string parkReason,
         CancellationToken ct)
     {
         var now = DateTime.UtcNow;
@@ -510,9 +544,7 @@ public sealed class DeliveryService : IDeliveryService
             channel = config.Protocol,
             idempotencyKey = attempt.IdempotencyKey,
             parkedAt = now,
-            detail = "Crash-recovery re-drive on a channel that cannot de-duplicate a re-send. "
-                   + "The artifact may have been sent, but the outcome was never observed; "
-                   + "re-sending could duplicate the PO, so the order is parked for an operator decision.",
+            detail = parkReason,
         });
 
         _db.AuditEvents.Add(new AuditEvent
@@ -943,6 +975,23 @@ public sealed class DeliveryService : IDeliveryService
         || protocol.Equals(DeliveryProtocolConstants.Ftps, StringComparison.OrdinalIgnoreCase)
         || protocol.Equals(DeliveryProtocolConstants.Ftp, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// True when a crash-recovery re-drive on this connection would be unable to replace the file
+    /// its own predecessor may have written — a file-drop channel whose operator turned
+    /// <c>overwriteExisting</c> off.
+    ///
+    /// <para>
+    /// The re-send cannot duplicate (the path is per-order), which is why the dispatcher still
+    /// declares <see cref="ResendSafety.Safe"/>; what it cannot do is finish. Re-driving it produces
+    /// a refusal, then a retry, then a dead-lettered order — while the supplier may already hold the
+    /// complete document, or a truncated one that every subsequent retry declines to repair. Neither
+    /// "delivered" nor "failed" is a claim this process can make, so it parks for a human.
+    /// </para>
+    /// </summary>
+    private static bool CannotRepairItsOwnFile(SupplierDeliveryConfig config) =>
+        IsFileDropProtocol(config.Protocol)
+        && !Dispatchers.SftpDeliveryDispatcher.OverwriteExistingFromConfig(config.ConfigJson);
+
     /// <summary>Short, stable, collision-free-in-practice per-order token for a filename.</summary>
     internal static string OrderFileQualifier(Guid orderId) => orderId.ToString("N")[..8];
 
@@ -954,8 +1003,22 @@ public sealed class DeliveryService : IDeliveryService
     /// BCL call returns a DIFFERENT set per platform — Windows rejects <c>: ? * " &lt; &gt; |</c>
     /// that Linux happily allows — so the same PO number produced a different remote filename in
     /// development (Windows) than in production (Linux), and a production filename could not be
-    /// reproduced locally. The allow-list below also matches the SFTP/FTPS dispatchers' own
-    /// <c>SanitiseFileName</c>, so the name this method builds survives that second pass unchanged.
+    /// reproduced locally.
+    /// </para>
+    /// <para>
+    /// The allow-list is Unicode letters and digits, NOT ASCII ones. On Linux —
+    /// which is production — <c>Path.GetInvalidFileNameChars()</c> is only <c>{ '\0', '/' }</c>, so
+    /// <c>Ä Ö Ü Õ ß é ç º</c> have always reached suppliers intact; narrowing to ASCII would
+    /// silently rewrite a European buyer's PO number both in the remote filename AND in the default
+    /// email subject the supplier reads ("Purchase Order Ordre-Nº7"), and would collapse two
+    /// different orders — <c>PO-Ä1</c> and <c>PO-Ö1</c> — onto one name, which is the very
+    /// collision this packet exists to remove.
+    /// </para>
+    /// <para>
+    /// This is the SAME allow-list the SFTP/FTPS dispatchers' own <c>SanitiseFileName</c> uses
+    /// (<c>char.IsLetterOrDigit</c> plus <c>. _ -</c>). Only the SUBSTITUTE character differs —
+    /// <c>-</c> here, <c>_</c> there — and because <c>-</c> is itself in the allow-list, the
+    /// dispatcher's second pass is a no-op on anything this method produces.
     /// </para>
     /// </summary>
     internal static string SanitizeFileToken(string value)
@@ -963,7 +1026,7 @@ public sealed class DeliveryService : IDeliveryService
         if (string.IsNullOrWhiteSpace(value)) return "order";
 
         var chars = value.Trim()
-            .Select(ch => char.IsAsciiLetterOrDigit(ch) || ch is '.' or '_' or '-' ? ch : '-')
+            .Select(ch => char.IsLetterOrDigit(ch) || ch is '.' or '_' or '-' ? ch : '-')
             .ToArray();
         var sanitized = new string(chars).Trim('-');
         return string.IsNullOrWhiteSpace(sanitized) ? "order" : sanitized;

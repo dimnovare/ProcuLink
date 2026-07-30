@@ -21,6 +21,21 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
     private readonly ILogger<FtpsDeliveryDispatcher> _logger;
     private readonly OutboundRequestGuard _guard;
 
+    /// <summary>
+    /// Test seam — how a connected upload session is obtained. Null in production (the only PUBLIC
+    /// constructor leaves it null, and Microsoft DI only ever sees public constructors), where the
+    /// session is a connected FluentFTP client.
+    ///
+    /// <para>
+    /// Same reason as <see cref="SftpDeliveryDispatcher"/>: the single expression that carries the
+    /// operator's <c>overwriteExisting</c> setting out of the saved config and onto the transfer
+    /// lives inside <see cref="DispatchAsync"/>, and was reachable by no test at all — hardcoding
+    /// it to <c>true</c> left the whole suite green while the operator's OFF setting became a no-op
+    /// for real purchase orders.
+    /// </para>
+    /// </summary>
+    private readonly Func<IFtpsUploadSession>? _sessionFactory;
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -29,16 +44,29 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Ftps;
 
-    // Safe in the sense ResendSafety means: a re-send after an unknown outcome cannot DUPLICATE at
-    // the supplier. The remote path is a deterministic function of the order, so a re-send either
-    // replaces its own file (overwriteExisting on, the default) or refuses outright (overwriteExisting
-    // off) — neither produces a second copy. See SftpDeliveryDispatcher.OverwriteExistingFromConfig.
+    // Safe in the sense ResendSafety means, and ONLY that sense: a re-send after an unknown outcome
+    // cannot DUPLICATE at the supplier. The remote path is a deterministic function of the order, so
+    // a re-send either replaces its own file (overwriteExisting on, the default) or refuses outright
+    // (overwriteExisting off) — neither produces a second copy.
+    //
+    // It does NOT mean the re-send completes: with overwriteExisting off it refuses, and
+    // DeliveryService parks that combination for a human rather than retrying it into dead-letter
+    // (CannotRepairItsOwnFile). See SftpDeliveryDispatcher.OverwriteExistingFromConfig.
     public ResendSafety ResendSafety => ResendSafety.Safe;
 
     public FtpsDeliveryDispatcher(ILogger<FtpsDeliveryDispatcher> logger, OutboundRequestGuard guard)
+        : this(logger, guard, sessionFactory: null)
+    {
+    }
+
+    internal FtpsDeliveryDispatcher(
+        ILogger<FtpsDeliveryDispatcher> logger,
+        OutboundRequestGuard guard,
+        Func<IFtpsUploadSession>? sessionFactory)
     {
         _logger = logger;
         _guard = guard;
+        _sessionFactory = sessionFactory;
     }
 
     public async Task<DeliveryResult> DispatchAsync(
@@ -131,13 +159,25 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
                 if (!guardResult.Allowed)
                     return new DeliveryResult(false, $"FTPS delivery blocked: {guardResult.Reason}");
 
-                await client.Connect(token).ConfigureAwait(false);
+                IFtpsUploadSession session;
+                if (_sessionFactory is null)
+                {
+                    await client.Connect(token).ConfigureAwait(false);
+                    session = new FluentFtpUploadSession(client);
+                }
+                else
+                {
+                    session = _sessionFactory();
+                }
 
                 return await UploadCoreAsync(
-                    new FluentFtpUploadSession(client),
+                    session,
                     content,
                     remotePath,
                     makeDirectories,
+                    // THE wire between the operator's saved setting and the live transfer. Covered
+                    // end-to-end by FtpsDeliveryDispatcherOverwriteWiringTests — hardcoding this to
+                    // true makes an OFF setting a no-op on the live path and must not be able to pass.
                     SftpDeliveryDispatcher.OverwriteExistingFromConfig(config.ConfigJson),
                     token).ConfigureAwait(false);
             }
@@ -204,9 +244,7 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
             // there. FluentFTP treats that as a benign no-op; a purchase order that was not sent is
             // not benign, so it becomes an explicit failure with the reason spelled out.
             FtpStatus.Skipped => new DeliveryResult(false,
-                $"A file named '{remotePath}' is already on the supplier's server and this connection " +
-                "is set not to replace existing files. Remove or rename the file there, or turn " +
-                "\"replace existing files\" back on for this supplier."),
+                SftpDeliveryDispatcher.RefusedBecauseFileExists(remotePath)),
             _ => new DeliveryResult(false, "FTPS upload did not complete successfully."),
         };
     }

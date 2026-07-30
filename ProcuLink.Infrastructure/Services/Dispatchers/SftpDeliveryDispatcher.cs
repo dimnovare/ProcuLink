@@ -20,6 +20,24 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
     private readonly ILogger<SftpDeliveryDispatcher> _logger;
     private readonly OutboundRequestGuard _guard;
 
+    /// <summary>
+    /// Test seam — how a connected upload session is obtained. Null in production (the only PUBLIC
+    /// constructor leaves it null, and Microsoft DI only ever sees public constructors), where the
+    /// session comes from a real SSH.NET connect.
+    ///
+    /// <para>
+    /// It exists because the step that carries the operator's <c>overwriteExisting</c> setting OUT
+    /// OF THE SAVED CONFIG and onto the upload is a single expression inside
+    /// <see cref="DispatchAsync"/>. Without a seam that expression cannot be reached by any test —
+    /// <see cref="OverwriteExistingFromConfig"/> is provable as a pure function and
+    /// <see cref="UploadCore"/> is provable with an injected bool, and BOTH can be green while the
+    /// wire between them is cut. Replacing that expression with a hardcoded <c>true</c> — the
+    /// operator's OFF setting silently ignored on the live path for real purchase orders — left the
+    /// entire suite passing. It does not any more.
+    /// </para>
+    /// </summary>
+    private readonly Func<ConnectionInfo, ISftpUploadSession>? _sessionFactory;
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -28,17 +46,30 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Sftp;
 
-    // Safe in the sense ResendSafety means: a re-send after an unknown outcome cannot DUPLICATE at
-    // the supplier. The remote path is a deterministic function of the order, so a re-send either
-    // replaces its own file (overwriteExisting on, the default) or refuses outright (overwriteExisting
-    // off) — neither produces a second copy. See OverwriteExistingFromConfig for the trade-off the
-    // off setting makes.
+    // Safe in the sense ResendSafety means, and ONLY that sense: a re-send after an unknown outcome
+    // cannot DUPLICATE at the supplier. The remote path is a deterministic function of the order, so
+    // a re-send either replaces its own file (overwriteExisting on, the default) or refuses outright
+    // (overwriteExisting off) — neither produces a second copy.
+    //
+    // It does NOT mean the re-send completes. With overwriteExisting off it refuses, which would
+    // walk the order into dead-letter while the supplier may already hold the document, so
+    // DeliveryService parks that combination for a human rather than re-driving it
+    // (CannotRepairItsOwnFile). See OverwriteExistingFromConfig for the trade-off the off setting makes.
     public ResendSafety ResendSafety => ResendSafety.Safe;
 
     public SftpDeliveryDispatcher(ILogger<SftpDeliveryDispatcher> logger, OutboundRequestGuard guard)
+        : this(logger, guard, sessionFactory: null)
+    {
+    }
+
+    internal SftpDeliveryDispatcher(
+        ILogger<SftpDeliveryDispatcher> logger,
+        OutboundRequestGuard guard,
+        Func<ConnectionInfo, ISftpUploadSession>? sessionFactory)
     {
         _logger = logger;
         _guard = guard;
+        _sessionFactory = sessionFactory;
     }
 
     public async Task<DeliveryResult> DispatchAsync(
@@ -83,10 +114,21 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
             if (!guardResult.Allowed)
                 return new DeliveryResult(false, $"SFTP delivery blocked: {guardResult.Reason}");
 
+            // THE wire between the operator's saved setting and the live upload. Read once, here,
+            // from the config row the operator actually edited. Covered end-to-end by
+            // SftpDeliveryDispatcherOverwriteWiringTests — hardcoding this to true makes an OFF
+            // setting a no-op on the live path and must not be able to pass.
+            var overwriteExisting = OverwriteExistingFromConfig(config.ConfigJson);
+
+            var fakeSession = _sessionFactory?.Invoke(connectionInfo);
+
             // SSH.NET is synchronous — wrap in Task.Run so we honour the CancellationToken.
             return await Task.Run(
-                () => UploadSync(content, remotePath, connectionInfo, cfg.MakeDirectories,
-                                 OverwriteExistingFromConfig(config.ConfigJson), ct),
+                () => fakeSession is null
+                    ? UploadSync(content, remotePath, connectionInfo, cfg.MakeDirectories,
+                                 overwriteExisting, ct)
+                    : UploadCore(fakeSession, content, remotePath, cfg.MakeDirectories,
+                                 overwriteExisting, _logger, ct),
                 ct);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -168,10 +210,7 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         // Reported as a normal failed delivery (retry/dead-letter as usual), never as a success.
         if (!overwriteExisting && session.Exists(remotePath))
         {
-            return new DeliveryResult(false,
-                $"A file named '{remotePath}' is already on the supplier's server and this connection " +
-                "is set not to replace existing files. Remove or rename the file there, or turn " +
-                "\"replace existing files\" back on for this supplier.");
+            return new DeliveryResult(false, RefusedBecauseFileExists(remotePath));
         }
 
         using var ms = new MemoryStream(content);
@@ -195,6 +234,26 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
 
         return new DeliveryResult(true, null);
     }
+
+    /// <summary>
+    /// What an operator reads when overwrite is off and something is already at the path. Shared by
+    /// both file-drop dispatchers so the two wordings cannot drift.
+    ///
+    /// <para>
+    /// It deliberately does NOT say "remove or rename the file there". The remote path is a
+    /// deterministic function of the order, so whatever is sitting on it is this order's own
+    /// document — renaming it and re-sending manufactures the second copy at the supplier that
+    /// <see cref="ResendSafety.Safe"/> promises cannot happen, and deleting it throws away a
+    /// purchase order the supplier may already be working from. The only remedy offered is the one
+    /// that keeps a single file: allow the send to replace its own.
+    /// </para>
+    /// </summary>
+    internal static string RefusedBecauseFileExists(string remotePath) =>
+        $"Nothing was sent. A file named '{remotePath}' is already on the supplier's server and this " +
+        "connection is set not to replace existing files. That remote path belongs to this order and " +
+        "no other, so the file there is almost certainly this same purchase order already delivered " +
+        "— check with the supplier before sending it again. To let a repeat send replace its own " +
+        "file, turn \"replace existing files\" back on for this supplier.";
 
     /// <summary>
     /// Whether an upload may replace a file already at the remote path. Absent key ⇒ TRUE, which is

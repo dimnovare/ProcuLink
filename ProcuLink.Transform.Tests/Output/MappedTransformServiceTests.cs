@@ -17,6 +17,38 @@ namespace ProcuLink.Transform.Tests.Output;
 /// </summary>
 public class MappedTransformServiceTests
 {
+    // ── The envelope comes from the one table, not from a literal here ────────
+    //
+    // WP-20 rerouted every transform through DeliveryMediaTypes and listed the sites it changed —
+    // and missed this one, which is a LIVE path (OrderTransformService drives per-order,
+    // per-revision and per-supplier mapping overrides through it). The values happened to agree
+    // with the table, so nothing was visibly wrong and nothing bound them: changing the table's
+    // Csv or Json row left this service, and the tests that pinned its literals, untouched.
+
+    [Theory]
+    [InlineData(OutputFormat.Csv)]
+    [InlineData(OutputFormat.Json)]
+    public void TheOverrideBuildersEnvelope_ComesFromTheDeliveryMediaTypeTable(OutputFormat format)
+    {
+        var order = BuildOrder();
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = { ["po"] = new OutputFieldRule { OutputPath = "OrderRef", CanonicalField = "PoNumber" } },
+                Lines  = { ["code"] = new OutputFieldRule { OutputPath = "ItemCode", CanonicalField = "SupplierItemCode" } },
+            },
+        };
+
+        var result   = new MappedTransformService().Build(order, ov, format);
+        var expected = ProcuLink.Core.Services.Delivery.DeliveryMediaTypes.For(format);
+
+        result.ContentType.Should().Be(expected.ContentType,
+            "the content type a document is stored and delivered with must come from the single table, not a literal in the builder");
+        result.FileExtension.Should().Be(expected.FileExtension,
+            "the extension a document is stored and delivered with must come from the single table, not a literal in the builder");
+    }
+
     private static PurchaseOrderEntity BuildOrder(IEnumerable<PurchaseOrderLineEntity>? lines = null)
     {
         var order = new PurchaseOrderEntity

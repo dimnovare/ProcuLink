@@ -141,12 +141,53 @@ public class DeliveryContentTypeAndFileNameTests
     [InlineData(DeliveryProtocolConstants.ErpErply)]
     public void ChannelsWhereTheNameIsNotAnIdentity_KeepThePlainPoNumber(string protocol)
     {
-        // The email dispatchers put this in front of a human ("Purchase Order PO-123"); HTTP and the
-        // ERP connectors carry the order in the payload. Nothing there collides on a filename.
+        // Not because the name can never repeat there — see
+        // OffTheFileDropChannels_TwoOrdersCanShareOneName below, which is the accepted residual —
+        // but because on these channels the name is not WHERE the document lives. HTTP never
+        // transmits it at all, the ERP connectors carry it as metadata beside a payload that names
+        // the order itself, and email delivers each document as its own message. Nothing can be
+        // overwritten and no order can be lost; the email dispatchers put this string in front of a
+        // human ("Purchase Order PO-123") where an id suffix would be noise.
         var order    = OrderNamed("PO-123", Guid.Parse("a1b2c3d4-0000-0000-0000-000000000000"));
         var artifact = new OutboundArtifact { Format = "cxml" };
 
         DeliveryService.BuildFileName(order, artifact, protocol).Should().Be("PO-123.xml");
+    }
+
+    [Fact]
+    public void OffTheFileDropChannels_TwoOrdersCanShareOneName_AndThatIsTheAcceptedResidual()
+    {
+        // ACCEPTED RISK, pinned so it cannot change silently.
+        //
+        // Two genuinely different orders whose PO numbers differ only in punctuation collapse to one
+        // name (the sanitiser maps everything outside letters/digits/. _ - to '-'), as do two orders
+        // that share a PO number outright. On SFTP/FTPS that used to cost the supplier an order and
+        // is fixed by the order-id suffix. Off those channels it costs nothing structural: both
+        // documents still arrive, in full, each in its own HTTP request / ERP post / email. What
+        // remains is a HUMAN ambiguity — a supplier who saves two same-named attachments into one
+        // folder keeps one, and the default email subject ("Purchase Order PO-123") reads the same
+        // for both.
+        //
+        // Not fixed here, deliberately: qualifying the email name would change the subject line
+        // every email supplier already filters on, which is a customer conversation of its own and
+        // does not belong in a packet about content types. The payload always carries the PO number
+        // and the order, so nothing is unrecoverable.
+        var artifact = new OutboundArtifact { Format = "cxml" };
+
+        var a = DeliveryService.BuildFileName(
+            OrderNamed("PO:123", Guid.NewGuid()), artifact, DeliveryProtocolConstants.Email);
+        var b = DeliveryService.BuildFileName(
+            OrderNamed("PO 123", Guid.NewGuid()), artifact, DeliveryProtocolConstants.Email);
+
+        a.Should().Be(b, "documented residual — see the reviewer note in the PR body");
+
+        // The same two orders over SFTP do NOT collide: the qualifier is the order id.
+        var sftpA = DeliveryService.BuildFileName(
+            OrderNamed("PO:123", Guid.NewGuid()), artifact, DeliveryProtocolConstants.Sftp);
+        var sftpB = DeliveryService.BuildFileName(
+            OrderNamed("PO 123", Guid.NewGuid()), artifact, DeliveryProtocolConstants.Sftp);
+
+        sftpA.Should().NotBe(sftpB);
     }
 
     [Fact]
@@ -179,10 +220,61 @@ public class DeliveryContentTypeAndFileNameTests
     [InlineData("PO_123",      "PO_123")]
     [InlineData("  PO-1  ",    "PO-1")]
     [InlineData("PO#123",      "PO-123")]
-    [InlineData("Ordre-Nº7",   "Ordre-N-7")]
     public void SanitizeFileToken_IsPlatformIndependent(string poNumber, string expected)
     {
         DeliveryService.SanitizeFileToken(poNumber).Should().Be(expected);
+    }
+
+    // ── Non-ASCII must reach the supplier intact ──────────────────────────────
+
+    [Theory]
+    // Production is Linux, where Path.GetInvalidFileNameChars() is only { '\0', '/' }: every one of
+    // these ALREADY reaches suppliers unchanged today, through both this sanitiser and the
+    // dispatchers' own (which uses the Unicode-aware char.IsLetterOrDigit). Reducing the allow-list
+    // to ASCII would silently mangle them — a customer-visible change, on the filename AND on the
+    // default email subject, for exactly the European buyers this product is sold to.
+    [InlineData("Ordre-Nº7",     "Ordre-Nº7")]
+    [InlineData("BESTELLUNG-Ä1", "BESTELLUNG-Ä1")]
+    [InlineData("TELLIMUS-Õ5",   "TELLIMUS-Õ5")]
+    [InlineData("PO-Öl-42",      "PO-Öl-42")]
+    [InlineData("PO-Über-9",     "PO-Über-9")]
+    [InlineData("Straße-77",     "Straße-77")]
+    [InlineData("Commande-Été",  "Commande-Été")]
+    [InlineData("Pedido-Niño",   "Pedido-Niño")]
+    [InlineData("Achat-Français", "Achat-Français")]
+    [InlineData("注文-2026",      "注文-2026")]
+    public void SanitizeFileToken_KeepsLettersAndDigitsThatAreNotAscii(string poNumber, string expected)
+    {
+        DeliveryService.SanitizeFileToken(poNumber).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("PO-Ä1")]
+    [InlineData("PO-Ö1")]
+    [InlineData("Ordre-Nº7")]
+    public void ANonAsciiPoNumber_SurvivesBothSanitisersUnchanged(string poNumber)
+    {
+        // The two passes must agree, or the name recorded here is not the name on the server. They
+        // use the SAME allow-list (Unicode letter/digit plus . _ -); only the substitute character
+        // differs (- here, _ in the dispatchers), and because - is itself in the allow-list the
+        // second pass is a no-op on anything this method produces.
+        var order = OrderNamed(poNumber, Guid.Parse("a1b2c3d4-0000-0000-0000-000000000000"));
+        var built = DeliveryService.BuildFileName(order, new OutboundArtifact { Format = "cxml" },
+                                                  DeliveryProtocolConstants.Sftp);
+
+        SftpDeliveryDispatcher.SanitiseFileName(built).Should().Be(built);
+        FtpsDeliveryDispatcher.SanitiseFileName(built).Should().Be(built);
+    }
+
+    [Fact]
+    public void TwoPoNumbersThatDifferOnlyInAnAccent_DoNotCollapseToOneName()
+    {
+        // PO-Ä1 and PO-Ö1 are two different purchase orders. An ASCII-only allow-list turns both
+        // into PO--1 — the same class of collision this packet exists to remove.
+        var a = DeliveryService.SanitizeFileToken("PO-Ä1");
+        var b = DeliveryService.SanitizeFileToken("PO-Ö1");
+
+        a.Should().NotBe(b);
     }
 
     [Theory]

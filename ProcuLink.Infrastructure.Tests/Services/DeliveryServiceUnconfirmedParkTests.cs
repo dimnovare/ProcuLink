@@ -114,6 +114,133 @@ public class DeliveryServiceUnconfirmedParkTests
             .Should().Be(OrderStatusConstants.Delivered);
     }
 
+    // ── WP-20: the file-drop connection that cannot repair its own file ──────────────────────
+    // SFTP/FTPS declare ResendSafety.Safe and that stays true — the remote path is per-order, so a
+    // re-send cannot DUPLICATE. But when the operator has turned "replace existing files" off, the
+    // re-send cannot COMPLETE either: it finds the file its own crashed predecessor may have written
+    // (whole, or truncated mid-transfer), refuses, fails the attempt, retries, and dead-letters —
+    // reporting the order FAILED while the supplier may be holding the complete purchase order, and
+    // the two remedies the refusal used to offer ("remove or rename the file there") are precisely
+    // the actions that manufacture the duplicate Safe promises cannot happen. Neither "delivered"
+    // nor "failed" is a claim this process can make, so it parks for the human who can ask.
+
+    [Theory]
+    [InlineData("sftp")]
+    [InlineData("ftps")]
+    public async Task ReAdopt_OnFileDropWithOverwriteOff_Parks_InsteadOfFailingAnOrderTheSupplierMayHold(string protocol)
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering, updatedAt: CrashedAt);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(
+            ids.OrgId, ids.SupplierId, encryption, protocol,
+            configJson: "{\"host\":\"drop.supplier.example\",\"remotePath\":\"/in\",\"overwriteExisting\":false}"));
+
+        var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+            Channel = protocol, Destination = "drop.supplier.example:/in",
+            Status = DeliveryAttempt.StatusDispatching, AttemptNumber = 1,
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-30), IdempotencyKey = key,
+        });
+        await db.SaveChangesAsync();
+
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 200), protocol, ResendSafety.Safe);
+        var service = CreateService(db, dispatcher, encryption);
+
+        var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
+
+        dispatcher.Calls.Should().Be(0,
+            "a re-send this connection is configured to refuse must not be attempted — it can only produce a false 'failed'");
+        result.Success.Should().BeFalse();
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId);
+        order.Status.Should().Be(OrderStatusConstants.DeliveryUnconfirmed,
+            "we cannot prove the supplier has it and we cannot prove they do not — that is a human's call, not a dead-letter");
+
+        var attempts = await db.DeliveryAttempts.Where(a => a.OrderId == ids.OrderId).ToListAsync();
+        attempts.Should().ContainSingle().Which.Status.Should().Be(DeliveryAttempt.StatusUnconfirmed);
+
+        var audit = await db.AuditEvents.SingleAsync(a => a.Action == "DeliveryUnconfirmed");
+        audit.Payload.RootElement.GetProperty("detail").GetString()
+            .Should().Be(DeliveryService.ParkReasonCannotRepairOwnFile,
+                "the recorded reason must be the file-drop one, not the 'could duplicate the PO' reason that does not apply here");
+    }
+
+    // The default — and every SFTP/FTPS connection that exists today, since none carries the key —
+    // is unchanged: overwrite on means the re-drive replaces its own file and completes.
+    [Theory]
+    [InlineData("sftp", "{\"host\":\"drop.supplier.example\",\"remotePath\":\"/in\"}")]
+    [InlineData("sftp", "{\"host\":\"drop.supplier.example\",\"overwriteExisting\":true}")]
+    [InlineData("ftps", "{\"host\":\"drop.supplier.example\",\"remotePath\":\"/in\"}")]
+    public async Task ReAdopt_OnFileDropWithOverwriteOn_StillReDrives(string protocol, string configJson)
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.Delivering, updatedAt: CrashedAt);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, protocol, configJson));
+
+        var key = DeliveryService.BuildIdempotencyKey(ids.OrderId, ids.ArtifactId);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
+            Channel = protocol, Destination = "drop.supplier.example:/in",
+            Status = DeliveryAttempt.StatusDispatching, AttemptNumber = 1,
+            AttemptedAt = DateTime.UtcNow.AddMinutes(-30), IdempotencyKey = key,
+        });
+        await db.SaveChangesAsync();
+
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 200), protocol, ResendSafety.Safe);
+        var service = CreateService(db, dispatcher, encryption);
+
+        var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
+
+        dispatcher.Calls.Should().Be(1, "replacing its own file is exactly what a crash-recovery re-drive is for");
+        result.Success.Should().BeTrue();
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == ids.OrderId)).Status
+            .Should().Be(OrderStatusConstants.Delivered);
+    }
+
+    // A FIRST send on an overwrite-off connection is an ordinary delivery, not a park: nothing was
+    // sent before, so a file at that path is somebody else's problem and the refusal is honest.
+    [Fact]
+    public async Task FirstSend_OnFileDropWithOverwriteOff_DeliversNormally()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.DeliveryFailed);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(
+            ids.OrgId, ids.SupplierId, encryption, "sftp",
+            configJson: "{\"host\":\"drop.supplier.example\",\"overwriteExisting\":false}"));
+        await db.SaveChangesAsync();
+
+        var dispatcher = new CountingDispatcher(new DeliveryResult(true, null, 200), "sftp", ResendSafety.Safe);
+        var service = CreateService(db, dispatcher, encryption);
+
+        var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, MaxAttempts, default);
+
+        dispatcher.Calls.Should().Be(1, "only a RE-ADOPTED in-flight row means we may already have written");
+        result.Success.Should().BeTrue();
+    }
+
+    // The refusal an operator reads must not recommend the actions that create the duplicate.
+    [Fact]
+    public void TheOverwriteOffRefusal_DoesNotRecommendCreatingADuplicate()
+    {
+        var message = ProcuLink.Infrastructure.Services.Dispatchers.SftpDeliveryDispatcher
+            .RefusedBecauseFileExists("/in/PO-123-a1b2c3d4.xml");
+
+        message.Should().NotContain("rename",
+            "renaming the file there and re-sending leaves the supplier holding two copies of one PO");
+        message.Should().NotContain("Remove",
+            "deleting it throws away a purchase order the supplier may already be working from");
+        message.Should().Contain("check with the supplier",
+            "the only safe first step is finding out whether they already have it");
+        message.Should().Contain("belongs to this order",
+            "the operator needs to know the file there is this same order, not an unrelated one");
+    }
+
     // The common path must not park: only a RE-ADOPTED row means "we already sent this".
     [Fact]
     public async Task FirstSend_OnUnsafeChannel_DeliversNormally()
@@ -684,7 +811,8 @@ public class DeliveryServiceUnconfirmedParkTests
     // Parameterised over DeliveryServiceIdempotencyTests's version so a test can pass a
     // non-"http" protocol (erp_erply / erp_directo / email) to exercise the Unsafe park.
     private static SupplierDeliveryConfig MakeConfig(
-        Guid orgId, Guid supplierId, DeliveryEncryptionService encryption, string protocol = "http") =>
+        Guid orgId, Guid supplierId, DeliveryEncryptionService encryption, string protocol = "http",
+        string configJson = "{\"url\":\"https://supplier.example/orders\"}") =>
         new()
         {
             Id = Guid.NewGuid(),
@@ -692,7 +820,7 @@ public class DeliveryServiceUnconfirmedParkTests
             SupplierId = supplierId,
             Protocol = protocol,
             AutoDeliver = true,
-            ConfigJson = "{\"url\":\"https://supplier.example/orders\"}",
+            ConfigJson = configJson,
             EncryptedCredentials = encryption.Encrypt("{\"type\":\"none\"}"),
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
