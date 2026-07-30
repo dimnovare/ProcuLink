@@ -1,20 +1,43 @@
-namespace ProcuLink.Core.Constants;
+﻿namespace ProcuLink.Core.Constants;
 
+/// <summary>
+/// A capability the paid ladder actually gates.
+///
+/// <para><b>Membership rule (WP-11).</b> A member may exist here only if production code
+/// really refuses it below its minimum plan AND the published pricing copy sells it as
+/// belonging to a specific tier. Anything else is a claim about the price list that nothing
+/// keeps true -- which is what this enum had become: sixteen declared capabilities, three
+/// enforced. Adding a member without an enforcement site now fails
+/// <c>BillingFeatureGateCoverageTests.EveryFeature_HasANamedEnforcementSite</c>.</para>
+///
+/// <para><b>Removed in WP-11</b>, each because there was nothing honest to gate:
+/// <c>Xml</c> and <c>Pdf</c> (gated at Growth, but the published Pilot card sells
+/// "CSV/XLSX/PDF/XML upload" -- input formats are not a tier differentiator);
+/// <c>MappingLibrary</c> (no such surface exists anywhere in the product -- the declaration
+/// and its plan-map row were the only two references in the repo);
+/// <c>DeliveryHistory</c> (no plan card sells it, and withholding "did my purchase order
+/// actually go out?" from a paying customer is not a differentiator); and
+/// <c>SlaOnboarding</c> (an SLA and named onboarding are commitments fulfilled by people --
+/// no code path could ever check them). <c>CustomTemplates</c> went the same way: it gated
+/// the output-template editor that WP-06 retired, so by the time this enum was audited there
+/// was no surface left behind the gate.</para>
+///
+/// <para>Deleting members here is ordinal-safe: <c>BillingFeature</c> is never persisted or
+/// serialized -- verified repo-wide, its only non-gate reference is a doc comment in
+/// <c>CxmlTransformService</c>. Re-verify that before removing any future member, or stored
+/// data silently changes meaning.</para>
+/// </summary>
 public enum BillingFeature
 {
-    Xml,
-    Pdf,
-    MappingLibrary,
+    /// <summary>Custom validation rules. Retired with its subsystem in BE #75.</summary>
     ValidationRules,
     BulkMapping,
     Cxml,
-    DeliveryHistory,
     AdvancedAudit,
     WebhookDelivery,
     EmailIngestion,
     ErpConnectors,
     CustomSupplierRules,
-    SlaOnboarding,
     SftpIngestion,
     S3Ingestion,
     // Enterprise SSO (SAML/OIDC). The auth itself is handled natively by Clerk

@@ -79,7 +79,7 @@ public sealed class SettingsController : ControllerBase
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
-                error = "email_ingestion_requires_integration",
+                error = BillingGateErrors.RequiresPlan("email_ingestion", BillingFeature.EmailIngestion),
                 upgradeUrl = "/settings"
             });
         }
@@ -139,7 +139,11 @@ public sealed class SettingsController : ControllerBase
         var orgId = _tenant.OrganisationId;
 
         if (request.Enabled && !await _billing.HasFeatureAsync(orgId, BillingFeature.SftpIngestion, ct))
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = "sftp_ingestion_requires_integration", upgradeUrl = "/settings" });
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = BillingGateErrors.RequiresPlan("sftp_ingestion", BillingFeature.SftpIngestion),
+                upgradeUrl = "/settings"
+            });
 
         if (request.Enabled)
         {
@@ -185,7 +189,11 @@ public sealed class SettingsController : ControllerBase
         var orgId = _tenant.OrganisationId;
 
         if (request.Enabled && !await _billing.HasFeatureAsync(orgId, BillingFeature.S3Ingestion, ct))
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = "s3_ingestion_requires_integration", upgradeUrl = "/settings" });
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = BillingGateErrors.RequiresPlan("s3_ingestion", BillingFeature.S3Ingestion),
+                upgradeUrl = "/settings"
+            });
 
         if (request.Enabled)
         {

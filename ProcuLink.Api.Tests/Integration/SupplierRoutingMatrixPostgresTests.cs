@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Amazon.S3;
 using Amazon.S3.Model;
 using FluentAssertions;
@@ -1084,7 +1084,7 @@ public sealed class SupplierRoutingMatrixPostgresTests
                    .ReturnsAsync((Guid?)null);
 
         return new IngressController(
-            db, idempotency.Object, tenant.Object, NullLogger<IngressController>.Instance)
+            db, idempotency.Object, tenant.Object, TestDoubles.PermissiveBilling.Service(), NullLogger<IngressController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };

@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Text;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -71,7 +71,7 @@ public class IngressControllerCatalogTests
 
         var http = new DefaultHttpContext();
         var controller = new IngressController(
-            db, new IdempotencyService(db), tenant.Object, NullLogger<IngressController>.Instance)
+            db, new IdempotencyService(db), tenant.Object, TestDoubles.PermissiveBilling.Service(), NullLogger<IngressController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

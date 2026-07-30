@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Hangfire;
 using Hangfire.Common;
 using Hangfire.States;
@@ -200,7 +200,7 @@ public class PollingJobFanOutTests
         sftpMock.Setup(s => s.PollAsync(orgId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(3);
 
-        var child = new SftpPollOrgJob(sftpMock.Object, NullLogger<SftpPollOrgJob>.Instance);
+        var child = new SftpPollOrgJob(sftpMock.Object, TestDoubles.PermissiveBilling.Service(), NullLogger<SftpPollOrgJob>.Instance);
 
         await child.ExecuteAsync(orgId, CancellationToken.None);
 
@@ -217,7 +217,7 @@ public class PollingJobFanOutTests
         s3Mock.Setup(s => s.PollAsync(orgId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(5);
 
-        var child = new S3PollOrgJob(s3Mock.Object, NullLogger<S3PollOrgJob>.Instance);
+        var child = new S3PollOrgJob(s3Mock.Object, TestDoubles.PermissiveBilling.Service(), NullLogger<S3PollOrgJob>.Instance);
 
         await child.ExecuteAsync(orgId, CancellationToken.None);
 

@@ -182,7 +182,12 @@ public class SettingsControllerPullIngressTests
 
         var status = result.Should().BeOfType<ObjectResult>().Subject;
         status.StatusCode.Should().Be(403);
-        ((string)((dynamic)status.Value!).error).Should().Be("sftp_ingestion_requires_integration");
+        // WP-11: this line used to pin "sftp_ingestion_requires_integration" — the wrong plan.
+        // SftpIngestion's minimum is Growth, so the old expectation was defending a 403 that
+        // told a Growth customer to buy Integration. Derived from the gate table now, so the
+        // test cannot re-pin a plan the gate does not actually require.
+        ((string)((dynamic)status.Value!).error).Should()
+            .Be($"sftp_ingestion_requires_{PlanConstants.GetMinimumPlan(BillingFeature.SftpIngestion)}");
         (await h.Db.SftpIngressConfigs.CountAsync()).Should().Be(0, "a gated enable persists nothing");
     }
 
@@ -328,7 +333,9 @@ public class SettingsControllerPullIngressTests
 
         var status = result.Should().BeOfType<ObjectResult>().Subject;
         status.StatusCode.Should().Be(403);
-        ((string)((dynamic)status.Value!).error).Should().Be("s3_ingestion_requires_integration");
+        // WP-11: was pinned to "s3_ingestion_requires_integration"; S3Ingestion's minimum is Growth.
+        ((string)((dynamic)status.Value!).error).Should()
+            .Be($"s3_ingestion_requires_{PlanConstants.GetMinimumPlan(BillingFeature.S3Ingestion)}");
         (await h.Db.S3IngressConfigs.CountAsync()).Should().Be(0);
     }
 

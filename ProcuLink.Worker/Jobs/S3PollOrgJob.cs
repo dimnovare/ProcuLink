@@ -1,4 +1,6 @@
 using Hangfire;
+using ProcuLink.Core.Constants;
+using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Jobs;
 
@@ -13,11 +15,16 @@ namespace ProcuLink.Worker.Jobs;
 public sealed class S3PollOrgJob
 {
     private readonly IS3IngressService _s3Ingress;
+    private readonly IBillingService _billing;
     private readonly ILogger<S3PollOrgJob> _logger;
 
-    public S3PollOrgJob(IS3IngressService s3Ingress, ILogger<S3PollOrgJob> logger)
+    public S3PollOrgJob(
+        IS3IngressService s3Ingress,
+        IBillingService billing,
+        ILogger<S3PollOrgJob> logger)
     {
         _s3Ingress = s3Ingress;
+        _billing = billing;
         _logger = logger;
     }
 
@@ -35,6 +42,16 @@ public sealed class S3PollOrgJob
     [PerOrgDistributedMutex(orgArgumentIndex: 0, timeoutSeconds: 300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
+        // Billing gate FIRST — before any network work. Mirrors EmailPollOrgJob; S3/R2
+        // polling skipped the check entirely, so an org whose plan does not include S3
+        // ingestion (or one that is frozen — HasFeatureAsync is false for every read-only
+        // status) kept having its bucket listed and its objects imported.
+        if (!await _billing.HasFeatureAsync(orgId, BillingFeature.S3Ingestion, ct))
+        {
+            _logger.LogInformation("S3PollOrgJob: plan does not include S3/R2 ingestion for org {OrgId}.", orgId);
+            return;
+        }
+
         _logger.LogInformation("S3PollOrgJob: starting S3/R2 poll for org {OrgId}.", orgId);
 
         var count = await _s3Ingress.PollAsync(orgId, ct);
