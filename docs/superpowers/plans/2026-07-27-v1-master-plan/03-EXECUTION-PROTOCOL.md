@@ -171,6 +171,13 @@ deliberately-RED guard turns main red and blocks every queued merge behind it. T
 constraint — it applies to every guard packet either session writes (WP-02, WP-04, and any future
 architecture test). Land guards GREEN with a dated, shrink-only allowlist; never land a red gate.
 
+**6. After a retirement PR and a guard PR both land, RE-RUN THE GUARD before the next merge.**
+Earned 2026-07-30 the expensive way. FE #47 (retire five routes) and FE #41 (the reachability guard) were
+both individually green and were merged close together. **Main went red** — a guard's allowlist is *state
+that a retirement invalidates*, so two individually-green PRs can be jointly red. It took FE #50 ("shrink
+the route allowlist that FE #47 made stale") to recover. Sequencing alone did not save us, because "in order"
+got treated as "both in the same batch". Order is not enough; a re-run between them is.
+
 ## 5c. Two sessions, one repo
 
 Both sessions collided on WP-01 and WP-12 on 2026-07-27/30 — four branches for two packets, roughly a

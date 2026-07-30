@@ -327,6 +327,42 @@ target despite the spec's misdirection. Needs a rebase: it branched at `214b3f3`
 
 **Merges are landing.** FE `origin/main` is at `1330cce` with #41, #42, #46, #47 and #50 merged.
 
+### 2026-07-30 — my nav correction was half wrong, and #42 shipped refuted
+
+**My BridgeTopbar correction does NOT reach FE #41's guard — the execution session checked and I was wrong
+about the consequence.** `useTopNav()` imports `buildVisibleNav` / `isItemActive` / `hubTooltip` **from**
+`BridgeSidebar` and renders `<TopNavLink href={item.href}>` off the filtered list — `href` is a *variable*,
+so the topbar contributes **zero literal targets** to a scanner. The guard's `REGISTRY_FILES`
+(`BridgeSidebar.tsx`, `HubTabs.tsx`, `guides.ts`, `help-articles.ts`) is the right set.
+
+**The distinction, stated so nobody re-derives it either way:**
+`BridgeSidebar.tsx` is where the nav **DATA** lives. `BridgeTopbar.tsx` is where desktop **RENDERS** it.
+A restructure (WP-25/26) touches both. A reachability scan needs only the data file.
+
+**⚠️ FE #42 SHIPPED REFUTED — wrong copy is LIVE on `/security` now.** It merged at 11:22 while its refuter
+had already found the residency sentence still false. Live copy says the US subprocessor categories are
+"sign-in, AI document extraction, **inbound email**, and payments". Postmark carries the **outbound purchase
+order** as an attachment and is US-only by vendor policy. Also: Vercel is a fifth SCC vendor, OpenAI's
+category drops "and mapping suggestions", and the region names are unevidenced with `europe-west4` not a
+real Railway identifier.
+
+**This is the plan's own warning coming true in production:** *a fix that makes a false claim more precise is
+worse than the claim it replaces.* Assigned to the execution session as a **narrow stage-3 correction**
+(category wording + soften the region claims to UNKNOWN, not to "probably EU"), explicitly NOT a
+stage-1-first rewrite — live wrong copy is a compliance exposure and correctness outranks sequencing. Stage 1
+(sourcing all eight deploy/egress cells) stays a separate packet.
+
+### Rebase plan for WP-24/25/26 — they are SIBLINGS, not a stack
+
+All three branched from `214b3f3`; `origin/main` is now `1330cce`. WP-25 and WP-26 both touch nav files, so
+they conflict with each other as well as with FE #47 (`ded9e04`), which also edited
+`navContextRowDedup.test.tsx`. A first rebase attempt hit exactly that conflict and was **aborted** rather
+than pulling HEAD out from under a running refuter.
+
+Order, once the round completes: **rebase WP-25 onto `origin/main` → rebase WP-26 onto WP-25 → re-run the
+reachability guard AND the vocab gate.** Per protocol rule 6, the guard re-run is mandatory, not optional:
+#47 already invalidated one allowlist and turned main red.
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
