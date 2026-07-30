@@ -506,7 +506,7 @@ Its author's reasoning on the part they could see is right and worth keeping: th
 CI-only because "a two-minute pre-commit hook teaches people to type `--no-verify`, and a bypassed gate
 enforces nothing."
 
-### 2026-07-30 — THE ICP QUESTION IS ANSWERED, and the answer is not what this plan assumes
+### 2026-07-30 — ~~THE ICP QUESTION IS ANSWERED~~ **RETRACTED 2026-07-30 — see the retraction below**
 
 Resolved from the repo rather than escalated. The two real customer purchase orders say it outright:
 
@@ -540,6 +540,50 @@ catalogue.
 **FOUNDER DECISION REQUIRED before WP-25/WP-26 merge — this is the one thing here only you can settle:**
 is Markit representative of the customers you intend to sell to, or a first customer who happens to run the
 mirror flow? If the former, the vocabulary work must be direction-aware before it lands, not after.
+
+### 2026-07-30 — RETRACTION: the ICP conclusion was wrong. Markit is the founder's EMPLOYER.
+
+I concluded from two fixtures that Markit is the ProcuLink customer and therefore the real ICP is inbound.
+**The fixture quotes were exact; the inference was wrong.** Retracted in full. Caught by the execution session.
+
+**The evidence I did not check, every piece verified first-hand now:**
+- **The founder's own Windows home directory is `C:\Users\Dmitri.REDACTED-PARTY\`** — a domain-joined account on a
+  `REDACTED-PARTY` domain. Markit is his **employer**. I typed that path in every shell command in this session.
+- ProcuLink's operating entity is **Diip Solutions OÜ**, registry 17527757 (`src/lib/legal-entity.ts`).
+- **`example.invalid` is a live Estonian IT/electronics reseller** — the catalog fixtures carry its real product
+  URLs (`https://example.invalid/ee/en/logilink-mousepad-...`, `example.invalid/images/...`).
+- "Markit" appears in **test files only** — 12 of them plus `CxmlCredentialConfig.cs`. **Nowhere** as an org,
+  tenant, or customer record.
+
+Read together: these are **real documents from the founder's day job, used as realistic test data** — the
+*convenience fixtures* branch of the audit's own question, which is the branch I did not take.
+
+**What survives, and it is worth keeping:** the only two real POs obtainable are inbound-shaped, so the
+realistic data available to test against is inbound. That is a genuine fact about test coverage and it does
+explain why MPN matching and supplier auto-detect were worth building. It establishes **nothing** about the
+paying customer's job.
+
+**Consequence: WP-25/WP-26 must NOT rescope on this.** Rewriting ~50 nouns around an inbound story on an
+inference this thin would be a large, hard-to-reverse change resting on its weakest link. The
+direction-agnostic pipeline plus the existing per-org `counterpartyPlural` relabel already cover both
+directions. If an inbound-first ICP is ever confirmed, the rename follows that decision — it does not arrive
+as a side effect of fixture archaeology. No marketing copy changes on this either.
+
+**The founder question stands but shrinks:** one sentence of confirmation, not a rescope.
+
+### CORRECTION LOG — entry 5, and the pattern is now undeniable
+
+| Claim | Verdict | The unchecked step |
+|---|---|---|
+| "Markit is the ProcuLink customer, so the ICP is inbound" | **RETRACTED** | Fixtures read; **who owns the receiving end never checked.** The answer was in my own shell prompt |
+
+Five findings have now failed the same way: **two true facts with one unchecked step between them.**
+Registry and filesystem but not the renderer. Dev config but not prod. Frontend links but not backend callers.
+Local tree but not origin/main. And now: the document's parties, but not who employs whom.
+
+**The sharpening this one adds:** the unchecked step was the single most familiar string in the entire
+session. **Proximity is not verification.** When an inference feels obvious because the evidence is *right
+there*, that is exactly where the step between the facts goes unexamined.
 
 ## Wave 0 — Ground truth & guardrails
 
