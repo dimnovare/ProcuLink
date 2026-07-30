@@ -138,11 +138,7 @@ public sealed class UblOrderTransformService : ITransformService
         var bytes  = Encoding.UTF8.GetBytes(doc.Declaration + Environment.NewLine + doc.ToString());
         var stream = new MemoryStream(bytes);
 
-        return Task.FromResult(new TransformResult(
-            Content:       stream,
-            ContentType:   "application/xml",
-            FileExtension: ".xml"
-        ));
+        return Task.FromResult(TransformResult.For(OutputFormat.Ubl, stream));
     }
 
     // ── Address / contact / delivery helpers ───────────────────────────────────

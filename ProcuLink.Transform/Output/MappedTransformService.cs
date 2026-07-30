@@ -142,7 +142,10 @@ public sealed class MappedTransformService
         }
 
         var bytes = Encoding.UTF8.GetBytes(sb.ToString());
-        return new TransformResult(new MemoryStream(bytes), "text/csv", ".csv");
+        // Envelope from the one table (DeliveryMediaTypes), like every other transform. This
+        // service is a LIVE path — OrderTransformService routes per-order, per-revision and
+        // per-supplier mapping overrides through it — and it used to declare its own literals.
+        return TransformResult.For(OutputFormat.Csv, new MemoryStream(bytes));
     }
 
     // ── JSON ───────────────────────────────────────────────────────────────────
@@ -181,7 +184,8 @@ public sealed class MappedTransformService
 
         var json  = JsonSerializer.Serialize(payload, JsonOptions);
         var bytes = Encoding.UTF8.GetBytes(json);
-        return new TransformResult(new MemoryStream(bytes), "application/json", ".json");
+        // Envelope from the one table (DeliveryMediaTypes) — see the CSV branch above.
+        return TransformResult.For(OutputFormat.Json, new MemoryStream(bytes));
     }
 
     // ── Value resolution (mirrors PoMappingEngine.ResolveField semantics) ────────

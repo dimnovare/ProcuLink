@@ -148,19 +148,26 @@ public sealed class ScribanTemplateTransformService
             throw new TransformValidationException(unresolved);
     }
 
-    /// <summary>Best-effort file extension from the content type so the delivered artifact is named sensibly.</summary>
+    /// <summary>
+    /// File extension for an operator-supplied template content type, so the delivered artifact is
+    /// named sensibly. Consults <see cref="ProcuLink.Core.Services.Delivery.DeliveryMediaTypes"/>
+    /// FIRST: a template declaring <c>application/EDI-X12</c> must be named the same way the
+    /// built-in X12 transform names its output (<c>.x12</c>), not differently. The rows below cover
+    /// only the content types the table does not own — alternate spellings and free-text types an
+    /// operator may legitimately choose.
+    /// </summary>
     private static string ExtensionFor(string contentType)
     {
+        if (ProcuLink.Core.Services.Delivery.DeliveryMediaTypes
+                .TryExtensionForContentType(contentType, out var known))
+            return known;
+
         var ct = contentType.Split(';')[0].Trim().ToLowerInvariant();
         return ct switch
         {
-            "application/json"          => ".json",
             "text/json"                 => ".json",
-            "text/csv"                  => ".csv",
-            "application/xml"           => ".xml",
             "text/xml"                  => ".xml",
             "text/plain"                => ".txt",
-            "application/edi-x12"       => ".edi",
             "application/edifact"       => ".edi",
             "application/octet-stream"  => ".dat",
             _                           => ".txt",

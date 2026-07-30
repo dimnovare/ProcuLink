@@ -90,11 +90,7 @@ public sealed class JsonTransformService : ITransformService
         var json  = JsonSerializer.Serialize(payload, SerializerOptions);
         var bytes = Encoding.UTF8.GetBytes(json);
 
-        return Task.FromResult(new TransformResult(
-            Content:       new MemoryStream(bytes),
-            ContentType:   "application/json",
-            FileExtension: ".json"
-        ));
+        return Task.FromResult(TransformResult.For(OutputFormat.Json, new MemoryStream(bytes)));
     }
 
     private static void ValidateOrder(PurchaseOrderEntity order)

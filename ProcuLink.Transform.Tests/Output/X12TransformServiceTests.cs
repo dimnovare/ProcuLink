@@ -102,6 +102,11 @@ public class X12TransformServiceTests
         var svc = new X12TransformService();
         var result = await svc.TransformAsync(BuildOrder(), OutputFormat.X12, CancellationToken.None);
 
+        // WP-20: the envelope now comes from the one DeliveryMediaTypes table, so the type this
+        // transform STORES is the same string delivery puts on the wire. The value is UNCHANGED:
+        // the table records the lowercase spelling this transform has always emitted rather than
+        // the mixed-case IANA registration, so nothing on the wire (or in R2 object metadata) moves
+        // for X12 — see DeliveryMediaTypes for the reasoning.
         result.ContentType.Should().Be("application/edi-x12");
         result.FileExtension.Should().Be(".x12");
 
