@@ -173,13 +173,20 @@ public class DeliveryServiceRejectionTests
     // endpoint (404) or a rate limit (429) therefore dead-ended a perfectly deliverable PO, and a
     // database edit was the only way out. These are the codes that must NOT do that any more.
 
+    // The second argument is WHERE the copy must send the operator, and it is not the same place
+    // for all five. 401/403/404 are cured by a configuration change, so the copy has to name the
+    // screen. 408 and 429 are NOT: nothing is wrong with the settings, and sending an operator to
+    // go audit them after a rate limit is a wrong answer delivered confidently. Asserting one
+    // blanket phrase across all five would have forced exactly that copy — this split is the
+    // difference between "names the likely cause" and "says something".
     [Theory]
-    [InlineData(401)] // credentials expired or rotated
-    [InlineData(403)] // credentials fine, this account may not post orders here
-    [InlineData(404)] // the endpoint moved
-    [InlineData(408)] // the endpoint did not answer in time
-    [InlineData(429)] // rate limited
-    public async Task DispatchArtifactAsync_TransportRefusal_LandsInDeliveryFailedWithCopyNamingTheCause(int code)
+    [InlineData(401, "delivery settings")]     // credentials expired or rotated
+    [InlineData(403, "delivery settings")]     // credentials fine, this account may not post orders here
+    [InlineData(404, "delivery settings")]     // the endpoint moved
+    [InlineData(408, "keeps trying on its own")] // the endpoint did not answer in time
+    [InlineData(429, "keeps trying on its own")] // rate limited
+    public async Task DispatchArtifactAsync_TransportRefusal_LandsInDeliveryFailedWithCopyNamingTheCause(
+        int code, string expectedNextStep)
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
@@ -207,9 +214,11 @@ public class DeliveryServiceRejectionTests
         attempt.RejectionReason.Should().BeNull(
             "the supplier rejected nothing — recording a rejection reason would invent one");
         attempt.ErrorMessage.Should().NotBeNullOrWhiteSpace();
-        attempt.ErrorMessage.Should().Contain(code.ToString());
-        attempt.ErrorMessage.Should().Contain("delivery settings",
-            "the operator must be told WHERE the fix is made, not just that something failed");
+        attempt.ErrorMessage.Should().Contain(code.ToString(),
+            "the copy must name the actual response so it can be matched against the supplier's logs");
+        attempt.ErrorMessage.Should().Contain(expectedNextStep,
+            "the operator must be told what happens next — and for a configuration fault, WHERE the " +
+            "fix is made");
 
         // The order still owes a delivery, so its SLA window must keep ticking. Only a settled
         // outcome (delivered, or a genuine rejection) closes it — a transport refusal that the
