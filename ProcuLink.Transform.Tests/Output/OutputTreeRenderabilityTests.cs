@@ -198,6 +198,27 @@ public class OutputTreeRenderabilityTests
         Assert.Equal("PO-1", doc.RootElement.GetProperty("orderNumber").GetString());
     }
 
+    [Theory]
+    [InlineData(OutputFormat.Json)]
+    [InlineData(OutputFormat.Xml)]
+    [InlineData(OutputFormat.Csv)]
+    public void AHeaderOnlyTree_WithNoRepeatingGroup_StillEmits(OutputFormat format)
+    {
+        // The simplest layout an operator can draw — one header column, no line group. The CSV emitter
+        // reaches for the line-item template's children, and a null-guard whose `?:` bound looser than
+        // its `??` turned "no line item" into a null list that NullReferenced on the next line.
+        var tree = new OutputNodeTemplate
+        {
+            Format = format,
+            Root = OutputNode.Obj("root", OutputNode.FieldOf("orderNumber", Canon("PoNumber"))),
+        };
+
+        var result = new OutputTemplateEmitter().Emit(tree, ResolvedOrder(), new OrderMappingOverride());
+
+        using var reader = new StreamReader(result.Content);
+        Assert.Contains("orderNumber", reader.ReadToEnd());
+    }
+
     // ══ D4 — envelope identity is only identity for the format that reads it ═════════════════════
 
     private static EnvelopeConfig CxmlOnly() => new()

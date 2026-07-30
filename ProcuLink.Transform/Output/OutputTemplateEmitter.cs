@@ -306,8 +306,12 @@ public sealed class OutputTemplateEmitter
         var headerFields = RealChildren(root).Where(c => c.NodeType == OutputNodeType.Field).ToList();
         var arrayNode    = RealChildren(root).FirstOrDefault(c => c.NodeType == OutputNodeType.Array);
         var lineItem     = arrayNode is null ? null : RealChildren(arrayNode).FirstOrDefault();
-        var lineFields   = lineItem is null ? null : RealChildren(lineItem).Where(c => c.NodeType == OutputNodeType.Field).ToList()
-                           ?? new List<OutputNode>();
+        // `?:` binds LOOSER than `??`, so folding the empty-list default into the false arm made the
+        // TRUE arm plain null — and a header-only CSV tree (no Array node at all) NullReferenced on the
+        // very next line. Two explicit arms, no precedence to get wrong.
+        var lineFields   = lineItem is null
+                               ? new List<OutputNode>()
+                               : RealChildren(lineItem).Where(c => c.NodeType == OutputNodeType.Field).ToList();
 
         var sb = new StringBuilder();
 
