@@ -122,8 +122,10 @@ public class ItemCodeComparerGuardTests
             + "does use the shared rule."),
 
         ("OrderIngestionService.cs", "Distinct(StringComparer.Ordinal)",
-            "ResolveFromSnapshot mirrors ResolveManyAsync's Ordinal keying exactly, for the same "
-            + "reason. Its MATCH against snapshot rows folds case via ItemCodeComparison."),
+            "ResolveFromSnapshot answers each requested spelling separately, for the same reason the "
+            + "live resolver does: a replay must reach the same row the live run reached, per input "
+            + "code. Collapsing two spellings here would make a replay substitute one line's "
+            + "supplier code for another's. Its MATCH against snapshot rows still folds case."),
 
         ("OrderIngestionService.cs", "row.BuyerItemCode, code, StringComparison.Ordinal",
             "ResolveFromSnapshot's exact-case tie-break, aligned with PickDeterministically so the "
@@ -138,11 +140,10 @@ public class ItemCodeComparerGuardTests
             + "in the comment at the site."),
 
         ("ReplayService.cs", "map.TryGetValue(buyerItemCode.Trim()",
-            "ResolveCodeFromMap names NO comparer on purpose: it inherits the dictionary it is "
-            + "handed, and both suppliers (ItemMappingService.ResolveManyAsync and "
-            + "OrderIngestionService.ResolveFromSnapshot) key Ordinal by the exact trimmed code the "
-            + "line carries. Folding here would answer a 'b-1' line from a 'B-1' key and report a "
-            + "code change that never happened."),
+            "ResolveCodeFromMap names NO comparer on purpose: it must inherit whatever the resolver "
+            + "that built the map decided, so a lookup here cannot disagree with the answer that was "
+            + "computed. Deciding case here independently would answer a 'b-1' line from a 'B-1' "
+            + "entry and report a code change that never happened."),
 
         ("OrderIngestionService.cs", "map.TryGetValue(buyerItemCode.Trim()",
             "BuildLineEntitiesAsync's local ResolveFromMap — same contract as ReplayService's copy "
