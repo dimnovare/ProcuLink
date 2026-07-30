@@ -25,7 +25,7 @@ public class SupplierAcceptanceControllerTests
         tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
 
         var svc  = new Mock<ISupplierAcceptanceService>();
-        var ctrl = new SupplierAcceptanceController(svc.Object, tenant.Object);
+        var ctrl = new SupplierAcceptanceController(svc.Object, tenant.Object, TestDoubles.PermissiveBilling.Service());
 
         return (ctrl, svc, orgId, supplierId);
     }

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -436,6 +436,7 @@ public class SuppliersController : ControllerBase
     [HttpPost("{supplierId:guid}/mappings/import")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> ImportMappings(
         Guid supplierId,
         IFormFile file,
@@ -444,6 +445,20 @@ public class SuppliersController : ControllerBase
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
 
         var orgId   = _tenant.OrganisationId;
+
+        // Bulk mapping import is sold from Operations up; it was declared in the gate table
+        // and enforced nowhere, so a Pilot org could bulk-load mappings one tier below the
+        // plan that advertises it. Editing mappings ONE AT A TIME stays open on every plan —
+        // the differentiator is the bulk lever, not the ability to map at all.
+        if (!await _billing.HasFeatureAsync(orgId, BillingFeature.BulkMapping, ct))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = BillingGateErrors.RequiresPlan("bulk_mapping_import", BillingFeature.BulkMapping),
+                upgradeUrl = "/settings",
+            });
+        }
+
         var created = 0;
         var updated = 0;
 
@@ -665,6 +680,21 @@ public class SuppliersController : ControllerBase
     {
         var orgId = _tenant.OrganisationId;
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        // ── Plan gates on the CHANNEL and the OUTPUT FORMAT (WP-11) ──────────
+        // This one endpoint writes both SupplierDeliveryConfig.Protocol and .OutputFormat,
+        // so it is where three separately-sold capabilities are actually chosen. All three
+        // were declared in the gate table and enforced NOWHERE, which meant a Pilot org
+        // could configure a webhook and an Enterprise-only ERP connector.
+        if (await DeliveryCapabilityGate.FirstUnmetAsync(
+                _billing, orgId, request.Protocol, request.OutputFormat, ct) is { } gated)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = BillingGateErrors.RequiresPlan(gated.Capability, gated.Feature),
+                upgradeUrl = "/settings",
+            });
+        }
 
         try
         {
@@ -985,7 +1015,11 @@ public class SuppliersController : ControllerBase
         // Billing gate on enablement (pull reuses the SFTP-ingestion feature tier).
         if (request.IsEnabled && !await _billing.HasFeatureAsync(orgId, BillingFeature.SftpIngestion, ct))
             return StatusCode(StatusCodes.Status403Forbidden,
-                new { error = "catalog_sync_requires_integration", upgradeUrl = "/settings" });
+                new
+                {
+                    error = BillingGateErrors.RequiresPlan("catalog_sync", BillingFeature.SftpIngestion),
+                    upgradeUrl = "/settings"
+                });
 
         // Save-time SSRF pre-check — fail fast in the UI instead of at the first poll.
         // The pull pipeline re-validates immediately before EVERY connect regardless.
