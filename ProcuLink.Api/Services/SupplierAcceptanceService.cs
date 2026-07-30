@@ -208,6 +208,57 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         return results;
     }
 
+    // ── WP-17 — the blocking subset, evaluated without persisting ─────────────
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Shares BOTH halves of <see cref="ValidateOrderAsync"/>'s supplier-rule evaluation — the same
+    /// <see cref="ResolveEffectiveProfileAsync"/> (so a pinned revision's bound profile governs here
+    /// too) and the same pure <see cref="EvaluateProfile"/>. Nothing is re-implemented, so the gate
+    /// and the validation panel can never disagree about which rules fail;
+    /// <c>AcceptanceGateMatchesValidationTests</c> asserts that difference structurally.
+    ///
+    /// <para><c>AsNoTracking</c> is correct and deliberate here: this method is read-only and runs
+    /// INSIDE the transform, where the caller already holds a tracked copy of the same order whose
+    /// status it is mid-way through mutating. A tracking query would hand back that instance and
+    /// invite a write from a method that must never perform one.</para>
+    /// </remarks>
+    public async Task<IReadOnlyList<AcceptanceBlocker>?> GetBlockingFailuresAsync(
+        Guid orgId, Guid orderId, CancellationToken ct)
+    {
+        var order = await _db.PurchaseOrders
+            .AsNoTracking()
+            .Include(o => o.Lines)
+            .Include(o => o.Parties)        // shipTo rules (not_label / vat_format) read the party
+            .Include(o => o.SourceCapture)  // date_sanity reads the raw printed date string
+            .Where(o => o.Id == orderId && o.OrgId == orgId)
+            .FirstOrDefaultAsync(ct);
+        if (order is null) return null;
+
+        var profile = await ResolveEffectiveProfileAsync(orgId, order, ct);
+        if (profile is null) return Array.Empty<AcceptanceBlocker>();
+
+        // BlockOnFail lives on the RULE, not on the result row, so correlate by RuleId rather than
+        // widening OrderValidationResult (which is a persisted, frontend-facing shape).
+        var ruleById = profile.Rules.ToDictionary(r => r.Id);
+
+        return EvaluateProfile(orgId, orderId, profile, order, DateTime.UtcNow)
+            .Where(r => r.Status == "fail"
+                     && r.RuleId is Guid ruleId
+                     && ruleById.TryGetValue(ruleId, out var rule)
+                     && IsBlocking(rule))
+            .Select(r => new AcceptanceBlocker(r.Code, r.LineNumber, r.Message))
+            .ToList();
+    }
+
+    /// <summary>
+    /// The ONE predicate for "this rule refuses the order" — <c>severity = error</c> OR an explicit
+    /// <c>BlockOnFail</c>. Exactly what the supplier-profile UI tells the operator will block
+    /// delivery. A <c>warning</c> rule without <c>BlockOnFail</c> never blocks.
+    /// </summary>
+    internal static bool IsBlocking(SupplierAcceptanceRule rule) =>
+        rule.BlockOnFail || string.Equals(rule.Severity, "error", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Surface the OUTPUT-render problems that NOTHING ELSE already shows, in the SAME plain-language
     /// list, BEFORE a transform is attempted — so the user sees them where they're looking, not only as

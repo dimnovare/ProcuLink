@@ -204,6 +204,14 @@ builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 // cXML network credentials resolver — consumed by the Worker's TransformOrderJob (OrderService →
 // OrderTransformService) so cXML generated on the Worker carries the supplier's real identities.
 builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
+// WP-17 — the server-side acceptance gate, and the acceptance evaluator it reads. THE WORKER is
+// where TransformOrderJob runs, so this is the host that actually enforces the supplier's blocking
+// rules; before this work package neither type was registered here at all. OrderService also
+// constructs a real gate when DI hands it none, so a future omission degrades to "still enforced"
+// rather than "silently open" — but the registration is the intended path and
+// AcceptanceGateHostRegistrationTests pins both hosts.
+builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
+builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 

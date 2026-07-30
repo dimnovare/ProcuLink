@@ -485,6 +485,10 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IPromoteMappingServic
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
+// WP-17 — the server-side acceptance gate. Registered in BOTH hosts (see Worker/Program.cs): the
+// Worker is where TransformOrderJob actually runs, so a gate registered only here would be
+// enforcement living in the API process and nowhere the transform happens.
+builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
 // Group V4 — unified validation: reusable rule definitions + binding-aware read API + boot backfill.
 builder.Services.AddScoped<IRuleDefinitionService, RuleDefinitionService>();
 builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfillService>();
