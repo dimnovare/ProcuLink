@@ -310,9 +310,16 @@ public sealed class OrphanGuardTests
     /// <para>The fixture is a synthetic DbContext plus a synthetic source corpus. It is
     /// deliberately NOT a fake DbSet bolted onto the production context: that would put a lie in
     /// the production model in order to test the test.</para>
+    ///
+    /// <para>Run under both path separators, because the answer must not depend on which OS is
+    /// asking. Windows dev, Linux CI: this repo scans with <c>\</c> locally and <c>/</c> on the
+    /// runner, and a stem-splitter that only understands one of them fails in exactly one place
+    /// — the one-hop reference lookup — where the symptom is a false ORPHAN, not a crash.</para>
     /// </summary>
-    [Fact]
-    public void Detector_FlagsASyntheticOrphan_AndSparesAConsumedStore()
+    [Theory]
+    [InlineData('\\')]
+    [InlineData('/')]
+    public void Detector_FlagsASyntheticOrphan_AndSparesAConsumedStore(char separator)
     {
         var dbSets = OrphanDetector.DbSetsOf(typeof(SyntheticDbContext));
 
@@ -320,10 +327,12 @@ public sealed class OrphanGuardTests
             new[] { "WidgetOrders", "WidgetTelemetries" },
             dbSets.Select(d => d.DbSetName).ToArray());
 
+        SourceFile At(string path, string text) => Source(path.Replace('\\', separator), text);
+
         var corpus = new[]
         {
             // The orphan: a CRUD service and its own controller, and nothing else.
-            Source(@"Widgets\Services\WidgetTelemetryService.cs", """
+            At(@"Widgets\Services\WidgetTelemetryService.cs", """
                 public class WidgetTelemetryService : IWidgetTelemetryService
                 {
                     public Task<List<WidgetTelemetry>> ListAsync(Guid organisationId) =>
@@ -332,19 +341,19 @@ public sealed class OrphanGuardTests
                     public void Record(WidgetTelemetry t) => _db.WidgetTelemetries.Add(t);
                 }
                 """),
-            Source(@"Widgets\Controllers\WidgetTelemetriesController.cs", """
+            At(@"Widgets\Controllers\WidgetTelemetriesController.cs", """
                 public class WidgetTelemetriesController : ControllerBase
                 {
                     public WidgetTelemetriesController(IWidgetTelemetryService telemetry) => _telemetry = telemetry;
                 }
                 """),
-            Source(@"Widgets\Program.cs", """
+            At(@"Widgets\Program.cs", """
                 builder.Services.AddScoped<IWidgetTelemetryService, WidgetTelemetryService>();
                 builder.Services.AddScoped<IWidgetOrderService, WidgetOrderService>();
                 """),
 
             // The healthy store: also a CRUD service, but a real path downstream consumes it.
-            Source(@"Widgets\Services\WidgetOrderService.cs", """
+            At(@"Widgets\Services\WidgetOrderService.cs", """
                 public class WidgetOrderService : IWidgetOrderService
                 {
                     public Task<WidgetOrder?> GetAsync(Guid organisationId, Guid id) =>
@@ -353,7 +362,7 @@ public sealed class OrphanGuardTests
                     public void Save(WidgetOrder o) => _db.WidgetOrders.Add(o);
                 }
                 """),
-            Source(@"Widgets\Jobs\ShipWidgetJob.cs", """
+            At(@"Widgets\Jobs\ShipWidgetJob.cs", """
                 public class ShipWidgetJob
                 {
                     public ShipWidgetJob(IWidgetOrderService orders) => _orders = orders;
@@ -364,7 +373,9 @@ public sealed class OrphanGuardTests
         var findings = OrphanDetector.FindOrphans(dbSets, corpus);
 
         Assert.Equal(new[] { "WidgetTelemetry" }, findings.Select(f => f.EntityName).ToArray());
-        Assert.Contains(@"Widgets\Services\WidgetTelemetryService.cs", findings[0].Owners);
+        Assert.Contains(
+            $"Widgets{separator}Services{separator}WidgetTelemetryService.cs",
+            findings[0].Owners);
 
         // An unreadable failure gets suppressed, so the rendered message must name the store.
         Assert.Contains("WidgetTelemetries", OrphanDetector.Render(findings, corpus.Length));
@@ -958,7 +969,19 @@ public static class OrphanDetector
         return arguments.Length == 1 ? arguments[0] : null;
     }
 
-    private static string StemOf(string relativePath) => Path.GetFileNameWithoutExtension(relativePath);
+    /// <summary>
+    /// Separator-agnostic on purpose. <see cref="Path.GetFileNameWithoutExtension(string)"/> does
+    /// not treat <c>\</c> as a separator on Linux, so on CI it would hand back a whole path as the
+    /// "stem" and every one-hop reference lookup would silently miss. Windows dev, Linux CI.
+    /// </summary>
+    private static string StemOf(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        var lastSlash = normalized.LastIndexOf('/');
+        var fileName = lastSlash >= 0 ? normalized[(lastSlash + 1)..] : normalized;
+        var lastDot = fileName.LastIndexOf('.');
+        return lastDot > 0 ? fileName[..lastDot] : fileName;
+    }
 
     /// <summary>
     /// Folds a file stem or a DbSet/entity name onto the concept it is about, so
