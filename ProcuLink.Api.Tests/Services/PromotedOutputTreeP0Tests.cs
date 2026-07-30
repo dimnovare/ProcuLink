@@ -328,7 +328,10 @@ public class PromotedOutputTreeP0Tests
         var orderId = await SeedOrderAsync(db, orgId, supplierId);
         await new OrderMappingOverrideService(db).UpsertAsync(orgId, orderId, new OrderMappingOverride
         {
-            SourceMap = { ["PoNumber"] = new SourceFieldRule { SourceToken = "Order No" } },
+            SourceMap = new Dictionary<string, SourceFieldRule>
+            {
+                ["PoNumber"] = new SourceFieldRule { SourceToken = "Order No" },
+            },
         }, CancellationToken.None);
 
         var promoted = await new PromoteMappingService(db, new PoMappingService(db))
@@ -353,7 +356,10 @@ public class PromotedOutputTreeP0Tests
         var orderId = await SeedOrderAsync(db, orgId, supplierId);
         await new OrderMappingOverrideService(db).UpsertAsync(orgId, orderId, new OrderMappingOverride
         {
-            SourceMap = { ["PoNumber"] = new SourceFieldRule { SourceToken = "Order No" } },
+            SourceMap = new Dictionary<string, SourceFieldRule>
+            {
+                ["PoNumber"] = new SourceFieldRule { SourceToken = "Order No" },
+            },
         }, CancellationToken.None);
 
         await new PromoteMappingService(db, new PoMappingService(db))

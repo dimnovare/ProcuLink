@@ -148,6 +148,14 @@ public class OrdersPreviewPromotedOutputTreeParityTests
             OutputNode.FieldOf(fieldName, new OutputFieldRule { OutputPath = fieldName, CanonicalField = "PoNumber" })),
     };
 
+    /// <summary>The same drawn layout, in the format the connection actually delivers.</summary>
+    private static OutputNodeTemplate CsvTree(string fieldName) => new()
+    {
+        Format = OutputFormat.Csv,
+        Root = OutputNode.Obj("root",
+            OutputNode.FieldOf(fieldName, new OutputFieldRule { OutputPath = fieldName, CanonicalField = "PoNumber" })),
+    };
+
     private static string PreviewContent(IActionResult result)
     {
         var ok = Assert.IsType<OkObjectResult>(result);
@@ -164,8 +172,11 @@ public class OrdersPreviewPromotedOutputTreeParityTests
         await using var db = NewDb();
         var (orgId, supplierId, orderId) = await SeedAsync(db);
 
+        // The promoted layout is designed for the format this connection delivers — the only case in
+        // which a tree drives the document at all (WP-12 P0-2: the connection's format wins, because
+        // artifact.Format, the delivered content type and the file name all come from it).
         await new PoMappingService(db).UpsertAsync(orgId, supplierId,
-            new PoMappingConfig { OutputTree = JsonTree("promotedLayout") }, CancellationToken.None);
+            new PoMappingConfig { OutputTree = CsvTree("promotedLayout") }, CancellationToken.None);
 
         // PREVIEW — no body, no per-order override: the promoted tree is what delivery will use.
         var preview = await BuildController(db, orgId)
@@ -174,6 +185,33 @@ public class OrdersPreviewPromotedOutputTreeParityTests
         Assert.Contains("promotedLayout", previewContent);
 
         // DELIVERY — the REAL transform for the same order.
+        var (svc, captured) = BuildOrderService(db);
+        var transform = await svc.TransformAsync(orgId, orderId, OutputFormat.Csv, CancellationToken.None);
+        Assert.True(transform.IsSuccess, transform.Error);
+
+        Assert.Equal(Encoding.UTF8.GetString(captured()!), previewContent);
+    }
+
+    [Fact]
+    public async Task Preview_PromotedTreeInAnotherFormat_MatchesTheRealTransformBytes_WhichAreTheFixedOnes()
+    {
+        // WP-12 P0-2. A JSON layout promoted onto a supplier this connection delivers as CSV does NOT
+        // drive the document — delivering it would have written JSON bytes into an artifact recorded as
+        // `csv`, shipped (post-#77) as text/csv named PO-x.csv. Both sides must therefore show the
+        // FIXED CSV document, and they must still agree: a preview that renders the layout while
+        // delivery renders the fixed file is the preview ≠ delivered bytes defect wearing a new hat.
+        await using var db = NewDb();
+        var (orgId, supplierId, orderId) = await SeedAsync(db);
+
+        await new PoMappingService(db).UpsertAsync(orgId, supplierId,
+            new PoMappingConfig { OutputTree = JsonTree("promotedLayout") }, CancellationToken.None);
+
+        var preview = await BuildController(db, orgId)
+            .PreviewMappingOverride(orderId, request: null, "csv", ct: CancellationToken.None);
+        var previewContent = PreviewContent(preview);
+        Assert.DoesNotContain("promotedLayout", previewContent);
+        Assert.StartsWith("PoNumber,OrderDate", previewContent);
+
         var (svc, captured) = BuildOrderService(db);
         var transform = await svc.TransformAsync(orgId, orderId, OutputFormat.Csv, CancellationToken.None);
         Assert.True(transform.IsSuccess, transform.Error);
