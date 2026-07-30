@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Services.Ocr;
 using ProcuLink.Infrastructure.Services.Ai;
 using ProcuLink.Infrastructure.Services.Ocr;
+using ProcuLink.TestSupport;
 using SkiaSharp;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Ai;
@@ -26,18 +27,16 @@ namespace ProcuLink.Infrastructure.Tests.Services.Ai;
 /// </summary>
 public class OpenAiPdfOrderExtractorLiveTests
 {
-    private static bool Enabled =>
-        Environment.GetEnvironmentVariable("PROCULINK_LIVE_AI_TESTS") == "1"
-        && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("Ai__OpenAI__ApiKey"));
+    private const string ApiKeyVar = "Ai__OpenAI__ApiKey";
 
-    // Default real-corpus location; overridable via PROCULINK_LIVE_AI_POS_DIR. Iterated
-    // by ExtractAsync_RealCorpus_* when present; skipped (no-op) when the dir is absent.
-    private const string DefaultPosDir = "C:/Users/Dmitri.REDACTED-PARTY/Downloads/POs";
+    /// <summary>
+    /// Real-corpus location, required explicitly. The previous default hard-coded one developer's
+    /// Downloads folder, so on every other machine the corpus test returned early — covering
+    /// nothing while reporting Passed.
+    /// </summary>
+    private const string PosDirVar = "PROCULINK_LIVE_AI_POS_DIR";
 
-    private static string PosDir =>
-        Environment.GetEnvironmentVariable("PROCULINK_LIVE_AI_POS_DIR") is { Length: > 0 } d
-            ? d
-            : DefaultPosDir;
+    private static string PosDir => Environment.GetEnvironmentVariable(PosDirVar)!;
 
     private static OpenAiPdfOrderExtractor BuildExtractor(IPdfRasterizer? rasterizer = null)
     {
@@ -57,11 +56,11 @@ public class OpenAiPdfOrderExtractorLiveTests
             config, NullLogger<OpenAiPdfOrderExtractor>.Instance, scopeFactory: null, rasterizer: rasterizer);
     }
 
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires the real OpenAI API",
+        LiveTestEnvironment.AiOptIn, ApiKeyVar)]
     public async Task ExtractAsync_RealTextPdf_ProducesStructuredOrder()
     {
-        if (!Enabled) return; // no-op unless explicitly enabled with a key
-
         var apiKey = Environment.GetEnvironmentVariable("Ai__OpenAI__ApiKey")!;
         var model = Environment.GetEnvironmentVariable("Ai__OpenAI__ExtractionModel");
 
@@ -107,11 +106,11 @@ public class OpenAiPdfOrderExtractorLiveTests
         first.UnitPrice.Should().Be(12.50m);
     }
 
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires the real OpenAI API with a vision-capable model",
+        LiveTestEnvironment.AiOptIn, ApiKeyVar)]
     public async Task ExtractAsync_ScannedImageOnlyPdf_ExtractsViaVision()
     {
-        if (!Enabled) return; // no-op unless explicitly enabled with a key
-
         var apiKey = Environment.GetEnvironmentVariable("Ai__OpenAI__ApiKey")!;
         var model = Environment.GetEnvironmentVariable("Ai__OpenAI__ExtractionModel");
         var config = new ConfigurationBuilder()
@@ -225,13 +224,13 @@ public class OpenAiPdfOrderExtractorLiveTests
         };
     }
 
-    [Theory]
+    [EnvironmentGatedTheory(
+        "requires the real OpenAI API",
+        LiveTestEnvironment.AiOptIn, ApiKeyVar)]
     [MemberData(nameof(PartyRoleFixtures))]
     public async Task ExtractAsync_PurchaseOrder_AssignsBuyerFromLabels_NotFromFamiliarName(
         string expectedBuyer, string expectedSupplier, byte[] pdf)
     {
-        if (!Enabled) return; // no-op unless explicitly enabled with a key
-
         var extractor = BuildExtractor();
         extractor.IsAvailable.Should().BeTrue();
 
@@ -277,20 +276,22 @@ public class OpenAiPdfOrderExtractorLiveTests
     }
 
     /// <summary>
-    /// Iterates a real local PO corpus (default <see cref="DefaultPosDir"/>, overridable via
-    /// PROCULINK_LIVE_AI_POS_DIR). Skips cleanly when the directory is absent. For each PDF it
-    /// asserts the universal invariants the swap bug violated: at least one line, every emitted
-    /// number verbatim in the source, and buyer != supplier. (The correct-buyer-per-document
-    /// assertion lives in the synthetic theory above, which knows the ground truth.)
+    /// Iterates a real local PO corpus (<c>PROCULINK_LIVE_AI_POS_DIR</c>). For each PDF it asserts
+    /// the universal invariants the swap bug violated: at least one line, every emitted number
+    /// verbatim in the source, and buyer != supplier. (The correct-buyer-per-document assertion
+    /// lives in the synthetic theory above, which knows the ground truth.)
+    ///
+    /// <para>The corpus directory is part of the DECLARED gate: an unset or non-existent path is a
+    /// reported skip, and a directory with no PDFs in it is a FAILURE — you asked for a corpus run
+    /// and handed the test nothing to run on.</para>
     /// </summary>
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires the real OpenAI API and a local corpus of real purchase-order PDFs",
+        LiveTestEnvironment.AiOptIn, ApiKeyVar, LiveTestEnvironment.DirectoryPrefix + PosDirVar)]
     public async Task ExtractAsync_RealCorpus_BuyerDiffersFromSupplier_AndNumbersAreVerbatim()
     {
-        if (!Enabled) return;            // no-op unless explicitly enabled with a key
-        if (!Directory.Exists(PosDir)) return; // no-op when the corpus is absent
-
         var pdfs = Directory.EnumerateFiles(PosDir, "*.pdf", SearchOption.TopDirectoryOnly).ToList();
-        if (pdfs.Count == 0) return;     // nothing to iterate
+        pdfs.Should().NotBeEmpty($"{PosDirVar} ('{PosDir}') must contain at least one PDF to iterate");
 
         var extractor = BuildExtractor(new SkiaPdfRasterizer(NullLogger<SkiaPdfRasterizer>.Instance));
 

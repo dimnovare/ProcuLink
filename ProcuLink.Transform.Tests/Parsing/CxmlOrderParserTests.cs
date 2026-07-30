@@ -447,9 +447,12 @@ public class CxmlOrderParserTests
             Path.GetDirectoryName(typeof(CxmlOrderParserTests).Assembly.Location)!,
             "Fixtures", "sample-order.cxml");
 
-        // Skip if fixture not deployed (e.g. in some CI configurations)
-        if (!File.Exists(fixturePath))
-            return;
+        // No File.Exists guard. The fixture is a BUILD OUTPUT (the csproj copies Fixtures\**\* to
+        // the test output), not an environment dependency — so a missing file means the build is
+        // wrong and must fail loudly. The old `if (!File.Exists) return;` turned that into a silent
+        // green: the parser could have stopped being exercised entirely and nobody would know.
+        File.Exists(fixturePath).Should().BeTrue(
+            $"the cXML sample fixture must be copied to the test output; looked in '{fixturePath}'");
 
         var parser = new CxmlOrderParser();
         await using var stream = File.OpenRead(fixturePath);

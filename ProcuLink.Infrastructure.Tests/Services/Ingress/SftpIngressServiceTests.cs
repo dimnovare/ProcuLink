@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
+using ProcuLink.TestSupport;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
@@ -328,13 +329,14 @@ public class SftpIngressServiceTests
     // Gated behind PROCULINK_LIVE_ENDPOINT_TESTS=1; connects to a real SFTP
     // server (env PROCULINK_LIVE_SFTP_*) with the PRODUCTION RenciSftpClientFactory,
     // lists + downloads a real PO file, and imports it via the in-memory DbContext.
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires a live SFTP server holding a PO file to poll",
+        LiveTestEnvironment.EndpointOptIn,
+        "PROCULINK_LIVE_SFTP_HOST", "PROCULINK_LIVE_SFTP_USER", "PROCULINK_LIVE_SFTP_PASS")]
     [Trait("Category", "LiveEndpoint")]
     public async Task Live_SftpIngress_RealPollImportsFile()
     {
-        if (Environment.GetEnvironmentVariable("PROCULINK_LIVE_ENDPOINT_TESTS") != "1") return;
-        var host = Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_HOST") ?? "";
-        if (string.IsNullOrEmpty(host)) return;
+        var host = Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_HOST")!;
 
         await using var db = CreateDb();
         var orgId = Guid.NewGuid();
