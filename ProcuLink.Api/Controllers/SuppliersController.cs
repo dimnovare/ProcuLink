@@ -985,7 +985,11 @@ public class SuppliersController : ControllerBase
         // Billing gate on enablement (pull reuses the SFTP-ingestion feature tier).
         if (request.IsEnabled && !await _billing.HasFeatureAsync(orgId, BillingFeature.SftpIngestion, ct))
             return StatusCode(StatusCodes.Status403Forbidden,
-                new { error = "catalog_sync_requires_integration", upgradeUrl = "/settings" });
+                new
+                {
+                    error = BillingGateErrors.RequiresPlan("catalog_sync", BillingFeature.SftpIngestion),
+                    upgradeUrl = "/settings"
+                });
 
         // Save-time SSRF pre-check — fail fast in the UI instead of at the first poll.
         // The pull pipeline re-validates immediately before EVERY connect regardless.

@@ -296,6 +296,17 @@ public static class PlanConstants
     private static readonly List<string> PlanOrder =
         new() { Pilot, Growth, Operations, Integration, Distributor, Enterprise };
 
+    /// <summary>
+    /// The lowest plan that includes <paramref name="feature"/>, or null when the
+    /// feature has no entry in the gate table (which <see cref="PlanHasFeature"/>
+    /// treats as "nobody has it"). This is the ONLY sanctioned way to name a plan in a
+    /// user-facing gate message: WP-11 found four 403 codes hardcoding "integration"
+    /// for gates whose real minimum was Growth, telling customers to buy a €999 tier to
+    /// unlock something their €149 tier already included. Derive, never hardcode.
+    /// </summary>
+    public static string? GetMinimumPlan(BillingFeature feature) =>
+        MinimumPlan.TryGetValue(feature, out var plan) ? plan : null;
+
     public static bool PlanHasFeature(string plan, BillingFeature feature)
     {
         if (!MinimumPlan.TryGetValue(feature, out var minPlan)) return false;
