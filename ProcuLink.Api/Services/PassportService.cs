@@ -4,6 +4,7 @@ using ProcuLink.Api.Contracts;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Services;
@@ -171,10 +172,20 @@ public sealed class PassportService : IPassportService
         var outputArtifact = latestArtifact is null
             ? null
             : new PassportOutputArtifact(
-                ArtifactId: latestArtifact.Id,
-                Format:     latestArtifact.Format,
-                FileKey:    latestArtifact.FileKey,
-                CreatedAt:  latestArtifact.CreatedAt);
+                ArtifactId:     latestArtifact.Id,
+                Format:         latestArtifact.Format,
+                FileKey:        latestArtifact.FileKey,
+                CreatedAt:      latestArtifact.CreatedAt,
+                // Surfaced as recorded at transform time — never recomputed here.
+                ArtifactSha256: latestArtifact.ArtifactSha256);
+
+        // Which artifact did each attempt send? An order can hold several of each, so the
+        // pairing is named rather than implied. The deterministic idempotency key is the only
+        // durable attempt→artifact record (no FK on delivery_attempts), and a recovered id counts
+        // only when THIS order's (already org-scoped) artifact rows contain it — a legacy row
+        // with no key, or a key naming an artifact we do not own, yields null and therefore no
+        // download offer.
+        var artifactIds = artifacts.Select(a => a.Id).ToHashSet();
 
         var deliveryAttemptDtos = deliveryAttempts
             .Select(a => new PassportDeliveryAttempt(
@@ -186,7 +197,12 @@ public sealed class PassportService : IPassportService
                 ResponseCode:    a.ResponseCode,
                 AcknowledgedAt:  a.AcknowledgedAt,
                 RejectionReason: a.RejectionReason,
-                ErrorMessage:    a.ErrorMessage))
+                ErrorMessage:    a.ErrorMessage,
+                ArtifactId:      DeliveryIdempotencyKey.TryParseArtifactId(a.IdempotencyKey, out var dispatched)
+                                 && artifactIds.Contains(dispatched)
+                                     ? dispatched
+                                     : null,
+                ArtifactSha256:  a.ArtifactSha256))
             .ToList();
 
         var supplierResponse = BuildSupplierResponse(order, deliveryAttempts);
