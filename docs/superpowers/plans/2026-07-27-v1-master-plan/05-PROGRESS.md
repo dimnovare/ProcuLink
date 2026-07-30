@@ -244,6 +244,24 @@ Kept because the shape of the mistake repeats, and naming it is cheaper than re-
 but not the renderer. Dev config but not prod. Frontend links but not backend callers. Before reporting
 an inference drawn from two verified facts, name the step between them and go check it.
 
+### 2026-07-30 — plan session claims Wave 4
+
+WP-24, WP-25, WP-26 taken by the plan-authoring session and building now from the delivered specs
+(`DESIGN-DB-6`, `DESIGN-DB-1`). The execution session explicitly declined them.
+
+**WP-15/16 are deliberately NOT started.** They sit on WP-12 and WP-14, and WP-14 is refuted and mid-fix —
+building the output designer on it now builds on moving ground. Correct call, and it came from the
+execution session about its own work.
+
+**Corrections accepted from the execution session:**
+- **`/security` renders 10 subprocessors, not 7** — it is `SUBPROCESSORS.map` at `security/page.tsx:86`, so
+  it structurally cannot diverge from `/subprocessors`. Their earlier "7 vs 10 contradiction" was inferred
+  from copy rather than from the render, and is withdrawn. Verified; never recorded here, so nothing to fix.
+- **WP-14 currently ships an item-ordering defect**: `ItemMappingService.cs:96-100` seeds the batch result
+  dictionary with the case-insensitive comparer, so an order carrying `B-1` and `b-1` as *different
+  products* writes line 1's supplier code onto line 2. Must be fixed before WP-14 merges. **Relevant to
+  WP-17** — the acceptance engine sits downstream of that resolution.
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |

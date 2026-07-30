@@ -126,6 +126,22 @@ that is what their data actually travels. One value cannot carry both facts, so 
 | Postmark | **US** — and it carries the **OUTBOUND PO** as an attachment, not just inbound mail | `EmailApiDeliveryDispatcher.cs:109`; its test asserts the attachment is `PO-1.xml` | US | same |
 | OpenAI | **US** — receives PO line text | `appsettings.Production.json` sets `Ai:Provider=openai`; no endpoint override exists in the repo | US | same |
 
+**EGRESS IS NOT CONTROLLABLE — established 2026-07-30, BE PR #83,
+`docs/qa/2026-07-30-residency-ground-truth.md`.** Stage 1 of WP-10 is done: 16 facts established, 10 still
+unsourced, 11 founder actions. The headline changes what the copy can ever promise:
+
+**Nothing in the codebase can control, pin, or predict the egress path.** `OutboundRequestGuard.cs:257-263`
+opens a bare `new Socket()`, and the `ConnectCallback` at `:184-191` would bypass an env proxy even if one
+were configured. So moving the Railway region moves the egress IP but **cannot make it stable or
+publishable**. Giving a supplier a fixed IP to allowlist is **new engineering, not a config flip** — treat
+any request for one as a scoped packet.
+
+Per-subprocessor, from that doc: **OpenAI receives real order content at 5 sites**, with no EU project and
+no zero-retention agreement. **Postmark is US-only by vendor policy** and carries the outbound PO.
+**PostHog is EU in code.** **Vercel touches no order data at all** — so it does not belong in a residency
+argument either way.
+
+
 **Corrections logged against this table.** "`europe-west4`" is not a Railway identifier — the real one is
 `europe-west4-drams3a`, so the shipped copy quotes a string the vendor does not use. And this plan
 previously asserted Railway "runs on AWS": **retracted** — Railway's docs name no cloud provider for any
