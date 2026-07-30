@@ -106,6 +106,46 @@ Sequential merges, one at a time, per wave. Never batch — the 2026-07-24 wave 
 
 ---
 
+## 4b. TOKEN DISCIPLINE — MANDATORY, BOTH SESSIONS
+
+Founder directive 2026-07-30: **preserve tokens.** Two sessions plus their subagents share one ceiling,
+and the audit alone cost ~6.7M subagent tokens. These are not preferences.
+
+**CAVEMAN MODE IS ON for all chat output.** Drop articles, filler, pleasantries, hedging. Fragments are
+fine. Technical terms stay exact; quoted errors stay verbatim.
+- **Chat replies: terse.** A table or a short list beats prose. Do not restate what the founder just
+  read. Do not narrate what you are about to do and then do it.
+- **Written normally, NOT caveman:** code, commit messages, PR bodies, and these plan documents. Those
+  are artifacts other people and future agents read cold.
+- Drop caveman only where compression risks a misread: security warnings, irreversible-action
+  confirmations, and multi-step sequences where fragment order matters. Resume immediately after.
+
+**T1 — packets carry their own context.** `01-WORK-PACKETS.md` names files and line numbers. An agent
+opens those and nothing else. If a packet needs exploration to start, the PACKET is under-specified —
+fix the packet, do not send the agent hunting.
+
+**T2 — one context pack per wave, not per packet.** One scout produces a <=300-line orientation note for
+the wave's subsystem; every packet in that wave receives it verbatim.
+
+**T3 — `git grep` from the repo root, never `grep -r`.** `.claude/worktrees/` holds full repo copies; a
+raw recursive grep returns other sessions' worktrees and reads as evidence of a separate track.
+
+**T4 — read `origin/main`, not the working tree.** Production deploys from `origin/main`. The local tree
+drifts — it was 9 commits behind during the audit and that produced two wrong P0s. Use
+`git -C <repo> show origin/main:<path>` when a file matters.
+
+**T5 — subagents return JSON against a schema, never prose.** Prose gets re-summarised; JSON gets consumed.
+
+**T6 — never dump a large result into chat.** Design specs, audit output and journal contents go to a
+FILE, then the chat carries the path and the verdict. The three DB specs are ~76-85k chars each; pasting
+one into chat would cost more than producing it.
+
+**T7 — do not re-verify what the other session already verified with a citation.** Read their citation.
+Re-check only when the claim is load-bearing AND the evidence is an inference rather than a quote.
+
+**T8 — coordinate the agent ceiling.** Messages are cheap; launches are not. If the other session reports
+starts-with-no-results, throttle rather than retry into a wall.
+
 ## 5b. Merge-order constraints (earned the hard way, 2026-07-30)
 
 Discovered by the parallel execution session while landing real PRs. These are ordering facts, not

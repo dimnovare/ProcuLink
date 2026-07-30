@@ -249,5 +249,8 @@ Assumes: one founder reviewing and merging; 4–6 concurrent agent worktrees; th
 | `05-PROGRESS.md` | **live tracker — what is done and what is not.** Update it whenever a packet changes state |
 | `01-WORK-PACKETS.md` | WP-01…WP-41: scope, files, acceptance criteria, tests, deps, skills, risk |
 | `02-DESIGN-BRIEFS.md` | Claude Design briefs for the seven surfaces that need design, with locked constraints |
+| `DESIGN-DB-1-information-architecture.md` | **delivered spec** — 4-item nav, supplier tab set, the full ~50-noun rename table. Feeds WP-25/26 |
+| `DESIGN-DB-2-output-designer.md` | **delivered spec** — the wedge's UI: reuse moment, reorder, structured conditionals, namespace presets, CSV dialect, typed leaves. Feeds WP-15/16 |
+| `DESIGN-DB-6-failure-recovery.md` | **delivered spec** — one failure-panel covering all 8 states, plus the inbox/health/Worker-outage treatment. Feeds WP-24/36 |
 | `03-EXECUTION-PROTOCOL.md` | agent topology, skill routing, token discipline, merge train, no-new-bugs enforcement |
 | `04-CAPABILITY-TRUTH-LEDGER.md` | the machine-checkable claim ledger and its schema |
