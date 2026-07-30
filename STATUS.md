@@ -98,8 +98,7 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   editing it and asserting it still passes.
 - **Main verified green AFTER the merge, not just on the PR.** Frontend PR #49 landed as `50639e3`
   in the gap between the pre-merge SHA check and the merge, so frontend `main` became a combination
-  CI had never run on — and **frontend CI is `pull_request`-only, so a push to `main` gets ZERO
-  checks.** Re-verified locally on `9cea6e5`: `bun run test` 116 files / 1243 tests green without
+  no CI run had covered. Re-verified locally on `9cea6e5`: `bun run test` 116 files / 1243 tests green without
   `NEXT_PUBLIC_USE_MOCK`; `lint`, `check:pageshell --strict`, `lint:vocab` all exit 0; `bunx tsc
   --noEmit` still only the two pre-existing errors (`src/lib/seo.test.ts:36`,
   `src/lib/planGate.test.ts:61`), both untouched. #49's new `.gitattributes` pins only `*.sh` and
@@ -122,9 +121,24 @@ _Update this file at the end of every session. Keep it lean — no full code, no
    now reddens *both* guards, which is a stronger signal — but a harness that patches this file by
    line needs updating. Noted in that file's MUTATION COVERAGE header. **Unverified: the harness is
    not in either repo.**
-3. **Consider a `push`-triggered CI job on the frontend.** `main` currently has no check at all
-   after a merge; #54's post-merge verification was manual and would not have happened on a
-   less careful session.
+3. **`cancel-in-progress` silently voids post-merge verification during a merge train.**
+   Frontend `.github/workflows/ci.yml` triggers on `pull_request` **and** `push: branches: [main]`,
+   but sets `concurrency: {group: ci-${{ github.ref }}, cancel-in-progress: true}`. Because every
+   merge to `main` shares the ref `main`, each merge CANCELS the previous commit's main run. Five
+   PRs merged inside ~4 minutes on 2026-07-30 (#49, #54, #53, #43, #45) and the observed result was:
+
+   | commit | main-push run |
+   |---|---|
+   | `9cea6e5` (#54) | unit+lint+conformance ✅, build ✅, Playwright **cancelled** |
+   | #53 | whole run **cancelled at 29s** |
+   | #43 | whole run **cancelled at 14s** |
+
+   So during a train, only the LAST commit gets a completed post-merge check; everything before it
+   is verified only as a PR against a base that is already stale. This is exactly the "`clean` ≠
+   tested" failure mode. **Fix: drop `cancel-in-progress` for the `push: main` trigger and keep it
+   for `pull_request`** — cancelling redundant PR runs is the point, cancelling main's only
+   post-merge proof is not. Until then, verify `main` locally after any merge landed into a train,
+   as #54 did.
 4. `wave1/frontend-retirements` still holds `71a7701`/`e0b108e` and will conflict on
    `src/test/linkExtract.ts` + `src/test/link-crawl.test.ts` — resolution is take `main`'s for
    both. Once #57 lands the branch has nothing left and can be deleted.
