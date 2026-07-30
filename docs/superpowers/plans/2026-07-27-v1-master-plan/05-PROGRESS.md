@@ -585,6 +585,42 @@ Local tree but not origin/main. And now: the document's parties, but not who emp
 session. **Proximity is not verification.** When an inference feels obvious because the evidence is *right
 there*, that is exactly where the step between the facts goes unexamined.
 
+### FOUNDER DECISION 2026-07-30 — BUYERS FIRST. Inbound stays supported, not marketed.
+
+Settles the ICP thread. **Sell to buyers** — procurement teams sending POs out to many suppliers. That is
+the documented ICP, so **nothing in this plan rescopes.**
+
+**Suppliers are NOT a second market to build or market to.** They are a capability that already exists and
+costs nothing to keep. `src/hooks/useOrderDirection.ts` ships a per-org `OrderDirection` switch with a full
+label set — counterparty Supplier/**Customer**, rail header `Buyer → Supplier` / **`Customer → You`**,
+primary CTA `Send to supplier` / **`Confirm order`**, done `Sent to supplier` / **`Order confirmed`**. Its own
+comment: *"the data model is direction-agnostic (orders store buyer=issuer, supplier=recipient); this hook
+only swaps DISPLAY text."* Entity, route and type names stay `supplier`; colour semantics are unchanged.
+A supplier who finds the product can use it. We just do not aim at them.
+
+**BINDING CONSTRAINT ON WP-25 AND WP-26 — this is the one thing the decision changes.**
+The rename must NOT hardcode outbound vocabulary. Every renamed user-facing noun routes through
+`partyLabels(direction)`, never a literal. Hardcoding "supplier" into the new nav would silently delete the
+inbound mode and make the decision irreversible — the exact opposite of what "buyers first, suppliers still
+work" means. Cost of complying: near zero, the mechanism is already there and already tested
+(`BridgeSidebar.test.tsx:278` pins the inbound relabel). Cost of not complying: the inbound capability is
+gone and nobody notices until a supplier signs up.
+
+**Marketing copy stays outbound-first.** No hedging on the website — hedged positioning is what the audit's
+~50-noun problem looks like in prose.
+
+**Why this is the right call on the evidence, recorded so it is not re-litigated:**
+- The supplier/inbound market is **proven but crowded** — it is Conexiom's entire business, plus Esker, and
+  Rossum/Hypatos/Nanonets sold for order intake. Funded, priced, competitive.
+- The buyer/outbound slot is **structurally unoccupied** across ~20 researched vendors. Empty means untapped
+  OR unviable, and this plan cannot tell which.
+- Countervailing fact, weighed and accepted: our only real test documents are inbound, so the outbound path
+  has **zero real customer documents**. That is a live testing gap, tracked separately — it does not change
+  the positioning, but it does mean outbound quality rests on synthetic fixtures.
+- And the conflict that mattered most: **Markit is the founder's employer**, an IT reseller. Selling
+  supplier-side software to its peers is selling to its competitors.
+
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
