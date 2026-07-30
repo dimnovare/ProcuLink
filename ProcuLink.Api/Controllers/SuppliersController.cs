@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -686,8 +686,8 @@ public class SuppliersController : ControllerBase
         // so it is where three separately-sold capabilities are actually chosen. All three
         // were declared in the gate table and enforced NOWHERE, which meant a Pilot org
         // could configure a webhook and an Enterprise-only ERP connector.
-        if (RequiredFeatureForDeliveryConfig(request) is { } gated
-            && !await _billing.HasFeatureAsync(orgId, gated.Feature, ct))
+        if (await DeliveryCapabilityGate.FirstUnmetAsync(
+                _billing, orgId, request.Protocol, request.OutputFormat, ct) is { } gated)
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
@@ -712,34 +712,6 @@ public class SuppliersController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
-    }
-
-    /// <summary>
-    /// The plan gate a delivery-config save must clear, or null when nothing on it is
-    /// plan-restricted (e.g. plain <c>sftp</c>/<c>ftps</c>/<c>email</c> with a stock output
-    /// format, all of which are included on every paid plan).
-    ///
-    /// <para>Protocol is checked before format so an ERP connector on a Pilot plan reports the
-    /// ERP gate (Enterprise) rather than a lesser one — naming the wrong gate is the very defect
-    /// WP-11 fixed elsewhere. Comparison is trimmed + invariant-lowercased to match how
-    /// <c>DeliveryConfigService</c> normalises the same strings before persisting.</para>
-    /// </summary>
-    private static (BillingFeature Feature, string Capability)? RequiredFeatureForDeliveryConfig(
-        UpsertDeliveryConfigRequest request)
-    {
-        var protocol = request.Protocol?.Trim().ToLowerInvariant();
-        var format   = request.OutputFormat?.Trim().ToLowerInvariant();
-
-        if (protocol is DeliveryProtocolConstants.ErpErply or DeliveryProtocolConstants.ErpDirecto)
-            return (BillingFeature.ErpConnectors, "erp_delivery");
-
-        if (protocol == DeliveryProtocolConstants.Http)
-            return (BillingFeature.WebhookDelivery, "webhook_delivery");
-
-        if (format == "cxml")
-            return (BillingFeature.Cxml, "cxml_output");
-
-        return null;
     }
 
     /// <summary>

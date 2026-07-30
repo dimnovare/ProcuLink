@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -427,6 +428,159 @@ public class BillingFeatureEnforcementTests
         PlanConstants.PlanHasFeature(PlanConstants.Enterprise, BillingFeature.Sso).Should().BeTrue();
         PlanConstants.PlanHasFeature(PlanConstants.Distributor, BillingFeature.Sso).Should().BeFalse(
             "Distributor outranks Integration but is still not Enterprise");
+    }
+
+    // ═══ ConnectionsController: the VERSIONED delivery path ══════════════════
+    //
+    // A pinned order delivers through its connection REVISION, not through the live
+    // delivery-config row. Gating only the live row left the whole thing bypassable: save a
+    // draft revision with DeliveryProtocol = "http", publish it, and a Pilot org delivers by
+    // webhook. Both paths now share DeliveryCapabilityGate.RequiredFeature.
+
+    private static ConnectionsController BuildConnections(
+        BillingFeature? granted, Mock<ISupplierConnectionService> svc)
+    {
+        var tenant = new Mock<ICurrentTenantService>();
+        tenant.SetupGet(t => t.OrganisationId).Returns(Guid.NewGuid());
+        return new ConnectionsController(
+            svc.Object, new Mock<IReplayService>().Object, tenant.Object, BillingGranting(granted).Object);
+    }
+
+    private static ConnectionRevisionBundleDto Bundle(string? protocol, string? outputFormat) => new(
+        InputMappingJson: null, OutputMappingJson: null, OutputFormat: outputFormat,
+        DeliveryProtocol: protocol, DeliveryConfigJson: null, DeliveryAutoDeliver: false,
+        CredentialsRef: null, AcceptanceProfileId: null, AcceptanceVersionNo: null,
+        CatalogMode: "live", ItemMappings: null);
+
+    [Theory]
+    [InlineData("http", null, "WebhookDelivery")]
+    [InlineData("erp_erply", null, "ErpConnectors")]
+    [InlineData("sftp", "cxml", "Cxml")]
+    public async Task ConnectionRevisionDraft_CannotSelectAGatedChannelOrFormat(
+        string protocol, string? format, string expectedFeature)
+    {
+        var feature = Enum.Parse<BillingFeature>(expectedFeature);
+        var svc = new Mock<ISupplierConnectionService>();
+        var controller = BuildConnections(granted: null, svc);
+
+        var result = await controller.CreateDraft(
+            Guid.NewGuid(),
+            new CreateConnectionRevisionRequest(CloneFromActive: false, Bundle: Bundle(protocol, format)),
+            CancellationToken.None);
+
+        Assert403NamingTheRightPlan(result, feature);
+        svc.Verify(c => c.CreateDraftAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<ConnectionRevisionDraftInput?>(),
+                It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
+            Times.Never, "a refused draft must never be persisted");
+    }
+
+    [Fact]
+    public async Task ConnectionRevisionUpdate_IsGatedToo_SoTheCreateGateIsNotBypassable()
+    {
+        var svc = new Mock<ISupplierConnectionService>();
+        var controller = BuildConnections(granted: null, svc);
+
+        var result = await controller.UpdateDraft(
+            Guid.NewGuid(), Guid.NewGuid(),
+            new UpdateConnectionRevisionRequest(Bundle("http", null)),
+            CancellationToken.None);
+
+        Assert403NamingTheRightPlan(result, BillingFeature.WebhookDelivery);
+    }
+
+    [Fact]
+    public async Task ConnectionRevisionDraft_WithAStockChannel_IsNotGated()
+    {
+        var svc = new Mock<ISupplierConnectionService>();
+        var controller = BuildConnections(granted: null, svc);
+
+        var result = await controller.CreateDraft(
+            Guid.NewGuid(),
+            new CreateConnectionRevisionRequest(CloneFromActive: false, Bundle: Bundle("sftp", "xml")),
+            CancellationToken.None);
+
+        (result as ObjectResult)?.StatusCode.Should().NotBe(403,
+            "sftp + xml is included on every paid plan");
+    }
+
+    [Fact]
+    public void BothDeliveryWritePaths_ShareOneGateDecision()
+    {
+        // The live row and the versioned revision must never disagree about what is gated —
+        // two copies of this logic is how one path silently stops enforcing.
+        DeliveryCapabilityGate.RequiredFeatures("HTTP", null).Select(r => r.Feature)
+            .Should().ContainSingle().Which.Should().Be(BillingFeature.WebhookDelivery,
+                "comparison must be case-insensitive");
+        DeliveryCapabilityGate.RequiredFeatures("  erp_directo  ", null).Select(r => r.Feature)
+            .Should().ContainSingle().Which.Should().Be(BillingFeature.ErpConnectors,
+                "comparison must trim");
+        DeliveryCapabilityGate.RequiredFeatures("sftp", "xml").Should().BeEmpty();
+        DeliveryCapabilityGate.RequiredFeatures(null, null).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ChannelAndFormat_AreBothRequired_NotEitherOr()
+    {
+        // The channel and the output format are sold separately, so a config can need BOTH.
+        // An earlier version returned the first match and checked only that, which let an
+        // http+cxml config through on Growth: WebhookDelivery matched, passed, and the cXML
+        // requirement (Operations) was never evaluated.
+        DeliveryCapabilityGate.RequiredFeatures("http", "cxml").Select(r => r.Feature)
+            .Should().BeEquivalentTo(new[] { BillingFeature.WebhookDelivery, BillingFeature.Cxml });
+    }
+
+    [Fact]
+    public async Task MixedTierConfig_IsRefused_WhenOnlyTheCHEAPERFeatureIsHeld()
+    {
+        // THE bypass this guards: a Growth org has WebhookDelivery but not Cxml. Saving
+        // http + cxml must still be refused, and must name the Operations gate — telling them
+        // to buy Growth would send them to a plan that still would not let them save.
+        var h = BuildSuppliers(granted: BillingFeature.WebhookDelivery);
+
+        var result = await h.Controller.UpsertDeliveryConfig(
+            h.Supplier.Id, Delivery("http", outputFormat: "cxml"), CancellationToken.None);
+
+        Assert403NamingTheRightPlan(result, BillingFeature.Cxml);
+    }
+
+    [Fact]
+    public async Task MixedTierConfig_IsRefused_WhenOnlyTheDEARERFeatureIsHeld()
+    {
+        // The mirror case: Cxml held, WebhookDelivery not. Still refused, naming the webhook gate.
+        var h = BuildSuppliers(granted: BillingFeature.Cxml);
+
+        var result = await h.Controller.UpsertDeliveryConfig(
+            h.Supplier.Id, Delivery("http", outputFormat: "cxml"), CancellationToken.None);
+
+        Assert403NamingTheRightPlan(result, BillingFeature.WebhookDelivery);
+    }
+
+    [Fact]
+    public async Task MixedTierConfig_OnTheVersionedPath_IsRefusedToo()
+    {
+        var svc = new Mock<ISupplierConnectionService>();
+        var controller = BuildConnections(granted: BillingFeature.WebhookDelivery, svc);
+
+        var result = await controller.CreateDraft(
+            Guid.NewGuid(),
+            new CreateConnectionRevisionRequest(CloneFromActive: false, Bundle: Bundle("http", "cxml")),
+            CancellationToken.None);
+
+        Assert403NamingTheRightPlan(result, BillingFeature.Cxml);
+    }
+
+    [Fact]
+    public async Task WhenSeveralGatesAreUnmet_The403NamesTheHIGHESTTierOne()
+    {
+        // ERP (Enterprise) + cXML (Operations), nothing held. Naming Operations would send the
+        // customer to a plan that still refuses the save.
+        var h = BuildSuppliers(granted: null);
+
+        var result = await h.Controller.UpsertDeliveryConfig(
+            h.Supplier.Id, Delivery("erp_erply", outputFormat: "cxml"), CancellationToken.None);
+
+        Assert403NamingTheRightPlan(result, BillingFeature.ErpConnectors);
     }
 
     // ═══ What must STAY open ═════════════════════════════════════════════════
