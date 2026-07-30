@@ -96,17 +96,11 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
         // fails to move the order, by whichever route was supposed to cover it. If B6 goes red, fix the
         // path or add the cap — do not silence B6.
         //
-        // DO NOT UNIFY THIS WITH THE WEBHOOK DISPATCH-EVIDENCE GUARD (WebhookIngressController.Status).
-        // Both look like a "was this dispatched?" test and they are NOT the same question, so one
-        // predicate cannot serve both:
-        //   • Here: "was the CURRENT artifact dispatched?" — necessarily ARTIFACT-scoped, because a
-        //     re-transform mints a new artifact and older rows MUST go stale, or the corrected PO is
-        //     never sent (the defect described above).
-        //   • There: "did a send ever BEGIN for this order?" — necessarily ORDER-scoped and
-        //     artifact-agnostic, because a supplier may legitimately report against ANY artifact of an
-        //     order; judging that callback against only the newest artifact would answer the wrong
-        //     question and reject a valid report.
-        // Neither test can be reused for the other's question. A per-row marker test cannot answer THIS
+        // THIS PREDICATE IS ARTIFACT-SCOPED ON PURPOSE. It asks "was the CURRENT artifact
+        // dispatched?", because a re-transform mints a new artifact and older rows MUST go stale, or
+        // the corrected PO is never sent (the defect described above). Do not swap in an order-scoped
+        // "did a send ever begin for this order, ever" marker test — that answers a different
+        // question and would leave a corrected PO permanently unsent. A per-row marker test cannot answer THIS
         // one: DeliveryAttempt has no ArtifactId column, and IdempotencyKey (artifact-scoped,
         // plk-dlv-{orderId:N}-{artifactId:N}) cannot be backfilled — per-attempt artifact identity was
         // never stored. Two discriminators is the correct shape, not drift; collapsing them yields a

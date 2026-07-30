@@ -285,87 +285,11 @@ public class FireIntegrationTriggerJobReliabilityTests
         sub.FailureCount.Should().Be(2, "two separate logical failures each count exactly once");
     }
 
-    [Fact]
-    public async Task TwoConcurrentFinalFailures_OnPostgres_IncrementFailureCountByExactlyTwo()
-    {
-        // FAITHFUL lost-update test. The fix (FailureCount = FailureCount + 1) is a RELATIONAL
-        // guarantee — the InMemory provider cannot translate a relative ExecuteUpdate — so this runs
-        // against a throwaway Postgres database when one is reachable and skips cleanly otherwise
-        // (e.g. CI without the local dev database). Both jobs read the same base value BEFORE either
-        // persists (the classic interleave): a load-modify-save bump persists base+1 from BOTH and
-        // loses one; the atomic relative UPDATE persists base+2.
-        // Gate on infra: when no local Postgres is reachable (e.g. CI) the test no-ops rather than
-        // failing — the relational atomicity it proves cannot be exercised without a real DB.
-        var admin = await TryOpenPostgresAdminAsync();
-        if (admin is null)
-            return;
-
-        var dbName = $"plk_webhook_{Guid.NewGuid():N}";
-        try
-        {
-            await ExecAsync(admin, $"CREATE DATABASE \"{dbName}\"");
-
-            var opts = new DbContextOptionsBuilder<ProcuLinkDbContext>()
-                .UseNpgsql($"Host=localhost;Port=5435;Username=postgres;Password=postgres;Database={dbName}")
-                .Options;
-
-            Guid subId;
-            await using (var db = new ProcuLinkDbContext(opts))
-            {
-                await db.Database.EnsureCreatedAsync();
-                subId = await SeedAsync(db, failureCount: 1);
-            }
-
-            await using var ctxA = new ProcuLinkDbContext(opts);
-            await using var ctxB = new ProcuLinkDbContext(opts);
-            _ = await ctxA.IntegrationSubscriptions.FirstAsync(s => s.Id == subId);
-            _ = await ctxB.IntegrationSubscriptions.FirstAsync(s => s.Id == subId);
-
-            var jobA = new FixedStatusJob(ctxA, HttpStatusCode.InternalServerError);
-            var jobB = new FixedStatusJob(ctxB, HttpStatusCode.InternalServerError);
-
-            await ((Func<Task>)(() => jobA.ExecuteCoreAsync(subId, "{}", isFinalAttempt: true, default)))
-                .Should().ThrowAsync<InvalidOperationException>();
-            await ((Func<Task>)(() => jobB.ExecuteCoreAsync(subId, "{}", isFinalAttempt: true, default)))
-                .Should().ThrowAsync<InvalidOperationException>();
-
-            await using var verify = new ProcuLinkDbContext(opts);
-            var sub = await verify.IntegrationSubscriptions.AsNoTracking().SingleAsync(s => s.Id == subId);
-            sub.FailureCount.Should().Be(3, "two concurrent failures from base 1 land at 3 — the atomic relative increment loses none");
-            sub.IsActive.Should().BeFalse("reaching the 3-failure threshold deactivates the subscription");
-        }
-        finally
-        {
-            try
-            {
-                await ExecAsync(admin,
-                    $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{dbName}'");
-                await ExecAsync(admin, $"DROP DATABASE IF EXISTS \"{dbName}\"");
-            }
-            catch { /* best-effort cleanup */ }
-            await admin.DisposeAsync();
-        }
-    }
-
-    private static async Task<Npgsql.NpgsqlConnection?> TryOpenPostgresAdminAsync()
-    {
-        try
-        {
-            var conn = new Npgsql.NpgsqlConnection(
-                "Host=localhost;Port=5435;Username=postgres;Password=postgres;Database=postgres;Timeout=3");
-            await conn.OpenAsync();
-            return conn;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static async Task ExecAsync(Npgsql.NpgsqlConnection conn, string sql)
-    {
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
-        await cmd.ExecuteNonQueryAsync();
-    }
+    // The lost-update half of A4b — two failures interleaving on the SAME row — is a RELATIONAL
+    // guarantee (FailureCount = FailureCount + 1), and the InMemory provider used by every test
+    // above cannot translate a relative ExecuteUpdate. It therefore lives on a real Postgres:
+    // ProcuLink.Api.Tests.Integration.WebhookFailureCountAtomicIncrementPostgresTests. It used to
+    // sit here gated on a local dev Postgres at localhost:5435 — which CI has never had, so the one
+    // test proving the relational guarantee silently no-opped there. Testcontainers + the repo's
+    // [DockerRequiredFact] gate runs it on every CI build instead.
 }

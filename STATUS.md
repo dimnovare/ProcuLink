@@ -11,6 +11,208 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-30) — post-merge CI on `main` was being cancelled; fixed in BOTH repos
+
+- **BE [PR #86](https://github.com/dimnovare/ProcuLink/pull/86) MERGED `a38cb9f`; FE
+  [PR #58](https://github.com/dimnovare/project-proculink/pull/58) MERGED `c319c805`.** One-line
+  concurrency fix, identical in both `ci.yml` files, plus a comment correction (below).
+- **The bug.** Both repos had `concurrency: {group: ci-${{ github.ref }}, cancel-in-progress: true}`.
+  Every merge to `main` shares the ref `refs/heads/main`, so **each merge cancelled the PREVIOUS
+  commit's post-merge run.** Six voided main runs measured on 2026-07-30 alone:
+
+  | repo | commit | main-push run |
+  |---|---|---|
+  | FE | `9cea6e5` (FE #54) | unit+lint+conformance ✅, build ✅, Playwright **cancelled** |
+  | FE | FE #53 | **cancelled at 29s** |
+  | FE | FE #43 | **cancelled at 14s** |
+  | BE | `d5a20fb` (BE #83) | **cancelled** ~25s in, when BE #76 landed |
+  | BE | BE #79 | **cancelled**, when BE #85 landed |
+  | BE | `5d3dc31` (BE #85) | **cancelled**, when `051b2eb` landed |
+
+  A `cancelled` conclusion is **not a pass and not a failure — it is no information.** Never report
+  one as green.
+- **Why it mattered.** FE #49 landed in the seconds *between* FE #54's pre-merge base-SHA check and
+  its merge, so `main` became a combination no run had covered — and the post-merge run that exists
+  to catch exactly that had been cancelled. FE #54 was only confirmed green because it was
+  re-verified by hand. Re-reading the base SHA before merging is necessary but **not sufficient**
+  while several sessions merge concurrently; the post-merge run is what closes the window. BE #85's
+  base then went stale three times in ~30 minutes, which is the same story.
+- **`cancel-in-progress: false` alone would NOT have fixed it** — and that was this session's own
+  first recommendation, which was wrong. Per the workflow-syntax docs: *"any existing `pending` job
+  or workflow in the same concurrency group will be canceled and the new queued job or workflow
+  will take its place."* With a shared group a merge train still loses every run except the first
+  in-progress one and the last queued one. **The group itself has to differ per commit:**
+
+  ```yaml
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  ```
+
+  `pull_request` → group by ref, so a new push to a PR still cancels its own older run (that
+  cancelling is the point). `push` on main → group by SHA, unique per commit, so nothing can cancel
+  another commit's verification and runs go in parallel rather than queueing.
+  `cancel-in-progress` is set from an expression rather than deleted, so the PR path is unchanged
+  by construction.
+- **Verified:** both files parsed with `yaml.parse` before pushing (group, `cancel-in-progress`,
+  `on.push.branches` and every job id read back unchanged); both workflows then parsed on GitHub —
+  PR runs appeared and went green (BE 1 check, FE 4 checks) — and **both main-push runs dispatched
+  after merge**, which is what proves the expression evaluates on the `push` path too. Frontend
+  gates: `bunx tsc --noEmit` exit **0** (clean since FE #56), `bun run test` 122 files / 1276 tests
+  green, lint + pageshell + vocab clean.
+- **Limit, stated plainly:** a PR run can only exercise the `pull_request` branch of the
+  expression. The anti-cancellation behaviour itself is only observable on the next merge train.
+  **If a main-push run ever shows `cancelled` again, this did not work.**
+- **Also fixed: an overclaim in `src/test/route-reachability.test.ts`.** Its MUTATION COVERAGE
+  header credited *"an out-of-tree harness that reverts each one in turn"*. **That harness is in
+  neither repo** — the only occurrences of the phrase were the comment and a STATUS.md entry
+  quoting it. A claim of coverage nobody can re-run is not coverage. Replaced with the reproducible
+  procedure and one dated result: reverting comment stripping in `src/test/sourceScan.ts` reddens
+  **both** guards (3 failures in the reachability guard, 2 in the crawl), which is also what proves
+  the shared module is genuinely shared. The mutation target moved into `sourceScan.ts` — mutate
+  that module, not the guard.
+- **Closes the follow-up list from the FE #54 entry below.** FE #57 merged (parse-gate stall
+  escalation), FE #55 closed (superseded duplicate parser), FE #56 merged (CI now typechecks, and
+  it fixed the two long-standing `tsc` errors). Nothing outstanding from that wave.
+
+---
+
+## Snapshot (2026-07-30) — Wave 1 WP-09 column drop is BLOCKED, not forgotten (no code shipped)
+
+- **The contract half of `organisations.webhook_secret_encrypted` was NOT written.** Its
+  precondition — BE [PR #75](https://github.com/dimnovare/ProcuLink/pull/75)
+  (`wave1/backend-retirements`, the EXPAND half) merged **and** deployed to both Railway services
+  — is not met. Verified rather than assumed, and re-verified after `origin/main` moved under the
+  session (`cd7feba` → `34ce1e1`, #81):
+  - **#75 is OPEN and still a DRAFT.** Its CI is green (run `30545346830`), so the block is the
+    draft flag and the merge decision, not a failing build.
+  - **The expand migration `20260730094527_Wave1RetireDeadSubsystems` is absent from `main`.**
+    It exists only on the PR branch. (Do not be fooled by `20260531090840_Wave1SecurityIndexes`,
+    which is unrelated and from May.)
+  - **Both services run `cd7feba`** — API `ProcuLink` and Worker `aware-amazement`, both
+    `SUCCESS`, deployed within 1s of each other. Neither carries #75.
+- **Dropping the column today would break production immediately — not merely during a deploy
+  window.** Because the expand half never landed, the live build still *maps* the property:
+  `Organisation.WebhookSecretEncrypted` is present in `ProcuLink.Core/Entities/Organisation.cs`
+  **and** in the current `ProcuLinkDbContextModelSnapshot.cs` on `main`. EF therefore emits
+  `o.webhook_secret_encrypted` on every non-projected `Organisation` query, so the drop yields
+  Npgsql `42703` on `EmailPollOrgJob` → `HasFeatureAsync` → `StripeBillingService.LoadOrgAsync`
+  on **every IMAP poll cycle**. The Worker never migrates and is mandatory — nothing parses or
+  delivers without it.
+- **`Wave1ColumnDropStaysDeferredTests.cs` was left alone.** It lives only on the #75 branch, so
+  there was nothing on `main` to delete. Deleting it is the deliberate act of contracting and
+  belongs to the same PR as the drop migration.
+- **How to verify the precondition next time** (one read-only call; the Railway MCP server is
+  unauthorized in non-interactive sessions, but the `railway` CLI is installed and logged in):
+
+  ```bash
+  railway status --json | python -c "import json,sys; d=json.load(sys.stdin); [print(n['node']['serviceName'], ((n['node'].get('latestDeployment') or {}).get('meta') or {}).get('commitHash','?')[:12]) for e in d['environments']['edges'] if e['node']['name']=='production' for n in e['node']['serviceInstances']['edges']]"
+  ```
+
+  Both services must print the **same** hash, and that commit must contain the unmap. The
+  load-bearing proof is `git grep WebhookSecretEncrypted <sha> -- ProcuLink.Core/Entities/Organisation.cs
+  ProcuLink.Infrastructure/Migrations/ProcuLinkDbContextModelSnapshot.cs` returning nothing;
+  historical `*.Designer.cs` snapshots always still match and read as false positives.
+- **Housekeeping done:** the two scratch databases left by the WP-09 verification work,
+  `plk_d1_probe` (54 tables) and `plk_d4_probe` (56 tables), were dropped from the shared
+  `proculink-postgres` dev container after confirming zero active connections. No container was
+  removed or pruned — the daemon is shared, and `proculink_dev` plus another session's
+  `proculink_wp12_*` were left untouched.
+- **Still to do:** un-draft and merge #75 → let both services deploy it → re-run the check above →
+  only then the hand-written drop migration (`dotnet ef migrations add` generates nothing here,
+  since the model already omits the property, so the model snapshot must stay unchanged) plus the
+  deletion of `Wave1ColumnDropStaysDeferredTests.cs`. **Merging #75 also executes
+  `DROP TABLE output_templates` and `DROP TABLE validation_rules` against production at the next
+  API startup — irreversible, so it is a founder call, not an agent one.**
+
+---
+
+## Snapshot (2026-07-30) — the two frontend link gates are one parser (frontend PR #54, MERGED)
+
+- **Frontend `wp04b/converge-link-extractors` → [PR #54](https://github.com/dimnovare/project-proculink/pull/54),
+  MERGED as `9cea6e5`.** Two commits: land an orphaned commit, then converge.
+- **An orphaned commit was found and landed.** `src/test/linkExtract.ts` was never on frontend
+  `main`. It sat in `71a7701` on `wave1/frontend-retirements`, pushed **after** PR #47 merged
+  (squash `ded9e04`), so it had no PR and CI never ran on it — while every branch-level signal read
+  "landed". **Durable trap: a push to a branch whose PR has already merged is silently orphaned —
+  no PR, no CI, no path to main.** Check with `git ls-tree --name-only origin/main <path>`; use
+  `git diff --stat origin/main..<branch>` for the unlanded set, because the commit *list*
+  over-reports after a squash-merge (branch-side originals look absent by SHA while their content
+  is on main).
+- **Two near-identical source-link extractors are now one.** New shared module
+  `src/test/sourceScan.ts` owns comment stripping (js + mdx modes), string-literal masking,
+  `readLiteral`, `literalsInRegion`, the anchor regexes and an `extractRaw` core. Each guard keeps
+  its own pattern selection and normalisation policy, because those encode genuinely different
+  questions: `route-reachability.test.ts` is INBOUND ("does anything navigate TO this page?") and
+  uses a `«dyn»` sentinel with structural matching; `link-crawl.test.ts` is OUTBOUND ("does every
+  link we ship land somewhere?") and must SKIP computed paths — requiring a dynamic route segment
+  would flag `/help/${slug}` as a 404 when every article is its own static page.
+- **One asymmetry preserved, not resolved.** The nav-call anchor is exported in two forms:
+  reachability counts `new URL(…)`, the crawl does not. Sharing one set would change one guard's
+  behaviour, and there is no evidence which answer is right — so `sourceScan.test.ts` pins the
+  difference instead. It is invisible to both existing suites, so either collapsing edit would read
+  as a harmless tidy-up.
+- **Proof, not assertion.** Planted the two probe 404s (`/library/templates-that-never-existed`
+  under `components/bridge/`, `/totally-dead-route-xyz` under `app/(app)/library/suppliers/`): the
+  crawl went RED on exactly those two, **before and after** the convergence, identically. Then a
+  mutation check — neutering `stripComments` in `sourceScan.ts` alone turned **both** guards red
+  (3 + 2 failures), which is what proves the sharing is real rather than a copy left behind. All
+  reverted; tree confirmed clean.
+- **`link-crawl.test.ts` has a ZERO diff in the convergence commit** — `linkExtract.ts` re-exports
+  `stripComments`/`syntaxFor`, so its 9 extraction-decision tests, its `>250` file floor and its
+  widened-tree assertions all run against an unchanged import surface. Stronger evidence than
+  editing it and asserting it still passes.
+- **Main verified green AFTER the merge, not just on the PR.** Frontend PR #49 landed as `50639e3`
+  in the gap between the pre-merge SHA check and the merge, so frontend `main` became a combination
+  no CI run had covered. Re-verified locally on `9cea6e5`: `bun run test` 116 files / 1243 tests green without
+  `NEXT_PUBLIC_USE_MOCK`; `lint`, `check:pageshell --strict`, `lint:vocab` all exit 0; `bunx tsc
+  --noEmit` still only the two pre-existing errors (`src/lib/seo.test.ts:36`,
+  `src/lib/planGate.test.ts:61`), both untouched. #49's new `.gitattributes` pins only `*.sh` and
+  `.githooks/**` to LF, so it does not renormalise `.ts`.
+- **Deliberately left out of scope:** the parse-gate stall escalation riding in the same orphaned
+  commit (`parseStall.ts`, `ParsingGate.tsx`, `OrderWorkshop.tsx`, `useOrderReview.ts`) is product
+  code touching the locked Order Workshop layout. Now carried by
+  [frontend PR #57](https://github.com/dimnovare/project-proculink/pull/57), correctly based on
+  `9cea6e5` with no `src/test` files.
+
+**NEEDS DOING:**
+
+1. **Close [frontend PR #55](https://github.com/dimnovare/project-proculink/pull/55)**
+   (`fix/link-crawl-and-parse-stall`, draft, base `fc9f0e6`). Superseded first attempt carrying all
+   eight files of `71a7701`, including a standalone 265-line `src/test/linkExtract.ts` — **the
+   duplicate parser #54 exists to delete. Merging it reintroduces the drift.** Owning session
+   notified; not closed here because it is another session's in-flight branch.
+2. **Repoint the reachability guard's out-of-tree mutation harness.** Three of its targets
+   (comment stripping, both link-tuple loosenings) moved into `sourceScan.ts`. Reverting one there
+   now reddens *both* guards, which is a stronger signal — but a harness that patches this file by
+   line needs updating. Noted in that file's MUTATION COVERAGE header. **Unverified: the harness is
+   not in either repo.**
+3. **`cancel-in-progress` silently voids post-merge verification during a merge train — in BOTH
+   repos.** `.github/workflows/ci.yml` is byte-equivalent on this point in `ProcuLink` and
+   `project-proculink`: it triggers on `pull_request` **and** `push: branches: [main]`, but sets
+   `concurrency: {group: ci-${{ github.ref }}, cancel-in-progress: true}`. Every merge to `main`
+   shares the ref `main`, so each merge CANCELS the previous commit's main run. Observed
+   2026-07-30, not inferred:
+
+   | repo | commit | main-push run |
+   |---|---|---|
+   | frontend | `9cea6e5` (FE #54) | unit+lint+conformance ✅, build ✅, Playwright **cancelled** |
+   | frontend | FE #53 | whole run **cancelled at 29s** |
+   | frontend | FE #43 | whole run **cancelled at 14s** |
+   | backend | `d5a20fb` (BE #83) | whole run **cancelled** ~25s in, when BE #76 landed |
+
+   Five frontend PRs merged inside ~4 minutes, so only the last got a completed post-merge check;
+   the backend is hit less often only because its merges are more spaced out, not because it is
+   configured differently. Everything before the last commit in a train is verified solely as a PR
+   against a base that is already stale — exactly the "`clean` ≠ tested" failure mode.
+   **Fix: drop `cancel-in-progress` for the `push: main` trigger, keep it for `pull_request`** —
+   cancelling redundant PR runs is the point; cancelling `main`'s only post-merge proof is not.
+   Until then, verify `main` locally after any merge that landed into a train, as FE #54 did.
+4. `wave1/frontend-retirements` still holds `71a7701`/`e0b108e` and will conflict on
+   `src/test/linkExtract.ts` + `src/test/link-crawl.test.ts` — resolution is take `main`'s for
+   both. Once #57 lands the branch has nothing left and can be deleted.
+
+---
+
 ## Snapshot (2026-07-27) — manufacturer part number is a real matching key (BE PR, OPEN)
 
 - **`feat/manufacturer-part-matching`, PR open, not merged.** Two real customer POs (sanitised,

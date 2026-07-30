@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Detection;
 
@@ -219,25 +220,40 @@ public sealed class SupplierSuggestionService : ISupplierSuggestionService
 
         // The same code on twenty lines is one piece of evidence. Distinct first, then capped, so a
         // long order cannot turn one suggestion into a several-hundred-term IN clause.
+        //
+        // The case rule is ItemCodeComparison — the SAME member OrderServiceShared.BuildCatalogLookupAsync
+        // uses to resolve a line against THIS VERY COLUMN. An ordinal probe here disagreed with the
+        // resolver: a supplier whose ERP exports lower-case scored ZERO on auto-detect while
+        // resolving perfectly once routed, so the order parked `unrouted` looking exactly like "we
+        // do not recognise this supplier". Nothing errored, nothing logged — the worst shape of
+        // failure this feature can have. Pinned by
+        // SupplierSuggestionServiceTests.SuggestAsync_catalogOverlap_appliesTheSameCaseRuleAsTheCatalogLookup.
         var codes = lineCodes
             .Where(c => !string.IsNullOrWhiteSpace(c))
             .Select(c => c.Trim())
-            .Distinct(StringComparer.Ordinal)
+            .Distinct(ItemCodeComparison.Comparer)
             .Take(SupplierSuggestionScoring.MaxProbedLineCodes)
             .ToList();
 
         if (codes.Count == 0) return result;
 
+        // Folded to the SQL-comparable form so `lower(code) IN (…)` matches whatever casing the
+        // catalog stored. Key() lower-cases exactly the way Npgsql translates `.ToLower()`.
+        var foldedCodes = codes.Select(ItemCodeComparison.Key).ToList();
+
         var hits = await _db.SupplierProducts
             .AsNoTracking()
-            .Where(p => p.OrgId == orgId && codes.Contains(p.Code))
+            .Where(p => p.OrgId == orgId
+                     && (codes.Contains(p.Code) || foldedCodes.Contains(p.Code.ToLower())))
             .Select(p => new { p.SupplierId, p.Code })
             .Distinct()
             .ToListAsync(ct);
 
         foreach (var group in hits.GroupBy(h => h.SupplierId))
         {
-            var matched = group.Select(h => h.Code).Distinct(StringComparer.Ordinal).Count();
+            // Case-variant catalog rows for one code are ONE match, not two — otherwise a supplier
+            // holding both "AAA" and "aaa" could score a fraction above 1.
+            var matched = group.Select(h => h.Code).Distinct(ItemCodeComparison.Comparer).Count();
             var fraction = (double)matched / codes.Count;
 
             result[group.Key] = new SupplierSignalContribution(

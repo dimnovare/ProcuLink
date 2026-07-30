@@ -73,15 +73,16 @@ public class SupplierConnectionRevision
     /// </summary>
     public string? InputMappingJson { get; set; }
 
-    // ── Bundle: output template / field-map ──────────────────────────────────
+    // ── Bundle: output field-map ─────────────────────────────────────────────
     /// <summary>
-    /// Snapshot of the supplier-promoted FLAT output mapping (<c>PoMappingConfig.Output</c>), taken
-    /// from <c>SupplierPoMapping.ConfigJson</c> by <c>ConnectionBackfillService</c>; null = the fixed
-    /// transformer. It is NOT a snapshot of the retired org-level <c>OutputTemplate.ConfigJson</c> —
-    /// that entity never fed this column.
+    /// Snapshot of the supplier-promoted FLAT Output section extracted from
+    /// <c>SupplierPoMapping.ConfigJson</c> — see
+    /// <c>ConnectionBackfillService.TryExtractPromotedOutputJson</c>, the only writer.
+    /// Null = no usable promoted Output, i.e. the fixed transformer path.
     ///
     /// <para>Outranked by the structured tree inside <see cref="InputMappingJson"/> when both are
-    /// present, mirroring the per-order and live-supplier ladders.</para>
+    /// present AND the tree renders for the effective format, mirroring the per-order and
+    /// live-supplier ladders.</para>
     /// </summary>
     public string? OutputMappingJson { get; set; }
 

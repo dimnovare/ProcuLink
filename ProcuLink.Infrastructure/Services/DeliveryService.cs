@@ -346,7 +346,11 @@ public sealed class DeliveryService : IDeliveryService
         // stuck re-drive REUSES that row (matched on the same key) instead of opening a fresh attempt,
         // so the lost-ACK re-send cannot create a second terminal attempt row or silently burn the
         // retry budget — and it carries the SAME idempotency key, which a supporting supplier
-        // de-duplicates (HTTP header / email Message-ID; SFTP/FTPS overwrite the deterministic file).
+        // de-duplicates (HTTP header / email Message-ID). SFTP/FTPS need no key at all: the remote
+        // path is a deterministic function of the order, so the re-drive targets its OWN file —
+        // which it replaces when overwriteExisting is on (the default) and refuses to touch when the
+        // operator has turned it off. That refusal is why the park below covers overwrite-off
+        // file-drop connections too.
         var idempotencyKey = BuildIdempotencyKey(order.Id, artifact.Id);
         var (attempt, reAdopted) = await OpenDispatchAttemptAsync(order, artifact, config, idempotencyKey, ct);
 
@@ -361,15 +365,27 @@ public sealed class DeliveryService : IDeliveryService
         // email: caller-supplied Message-ID dedup is best-effort), re-sending on that ambiguity
         // would risk handing the supplier a duplicate PO. So we do not guess: park the order and let
         // a human — who can ask the supplier — decide. Safe/BestEffort channels re-drive unchanged.
+        //
+        // ONE Safe channel parks too, and for the opposite reason. A file-drop connection whose
+        // operator turned overwriteExisting OFF cannot repair its own write: the re-drive finds the
+        // file its predecessor left, REFUSES (correctly — that is what the setting asks for), and the
+        // order walks the retry ladder into dead-letter while the supplier may be holding the
+        // complete purchase order. Reporting that as "failed" is a lie in one direction and
+        // re-sending it is impossible in the other, so it is exactly the case ParkUnconfirmedAsync
+        // exists for: stop, and ask the human who can ask the supplier. Nothing changes for the
+        // default (overwrite on), which repairs its own file and re-drives as before.
         if (reAdopted && dispatcher.ResendSafety == ResendSafety.Unsafe)
-            return await ParkUnconfirmedAsync(order, attempt, config, ct);
+            return await ParkUnconfirmedAsync(order, attempt, config, ParkReasonCannotDeduplicate, ct);
+
+        if (reAdopted && CannotRepairItsOwnFile(config))
+            return await ParkUnconfirmedAsync(order, attempt, config, ParkReasonCannotRepairOwnFile, ct);
 
         DeliveryResult result;
         try
         {
             result = await dispatcher.DispatchAsync(
                 content,
-                BuildFileName(order, artifact),
+                BuildFileName(order, artifact, config.Protocol),
                 GetContentType(artifact.Format),
                 config,
                 credentials,
@@ -462,6 +478,23 @@ public sealed class DeliveryService : IDeliveryService
         return (attempt, false);
     }
 
+    /// <summary>Why a crash-recovery re-drive was parked: the channel cannot de-duplicate a re-send.</summary>
+    internal const string ParkReasonCannotDeduplicate =
+        "Crash-recovery re-drive on a channel that cannot de-duplicate a re-send. "
+        + "The artifact may have been sent, but the outcome was never observed; "
+        + "re-sending could duplicate the PO, so the order is parked for an operator decision.";
+
+    /// <summary>
+    /// Why a crash-recovery re-drive was parked on a file-drop channel: it cannot DUPLICATE, but with
+    /// overwriteExisting off it cannot finish either — it would refuse, retry, and dead-letter an
+    /// order the supplier may already hold in full.
+    /// </summary>
+    internal const string ParkReasonCannotRepairOwnFile =
+        "Crash-recovery re-drive on a file-drop connection with \"replace existing files\" turned off. "
+        + "The artifact may have been written to the supplier's server, in full or in part, but the "
+        + "outcome was never observed; a re-send would refuse rather than replace it, so the order is "
+        + "parked for an operator decision instead of being retried into dead-letter.";
+
     /// <summary>
     /// The unknown-outcome park: finalise the re-adopted in-flight row as
     /// <c>unconfirmed</c> and stop. NO send occurs. The result is
@@ -490,10 +523,11 @@ public sealed class DeliveryService : IDeliveryService
         PurchaseOrderEntity order,
         DeliveryAttempt attempt,
         SupplierDeliveryConfig config,
+        string parkReason,
         CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        var message = BuildUnconfirmedMessage(config.Protocol);
+        var message = BuildUnconfirmedMessage(config.Protocol, parkReason);
 
         attempt.Status = DeliveryAttempt.StatusUnconfirmed;
         attempt.AttemptedAt = now;
@@ -510,9 +544,7 @@ public sealed class DeliveryService : IDeliveryService
             channel = config.Protocol,
             idempotencyKey = attempt.IdempotencyKey,
             parkedAt = now,
-            detail = "Crash-recovery re-drive on a channel that cannot de-duplicate a re-send. "
-                   + "The artifact may have been sent, but the outcome was never observed; "
-                   + "re-sending could duplicate the PO, so the order is parked for an operator decision.",
+            detail = parkReason,
         });
 
         _db.AuditEvents.Add(new AuditEvent
@@ -537,33 +569,66 @@ public sealed class DeliveryService : IDeliveryService
         // operator to believe the red one and re-send — the duplicate PO this park exists to stop.
         await SafeReconcileExceptionsAsync(order.OrgId, order.Id, ct);
 
+        // The reason, not a restatement of one of them. This line used to assert "cannot
+        // de-duplicate a re-send" for BOTH parks — false of a file-drop connection, which
+        // de-duplicates perfectly and simply refuses to overwrite.
         _logger.LogWarning(
-            "DeliveryUnconfirmed: order {OrderId} (org {OrgId}) parked — a crash-recovery re-drive "
-            + "re-adopted an in-flight send on {Protocol}, which cannot de-duplicate a re-send. "
-            + "NOT re-sent; waiting for an operator to send again or mark delivered.",
-            order.Id, order.OrgId, config.Protocol);
+            "DeliveryUnconfirmed: order {OrderId} (org {OrgId}) parked on {Protocol} — {ParkReason} "
+            + "NOT re-sent; waiting for an operator.",
+            order.Id, order.OrgId, config.Protocol, parkReason);
 
         return new DeliveryResult(false, message, ResponseCode: null, ResponseBody: null,
             Outcome: DeliveryOutcome.NotRetryable);
     }
 
     /// <summary>
-    /// The operator-facing park sentence. Plain language, one sentence of what happened plus what
-    /// to do — never internal vocabulary (no "idempotency", "re-adopt", "dispatching row", "park").
-    /// Says only what a re-adopted in-flight row PROVES: the send was ATTEMPTED, not that it
-    /// succeeded — a crash between the marker commit and the network write, or a cancelled token on
-    /// shutdown, parks with no send at all. Never fabricate an observed outcome.
+    /// The operator-facing park sentence. Plain language, what happened plus what to do — never
+    /// internal vocabulary (no "idempotency", "re-adopt", "dispatching row", "park"). Says only what
+    /// a re-adopted in-flight row PROVES: the send was ATTEMPTED, not that it succeeded — a crash
+    /// between the marker commit and the network write, or a cancelled token on shutdown, parks with
+    /// no send at all. Never fabricate an observed outcome.
+    /// <para>
+    /// It is REASON-SPECIFIC, because the two parks leave the operator in opposite situations and
+    /// the advice that fits one destroys the other. On a channel that cannot de-duplicate, sending
+    /// again is a real choice (it may duplicate, which is why a human makes it). On a file-drop
+    /// connection with "replace existing files" off it is not a choice at all: the park has already
+    /// finalised the in-flight row, so a repeat send opens a fresh attempt, meets the file its
+    /// predecessor left, is REFUSED, and walks the retry ladder into dead-letter — at which point
+    /// "mark it delivered" (which only accepts an order whose delivery is unconfirmed) is no longer
+    /// reachable either. Telling that operator to send it again destroys their only honest exit.
+    /// </para>
     /// <para>
     /// A null <paramref name="protocol"/> yields the channel-agnostic wording, for callers that know
-    /// the order is parked but not which channel parked it (<c>OrderExceptionService.ProblemFor</c>
-    /// works from order status alone). Shared rather than restated: two operator surfaces telling
-    /// different stories about the same order is the failure this whole feature guards against.
+    /// the order is parked but not which channel parked it. Callers that know neither channel nor
+    /// reason read the sentence back off the parked attempt row
+    /// (<c>OrderExceptionService.ReconcileAsync</c>) rather than rebuilding a generic one — two
+    /// operator surfaces telling different stories about the same order is the failure this whole
+    /// feature guards against.
     /// </para>
     /// </summary>
-    internal static string BuildUnconfirmedMessage(string? protocol) =>
-        $"Delivery unconfirmed. We may have sent this order, but lost the connection before the "
-        + $"supplier confirmed it, and {DescribeChannel(protocol)} cannot tell us whether it arrived. "
-        + $"Check with the supplier, then either send it again or mark it delivered.";
+    internal static string BuildUnconfirmedMessage(string? protocol, string? parkReason = null) =>
+        parkReason == ParkReasonCannotRepairOwnFile
+            ? UnconfirmedCannotRepairOwnFileMessage
+            : $"Delivery unconfirmed. We may have sent this order, but lost the connection before the "
+              + $"supplier confirmed it, and {DescribeChannel(protocol)} cannot tell us whether it arrived. "
+              + $"Check with the supplier, then either send it again or mark it delivered.";
+
+    /// <summary>
+    /// The file-drop wording. Both halves of the generic sentence are false here: this channel CAN
+    /// tell us whether a file arrived (that is the whole point of it), and a repeat send cannot get
+    /// through while the setting that caused the park is still off. So it says what is actually
+    /// true — the file may already be there and we will not overwrite it — and offers the two
+    /// remedies that exist: turn the setting back on, or confirm with the supplier and mark it
+    /// delivered.
+    /// </summary>
+    internal const string UnconfirmedCannotRepairOwnFileMessage =
+        "Delivery unconfirmed. We may have written this order to the supplier's server — in full, or "
+        + "only partly — but lost the connection before we could confirm it. This connection is set "
+        + "not to replace existing files, so a repeat send would be refused rather than replacing "
+        + "what is there. Check with the supplier. If they have the order, mark it delivered. If they "
+        + "do not, turn \"replace existing files\" back on for this supplier first — the next send "
+        + "then replaces this order's own file instead of being refused, and still cannot create a "
+        + "second copy.";
 
     private static string DescribeChannel(string? protocol) => protocol?.ToLowerInvariant() switch
     {
@@ -650,10 +715,15 @@ public sealed class DeliveryService : IDeliveryService
         if (credentials is null)
             return new DeliveryTestResult(false, "Delivery credentials could not be decrypted.", null);
 
+        // The fixed test document, named from the SHARED constant rather than a local literal: the
+        // file-drop dispatchers recognise that name to tell an operator the truth when a repeat test
+        // meets the previous test's file on an overwrite-off connection. A literal here would drift
+        // from the one there and quietly restore the message that talks about "this order" when
+        // there is no order (see DeliveryTestArtifact).
         var result = await dispatcher.DispatchAsync(
-            Encoding.UTF8.GetBytes("test,from\r\nproculink,true\r\n"),
-            "proculink-test.csv",
-            "text/csv",
+            Encoding.UTF8.GetBytes(DeliveryTestArtifact.Body),
+            DeliveryTestArtifact.FileName,
+            DeliveryTestArtifact.ContentType,
             config,
             credentials,
             ct);
@@ -903,34 +973,110 @@ public sealed class DeliveryService : IDeliveryService
             result.Success ? "success" : "failed");
     }
 
-    private static string BuildFileName(PurchaseOrderEntity order, OutboundArtifact artifact)
+    /// <summary>
+    /// The name the supplier sees. The extension comes from <see cref="DeliveryMediaTypes"/> — the
+    /// one table — so a cXML document is never handed over as <c>PO-1234.dat</c> again.
+    ///
+    /// <para>
+    /// On the FILE-DROP channels (SFTP/FTPS) the name is additionally qualified with the order id.
+    /// There the filename is the document's only identity in a shared remote directory: two
+    /// different orders that happen to share a PO number resolved to the SAME remote path, and the
+    /// second upload silently replaced the first — one supplier order simply gone, with a delivery
+    /// recorded as successful for both. The qualifier is the ORDER ID, deliberately not a timestamp:
+    /// it keeps the path DETERMINISTIC per order, which is what lets a crash-recovery re-drive or a
+    /// retry of the same artifact re-target its own file instead of accumulating copies (see the A3
+    /// idempotency note on <see cref="Dispatchers.SftpDeliveryDispatcher"/>).
+    /// </para>
+    /// <para>
+    /// Channels where the name is not an identity keep the bare PO number: HTTP and the ERP
+    /// connectors carry the order in the payload, and the email dispatchers put this name in front
+    /// of a human ("Purchase Order PO-1234") where an id suffix would be noise.
+    /// </para>
+    /// </summary>
+    internal static string BuildFileName(PurchaseOrderEntity order, OutboundArtifact artifact, string protocol)
     {
-        var extension = artifact.Format switch
-        {
-            "xml" => "xml",
-            "csv" => "csv",
-            "json" => "json",
-            _ => "dat",
-        };
+        var media = DeliveryMediaTypes.ForTokenOrUnknown(artifact.Format);
+        var stem  = SanitizeFileToken(order.PoNumber);
 
-        return $"{SanitizeFileToken(order.PoNumber)}.{extension}";
+        if (IsFileDropProtocol(protocol))
+            stem = $"{stem}-{OrderFileQualifier(order.Id)}";
+
+        return stem + media.FileExtension;
     }
 
-    private static string SanitizeFileToken(string value)
+    /// <summary>
+    /// Channels whose destination is a directory of files, where the filename alone decides whether
+    /// two documents collide.
+    /// </summary>
+    private static bool IsFileDropProtocol(string protocol) =>
+        protocol.Equals(DeliveryProtocolConstants.Sftp, StringComparison.OrdinalIgnoreCase)
+        || protocol.Equals(DeliveryProtocolConstants.Ftps, StringComparison.OrdinalIgnoreCase)
+        || protocol.Equals(DeliveryProtocolConstants.Ftp, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when a crash-recovery re-drive on this connection would be unable to replace the file
+    /// its own predecessor may have written — a file-drop channel whose operator turned
+    /// <c>overwriteExisting</c> off.
+    ///
+    /// <para>
+    /// The re-send cannot duplicate (the path is per-order), which is why the dispatcher still
+    /// declares <see cref="ResendSafety.Safe"/>; what it cannot do is finish. Re-driving it produces
+    /// a refusal, then a retry, then a dead-lettered order — while the supplier may already hold the
+    /// complete document, or a truncated one that every subsequent retry declines to repair. Neither
+    /// "delivered" nor "failed" is a claim this process can make, so it parks for a human.
+    /// </para>
+    /// </summary>
+    private static bool CannotRepairItsOwnFile(SupplierDeliveryConfig config) =>
+        IsFileDropProtocol(config.Protocol)
+        && !Dispatchers.SftpDeliveryDispatcher.OverwriteExistingFromConfig(config.ConfigJson);
+
+    /// <summary>Short, stable, collision-free-in-practice per-order token for a filename.</summary>
+    internal static string OrderFileQualifier(Guid orderId) => orderId.ToString("N")[..8];
+
+    /// <summary>
+    /// Reduce a PO number to characters every filesystem and transfer protocol accepts.
+    ///
+    /// <para>
+    /// Deliberately an explicit allow-list rather than <c>Path.GetInvalidFileNameChars()</c>: that
+    /// BCL call returns a DIFFERENT set per platform — Windows rejects <c>: ? * " &lt; &gt; |</c>
+    /// that Linux happily allows — so the same PO number produced a different remote filename in
+    /// development (Windows) than in production (Linux), and a production filename could not be
+    /// reproduced locally.
+    /// </para>
+    /// <para>
+    /// The allow-list is Unicode letters and digits, NOT ASCII ones. On Linux —
+    /// which is production — <c>Path.GetInvalidFileNameChars()</c> is only <c>{ '\0', '/' }</c>, so
+    /// <c>Ä Ö Ü Õ ß é ç º</c> have always reached suppliers intact; narrowing to ASCII would
+    /// silently rewrite a European buyer's PO number both in the remote filename AND in the default
+    /// email subject the supplier reads ("Purchase Order Ordre-Nº7"), and would collapse two
+    /// different orders — <c>PO-Ä1</c> and <c>PO-Ö1</c> — onto one name, which is the very
+    /// collision this packet exists to remove.
+    /// </para>
+    /// <para>
+    /// This is the SAME allow-list the SFTP/FTPS dispatchers' own <c>SanitiseFileName</c> uses
+    /// (<c>char.IsLetterOrDigit</c> plus <c>. _ -</c>). Only the SUBSTITUTE character differs —
+    /// <c>-</c> here, <c>_</c> there — and because <c>-</c> is itself in the allow-list, the
+    /// dispatcher's second pass is a no-op on anything this method produces.
+    /// </para>
+    /// </summary>
+    internal static string SanitizeFileToken(string value)
     {
-        var invalid = Path.GetInvalidFileNameChars();
-        var chars = value.Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray();
-        var sanitized = new string(chars).Trim();
+        if (string.IsNullOrWhiteSpace(value)) return "order";
+
+        var chars = value.Trim()
+            .Select(ch => char.IsLetterOrDigit(ch) || ch is '.' or '_' or '-' ? ch : '-')
+            .ToArray();
+        var sanitized = new string(chars).Trim('-');
         return string.IsNullOrWhiteSpace(sanitized) ? "order" : sanitized;
     }
 
-    private static string GetContentType(string format) => format switch
-    {
-        "xml" => "application/xml",
-        "json" => "application/json",
-        "csv" => "text/csv",
-        _ => "application/octet-stream",
-    };
+    /// <summary>
+    /// The media type for a persisted artifact format token, from the one table. An unrecognised
+    /// token (a legacy row, a hand-written format) resolves to
+    /// <see cref="DeliveryMediaTypes.Unknown"/> — the only place octet-stream is still honest.
+    /// </summary>
+    private static string GetContentType(string format) =>
+        DeliveryMediaTypes.ForTokenOrUnknown(format).ContentType;
 
     private static string? TruncateResponseBody(string? body)
     {
@@ -1294,15 +1440,13 @@ public sealed class DeliveryService : IDeliveryService
     /// <para>
     /// Each row is released through an ATOMIC per-row claim — an <c>ExecuteUpdateAsync</c> guarded
     /// on <c>Status == delivery_held</c>, committed in one transaction with that row's audit
-    /// event. <c>delivery_held</c> is webhook-reportable, so a supplier status callback can claim
-    /// a held order terminal (<c>WebhookIngressController</c>'s own guarded update) between this
-    /// method's list read and its writes; the guard makes the release LOSE that race — 0 rows
-    /// claimed means the webhook answered first, and the row is skipped: not counted, not audited,
-    /// not re-driven. The previous tracked-load + <c>SaveChanges</c> shape (no concurrency token)
-    /// overwrote the webhook's write BACKWARDS — a just-delivered order re-driven, or a
-    /// just-delivered park "restored" with its nag reopened. Pinned per branch by
-    /// <c>BillingReleaseWebhookRacePostgresTests</c>, which lands the webhook write deterministically
-    /// inside the window.
+    /// event. Another claimant can take a held order terminal between this method's list read and
+    /// its writes; the guard makes the release LOSE that race — 0 rows claimed means the other
+    /// writer answered first, and the row is skipped: not counted, not audited, not re-driven. The
+    /// previous tracked-load + <c>SaveChanges</c> shape (no concurrency token) overwrote that write
+    /// BACKWARDS — a just-delivered order re-driven, or a just-delivered park "restored" with its
+    /// nag reopened. Pinned per branch by <c>BillingReleaseWebhookRacePostgresTests</c>, which lands
+    /// the competing write deterministically inside the window.
     /// </para>
     /// <para>
     /// Returns the number of orders actually released — a row lost to the webhook race is not

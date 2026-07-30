@@ -1672,10 +1672,6 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnName("trial_started_at")
                         .HasDefaultValueSql("now()");
 
-                    b.Property<string>("WebhookSecretEncrypted")
-                        .HasColumnType("text")
-                        .HasColumnName("webhook_secret_encrypted");
-
                     b.HasKey("Id");
 
                     b.HasIndex("ClerkOrgId")
@@ -1742,51 +1738,6 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.HasIndex("OrgId");
 
                     b.ToTable("outbound_artifacts", (string)null);
-                });
-
-            modelBuilder.Entity("ProcuLink.Core.Entities.OutputTemplate", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<string>("ConfigJson")
-                        .HasColumnType("jsonb")
-                        .HasColumnName("config_json");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("Format")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("format");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("name");
-
-                    b.Property<Guid>("OrgId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("org_id");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("updated_at");
-
-                    b.Property<string>("Version")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("version");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OrgId");
-
-                    b.ToTable("output_templates", (string)null);
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.OverageBillingRecord", b =>
@@ -3405,74 +3356,6 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("tenant_api_keys", (string)null);
                 });
 
-            modelBuilder.Entity("ProcuLink.Core.Entities.ValidationRule", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<bool>("AutoBlock")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false)
-                        .HasColumnName("auto_block");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("description");
-
-                    b.Property<bool>("Enabled")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true)
-                        .HasColumnName("enabled");
-
-                    b.Property<string>("Entity")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("entity");
-
-                    b.Property<DateTime?>("LastTriggeredAt")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("last_triggered_at");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("name");
-
-                    b.Property<Guid>("OrgId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("org_id");
-
-                    b.Property<string>("Severity")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("severity");
-
-                    b.Property<int>("TriggerCount")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(0)
-                        .HasColumnName("trigger_count");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("updated_at");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OrgId");
-
-                    b.ToTable("validation_rules", (string)null);
-                });
-
             modelBuilder.Entity("ProcuLink.Core.Entities.AdvanceShippingNoticeEntity", b =>
                 {
                     b.HasOne("ProcuLink.Core.Entities.Organisation", "Organisation")
@@ -3774,17 +3657,6 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Navigation("Organisation");
                 });
 
-            modelBuilder.Entity("ProcuLink.Core.Entities.OutputTemplate", b =>
-                {
-                    b.HasOne("ProcuLink.Core.Entities.Organisation", "Organisation")
-                        .WithMany()
-                        .HasForeignKey("OrgId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Organisation");
-                });
-
             modelBuilder.Entity("ProcuLink.Core.Entities.PoPassportEvent", b =>
                 {
                     b.HasOne("ProcuLink.Core.Entities.Organisation", "Organisation")
@@ -4062,17 +3934,6 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.HasOne("ProcuLink.Core.Entities.Organisation", "Organisation")
                         .WithMany("ApiKeys")
                         .HasForeignKey("OrganisationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Organisation");
-                });
-
-            modelBuilder.Entity("ProcuLink.Core.Entities.ValidationRule", b =>
-                {
-                    b.HasOne("ProcuLink.Core.Entities.Organisation", "Organisation")
-                        .WithMany()
-                        .HasForeignKey("OrgId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 

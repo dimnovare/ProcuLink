@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -406,17 +406,31 @@ public class SuppliersController : ControllerBase
     [HttpPut("{supplierId:guid}/mappings/{mappingId:guid}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> UpdateMapping(
         Guid supplierId,
         Guid mappingId,
         [FromBody] UpdateMappingRequest request,
         CancellationToken ct)
     {
-        var orgId   = _tenant.OrganisationId;
+        var orgId = _tenant.OrganisationId;
+
+        // UpdateByIdAsync returns null for BOTH "no such mapping" and "the new code is already
+        // mapped under another spelling". They are different answers to the operator, so the two
+        // cases are separated here rather than both surfacing as a bare 404.
+        var exists = await _db.ItemMappings
+            .AsNoTracking()
+            .AnyAsync(m => m.Id == mappingId && m.OrgId == orgId, ct);
+
         var mapping = await _mappingService.UpdateByIdAsync(
             orgId, mappingId,
             request.BuyerItemCode, request.SupplierItemCode,
             MappingSource.Manual, ct);
+
+        if (mapping is null && exists)
+            return Conflict(
+                $"'{request.BuyerItemCode.Trim()}' is already mapped for this supplier "
+                + "(item codes ignore capitalisation). Edit that mapping instead.");
 
         if (mapping is null) return NotFound();
 
@@ -436,6 +450,7 @@ public class SuppliersController : ControllerBase
     [HttpPost("{supplierId:guid}/mappings/import")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> ImportMappings(
         Guid supplierId,
         IFormFile file,
@@ -444,6 +459,20 @@ public class SuppliersController : ControllerBase
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
 
         var orgId   = _tenant.OrganisationId;
+
+        // Bulk mapping import is sold from Operations up; it was declared in the gate table
+        // and enforced nowhere, so a Pilot org could bulk-load mappings one tier below the
+        // plan that advertises it. Editing mappings ONE AT A TIME stays open on every plan —
+        // the differentiator is the bulk lever, not the ability to map at all.
+        if (!await _billing.HasFeatureAsync(orgId, BillingFeature.BulkMapping, ct))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = BillingGateErrors.RequiresPlan("bulk_mapping_import", BillingFeature.BulkMapping),
+                upgradeUrl = "/settings",
+            });
+        }
+
         var created = 0;
         var updated = 0;
 
@@ -463,20 +492,23 @@ public class SuppliersController : ControllerBase
             var supplierCode = parts[1].Trim().Trim('"');
             if (string.IsNullOrEmpty(buyerCode) || string.IsNullOrEmpty(supplierCode)) continue;
 
-            var existing = await _db.ItemMappings
-                .Where(m => m.OrgId == orgId && m.SupplierId == supplierId && m.BuyerItemCode == buyerCode)
-                .FirstOrDefaultAsync(ct);
+            // The created/updated counters must use the SAME case rule the write itself uses.
+            // With an ordinal `==` precheck here, importing "b-1" while "B-1" was already mapped
+            // reported "created: 1" while the service correctly updated the existing row — an
+            // honest write with a lying receipt. `lower()` here matches ItemCodeComparison.Key.
+            var folded = buyerCode.ToLower();
+            var existed = await _db.ItemMappings
+                .AsNoTracking()
+                .AnyAsync(m => m.OrgId == orgId
+                            && m.SupplierId == supplierId
+                            && (m.BuyerItemCode == buyerCode || m.BuyerItemCode.ToLower() == folded), ct);
 
-            if (existing is null)
-            {
-                await _mappingService.CreateAsync(orgId, supplierId, buyerCode, supplierCode, MappingSource.Imported, ct);
-                created++;
-            }
-            else
-            {
-                await _mappingService.UpdateByIdAsync(orgId, existing.Id, buyerCode, supplierCode, MappingSource.Imported, ct);
-                updated++;
-            }
+            // CreateAsync applies the shared rule itself (updates an existing case-variant row
+            // rather than inserting a twin), so ONE call covers both branches.
+            await _mappingService.CreateAsync(
+                orgId, supplierId, buyerCode, supplierCode, MappingSource.Imported, ct);
+
+            if (existed) updated++; else created++;
         }
 
         return Ok(new { created, updated });
@@ -665,6 +697,21 @@ public class SuppliersController : ControllerBase
     {
         var orgId = _tenant.OrganisationId;
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        // ── Plan gates on the CHANNEL and the OUTPUT FORMAT (WP-11) ──────────
+        // This one endpoint writes both SupplierDeliveryConfig.Protocol and .OutputFormat,
+        // so it is where three separately-sold capabilities are actually chosen. All three
+        // were declared in the gate table and enforced NOWHERE, which meant a Pilot org
+        // could configure a webhook and an Enterprise-only ERP connector.
+        if (await DeliveryCapabilityGate.FirstUnmetAsync(
+                _billing, orgId, request.Protocol, request.OutputFormat, ct) is { } gated)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = BillingGateErrors.RequiresPlan(gated.Capability, gated.Feature),
+                upgradeUrl = "/settings",
+            });
+        }
 
         try
         {
@@ -985,7 +1032,11 @@ public class SuppliersController : ControllerBase
         // Billing gate on enablement (pull reuses the SFTP-ingestion feature tier).
         if (request.IsEnabled && !await _billing.HasFeatureAsync(orgId, BillingFeature.SftpIngestion, ct))
             return StatusCode(StatusCodes.Status403Forbidden,
-                new { error = "catalog_sync_requires_integration", upgradeUrl = "/settings" });
+                new
+                {
+                    error = BillingGateErrors.RequiresPlan("catalog_sync", BillingFeature.SftpIngestion),
+                    upgradeUrl = "/settings"
+                });
 
         // Save-time SSRF pre-check — fail fast in the UI instead of at the first poll.
         // The pull pipeline re-validates immediately before EVERY connect regardless.

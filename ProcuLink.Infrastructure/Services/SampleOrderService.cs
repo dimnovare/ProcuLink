@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
@@ -167,10 +168,15 @@ public sealed class SampleOrderService : ISampleOrderService
     private async Task SeedSampleSupplierDataAsync(
         Guid organisationId, Guid supplierId, DateTime now, CancellationToken ct)
     {
-        var existingCatalogCodes = await _db.SupplierProducts
+        // The idempotency probe uses the SHARED item-code rule, not a plain List.Contains (which is
+        // Ordinal). Re-seeding an org whose catalog already holds "WIDGET-1" must not add a second
+        // "widget-1" row: the unique index is case-sensitive so the insert succeeds, and the
+        // case-insensitive catalog lookup then has two candidates for one code.
+        var existingCatalogCodes = (await _db.SupplierProducts
             .Where(p => p.OrgId == organisationId && p.SupplierId == supplierId)
             .Select(p => p.Code)
-            .ToListAsync(ct);
+            .ToListAsync(ct))
+            .ToHashSet(ItemCodeComparison.Comparer);
 
         foreach (var (code, name, unit, price) in SampleCatalog)
         {
@@ -193,10 +199,12 @@ public sealed class SampleOrderService : ISampleOrderService
             });
         }
 
-        var existingMappedBuyerCodes = await _db.ItemMappings
+        // Same shared rule for the learned mappings — see the catalog probe above.
+        var existingMappedBuyerCodes = (await _db.ItemMappings
             .Where(m => m.OrgId == organisationId && m.SupplierId == supplierId)
             .Select(m => m.BuyerItemCode)
-            .ToListAsync(ct);
+            .ToListAsync(ct))
+            .ToHashSet(ItemCodeComparison.Comparer);
 
         foreach (var (buyerCode, supplierCode) in SampleMappings)
         {

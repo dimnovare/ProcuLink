@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -169,6 +169,7 @@ public sealed class SourceCaptureLosslessTests : IAsyncLifetime
             db,
             new ProcuLink.Infrastructure.Services.IdempotencyService(db),
             tenant,
+            TestDoubles.PermissiveBilling.Service(),
             NullLogger<ProcuLink.Api.Controllers.IngressController>.Instance)
         {
             ControllerContext = new Microsoft.AspNetCore.Mvc.ControllerContext { HttpContext = httpContext },

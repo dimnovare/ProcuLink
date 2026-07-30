@@ -1,4 +1,4 @@
-namespace ProcuLink.Core.Constants;
+﻿namespace ProcuLink.Core.Constants;
 
 public static class PlanConstants
 {
@@ -265,16 +265,14 @@ public static class PlanConstants
     }
 
     // ── Feature gate: minimum plan required per feature ───────────────────
+    // EVERY row here must have a real enforcement site in production code — see
+    // BillingFeatureGateCoverageTests.EnforcedBy, which fails the build otherwise.
+    // A row nothing checks is not a gate, it is a false claim about the price list.
     private static readonly IReadOnlyDictionary<BillingFeature, string> MinimumPlan =
         new Dictionary<BillingFeature, string>
         {
-            [BillingFeature.Xml]                = Growth,
-            [BillingFeature.Pdf]                = Growth,
-            [BillingFeature.MappingLibrary]     = Growth,
-            [BillingFeature.ValidationRules]    = Growth,
             [BillingFeature.BulkMapping]        = Operations,
             [BillingFeature.Cxml]               = Operations,
-            [BillingFeature.DeliveryHistory]    = Operations,
             [BillingFeature.AdvancedAudit]      = Operations,
             // ── Delivery / ingestion CHANNELS are decoupled from VOLUME ──────
             // These were gated to Integration, which forced a volume upgrade just
@@ -285,16 +283,25 @@ public static class PlanConstants
             [BillingFeature.EmailIngestion]     = Growth,
             [BillingFeature.SftpIngestion]      = Growth,
             [BillingFeature.S3Ingestion]        = Growth,
-            [BillingFeature.CustomTemplates]    = Integration,
             [BillingFeature.ErpConnectors]      = Enterprise,
             [BillingFeature.CustomSupplierRules]= Enterprise,
-            [BillingFeature.SlaOnboarding]      = Enterprise,
             // Enterprise SSO (SAML/OIDC) via Clerk Enterprise Connections.
             [BillingFeature.Sso]                = Enterprise,
         };
 
     private static readonly List<string> PlanOrder =
         new() { Pilot, Growth, Operations, Integration, Distributor, Enterprise };
+
+    /// <summary>
+    /// The lowest plan that includes <paramref name="feature"/>, or null when the feature has
+    /// no gate-table entry (which <see cref="PlanHasFeature"/> treats as "nobody has it").
+    /// This is the ONLY sanctioned way to name a plan in a user-facing gate message: WP-11
+    /// found four 403 codes hardcoding "integration" for gates whose real minimum was Growth,
+    /// telling customers to buy a €999 tier to unlock what their €149 tier already included.
+    /// Derive, never hardcode.
+    /// </summary>
+    public static string? GetMinimumPlan(BillingFeature feature) =>
+        MinimumPlan.TryGetValue(feature, out var plan) ? plan : null;
 
     public static bool PlanHasFeature(string plan, BillingFeature feature)
     {
