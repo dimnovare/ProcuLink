@@ -153,6 +153,14 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
                 OrderStatusConstants.DeliveryFailed, OrderStatusConstants.RejectedBySupplier),
             // Rejected: corrected and re-driven through the loop.
             //
+            // WP-19 reconciled three of these into OrderStatusMachine, which had called the status
+            // TERMINAL while this map already listed them. The observer was right and the machine
+            // was wrong: → pending_review / ready are written by OrderResolutionService.ResolveAsync
+            // (no from-status guard) and were live in production the whole time, and → transforming
+            // is now real too because the transform claim admits rejected_by_supplier
+            // (OrderStatusMachine.ClaimableForTransformFrom) — the transform_failed precedent. Only
+            // → delivering and → delivery_failed remain observer-only; see KnownObserverOnlyEdges.
+            //
             // → delivered is GONE: no dispatch can write 'delivered' onto a rejected order — the
             // delivery claim (DispatchArtifactAsync / RetryDeliveryAsync) never admits
             // rejected_by_supplier, and OrdersController.MarkDelivered admits only

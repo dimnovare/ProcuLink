@@ -1347,10 +1347,11 @@ public sealed class OrdersController : ControllerBase
     /// Returns immediately with { status: "transforming" }.
     /// Poll GET /api/orders/{id}/status until status changes.
     /// All lines must have NeedsReview = false — returns 422 otherwise.
-    /// Only a 'ready' order — or one whose last transform FAILED — can start a transform (atomic
-    /// ready|transform_failed → transforming claim); an in-flight order returns 202, any other state
-    /// returns 409. Accepting <c>transform_failed</c> is what makes this endpoint the recovery door
-    /// after a broken template/mapping is fixed.
+    /// Only an order in <see cref="OrderStatusMachine.TransformableFrom"/> can start a transform —
+    /// 'ready', one whose last transform FAILED, or one the supplier REJECTED; an in-flight order
+    /// returns 202, any other state returns 409. Accepting <c>transform_failed</c> and
+    /// <c>rejected_by_supplier</c> is what makes this endpoint the recovery door after a broken
+    /// template/mapping is fixed, and after a supplier refusal is corrected.
     /// </summary>
     [HttpPost("{id:guid}/transform")]
     [EnableRateLimiting("transform")]
@@ -1433,8 +1434,18 @@ public sealed class OrdersController : ControllerBase
         // (OrderMappingOverrideService's MV-1 reset only fires for post-artifact states, and a failed
         // transform produced no artifact), so if this claim stayed keyed on 'ready' alone the order
         // would answer 409 forever — permanently stuck, which is strictly worse than the silent
-        // strand transform_failed exists to expose. Kept in lockstep with the transform claim in
-        // OrderTransformService.
+        // strand transform_failed exists to expose.
+        //
+        // rejected_by_supplier joins it for the same reason (WP-19): a genuine business rejection is
+        // cured by a CORRECTED document, and this endpoint is how one gets produced. Before that the
+        // status had no exit at all.
+        //
+        // The status list is OrderStatusMachine.TransformableFrom, NOT a literal. This claim's own
+        // comment used to say "kept in lockstep with the transform claim in OrderTransformService" —
+        // which is the sentence a second hand-written copy of a rule writes just before it drifts,
+        // and is how five delivery-claim lists drifted apart four times. The two are now one
+        // declaration with the endpoint's deliberate delta (it excludes 'transforming' so a second
+        // click answers 202 instead of racing) asserted in OrderStatusMachineTests.
         //
         // CancellationToken.None (NOT the request ct) on purpose: there is no await between
         // this committed claim and the synchronous Enqueue below, so a client disconnect can
@@ -1443,10 +1454,10 @@ public sealed class OrdersController : ControllerBase
         // without enqueuing — stranding the order in 'transforming' with no job. Making the
         // claim uninterruptible means it either fully happens (→ we enqueue) or never started
         // (→ the order keeps its prior status); the rare strand window is closed.
+        var transformableStatuses = OrderStatusMachine.TransformableFrom.ToArray();
         var claimed = await _db.PurchaseOrders
             .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId
-                     && (o.Status == OrderStatusConstants.Ready
-                      || o.Status == OrderStatusConstants.TransformFailed))
+                     && transformableStatuses.Contains(o.Status))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(o => o.Status, OrderStatusConstants.Transforming)
                 .SetProperty(o => o.UpdatedAt, DateTime.UtcNow), CancellationToken.None);
@@ -1464,8 +1475,8 @@ public sealed class OrdersController : ControllerBase
             return Conflict(new
             {
                 error = $"Order is not ready to transform (status '{currentStatus}'). " +
-                        "Only a 'ready' order (or one whose last transform failed) can start a transform; " +
-                        "re-resolve its lines to return it to 'ready'."
+                        "A transform can start from a ready order, one whose last transform failed, " +
+                        "or one the supplier rejected; re-resolve its lines to return it to 'ready'."
             });
         }
 

@@ -98,9 +98,14 @@ public sealed class OrderMappingOverrideService : IOrderMappingOverrideService
     /// <c>delivery_unconfirmed</c>) are included too: all three are post-artifact and
     /// re-dispatchable/rescuable — Retry/Redeliver, the ops requeue, and Send again on a parked order
     /// all ship the LATEST STORED artifact WITHOUT re-transforming, so a mapping edit after any of them
-    /// would otherwise deliver the pre-edit content invisibly (the MV-1 sibling bug). <c>rejected_by_supplier</c>
-    /// is deliberately excluded: it has no outgoing transitions (it never re-dispatches), so its artifact
-    /// can never be re-shipped — resetting it would be dead weight, not a fix.
+    /// would otherwise deliver the pre-edit content invisibly (the MV-1 sibling bug).
+    /// <c>rejected_by_supplier</c> is deliberately excluded, and the reason is narrower than it used
+    /// to be. It read "it has no outgoing transitions (it never re-dispatches)"; WP-19 gave the
+    /// status exits, so state the fact that actually holds: no delivery claim set admits
+    /// <c>rejected_by_supplier</c> — not dispatch, not retry, not the ops requeue, not Redeliver —
+    /// so the refused artifact cannot be re-shipped IN PLACE. Its only exits are the correction loop
+    /// (resolve, or a re-transform that produces a fresh artifact), and both already invalidate the
+    /// old one. Resetting here would still be dead weight, not a fix.
     /// </summary>
     private static bool IsPastReady(string status) =>
         status is OrderStatusConstants.ReadyToDeliver

@@ -248,15 +248,27 @@ internal sealed class OrderTransformService
         // MV-1 reset only fires for post-artifact states, which transform_failed is not), so
         // if this claim rejected it the order would be permanently stuck — trading the silent
         // strand this status exists to expose for a worse, louder one.
+        //
+        // "rejected_by_supplier" is the SAME recovery door for the other kind of correction
+        // (WP-19), and for the same three reasons: it is a failure state, it holds no artifact
+        // anyone may ship (no delivery claim set admits it, so the refused bytes can never be
+        // re-sent in place), and refusing it here left the status with no exit at all — an order
+        // the operator could only move with a database edit.
+        //
+        // The status list itself lives in OrderStatusMachine.ClaimableForTransformFrom because it
+        // is written TWICE below (relational + InMemory), which is precisely how the five
+        // delivery-claim lists drifted apart four times, each time silently.
         var claimedAt = DateTime.UtcNow;
         int claimed;
+        // Parameterised as `= ANY(@p)` rather than inlined as `IN ('…', …)` — same reason as
+        // DeliveryClaim: it keeps the claim's SQL text (and therefore its Postgres plan) stable
+        // no matter what the set contains.
+        var claimableStatuses = OrderStatusMachine.ClaimableForTransformFrom.ToArray();
         if (_db.Database.IsRelational())
         {
             claimed = await _db.PurchaseOrders
                 .Where(x => x.Id == orderId && x.OrgId == organisationId
-                         && (x.Status == OrderStatusConstants.Ready
-                          || x.Status == OrderStatusConstants.Transforming
-                          || x.Status == OrderStatusConstants.TransformFailed))
+                         && claimableStatuses.Contains(x.Status))
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.Status, OrderStatusConstants.Transforming)
                     .SetProperty(o => o.UpdatedAt, claimedAt), ct);
@@ -265,9 +277,7 @@ internal sealed class OrderTransformService
         {
             // EF InMemory test provider cannot translate ExecuteUpdateAsync — emulate the
             // same transition through the change tracker (tests are single-threaded there).
-            claimed = entity.Status is OrderStatusConstants.Ready
-                                    or OrderStatusConstants.Transforming
-                                    or OrderStatusConstants.TransformFailed ? 1 : 0;
+            claimed = OrderStatusMachine.ClaimableForTransformFrom.Contains(entity.Status) ? 1 : 0;
             if (claimed == 1)
             {
                 entity.Status    = OrderStatusConstants.Transforming;

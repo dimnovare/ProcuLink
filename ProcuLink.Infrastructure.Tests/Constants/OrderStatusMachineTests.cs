@@ -620,6 +620,35 @@ public class OrderStatusMachineTests
             "transform (ready_to_deliver and beyond) must stay OUT: claiming one would upload a " +
             "duplicate artifact and re-enqueue delivery, double-sending the PO");
 
+    /// <summary>
+    /// The transform leg's own 52c6431 guard, and the SIXTH copy of this rule that WP-19 found:
+    /// <c>OrdersController.Transform</c> carried its own <c>ready|transform_failed</c> literal under
+    /// a comment reading "kept in lockstep with the transform claim in OrderTransformService" — the
+    /// sentence a second hand-written copy writes just before it drifts. The endpoint commits
+    /// <c>transforming</c> and enqueues; the service then re-claims. A status the endpoint admits
+    /// but the service claim refuses leaves the order in <c>transforming</c> with no artifact, and a
+    /// job that logged a benign "already in flight or done" skip.
+    /// </summary>
+    [Fact]
+    public void TransformableFrom_IsSubsetOf_ClaimableForTransformFrom()
+        => OrderStatusMachine.TransformableFrom.Should().BeSubsetOf(
+            OrderStatusMachine.ClaimableForTransformFrom,
+            "every status the transform ENDPOINT claims must be one the transform SERVICE can " +
+            "re-claim, or the 202 is a lie and the order strands mid-transform");
+
+    /// <summary>
+    /// …and the delta is exactly <c>transforming</c>, which is a product decision: the SERVICE
+    /// admits it so a Hangfire retry can re-run a crashed attempt, while the ENDPOINT answers a
+    /// second click with 202 "already in progress" rather than racing a competing job.
+    /// </summary>
+    [Fact]
+    public void TransformEndpointAndServiceClaims_DifferExactlyBy_Transforming()
+        => OrderStatusMachine.ClaimableForTransformFrom
+            .Except(OrderStatusMachine.TransformableFrom)
+            .Should().BeEquivalentTo(new[] { Transforming },
+                "'transforming' is the ONE status only the service claim may take (crash re-run); " +
+                "widening or narrowing this delta changes whether a double-click can race a job");
+
     [Fact]
     public void Machine_KnowsEveryDeclaredStatusConstant()
     {

@@ -828,27 +828,47 @@ public sealed class DeliveryService : IDeliveryService
     {
         var now = DateTime.UtcNow;
 
-        // Distinguish supplier rejection (4xx) from transient failure (5xx / network).
-        // A 4xx means the supplier received and explicitly rejected the payload —
-        // retrying the exact same payload will not help without a content fix.
+        // Distinguish a BUSINESS rejection from a refusal of the request (WP-19).
+        //
+        // This used to read `ResponseCode is >= 400 and <= 499` and call every one of them a
+        // supplier rejection. It swept in the refusals that say nothing about the order at all — an
+        // expired API key (401), a moved endpoint (404), a rate limit (429) — and parked those
+        // orders in rejected_by_supplier, which had NO outgoing transitions and was excluded from
+        // Redeliver: the order dead-ended, and a database edit was the operator's only recourse.
+        //
+        // SupplierResponseClassification is now the one table, shared with DeliverOrderJob and
+        // RetryDeliveryJob so the status decision and the retry decision cannot disagree. Only a
+        // refusal OF THE ORDER — a 422, or a 400 carrying the supplier's reason — is a rejection;
+        // everything else lands in delivery_failed, which is retryable, dead-letterable and
+        // re-sendable, i.e. somewhere the operator can still act.
         var isSupplierRejection = !result.Success
-            && result.ResponseCode.HasValue
-            && result.ResponseCode.Value is >= 400 and <= 499;
+            && SupplierResponseClassification
+                .Classify(result.ResponseCode, result.ResponseBody)
+                .IsBusinessRejection;
 
         order.Status = result.Success
             ? OrderStatusConstants.Delivered
-            : isSupplierRejection
-                ? OrderStatusConstants.RejectedBySupplier
-                : OrderStatusConstants.DeliveryFailed;
+            : SupplierResponseClassification.FailedOrderStatusFor(result.ResponseCode, result.ResponseBody);
         order.UpdatedAt = now;
+
+        // The message the operator actually reads (OrdersController surfaces the latest attempt's
+        // ErrorMessage for a failed order). For a refusal whose cause the table can name, this is our
+        // sentence — likely cause, then the fix, then where the fix is made — followed by the
+        // supplier's own words when they sent any. For a business rejection or a 5xx it is the
+        // dispatcher's message, unchanged: the supplier's reason IS the explanation there.
+        var failureMessage = result.Success
+            ? null
+            : SupplierResponseClassification.DescribeFailure(
+                result.ResponseCode, result.ResponseBody, result.ErrorMessage);
 
         // SLA timer: a terminal supplier outcome closes the SLA window — clear the deadline and breach
         // flag so the sweep can never nag a settled order. A confirmed delivery settles it, and so does
-        // a 4xx rejection: the supplier received and explicitly refused the payload, so the order is as
-        // done as a delivered one (retrying the same bytes will not help). A 5xx / transient failure is
-        // NOT terminal — the order still owes a delivery and its window must keep ticking, so it is
-        // deliberately excluded here. rejected_by_supplier is likewise excluded from DeliverySlaService's
-        // sweep (belt-and-braces for legacy rows), mirroring Delivered and DeliveryDeadLetter.
+        // a genuine business rejection: the supplier read the document and refused it, so the order is
+        // as done as a delivered one (retrying the same bytes will not help). A transport refusal
+        // (401/403/404/408/429, a bare 400) and a 5xx are NOT terminal — the order still owes a
+        // delivery and its window must keep ticking, so they are deliberately excluded here.
+        // rejected_by_supplier is likewise excluded from DeliverySlaService's sweep (belt-and-braces
+        // for legacy rows), mirroring Delivered and DeliveryDeadLetter.
         if (result.Success || isSupplierRejection)
         {
             order.DeliveryDueAt = null;
@@ -866,7 +886,7 @@ public sealed class DeliveryService : IDeliveryService
             existingAttempt.Status = status;
             existingAttempt.AttemptedAt = now;
             existingAttempt.ResponseCode = result.ResponseCode;
-            existingAttempt.ErrorMessage = result.Success ? null : result.ErrorMessage;
+            existingAttempt.ErrorMessage = failureMessage;
             existingAttempt.RejectionReason = isSupplierRejection ? result.ErrorMessage : null;
             existingAttempt.ResponseBody = TruncateResponseBody(result.ResponseBody);
             existingAttempt.AcknowledgedAt = result.Success ? now : null;
@@ -893,7 +913,7 @@ public sealed class DeliveryService : IDeliveryService
                 AttemptNumber = attemptNumber,
                 AttemptedAt = now,
                 ResponseCode = result.ResponseCode,
-                ErrorMessage = result.Success ? null : result.ErrorMessage,
+                ErrorMessage = failureMessage,
                 RejectionReason = isSupplierRejection ? result.ErrorMessage : null,
                 // Rejection capture: persist the supplier's raw NACK body verbatim (bounded).
                 ResponseBody = TruncateResponseBody(result.ResponseBody),
@@ -962,7 +982,7 @@ public sealed class DeliveryService : IDeliveryService
             await _integrationTrigger.EnqueueAsync(
                 order.OrgId,
                 "order.failed",
-                new { order_id = order.Id, failed_at = now, error = result.ErrorMessage },
+                new { order_id = order.Id, failed_at = now, error = failureMessage },
                 ct);
         }
 

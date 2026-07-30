@@ -119,9 +119,20 @@ public class SupplierResponseClassificationTests
             var withoutReason = SupplierResponseClassification.Classify(code, null);
             var withReason    = SupplierResponseClassification.Classify(code, "supplier says: line 3 is not orderable");
 
-            withoutReason.OperatorHint.Should().NotBeNullOrWhiteSpace(
-                $"HTTP {code} lands in front of an operator, so it must carry a next step — " +
-                "including the codes this table has no named row for");
+            // Every refusal that is NOT a business rejection owes the operator a next step —
+            // including the codes this table has no named row for. A business rejection carries no
+            // hint of ours on purpose: the supplier's own reason IS the explanation, and prefixing
+            // it with our guesswork would bury the one sentence that says what to change. Not
+            // hindsight — this sweep is what caught the first version of the assertion demanding a
+            // hint for 422.
+            if (withoutReason.IsBusinessRejection)
+                withoutReason.OperatorHint.Should().BeNull(
+                    $"HTTP {code} is the supplier explaining themselves — our copy must not " +
+                    "displace theirs");
+            else
+                withoutReason.OperatorHint.Should().NotBeNullOrWhiteSpace(
+                    $"HTTP {code} lands in front of an operator with no supplier reason attached, " +
+                    "so the product owes it a likely cause and a next step");
 
             withoutReason.IsBusinessRejection.Should().Be(
                 code == SupplierResponseClassification.UnprocessableEntity,
