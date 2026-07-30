@@ -509,8 +509,6 @@ public class DeliveryContentTypeAndFileNameTests
             modelBuilder.Ignore<S3IngressConfig>();
             modelBuilder.Ignore<ImportedS3Object>();
             modelBuilder.Ignore<Buyer>();
-            modelBuilder.Ignore<ValidationRule>();
-            modelBuilder.Ignore<OutputTemplate>();
             modelBuilder.Ignore<InvoiceEntity>();
             modelBuilder.Ignore<InvoiceLineEntity>();
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
