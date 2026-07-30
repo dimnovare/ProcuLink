@@ -594,6 +594,118 @@ public sealed class OrphanGuardTests
             OrphanDetector.FindOrphans(dbSets, corpus).Select(f => f.EntityName));
     }
 
+    // ── The comment stripper ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A slash-star inside a STRING LITERAL is data, not a comment opener. This is not
+    /// hypothetical: <c>ProcuLink.Api/Program.cs</c> talks about a wildcard CORS origin
+    /// (<c>https://*.vercel.app</c>), and the previous two-pass implementation — block comments
+    /// stripped first, by a regex that cannot see literals — treated that as an OPEN comment. It
+    /// closed at the next <c>*/</c> in the file, a <c>/* swallow */</c> some 680 lines later, and
+    /// everything in between was deleted before the scan ever saw it: 78% of the composition root.
+    ///
+    /// <para>The failure mode is a FALSE ORPHAN — a store whose only reader sits in the swallowed
+    /// span looks unread — which is the one outcome that makes a guard like this get switched off.
+    /// A single left-to-right scanner that knows what a literal is has no pass ordering to get
+    /// wrong.</para>
+    /// </summary>
+    [Fact]
+    public void StripComments_DoesNotOpenABlockCommentInsideAStringLiteral()
+    {
+        var stripped = OrphanDetector.StripComments("""
+            var origins = new[] { "https://*.vercel.app" };
+
+            builder.Services.AddScoped<IWidgetOrderService, WidgetOrderService>();
+            var live = _db.WidgetOrders.Where(x => x.OrganisationId == organisationId);
+
+            try { Flush(); } catch { /* swallow */ }
+            """);
+
+        Assert.Contains("AddScoped<IWidgetOrderService", stripped, StringComparison.Ordinal);
+        Assert.Contains("_db.WidgetOrders.Where", stripped, StringComparison.Ordinal);
+        Assert.Contains("https://*.vercel.app", stripped, StringComparison.Ordinal);
+        Assert.DoesNotContain("swallow", stripped, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same hazard in every literal form C# offers, plus the two comment forms hiding inside
+    /// each other. Each line is a way the previous regex pair could be made to eat live code.
+    /// </summary>
+    [Theory]
+    // Verbatim strings: no escapes, and "" is a literal quote — a scanner that honours \ here
+    // would leave the literal early and read the rest of the line as code.
+    [InlineData("""var a = @"C:\path\*/ and /* more";""")]
+    [InlineData("""var b = @"he said ""/*"" loudly";""")]
+    // Interpolated, and both orders of the raw+interpolated prefix.
+    [InlineData("""var c = $"prefix /* {value} */ suffix";""")]
+    [InlineData("""var d = $@"C:\x /* {value} */";""")]
+    [InlineData("""var e = @$"C:\x /* {value} */";""")]
+    // Escaped quote: the literal does NOT end at the middle quote.
+    [InlineData("""var f = "she said \" /* \" then";""")]
+    // Char literals, including the escaped-quote and the slash itself.
+    [InlineData("""var g = '"'; var h = '\''; var i = '/';""")]
+    // A line comment containing a block opener must not open a block: this is Program.cs's
+    // actual shape (`// … a future `https://*.vercel.app` …`).
+    [InlineData("""// a future `https://*.vercel.app` entry would be dangerous""")]
+    // ...and a block comment containing a line-comment opener must still close at its own */.
+    [InlineData("""/* see // https://example.com for why */""")]
+    public void StripComments_KeepsCodeAliveAfterEveryLiteralAndCommentForm(string preamble)
+    {
+        var stripped = OrphanDetector.StripComments(
+            preamble + Environment.NewLine
+            + "_db.WidgetOrders.Where(x => x.OrganisationId == organisationId);" + Environment.NewLine
+            + "/* a real comment */");
+
+        Assert.Contains("_db.WidgetOrders.Where", stripped, StringComparison.Ordinal);
+        Assert.DoesNotContain("a real comment", stripped, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Comments must still actually be stripped — the whole reason this function exists. Guards
+    /// against "fixing" the literal bug by simply stripping less.
+    /// </summary>
+    [Fact]
+    public void StripComments_StillRemovesRealComments()
+    {
+        var stripped = OrphanDetector.StripComments("""
+            // gone-line
+            /* gone-block
+               still gone */
+            /// <summary>gone-doc</summary>
+            var kept = 1;
+            """);
+
+        Assert.Contains("var kept = 1;", stripped, StringComparison.Ordinal);
+        Assert.DoesNotContain("gone-line", stripped, StringComparison.Ordinal);
+        Assert.DoesNotContain("gone-block", stripped, StringComparison.Ordinal);
+        Assert.DoesNotContain("still gone", stripped, StringComparison.Ordinal);
+        Assert.DoesNotContain("gone-doc", stripped, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The regression, asserted against the REAL file rather than a fixture, because the fixture
+    /// is what a future refactor will keep passing while the corpus quietly breaks again. Every
+    /// service registration in the API composition root must survive the strip; none of them are
+    /// commented out, so raw and scanned counts have to agree exactly.
+    /// </summary>
+    [Fact]
+    public void Scan_DoesNotSwallowTheApiCompositionRoot()
+    {
+        var root = OrphanDetector.FindRepoRoot();
+        var raw = File.ReadAllText(Path.Combine(root, "ProcuLink.Api", "Program.cs"));
+
+        var scanned = Scan.Value.Sources.Single(f =>
+            f.RelativePath.Replace('\\', '/').Equals("ProcuLink.Api/Program.cs", StringComparison.Ordinal));
+
+        static int Registrations(string text) =>
+            Regex.Matches(text, @"builder\.Services\.AddScoped<").Count;
+
+        var expected = Registrations(raw);
+
+        Assert.True(expected > 50, $"expected the API composition root to register plenty; found {expected}");
+        Assert.Equal(expected, Registrations(scanned.Text));
+    }
+
     // ── Fixtures. Never instantiated; only reflected over. ───────────────────────────────
 
     private static SourceFile Source(string relativePath, string text) =>
@@ -688,9 +800,6 @@ public static class OrphanDetector
         "ExecuteDelete|ExecuteUpdate|RemoveRange|UpdateRange|AttachRange|AddRange|Attach|Remove|Update|Add";
 
     private const string ContextFileStem = "ProcuLinkDbContext";
-
-    private static readonly Regex LineComment = new(@"(?<!:)//[^\r\n]*", RegexOptions.Compiled);
-    private static readonly Regex BlockComment = new(@"/\*.*?\*/", RegexOptions.Compiled | RegexOptions.Singleline);
 
     private static readonly Regex RoleSuffix = new(
         @"(?:Service|Controller|Repository|Store|Manager|Job|Provider|Resolver|Tracker|Sender|Dispatcher|Handler|Client|Factory)$",
@@ -794,10 +903,223 @@ public static class OrphanDetector
     /// <summary>
     /// Comments are stripped before ANY matching. A doc comment naming a service is prose, not a
     /// call; treating it as consumption is how a guard like this goes quietly false-green.
-    /// The <c>(?&lt;!:)</c> keeps <c>https://…</c> inside string literals intact.
+    ///
+    /// <para><b>Why this is a character scanner and not two regex passes.</b> It used to be
+    /// <c>LineComment.Replace(BlockComment.Replace(text, ""), "")</c> — block comments stripped
+    /// first, by a regex with no idea what a string literal is. <c>ProcuLink.Api/Program.cs:421</c>
+    /// mentions the wildcard CORS origin <c>https://*.vercel.app</c>; that <c>/*</c> was read as an
+    /// OPEN block comment, which then closed at the next <c>*/</c> in the file — a
+    /// <c>/* swallow */</c> 677 lines later. 69 of the 71 service registrations in the API
+    /// composition root were deleted before the scan saw them, and the whole span was invisible.
+    ///
+    /// <para>Reordering the two passes does not fix it, it only moves the hole: strip line
+    /// comments first and a <c>//</c> inside a string truncates the line instead. The bug is that
+    /// a regex cannot know whether it is inside a literal. A single left-to-right pass that tracks
+    /// that state can, and has no pass ordering to get wrong — which is why the frontend's
+    /// route-reachability guard already scans this way.</para>
+    ///
+    /// <para>Handled: <c>"…"</c> with backslash escapes, <c>@"…"</c> with doubled <c>""</c>,
+    /// <c>$"…"</c>, <c>$@"…"</c>/<c>@$"…"</c>, raw <c>"""…"""</c> (the AI services use them), and
+    /// <c>'c'</c>. Newlines are preserved so the stripped text stays line-aligned with the file,
+    /// and an unterminated single-line literal resyncs at the newline rather than eating the
+    /// rest of the file.</para>
     /// </summary>
-    public static string StripComments(string text) =>
-        LineComment.Replace(BlockComment.Replace(text, string.Empty), string.Empty);
+    public static string StripComments(string text)
+    {
+        var sb = new StringBuilder(text.Length);
+        var i = 0;
+
+        while (i < text.Length)
+        {
+            var c = text[i];
+
+            // Line comment — runs to the line break, which the main loop then copies. Stopping
+            // at '\r' as well as '\n' keeps CRLF files byte-identical outside their comments.
+            if (c == '/' && i + 1 < text.Length && text[i + 1] == '/')
+            {
+                i += 2;
+                while (i < text.Length && text[i] != '\n' && text[i] != '\r')
+                {
+                    i++;
+                }
+
+                continue;
+            }
+
+            // Block comment — newlines kept so line numbers do not shift.
+            if (c == '/' && i + 1 < text.Length && text[i + 1] == '*')
+            {
+                i += 2;
+                while (i < text.Length && !(text[i] == '*' && i + 1 < text.Length && text[i + 1] == '/'))
+                {
+                    if (text[i] == '\n')
+                    {
+                        sb.Append('\n');
+                    }
+
+                    i++;
+                }
+
+                i = Math.Min(i + 2, text.Length);
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                i = CopyCharLiteral(text, i, sb);
+                continue;
+            }
+
+            // A string literal, possibly behind $ / @ prefixes in either order. `@` also prefixes
+            // escaped identifiers (`@class`), so the quote is what decides.
+            var q = i;
+            var verbatim = false;
+            while (q < text.Length && (text[q] == '$' || text[q] == '@'))
+            {
+                verbatim |= text[q] == '@';
+                q++;
+            }
+
+            if (q < text.Length && text[q] == '"')
+            {
+                sb.Append(text, i, q - i);
+                i = CopyStringLiteral(text, q, verbatim, sb);
+                continue;
+            }
+
+            sb.Append(c);
+            i++;
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>Copies a string literal through verbatim; returns the index just past it.</summary>
+    private static int CopyStringLiteral(string text, int i, bool verbatim, StringBuilder sb)
+    {
+        // Raw string literal: an opening run of 3+ quotes, closed by a run at least as long.
+        var fence = 0;
+        while (i + fence < text.Length && text[i + fence] == '"')
+        {
+            fence++;
+        }
+
+        if (fence >= 3)
+        {
+            var k = i + fence;
+            while (k < text.Length)
+            {
+                if (text[k] != '"')
+                {
+                    k++;
+                    continue;
+                }
+
+                var run = 0;
+                while (k + run < text.Length && text[k + run] == '"')
+                {
+                    run++;
+                }
+
+                k += run;
+                if (run >= fence)
+                {
+                    sb.Append(text, i, k - i);
+                    return k;
+                }
+            }
+
+            sb.Append(text, i, text.Length - i);
+            return text.Length;
+        }
+
+        sb.Append('"');
+
+        for (var k = i + 1; k < text.Length;)
+        {
+            var ch = text[k];
+
+            if (verbatim)
+            {
+                // No escapes; "" is one literal quote, a lone " ends the string.
+                if (ch == '"')
+                {
+                    if (k + 1 < text.Length && text[k + 1] == '"')
+                    {
+                        sb.Append('"').Append('"');
+                        k += 2;
+                        continue;
+                    }
+
+                    sb.Append('"');
+                    return k + 1;
+                }
+
+                sb.Append(ch);
+                k++;
+                continue;
+            }
+
+            if (ch == '\\' && k + 1 < text.Length)
+            {
+                sb.Append(text, k, 2);
+                k += 2;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                sb.Append('"');
+                return k + 1;
+            }
+
+            // A non-verbatim literal cannot span lines. If we are here the source was
+            // unbalanced; resync at the newline instead of consuming the rest of the file.
+            if (ch == '\n')
+            {
+                return k;
+            }
+
+            sb.Append(ch);
+            k++;
+        }
+
+        return text.Length;
+    }
+
+    /// <summary>Copies a char literal through verbatim; returns the index just past it.</summary>
+    private static int CopyCharLiteral(string text, int i, StringBuilder sb)
+    {
+        sb.Append('\'');
+
+        for (var k = i + 1; k < text.Length;)
+        {
+            var ch = text[k];
+
+            if (ch == '\\' && k + 1 < text.Length)
+            {
+                sb.Append(text, k, 2);
+                k += 2;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                sb.Append('\'');
+                return k + 1;
+            }
+
+            if (ch == '\n')
+            {
+                return k;
+            }
+
+            sb.Append(ch);
+            k++;
+        }
+
+        return text.Length;
+    }
 
     // ── Detection ───────────────────────────────────────────────────────────────────────
 
