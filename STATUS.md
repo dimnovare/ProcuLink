@@ -59,6 +59,78 @@ _Update this file at the end of every session. Keep it lean — no full code, no
   `DROP TABLE output_templates` and `DROP TABLE validation_rules` against production at the next
   API startup — irreversible, so it is a founder call, not an agent one.**
 
+---
+
+## Snapshot (2026-07-30) — the two frontend link gates are one parser (frontend PR #54, MERGED)
+
+- **Frontend `wp04b/converge-link-extractors` → [PR #54](https://github.com/dimnovare/project-proculink/pull/54),
+  MERGED as `9cea6e5`.** Two commits: land an orphaned commit, then converge.
+- **An orphaned commit was found and landed.** `src/test/linkExtract.ts` was never on frontend
+  `main`. It sat in `71a7701` on `wave1/frontend-retirements`, pushed **after** PR #47 merged
+  (squash `ded9e04`), so it had no PR and CI never ran on it — while every branch-level signal read
+  "landed". **Durable trap: a push to a branch whose PR has already merged is silently orphaned —
+  no PR, no CI, no path to main.** Check with `git ls-tree --name-only origin/main <path>`; use
+  `git diff --stat origin/main..<branch>` for the unlanded set, because the commit *list*
+  over-reports after a squash-merge (branch-side originals look absent by SHA while their content
+  is on main).
+- **Two near-identical source-link extractors are now one.** New shared module
+  `src/test/sourceScan.ts` owns comment stripping (js + mdx modes), string-literal masking,
+  `readLiteral`, `literalsInRegion`, the anchor regexes and an `extractRaw` core. Each guard keeps
+  its own pattern selection and normalisation policy, because those encode genuinely different
+  questions: `route-reachability.test.ts` is INBOUND ("does anything navigate TO this page?") and
+  uses a `«dyn»` sentinel with structural matching; `link-crawl.test.ts` is OUTBOUND ("does every
+  link we ship land somewhere?") and must SKIP computed paths — requiring a dynamic route segment
+  would flag `/help/${slug}` as a 404 when every article is its own static page.
+- **One asymmetry preserved, not resolved.** The nav-call anchor is exported in two forms:
+  reachability counts `new URL(…)`, the crawl does not. Sharing one set would change one guard's
+  behaviour, and there is no evidence which answer is right — so `sourceScan.test.ts` pins the
+  difference instead. It is invisible to both existing suites, so either collapsing edit would read
+  as a harmless tidy-up.
+- **Proof, not assertion.** Planted the two probe 404s (`/library/templates-that-never-existed`
+  under `components/bridge/`, `/totally-dead-route-xyz` under `app/(app)/library/suppliers/`): the
+  crawl went RED on exactly those two, **before and after** the convergence, identically. Then a
+  mutation check — neutering `stripComments` in `sourceScan.ts` alone turned **both** guards red
+  (3 + 2 failures), which is what proves the sharing is real rather than a copy left behind. All
+  reverted; tree confirmed clean.
+- **`link-crawl.test.ts` has a ZERO diff in the convergence commit** — `linkExtract.ts` re-exports
+  `stripComments`/`syntaxFor`, so its 9 extraction-decision tests, its `>250` file floor and its
+  widened-tree assertions all run against an unchanged import surface. Stronger evidence than
+  editing it and asserting it still passes.
+- **Main verified green AFTER the merge, not just on the PR.** Frontend PR #49 landed as `50639e3`
+  in the gap between the pre-merge SHA check and the merge, so frontend `main` became a combination
+  CI had never run on — and **frontend CI is `pull_request`-only, so a push to `main` gets ZERO
+  checks.** Re-verified locally on `9cea6e5`: `bun run test` 116 files / 1243 tests green without
+  `NEXT_PUBLIC_USE_MOCK`; `lint`, `check:pageshell --strict`, `lint:vocab` all exit 0; `bunx tsc
+  --noEmit` still only the two pre-existing errors (`src/lib/seo.test.ts:36`,
+  `src/lib/planGate.test.ts:61`), both untouched. #49's new `.gitattributes` pins only `*.sh` and
+  `.githooks/**` to LF, so it does not renormalise `.ts`.
+- **Deliberately left out of scope:** the parse-gate stall escalation riding in the same orphaned
+  commit (`parseStall.ts`, `ParsingGate.tsx`, `OrderWorkshop.tsx`, `useOrderReview.ts`) is product
+  code touching the locked Order Workshop layout. Now carried by
+  [frontend PR #57](https://github.com/dimnovare/project-proculink/pull/57), correctly based on
+  `9cea6e5` with no `src/test` files.
+
+**NEEDS DOING:**
+
+1. **Close [frontend PR #55](https://github.com/dimnovare/project-proculink/pull/55)**
+   (`fix/link-crawl-and-parse-stall`, draft, base `fc9f0e6`). Superseded first attempt carrying all
+   eight files of `71a7701`, including a standalone 265-line `src/test/linkExtract.ts` — **the
+   duplicate parser #54 exists to delete. Merging it reintroduces the drift.** Owning session
+   notified; not closed here because it is another session's in-flight branch.
+2. **Repoint the reachability guard's out-of-tree mutation harness.** Three of its targets
+   (comment stripping, both link-tuple loosenings) moved into `sourceScan.ts`. Reverting one there
+   now reddens *both* guards, which is a stronger signal — but a harness that patches this file by
+   line needs updating. Noted in that file's MUTATION COVERAGE header. **Unverified: the harness is
+   not in either repo.**
+3. **Consider a `push`-triggered CI job on the frontend.** `main` currently has no check at all
+   after a merge; #54's post-merge verification was manual and would not have happened on a
+   less careful session.
+4. `wave1/frontend-retirements` still holds `71a7701`/`e0b108e` and will conflict on
+   `src/test/linkExtract.ts` + `src/test/link-crawl.test.ts` — resolution is take `main`'s for
+   both. Once #57 lands the branch has nothing left and can be deleted.
+
+---
+
 ## Snapshot (2026-07-27) — manufacturer part number is a real matching key (BE PR, OPEN)
 
 - **`feat/manufacturer-part-matching`, PR open, not merged.** Two real customer POs (sanitised,
