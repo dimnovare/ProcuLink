@@ -41,6 +41,15 @@ public static class EffectiveEntityResolver
 {
     // Recognised header canonical fields that map onto typed columns.
     // V5: added "RequestedDeliveryDate" (DateOnly?; nullable — a parse failure leaves it null rather than the original).
+    //
+    // WP-14 deliberately did NOT widen these two sets, even though the row bag grew to the full
+    // business field set. This list is the WRITE-BACK set — the names whose output rules OVERWRITE a
+    // typed column for the fixed-shape formats — and widening it would not be additive:
+    // ResolveTargetField matches a rule by its OutputPath, so an existing customer whose cXML output
+    // column happens to be named "ShipToCity" or "Incoterms" (natural column names) would suddenly
+    // have that rule rewrite the real column and change the document they receive today. Binding a
+    // new name EMITS it everywhere; it never rewrites the entity. Pinned by
+    // EffectiveEntityResolverCarriesWidenedFieldsTests.AnOutputColumnNamedAfterANewCanonicalField_*.
     private static readonly HashSet<string> HeaderFields =
         new(StringComparer.OrdinalIgnoreCase) { "PoNumber", "OrderDate", "Currency", "SupplierName", "BuyerName", "RequestedDeliveryDate" };
 
@@ -280,6 +289,14 @@ public static class EffectiveEntityResolver
             ContactName       = src.ContactName,
             ContactEmail      = src.ContactEmail,
             ContactPhone      = src.ContactPhone,
+            // WP-14: bindable header columns that this clone used to drop. The structured path
+            // (XML/cXML/UBL/X12) renders from the CLONE and builds its row bag from the clone's
+            // values, so a column missing here arrives EMPTY at a real supplier with no error
+            // raised anywhere — the CSV/JSON native path would look perfect while cXML shipped
+            // blanks. Carried verbatim; they are not override-targetable (see HeaderFields).
+            Incoterms         = src.Incoterms,
+            ShippingMethod    = src.ShippingMethod,
+            BuyerOrderRef     = src.BuyerOrderRef,
             ShipToName        = src.ShipToName,
             ShipToDeliverTo   = src.ShipToDeliverTo,
             ShipToStreet      = src.ShipToStreet,
@@ -329,6 +346,18 @@ public static class EffectiveEntityResolver
                 // override-targetable; carried verbatim so the structured preview + delivery path keeps it.
                 TaxAmount        = l.TaxAmount,
                 DeliveryDate     = l.DeliveryDate,
+                // WP-14: bindable LINE columns this clone used to drop. Same failure as the header
+                // block above, one level down: a rule binding ManufacturerPartNumber or Unspsc on a
+                // structured-format supplier resolved against the clone's line and rendered empty,
+                // while the identical rule on a CSV supplier worked. Carried verbatim.
+                DiscountPercent        = l.DiscountPercent,
+                NetAmount              = l.NetAmount,
+                ManufacturerPartNumber = l.ManufacturerPartNumber,
+                ManufacturerName       = l.ManufacturerName,
+                CustomerPartNumber     = l.CustomerPartNumber,
+                Unspsc                 = l.Unspsc,
+                Recipient              = l.Recipient,
+                ContractNumber         = l.ContractNumber,
             })
             .ToList();
 

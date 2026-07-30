@@ -368,12 +368,17 @@ public class WidenedOutputRowTests
     // ── 6. GOLDEN: a supplier with no custom output renders byte-identically ─────
 
     /// <summary>
-    /// The default (no-override) path must be untouched by the widening. Two oracles:
-    /// this one pins the EXACT BYTES of the fixed CSV transform for a fully-populated order, so any
-    /// leak of a new field into the default document changes a checked-in literal.
+    /// Oracle 1 — a supplier with NO custom output. Pins the EXACT BYTES of the fixed CSV transform
+    /// for a fully-populated order.
+    ///
+    /// <para>Note what this literal actually shows: the fixed transform ALREADY emitted the ship-to,
+    /// bill-to and contact columns natively. That is precisely why the gap was invisible — the
+    /// DEFAULT document carried the address, and only a supplier who needed a CUSTOM layout found
+    /// the fields unreachable. The literal was verified byte-for-byte against the pre-WP-14 tree by
+    /// stashing the two changed production files and re-running this test.</para>
     /// </summary>
     [Fact]
-    public async Task Golden_FixedCsvTransform_ForAFullyPopulatedOrder_IsUnchanged()
+    public async Task Golden_FixedCsvTransform_NoCustomOutput_IsByteIdenticalToPreWp14()
     {
         var order = FullyPopulatedOrder();
         order.Supplier = new Supplier { Id = Guid.NewGuid(), Name = "REDACTED-PARTY" };
@@ -383,64 +388,138 @@ public class WidenedOutputRowTests
         var csv      = sr.ReadToEnd().Replace("\r\n", "\n");
 
         const string golden =
-            "PoNumber,OrderDate,SupplierName,LineNumber,SupplierItemCode,Description,Quantity,Unit,UnitPrice,LineTotal,Currency\n"
-            + "PO-4711,2026-03-04,REDACTED-PARTY,1,S-1,Barcode scanner,2,PCS,50,100,EUR\n";
+            "PoNumber,OrderDate,Currency,BuyerName,SupplierItemCode,Description,Quantity,Unit,UnitPrice,LineTotal,"
+            + "ShipToName,ShipToStreet,ShipToCity,ShipToPostalCode,ShipToCountry,"
+            + "BillToName,BillToStreet,BillToCity,BillToPostalCode,BillToCountry,"
+            + "ContactName,ContactEmail,ContactPhone\n"
+            + "PO-4711,2026-03-04,EUR,Acme Buyer AS,S-1,Barcode scanner,2,PCS,50,100,"
+            + "Acme Warehouse,Sadama tee 12,Tallinn,10111,EE,"
+            + "Acme Finance,Pärnu mnt 5,Tartu,51004,EE,"
+            + "Mari Tamm,mari.tamm@acme.example,+372 555 0101\n";
 
         csv.Should().Be(golden,
-            "a supplier with NO custom output must render byte-identically to before WP-14 — the "
-            + "fixed transforms read typed columns and must never see the widened row bag");
+            "a supplier with NO custom output must render byte-identically to before WP-14");
     }
 
     /// <summary>
-    /// The second oracle: the same fixed transforms produce identical bytes whether or not the
-    /// WP-14 columns are populated. This survives an intentional edit to the golden literal above.
+    /// Oracle 2 — the one that actually exercises the CHANGED code. The fixed transforms above do
+    /// not call <see cref="MappedTransformService"/> at all, so they cannot regress from this work;
+    /// an EXISTING override can. This pins the exact bytes of the native override path for an
+    /// override that binds only PRE-WP-14 names — the shape every current customer has. Widening
+    /// the row bag must not perturb one byte of it.
     /// </summary>
-    [Theory]
-    [InlineData(OutputFormat.Csv)]
-    [InlineData(OutputFormat.Xml)]
-    public async Task Golden_FixedTransform_ByteIdentical_WhetherOrNotWp14FieldsArePopulated(OutputFormat format)
+    [Fact]
+    public void Golden_NativeOverride_BindingOnlyPreWp14Names_IsByteIdentical()
     {
-        var without = FullyPopulatedOrder();
-        StripWp14Fields(without);
-        var with = FullyPopulatedOrder();
-
-        foreach (var o in new[] { without, with })
-            o.Supplier = new Supplier { Id = Guid.NewGuid(), Name = "REDACTED-PARTY" };
-
-        ITransformService svc = format == OutputFormat.Csv
-            ? new CsvTransformService()
-            : new XmlTransformService();
-
-        var a = await Bytes(svc, without, format);
-        var b = await Bytes(svc, with, format);
-
-        a.Should().Equal(b,
-            "the fixed {0} transform reads typed columns only; populating the WP-14 columns must not "
-            + "change one byte of the default document", format);
-    }
-
-    private static async Task<byte[]> Bytes(ITransformService svc, PurchaseOrderEntity order, OutputFormat format)
-    {
-        var result = await svc.TransformAsync(order, format, CancellationToken.None);
-        using var ms = new MemoryStream();
-        await result.Content.CopyToAsync(ms);
-        return ms.ToArray();
-    }
-
-    private static void StripWp14Fields(PurchaseOrderEntity o)
-    {
-        o.BuyerOrderRef = o.BuyerTaxId = o.ContactName = o.ContactEmail = o.ContactPhone =
-            o.Incoterms = o.ShippingMethod = null;
-        o.ShipToName = o.ShipToDeliverTo = o.ShipToStreet = o.ShipToCity =
-            o.ShipToPostalCode = o.ShipToCountry = o.ShipToEmail = o.ShipToPhone = null;
-        o.BillToName = o.BillToDeliverTo = o.BillToStreet = o.BillToCity =
-            o.BillToPostalCode = o.BillToCountry = o.BillToEmail = o.BillToPhone = null;
-
-        foreach (var l in o.Lines)
+        var ov = new OrderMappingOverride
         {
-            l.TaxAmount = l.DiscountPercent = l.NetAmount = null;
-            l.ManufacturerPartNumber = l.ManufacturerName = l.CustomerPartNumber =
-                l.Unspsc = l.Recipient = l.ContractNumber = null;
-        }
+            Output = new OutputMappingConfig
+            {
+                Header = new()
+                {
+                    ["PO"]   = new OutputFieldRule { OutputPath = "PO",   CanonicalField = "PoNumber" },
+                    ["Date"] = new OutputFieldRule { OutputPath = "Date", CanonicalField = "OrderDate" },
+                    ["Cur"]  = new OutputFieldRule { OutputPath = "Cur",  CanonicalField = "Currency" },
+                    ["Sup"]  = new OutputFieldRule { OutputPath = "Sup",  CanonicalField = "SupplierName" },
+                    ["Tot"]  = new OutputFieldRule { OutputPath = "Tot",  CanonicalField = "GrandTotal" },
+                },
+                Lines = new()
+                {
+                    ["Ln"]   = new OutputFieldRule { OutputPath = "Ln",   CanonicalField = "LineNumber" },
+                    ["Code"] = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" },
+                    ["Desc"] = new OutputFieldRule { OutputPath = "Desc", CanonicalField = "Description" },
+                    ["Qty"]  = new OutputFieldRule { OutputPath = "Qty",  CanonicalField = "Quantity" },
+                    ["Prc"]  = new OutputFieldRule { OutputPath = "Prc",  CanonicalField = "UnitPrice" },
+                    ["Amt"]  = new OutputFieldRule { OutputPath = "Amt",  CanonicalField = "LineTotal" },
+                    ["Vat"]  = new OutputFieldRule { OutputPath = "Vat",  CanonicalField = "TaxRate" },
+                    ["Del"]  = new OutputFieldRule { OutputPath = "Del",  CanonicalField = "DeliveryDate" },
+                },
+            },
+        };
+
+        var csv = RenderCsv(FullyPopulatedOrder(), ov).Replace("\r\n", "\n");
+
+        const string golden =
+            "PO,Date,Cur,Sup,Tot,Ln,Code,Desc,Qty,Prc,Amt,Vat,Del\n"
+            + "REDACTED-PARTY";
+
+        csv.Should().Be(golden,
+            "an override that binds only pre-WP-14 names must render byte-identically after the "
+            + "widening — 23 new header keys and 9 new line keys are INERT unless a rule names them");
+    }
+
+    /// <summary>
+    /// Oracle 3 — the same guarantee for the tree emitter, whose leaves resolve through the same
+    /// widened bag. XML, so the structured family is covered too.
+    /// </summary>
+    [Fact]
+    public void Golden_TreeOutput_BindingOnlyPreWp14Names_IsByteIdentical()
+    {
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Xml,
+            Root = new OutputNode
+            {
+                Name     = "Order",
+                NodeType = OutputNodeType.Object,
+                Children = new List<OutputNode>
+                {
+                    new()
+                    {
+                        Name     = "Number",
+                        NodeType = OutputNodeType.Field,
+                        Rule     = new OutputFieldRule { OutputPath = "Number", CanonicalField = "PoNumber" },
+                    },
+                    new()
+                    {
+                        Name       = "Lines",
+                        NodeType   = OutputNodeType.Array,
+                        Collection = "lines",
+                        Children = new List<OutputNode>
+                        {
+                            new()
+                            {
+                                Name     = "Line",
+                                NodeType = OutputNodeType.Object,
+                                Children = new List<OutputNode>
+                                {
+                                    new()
+                                    {
+                                        Name     = "Code",
+                                        NodeType = OutputNodeType.Field,
+                                        Rule     = new OutputFieldRule { OutputPath = "Code", CanonicalField = "SupplierItemCode" },
+                                    },
+                                    new()
+                                    {
+                                        Name     = "Qty",
+                                        NodeType = OutputNodeType.Field,
+                                        Rule     = new OutputFieldRule { OutputPath = "Qty", CanonicalField = "Quantity" },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        var result   = new OutputTemplateEmitter().Emit(template, FullyPopulatedOrder(), new OrderMappingOverride());
+        using var sr = new StreamReader(result.Content, Encoding.UTF8);
+        var xml      = sr.ReadToEnd().Replace("\r\n", "\n");
+
+        const string golden =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+            + "<Order>\n"
+            + "  <Number>PO-4711</Number>\n"
+            + "  <Lines>\n"
+            + "    <Line>\n"
+            + "      <Code>S-1</Code>\n"
+            + "      <Qty>2</Qty>\n"
+            + "    </Line>\n"
+            + "  </Lines>\n"
+            + "</Order>";
+
+        xml.Should().Be(golden,
+            "a tree output binding only pre-WP-14 names must render byte-identically after the widening");
     }
 }
