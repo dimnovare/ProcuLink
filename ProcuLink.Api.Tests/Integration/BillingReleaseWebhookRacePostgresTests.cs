@@ -154,7 +154,7 @@ public sealed class BillingReleaseWebhookRacePostgresTests : IAsyncLifetime
     {
         var interceptor = new WebhookAfterHeldReadInterceptor(async () =>
         {
-            // The webhook's terminal claim, exactly as WebhookIngressController lands it: an
+            // A concurrent terminal claim, in the shape any ExecuteUpdateAsync claimant lands it: an
             // atomic guarded ExecuteUpdate on its OWN connection, committed before the release
             // gets to write anything.
             await using var db = NewContext();

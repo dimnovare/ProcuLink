@@ -271,7 +271,6 @@ public static class PlanConstants
             [BillingFeature.Xml]                = Growth,
             [BillingFeature.Pdf]                = Growth,
             [BillingFeature.MappingLibrary]     = Growth,
-            [BillingFeature.ValidationRules]    = Growth,
             [BillingFeature.BulkMapping]        = Operations,
             [BillingFeature.Cxml]               = Operations,
             [BillingFeature.DeliveryHistory]    = Operations,

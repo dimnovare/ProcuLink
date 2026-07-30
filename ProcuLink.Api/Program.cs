@@ -251,12 +251,10 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 // Named per-user fixed-window policies for expensive / cost-bearing / abusable
 // endpoints, PLUS a global fallback limiter so every endpoint has a backstop.
 //
-// Partition key for MOST policies: Clerk `sub` claim first (so an authenticated
-// user is limited as themselves regardless of source IP), then the remote IP
-// for unauthenticated-ish callers (ApiKey ingress), then a shared "anonymous"
-// bucket as the last resort. Helper below keeps this consistent across policies.
-// The "webhook" policy is the exception: it partitions by the TENANT slug on the
-// route, so one tenant's HMAC-webhook flood can't exhaust another tenant's quota.
+// Partition key: Clerk `sub` claim first (so an authenticated user is limited as
+// themselves regardless of source IP), then the remote IP for unauthenticated-ish
+// callers (ApiKey ingress), then a shared "anonymous" bucket as the last resort.
+// Helper below keeps this consistent across policies.
 //
 // Controllers opt into a named policy with [EnableRateLimiting("<name>")];
 // the global limiter applies to everything not otherwise rejected.
@@ -272,8 +270,7 @@ builder.Services.AddRateLimiter(options =>
     // the window is shared. See docs/audit/2026-06-12-scale-gated-constraints.md.
     //
     // sub → IP → "anonymous": authenticated callers are limited per-user; the
-    // unauthenticated ApiKey-ingress surface is limited per source IP. (The webhook
-    // surface overrides this to partition per tenant slug — see the "webhook" policy.)
+    // unauthenticated ApiKey-ingress surface is limited per source IP.
     static string PartitionKey(HttpContext ctx) =>
         ctx.User.FindFirst("sub")?.Value
         ?? ctx.Connection.RemoteIpAddress?.ToString()
@@ -322,22 +319,6 @@ builder.Services.AddRateLimiter(options =>
     // Signed-URL / artifact-download generation. Each call mints a pre-signed R2
     // URL; cap so the surface can't be used to bulk-mint download links.
     options.AddPolicy("signed-url", ctx => Window(ctx, "signed-url", permit: 60, seconds: 60));
-
-    // Webhook receivers are unauthenticated (HMAC-only) and chatty, so the ceiling
-    // is generous. The PARTITION KEY is the tenant slug carried in the route
-    // (/api/webhook-ingress/{slug}/...), NOT the source IP: many suppliers push
-    // callbacks for one org from a shared egress IP, and an IP-keyed bucket lets a
-    // single noisy tenant exhaust the window for EVERY other tenant. Keying on the
-    // slug isolates each org's quota. Fall back to IP / "anonymous" only when no
-    // slug is on the route (a malformed request that won't match the controller
-    // anyway) so the surface is never left unbounded.
-    static string WebhookKey(HttpContext ctx) =>
-        ctx.Request.RouteValues.TryGetValue("slug", out var slug)
-            && slug?.ToString() is { Length: > 0 } s
-                ? $"slug:{s}"
-                : ctx.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
-
-    options.AddPolicy("webhook", ctx => WindowFor(ctx, "webhook", WebhookKey(ctx), permit: 120, seconds: 60));
 
     // The anonymous support contact form feeds an outbound email sender, so it
     // is a spam/amplification + SMTP-cost vector. Nobody legitimately files
@@ -609,8 +590,6 @@ builder.Services.AddScoped<IBuyerService, BuyerService>();
 // ── Wave 4: API keys + integration subscriptions ──────────────────────────
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService>();
-builder.Services.AddScoped<IValidationRuleService, ValidationRuleService>();
-builder.Services.AddScoped<IOutputTemplateService, OutputTemplateService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddSingleton<OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
@@ -706,20 +685,7 @@ builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.Des
 // GDPR per-order erasure (admin-triggered): deletes the R2 blobs + every order-tied DB row.
 builder.Services.AddScoped<IDataErasureService, ProcuLink.Infrastructure.Services.DataErasureService>();
 
-// ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
-// IDistributedCache for HmacWebhookVerifier nonce replay store.
-// MemoryDistributedCache is single-instance (correct for one API replica). Set
-// Redis:ConnectionString to make HMAC-nonce replay protection cross-instance for
-// horizontal scaling — no other code change needed (closes P2-3 / W4 at the swap point).
-var hmacNonceRedis = builder.Configuration["Redis:ConnectionString"];
-if (!string.IsNullOrWhiteSpace(hmacNonceRedis))
-{
-    builder.Services.AddStackExchangeRedisCache(o => o.Configuration = hmacNonceRedis);
-}
-else
-{
-    builder.Services.AddDistributedMemoryCache();
-}
+// ── Phase 6: smart format auto-detect ─────────────────────────────────────
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISupplierSuggestionService, ProcuLink.Infrastructure.Services.Detection.SupplierSuggestionService>();
@@ -728,7 +694,6 @@ builder.Services.AddSingleton<ProcuLink.Core.Services.Detection.ISourceColumnExt
 // SourceMap engine tokenizer: extracts every addressable value from a source file (CSV + XML concrete;
 // other formats return an empty list). Singleton — stateless, reused across requests.
 builder.Services.AddSingleton<ProcuLink.Transform.Tokenizing.ISourceTokenizer, ProcuLink.Transform.Tokenizing.SourceTokenizer>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier, ProcuLink.Infrastructure.Services.Webhooks.HmacWebhookVerifier>();
 
 // ── Health checks (G5) — liveness vs readiness ────────────────────────────
 // Liveness (/health) is a fast, dependency-free 200 served by HealthController

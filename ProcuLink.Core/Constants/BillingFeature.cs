@@ -5,7 +5,6 @@ public enum BillingFeature
     Xml,
     Pdf,
     MappingLibrary,
-    ValidationRules,
     BulkMapping,
     Cxml,
     DeliveryHistory,

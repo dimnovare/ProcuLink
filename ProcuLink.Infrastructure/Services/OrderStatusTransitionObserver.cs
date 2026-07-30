@@ -29,13 +29,11 @@ namespace ProcuLink.Infrastructure.Services;
 /// sold as a universal (the defect that produced this subsystem's last several Criticals).
 /// To get the CURRENT set, ask the code:</para>
 /// <code>grep -rn "SetProperty(o =&gt; o.Status" --include=*.cs</code>
-/// <para>One consequence IS worth naming, because the map below would otherwise mislead: the
-/// supplier status callback claims via <c>ExecuteUpdateAsync</c>
-/// (<c>WebhookIngressController.ApplyReportedStatusAsync</c>), so webhook-driven
-/// <c>→ delivered / → rejected_by_supplier</c> transitions never reach this observer — even though
-/// they ARE listed in the map, which serves the non-relational path and documentation. The
-/// tracked-entity writes (transform, resolution, stuck/ops, mapping-edit flows) are the majority of
-/// transitions and are all covered.</para>
+/// <para>One consequence IS worth naming, because the map below would otherwise mislead: any writer
+/// that claims via <c>ExecuteUpdateAsync</c> bypasses the tracker, so those transitions never reach
+/// this observer — even though they ARE listed in the map, which serves the non-relational path and
+/// documentation. The tracked-entity writes (transform, resolution, stuck/ops, mapping-edit flows)
+/// are the majority of transitions and are all covered.</para>
 /// </summary>
 public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
 {
@@ -47,8 +45,8 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
     /// <summary>
     /// Allowed transitions, derived from every real <c>Status</c> write point in the
     /// codebase (OrderIngestionService / OrderResolutionService / OrderTransformService /
-    /// DeliveryService / Stuck*DetectionService / OrdersController / OpsController /
-    /// WebhookIngressController). Self-transitions (from == to) are always allowed and
+    /// DeliveryService / Stuck*DetectionService / OrdersController / OpsController).
+    /// Self-transitions (from == to) are always allowed and
     /// are not listed. Generous by design: this map must stay SILENT for every legit
     /// flow — false-positive warnings would train operators to ignore it.
     ///

@@ -126,15 +126,10 @@ public class DeliveryAttempt
     /// resets the budget by stamping <see cref="CapSupersededAt"/>, never by deleting rows.
     /// Keep this an <c>Expression</c> — EF inlines a LambdaExpression passed to
     /// <c>DbSet.Where</c>, including inside correlated subqueries, while a <c>.Compile()</c>d
-    /// delegate does not translate (see WebhookIngressController.HasDispatchMarker's warning).
+    /// delegate does not translate.
     ///
-    /// <para>Two DELIBERATE non-unifications — same table, different questions; each is pinned
-    /// by an assert-the-difference test, not just this comment:</para>
-    /// <para>• NOT the webhook dispatch-evidence predicate
-    /// (<c>WebhookIngressController.HasDispatchMarker</c>). Evidence asks "was a send ever
-    /// BEGUN for this order, ever" — epoch-agnostic, so it must IGNORE
-    /// <see cref="CapSupersededAt"/>. Folding the two reopens the never-dispatched erasure
-    /// hole under a new name: a requeued-then-reported order would read as never sent.</para>
+    /// <para>One DELIBERATE non-unification — same table, different question, pinned by an
+    /// assert-the-difference test, not just this comment:</para>
     /// <para>• NOT attempt NUMBERING (the <c>AttemptNumber</c> counts in DeliveryService).
     /// Numbering counts attempts EVER — ascending across requeues (see
     /// <see cref="AttemptNumber"/>) — so it keeps only the <see cref="StatusDispatching"/>

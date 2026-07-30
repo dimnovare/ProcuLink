@@ -1977,8 +1977,8 @@ public sealed class OrdersController : ControllerBase
         // parked this order) stays open forever, even though the operator just confirmed the
         // supplier received it. Called AFTER the save above commits: reconcile reads the order's
         // CURRENT status back from the tracked row, so it must see 'delivered', not the
-        // 'delivery_unconfirmed' this write just replaced. Mirrors WebhookIngressController's
-        // SafeReconcileExceptionsAsync for the same delivered transition arriving via callback.
+        // 'delivery_unconfirmed' this write just replaced. Same contract as
+        // OrderServiceShared.SafeReconcileExceptionsAsync for the same delivered transition.
         await SafeReconcileExceptionsAsync(orgId, id, ct);
 
         _logger.LogInformation(
@@ -1995,7 +1995,7 @@ public sealed class OrdersController : ControllerBase
     /// reconcile error must not turn the operator's SUCCESSFUL confirmation into a 500 — the
     /// operator did the one correct thing (confirmed with the supplier), and an observability-surface
     /// fault must not be allowed to contradict that. Same contract as
-    /// WebhookIngressController's private helper of the same name / OrderServiceShared.SafeReconcileExceptionsAsync.
+    /// OrderServiceShared.SafeReconcileExceptionsAsync.
     /// </summary>
     private async Task SafeReconcileExceptionsAsync(Guid orgId, Guid orderId, CancellationToken ct)
     {

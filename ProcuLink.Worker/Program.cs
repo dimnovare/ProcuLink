@@ -320,16 +320,11 @@ if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
 else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
 
-// ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
-// Mirrors API/Program.cs lines 270-272. Currently used only by API controllers,
-// but registered here too so future background jobs in this dep graph
-// (e.g. retry queue, ACK round-trip) can resolve them without a second DI fix.
-// IDistributedCache for HmacWebhookVerifier nonce replay store.
-// MemoryDistributedCache is single-instance; swap for Redis when horizontal scaling is needed:
-//   builder.Services.AddStackExchangeRedisCache(o => o.Configuration = config["Redis:ConnectionString"]);
-builder.Services.AddDistributedMemoryCache();
+// ── Phase 6: smart format auto-detect ─────────────────────────────────────
+// Mirrors API/Program.cs. Currently used only by API controllers, but registered
+// here too so future background jobs in this dep graph can resolve it without a
+// second DI fix.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier, ProcuLink.Infrastructure.Services.Webhooks.HmacWebhookVerifier>();
 
 builder.Services.AddScoped<EmailPollingJob>();
 builder.Services.AddScoped<EmailPollOrgJob>();
