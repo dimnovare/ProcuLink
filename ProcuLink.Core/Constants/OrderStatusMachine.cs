@@ -95,7 +95,25 @@ public static class OrderStatusMachine
             // dead_letter → delivery_failed: an ops requeue that fails again.
             // → delivered is GONE (WP-09) — same reason as delivery_failed above.
             [DeliveryDeadLetter] = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
-            [RejectedBySupplier] = Set(),
+            // rejected_by_supplier is a CORRECTION LOOP, not an ending (WP-19). It used to have no
+            // successors at all, and DeliveryService routed every 400–499 into it — so an expired
+            // API key, a moved endpoint or a rate limit parked a deliverable PO where nothing in
+            // the product could move it. The classification split fixed WHICH orders arrive here;
+            // these edges fix what an operator can do once one has.
+            //
+            // The exits are the two ways to produce a CORRECTED document. Re-sending the refused
+            // bytes is deliberately NOT one of them — the supplier read them and said no — so no
+            // delivery claim set admits this status and → delivering stays impossible.
+            //   → pending_review / ready: OrderResolutionService.ResolveAsync recomputes the status
+            //     from the lines with NO from-status guard, so correcting the line or header the
+            //     supplier named already moves the order out. That writer PREDATES this packet: the
+            //     edge was live in production while this map called the status terminal, which is
+            //     part of how the dead end read as intentional.
+            //   → transforming: the transform claim admits rejected_by_supplier
+            //     (ClaimableForTransformFrom), exactly as it admits transform_failed — the order
+            //     holds no artifact anyone may ship, and re-transforming with the corrected mapping
+            //     is the cure.
+            [RejectedBySupplier] = Set(PendingReview, Ready, Transforming),
             [Failed]             = Set(),
             // transform_failed is a FAILURE state, not a terminal one — unlike 'failed' (a bad source
             // file: recovery is a new order row), a failed transform holds a perfectly good order whose
@@ -119,6 +137,41 @@ public static class OrderStatusMachine
         Transitions.TryGetValue(from, out var next) ? next : EmptySet;
 
     /// <summary>
+    /// The statuses that are terminal BY DECLARATION — an order that reaches one is finished, and
+    /// the product deliberately owes the operator no way out of it.
+    ///
+    /// <para><b>Declared, never derived — that distinction is the whole point.</b>
+    /// <see cref="IsTerminal"/> computes terminality FROM an empty edge set, so using it to justify
+    /// an empty edge set is circular, and that circle is exactly how
+    /// <c>rejected_by_supplier</c> became an unintended dead end: <c>DeliveryService</c> routed
+    /// every 400–499 there, the map gave it no successors, <see cref="RedeliverableFrom"/> excluded
+    /// it, and each of those facts was justified by the others. An expired API key (401) or a moved
+    /// endpoint (404) then parked a perfectly good PO in a state no control in the product could
+    /// move — a database edit was the only recourse. Splitting this set out of the derivation is
+    /// what lets <c>OrderStatusMachineTests.NoNonTerminalStatus_IsADeadEnd</c> ask the question at
+    /// all: "does every status the product does NOT call finished have a way out?"</para>
+    ///
+    /// <para><c>failed</c> is the only member, and it earns it: a bad SOURCE FILE cannot be fixed
+    /// in place. <c>ParseOrderJob</c> refuses to re-drive it and <c>OrdersController.Transform</c>
+    /// answers "Upload a corrected file before transforming" — recovery is a NEW order row, which
+    /// is a real exit, just not one that runs through this order. Adding a member here is a product
+    /// decision ("this order is over"), not a way to silence the invariant.</para>
+    ///
+    /// <para><b>This set is ENFORCED, not merely asserted.</b> Those two refusals were the whole
+    /// justification for a while, and they left a third writer out: <c>OrderResolutionService</c>
+    /// recomputed the status from the lines with no from-status check on every one of its paths, and
+    /// a failed source file leaves NO lines — so <c>Lines.Any(NeedsReview)</c> over an empty
+    /// collection landed on <c>ready</c>, and a header-only
+    /// <c>POST /api/orders/{id}/resolve {"poNumber":"X"}</c> walked a failed order back into the
+    /// pipeline. Marking one rejected was worse: <c>rejected_by_supplier</c> has exits (WP-19), so it
+    /// laundered the order past any guard on resolve alone. All three writers now derive their
+    /// refusal from THIS set (<c>OrderResolutionService.IsFinished</c>), which is what makes the
+    /// declaration true rather than aspirational — and what stops the next writer from quietly
+    /// contradicting it.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> DeclaredTerminal = Set(Failed);
+
+    /// <summary>
     /// A status with no outgoing transitions. <c>delivered</c> is NOT terminal, and the reasons are
     /// all human or local now that the inbound supplier-status webhook is retired (WP-09):
     /// <c>OrderResolutionService.MarkRejectedAsync</c> carries no from-status guard, so an operator
@@ -127,6 +180,11 @@ public static class OrderStatusMachine
     /// <c>delivered → delivery_failed</c> entry survives for DeliveryService's PRE-CLAIM failure
     /// paths (<c>FailMissingConfigAsync</c> / <c>FailBeforeDispatchAsync</c>), which write
     /// <c>delivery_failed</c> with no status check and can race an enqueue-time guard.
+    ///
+    /// <para><b>Do not use this to decide whether a status is ALLOWED to have no exits.</b> It is
+    /// derived from the map, so that reasoning is circular — see
+    /// <see cref="DeclaredTerminal"/>, which states the product's answer independently and is what
+    /// the dead-end invariant checks against.</para>
     /// </summary>
     public static bool IsTerminal(string status) => NextStatuses(status).Count == 0;
 
@@ -239,6 +297,53 @@ public static class OrderStatusMachine
     /// </summary>
     public static readonly IReadOnlySet<string> RetryableFrom =
         Set(DeliveryFailed);
+
+    /// <summary>
+    /// <c>OrderTransformService</c>'s atomic transform claim — the statuses it flips to
+    /// <c>transforming</c>. Written TWICE at that call site (a relational <c>ExecuteUpdateAsync</c>
+    /// predicate and its EF-InMemory emulation), which is the same two-copies-of-one-rule shape
+    /// that made the five delivery-claim lists drift apart four times, always silently. Named here
+    /// so both branches read one declaration.
+    ///
+    /// <list type="bullet">
+    /// <item><c>ready</c> — the normal entry.</item>
+    /// <item><c>transforming</c> — a Hangfire retry re-running a crashed attempt.</item>
+    /// <item><c>transform_failed</c> — the recovery door after a broken template/mapping is fixed.
+    ///   It holds NO artifact, so nothing stale can be re-shipped.</item>
+    /// <item><c>rejected_by_supplier</c> — the SAME recovery door for the other kind of correction
+    ///   (WP-19). A genuine business rejection means the supplier read the document and refused it;
+    ///   the cure is a corrected document, and re-transforming is how one is produced. Its stored
+    ///   artifact can never be re-shipped in place — no delivery claim set admits the status — so
+    ///   admitting it here cannot duplicate a send. Without this the status had no exit at all.</item>
+    /// </list>
+    ///
+    /// <para>Everything PAST transform (<c>ready_to_deliver</c> and beyond) must stay out: claiming
+    /// one would upload a duplicate artifact and re-enqueue delivery, double-sending the same PO. A
+    /// mapping edit resets such an order to <c>ready</c> first (the MV-1 edges).</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> ClaimableForTransformFrom =
+        Set(Ready, Transforming, TransformFailed, RejectedBySupplier);
+
+    /// <summary>
+    /// <c>OrdersController.Transform</c>'s admission guard — the statuses the ENDPOINT claims, and
+    /// the <see cref="RetryableFrom"/> analogue for the transform leg. Its own comment already
+    /// described itself as "kept in lockstep with the transform claim in OrderTransformService",
+    /// which is the sentence a hand-written literal writes just before it drifts.
+    ///
+    /// <para>It differs from <see cref="ClaimableForTransformFrom"/> by exactly
+    /// <c>transforming</c>, and that delta is a product decision, not an oversight: the SERVICE
+    /// claim admits <c>transforming</c> so a Hangfire retry can re-run a crashed attempt, while the
+    /// endpoint answers a second click with 202 "already in progress" instead of starting a
+    /// competing job. Pinned by
+    /// <c>OrderStatusMachineTests.TransformEndpointAndServiceClaims_DifferExactlyBy_Transforming</c>.</para>
+    ///
+    /// <para><b>Invariant:</b> a subset of <see cref="ClaimableForTransformFrom"/>. A status the
+    /// endpoint claims but the service claim refuses is the 52c6431 shape on the transform leg —
+    /// the endpoint commits <c>transforming</c> and enqueues, the job's claim matches 0 rows and
+    /// reports a benign skip, and the order sits in <c>transforming</c> with no artifact.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> TransformableFrom =
+        Set(Ready, TransformFailed, RejectedBySupplier);
 
     /// <summary>
     /// <c>OrdersController.MarkDelivered</c>'s admission guard — the ONLY statuses from which a

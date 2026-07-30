@@ -43,8 +43,22 @@ public sealed class StrandedFailedDeliveryDetectionService : IStrandedFailedDeli
         // is preserved because each order, enqueue, and audit event carries that order's own OrgId.
         //
         // Every eligibility filter is pushed INTO the query so the database excludes the orders that
-        // legitimately rest in delivery_failed (a supplier rejection lands in rejected_by_supplier, a
-        // dead order in delivery_dead_letter — neither matches this status filter). We recover ONLY:
+        // must not be re-driven: a dead order rests in delivery_dead_letter and a business rejection
+        // in rejected_by_supplier, and neither matches this status filter.
+        //
+        // What delivery_failed HOLDS changed in WP-19, and this comment used to describe the world
+        // before it. It read "a supplier rejection lands in rejected_by_supplier", which was offered
+        // as the reason delivery_failed contains only stranded orders. That is no longer true and the
+        // conclusion never followed from it anyway: 401, 403, 404, 408, 429 and a genuinely bare 400
+        // now rest here BY DESIGN — they are refusals of the REQUEST, not of the order, and putting
+        // them somewhere retryable is the entire point of the split. So this sweep re-drives them
+        // too, and that is correct rather than incidental: a rotated credential or a moved endpoint
+        // is exactly the case where a later attempt can succeed where the first three did not.
+        //
+        // It is bounded by the same cap as every other retry path — the CountsAgainstCap subquery
+        // below — so an order the backoff queue already exhausted is never picked up here, and a
+        // supplier whose endpoint is simply gone gets one more attempt, not an endless supply.
+        // We recover ONLY:
         //   • delivery_failed orders aged past the threshold. The threshold MUST exceed the maximum
         //     retry backoff (the recurring job sets 3h vs the {30,60,120}-min schedule), so a
         //     legitimately-scheduled retry — which fires within minutes and moves the order out of

@@ -40,6 +40,13 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
     // most likely lands a duplicate email.
     public ResendSafety ResendSafety => ResendSafety.Unsafe;
 
+    // No HTTP status codes exist on this channel at all — every DeliveryResult it returns carries a
+    // null ResponseCode, so the classification never reaches its 400 branch and there is no supplier
+    // reason to capture. Declared explicitly rather than inherited: the whole point of the capability
+    // is that a dispatcher states what it can see, and "nothing, because there is nothing to see" is
+    // an answer, not an omission.
+    public bool CapturesSupplierResponseBody => false;
+
     public SmtpDeliveryDispatcher(ILogger<SmtpDeliveryDispatcher> logger, OutboundRequestGuard guard)
     {
         _logger = logger;

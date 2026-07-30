@@ -12,8 +12,9 @@ namespace ProcuLink.Infrastructure.Jobs;
 /// attempts the order is moved to <c>delivery_dead_letter</c> and is no longer retried.
 ///
 /// <para>
-/// <b>Automatic retry queue:</b> when a retry fails for a transient reason (5xx / network —
-/// not an explicit 4xx supplier rejection) and attempts remain below the cap, the job
+/// <b>Automatic retry queue:</b> when a retry fails for any reason the supplier did not attribute
+/// to the ORDER (5xx, network, or a 4xx that refuses the REQUEST — bad credentials, moved endpoint,
+/// rate limit) and attempts remain below the cap, the job
 /// <see cref="BackgroundJob.Schedule(System.Linq.Expressions.Expression{Func{System.Threading.Tasks.Task}}, TimeSpan)">schedules</see>
 /// the next attempt after the configured exponential backoff (~30 → 60 → 120 min). The
 /// attempt-count guard inside <c>RetryDeliveryAsync</c> makes the whole chain idempotent:
@@ -27,7 +28,7 @@ namespace ProcuLink.Infrastructure.Jobs;
 /// unbounded ~30-min loop, not a retry. A <see cref="DeliveryOutcome.ClaimLost"/> result also wrote
 /// no attempt row, but it MUST still be rescheduled: it is the only thing that carries a crashed
 /// holder's order past the reclaim window (see <c>CrashedHolderRecoveryCompositionPostgresTests</c>).
-/// So the queue stops on: delivered, a 4xx supplier rejection, the attempt cap, and NotRetryable.
+/// So the queue stops on: delivered, a genuine BUSINESS rejection, the attempt cap, and NotRetryable.
 /// </para>
 /// </summary>
 public class RetryDeliveryJob
@@ -104,10 +105,11 @@ public class RetryDeliveryJob
         // the cap has been reached. RetryDeliveryAsync has just persisted this attempt.
         var attemptsMade = await _delivery.CountDeliveryAttemptsAsync(organisationId, orderId, ct);
 
-        if (IsSupplierRejection(result.ResponseCode))
+        if (IsBusinessRejection(result))
         {
-            // 4xx: the supplier received and explicitly refused the payload. Retrying the same
-            // bytes will not help — stop the automatic queue and leave it for operator review.
+            // The supplier READ the document and refused it (422, or a 400 carrying their reason).
+            // Retrying the same bytes cannot help — stop the queue; the cure is a CORRECTED
+            // document, which the operator drives via resolve / re-transform.
             _logger.LogWarning(
                 "RetryDeliveryJob: order {OrderId} rejected by supplier (HTTP {Code}); not rescheduling.",
                 orderId, result.ResponseCode);
@@ -126,15 +128,25 @@ public class RetryDeliveryJob
             return;
         }
 
-        var delay = _options.BackoffFor(attemptsMade);
+        // Jittered, and never sooner than a Retry-After the supplier sent — the burst-breaking half
+        // of the backoff. See DeliveryReliabilityOptions.NextRetryDelay for why a fixed schedule
+        // re-creates the thundering herd that caused the failure.
+        var delay = _options.NextRetryDelay(attemptsMade, result.RetryAfter, Random.Shared.NextDouble());
         ScheduleRetry(_jobs, orderId, organisationId, delay);
         _logger.LogWarning(
             "RetryDeliveryJob: order {OrderId} delivery failed ({Error}); scheduled retry #{Next} in {Delay}.",
             orderId, result.ErrorMessage, attemptsMade + 1, delay);
     }
 
-    private static bool IsSupplierRejection(int? responseCode) =>
-        responseCode is >= 400 and <= 499;
+    /// <summary>
+    /// Read `responseCode is >= 400 and <= 499` until WP-19, which is how an expired API key, a
+    /// moved endpoint or a rate limit abandoned an order the queue could still have delivered — in
+    /// a status (<c>rejected_by_supplier</c>) that had no exit either. The predicate now comes from
+    /// the one table, shared with <c>DeliveryService</c>'s status decision and
+    /// <c>DeliverOrderJob</c>'s identical first-failure gate, so the three cannot disagree.
+    /// </summary>
+    private static bool IsBusinessRejection(DeliveryResult result) =>
+        SupplierResponseClassification.SuppressesAutomaticRetry(result);
 
     /// <summary>Enqueue an immediate operator-triggered retry.</summary>
     public static void Enqueue(IBackgroundJobClient jobs, Guid orderId, Guid organisationId)

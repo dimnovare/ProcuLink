@@ -27,6 +27,12 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
     // so this is best-effort, not a guarantee — re-drive, and document the residual.
     public ResendSafety ResendSafety => ResendSafety.BestEffort;
 
+    // Reads the response body on every non-2xx and passes it through verbatim, so a blank
+    // ResponseBody here is real evidence that the endpoint returned nothing — which is what makes
+    // the bare-400 rule meaningful on this channel. This was the ONLY dispatcher for which that was
+    // true before WP-19's follow-up.
+    public bool CapturesSupplierResponseBody => true;
+
     public HttpDeliveryDispatcher(
         IHttpClientFactory httpClientFactory,
         OutboundRequestGuard guard,
@@ -147,8 +153,13 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
             return response.IsSuccessStatusCode
                 ? new DeliveryResult(true, null, code)
                 // Pass the full (DeliveryService-bounded) body as ResponseBody for rejection capture,
-                // while ErrorMessage stays a short human-readable summary.
-                : new DeliveryResult(false, BuildFailureMessage(code, body), code, ResponseBody: NullIfBlank(body));
+                // while ErrorMessage stays a short human-readable summary. Retry-After is the
+                // supplier's own back-pressure and is honoured as a FLOOR on the next backoff step.
+                : new DeliveryResult(
+                    false, BuildFailureMessage(code, body), code,
+                    ResponseBody: NullIfBlank(body),
+                    SupplierReasonObservable: CapturesSupplierResponseBody,
+                    RetryAfter: RetryAfterHeader.Read(response.Headers, DateTimeOffset.UtcNow));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

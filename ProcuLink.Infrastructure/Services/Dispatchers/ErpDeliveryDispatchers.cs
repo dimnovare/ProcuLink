@@ -38,6 +38,14 @@ public abstract class ErpDeliveryDispatcherBase : IDeliveryDispatcher
     // or lookup API. A re-send after an unknown outcome creates a DUPLICATE ERP order.
     public ResendSafety ResendSafety => ResendSafety.Unsafe;
 
+    // The connector reads the ERP's response body on every non-2xx and now carries it verbatim, so a
+    // blank ResponseBody here really does mean "the endpoint said nothing" — which is what
+    // SupplierResponseClassification's 400 split requires. It was NOT true before: this dispatcher
+    // returned only (Success, ErrorMessage, ResponseCode), so a 400 naming a bad buyer code was
+    // indistinguishable from a bare one, classified retryable, and re-POSTed to an endpoint that
+    // cannot de-duplicate.
+    public bool CapturesSupplierResponseBody => true;
+
     public async Task<DeliveryResult> DispatchAsync(
         byte[] content,
         string fileName,
@@ -60,6 +68,12 @@ public abstract class ErpDeliveryDispatcherBase : IDeliveryDispatcher
             new ErpDeliveryRequest(content, fileName, contentType, config, decryptedCredentials),
             ct);
 
-        return new DeliveryResult(result.Success, result.ErrorMessage, result.ResponseCode);
+        return new DeliveryResult(
+            result.Success,
+            result.ErrorMessage,
+            result.ResponseCode,
+            ResponseBody: result.ResponseBody,
+            SupplierReasonObservable: CapturesSupplierResponseBody,
+            RetryAfter: result.RetryAfter);
     }
 }

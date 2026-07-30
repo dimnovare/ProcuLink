@@ -38,6 +38,12 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
     // most likely lands a duplicate email.
     public ResendSafety ResendSafety => ResendSafety.Unsafe;
 
+    // The provider's own response payload is carried verbatim on every failure, so a blank
+    // ResponseBody here means the provider really did say nothing. Before WP-19 this dispatcher
+    // returned only (false, result.Error, result.StatusCode) — so on the CANONICAL, live outbound
+    // channel every 400 read as unexplained and went back into the automatic re-send path.
+    public bool CapturesSupplierResponseBody => true;
+
     public EmailApiDeliveryDispatcher(IEmailApiClient email, ILogger<EmailApiDeliveryDispatcher> logger)
     {
         _email = email;
@@ -113,7 +119,13 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
         var result = await _email.SendAsync(message, ct);
         return result.Success
             ? new DeliveryResult(true, null, result.StatusCode)
-            : new DeliveryResult(false, result.Error ?? "Email delivery failed.", result.StatusCode);
+            : new DeliveryResult(
+                false,
+                result.Error ?? "Email delivery failed.",
+                result.StatusCode,
+                ResponseBody: result.ResponseBody,
+                SupplierReasonObservable: CapturesSupplierResponseBody,
+                RetryAfter: result.RetryAfter);
     }
 
     /// <summary>

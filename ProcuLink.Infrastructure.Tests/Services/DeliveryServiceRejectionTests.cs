@@ -166,6 +166,175 @@ public class DeliveryServiceRejectionTests
         order.SlaBreached.Should().BeFalse();
     }
 
+    // ── WP-19: the 4xx split ──────────────────────────────────────────────────
+    //
+    // Every 400–499 used to become rejected_by_supplier — a status with no outgoing transitions,
+    // excluded from Redeliver, abandoned by the retry queue. An expired API key (401), a moved
+    // endpoint (404) or a rate limit (429) therefore dead-ended a perfectly deliverable PO, and a
+    // database edit was the only way out. These are the codes that must NOT do that any more.
+
+    // The second argument is WHERE the copy must send the operator, and it is not the same place
+    // for all five. 401/403/404 are cured by a configuration change, so the copy has to name the
+    // screen. 408 and 429 are NOT: nothing is wrong with the settings, and sending an operator to
+    // go audit them after a rate limit is a wrong answer delivered confidently. Asserting one
+    // blanket phrase across all five would have forced exactly that copy — this split is the
+    // difference between "names the likely cause" and "says something".
+    [Theory]
+    [InlineData(401, "delivery settings")]     // credentials expired or rotated
+    [InlineData(403, "delivery settings")]     // credentials fine, this account may not post orders here
+    [InlineData(404, "delivery settings")]     // the endpoint moved
+    [InlineData(408, "keeps trying on its own")] // the endpoint did not answer in time
+    [InlineData(429, "keeps trying on its own")] // rate limited
+    public async Task DispatchArtifactAsync_TransportRefusal_LandsInDeliveryFailedWithCopyNamingTheCause(
+        int code, string expectedNextStep)
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(
+                false, $"HTTP {code}: supplier endpoint returned an error.", code)),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.DeliveryFailed,
+            $"HTTP {code} is the supplier's SYSTEM refusing the request, not a judgement on the " +
+            "order — rejected_by_supplier has no way out, so landing here is what keeps Retry, " +
+            "Send again, the backoff queue and the dead-letter available to the operator");
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.ResponseCode.Should().Be(code);
+        attempt.RejectionReason.Should().BeNull(
+            "the supplier rejected nothing — recording a rejection reason would invent one");
+        attempt.ErrorMessage.Should().NotBeNullOrWhiteSpace();
+        attempt.ErrorMessage.Should().Contain(code.ToString(),
+            "the copy must name the actual response so it can be matched against the supplier's logs");
+        attempt.ErrorMessage.Should().Contain(expectedNextStep,
+            "the operator must be told what happens next — and for a configuration fault, WHERE the " +
+            "fix is made");
+
+        // The order still owes a delivery, so its SLA window must keep ticking. Only a settled
+        // outcome (delivered, or a genuine rejection) closes it — a transport refusal that the
+        // queue will retry is exactly the case the sweep exists to notice.
+        order.DeliveryDueAt.Should().NotBeNull();
+        order.SlaBreached.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DispatchArtifactAsync_400WithASupplierReason_IsAGenuineRejection()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        const string body = "{\"error\":\"unknown buyer code BC-9\"}";
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(
+                false, "HTTP 400: supplier endpoint returned an error. Response summary: " + body,
+                400, ResponseBody: body)),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.RejectedBySupplier,
+            "a 400 carrying a reason IS the supplier telling us what is wrong with the document");
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.RejectionReason.Should().NotBeNullOrWhiteSpace();
+        attempt.ResponseBody.Should().Contain("unknown buyer code BC-9");
+
+        // A settled outcome closes the SLA window — mirrors the 422 case above.
+        order.DeliveryDueAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DispatchArtifactAsync_400WithNoSupplierReason_IsNotARejection()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        // A bare 400 is indistinguishable from a bad URL, a malformed header, or a proxy sitting in
+        // front of the supplier. Calling that a business rejection is the dead end in miniature.
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(
+                false, "HTTP 400: supplier endpoint returned an error.", 400)),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.DeliveryFailed);
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.RejectionReason.Should().BeNull();
+        attempt.ErrorMessage.Should().Contain("delivery settings");
+    }
+
+    /// <summary>
+    /// The same bare 400 from a channel that CANNOT read the response body, end-to-end through
+    /// <c>DeliveryService</c> — which is what proves the stamp works, not just the pure table.
+    ///
+    /// <para><b>The defect.</b> The test above asserts a property of the HTTP dispatcher: it read
+    /// the response and there was nothing in it. Three other dispatchers never read one at all —
+    /// <c>ErpDeliveryDispatcherBase</c> returned <c>(Success, ErrorMessage, ResponseCode)</c> and
+    /// <c>EmailApiDeliveryDispatcher</c> the same — so their 400s took this branch by DEFAULT and
+    /// were re-dispatched to the live endpoint up to the cap. Email is the canonical outbound path,
+    /// live on production; both ERP channels declare <c>ResendSafety.Unsafe</c>.</para>
+    ///
+    /// <para>All three capture the body now, so this shape has no production dispatcher today. It is
+    /// pinned anyway, because the next dispatcher inherits <c>false</c> and must land here.</para>
+    /// </summary>
+    [Fact]
+    public async Task DispatchArtifactAsync_BareBadRequest_FromAChannelThatCannotSeeTheBody_IsNotRetried()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(
+            db,
+            new FakeDispatcher(
+                new DeliveryResult(false, "HTTP 400: endpoint returned an error.", 400),
+                capturesSupplierResponseBody: false),
+            encryption);
+
+        var result = await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.RejectedBySupplier,
+            "we cannot show the supplier said nothing, so the safe reading is that the refusal was " +
+            "theirs: no further requests, and an order in a status that (since WP-19) an operator " +
+            "can resolve or re-transform out of");
+
+        SupplierResponseClassification.SuppressesAutomaticRetry(result).Should().BeTrue(
+            "the status decision and the retry gate are ONE decision — a status the delivery claim " +
+            "refuses but the queue keeps retrying burns the backoff budget on 0 claimed rows");
+
+        result.SupplierReasonObservable.Should().BeFalse(
+            "DeliveryService must stamp the dispatcher's capability onto the result it returns, or " +
+            "the two jobs read a different answer than the status decision did");
+    }
+
     [Fact]
     public async Task DispatchArtifactAsync_5xxResponse_SetsDeliveryFailedAndLeavesRejectionReasonNull()
     {
@@ -230,12 +399,25 @@ public class DeliveryServiceRejectionTests
             => Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Stands in for the <c>http</c> dispatcher, which DOES read the supplier's response body — so
+    /// it must say so, exactly as the real one does. <c>DeliveryService</c> stamps
+    /// <c>SupplierReasonObservable</c> onto the result from this declaration, and the bare-400 split
+    /// turns on it: a fake that stayed silent would quietly turn every 400 in this fixture into a
+    /// business rejection, which is the RIGHT answer for a channel that cannot see the body and the
+    /// wrong one for the channel this fake represents.
+    /// </summary>
     private sealed class FakeDispatcher : IDeliveryDispatcher
     {
         private readonly DeliveryResult _result;
         public string Protocol => "http";
+        public bool CapturesSupplierResponseBody { get; }
 
-        public FakeDispatcher(DeliveryResult result) => _result = result;
+        public FakeDispatcher(DeliveryResult result, bool capturesSupplierResponseBody = true)
+        {
+            _result = result;
+            CapturesSupplierResponseBody = capturesSupplierResponseBody;
+        }
 
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
