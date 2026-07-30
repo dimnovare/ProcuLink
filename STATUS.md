@@ -11,6 +11,54 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-30) — Wave 1 WP-09 column drop is BLOCKED, not forgotten (no code shipped)
+
+- **The contract half of `organisations.webhook_secret_encrypted` was NOT written.** Its
+  precondition — BE [PR #75](https://github.com/dimnovare/ProcuLink/pull/75)
+  (`wave1/backend-retirements`, the EXPAND half) merged **and** deployed to both Railway services
+  — is not met. Verified rather than assumed, and re-verified after `origin/main` moved under the
+  session (`cd7feba` → `34ce1e1`, #81):
+  - **#75 is OPEN and still a DRAFT.** Its CI is green (run `30545346830`), so the block is the
+    draft flag and the merge decision, not a failing build.
+  - **The expand migration `20260730094527_Wave1RetireDeadSubsystems` is absent from `main`.**
+    It exists only on the PR branch. (Do not be fooled by `20260531090840_Wave1SecurityIndexes`,
+    which is unrelated and from May.)
+  - **Both services run `cd7feba`** — API `ProcuLink` and Worker `aware-amazement`, both
+    `SUCCESS`, deployed within 1s of each other. Neither carries #75.
+- **Dropping the column today would break production immediately — not merely during a deploy
+  window.** Because the expand half never landed, the live build still *maps* the property:
+  `Organisation.WebhookSecretEncrypted` is present in `ProcuLink.Core/Entities/Organisation.cs`
+  **and** in the current `ProcuLinkDbContextModelSnapshot.cs` on `main`. EF therefore emits
+  `o.webhook_secret_encrypted` on every non-projected `Organisation` query, so the drop yields
+  Npgsql `42703` on `EmailPollOrgJob` → `HasFeatureAsync` → `StripeBillingService.LoadOrgAsync`
+  on **every IMAP poll cycle**. The Worker never migrates and is mandatory — nothing parses or
+  delivers without it.
+- **`Wave1ColumnDropStaysDeferredTests.cs` was left alone.** It lives only on the #75 branch, so
+  there was nothing on `main` to delete. Deleting it is the deliberate act of contracting and
+  belongs to the same PR as the drop migration.
+- **How to verify the precondition next time** (one read-only call; the Railway MCP server is
+  unauthorized in non-interactive sessions, but the `railway` CLI is installed and logged in):
+
+  ```bash
+  railway status --json | python -c "import json,sys; d=json.load(sys.stdin); [print(n['node']['serviceName'], ((n['node'].get('latestDeployment') or {}).get('meta') or {}).get('commitHash','?')[:12]) for e in d['environments']['edges'] if e['node']['name']=='production' for n in e['node']['serviceInstances']['edges']]"
+  ```
+
+  Both services must print the **same** hash, and that commit must contain the unmap. The
+  load-bearing proof is `git grep WebhookSecretEncrypted <sha> -- ProcuLink.Core/Entities/Organisation.cs
+  ProcuLink.Infrastructure/Migrations/ProcuLinkDbContextModelSnapshot.cs` returning nothing;
+  historical `*.Designer.cs` snapshots always still match and read as false positives.
+- **Housekeeping done:** the two scratch databases left by the WP-09 verification work,
+  `plk_d1_probe` (54 tables) and `plk_d4_probe` (56 tables), were dropped from the shared
+  `proculink-postgres` dev container after confirming zero active connections. No container was
+  removed or pruned — the daemon is shared, and `proculink_dev` plus another session's
+  `proculink_wp12_*` were left untouched.
+- **Still to do:** un-draft and merge #75 → let both services deploy it → re-run the check above →
+  only then the hand-written drop migration (`dotnet ef migrations add` generates nothing here,
+  since the model already omits the property, so the model snapshot must stay unchanged) plus the
+  deletion of `Wave1ColumnDropStaysDeferredTests.cs`. **Merging #75 also executes
+  `DROP TABLE output_templates` and `DROP TABLE validation_rules` against production at the next
+  API startup — irreversible, so it is a founder call, not an agent one.**
+
 ## Snapshot (2026-07-27) — manufacturer part number is a real matching key (BE PR, OPEN)
 
 - **`feat/manufacturer-part-matching`, PR open, not merged.** Two real customer POs (sanitised,
