@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure.Services.Dispatchers;
 using ProcuLink.Infrastructure.Services.Security;
+using ProcuLink.TestSupport;
 using Xunit;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Dispatchers;
@@ -31,9 +32,6 @@ namespace ProcuLink.Infrastructure.Tests.Services.Dispatchers;
 [Trait("Category", "LiveEndpoint")]
 public class LiveEndpointDeliveryTests
 {
-    private static bool Enabled =>
-        Environment.GetEnvironmentVariable("PROCULINK_LIVE_ENDPOINT_TESTS") == "1";
-
     private static string Env(string k) => Environment.GetEnvironmentVariable(k) ?? "";
 
     // A real factory — returns a live HttpClient (no mocked handler).
@@ -67,12 +65,12 @@ public class LiveEndpointDeliveryTests
     };
 
     // ── HTTP + OAuth2 client-credentials, fired at a real public Worker ───────
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires a live HTTP endpoint that issues OAuth2 client-credentials tokens",
+        LiveTestEnvironment.EndpointOptIn, "PROCULINK_LIVE_HTTP_BASE")]
     public async Task Live_Http_OAuth2_RealTokenFetchAndBearerDelivery()
     {
-        if (!Enabled) return;
         var baseUrl = Env("PROCULINK_LIVE_HTTP_BASE").TrimEnd('/');
-        baseUrl.Should().NotBeEmpty("PROCULINK_LIVE_HTTP_BASE must be set");
 
         var dispatcher = new HttpDeliveryDispatcher(
             new RealHttpClientFactory(), Guard(), NullLogger<HttpDeliveryDispatcher>.Instance);
@@ -97,12 +95,12 @@ public class LiveEndpointDeliveryTests
     }
 
     // ── Plain HTTP POST (no auth), fired at a real public Worker ──────────────
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires a live HTTP endpoint that accepts an unauthenticated POST",
+        LiveTestEnvironment.EndpointOptIn, "PROCULINK_LIVE_HTTP_BASE")]
     public async Task Live_Http_PlainPost_RealDelivery()
     {
-        if (!Enabled) return;
         var baseUrl = Env("PROCULINK_LIVE_HTTP_BASE").TrimEnd('/');
-        baseUrl.Should().NotBeEmpty("PROCULINK_LIVE_HTTP_BASE must be set");
 
         var dispatcher = new HttpDeliveryDispatcher(
             new RealHttpClientFactory(), Guard(), NullLogger<HttpDeliveryDispatcher>.Instance);
@@ -119,12 +117,13 @@ public class LiveEndpointDeliveryTests
     }
 
     // ── SMTP delivery, fired at a real mailbox (Ethereal) ─────────────────────
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires a live SMTP relay and a mailbox to deliver into",
+        LiveTestEnvironment.EndpointOptIn,
+        "PROCULINK_LIVE_SMTP_HOST", "PROCULINK_LIVE_SMTP_FROM", "PROCULINK_LIVE_SMTP_TO")]
     public async Task Live_Smtp_RealSendToMailbox()
     {
-        if (!Enabled) return;
         var host = Env("PROCULINK_LIVE_SMTP_HOST");
-        host.Should().NotBeEmpty("PROCULINK_LIVE_SMTP_HOST must be set");
 
         var dispatcher = new SmtpDeliveryDispatcher(NullLogger<SmtpDeliveryDispatcher>.Instance, Guard());
 
@@ -162,12 +161,13 @@ public class LiveEndpointDeliveryTests
     }
 
     // ── SFTP delivery, fired at a real SFTP server ────────────────────────────
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires a live SFTP server to upload into",
+        LiveTestEnvironment.EndpointOptIn,
+        "PROCULINK_LIVE_SFTP_HOST", "PROCULINK_LIVE_SFTP_USER", "PROCULINK_LIVE_SFTP_PASS")]
     public async Task Live_Sftp_RealUpload()
     {
-        if (!Enabled) return;
         var host = Env("PROCULINK_LIVE_SFTP_HOST");
-        host.Should().NotBeEmpty("PROCULINK_LIVE_SFTP_HOST must be set");
 
         var dispatcher = new SftpDeliveryDispatcher(NullLogger<SftpDeliveryDispatcher>.Instance, Guard());
 

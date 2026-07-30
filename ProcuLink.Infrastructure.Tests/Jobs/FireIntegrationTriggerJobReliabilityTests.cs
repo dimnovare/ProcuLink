@@ -8,6 +8,7 @@ using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Security;
+using ProcuLink.TestSupport;
 
 namespace ProcuLink.Infrastructure.Tests.Jobs;
 
@@ -285,20 +286,24 @@ public class FireIntegrationTriggerJobReliabilityTests
         sub.FailureCount.Should().Be(2, "two separate logical failures each count exactly once");
     }
 
-    [Fact]
+    /// <summary>
+    /// FAITHFUL lost-update test. The fix (<c>FailureCount = FailureCount + 1</c>) is a RELATIONAL
+    /// guarantee — the InMemory provider cannot translate a relative <c>ExecuteUpdate</c> — so it
+    /// runs against a throwaway database on the local dev Postgres. Both jobs read the same base
+    /// value BEFORE either persists (the classic interleave): a load-modify-save bump persists
+    /// base+1 from BOTH and loses one; the atomic relative UPDATE persists base+2.
+    ///
+    /// <para>Until WP-02 this opened with <c>if (admin is null) return;</c>, so on every machine
+    /// and every CI run without a Postgres on :5435 it reported <b>Passed</b> having proved
+    /// nothing about the concurrency guarantee it exists for. <see cref="LocalPostgresRequiredFact"/>
+    /// turns that into a declared skip with a reason.</para>
+    /// </summary>
+    [LocalPostgresRequiredFact]
     public async Task TwoConcurrentFinalFailures_OnPostgres_IncrementFailureCountByExactlyTwo()
     {
-        // FAITHFUL lost-update test. The fix (FailureCount = FailureCount + 1) is a RELATIONAL
-        // guarantee — the InMemory provider cannot translate a relative ExecuteUpdate — so this runs
-        // against a throwaway Postgres database when one is reachable and skips cleanly otherwise
-        // (e.g. CI without the local dev database). Both jobs read the same base value BEFORE either
-        // persists (the classic interleave): a load-modify-save bump persists base+1 from BOTH and
-        // loses one; the atomic relative UPDATE persists base+2.
-        // Gate on infra: when no local Postgres is reachable (e.g. CI) the test no-ops rather than
-        // failing — the relational atomicity it proves cannot be exercised without a real DB.
-        var admin = await TryOpenPostgresAdminAsync();
-        if (admin is null)
-            return;
+        // The attribute already established that :5435 answers; a failure to connect here is a
+        // real failure, not a reason to go quiet.
+        var admin = await OpenPostgresAdminAsync();
 
         var dbName = $"plk_webhook_{Guid.NewGuid():N}";
         try
@@ -347,19 +352,16 @@ public class FireIntegrationTriggerJobReliabilityTests
         }
     }
 
-    private static async Task<Npgsql.NpgsqlConnection?> TryOpenPostgresAdminAsync()
+    /// <summary>
+    /// Opens the dev Postgres admin connection. Deliberately NOT try/catch-to-null: swallowing the
+    /// connection error is what let this test report Passed without a database. Reachability is
+    /// decided once, up front, by <see cref="LocalPostgresProbe"/>.
+    /// </summary>
+    private static async Task<Npgsql.NpgsqlConnection> OpenPostgresAdminAsync()
     {
-        try
-        {
-            var conn = new Npgsql.NpgsqlConnection(
-                "Host=localhost;Port=5435;Username=postgres;Password=postgres;Database=postgres;Timeout=3");
-            await conn.OpenAsync();
-            return conn;
-        }
-        catch
-        {
-            return null;
-        }
+        var conn = new Npgsql.NpgsqlConnection(LocalPostgresProbe.AdminConnectionString);
+        await conn.OpenAsync();
+        return conn;
     }
 
     private static async Task ExecAsync(Npgsql.NpgsqlConnection conn, string sql)

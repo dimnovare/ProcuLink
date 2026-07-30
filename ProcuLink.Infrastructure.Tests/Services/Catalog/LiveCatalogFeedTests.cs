@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Infrastructure.Services.Catalog;
+using ProcuLink.TestSupport;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Catalog;
 
@@ -19,24 +20,19 @@ namespace ProcuLink.Infrastructure.Tests.Services.Catalog;
 /// </summary>
 public class LiveCatalogFeedTests
 {
-    private static bool Enabled =>
-        Environment.GetEnvironmentVariable("PROCULINK_LIVE_FEED_TESTS") == "1";
-
     private static string? Env(string name) => Environment.GetEnvironmentVariable(name);
 
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires live Logicom QuickConnect credentials",
+        LiveTestEnvironment.FeedOptIn,
+        "LOGICOM_CUSTOMER_ID", "LOGICOM_CONSUMER_KEY", "LOGICOM_CONSUMER_SECRET", "LOGICOM_ACCESS_TOKEN_KEY")]
     public async Task Logicom_FetchesFirstPage_WithRealCredentials()
     {
-        if (!Enabled) return; // opt-in only — no SkippableFact package; return early when unset
-
         var url = Env("LOGICOM_URL") ?? "https://example.invalid/redacted";
         var customerId = Env("LOGICOM_CUSTOMER_ID");
         var consumerKey = Env("LOGICOM_CONSUMER_KEY");
         var consumerSecret = Env("LOGICOM_CONSUMER_SECRET");
         var accessTokenKey = Env("LOGICOM_ACCESS_TOKEN_KEY");
-        if (string.IsNullOrWhiteSpace(customerId) || string.IsNullOrWhiteSpace(consumerKey)
-            || string.IsNullOrWhiteSpace(consumerSecret) || string.IsNullOrWhiteSpace(accessTokenKey))
-            return; // credentials not provided → nothing to verify
 
         var creds = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
             System.Text.Json.JsonSerializer.Serialize(new
