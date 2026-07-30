@@ -90,6 +90,74 @@ return, because those block Wave 4 and WP-15/16 and sit further down the critica
 with 0 results reads as "bad API day" from inside one session — it takes the other session saying "I am
 holding 12 agents" to diagnose it.** If both sessions run wide, coordinate the ceiling.
 
+### 2026-07-30, later still — parallel-execution session: four packets complete
+
+Every PR below is a **draft**, CI-green, and **not merged**. WP-01 remains the only merge.
+
+| Packet | PR | CI | State |
+|---|---|---|---|
+| WP-01 | FE #40 | `30526225189` | 🟢 **merged** `3b0feea` |
+| WP-12 | BE #74 | `30533501611` | 🟡 all 8 refuted defects fixed — green, **fixes not re-gated** |
+| WP-04 FE | FE #41 | `30531502223` | 🟡 built, refuter running |
+| WP-10 | FE #42 | `30532874789` | 🟡 built, refuter running |
+| Wave 1 BE (WP-06/07/09) | BE #75 | — | 🟡 4029 tests / 0 failures — **green-but-ungated** |
+| WP-20 BE | BE #77 | `30533604117` | 🟡 built, ungated |
+| WP-20 FE | FE #43 | `30533574000` | 🟡 built, ungated — **not optional**, see below |
+
+Still in flight: WP-04 BE, WP-14 (both repos), Wave 1 FE, WP-11 (both repos), WP-02 (both repos).
+
+**WP-12 is fixed, and the mutation numbers are the evidence.** Reverting *only*
+`OrderTransformService.cs` to `origin/main`: before the fix round 3 of 11 tests failed; after, **7 of
+11**, and **16 of 33** across all WP-12 tests. All four tests the refuter called vacuous now fail under
+that mutation. The four still passing are correctly passing — promote, round-trip and the golden
+no-tree path do not touch that file. Best structural outcome: the usability predicate is now
+format-aware, so **promote and consumption share one predicate and cannot drift**; that closed D5 and
+D4(b) together rather than as two patches that could diverge.
+
+Still open on #74, flagged not smuggled: the field-by-field preview never threads an `EnvelopeConfig`
+into the cXML/X12 transform, so a previewed `<Credential>` can differ from the delivered one on
+envelope identity. **Predates the branch** — a WS-12 preview gap, not a WP-12 regression.
+
+**WP-20 caught all 11 of its mutations, including the three the earlier attempt left green** (M4 SFTP
+`canOverride:true` hardcoded, M5 `Exists` pre-check dead-coded, M6 FTPS `Overwrite` hardcoded). They
+bite now because `UploadCore` was extracted behind narrow session seams, so tests drive the live upload
+path instead of mocking around it. The acceptance mutation works: a new `OutputFormat` with no table
+row fails with `NotSupportedException: No delivery media type is defined for output format
+'EdifactDesadv'`.
+
+**FE #43 is a hard dependency of BE #77, not a nicety.** `buildConfigObject()` returns a fixed key
+whitelist and the save replaces the whole config object, so without it `overwriteExisting` is destroyed
+the next time an operator saves — the backend fix would silently revert itself in production.
+
+**Overwrite defaults ON**, reversing the packet spec. The spec was wrong: a crash-recovery re-drive must
+be able to repair its own truncated file, and delivery is at-least-once. The clobber is fixed by the
+filename instead. `ResendSafety` stays `Safe` and is now honest — with overwrite off a re-send
+*refuses* rather than duplicating.
+
+### ⚠️ FOUNDER GATE — WP-20 changes what real suppliers receive
+
+SFTP/FTPS filenames become `PO-123-a1b2c3d4.xml` (was `PO-123.dat`). **Any supplier whose pickup script
+globs `*.dat` or matches the PO number exactly stops seeing files.** This is a wire-visible change to
+live delivery, not an internal refactor, and needs a customer conversation before BE #77 merges.
+
+Related, and worth a human sanity check: the agent chose `.cxml` → `.xml` and made the table
+authoritative, on the reasoning "no receiver we integrate with requires `.cxml`". The repo cannot fully
+evidence that claim.
+
+### Green-but-ungated is a real state, not a formality
+
+BE #75 (4029 tests) and BE #77 have **not** been through the adversarial gate; the throttle below
+stopped their refuters launching. Recorded as green-but-ungated rather than cleared. A green suite
+proves nothing broke that a test already covered; it says nothing about what no test covers — which is
+exactly what the gate found six times in WP-12 against a green 1723-test suite.
+
+### Agent-ceiling throttle — in effect
+
+The parallel-execution session is **holding all new agent launches** at the plan-authoring session's
+request, until DB-1/DB-2/DB-6 return. In-flight work continues; only launches are paused. Diagnosis
+correction worth keeping: "7 starts / 0 results" was 4 initial + 3 retries, not 7 failures — the
+retries that died were pre-throttle, and the attempts running after it are healthy.
+
 ### New small packets found in passing — unowned
 
 | Item | Evidence | Options |
