@@ -288,6 +288,45 @@ supplier auto-detection while resolving fine once routed** — the order lands `
 looks like "we do not recognise this supplier" when in fact the codes match. So the WP-14 comparer defect
 has a sibling one layer up, and the class is "two comparers over one column". Both belong in the WP-14 fix.
 
+### 2026-07-30 — design critiques, and an error in this plan's own file references
+
+All three specs came back **buildable-with-fixes**. None is hand-to-an-engineer ready. Each critique
+independently re-verified the spec's citations and recomputed its contrast ratios by hand — DB-1's nine
+pairs and DB-6's fourteen all checked out to two decimals. The forensic halves are sound; the build orders
+are not.
+
+**⚠️ CORRECTION TO THIS PLAN AND TO `AUDIT-2026-07-27.md`: the desktop nav is NOT in `BridgeSidebar.tsx`.**
+`(app)/layout.tsx` removed the sidebar at `md+`. Desktop nav renders from **`BridgeTopbar.tsx`** —
+`useTopNav()` at `:465`, `TopNavLink` at `:410`, rendered at `:857`. `BridgeSidebar` survives only as the
+`< md` drawer. Every reference in the audit and in WP-25/WP-26 that calls `BridgeSidebar.tsx:52-96` "the nav
+registry" is describing the MOBILE DRAWER. Verified first-hand.
+Consequence: DB-1's §11 implementation order names `HubTabs.tsx` and `BridgeSidebar.tsx` and never mentions
+`BridgeTopbar.tsx`. And the topbar's second row exists *because* the code already tried the inline
+arrangement and rejected it — `BridgeTopbar.tsx:845` comment: "they can't fit in the utility row above". A
+spec proposing to inline it is re-proposing something already tried.
+
+**DB-6 — buildable-with-fixes.** Diagnosis fully confirmed (D1, D2, D4, D6, D7, D8, D9 at the stated lines;
+the transform gate really does link `/inbox/{id}` from inside `/inbox/{id}`; `InboxView` really has no
+`useSearchParams`). But its headline fix rests on **three deep links no code reads**:
+`/library/templates?supplierId=` (that page has no `useSearchParams` and the template model has no supplier
+filter at all), `?details=response` (the workshop reads `?tab=`), and `&from={orderId}` (UploadWorkbench
+reads only `supplierId`). It also mutates `isRedeliverable`, whose file and three test files declare it a
+byte-for-byte mirror of the backend guard set; names one artifact three ways in one panel; introduces
+"channel" as a **tenth noun** where shipped copy says "connection"; and stops mid-sentence at 11.10.
+~70% buildable as written.
+
+**DB-1 — buildable-with-fixes.** Best-grounded of the three. §11 stops mid-sentence at step 2, so there is
+no build order for §3–§8 (supplier tabs, `WhatIsThis`, the Setup screen, the 100-row rename table). Cites an
+"Open questions" section that does not exist. Copy quality high; IA thesis sound.
+
+**DB-2 — buildable-with-fixes.**
+
+**WP-26 built and clean.** 7 files, all nav — and it *does* edit `BridgeTopbar.tsx`, so it hit the real
+target despite the spec's misdirection. Needs a rebase: it branched at `214b3f3` and `origin/main` is now
+`1330cce`. Still HELD behind FE #47 per the agreed merge order.
+
+**Merges are landing.** FE `origin/main` is at `1330cce` with #41, #42, #46, #47 and #50 merged.
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
