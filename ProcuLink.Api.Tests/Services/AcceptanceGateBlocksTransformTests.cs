@@ -122,18 +122,107 @@ public sealed class AcceptanceGateBlocksTransformTests
     /// THIRD NEGATIVE CONTROL: an order with no acceptance profile at all is the overwhelming
     /// majority of live traffic. It must be completely unaffected — this feature adds enforcement,
     /// not friction.
+    ///
+    /// <para>Like the two above, this asserts a DIFFERENCE rather than a success. Asserting only
+    /// "the no-profile order transformed" made it not a control at all: deleting the gate outright
+    /// would leave it green, so it could never have detected the thing it was named after. Both runs
+    /// use the identical non-conforming order and the identical rule text; the ONE difference is
+    /// whether that rule is bound to the supplier.</para>
     /// </summary>
     [Fact]
-    public async Task NegativeControl_anOrderWithNoProfile_transformsExactlyAsBefore()
+    public async Task NegativeControl_theProfileIsTheOnlyDifference()
+    {
+        await using var withDb = NewDb();
+        var withSeed = await SeedAsync(withDb, currency: "USD", severity: "error", withProfile: true);
+        var (withSvc, withUploads) = Build(withDb);
+        var gated = await withSvc.TransformAsync(withSeed.OrgId, withSeed.OrderId, OutputFormat.Csv, CancellationToken.None);
+
+        await using var withoutDb = NewDb();
+        var withoutSeed = await SeedAsync(withoutDb, currency: "USD", severity: "error", withProfile: false); // ← the one difference
+        var (withoutSvc, withoutUploads) = Build(withoutDb);
+        var ungated = await withoutSvc.TransformAsync(withoutSeed.OrgId, withoutSeed.OrderId, OutputFormat.Csv, CancellationToken.None);
+
+        Assert.NotEqual(gated.IsSuccess, ungated.IsSuccess);
+
+        Assert.False(gated.IsSuccess);
+        Assert.Equal(0, withUploads());
+
+        Assert.True(ungated.IsSuccess, ungated.Error);
+        Assert.Equal(1, withoutUploads());
+        var status = await withoutDb.PurchaseOrders.AsNoTracking()
+            .Where(o => o.Id == withoutSeed.OrderId).Select(o => o.Status).FirstAsync();
+        Assert.Equal(OrderStatusConstants.ReadyToDeliver, status);
+    }
+
+    // ── The gate itself failing ───────────────────────────────────────────────
+
+    /// <summary>
+    /// A THROW inside the gate must not strand the order. The gate call runs AFTER the order has
+    /// been claimed into <c>transforming</c> and OUTSIDE the try/catch that wraps document
+    /// generation, so a profile-lookup failure (a DB blip, a malformed pin) unwound straight through
+    /// the Hangfire job and left the row sitting in <c>transforming</c> — no artifact, no
+    /// <c>transform_failed</c>, no sentence for the operator, and no sweep that looks for it.
+    ///
+    /// <para>The decision is REFUSE, visibly: a document we could not check against the supplier's
+    /// rules is not one to send. It lands in <c>transform_failed</c> exactly like every other
+    /// terminal failure — counted in ops health, carrying its own plain sentence, and re-claimable —
+    /// so <see cref="AnOrderStrandedByAGateFailure_transformsOnceTheGateRecovers"/> proves the
+    /// refusal is not a dead end either.</para>
+    /// </summary>
+    [Fact]
+    public async Task WhenTheGateThrows_theOrderFailsVisibly_ratherThanStrandingInTransforming()
     {
         await using var db = NewDb();
-        var seed = await SeedAsync(db, currency: "USD", severity: "error", withProfile: false);
-        var (svc, uploads) = Build(db);
+        var seed = await SeedAsync(db, currency: "EUR", severity: "error");   // the rule PASSES; only the gate breaks
+        var (svc, uploads) = Build(db, gate: ThrowingGate());
 
         var result = await svc.TransformAsync(seed.OrgId, seed.OrderId, OutputFormat.Csv, CancellationToken.None);
 
+        Assert.False(result.IsSuccess);
+
+        var status = await db.PurchaseOrders.AsNoTracking()
+            .Where(o => o.Id == seed.OrderId).Select(o => o.Status).FirstAsync();
+        Assert.NotEqual(OrderStatusConstants.Transforming, status);
+        Assert.Equal(OrderStatusConstants.TransformFailed, status);
+
+        // Nothing was generated: refusing on an unreadable answer must not also leave an artifact
+        // behind that a delivery sweep could pick up.
+        Assert.Equal(0, uploads());
+        Assert.Empty(await db.OutboundArtifacts.Where(a => a.OrderId == seed.OrderId).ToListAsync());
+
+        // The operator gets a sentence, not a stack trace.
+        var failure = await db.AuditEvents.AsNoTracking()
+            .SingleAsync(a => a.OrgId == seed.OrgId && a.EntityId == seed.OrderId && a.Action == "TransformFailed");
+        var error = failure.Payload!.RootElement.GetProperty("error").GetString()!;
+        Assert.Contains("couldn't be checked", error);
+        Assert.DoesNotContain("Exception", error);
+    }
+
+    /// <summary>The other half of "neither outcome is stuck": once the gate answers again, the same
+    /// order sends. <c>transform_failed</c> is re-claimable, so the Hangfire retry that follows a
+    /// transient lookup failure simply works.</summary>
+    [Fact]
+    public async Task AnOrderStrandedByAGateFailure_transformsOnceTheGateRecovers()
+    {
+        await using var db = NewDb();
+        var seed = await SeedAsync(db, currency: "EUR", severity: "error");
+
+        var (broken, _) = Build(db, gate: ThrowingGate());
+        Assert.False((await broken.TransformAsync(seed.OrgId, seed.OrderId, OutputFormat.Csv, CancellationToken.None)).IsSuccess);
+
+        var (healthy, uploads) = Build(db);
+        var result = await healthy.TransformAsync(seed.OrgId, seed.OrderId, OutputFormat.Csv, CancellationToken.None);
+
         Assert.True(result.IsSuccess, result.Error);
         Assert.Equal(1, uploads());
+    }
+
+    private static IAcceptanceGate ThrowingGate()
+    {
+        var gate = new Mock<IAcceptanceGate>();
+        gate.Setup(g => g.EvaluateAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("acceptance profile lookup failed"));
+        return gate.Object;
     }
 
     // ── Audit ─────────────────────────────────────────────────────────────────
@@ -194,8 +283,12 @@ public sealed class AcceptanceGateBlocksTransformTests
 
     private sealed record Seed(Guid OrgId, Guid OrderId);
 
-    /// <summary>OrderService with the real CSV transformer and an upload counter.</summary>
-    private static (OrderService Svc, Func<int> Uploads) Build(ProcuLinkDbContext db)
+    /// <summary>
+    /// OrderService with the real CSV transformer and an upload counter. <paramref name="gate"/>
+    /// null means "let OrderService build the real gate", which is what production does.
+    /// </summary>
+    private static (OrderService Svc, Func<int> Uploads) Build(
+        ProcuLinkDbContext db, IAcceptanceGate? gate = null)
     {
         var uploads = 0;
         var fileStorage = new Mock<IFileStorageService>();
@@ -215,7 +308,8 @@ public sealed class AcceptanceGateBlocksTransformTests
             new ITransformService[] { new CsvTransformService() },
             NullLogger<OrderService>.Instance,
             new Mock<IIntegrationTriggerService>().Object,
-            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
+            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService(),
+            acceptanceGate: gate);
 
         return (svc, () => uploads);
     }

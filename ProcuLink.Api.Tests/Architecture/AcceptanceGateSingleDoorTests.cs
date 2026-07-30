@@ -163,6 +163,70 @@ public sealed class AcceptanceGateSingleDoorTests
             Text("ProcuLink.Api/Services/Orders/OrderTransformService.cs"));
     }
 
+    // ── D6 — how much does this tripwire actually see? ────────────────────────
+
+    /// <summary>
+    /// Eight ways someone could plausibly start a transform. Each is a REAL shape a future change
+    /// would take — an auto-send after parse, a nightly resend sweep, an ERP poller — and each
+    /// differs from the shape in <c>TransformOrderJob</c> today along exactly ONE axis, so a miss
+    /// names the axis the tripwire is blind to rather than a strawman.
+    /// </summary>
+    public static readonly IReadOnlyList<(string Name, string Code)> PlausibleTriggerShapes = new[]
+    {
+        ("the shape TransformOrderJob uses today",
+         "var result = await _orderService.TransformAsync(organisationId, orderId, outputFormat, ct);"),
+        ("a differently-named field",
+         "var result = await _orders.TransformAsync(organisationId, orderId, outputFormat, ct);"),
+        ("a differently-named cancellation token",
+         "var result = await _orderService.TransformAsync(organisationId, orderId, outputFormat, cancellationToken);"),
+        ("an assignment with short locals",
+         "var r = await svc.TransformAsync(orgId, orderId, format, ct);"),
+        ("a delayed enqueue",
+         "_jobs.Schedule<TransformOrderJob>(j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None), TimeSpan.FromMinutes(5));"),
+        ("a recurring sweep",
+         "RecurringJob.AddOrUpdate<TransformOrderJob>(\"nightly-resend\", j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None), Cron.Daily());"),
+        ("a job built from an expression",
+         "var job = Job.FromExpression<TransformOrderJob>(j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None));"),
+        ("a direct generic enqueue",
+         "_jobs.Enqueue<TransformOrderJob>(j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None));"),
+    };
+
+    /// <summary>
+    /// The tripwire must SEE every one of them. A guard that only recognises the exact formatting of
+    /// the single call site that exists today is not a guard against a new call site — it is a guard
+    /// against reformatting the old one, and the file's own doc comment promises the former.
+    /// </summary>
+    [Fact]
+    public void TheTripwire_firesOnEveryPlausibleTriggerShape()
+    {
+        var missed = PlausibleTriggerShapes
+            .Where(s => !EnqueueCall.IsMatch(s.Code)
+                     && !JobEnqueue.IsMatch(s.Code)
+                     && !OrderServiceTransformCall.IsMatch(s.Code))
+            .Select(s => $"  • {s.Name}: {s.Code}")
+            .ToList();
+
+        Assert.True(missed.Count == 0,
+            $"the tripwire does not see {missed.Count} of {PlausibleTriggerShapes.Count} plausible ways to "
+          + "start a transform, so none of them would fire it:\n" + string.Join("\n", missed));
+    }
+
+    // ── The delivery side is a door too ───────────────────────────────────────
+
+    /// <summary>
+    /// The endpoints that dispatch a STORED artifact on a human's say-so must consult the gate.
+    /// <c>OrdersController.Transform</c> is not the mainline manual send — <c>AutoDeliver</c>
+    /// defaults to false, so a live order rests in <c>ready_to_deliver</c> and the inbox's bulk
+    /// "Send selected" reaches the supplier through <c>/redeliver</c>, never through the transform.
+    /// </summary>
+    [Theory]
+    [InlineData("ProcuLink.Api/Controllers/OrdersController.cs")]
+    [InlineData("ProcuLink.Api/Controllers/OpsController.cs")]
+    public void TheManualSendEndpoints_consultTheGate(string file)
+    {
+        Assert.Matches(@"_acceptanceGate\s*\.\s*EvaluateAsync\s*\(", Text(file));
+    }
+
     /// <summary>
     /// BOTH hosts must register the gate. The Worker is where <c>TransformOrderJob</c> runs, and
     /// before WP-17 it did not register <c>ISupplierAcceptanceService</c> at all — an enforcement

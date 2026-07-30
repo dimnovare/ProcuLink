@@ -32,15 +32,20 @@ namespace ProcuLink.Api.Tests.Integration;
 /// driven end to end anywhere else. The transform's own claim has an InMemory fallback, so only
 /// here do the controller claim and the service claim both run the way production runs them.</para>
 ///
-/// <para><b>What "four entry paths" means after WP-17.</b> There is exactly ONE server-side
-/// transform door: <c>OrderTransformService.TransformAsync</c>, reached only via
-/// <c>TransformOrderJob</c>, which only <c>OrdersController.Transform</c> enqueues
-/// (<c>AcceptanceGateSingleDoorTests</c> pins that structurally). The four channels differ in how
-/// the ORDER got there — a browser upload, a bulk selection in the inbox, a REST ingress push, an
-/// inbound email — not in how it is sent. This class seeds one order per channel and drives each
-/// through the door, asserting all four reach the SAME refusal. If a future change gives any
-/// channel its own transform trigger, the single-door test fails and this one stops being
-/// sufficient — which is the point of having both.</para>
+/// <para><b>What "entry paths" means after WP-17.</b> There is exactly ONE server-side TRANSFORM
+/// door — <c>OrderTransformService.TransformAsync</c>, reached only via <c>TransformOrderJob</c>,
+/// which only <c>OrdersController.Transform</c> enqueues (<c>AcceptanceGateSingleDoorTests</c> pins
+/// that structurally). Browser send, REST ingress and inbound email all reach the supplier through
+/// that door, so they inherit one answer.
+///
+/// <para>The inbox's bulk "Send selected" does NOT. It calls
+/// <c>POST /api/orders/{id}/redeliver</c> once per selected row, which dispatches a STORED artifact
+/// and never touches the transform. Because <c>Organisation.AutoDeliver</c> defaults to false,
+/// <c>ready_to_deliver</c> is the ordinary resting state of a live order and that endpoint is the
+/// mainline manual send in this product — so it is gated in its own right
+/// (<see cref="InboxBulkSend_refusesEveryOrderInTheBatch"/>, and the unit-level proof for it and
+/// its siblings in <c>AcceptanceGateBlocksDeliveryTests</c>). Driving the transform endpoint three
+/// times would have proved nothing about it.</para></para>
 ///
 /// <para><b>The negative control is the load-bearing test here.</b> Everything else in this file
 /// would stay green if the orders were refused for an unrelated reason — a missing supplier, an
@@ -97,18 +102,74 @@ public sealed class AcceptanceGateEntryPathsPostgresTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Path 2 — the inbox's bulk "Send selected". Server-side this is the browser endpoint called
-    /// once per order, so the meaningful assertion is that a BATCH is refused wholesale rather than
-    /// one order slipping through on a shared code path.
+    /// Path 2 — the inbox's bulk "Send selected", driven through the endpoint it ACTUALLY calls:
+    /// <c>POST /api/orders/{id}/redeliver</c>, once per selected row, on orders that already hold a
+    /// stored artifact and sit in <c>ready_to_deliver</c>. This is the mainline manual send, and it
+    /// never goes near the transform.
+    ///
+    /// <para>The batch shape is the assertion that matters here: three orders selected together must
+    /// ALL be refused and NONE of them may enqueue a delivery. One row slipping through a shared
+    /// code path is precisely the failure a per-order test would not see.</para>
     /// </summary>
     [DockerRequiredFact]
     public async Task InboxBulkSend_refusesEveryOrderInTheBatch()
     {
         var batch = new List<Seeded>();
-        for (var i = 0; i < 3; i++) batch.Add(await SeedBlockedOrderAsync($"bulk-{i}"));
+        for (var i = 0; i < 3; i++)
+            batch.Add(await SeedBlockedOrderAsync($"bulk-{i}",
+                status: OrderStatusConstants.ReadyToDeliver, withArtifact: true));
 
+        var enqueued = 0;
         foreach (var order in batch)
-            AssertRefused(await SendThroughTheControllerAsync(order));
+        {
+            var (status, error, created) = await BulkSendOneAsync(order);
+
+            Assert.Equal(StatusCodes.Status409Conflict, status);
+            Assert.NotNull(error);
+            Assert.Contains("Currency must be EUR", error!);
+            Assert.Contains("USD", error!);
+            Assert.Contains("Set currency to EUR", error!);
+            Assert.DoesNotContain("failed rule", error!);
+            enqueued += created;
+        }
+
+        Assert.Equal(0, enqueued);
+
+        // …and no order in the batch was moved on by the attempt: a refusal must leave the row
+        // exactly where the operator left it, still selectable, still fixable.
+        await using var db = NewContext();
+        foreach (var order in batch)
+        {
+            var status = await db.PurchaseOrders.AsNoTracking()
+                .Where(o => o.Id == order.OrderId && o.OrgId == order.OrgId)
+                .Select(o => o.Status).FirstAsync();
+            Assert.Equal(OrderStatusConstants.ReadyToDeliver, status);
+        }
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL for the bulk send: same fixture, same endpoint, the ONE difference is the
+    /// currency the supplier's rule judges. Without this, "the bulk send is refused" and "the bulk
+    /// send is broken" look identical.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task InboxBulkSend_whenTheOrdersSatisfyTheRule_sendsEveryOne()
+    {
+        var batch = new List<Seeded>();
+        for (var i = 0; i < 3; i++)
+            batch.Add(await SeedBlockedOrderAsync($"bulk-ok-{i}", currency: "EUR",
+                status: OrderStatusConstants.ReadyToDeliver, withArtifact: true));
+
+        var enqueued = 0;
+        foreach (var order in batch)
+        {
+            var (status, error, created) = await BulkSendOneAsync(order);
+            Assert.Equal(StatusCodes.Status202Accepted, status);
+            Assert.Null(error);
+            enqueued += created;
+        }
+
+        Assert.Equal(batch.Count, enqueued);
     }
 
     /// <summary>
@@ -135,17 +196,18 @@ public sealed class AcceptanceGateEntryPathsPostgresTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The four paths must AGREE. Asserting each one separately would still pass if one of them
-    /// started refusing for a different reason, or stopped refusing while the others carried the
-    /// suite; this compares them to each other, so any single path drifting fails the test.
+    /// The three TRANSFORM-door paths must AGREE. Asserting each one separately would still pass if
+    /// one of them started refusing for a different reason, or stopped refusing while the others
+    /// carried the suite; this compares them to each other, so any single path drifting fails the
+    /// test. (The inbox bulk-send is deliberately absent: it is not a transform-door path, and
+    /// folding it in here is exactly the conflation that let it go ungated.)
     /// </summary>
     [DockerRequiredFact]
-    public async Task AllFourEntryPaths_reachTheSameRefusal()
+    public async Task AllTransformDoorPaths_reachTheSameRefusal()
     {
         var outcomes = new List<(string Path, Outcome Result)>
         {
             ("browser send",     await SendThroughTheControllerAsync(await SeedBlockedOrderAsync("agree-browser"))),
-            ("inbox bulk-send",  await SendThroughTheControllerAsync(await SeedBlockedOrderAsync("agree-bulk"))),
             ("REST ingress",     await SendThroughTheJobAsync(await SeedBlockedOrderAsync("agree-rest", sourceFileKey: "ingress/rest/po.csv"))),
             ("inbound email",    await SendThroughTheJobAsync(await SeedBlockedOrderAsync("agree-email", inboundSenderDomain: "acme.com"))),
         };
@@ -292,7 +354,44 @@ public sealed class AcceptanceGateEntryPathsPostgresTests : IAsyncLifetime
         Assert.DoesNotContain("BlockOnFail", outcome.ErrorMessage!);
     }
 
-    /// <summary>Browser / bulk-send: the real HTTP endpoint, then the job it enqueued.</summary>
+    /// <summary>
+    /// ONE row of the inbox's bulk "Send selected", through the endpoint the browser really calls:
+    /// <c>POST /api/orders/{id}/redeliver</c>. Returns the HTTP status, the `error` string the inbox
+    /// shows next to the PO when the call fails, and how many Hangfire jobs the call created —
+    /// because "refused" has to mean nothing was enqueued, not merely that the response looked bad.
+    /// </summary>
+    private async Task<(int Status, string? Error, int JobsCreated)> BulkSendOneAsync(Seeded order)
+    {
+        await using var db = NewContext();
+
+        var po = await db.PurchaseOrders.AsNoTracking()
+            .Include(o => o.Lines)
+            .Include(o => o.OutboundArtifacts)
+            .FirstAsync(o => o.Id == order.OrderId && o.OrgId == order.OrgId);
+
+        var (ctrl, jobs) = BuildController(db, order.OrgId, po);
+        var created = 0;
+        jobs.Setup(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()))
+            .Callback(() => created++)
+            .Returns(Guid.NewGuid().ToString());
+
+        var response = await ctrl.Redeliver(order.OrderId, CancellationToken.None);
+
+        var status = response switch
+        {
+            ObjectResult o     => o.StatusCode ?? StatusCodes.Status200OK,
+            StatusCodeResult s => s.StatusCode,
+            _                  => StatusCodes.Status200OK,
+        };
+
+        string? error = null;
+        if (response is ObjectResult { Value: { } body } && status >= 400)
+            error = body.GetType().GetProperty("error")?.GetValue(body) as string;
+
+        return (status, error, created);
+    }
+
+    /// <summary>Browser send: the real HTTP transform endpoint, then the job it enqueued.</summary>
     private async Task<Outcome> SendThroughTheControllerAsync(Seeded order)
     {
         int httpStatus;
@@ -417,7 +516,10 @@ public sealed class AcceptanceGateEntryPathsPostgresTests : IAsyncLifetime
             billing.Object,
             new Mock<IIdempotencyService>().Object,
             new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
+            // The REAL acceptance service against the REAL DbContext: OrdersController builds its
+            // acceptance gate from these two when DI supplies none, so /redeliver is exercised with
+            // the same gate production uses rather than a stand-in that always says "clear".
+            new SupplierAcceptanceService(db),
             new Mock<IOrderMappingOverrideService>().Object,
             new PromoteMappingService(db, new PoMappingService(db)),
             new Mock<IFileStorageService>().Object,
@@ -437,11 +539,14 @@ public sealed class AcceptanceGateEntryPathsPostgresTests : IAsyncLifetime
         string currency = "USD",
         string severity = "error",
         string? sourceFileKey = null,
-        string? inboundSenderDomain = null)
+        string? inboundSenderDomain = null,
+        string? status = null,
+        bool withArtifact = false)
     {
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
         var orderId = Guid.NewGuid();
+        var artifactId = Guid.NewGuid();
         var now = DateTime.UtcNow;
 
         await using var db = NewContext();
@@ -457,7 +562,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests : IAsyncLifetime
         {
             Id = orderId, OrgId = orgId, SupplierId = supplierId,
             PoNumber = $"PO-GATE-{tag}", BuyerName = "Buyer Ltd", Currency = currency,
-            OrderDate = new DateOnly(2026, 7, 30), Status = OrderStatusConstants.Ready,
+            OrderDate = new DateOnly(2026, 7, 30), Status = status ?? OrderStatusConstants.Ready,
             SourceFileKey = sourceFileKey, InboundSenderDomain = inboundSenderDomain,
             InboundSenderDomainCapturedAt = inboundSenderDomain is null ? null : now,
             CreatedAt = now, UpdatedAt = now,
@@ -470,6 +575,19 @@ public sealed class AcceptanceGateEntryPathsPostgresTests : IAsyncLifetime
                     Quantity = 3m, Unit = "EA", UnitPrice = 10m, NeedsReview = false, Confidence = 1.0f,
                 },
             },
+            // A stored artifact + a delivery status is the shape the inbox bulk-send operates on:
+            // the order was transformed at some earlier point (possibly before the rule existed) and
+            // is now sitting in ready_to_deliver waiting for a human to press Send.
+            OutboundArtifacts = withArtifact
+                ? new List<OutboundArtifact>
+                  {
+                      new()
+                      {
+                          Id = artifactId, OrderId = orderId, OrgId = orgId, Format = "csv",
+                          FileKey = $"{orgId}/{orderId}/artifacts/{artifactId}.csv", CreatedAt = now,
+                      },
+                  }
+                : new List<OutboundArtifact>(),
         });
 
         db.SupplierAcceptanceProfiles.Add(new SupplierAcceptanceProfile

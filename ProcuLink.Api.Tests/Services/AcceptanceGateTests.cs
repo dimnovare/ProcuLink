@@ -338,6 +338,139 @@ public sealed class AcceptanceGateTests
         Assert.Contains(after.Blockers, b => b.Code == "currency.equals");
     }
 
+    // ── The override excuses a FAILURE, and a failure has a VALUE ─────────────
+    //
+    // The three tests below are the ones the doc comment on IAcceptanceGate / AcceptanceGate always
+    // claimed — "a new rule version, an edited line, a re-parse — that failure is not covered" —
+    // and which the old key could not keep. The key was `{fieldPath}.{operator}#{line}`: it named
+    // the RULE and the LINE and nothing else, so the same rule failing on the same line for a
+    // hundred times worse a value, or after the rule itself was tightened, or under a new profile
+    // version, matched the excused key exactly and stayed waved through. Each test changes ONE of
+    // those three things and asserts the order blocks again.
+
+    /// <summary>
+    /// A RE-PARSE that changes the judged value. Line 1's unit price was 50,001 against a 50,000
+    /// cap when the operator signed it off; the re-parsed order says 900,000. That is not the
+    /// failure anybody excused.
+    /// </summary>
+    [Fact]
+    public async Task OverrideDoesNotExcuse_theSameRuleAfterAReParseChangesTheValue()
+    {
+        var store = Guid.NewGuid().ToString();
+
+        Seed seed;
+        await using (var db = NewDb(store))
+        {
+            seed = await SeedOrderAsync(db, unitPrice: 50001m);
+            await SeedRuleAsync(db, seed, "line", "unitPrice", "max", "50000", "error", false);
+
+            var granted = await Build(db).RecordOverrideAsync(
+                seed.OrgId, seed.OrderId, "user_2abcOPS", "One-off, buyer approved 50,001.", CancellationToken.None);
+            Assert.True(granted.Recorded, granted.Error);
+        }
+
+        // The override does cover the failure it was granted for — otherwise the assertion below
+        // would be testing a broken override rather than a value-sensitive key.
+        await using (var db = NewDb(store))
+            Assert.False((await Build(db).EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None))!.Blocked);
+
+        await using (var db = NewDb(store))
+        {
+            var line = await db.PurchaseOrderLines.FirstAsync(l => l.OrderId == seed.OrderId && l.LineNumber == 1);
+            line.UnitPrice = 900000m;                       // ← the one difference
+            await db.SaveChangesAsync();
+        }
+
+        await using var check = NewDb(store);
+        var after = await Build(check).EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None);
+
+        Assert.True(after!.Blocked,
+            "the excused failure was 'line 1 is 50,001 against a 50,000 cap'; this order now fails the "
+          + "same rule at 900,000, which nobody signed off");
+        Assert.False(after.Overridden);
+    }
+
+    /// <summary>
+    /// A TIGHTENED RULE. Same order, same value, same line — the supplier lowered the cap from
+    /// 50,000 to 100 after the override was granted. The order now fails a rule the operator never
+    /// saw the terms of.
+    /// </summary>
+    [Fact]
+    public async Task OverrideDoesNotExcuse_theSameRuleAfterItIsTightened()
+    {
+        var store = Guid.NewGuid().ToString();
+
+        Seed seed;
+        await using (var db = NewDb(store))
+        {
+            seed = await SeedOrderAsync(db, unitPrice: 50001m);
+            await SeedRuleAsync(db, seed, "line", "unitPrice", "max", "50000", "error", false);
+
+            var granted = await Build(db).RecordOverrideAsync(
+                seed.OrgId, seed.OrderId, "user_2abcOPS", "One-off, buyer approved 50,001.", CancellationToken.None);
+            Assert.True(granted.Recorded, granted.Error);
+        }
+
+        await using (var db = NewDb(store))
+            Assert.False((await Build(db).EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None))!.Blocked);
+
+        await using (var db = NewDb(store))
+        {
+            var rule = await db.SupplierAcceptanceRules.FirstAsync(r => r.FieldPath == "unitPrice");
+            rule.ExpectedValue = "100";                     // ← the one difference
+            await db.SaveChangesAsync();
+        }
+
+        await using var check = NewDb(store);
+        var after = await Build(check).EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None);
+
+        Assert.True(after!.Blocked,
+            "the override excused a failure against a 50,000 cap; the supplier's cap is now 100 and "
+          + "that is a different failure");
+        Assert.False(after.Overridden);
+    }
+
+    /// <summary>
+    /// A NEW PROFILE VERSION. Nothing about this order changed and the rule text is untouched — the
+    /// supplier published a new version of the acceptance profile. An override granted against v1 is
+    /// not consent to send under v2.
+    /// </summary>
+    [Fact]
+    public async Task OverrideDoesNotExcuse_theSameFailureUnderANewProfileVersion()
+    {
+        var store = Guid.NewGuid().ToString();
+
+        Seed seed;
+        await using (var db = NewDb(store))
+        {
+            seed = await SeedOrderAsync(db, currency: "USD");
+            await SeedRuleAsync(db, seed, "order", "currency", "equals", "EUR", "error", false);
+
+            var granted = await Build(db).RecordOverrideAsync(
+                seed.OrgId, seed.OrderId, "user_2abcOPS", "Supplier confirmed USD by phone.", CancellationToken.None);
+            Assert.True(granted.Recorded, granted.Error);
+        }
+
+        await using (var db = NewDb(store))
+            Assert.False((await Build(db).EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None))!.Blocked);
+
+        await using (var db = NewDb(store))
+        {
+            var profile = await db.SupplierAcceptanceProfiles
+                .FirstAsync(p => p.OrgId == seed.OrgId && p.SupplierId == seed.SupplierId);
+            profile.VersionNo = 2;                          // ← the one difference
+            await db.SaveChangesAsync();
+        }
+
+        await using var check = NewDb(store);
+        var after = await Build(check).EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None);
+
+        Assert.True(after!.Blocked,
+            "an override is consent to send under the profile version the operator read, not under "
+          + "every version the supplier publishes afterwards");
+        Assert.False(after.Overridden);
+    }
+
     [Fact]
     public async Task Override_withoutAReason_isRefused()
     {
