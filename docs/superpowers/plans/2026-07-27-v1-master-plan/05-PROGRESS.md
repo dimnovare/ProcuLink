@@ -598,3 +598,68 @@ files at **collect** while the summary reports `Tests 1165 passed` and `0 failed
 
 **BE #77 (WP-20) untouched**, per the founder gate — it changes what real suppliers receive. Its hard
 dependency FE #43 is likewise unmerged, so nothing has half-shipped.
+
+---
+
+### 2026-07-30 — FE session (`claude/elegant-colden-a2c779`): plan-gate upsell UI, claimed and done
+
+**Packet: wire the plan-gate helper into every surface WP-11 newly gates.** Branch
+`wp11/plan-gate-wiring`, commit `8910d94`, **stacked on `wp11/billing-honesty` (FE #48, still open)** —
+`src/lib/planGate.ts` does not exist on FE `main`, so this cannot merge before #48. Merge order:
+**FE #48 → this**.
+
+Five surfaces were showing a gated customer either a generic failure or the raw
+`<capability>_requires_<plan>` token: `/operations/log` (audit), the supplier delivery editor, both
+revision-editor paths (the mapper's draft save and the lifecycle notice), bulk mapping import, and the
+supplier acceptance profile. Two of those were worse than "unhelpful" — the audit log blamed the network
+("Check your connection") and offered a Retry that can only 403 again, and the acceptance tab paints its
+notice in the **success green**, so a refusal read as a confirmation.
+
+#### The wiring was not the whole fix — four api calls threw the gate away first
+
+`getAuditLog` summarised every failure as `` `audit: ${res.status}` ``; `createConnectionDraft`,
+`updateConnectionDraft` and the publish/archive lifecycle used `res.statusText`. The gate lives **only in
+the body** — the status line carries none of it — so the code never reached the component and no amount of
+wiring in the UI could have matched it. Those four now keep a plan-gate body **verbatim** (code *and*
+`upgradeUrl`) on the Error message; every other failure keeps the message it had, including the 409s that
+already read the body for their own copy.
+
+Worth generalising: **a 403 whose meaning is in the body cannot survive a client that summarises failures
+by status.** Any other call added later that does `throw new Error(\`x: ${res.status}\`)` will silently
+re-break this.
+
+#### On the "codes name the wrong plan" trap — already fixed upstream, do not re-fix in the frontend
+
+BE #82 merged 2026-07-30T11:45Z ("stop 403s naming the wrong plan"): the server derives the plan segment
+from `PlanConstants.GetMinimumPlan`. The frontend therefore **parses the plan out of the code it receives
+and never writes a plan name of its own**. Reading `PlanConstants` from the frontend, or mapping codes to
+tiers in a component, would rebuild the exact hardcoded ladder WP-11 deleted — and it would drift again on
+the next re-tier. The shipped helper says so in its own header comment; it is a deliberate constraint, not
+an oversight.
+
+#### Unenforced gates are not a risk for this packet
+
+Only 6 of 16 `BillingFeature` gates fire today. The banner is **response-driven** — it renders only when a
+403 carrying that code actually arrives, and it never reads plan state — so a gate that does not fire
+produces no upsell and makes no promise the product cannot keep. No coordination needed on that axis.
+
+#### Details worth knowing
+
+- One shared `PlanGateNotice` (`src/components/bridge/PlanGateNotice.tsx`) + an `isPlanGate` guard, so the
+  six render sites share one shape and one copy pattern.
+- The upsell link uses the **server's** `upgradeUrl`, sanitized to an in-app path — `//host`, `https://`
+  and `javascript:` all fall back to `/settings`. A 403 body must never be able to turn an error banner
+  into an off-site link.
+- The acceptance-profile notice is now typed `ok`/`err`. It was a bare string in a green box.
+- 21 new tests across 8 files, each written RED first. Gates green: `bun run test`
+  (116 files / 1185 tests), `lint`, `check:pageshell --strict`, `lint:vocab`.
+
+#### Confirming the standing `remark-gfm` note, with the precise cause
+
+Independently hit and independently diagnosed: the shared root `node_modules` is installed from **whatever
+branch the main checkout happens to sit on**, so a worktree on a newer branch can be missing a *declared*
+dependency. The FE main checkout is on a `main` that predates `remark-gfm@^4.0.1`, which fails
+`src/test/seo-host.test.ts` at collect on a `next.config.ts` import. Fix is `bun install` **inside the
+worktree** (~90s), not at the repo root, which other sessions share and which would reinstall the stale
+branch's dep set. Afterwards revert `public/mockServiceWorker.js` — msw's postinstall rewrites it and it is
+tracked.
