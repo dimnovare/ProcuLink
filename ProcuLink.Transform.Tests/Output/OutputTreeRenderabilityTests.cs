@@ -254,6 +254,79 @@ public class OutputTreeRenderabilityTests
         }));
     }
 
+    // ══ Direct coverage for the load-bearing predicates ══════════════════════════════════════════
+    // Every one of these was consumed by promote, the transform, replay and the preview while having
+    // ZERO direct tests — the reason a wrong answer reached production as a bricked supplier.
+
+    [Fact]
+    public void CanRenderTree_IsNullSafe_AndTracksTheDeclaredFormats()
+    {
+        Assert.False(OrderMappingOverrideReader.CanRenderTree(null));
+        Assert.True(OrderMappingOverrideReader.CanRenderTree(
+            new OutputNodeTemplate { Format = OutputFormat.Xml, Root = DrawnRoot() }));
+        Assert.False(OrderMappingOverrideReader.CanRenderTree(
+            new OutputNodeTemplate { Format = OutputFormat.EdifactOrders, Root = DrawnRoot() }));
+    }
+
+    [Fact]
+    public void IsEnvelopeOnlyTree_IsTrueForExactlyTheTwoEnvelopeReadingFormats()
+    {
+        Assert.False(OrderMappingOverrideReader.IsEnvelopeOnlyTree(null));
+        Assert.True(OrderMappingOverrideReader.IsEnvelopeOnlyTree(new OutputNodeTemplate { Format = OutputFormat.CXml }));
+        Assert.True(OrderMappingOverrideReader.IsEnvelopeOnlyTree(new OutputNodeTemplate { Format = OutputFormat.X12 }));
+        Assert.False(OrderMappingOverrideReader.IsEnvelopeOnlyTree(new OutputNodeTemplate { Format = OutputFormat.Ubl }));
+        Assert.False(OrderMappingOverrideReader.IsEnvelopeOnlyTree(new OutputNodeTemplate { Format = OutputFormat.Json }));
+    }
+
+    [Fact]
+    public void HasEnvelopeIdentity_IsNullSafe_AndIgnoresAnAllBlankEnvelope()
+    {
+        Assert.False(OrderMappingOverrideReader.HasEnvelopeIdentity(null));
+        Assert.False(OrderMappingOverrideReader.HasEnvelopeIdentity(new EnvelopeConfig()));
+        Assert.False(OrderMappingOverrideReader.HasEnvelopeIdentity(new EnvelopeConfig
+        {
+            Cxml = new CxmlEnvelope { FromDomain = "   " },   // whitespace is not identity
+        }));
+        Assert.True(OrderMappingOverrideReader.HasEnvelopeIdentity(CxmlOnly()));
+        Assert.True(OrderMappingOverrideReader.HasEnvelopeIdentity(X12Only()));
+
+        // …and it agrees with the format-aware one it delegates to, for the formats that read one.
+        Assert.True(OrderMappingOverrideReader.HasEnvelopeIdentityFor(CxmlOnly(), OutputFormat.CXml));
+        Assert.False(OrderMappingOverrideReader.HasEnvelopeIdentityFor(CxmlOnly(), OutputFormat.X12));
+        Assert.True(OrderMappingOverrideReader.HasEnvelopeIdentityFor(X12Only(), OutputFormat.X12));
+        Assert.False(OrderMappingOverrideReader.HasEnvelopeIdentityFor(X12Only(), OutputFormat.CXml));
+    }
+
+    [Fact]
+    public void HasUsablePromotedOutputTree_IsTheSameAnswerAsHasUsableOutputTree()
+    {
+        Assert.False(OrderMappingOverrideReader.HasUsablePromotedOutputTree(null));
+        Assert.False(OrderMappingOverrideReader.HasUsablePromotedOutputTree(new PoMappingConfig()));
+        Assert.True(OrderMappingOverrideReader.HasUsablePromotedOutputTree(new PoMappingConfig
+        {
+            OutputTree = new OutputNodeTemplate { Format = OutputFormat.Json, Root = DrawnRoot() },
+        }));
+        Assert.False(OrderMappingOverrideReader.HasUsablePromotedOutputTree(new PoMappingConfig
+        {
+            OutputTree = new OutputNodeTemplate { Format = OutputFormat.Ubl, Root = DrawnRoot() },
+        }));
+    }
+
+    [Fact]
+    public void HasUsableOutputTree_RejectsANullRootAndAnEmptyRoot_ButAcceptsALeafRoot()
+    {
+        Assert.False(OrderMappingOverrideReader.HasUsableOutputTree(null));
+        Assert.False(OrderMappingOverrideReader.HasUsableOutputTree(
+            new OutputNodeTemplate { Format = OutputFormat.Json, Root = null! }));
+        Assert.False(OrderMappingOverrideReader.HasUsableOutputTree(
+            new OutputNodeTemplate { Format = OutputFormat.Json, Root = OutputNode.Obj("root") }));
+        Assert.True(OrderMappingOverrideReader.HasUsableOutputTree(new OutputNodeTemplate
+        {
+            Format = OutputFormat.Json,
+            Root = OutputNode.FieldOf("whole", Canon("PoNumber")),   // a root that is itself a leaf
+        }));
+    }
+
     [Theory]
     [InlineData(OutputFormat.Ubl)]
     [InlineData(OutputFormat.UblOrder)]
