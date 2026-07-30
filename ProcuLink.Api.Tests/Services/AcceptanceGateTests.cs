@@ -307,14 +307,21 @@ public sealed class AcceptanceGateTests
         await using (var db = NewDb(store))
             Assert.False((await Build(db).EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None))!.Blocked);
 
-        // A SECOND blocking rule the operator never saw.
+        // A SECOND blocking rule the operator never saw. Inserted as a standalone child row rather
+        // than by mutating a loaded profile's Rules collection: the EF InMemory provider treats the
+        // collection change as an update to the parent graph and throws
+        // "Attempted to update or delete an entity that does not exist in the store". A direct
+        // insert with the FK set is both what the rule editor does and what Postgres would see.
         await using (var db = NewDb(store))
         {
-            var profile = await db.SupplierAcceptanceProfiles.Include(p => p.Rules)
-                .FirstAsync(p => p.OrgId == seed.OrgId && p.SupplierId == seed.SupplierId);
-            profile.Rules.Add(new SupplierAcceptanceRule
+            var profileId = await db.SupplierAcceptanceProfiles.AsNoTracking()
+                .Where(p => p.OrgId == seed.OrgId && p.SupplierId == seed.SupplierId)
+                .Select(p => p.Id)
+                .FirstAsync();
+
+            db.SupplierAcceptanceRules.Add(new SupplierAcceptanceRule
             {
-                Id = Guid.NewGuid(), ProfileId = profile.Id, Scope = "line", FieldPath = "unitPrice",
+                Id = Guid.NewGuid(), ProfileId = profileId, Scope = "line", FieldPath = "unitPrice",
                 Operator = "max", ExpectedValue = "5", Severity = "error", BlockOnFail = false,
             });
             await db.SaveChangesAsync();
