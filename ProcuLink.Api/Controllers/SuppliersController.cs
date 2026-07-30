@@ -436,6 +436,7 @@ public class SuppliersController : ControllerBase
     [HttpPost("{supplierId:guid}/mappings/import")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> ImportMappings(
         Guid supplierId,
         IFormFile file,
@@ -444,6 +445,20 @@ public class SuppliersController : ControllerBase
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
 
         var orgId   = _tenant.OrganisationId;
+
+        // Bulk mapping import is sold from Operations up; it was declared in the gate table
+        // and enforced nowhere, so a Pilot org could bulk-load mappings one tier below the
+        // plan that advertises it. Editing mappings ONE AT A TIME stays open on every plan —
+        // the differentiator is the bulk lever, not the ability to map at all.
+        if (!await _billing.HasFeatureAsync(orgId, BillingFeature.BulkMapping, ct))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = BillingGateErrors.RequiresPlan("bulk_mapping_import", BillingFeature.BulkMapping),
+                upgradeUrl = "/settings",
+            });
+        }
+
         var created = 0;
         var updated = 0;
 
@@ -666,6 +681,21 @@ public class SuppliersController : ControllerBase
         var orgId = _tenant.OrganisationId;
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
 
+        // ── Plan gates on the CHANNEL and the OUTPUT FORMAT (WP-11) ──────────
+        // This one endpoint writes both SupplierDeliveryConfig.Protocol and .OutputFormat,
+        // so it is where three separately-sold capabilities are actually chosen. All three
+        // were declared in the gate table and enforced NOWHERE, which meant a Pilot org
+        // could configure a webhook and an Enterprise-only ERP connector.
+        if (RequiredFeatureForDeliveryConfig(request) is { } gated
+            && !await _billing.HasFeatureAsync(orgId, gated.Feature, ct))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = BillingGateErrors.RequiresPlan(gated.Capability, gated.Feature),
+                upgradeUrl = "/settings",
+            });
+        }
+
         try
         {
             var saved = await _deliveryConfigService.UpsertAsync(orgId, id, request, ct);
@@ -682,6 +712,34 @@ public class SuppliersController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    /// <summary>
+    /// The plan gate a delivery-config save must clear, or null when nothing on it is
+    /// plan-restricted (e.g. plain <c>sftp</c>/<c>ftps</c>/<c>email</c> with a stock output
+    /// format, all of which are included on every paid plan).
+    ///
+    /// <para>Protocol is checked before format so an ERP connector on a Pilot plan reports the
+    /// ERP gate (Enterprise) rather than a lesser one — naming the wrong gate is the very defect
+    /// WP-11 fixed elsewhere. Comparison is trimmed + invariant-lowercased to match how
+    /// <c>DeliveryConfigService</c> normalises the same strings before persisting.</para>
+    /// </summary>
+    private static (BillingFeature Feature, string Capability)? RequiredFeatureForDeliveryConfig(
+        UpsertDeliveryConfigRequest request)
+    {
+        var protocol = request.Protocol?.Trim().ToLowerInvariant();
+        var format   = request.OutputFormat?.Trim().ToLowerInvariant();
+
+        if (protocol is DeliveryProtocolConstants.ErpErply or DeliveryProtocolConstants.ErpDirecto)
+            return (BillingFeature.ErpConnectors, "erp_delivery");
+
+        if (protocol == DeliveryProtocolConstants.Http)
+            return (BillingFeature.WebhookDelivery, "webhook_delivery");
+
+        if (format == "cxml")
+            return (BillingFeature.Cxml, "cxml_output");
+
+        return null;
     }
 
     /// <summary>
