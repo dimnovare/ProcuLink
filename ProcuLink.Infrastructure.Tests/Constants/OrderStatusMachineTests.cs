@@ -67,6 +67,17 @@ public class OrderStatusMachineTests
     [InlineData(Unrouted, Parsing)]              // assign-supplier re-enqueues parse
     [InlineData(Unrouted, PendingParse)]
     [InlineData(Unrouted, RejectedBySupplier)]   // operator discards an unrouted order
+    // WP-19: rejected_by_supplier is NOT a dead end. A genuine business rejection is cured by
+    // correcting the order and sending a corrected document, and both halves of that already have
+    // production writers:
+    //   • resolve   — OrderResolutionService.ResolveAsync recomputes pending_review|ready with NO
+    //                 from-status guard, so fixing the line the supplier named moves the order out.
+    //   • transform — OrderTransformService's claim accepts rejected_by_supplier (ClaimableForTransformFrom),
+    //                 exactly as it accepts transform_failed: the recovery door after the operator
+    //                 has fixed whatever the supplier refused.
+    [InlineData(RejectedBySupplier, Ready)]
+    [InlineData(RejectedBySupplier, PendingReview)]
+    [InlineData(RejectedBySupplier, Transforming)]
     public void IsAllowed_RealTransitions_AreAllowed(string from, string to)
         => OrderStatusMachine.IsAllowed(from, to).Should().BeTrue($"{from} -> {to} is a real flow");
 
@@ -74,7 +85,10 @@ public class OrderStatusMachineTests
     // Genuinely-impossible moves must be rejected (this is the value the machine adds).
     [InlineData(Delivered, Parsing)]
     [InlineData(Failed, Delivering)]
-    [InlineData(RejectedBySupplier, Ready)]
+    // rejected_by_supplier → delivering stays impossible even after WP-19 gave the status an exit:
+    // the exit is a CORRECTION loop (resolve / re-transform), never a re-send of the same bytes.
+    // No delivery claim set admits rejected_by_supplier, so nothing can dispatch it in place.
+    [InlineData(RejectedBySupplier, Delivering)]
     [InlineData(Delivered, Transforming)]
     [InlineData(Parsing, Delivered)]
     [InlineData(RejectedBySupplier, Delivered)]  // no silent un-rejection: nothing writes it
@@ -90,7 +104,6 @@ public class OrderStatusMachineTests
 
     [Theory]
     [InlineData(Failed)]
-    [InlineData(RejectedBySupplier)]
     public void IsTerminal_TrueForTerminalStates(string status)
         => OrderStatusMachine.IsTerminal(status).Should().BeTrue();
 
@@ -98,6 +111,9 @@ public class OrderStatusMachineTests
     [InlineData(Delivered)]            // a pre-claim delivery failure can still flip it to delivery_failed
     [InlineData(DeliveryDeadLetter)]   // an ops requeue can still rescue it
     [InlineData(Ready)]
+    // WP-19: a genuine business rejection is a correction loop, not an ending. The operator fixes
+    // what the supplier named and re-sends; resolve and the transform claim are the two doors.
+    [InlineData(RejectedBySupplier)]
     // transform_failed is a FAILURE state but NOT a terminal one: unlike 'failed' (a bad source file,
     // where recovery means a NEW order row), the order itself is fine — its template/mapping is broken.
     // Fixing that and re-transforming is the intended cure, so it must have a way out.
@@ -172,12 +188,13 @@ public class OrderStatusMachineTests
         Edge(DeliveryFailed, Transforming),
         Edge(DeliveryFailed, PendingReview),
 
-        // Nothing moves an order OUT of 'rejected_by_supplier' under its own power: the ops
-        // requeue guards on dead_letter|delivery_failed (OpsController.cs:126) and dispatch/retry
-        // guard on ready_to_deliver|delivery_failed|stale-delivering.
-        Edge(RejectedBySupplier, PendingReview),
-        Edge(RejectedBySupplier, Ready),
-        Edge(RejectedBySupplier, Transforming),
+        // Nothing DISPATCHES an order out of 'rejected_by_supplier': the ops requeue guards on
+        // dead_letter|delivery_failed (OpsController.cs:126) and every delivery claim set
+        // (ClaimableForDispatchFrom / ClaimableForAutomaticDispatchFrom / ClaimableForRetryFrom)
+        // excludes it. The exit WP-19 gave the status is a correction loop — resolve and
+        // re-transform — never a re-send of the bytes the supplier already refused, so this one
+        // edge stays observer-only while → pending_review / ready / transforming were reconciled
+        // into the machine.
         Edge(RejectedBySupplier, Delivering),
 
         // rejected_by_supplier -> delivery_failed is reachable through DeliveryService's pre-claim
@@ -448,6 +465,160 @@ public class OrderStatusMachineTests
         => OrderStatusMachine.ClaimableForDispatchFrom.Should().Contain(DeliveryFailed,
             "OpsController.RequeueDelivery rewrites the order to delivery_failed before enqueuing " +
             "DeliverOrderJob");
+
+    // ── The dead-end invariant (WP-19) ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The invariant, as a PURE function over a map, so the guard below can be proven to catch
+    /// something rather than merely asserted to hold today.
+    /// </summary>
+    /// <returns>Every status that has no way out and was never declared finished.</returns>
+    private static IReadOnlyList<string> DeadEnds(
+        IReadOnlyDictionary<string, IReadOnlySet<string>> transitions,
+        IReadOnlySet<string> declaredTerminal)
+        => transitions
+            .Where(kv => kv.Value.Count == 0 && !declaredTerminal.Contains(kv.Key))
+            .Select(kv => kv.Key)
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// <b>The regression guard for the whole defect class.</b> No status may have an empty edge set
+    /// unless the product DECLARES the order finished there.
+    ///
+    /// <para><b>The defect it exists for.</b> <c>rejected_by_supplier</c> had no outgoing edges, was
+    /// absent from <see cref="OrderStatusMachine.RedeliverableFrom"/>, and was where
+    /// <c>DeliveryService</c> routed every 400–499. An expired API key (401), a moved endpoint (404)
+    /// or a rate limit (429) therefore parked a perfectly deliverable PO in a state that NO control
+    /// in the product could move — the operator's only recourse was a database edit. Every
+    /// individual fact looked defensible in review; the hole was only visible by asking the question
+    /// this test asks.</para>
+    ///
+    /// <para><b>Why <see cref="OrderStatusMachine.DeclaredTerminal"/> and not
+    /// <c>IsTerminal</c>.</b> <c>IsTerminal</c> DERIVES terminality from an empty edge set, so
+    /// asserting "every terminal status has no exits" is a tautology and asserting "every
+    /// non-terminal status has exits" is vacuous — the invariant only bites against a set that is
+    /// declared independently of the map. Adding a status to <c>DeclaredTerminal</c> to silence this
+    /// test is therefore a visible product decision ("an order that reaches this is over"), which is
+    /// exactly the review this defect escaped.</para>
+    ///
+    /// <para><b>Scope, honestly.</b> This proves a status has an EDGE, not that a human can reach
+    /// it. An edge with no production writer is a different defect, caught by
+    /// <see cref="EveryInboundDeliveredEdge_HasAProductionWriter"/> and by
+    /// <see cref="Machine_Transitions_AreASupersetOf_ObserverAllowedTransitions"/>; the writers for
+    /// the edges this test unblocked are named in
+    /// <see cref="RejectedBySupplier_ExitsThroughACorrectionLoop_NotARedelivery"/>. Two weak
+    /// guarantees over the same map are what make the pair strong: an edge no one writes fails one,
+    /// a status with no edge fails the other.</para>
+    /// </summary>
+    [Fact]
+    public void NoNonTerminalStatus_IsADeadEnd()
+        => DeadEnds(OrderStatusMachine.Transitions, OrderStatusMachine.DeclaredTerminal)
+            .Should().BeEmpty(
+                "a status with no outgoing transitions that the product does NOT declare finished is " +
+                "an order the operator cannot move: not redeliverable, not retryable, not resolvable, " +
+                "fixable only by editing the database. If the listed status really is an ending, say " +
+                "so in OrderStatusMachine.DeclaredTerminal and justify it there; otherwise give it the " +
+                "exit the product owes it");
+
+    /// <summary>
+    /// Proof that the guard above BITES. A test that has only ever been green is indistinguishable
+    /// from a test that cannot fail — and this one is guarding a defect that survived review by
+    /// looking reasonable, so "it passes" is not the evidence that matters. The same
+    /// <see cref="DeadEnds"/> function is run against a synthetic map carrying exactly the defect,
+    /// and must report it.
+    /// </summary>
+    [Fact]
+    public void DeadEndInvariant_CatchesASyntheticEmptyEdgeStatus()
+    {
+        var synthetic = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+        {
+            [Ready]              = new HashSet<string>(StringComparer.Ordinal) { Transforming },
+            [Transforming]       = new HashSet<string>(StringComparer.Ordinal) { ReadyToDeliver },
+            // The defect, reproduced: a failure state with nowhere to go that nobody declared final.
+            [RejectedBySupplier] = new HashSet<string>(StringComparer.Ordinal),
+            // A declared ending in the same map, so the assertion below shows the guard
+            // DISTINGUISHES the two rather than flagging every empty set it sees.
+            [Failed]             = new HashSet<string>(StringComparer.Ordinal),
+        };
+
+        DeadEnds(synthetic, OrderStatusMachine.DeclaredTerminal)
+            .Should().Equal(RejectedBySupplier);
+    }
+
+    /// <summary>
+    /// <see cref="OrderStatusMachine.DeclaredTerminal"/> is a product decision, pinned exactly so
+    /// widening it is a deliberate edit and not a convenient way to quiet the invariant above.
+    /// </summary>
+    [Fact]
+    public void DeclaredTerminal_IsExactlyFailed()
+        => OrderStatusMachine.DeclaredTerminal.Should().BeEquivalentTo(new[] { Failed },
+            "'failed' is a bad SOURCE FILE — it cannot be fixed in place, and recovery is a new " +
+            "order row (ParseOrderJob refuses to re-drive it; OrdersController.Transform answers " +
+            "'Upload a corrected file'). Nothing else in the pipeline is finished in that sense");
+
+    /// <summary>
+    /// The writers behind rejected_by_supplier's exit, named — because an edge with no writer is
+    /// not an exit, it is the SAME defect wearing the invariant's clothes.
+    ///
+    /// <para>The exit is a CORRECTION loop, deliberately: a genuine business rejection means the
+    /// supplier read the document and refused it, so the cure is a corrected document, never a
+    /// re-send of the same bytes. Both doors are existing product surface:</para>
+    /// <list type="bullet">
+    ///   <item><c>OrderResolutionService.ResolveAsync</c> — recomputes <c>pending_review|ready</c>
+    ///     with NO from-status guard, so correcting the line or header the supplier named already
+    ///     moves a rejected order out. (This edge was live in production the whole time; the map
+    ///     called the status terminal anyway, which is how the dead end read as intentional.)</item>
+    ///   <item><c>OrderTransformService</c>'s claim — accepts
+    ///     <see cref="OrderStatusMachine.ClaimableForTransformFrom"/>, which now includes
+    ///     rejected_by_supplier for the same reason it includes transform_failed: it holds no
+    ///     shippable artifact and re-transforming is the intended cure.</item>
+    /// </list>
+    /// <para>And the door that stays SHUT: no delivery claim set admits rejected_by_supplier, so
+    /// nothing re-sends the refused artifact in place.</para>
+    /// </summary>
+    [Fact]
+    public void RejectedBySupplier_ExitsThroughACorrectionLoop_NotARedelivery()
+    {
+        OrderStatusMachine.NextStatuses(RejectedBySupplier).Should().BeEquivalentTo(
+            new[] { PendingReview, Ready, Transforming },
+            "these three are exactly the correction-loop edges, and each has a named production " +
+            "writer: resolve recomputes pending_review|ready, and the transform claim admits the status");
+
+        OrderStatusMachine.ClaimableForTransformFrom.Should().Contain(RejectedBySupplier,
+            "'Transform again' is the operator's one-click exit — the transform_failed precedent, " +
+            "for the same reason: the order holds no artifact anyone may ship, and re-transforming " +
+            "with the corrected mapping is the cure");
+
+        foreach (var claim in new[]
+                 {
+                     OrderStatusMachine.ClaimableForDispatchFrom,
+                     OrderStatusMachine.ClaimableForAutomaticDispatchFrom,
+                     OrderStatusMachine.ClaimableForRetryFrom,
+                     OrderStatusMachine.RedeliverableFrom,
+                     OrderStatusMachine.RetryableFrom,
+                 })
+            claim.Should().NotContain(RejectedBySupplier,
+                "the supplier read these bytes and refused them — re-sending them unchanged is the " +
+                "one thing that certainly does not help, and it would hand the supplier a duplicate " +
+                "of a document they already answered");
+    }
+
+    /// <summary>
+    /// The transform claim set, pinned. It is written TWICE in OrderTransformService (a relational
+    /// <c>ExecuteUpdateAsync</c> predicate and its EF-InMemory emulation) — the same
+    /// two-copies-of-one-rule shape that made the five delivery-claim lists drift apart four times,
+    /// each time silently.
+    /// </summary>
+    [Fact]
+    public void ClaimableForTransformFrom_IsExactlyTheFourReTransformableStatuses()
+        => OrderStatusMachine.ClaimableForTransformFrom.Should().BeEquivalentTo(
+            new[] { Ready, Transforming, TransformFailed, RejectedBySupplier },
+            "ready is the normal entry; transforming lets a crashed attempt re-run; transform_failed " +
+            "and rejected_by_supplier are the two recovery doors — both hold no shippable artifact, " +
+            "so re-transforming can neither duplicate a send nor ship stale content. Any status past " +
+            "transform (ready_to_deliver and beyond) must stay OUT: claiming one would upload a " +
+            "duplicate artifact and re-enqueue delivery, double-sending the PO");
 
     [Fact]
     public void Machine_KnowsEveryDeclaredStatusConstant()

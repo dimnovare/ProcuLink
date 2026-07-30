@@ -119,6 +119,29 @@ public static class OrderStatusMachine
         Transitions.TryGetValue(from, out var next) ? next : EmptySet;
 
     /// <summary>
+    /// The statuses that are terminal BY DECLARATION — an order that reaches one is finished, and
+    /// the product deliberately owes the operator no way out of it.
+    ///
+    /// <para><b>Declared, never derived — that distinction is the whole point.</b>
+    /// <see cref="IsTerminal"/> computes terminality FROM an empty edge set, so using it to justify
+    /// an empty edge set is circular, and that circle is exactly how
+    /// <c>rejected_by_supplier</c> became an unintended dead end: <c>DeliveryService</c> routed
+    /// every 400–499 there, the map gave it no successors, <see cref="RedeliverableFrom"/> excluded
+    /// it, and each of those facts was justified by the others. An expired API key (401) or a moved
+    /// endpoint (404) then parked a perfectly good PO in a state no control in the product could
+    /// move — a database edit was the only recourse. Splitting this set out of the derivation is
+    /// what lets <c>OrderStatusMachineTests.NoNonTerminalStatus_IsADeadEnd</c> ask the question at
+    /// all: "does every status the product does NOT call finished have a way out?"</para>
+    ///
+    /// <para><c>failed</c> is the only member, and it earns it: a bad SOURCE FILE cannot be fixed
+    /// in place. <c>ParseOrderJob</c> refuses to re-drive it and <c>OrdersController.Transform</c>
+    /// answers "Upload a corrected file before transforming" — recovery is a NEW order row, which
+    /// is a real exit, just not one that runs through this order. Adding a member here is a product
+    /// decision ("this order is over"), not a way to silence the invariant.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> DeclaredTerminal = Set(Failed);
+
+    /// <summary>
     /// A status with no outgoing transitions. <c>delivered</c> is NOT terminal, and the reasons are
     /// all human or local now that the inbound supplier-status webhook is retired (WP-09):
     /// <c>OrderResolutionService.MarkRejectedAsync</c> carries no from-status guard, so an operator
@@ -239,6 +262,32 @@ public static class OrderStatusMachine
     /// </summary>
     public static readonly IReadOnlySet<string> RetryableFrom =
         Set(DeliveryFailed);
+
+    /// <summary>
+    /// <c>OrderTransformService</c>'s atomic transform claim — the statuses it flips to
+    /// <c>transforming</c>. Written TWICE at that call site (a relational <c>ExecuteUpdateAsync</c>
+    /// predicate and its EF-InMemory emulation), which is the same two-copies-of-one-rule shape
+    /// that made the five delivery-claim lists drift apart four times, always silently. Named here
+    /// so both branches read one declaration.
+    ///
+    /// <list type="bullet">
+    /// <item><c>ready</c> — the normal entry.</item>
+    /// <item><c>transforming</c> — a Hangfire retry re-running a crashed attempt.</item>
+    /// <item><c>transform_failed</c> — the recovery door after a broken template/mapping is fixed.
+    ///   It holds NO artifact, so nothing stale can be re-shipped.</item>
+    /// <item><c>rejected_by_supplier</c> — the SAME recovery door for the other kind of correction
+    ///   (WP-19). A genuine business rejection means the supplier read the document and refused it;
+    ///   the cure is a corrected document, and re-transforming is how one is produced. Its stored
+    ///   artifact can never be re-shipped in place — no delivery claim set admits the status — so
+    ///   admitting it here cannot duplicate a send. Without this the status had no exit at all.</item>
+    /// </list>
+    ///
+    /// <para>Everything PAST transform (<c>ready_to_deliver</c> and beyond) must stay out: claiming
+    /// one would upload a duplicate artifact and re-enqueue delivery, double-sending the same PO. A
+    /// mapping edit resets such an order to <c>ready</c> first (the MV-1 edges).</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> ClaimableForTransformFrom =
+        Set(Ready, Transforming, TransformFailed);
 
     /// <summary>
     /// <c>OrdersController.MarkDelivered</c>'s admission guard — the ONLY statuses from which a

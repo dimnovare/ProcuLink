@@ -96,6 +96,94 @@ public class RetryDeliveryJobBackoffTests
         jobs.Captured.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// WP-19, the retry half of the split. The queue used to stop on ANY 4xx, so an expired API key
+    /// or a moved endpoint abandoned an order that a key rotation would have delivered — and the
+    /// status it was abandoned in (<c>rejected_by_supplier</c>) had no exit either. A transport
+    /// refusal is now an ordinary failure: keep the backoff running so the order reaches a delivery
+    /// or an honest dead-letter, both of which an operator can act on.
+    ///
+    /// <para>This is one half of the difference assertion. Its partner is
+    /// <c>DeliveryServiceRejectionTests.DispatchArtifactAsync_TransportRefusal_…</c>, which pins the
+    /// STATUS written for the same code. Reverting either call site to
+    /// <c>responseCode is &gt;= 400 and &lt;= 499</c> turns one of the two red.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(401)]
+    [InlineData(403)]
+    [InlineData(404)]
+    [InlineData(408)]
+    [InlineData(429)]
+    public async Task ExecuteAsync_TransportRefusal_StillSchedulesTheNextBackoffStep(int code)
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, $"HTTP {code}", code));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().HaveCount(1,
+            $"HTTP {code} is the supplier's system refusing the REQUEST, not a judgement on the " +
+            "order — the backoff queue is exactly what carries it to a delivery or a dead-letter");
+        jobs.Captured.Single().State.Should().BeOfType<ScheduledState>();
+    }
+
+    /// <summary>
+    /// The reserved half, and the reason the split cannot collapse back to a range check: a bare 400
+    /// is indistinguishable from a bad URL or a malformed header, so it keeps retrying…
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_BareBadRequest_StillSchedules()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "HTTP 400", 400));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().HaveCount(1);
+    }
+
+    /// <summary>…while the SAME 400 carrying the supplier's reason is a business rejection and stops.</summary>
+    [Fact]
+    public async Task ExecuteAsync_BadRequestCarryingASupplierReason_DoesNotSchedule()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(
+                    false, "HTTP 400", 400, ResponseBody: "{\"error\":\"unknown buyer code BC-9\"}"));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().BeEmpty(
+            "the supplier read the document and said what is wrong with it — re-sending the same " +
+            "bytes cannot help, and the delivery claim refuses the resulting status anyway");
+    }
+
     [Fact]
     public async Task ExecuteAsync_AtAttemptCap_DoesNotSchedule()
     {

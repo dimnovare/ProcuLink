@@ -166,6 +166,118 @@ public class DeliveryServiceRejectionTests
         order.SlaBreached.Should().BeFalse();
     }
 
+    // ── WP-19: the 4xx split ──────────────────────────────────────────────────
+    //
+    // Every 400–499 used to become rejected_by_supplier — a status with no outgoing transitions,
+    // excluded from Redeliver, abandoned by the retry queue. An expired API key (401), a moved
+    // endpoint (404) or a rate limit (429) therefore dead-ended a perfectly deliverable PO, and a
+    // database edit was the only way out. These are the codes that must NOT do that any more.
+
+    [Theory]
+    [InlineData(401)] // credentials expired or rotated
+    [InlineData(403)] // credentials fine, this account may not post orders here
+    [InlineData(404)] // the endpoint moved
+    [InlineData(408)] // the endpoint did not answer in time
+    [InlineData(429)] // rate limited
+    public async Task DispatchArtifactAsync_TransportRefusal_LandsInDeliveryFailedWithCopyNamingTheCause(int code)
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(
+                false, $"HTTP {code}: supplier endpoint returned an error.", code)),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.DeliveryFailed,
+            $"HTTP {code} is the supplier's SYSTEM refusing the request, not a judgement on the " +
+            "order — rejected_by_supplier has no way out, so landing here is what keeps Retry, " +
+            "Send again, the backoff queue and the dead-letter available to the operator");
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.ResponseCode.Should().Be(code);
+        attempt.RejectionReason.Should().BeNull(
+            "the supplier rejected nothing — recording a rejection reason would invent one");
+        attempt.ErrorMessage.Should().NotBeNullOrWhiteSpace();
+        attempt.ErrorMessage.Should().Contain(code.ToString());
+        attempt.ErrorMessage.Should().Contain("delivery settings",
+            "the operator must be told WHERE the fix is made, not just that something failed");
+
+        // The order still owes a delivery, so its SLA window must keep ticking. Only a settled
+        // outcome (delivered, or a genuine rejection) closes it — a transport refusal that the
+        // queue will retry is exactly the case the sweep exists to notice.
+        order.DeliveryDueAt.Should().NotBeNull();
+        order.SlaBreached.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DispatchArtifactAsync_400WithASupplierReason_IsAGenuineRejection()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        const string body = "{\"error\":\"unknown buyer code BC-9\"}";
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(
+                false, "HTTP 400: supplier endpoint returned an error. Response summary: " + body,
+                400, ResponseBody: body)),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.RejectedBySupplier,
+            "a 400 carrying a reason IS the supplier telling us what is wrong with the document");
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.RejectionReason.Should().NotBeNullOrWhiteSpace();
+        attempt.ResponseBody.Should().Contain("unknown buyer code BC-9");
+
+        // A settled outcome closes the SLA window — mirrors the 422 case above.
+        order.DeliveryDueAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DispatchArtifactAsync_400WithNoSupplierReason_IsNotARejection()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        // A bare 400 is indistinguishable from a bad URL, a malformed header, or a proxy sitting in
+        // front of the supplier. Calling that a business rejection is the dead end in miniature.
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(
+                false, "HTTP 400: supplier endpoint returned an error.", 400)),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.DeliveryFailed);
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.RejectionReason.Should().BeNull();
+        attempt.ErrorMessage.Should().Contain("delivery settings");
+    }
+
     [Fact]
     public async Task DispatchArtifactAsync_5xxResponse_SetsDeliveryFailedAndLeavesRejectionReasonNull()
     {
