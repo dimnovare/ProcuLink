@@ -506,6 +506,41 @@ Its author's reasoning on the part they could see is right and worth keeping: th
 CI-only because "a two-minute pre-commit hook teaches people to type `--no-verify`, and a bypassed gate
 enforces nothing."
 
+### 2026-07-30 — THE ICP QUESTION IS ANSWERED, and the answer is not what this plan assumes
+
+Resolved from the repo rather than escalated. The two real customer purchase orders say it outright:
+
+- `real-cxml-1.1-mpn-equals-supplier-part.xml` — `<From><Identity>REDACTED-NETWORK-ID</Identity></From>`,
+  `<To><Identity>REDACTED-NETWORK-ID</Identity></To>`.
+- `real-cxml-1.2-ariba-punchout-mpn-differs.xml` — KSB → Markit, through an **Ariba PunchOut session**. Its own header
+  comment says the buyer's `<SupplierPartID>` "resolves against" our catalog.
+
+**Markit is the ProcuLink customer, and Markit RECEIVES these orders from its own buyers.** That is the
+supplier / INBOUND side — the mirror image of this plan's documented ICP ("buyer/procurement teams sending
+purchase orders OUT to many suppliers").
+
+It also retroactively explains work that looked speculative: **MPN matching (BE #73) and supplier
+auto-detect are inbound-flow problems.** A buyer sending POs out already knows which supplier each order is
+for. Only a party RECEIVING orders needs to detect who sent one and match a foreign part number to its own
+catalogue.
+
+**What this does and does not change.**
+- It does NOT invalidate the engine. The pipeline is direction-agnostic: ingest → normalise → map item codes
+  → transform → deliver. Both directions use it unchanged.
+- It DOES affect the wedge argument. `AUDIT-2026-07-27-FULL-VERDICT.md` §10 dismissed Conexiom as "the
+  closest analogue but sits on the inbound side" and concluded "the buyer-side outbound slot is structurally
+  unoccupied". If the real customer is inbound, then the market comparison was run against the wrong axis,
+  and Conexiom is a direct competitor rather than an adjacent one.
+- It DOES affect **WP-25 and WP-26**, which are about to rewrite ~50 nouns and the whole navigation around an
+  outbound story ("what we send them", "Suppliers"). For an inbound customer the counterparty is a BUYER,
+  not a supplier. The product already has a `counterpartyPlural` mechanism in `BridgeSidebar` — evidence the
+  codebase anticipated both directions even where the plan did not.
+- All marketing copy is written outbound-first throughout.
+
+**FOUNDER DECISION REQUIRED before WP-25/WP-26 merge — this is the one thing here only you can settle:**
+is Markit representative of the customers you intend to sell to, or a first customer who happens to run the
+mirror flow? If the former, the vocabulary work must be direction-aware before it lands, not after.
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
