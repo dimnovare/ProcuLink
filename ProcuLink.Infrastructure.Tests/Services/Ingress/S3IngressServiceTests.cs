@@ -804,8 +804,6 @@ public class S3IngressServiceTests
             modelBuilder.Ignore<SftpIngressConfig>();
             modelBuilder.Ignore<ImportedSftpFile>();
             modelBuilder.Ignore<Buyer>();
-            modelBuilder.Ignore<ValidationRule>();
-            modelBuilder.Ignore<OutputTemplate>();
             modelBuilder.Ignore<InvoiceEntity>();
             modelBuilder.Ignore<InvoiceLineEntity>();
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();

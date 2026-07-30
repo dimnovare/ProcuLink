@@ -1440,15 +1440,13 @@ public sealed class DeliveryService : IDeliveryService
     /// <para>
     /// Each row is released through an ATOMIC per-row claim — an <c>ExecuteUpdateAsync</c> guarded
     /// on <c>Status == delivery_held</c>, committed in one transaction with that row's audit
-    /// event. <c>delivery_held</c> is webhook-reportable, so a supplier status callback can claim
-    /// a held order terminal (<c>WebhookIngressController</c>'s own guarded update) between this
-    /// method's list read and its writes; the guard makes the release LOSE that race — 0 rows
-    /// claimed means the webhook answered first, and the row is skipped: not counted, not audited,
-    /// not re-driven. The previous tracked-load + <c>SaveChanges</c> shape (no concurrency token)
-    /// overwrote the webhook's write BACKWARDS — a just-delivered order re-driven, or a
-    /// just-delivered park "restored" with its nag reopened. Pinned per branch by
-    /// <c>BillingReleaseWebhookRacePostgresTests</c>, which lands the webhook write deterministically
-    /// inside the window.
+    /// event. Another claimant can take a held order terminal between this method's list read and
+    /// its writes; the guard makes the release LOSE that race — 0 rows claimed means the other
+    /// writer answered first, and the row is skipped: not counted, not audited, not re-driven. The
+    /// previous tracked-load + <c>SaveChanges</c> shape (no concurrency token) overwrote that write
+    /// BACKWARDS — a just-delivered order re-driven, or a just-delivered park "restored" with its
+    /// nag reopened. Pinned per branch by <c>BillingReleaseWebhookRacePostgresTests</c>, which lands
+    /// the competing write deterministically inside the window.
     /// </para>
     /// <para>
     /// Returns the number of orders actually released — a row lost to the webhook race is not

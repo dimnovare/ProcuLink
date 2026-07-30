@@ -22,6 +22,13 @@
 /// the output-template editor that WP-06 retired, so by the time this enum was audited there
 /// was no surface left behind the gate.</para>
 ///
+/// <para><b>Removed in WP-07</b> (this PR): the flag that gated the second, never-run rule engine.
+/// Like <c>CustomTemplates</c>, there is no surface left behind the gate once its subsystem is
+/// retired. (Its identifier is deliberately not written here -- naming a retired symbol in a comment
+/// is what <c>RetiredSubsystemsStayRetiredTests</c> exists to catch, and it caught this line.) The
+/// engine that DOES evaluate (<c>SupplierAcceptanceRule</c> / <c>RuleDefinition</c>) is gated by
+/// <c>CustomSupplierRules</c>, which stays.</para>
+///
 /// <para>Deleting members here is ordinal-safe: <c>BillingFeature</c> is never persisted or
 /// serialized -- verified repo-wide, its only non-gate reference is a doc comment in
 /// <c>CxmlTransformService</c>. Re-verify that before removing any future member, or stored
@@ -29,8 +36,6 @@
 /// </summary>
 public enum BillingFeature
 {
-    /// <summary>Custom validation rules. Retired with its subsystem in BE #75.</summary>
-    ValidationRules,
     BulkMapping,
     Cxml,
     AdvancedAudit,

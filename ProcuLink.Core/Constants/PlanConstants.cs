@@ -271,7 +271,6 @@ public static class PlanConstants
     private static readonly IReadOnlyDictionary<BillingFeature, string> MinimumPlan =
         new Dictionary<BillingFeature, string>
         {
-            [BillingFeature.ValidationRules]    = Growth,
             [BillingFeature.BulkMapping]        = Operations,
             [BillingFeature.Cxml]               = Operations,
             [BillingFeature.AdvancedAudit]      = Operations,

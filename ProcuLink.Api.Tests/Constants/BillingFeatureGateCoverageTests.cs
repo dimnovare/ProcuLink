@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using FluentAssertions;
 using ProcuLink.Core.Constants;
 using Xunit;
@@ -46,8 +46,11 @@ public class BillingFeatureGateCoverageTests
     /// <c>DeliveryHistory</c> (no plan card sells it, and hiding "did my PO actually go
     /// out?" from a paying customer is not a tier differentiator), and <c>SlaOnboarding</c>
     /// (a contractual commitment, not a software capability — nothing in code could ever
-    /// check it). Two more are being removed by other work in flight — see
-    /// <see cref="RetiredElsewhere"/>.</para>
+    /// check it). Two more were removed by the work packets that retired the surfaces behind them:
+    /// <c>CustomTemplates</c> (BE #80, the output-template editor WP-06 deleted) and the
+    /// second, never-run rule engine's flag (BE #75, WP-07). The temporary
+    /// <c>RetiredElsewhere</c> exemption that held the latter is gone with it — its own doc
+    /// asked for that deletion rather than letting it become a parking space.</para>
     /// </summary>
     public static readonly IReadOnlyDictionary<BillingFeature, string> EnforcedBy =
         new Dictionary<BillingFeature, string>
@@ -64,27 +67,6 @@ public class BillingFeatureGateCoverageTests
             [BillingFeature.Sso]                 = "StripeBillingService.GetStatusAsync -> BillingStatus.SsoAvailable",
         };
 
-    /// <summary>
-    /// Features whose REMOVAL is owned by other work in flight, so WP-11 must neither enforce
-    /// them nor delete them — three concurrent edits to one enum is how a member gets silently
-    /// reassigned. They are exempt from the enforcement and boundary checks below, and ONLY
-    /// this one: <see cref="ExemptionList_IsExactlyTheOneOwnedElsewhere"/> fails if the
-    /// exemption is ever used to wave through a genuinely unenforced gate.
-    ///
-    /// <para>It is a dead gate today, so exempting it hides nothing that is being sold:</para>
-    /// <list type="bullet">
-    ///   <item><c>ValidationRules</c> — BE #75 retires the whole <c>ValidationRule</c>
-    ///   subsystem (working CRUD, no evaluator) along with this flag.</item>
-    /// </list>
-    ///
-    /// <para><c>CustomTemplates</c> was the second entry and is gone: BE #80 deleted the member
-    /// outright, which is why it no longer needs exempting. When BE #75 lands, this set empties
-    /// and the exemption branch becomes dead code — delete it then rather than letting it become
-    /// a parking space.</para>
-    /// </summary>
-    public static readonly IReadOnlySet<BillingFeature> RetiredElsewhere =
-        new HashSet<BillingFeature> { BillingFeature.ValidationRules };
-
     /// <summary>Ladder order, lowest → highest. Mirrors <c>PlanConstants.PlanOrder</c>.</summary>
     private static readonly string[] Ladder =
     [
@@ -96,24 +78,17 @@ public class BillingFeatureGateCoverageTests
         PlanConstants.Enterprise,
     ];
 
-    /// <summary>Every feature WP-11 owns — the enum minus <see cref="RetiredElsewhere"/>.</summary>
+    /// <summary>
+    /// Every feature in the enum. There is no exemption filter any more: the last exempt member
+    /// went with the subsystem behind it (BE #75), so every member must now be enforced by a named
+    /// site. Re-introducing a filter here is how an unenforced gate gets waved through.
+    /// </summary>
     public static TheoryData<BillingFeature> AllFeatures()
     {
         var data = new TheoryData<BillingFeature>();
-        foreach (var f in Enum.GetValues<BillingFeature>().Where(f => !RetiredElsewhere.Contains(f)))
+        foreach (var f in Enum.GetValues<BillingFeature>())
             data.Add(f);
         return data;
-    }
-
-    [Fact]
-    public void ExemptionList_IsExactlyTheOneOwnedElsewhere()
-    {
-        // The exemption exists for a specific, temporary reason. Anything else appearing here
-        // means an unenforced gate was waved through instead of being enforced or deleted.
-        RetiredElsewhere.Should().BeEquivalentTo(new[]
-        {
-            BillingFeature.ValidationRules,   // BE #75 — subsystem retired
-        });
     }
 
     // ── 1. Every feature is declared ─────────────────────────────────────────
@@ -218,17 +193,19 @@ public class BillingFeatureGateCoverageTests
     // ── The enum must not grow silently ──────────────────────────────────────
 
     [Fact]
-    public void EveryEnumMember_IsEitherEnforcedOrExplicitlyExempt()
+    public void EveryEnumMember_IsEnforcedByANamedSite()
     {
         // Belt-and-braces against the theory-based checks above being skipped or filtered:
         // every member must be accounted for by name, so a new one cannot slip through
-        // un-enforced and un-noticed.
+        // un-enforced and un-noticed. There is no exemption term any more — the last exempt
+        // member left with its subsystem, so EnforcedBy must now cover the enum exactly.
         var members = typeof(BillingFeature)
             .GetFields(BindingFlags.Public | BindingFlags.Static)
             .Length;
 
-        (EnforcedBy.Count + RetiredElsewhere.Count).Should().Be(members,
-            "every BillingFeature must be either enforced by a named site or listed in " +
-            "RetiredElsewhere with the work item that removes it");
+        EnforcedBy.Count.Should().Be(members,
+            "every BillingFeature must be enforced by a named production site. If a new member has " +
+            "no enforcement point, it is a claim about the price list that nothing keeps true — " +
+            "delete it rather than exempting it");
     }
 }

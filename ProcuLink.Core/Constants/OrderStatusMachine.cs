@@ -49,23 +49,22 @@ public static class OrderStatusMachine
             // the artifact and resets the order so the next Send re-transforms.
             // ready_to_deliver → delivery_held: a billing flip pauses (not fails) delivery. This fires
             // BEFORE the 'delivering' claim, so it moves a still-idle, NEVER-dispatched order.
-            // ready_to_deliver → delivered/rejected_by_supplier: a supplier status webhook. LEGITIMATE
-            // ONLY for an order that was already dispatched (MV-1 reset it to ready, the next Send
-            // re-transformed it back here, and a late ACK for the ORIGINAL dispatch lands while it sits
-            // in this state). Most orders resting here were never sent at all, so the webhook gates this
-            // edge on dispatch evidence, not on the status — see WebhookReportableFrom.
-            [ReadyToDeliver]     = Set(Delivering, Delivered, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier),
+            // → delivered is GONE (WP-09). It was listed for the retired inbound supplier-status
+            // webhook, and no other writer can perform it: OrdersController.MarkDelivered is gated on
+            // ManuallyDeliverableFrom (delivery_unconfirmed only, checked twice), and DeliveryService
+            // only writes 'delivered' AFTER its claim has moved the row to 'delivering'. Pinned by
+            // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter.
+            [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier),
             // Billing hold → released back to ready_to_deliver when the org returns to good standing.
             // delivery_held → delivery_unconfirmed: the release RESTORES a held PARK instead of
             // re-driving it — HoldForBillingAsync records the origin (HeldFromStatus) and
             // ReleaseBillingHeldOrdersAsync branches on it, because an automatic re-send of an
             // unknown-outcome PO on a channel that cannot de-duplicate is the duplicate the park
             // exists to prevent.
-            // delivery_held → delivered/rejected_by_supplier: a late supplier ACK for an order sent
-            // before the hold landed (delivery_failed → delivery_held is real, A5). A hold placed by the
-            // PRE-CLAIM billing gate has NO dispatch behind it, so this edge too is gated on dispatch
-            // evidence rather than on the status — see WebhookReportableFrom.
-            [DeliveryHeld]       = Set(ReadyToDeliver, Delivered, DeliveryUnconfirmed, Ready, RejectedBySupplier),
+            // → delivered is GONE (WP-09) — same reason as ready_to_deliver above. A held order is
+            // settled by RELEASING it (→ ready_to_deliver, or → delivery_unconfirmed for a held
+            // park) and settling it from there; it cannot be marked delivered in place.
+            [DeliveryHeld]       = Set(ReadyToDeliver, DeliveryUnconfirmed, Ready, RejectedBySupplier),
             // delivering → delivery_unconfirmed: the park — a crash-recovery re-drive on a channel
             // that cannot de-duplicate stops rather than risk a duplicate PO.
             // delivering → delivery_dead_letter: StuckDeliveryDetectionService dead-letters an order
@@ -77,25 +76,25 @@ public static class OrderStatusMachine
             // un-re-transformed), so the order resets and the next Send re-transforms.
             // delivery_failed → delivery_held: A5 — a backoff retry for an org that lapsed to
             // read_only/past_due since the first attempt is held (not delivered) via HoldForBillingAsync.
-            // delivery_failed/delivery_dead_letter → delivered: a late positive ACK from the supplier
-            // status webhook. Both are gated by WebhookReportableFrom + dispatch evidence.
-            [DeliveryFailed]     = Set(Delivering, Delivered, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
+            // → delivered is GONE (WP-09) — same reason as ready_to_deliver above. An operator who
+            // learns out-of-band that the supplier DID receive a failed-looking send cannot settle it
+            // from here: MarkDelivered admits delivery_unconfirmed only. That is a real product gap,
+            // named in PR #75 as a follow-up, not something to paper over by listing an edge no code
+            // can perform.
+            [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
             // Unknown-outcome park. The operator decides: send again (→ delivering) or confirm the
             // supplier got it (→ delivered). A mapping edit invalidates the artifact (→ ready, the
             // MV-1 sibling). Dead-letter/failed remain reachable if a later re-send exhausts retries.
             // → delivery_held: the delivery_failed sibling — a "Send again" for an org that lapsed
             // since the park is held (not delivered) via HoldForBillingAsync.
-            // → delivered/rejected_by_supplier also arrive via the supplier status webhook
-            // (2026-07-23): a terminal callback answers exactly the question the park is waiting
-            // on — did the PO arrive? — with the one thing the park lacks, the supplier's own
-            // statement. The park always satisfied the guard's dispatch-evidence half (the park
-            // finalises the in-flight row it re-adopted, and that row keeps the IdempotencyKey the
-            // pre-send commit stamped), so admitting the status into WebhookReportableFrom was the
-            // only missing half. See that set's doc for the billable-status trade.
+            // → delivered/rejected_by_supplier: the operator answers the question the park is waiting
+            // on — did the PO arrive? — after checking with the supplier out-of-band. The park keeps
+            // the IdempotencyKey the pre-send commit stamped (ParkUnconfirmedAsync finalises the
+            // re-adopted in-flight row), so the evidence that a send BEGAN survives for that call.
             [DeliveryUnconfirmed] = Set(Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
-            // dead_letter → delivery_failed: an ops requeue that fails again. (NOT a webhook: a supplier
-            // status callback writes delivered or rejected_by_supplier only — never delivery_failed.)
-            [DeliveryDeadLetter] = Set(Delivering, Delivered, DeliveryFailed, Ready, RejectedBySupplier),
+            // dead_letter → delivery_failed: an ops requeue that fails again.
+            // → delivered is GONE (WP-09) — same reason as delivery_failed above.
+            [DeliveryDeadLetter] = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
             [RejectedBySupplier] = Set(),
             [Failed]             = Set(),
             // transform_failed is a FAILURE state, not a terminal one — unlike 'failed' (a bad source
@@ -120,12 +119,14 @@ public static class OrderStatusMachine
         Transitions.TryGetValue(from, out var next) ? next : EmptySet;
 
     /// <summary>
-    /// A status with no outgoing transitions. <c>delivered</c> is NOT terminal: a supplier status
-    /// callback can still reject it (HTTP 200 is transport success, not business acceptance), and an
-    /// MV-1 mapping edit resets it to <c>ready</c> for re-transform. (It can NOT be webhook-flipped to
-    /// delivery_failed — that callback writes rejected_by_supplier. The delivered → delivery_failed
-    /// entry survives for DeliveryService's pre-claim failure paths, which write delivery_failed with
-    /// no status check.)
+    /// A status with no outgoing transitions. <c>delivered</c> is NOT terminal, and the reasons are
+    /// all human or local now that the inbound supplier-status webhook is retired (WP-09):
+    /// <c>OrderResolutionService.MarkRejectedAsync</c> carries no from-status guard, so an operator
+    /// can still reject a delivered order (HTTP 200 is transport success, not business acceptance);
+    /// an MV-1 mapping edit resets it to <c>ready</c> for re-transform; and the
+    /// <c>delivered → delivery_failed</c> entry survives for DeliveryService's PRE-CLAIM failure
+    /// paths (<c>FailMissingConfigAsync</c> / <c>FailBeforeDispatchAsync</c>), which write
+    /// <c>delivery_failed</c> with no status check and can race an enqueue-time guard.
     /// </summary>
     public static bool IsTerminal(string status) => NextStatuses(status).Count == 0;
 
@@ -240,60 +241,22 @@ public static class OrderStatusMachine
         Set(DeliveryFailed);
 
     /// <summary>
-    /// A supplier status callback (<c>POST /api/webhook-ingress/{slug}/status</c>) may report a
-    /// terminal outcome — <see cref="OrderStatusConstants.Delivered"/> or
-    /// <see cref="OrderStatusConstants.RejectedBySupplier"/> — ONLY for an order that was
-    /// genuinely dispatched. This set is the STATUS half of that guard.
+    /// <c>OrdersController.MarkDelivered</c>'s admission guard — the ONLY statuses from which a
+    /// human may settle an order as <c>delivered</c> without sending it. Named for the same reason
+    /// as <see cref="RetryableFrom"/>: the endpoint gates on it TWICE (once against the detached
+    /// read, once as a TOCTOU re-check against the tracked row), and two hand-written literals of
+    /// the same rule is how the four claim lists drifted apart four times.
     ///
-    /// <para><b>Read the invariant precisely: membership means an order in this state MAY have been
-    /// dispatched — NOT that it was.</b> The set is a PROXY for "this order has a DeliveryAttempt
-    /// row", and the proxy is UNSOUND for exactly two members:</para>
-    /// <list type="bullet">
-    ///   <item><c>ready_to_deliver</c> is where EVERY transformed order rests BEFORE it is ever
-    ///     sent — <c>AutoDeliver</c> defaults false, so the ordinary path in is
-    ///     transform → wait for a human "Send" (<c>StrandedReadyOrderDetectionService</c> exists
-    ///     solely because orders sit here un-sent). It is ALSO reachable post-dispatch, via MV-1:
-    ///     a mapping edit resets a delivered/delivery_failed order to ready and the next Send
-    ///     re-transforms it back here, where a late ACK for the ORIGINAL dispatch can land. Both
-    ///     paths are real; the status cannot tell them apart.</item>
-    ///   <item><c>delivery_held</c> is reachable AFTER an attempt (A5: <c>delivery_failed →
-    ///     delivery_held</c> — refusing that order's late ACK would make the reactivation re-drive
-    ///     send it a SECOND time) and BEFORE any attempt, via the PRE-CLAIM billing gate, which
-    ///     moves a still-idle <c>ready_to_deliver</c> order straight here — "never a delivery"
-    ///     (<c>DeliveryService.cs:822-825</c>).</item>
-    /// </list>
-    ///
-    /// <para><b>Because the proxy is unsound, this set is NOT sufficient on its own.</b>
-    /// <c>WebhookIngressController</c> pairs it with dispatch EVIDENCE and re-verifies BOTH inside
-    /// its atomic claim. The evidence is NOT "a <c>DeliveryAttempt</c> row exists" — four
-    /// pre-dispatch gates write an order-linked row with nothing sent — but a per-row marker only
-    /// the dispatch sequence writes (<c>IdempotencyKey != null OR ArtifactSha256 != null</c>); see
-    /// that controller for the full derivation. Do not "simplify" the controller down to this set
-    /// alone: that would let a callback mark a never-dispatched order delivered AND disable its
-    /// safety net (the stranded-ready sweep matches <c>Status == ready_to_deliver</c>; the billing
-    /// release matches <c>Status == delivery_held</c> — overwrite either and the order is
-    /// permanently lost, displayed as shipped, and billable).</para>
-    ///
-    /// <para><c>delivery_unconfirmed</c> (added 2026-07-23) is the opposite case: for this member
-    /// the proxy is SOUND on its own. Its only writer is <c>DeliveryService.ParkUnconfirmedAsync</c>,
-    /// which finalises the re-adopted in-flight row to <c>unconfirmed</c> without touching the
-    /// <c>IdempotencyKey</c> the pre-send commit stamped (<c>OpenDispatchAttemptAsync</c>) — so a
-    /// parked order always carries a marker row and the evidence half passes for every real park.
-    /// It is admitted because a terminal callback answers exactly the question the park is waiting
-    /// on — did the PO arrive? — with positive supplier evidence no operator guess can match;
-    /// refusing it left even http-channel parks to be resolved by out-of-band guesswork. This
-    /// deliberately lets an authenticated webhook move an order into a BILLABLE status; that trade
-    /// was made in the 2026-07-23 open-queue handover (item 3), not silently here.</para>
-    ///
-    /// <para><c>rejected_by_supplier</c> is deliberately ABSENT: a supplier that rejected must not
-    /// silently flip the order to delivered, because a human has likely already acted on the
-    /// rejection. A genuine retraction is an operator re-drive, not an automatic write. A REPEATED
-    /// rejection callback is still a 200 — the endpoint short-circuits when the reported status
-    /// already matches the order's status.</para>
+    /// <para>It is also the load-bearing half of
+    /// <c>OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter</c>: together with
+    /// the delivery claim's single automatic writer (<c>delivering</c> — <c>DeliveryService</c>
+    /// resyncs the claimed row's tracked value AND <c>OriginalValue</c> to <c>delivering</c> before
+    /// <c>PersistAttemptAsync</c> writes the outcome), this set IS the complete inbound edge list
+    /// for <c>delivered</c>. Widening it here without widening the endpoint — or vice versa — is
+    /// what that test catches.</para>
     /// </summary>
-    public static readonly IReadOnlySet<string> WebhookReportableFrom =
-        Set(ReadyToDeliver, Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld,
-            DeliveryUnconfirmed);
+    public static readonly IReadOnlySet<string> ManuallyDeliverableFrom =
+        Set(DeliveryUnconfirmed);
 
     private static readonly IReadOnlySet<string> EmptySet =
         new HashSet<string>(StringComparer.Ordinal);

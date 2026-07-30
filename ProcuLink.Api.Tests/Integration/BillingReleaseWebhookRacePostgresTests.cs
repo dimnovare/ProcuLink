@@ -1,4 +1,4 @@
-using System.Data.Common;
+﻿using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -19,25 +19,41 @@ namespace ProcuLink.Api.Tests.Integration;
 /// The release-vs-webhook race, closed (#36 secondary scope; the window was documented in
 /// <c>ReleaseBillingHeldOrdersAsync</c>'s "KNOWN WINDOW" note when PR #40 shipped around it).
 ///
-/// <para><b>The race.</b> <c>delivery_held</c> is webhook-reportable: a supplier status callback
-/// can claim a held order terminal (<c>delivered</c> / <c>rejected_by_supplier</c>) via
-/// <c>ExecuteUpdateAsync</c> at any moment. The old release read the held rows TRACKED and wrote
-/// them back with <c>SaveChanges</c> and no concurrency token, so a webhook landing in the
-/// milliseconds between its SELECT and its save was overwritten BACKWARDS: a just-delivered order
-/// flipped to <c>ready_to_deliver</c> and was re-driven (a duplicate send of a PO the supplier
-/// already confirmed), or a just-delivered park was "restored" to <c>delivery_unconfirmed</c> with
-/// a reopened nag over an order whose outcome the supplier had just reported.</para>
+/// <para><b>The race.</b> A held row can be moved by another writer at any moment. The old release
+/// read the held rows TRACKED and wrote them back with <c>SaveChanges</c> and no concurrency token,
+/// so anything landing in the milliseconds between its SELECT and its save was overwritten
+/// BACKWARDS: a just-settled order flipped to <c>ready_to_deliver</c> and re-driven (a duplicate
+/// send of a PO already confirmed), or a just-settled park "restored" to
+/// <c>delivery_unconfirmed</c> with a reopened nag over an order whose outcome was already known.</para>
+///
+/// <para><b>The producer has changed; the race has not. (WP-09.)</b> This test — and the class and
+/// method names, which are historical — were written when the concurrent claimant was the inbound
+/// supplier-status callback, which could report a held order terminal via
+/// <c>ExecuteUpdateAsync</c>. That subsystem is retired, and with it the ONLY writer of
+/// <c>delivery_held → delivered</c>; the edge is gone from both transition maps. What survives is
+/// the race SHAPE, and it still has real producers: a concurrent (or Hangfire-retried) invocation
+/// of <c>ReleaseBillingHeldOrdersAsync</c> itself, and an operator "mark rejected"
+/// (<c>OrderResolutionService.MarkRejectedAsync</c> carries no from-status guard, so it moves a held
+/// row too). The guarded atomic claim is what makes both safe, and that is what is under test.</para>
+///
+/// <para><b>Known imprecision, deliberately not changed blind.</b> The interceptor writes
+/// <c>delivered</c> as its sentinel for "some other claimant got here first". Since WP-09 nothing in
+/// production writes <c>delivered</c> from <c>delivery_held</c>, so a producible target
+/// (<c>rejected_by_supplier</c>) would be strictly more honest. The mechanism under test is
+/// unaffected — the assertion is that the release yields 0 rows and SKIPS, not that the row reached
+/// any particular status — and swapping it needs a real-Postgres run to verify, which the host's
+/// wedged Docker daemon could not provide. Filed rather than guessed.</para>
 ///
 /// <para><b>The fix under test.</b> Release claims each row atomically —
 /// <c>ExecuteUpdateAsync</c> guarded on <c>Status == delivery_held</c>, in one transaction with
-/// that row's audit event — so a row the webhook moved first yields 0 rows and is skipped:
+/// that row's audit event — so a row another claimant moved first yields 0 rows and is skipped:
 /// released count, audit trail and re-drive list all exclude it. The claim-shape is the same
 /// "guarded atomic status flip" the canonical delivery-claim predicate work standardises; the
 /// target set here is {delivery_held}, which never composes a staleness window, so it stays a
 /// plain guarded update rather than a <c>DeliveryClaim</c> composition.</para>
 ///
 /// <para><b>Determinism.</b> A <see cref="DbCommandInterceptor"/> on the release's own
-/// <c>DbContext</c> fires the webhook write immediately AFTER the held-list SELECT returns and
+/// <c>DbContext</c> fires the competing write immediately AFTER the held-list SELECT returns and
 /// BEFORE the release writes anything — the exact interleaving the window describes, every run.
 /// Real Postgres is mandatory: the race is between two connections and an
 /// <c>ExecuteUpdateAsync</c>, neither of which InMemory executes.</para>
@@ -79,10 +95,11 @@ public sealed class BillingReleaseWebhookRacePostgresTests : IAsyncLifetime
     private ProcuLinkDbContext NewContext() => new(_options!);
 
     /// <summary>
-    /// A re-drive-origin hold (<c>HeldFromStatus: ready_to_deliver</c>) whose order the supplier
-    /// reports delivered between the release's read and its write. The release must lose that
-    /// race — never flip the delivered order back to <c>ready_to_deliver</c> and re-send it — and
-    /// must still release the org's OTHER held order normally.
+    /// A re-drive-origin hold (<c>HeldFromStatus: ready_to_deliver</c>) whose order ANOTHER claimant
+    /// settles between the release's read and its write. The release must lose that race — never flip
+    /// the settled order back to <c>ready_to_deliver</c> and re-send it — and must still release the
+    /// org's OTHER held order normally. (Written for the retired supplier callback; see the class doc
+    /// for the claimants that produce this race today.)
     /// </summary>
     [DockerRequiredFact]
     public async Task Release_LosesTheRace_ToAWebhookDeliveredReDriveHold()
@@ -116,10 +133,10 @@ public sealed class BillingReleaseWebhookRacePostgresTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The park-origin sibling (<c>HeldFromStatus: delivery_unconfirmed</c>): the supplier's
-    /// callback answers the exact question the park was waiting on while the order sits held. The
+    /// The park-origin sibling (<c>HeldFromStatus: delivery_unconfirmed</c>): another claimant answers
+    /// the exact question the park was waiting on while the order sits held. The
     /// release must not "restore" the park over the answer — that would reopen the SLA nag and ask
-    /// an operator to re-decide an outcome the supplier just reported. Pinned separately because
+    /// an operator to re-decide an outcome that is already settled. Pinned separately because
     /// the park restore is a DIFFERENT guarded write than the re-drive release, and the two
     /// drifting apart is this change's whole subject.
     /// </summary>
@@ -154,7 +171,7 @@ public sealed class BillingReleaseWebhookRacePostgresTests : IAsyncLifetime
     {
         var interceptor = new WebhookAfterHeldReadInterceptor(async () =>
         {
-            // The webhook's terminal claim, exactly as WebhookIngressController lands it: an
+            // A concurrent terminal claim, in the shape any ExecuteUpdateAsync claimant lands it: an
             // atomic guarded ExecuteUpdate on its OWN connection, committed before the release
             // gets to write anything.
             await using var db = NewContext();

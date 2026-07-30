@@ -65,8 +65,13 @@ public class SupplierConnectionRevision
     /// <summary>Snapshot of <c>SupplierPoMapping.ConfigJson</c> (= serialized PoMappingConfig). Null = none.</summary>
     public string? InputMappingJson { get; set; }
 
-    // ── Bundle: output template / field-map ──────────────────────────────────
-    /// <summary>Snapshot of the assigned org <c>OutputTemplate.ConfigJson</c>, else null (= fixed transformer).</summary>
+    // ── Bundle: output field-map ─────────────────────────────────────────────
+    /// <summary>
+    /// Snapshot of the supplier-promoted Output section extracted from
+    /// <c>SupplierPoMapping.ConfigJson</c> — see
+    /// <c>ConnectionBackfillService.TryExtractPromotedOutputJson</c>, the only writer.
+    /// Null = no usable promoted Output, i.e. the fixed transformer path.
+    /// </summary>
     public string? OutputMappingJson { get; set; }
 
     /// <summary>'xml' | 'csv' | 'cxml' | 'json' | 'ubl' | 'x12' — from SupplierDeliveryConfig.OutputFormat.</summary>

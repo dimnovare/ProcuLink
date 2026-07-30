@@ -10,7 +10,6 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
-using ProcuLink.Core.Services.Webhooks;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using Testcontainers.PostgreSql;
@@ -30,9 +29,11 @@ namespace ProcuLink.Api.Tests.Integration;
 /// (IdempotencyKey / ArtifactSha256), stamps CapSupersededAt on the terminal rows, and the cap
 /// count reads 0. The next dispatch's AttemptNumber ASCENDS (ruling 1) — attempt 4, not a lying
 /// attempt 1 — and the new row itself counts against the fresh budget.</item>
-/// <item><b>C2</b> — the P1 inverse: after a requeue, a late supplier <c>rejected</c> callback is
-/// ACCEPTED (evidence survived), the order lands in rejected_by_supplier, and the stranded-failed
-/// sweep no longer reaches it — the rejected PO is never re-sent.</item>
+/// <item><b>C2</b> — RETIRED with inbound webhook ingress (Wave 1, WP-09). It drove a late
+/// supplier <c>rejected</c> callback through the HMAC ingress endpoint; that endpoint never had a
+/// writer for its authenticating secret, so it 401'd from the day it shipped and is gone. C1 still
+/// pins the property C2 depended on — a requeue supersedes rather than deletes, so dispatch
+/// evidence survives.</item>
 /// <item><b>C3</b> — condition 2: the stranded-failed sweep still re-drives a requeued order whose
 /// re-enqueue was lost. Rows now SURVIVE the requeue, so without the sweep's cap subquery being
 /// re-based onto the shared predicate it would read count ≥ cap and skip the order forever —
@@ -173,90 +174,6 @@ public sealed class CapWithoutErasingEvidencePostgresTests : IAsyncLifetime
                 .CountAsync();
             Assert.Equal(1, capCount);
         }
-    }
-
-    // ── C2: the P1 inverse — a late rejection after a requeue is accepted, sweep can't re-send ──
-
-    [DockerRequiredFact]
-    public async Task C2_LateSupplierRejection_AfterRequeue_IsAccepted_AndLeavesTheSweepersReach()
-    {
-        var encryption = CreateEncryption();
-        var ids = await SeedDeliverableOrderAsync(encryption, status: OrderStatusConstants.ReadyToDeliver, agedMinutes: 5);
-
-        // Genuinely dispatched (markers on row 1), then dead-lettered at the cap.
-        var dispatcher = new CountingDispatcher();
-        await using (var db = NewContext())
-        {
-            var svc = BuildService(db, dispatcher, encryption);
-            Assert.True((await svc.DispatchArtifactAsync(
-                ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: false, CancellationToken.None)).Success);
-        }
-        await using (var seed = NewContext())
-        {
-            for (var i = 2; i <= 3; i++)
-                seed.DeliveryAttempts.Add(new DeliveryAttempt
-                {
-                    Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
-                    Channel = "http", Destination = "d", Status = DeliveryAttempt.StatusFailed,
-                    AttemptNumber = i, AttemptedAt = DateTime.UtcNow,
-                });
-            await seed.PurchaseOrders
-                .Where(o => o.Id == ids.OrderId)
-                .ExecuteUpdateAsync(s => s.SetProperty(o => o.Status, OrderStatusConstants.DeliveryDeadLetter));
-            await seed.SaveChangesAsync();
-        }
-
-        // Operator requeues; the re-driven dispatch fails pre-dispatch (markerless row) and the
-        // order rests in delivery_failed — the exact compound the KNOWN_GAP documented.
-        await RequeueAsync(ids.OrgId, ids.OrderId);
-        await using (var seed = NewContext())
-        {
-            seed.DeliveryAttempts.Add(new DeliveryAttempt
-            {
-                Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
-                Channel = "missing_config", Destination = "supplier delivery config",
-                Status = DeliveryAttempt.StatusFailed, AttemptNumber = 4,
-                AttemptedAt = DateTime.UtcNow, ErrorMessage = "Supplier delivery config is missing.",
-            });
-            await seed.SaveChangesAsync();
-        }
-
-        // The late supplier rejection arrives. Evidence SURVIVED the requeue, so the callback is
-        // ACCEPTED and the order leaves the sweeper's status filter.
-        await using (var db = NewContext())
-        {
-            var verifier = new Mock<IHmacWebhookVerifier>();
-            verifier.Setup(v => v.VerifyAsync(
-                    "cap-slug", It.IsAny<string>(), It.IsAny<string>(),
-                    It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new HmacVerificationResult(true, null, ids.OrgId));
-            var ctrl = new WebhookIngressController(
-                verifier.Object, db, new OrderExceptionService(db),
-                NullLogger<WebhookIngressController>.Instance);
-            SetHttpContext(ctrl, body: $"{{\"orderId\":\"{ids.OrderId}\",\"status\":\"rejected\"}}");
-
-            var result = await ctrl.Status("cap-slug", CancellationToken.None);
-            Assert.IsType<OkObjectResult>(result);
-        }
-
-        await using (var verify = NewContext())
-        {
-            var status = await verify.PurchaseOrders.AsNoTracking()
-                .Where(o => o.Id == ids.OrderId).Select(o => o.Status).SingleAsync();
-            Assert.Equal(OrderStatusConstants.RejectedBySupplier, status);
-        }
-
-        // The stranded-failed sweep finds nothing to re-drive — the rejected PO cannot be re-sent.
-        var enqueuer = new RecordingRetryEnqueuer();
-        await using (var db = NewContext())
-        {
-            var sweep = new StrandedFailedDeliveryDetectionService(
-                db, NullLogger<StrandedFailedDeliveryDetectionService>.Instance,
-                new DeliveryReliabilityOptions(), enqueuer);
-            var acted = await sweep.RunAsync(TimeSpan.FromHours(3), CancellationToken.None);
-            Assert.Equal(0, acted);
-        }
-        Assert.Empty(enqueuer.Calls);
     }
 
     // ── C3: condition 2 — the sweep still re-drives a requeued order (rows survive superseded) ──
@@ -438,18 +355,6 @@ public sealed class CapWithoutErasingEvidencePostgresTests : IAsyncLifetime
 
         var result = await ctrl.RequeueDelivery(orderId, CancellationToken.None);
         Assert.IsType<AcceptedResult>(result);
-    }
-
-    private static void SetHttpContext(WebhookIngressController ctrl, string body)
-    {
-        var httpContext = new DefaultHttpContext();
-        httpContext.Request.Headers["X-ProcuLink-Timestamp"] = "2026-07-23T00:00:00Z";
-        httpContext.Request.Headers["X-ProcuLink-Nonce"]     = "nonce-cap";
-        httpContext.Request.Headers["X-ProcuLink-Signature"] = "sig-placeholder";
-        var bodyBytes = Encoding.UTF8.GetBytes(body);
-        httpContext.Request.Body          = new MemoryStream(bodyBytes);
-        httpContext.Request.ContentLength = bodyBytes.Length;
-        ctrl.ControllerContext = new ControllerContext { HttpContext = httpContext };
     }
 
     private sealed class RecordingRetryEnqueuer : IRetryDeliveryEnqueuer

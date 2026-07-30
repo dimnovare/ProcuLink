@@ -171,20 +171,19 @@ public class DeliveryProvenanceTests
         attempt.ArtifactSha256.Should().Be(ProvenanceHash.TrySha256Hex(PayloadBytes));
     }
 
-    // ── dispatch markers: the webhook guard's evidence ───────────────────────
+    // ── dispatch markers: "a send was begun" evidence ────────────────────────
 
     /// <summary>
-    /// The supplier status callback (<c>WebhookIngressController</c>) accepts a terminal report only
-    /// for an order it can PROVE a send was begun for, and its proof is a per-row marker:
-    /// <c>IdempotencyKey != null OR ArtifactSha256 != null</c>. That proof is only sound while EVERY
-    /// pre-dispatch failure leaves BOTH null — a row alone means nothing, because all four gates
-    /// below write an order-linked terminal row with zero bytes sent.
+    /// A <c>DeliveryAttempt</c> ROW proves nothing on its own: all four gates below write an
+    /// order-linked TERMINAL row with zero bytes sent. What proves a send was begun is a per-row
+    /// MARKER — <c>IdempotencyKey != null OR ArtifactSha256 != null</c> — and that reading is only
+    /// sound while EVERY pre-dispatch failure leaves BOTH null.
     ///
-    /// <para>If any of these starts stamping either marker, the webhook guard silently reopens: a
-    /// never-sent order becomes markable 'delivered', which also DISABLES its safety net (the
-    /// stranded-ready sweep matches <c>ready_to_deliver</c>, the billing release matches
-    /// <c>delivery_held</c>) — permanently lost, displayed as shipped, and billable. These tests are
-    /// the tripwire; the guard's correctness depends on them, not on a comment.</para>
+    /// <para>Keep it that way. The marker is what separates "we tried and the transport failed"
+    /// from "we never got as far as sending", and operators, provenance and any future acknowledgement
+    /// path all read it that way. If any of these gates starts stamping either marker, a never-sent
+    /// order becomes indistinguishable from a sent one. These tests are the tripwire; that
+    /// distinction depends on them, not on a comment.</para>
     /// </summary>
     public class PreDispatchFailuresWriteNoDispatchMarker
     {
@@ -437,8 +436,6 @@ public class DeliveryProvenanceTests
             modelBuilder.Ignore<S3IngressConfig>();
             modelBuilder.Ignore<ImportedS3Object>();
             modelBuilder.Ignore<Buyer>();
-            modelBuilder.Ignore<ValidationRule>();
-            modelBuilder.Ignore<OutputTemplate>();
             modelBuilder.Ignore<InvoiceEntity>();
             modelBuilder.Ignore<InvoiceLineEntity>();
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();

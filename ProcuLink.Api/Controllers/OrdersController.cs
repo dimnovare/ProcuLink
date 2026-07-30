@@ -1889,7 +1889,13 @@ public sealed class OrdersController : ControllerBase
 
         var order = getResult.Value!;
 
-        if (order.Status != OrderStatusConstants.DeliveryUnconfirmed)
+        // Both this gate and the TOCTOU re-check below derive from the SAME named set rather than
+        // repeating a status literal: OrderStatusMachine.ManuallyDeliverableFrom is the canonical
+        // "an operator may settle this as delivered" rule, and it is what
+        // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter reads to prove that
+        // every X -> delivered edge in the two transition maps has a writer. Two hand-written copies
+        // of one rule is the drift class that bit the delivery-claim gates four times.
+        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(order.Status))
             return BadRequest(new
             {
                 error = $"Only an order whose delivery is unconfirmed can be marked delivered "
@@ -1912,7 +1918,7 @@ public sealed class OrdersController : ControllerBase
         // no concurrency token, so re-checking the TRACKED row here is what stops this endpoint from
         // silently overwriting an in-flight send back to 'delivered' — the order moved under us, so
         // the operator's assertion (made against the stale snapshot) no longer applies.
-        if (tracked.Status != OrderStatusConstants.DeliveryUnconfirmed)
+        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(tracked.Status))
             return BadRequest(new
             {
                 error = $"Only an order whose delivery is unconfirmed can be marked delivered "
@@ -1977,8 +1983,8 @@ public sealed class OrdersController : ControllerBase
         // parked this order) stays open forever, even though the operator just confirmed the
         // supplier received it. Called AFTER the save above commits: reconcile reads the order's
         // CURRENT status back from the tracked row, so it must see 'delivered', not the
-        // 'delivery_unconfirmed' this write just replaced. Mirrors WebhookIngressController's
-        // SafeReconcileExceptionsAsync for the same delivered transition arriving via callback.
+        // 'delivery_unconfirmed' this write just replaced. Same contract as
+        // OrderServiceShared.SafeReconcileExceptionsAsync for the same delivered transition.
         await SafeReconcileExceptionsAsync(orgId, id, ct);
 
         _logger.LogInformation(
@@ -1995,7 +2001,7 @@ public sealed class OrdersController : ControllerBase
     /// reconcile error must not turn the operator's SUCCESSFUL confirmation into a 500 — the
     /// operator did the one correct thing (confirmed with the supplier), and an observability-surface
     /// fault must not be allowed to contradict that. Same contract as
-    /// WebhookIngressController's private helper of the same name / OrderServiceShared.SafeReconcileExceptionsAsync.
+    /// OrderServiceShared.SafeReconcileExceptionsAsync.
     /// </summary>
     private async Task SafeReconcileExceptionsAsync(Guid orgId, Guid orderId, CancellationToken ct)
     {

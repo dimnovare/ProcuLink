@@ -336,8 +336,6 @@ public class DataErasureServiceTests
             // OrderId so the erased order cannot be resurrected by a re-poll of the surviving source
             // file. The trimmed model must include them for that query to translate.
             modelBuilder.Ignore<Buyer>();
-            modelBuilder.Ignore<ValidationRule>();
-            modelBuilder.Ignore<OutputTemplate>();
             modelBuilder.Ignore<InvoiceEntity>();
             modelBuilder.Ignore<InvoiceLineEntity>();
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();

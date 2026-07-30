@@ -76,16 +76,6 @@ public class Organisation
     /// </summary>
     public bool EmailPollingEnabled      { get; set; }
 
-    // ── Webhook receive ingress (Group N Phase 4) ────────────────────────
-    /// <summary>
-    /// AES-GCM-encrypted HMAC shared secret used to verify inbound webhook calls
-    /// at /api/webhook-ingress/{slug}/*. Separate from TenantApiKey because the
-    /// raw key must be re-derivable to verify HMAC signatures, but TenantApiKey
-    /// only stores a hash. Set/rotated by org admins; receiver-only — never
-    /// exposed back to callers after creation.
-    /// </summary>
-    public string? WebhookSecretEncrypted { get; set; }
-
     /// <summary>
     /// When true, this org's PDFs are parsed with NO egress to OpenAI: scanned/textless
     /// pages are OCR'd by the self-hosted RapidOcrNet engine and parsed deterministically,
