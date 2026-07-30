@@ -62,11 +62,27 @@ public class SupplierConnectionRevision
     public bool? TestPassed { get; set; }
 
     // ── Bundle: input / parse mapping ────────────────────────────────────────
-    /// <summary>Snapshot of <c>SupplierPoMapping.ConfigJson</c> (= serialized PoMappingConfig). Null = none.</summary>
+    /// <summary>
+    /// Snapshot of <c>SupplierPoMapping.ConfigJson</c> (= serialized <c>PoMappingConfig</c>), byte-identical.
+    /// Null = none.
+    ///
+    /// <para>Because it is the WHOLE config, it also carries the additive
+    /// <c>PoMappingConfig.OutputTree</c> — the structured output layout designed in the visual
+    /// designer (WP-12). A pinned order therefore reproduces the layout its revision was published
+    /// with, and adding the tree needed no new column here.</para>
+    /// </summary>
     public string? InputMappingJson { get; set; }
 
     // ── Bundle: output template / field-map ──────────────────────────────────
-    /// <summary>Snapshot of the assigned org <c>OutputTemplate.ConfigJson</c>, else null (= fixed transformer).</summary>
+    /// <summary>
+    /// Snapshot of the supplier-promoted FLAT output mapping (<c>PoMappingConfig.Output</c>), taken
+    /// from <c>SupplierPoMapping.ConfigJson</c> by <c>ConnectionBackfillService</c>; null = the fixed
+    /// transformer. It is NOT a snapshot of the retired org-level <c>OutputTemplate.ConfigJson</c> —
+    /// that entity never fed this column.
+    ///
+    /// <para>Outranked by the structured tree inside <see cref="InputMappingJson"/> when both are
+    /// present, mirroring the per-order and live-supplier ladders.</para>
+    /// </summary>
     public string? OutputMappingJson { get; set; }
 
     /// <summary>'xml' | 'csv' | 'cxml' | 'json' | 'ubl' | 'x12' — from SupplierDeliveryConfig.OutputFormat.</summary>

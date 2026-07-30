@@ -36,6 +36,14 @@ public sealed record PromoteMappingResult(
     string? SchemaFingerprintHash,
     string Message)
 {
+    /// <summary>
+    /// True when a structured OUTPUT TREE — the layout drawn in the visual output designer — was
+    /// saved onto the supplier's reusable mapping (WP-12). A tree carries structure rather than a
+    /// countable list of field rules, so it is reported as a flag rather than a count; it still
+    /// counts as a real promotion for <see cref="NothingToPromote"/>.
+    /// </summary>
+    public bool OutputTreePromoted { get; init; }
+
     /// <summary>Total inbound (SourceMap) field rules promoted.</summary>
     public int InboundFieldsPromoted => HeaderFieldsPromoted + LineFieldsPromoted;
 
@@ -46,11 +54,11 @@ public sealed record PromoteMappingResult(
     public int TotalFieldsPromoted => InboundFieldsPromoted + OutputFieldsPromoted;
 
     /// <summary>
-    /// True when the order carried no promotable mapping at all (no SourceMap and no output mapping),
-    /// so the supplier mapping was left unchanged. The caller surfaces <see cref="Message"/> as a
-    /// clear "nothing to save" notice rather than a misleading success.
+    /// True when the order carried no promotable mapping at all (no SourceMap, no output mapping and
+    /// no output tree), so the supplier mapping was left unchanged. The caller surfaces
+    /// <see cref="Message"/> as a clear "nothing to save" notice rather than a misleading success.
     /// </summary>
-    public bool NothingToPromote => TotalFieldsPromoted == 0;
+    public bool NothingToPromote => TotalFieldsPromoted == 0 && !OutputTreePromoted;
 }
 
 /// <summary>

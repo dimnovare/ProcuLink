@@ -147,11 +147,21 @@ public sealed class PromoteMappingService : IPromoteMappingService
         int outputLineCount   = output?.Lines.Count  ?? 0;
         var hasUsableOutput   = outputHeaderCount > 0 || outputLineCount > 0;
 
+        // WP-12 — promote the STRUCTURED output tree too. Without this the visual output designer's
+        // layout dies with the order it was drawn on: the next identical file from the same supplier
+        // renders through the fixed transformer and every design decision is silently lost. Same
+        // "only a usable value is stored" rule as the flat output above, so promoting an ordinary
+        // order never wipes a layout a previous promote saved.
+        var tree           = @override?.OutputTree;
+        var hasUsableTree  = tree is not null
+                             && (tree.Root.Children.Count > 0 || tree.Root.Rule is not null);
+
         // Decide whether anything is actually promotable. If the order has no SourceMap entries that
-        // map to a known canonical field AND no usable output mapping, leave the supplier mapping
-        // untouched and report a clear "nothing to promote" — never a silent success-with-no-effect.
+        // map to a known canonical field AND no usable output mapping AND no usable output tree,
+        // leave the supplier mapping untouched and report a clear "nothing to promote" — never a
+        // silent success-with-no-effect.
         var inboundPromoted = headerCount + lineCount;
-        if (inboundPromoted == 0 && !hasUsableOutput)
+        if (inboundPromoted == 0 && !hasUsableOutput && !hasUsableTree)
         {
             return new PromoteMappingResult(
                 SupplierId:                 supplierId,
@@ -164,13 +174,14 @@ public sealed class PromoteMappingService : IPromoteMappingService
         }
 
         // Build the merged config. Inbound rules merge into Header/Lines (additive). The output mapping
-        // is set only when this order carries a usable one — otherwise the existing supplier output
-        // mapping (if any) is preserved unchanged.
+        // and the output tree are each set only when this order carries a usable one — otherwise the
+        // existing supplier value (if any) is preserved unchanged.
         var merged = existing with
         {
-            Header = header,
-            Lines  = lines,
-            Output = hasUsableOutput ? output : existing.Output,
+            Header     = header,
+            Lines      = lines,
+            Output     = hasUsableOutput ? output : existing.Output,
+            OutputTree = hasUsableTree   ? tree   : existing.OutputTree,
         };
 
         // Upsert is idempotent (overwrites the existing mapping row — no duplication).
@@ -183,7 +194,14 @@ public sealed class PromoteMappingService : IPromoteMappingService
             OutputHeaderFieldsPromoted: hasUsableOutput ? outputHeaderCount : 0,
             OutputLineFieldsPromoted:   hasUsableOutput ? outputLineCount   : 0,
             SchemaFingerprintHash:      orderRow.SchemaFingerprintHash,
-            Message:                    BuildPromotedMessage(headerCount, lineCount, hasUsableOutput ? outputHeaderCount : 0, hasUsableOutput ? outputLineCount : 0));
+            Message:                    BuildPromotedMessage(
+                                            headerCount, lineCount,
+                                            hasUsableOutput ? outputHeaderCount : 0,
+                                            hasUsableOutput ? outputLineCount   : 0,
+                                            hasUsableTree))
+        {
+            OutputTreePromoted = hasUsableTree,
+        };
     }
 
     // ── Translation helpers ──────────────────────────────────────────────────
@@ -223,7 +241,7 @@ public sealed class PromoteMappingService : IPromoteMappingService
     /// Only the non-zero halves are mentioned.
     /// </summary>
     private static string BuildPromotedMessage(
-        int headerCount, int lineCount, int outputHeaderCount, int outputLineCount)
+        int headerCount, int lineCount, int outputHeaderCount, int outputLineCount, bool promotedTree)
     {
         var inbound = headerCount + lineCount;
         var output  = outputHeaderCount + outputLineCount;
@@ -231,6 +249,8 @@ public sealed class PromoteMappingService : IPromoteMappingService
         var parts = new List<string>();
         if (inbound > 0) parts.Add($"{inbound} source field{(inbound == 1 ? "" : "s")}");
         if (output  > 0) parts.Add($"{output} output field{(output == 1 ? "" : "s")}");
+        // Plain language: the operator drew a structure, so name the structure — not "a tree".
+        if (promotedTree) parts.Add("the file layout you designed");
 
         return $"Saved {string.Join(" and ", parts)} to this supplier's reusable mapping. " +
                "Future uploads from this supplier reuse it.";

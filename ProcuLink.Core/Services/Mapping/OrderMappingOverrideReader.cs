@@ -91,6 +91,22 @@ public static class OrderMappingOverrideReader
         && (output.Header.Count > 0 || output.Lines.Count > 0);
 
     /// <summary>
+    /// True only when a supplier-level <see cref="PoMappingConfig"/> carries a promoted structured
+    /// output tree that can actually emit something (WP-12): a root with at least one child, or a
+    /// root that is itself a leaf carrying a rule. A null config, a null
+    /// <see cref="PoMappingConfig.OutputTree"/>, or a tree whose root is an empty wrapper must NOT
+    /// divert the transform — an empty tree would emit an empty document, which is strictly worse
+    /// than the fixed transformer's complete one.
+    ///
+    /// <para>Mirrors <see cref="HasUsablePromotedOutput"/>. Within the supplier-promoted layer a
+    /// usable tree OUTRANKS a usable flat output config, mirroring the per-order ladder where
+    /// <see cref="OrderMappingOverride.OutputTree"/> outranks <see cref="OrderMappingOverride.Output"/>.</para>
+    /// </summary>
+    public static bool HasUsablePromotedOutputTree(PoMappingConfig? config) =>
+        config?.OutputTree is { } tree
+        && (tree.Root.Children.Count > 0 || tree.Root.Rule is not null);
+
+    /// <summary>
     /// True only when an override is present AND carries a non-blank whole-document
     /// <see cref="OrderMappingOverride.OutputTemplate"/>. Template mode takes precedence over the
     /// field-by-field <see cref="OrderMappingOverride.Output"/> config: when a usable template is

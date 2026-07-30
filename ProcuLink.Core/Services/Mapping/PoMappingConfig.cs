@@ -26,6 +26,28 @@ public record PoMappingConfig
     /// </para>
     /// </summary>
     public OutputMappingConfig? Output { get; init; }
+
+    /// <summary>
+    /// Optional reusable STRUCTURED output template (the OutputNode AST) promoted from a per-order
+    /// <see cref="OrderMappingOverride.OutputTree"/>, so a layout designed once in the visual output
+    /// designer persists across re-uploads instead of dying with the order it was drawn on. Null
+    /// (the default) means no supplier-level tree — the existing fixed transformers stay in control,
+    /// byte-for-byte identical to today.
+    ///
+    /// <para>
+    /// Additive + safe, exactly like <see cref="Output"/>: it serialises into the SAME
+    /// <c>SupplierPoMapping.ConfigJson</c> JSONB column (no new table, no EF migration), and older
+    /// configs that predate it simply deserialise it as null.
+    /// </para>
+    ///
+    /// <para>
+    /// Consumed by <c>OrderTransformService</c> in the supplier-promoted layer, which sits BELOW every
+    /// per-order seam and ABOVE the fixed transformer. Within that layer the tree outranks
+    /// <see cref="Output"/>, mirroring the per-order ladder. A malformed or unusable value falls back
+    /// to the fixed transformer with a logged warning — never a throw.
+    /// </para>
+    /// </summary>
+    public OutputNodeTemplate? OutputTree { get; init; }
 }
 
 public record FieldMappingEntry
