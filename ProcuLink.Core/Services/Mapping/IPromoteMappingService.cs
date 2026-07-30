@@ -12,6 +12,15 @@ namespace ProcuLink.Core.Services.Mapping;
 /// <param name="LineFieldsPromoted">Number of INBOUND line canonical-field rules (SourceMap) written into the supplier mapping.</param>
 /// <param name="OutputHeaderFieldsPromoted">Number of OUTPUT header rules promoted into the supplier mapping's reusable output config.</param>
 /// <param name="OutputLineFieldsPromoted">Number of OUTPUT line rules promoted into the supplier mapping's reusable output config.</param>
+/// <param name="OutputTreePromoted">
+/// True when the order's STRUCTURED output template (<see cref="OrderMappingOverride.OutputTree"/> —
+/// the visual designer's document) was written onto the supplier's reusable
+/// <see cref="PoMappingConfig.OutputTree"/>. A tree is a WHOLE document, not a countable set of field
+/// rules, so it is reported as a flag rather than folded into the field counts — but it MUST be
+/// reflected in <see cref="PromoteMappingResult.NothingToPromote"/>, otherwise a tree-only promotion
+/// would write the tree and then tell the operator nothing was saved (the exact silent no-op this
+/// record exists to prevent).
+/// </param>
 /// <param name="SchemaFingerprintHash">
 /// The order's schema-fingerprint hash at the time of promotion, or <c>null</c> when the order has
 /// no fingerprint recorded (header-less format, or parsed before fingerprinting was wired).
@@ -33,6 +42,7 @@ public sealed record PromoteMappingResult(
     int LineFieldsPromoted,
     int OutputHeaderFieldsPromoted,
     int OutputLineFieldsPromoted,
+    bool OutputTreePromoted,
     string? SchemaFingerprintHash,
     string Message)
 {
@@ -46,11 +56,15 @@ public sealed record PromoteMappingResult(
     public int TotalFieldsPromoted => InboundFieldsPromoted + OutputFieldsPromoted;
 
     /// <summary>
-    /// True when the order carried no promotable mapping at all (no SourceMap and no output mapping),
-    /// so the supplier mapping was left unchanged. The caller surfaces <see cref="Message"/> as a
-    /// clear "nothing to save" notice rather than a misleading success.
+    /// True when the order carried no promotable mapping at all (no SourceMap, no output mapping AND
+    /// no output tree), so the supplier mapping was left unchanged. The caller surfaces
+    /// <see cref="Message"/> as a clear "nothing to save" notice rather than a misleading success.
+    ///
+    /// <para><see cref="OutputTreePromoted"/> is part of this predicate on purpose: a tree contributes
+    /// zero to <see cref="TotalFieldsPromoted"/>, so keying this off the field counts alone would
+    /// report "nothing to save" for a promotion that DID write the supplier's whole document.</para>
     /// </summary>
-    public bool NothingToPromote => TotalFieldsPromoted == 0;
+    public bool NothingToPromote => TotalFieldsPromoted == 0 && !OutputTreePromoted;
 }
 
 /// <summary>

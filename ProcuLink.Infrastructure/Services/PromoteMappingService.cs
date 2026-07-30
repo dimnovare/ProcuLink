@@ -35,6 +35,13 @@ namespace ProcuLink.Infrastructure.Services;
 /// table, no EF migration). This makes the founder's "Save mappings for &lt;supplier&gt;" button
 /// actually save the output side and report what it saved — fixing the silent no-op.
 ///
+/// Output TREE (WP-12): the per-order <see cref="OrderMappingOverride.OutputTree"/> — the visual
+/// output designer's whole document, with its nesting, arrays, attributes, namespaces and
+/// <see cref="OutputNode.IncludeWhen"/> conditionals — is promoted the same way, onto
+/// <see cref="PoMappingConfig.OutputTree"/> (same column, same additive pattern). Before this the
+/// designer's output died with the order: it delivered correctly once and the NEXT order from the
+/// same supplier silently reverted to the fixed transformer.
+///
 /// Consumption (launch batch 4A): the promoted supplier output mapping IS consumed at transform
 /// time — when a future order from this supplier carries no usable per-order template/output
 /// override, <c>OrderTransformService</c> (and the mapping-override preview / replay current side)
@@ -101,9 +108,10 @@ public sealed class PromoteMappingService : IPromoteMappingService
             ?? throw new InvalidOperationException("Cannot promote a mapping for an unrouted order (no supplier assigned).");
 
         // Read the stored override from canonical_json (null = no override set yet).
-        var @override = OrderMappingOverrideReader.Read(orderRow.CanonicalJson);
-        var sourceMap = @override?.SourceMap;
-        var output    = @override?.Output;
+        var @override  = OrderMappingOverrideReader.Read(orderRow.CanonicalJson);
+        var sourceMap  = @override?.SourceMap;
+        var output     = @override?.Output;
+        var outputTree = @override?.OutputTree;
 
         // Load the existing supplier mapping (or start from an empty config) so we can merge.
         var existing = await _poMappingService.GetAsync(orgId, supplierId, ct)
@@ -147,11 +155,19 @@ public sealed class PromoteMappingService : IPromoteMappingService
         int outputLineCount   = output?.Lines.Count  ?? 0;
         var hasUsableOutput   = outputHeaderCount > 0 || outputLineCount > 0;
 
+        // Promote the structured OUTPUT TREE too (WP-12). Same rule as the flat output mapping: only a
+        // tree that actually describes a document is promoted, and an empty/absent one never wipes the
+        // supplier's existing tree. Without this the visual designer's work died with the order it was
+        // designed on — the next upload from the same supplier silently reverted to the fixed
+        // transformer even though the operator had already built that supplier's exact document.
+        var hasUsableOutputTree = OrderMappingOverrideReader.HasUsableOutputTree(outputTree);
+
         // Decide whether anything is actually promotable. If the order has no SourceMap entries that
-        // map to a known canonical field AND no usable output mapping, leave the supplier mapping
-        // untouched and report a clear "nothing to promote" — never a silent success-with-no-effect.
+        // map to a known canonical field AND no usable output mapping AND no usable output tree, leave
+        // the supplier mapping untouched and report a clear "nothing to promote" — never a silent
+        // success-with-no-effect.
         var inboundPromoted = headerCount + lineCount;
-        if (inboundPromoted == 0 && !hasUsableOutput)
+        if (inboundPromoted == 0 && !hasUsableOutput && !hasUsableOutputTree)
         {
             return new PromoteMappingResult(
                 SupplierId:                 supplierId,
@@ -159,18 +175,20 @@ public sealed class PromoteMappingService : IPromoteMappingService
                 LineFieldsPromoted:         0,
                 OutputHeaderFieldsPromoted: 0,
                 OutputLineFieldsPromoted:   0,
+                OutputTreePromoted:         false,
                 SchemaFingerprintHash:      orderRow.SchemaFingerprintHash,
                 Message:                    BuildNothingToPromoteMessage(@override));
         }
 
         // Build the merged config. Inbound rules merge into Header/Lines (additive). The output mapping
-        // is set only when this order carries a usable one — otherwise the existing supplier output
-        // mapping (if any) is preserved unchanged.
+        // and the output tree are each set only when this order carries a usable one — otherwise the
+        // existing supplier value (if any) is preserved unchanged.
         var merged = existing with
         {
-            Header = header,
-            Lines  = lines,
-            Output = hasUsableOutput ? output : existing.Output,
+            Header     = header,
+            Lines      = lines,
+            Output     = hasUsableOutput     ? output     : existing.Output,
+            OutputTree = hasUsableOutputTree ? outputTree : existing.OutputTree,
         };
 
         // Upsert is idempotent (overwrites the existing mapping row — no duplication).
@@ -182,8 +200,13 @@ public sealed class PromoteMappingService : IPromoteMappingService
             LineFieldsPromoted:         lineCount,
             OutputHeaderFieldsPromoted: hasUsableOutput ? outputHeaderCount : 0,
             OutputLineFieldsPromoted:   hasUsableOutput ? outputLineCount   : 0,
+            OutputTreePromoted:         hasUsableOutputTree,
             SchemaFingerprintHash:      orderRow.SchemaFingerprintHash,
-            Message:                    BuildPromotedMessage(headerCount, lineCount, hasUsableOutput ? outputHeaderCount : 0, hasUsableOutput ? outputLineCount : 0));
+            Message:                    BuildPromotedMessage(
+                                            headerCount, lineCount,
+                                            hasUsableOutput ? outputHeaderCount : 0,
+                                            hasUsableOutput ? outputLineCount   : 0,
+                                            hasUsableOutputTree));
     }
 
     // ── Translation helpers ──────────────────────────────────────────────────
@@ -219,11 +242,13 @@ public sealed class PromoteMappingService : IPromoteMappingService
 
     /// <summary>
     /// Human-readable confirmation of a successful promotion, e.g.
-    /// "Saved 3 source field(s) and 5 output field(s) to this supplier's reusable mapping."
-    /// Only the non-zero halves are mentioned.
+    /// "Saved 3 source fields, 5 output fields and the output document design to this supplier's
+    /// reusable mapping." Only the parts that were actually written are mentioned — a promoted output
+    /// TREE is named explicitly because it contributes no field count, and a message that omitted it
+    /// would read as an empty success for the single most valuable thing the operator just saved.
     /// </summary>
     private static string BuildPromotedMessage(
-        int headerCount, int lineCount, int outputHeaderCount, int outputLineCount)
+        int headerCount, int lineCount, int outputHeaderCount, int outputLineCount, bool outputTreePromoted)
     {
         var inbound = headerCount + lineCount;
         var output  = outputHeaderCount + outputLineCount;
@@ -231,8 +256,16 @@ public sealed class PromoteMappingService : IPromoteMappingService
         var parts = new List<string>();
         if (inbound > 0) parts.Add($"{inbound} source field{(inbound == 1 ? "" : "s")}");
         if (output  > 0) parts.Add($"{output} output field{(output == 1 ? "" : "s")}");
+        if (outputTreePromoted) parts.Add("the output document design");
 
-        return $"Saved {string.Join(" and ", parts)} to this supplier's reusable mapping. " +
+        var saved = parts.Count switch
+        {
+            1 => parts[0],
+            2 => $"{parts[0]} and {parts[1]}",
+            _ => $"{string.Join(", ", parts.Take(parts.Count - 1))} and {parts[^1]}",
+        };
+
+        return $"Saved {saved} to this supplier's reusable mapping. " +
                "Future uploads from this supplier reuse it.";
     }
 
@@ -247,7 +280,8 @@ public sealed class PromoteMappingService : IPromoteMappingService
             return "Nothing to save — this order has no custom field mapping yet. " +
                    "Wire some fields (or edit the output mapping) first, then save.";
 
-        return "Nothing to save — the current field mapping has no source or output rules that map " +
-               "to a known field. Wire at least one field, then save.";
+        return "Nothing to save — the current field mapping has no source rules, no output rules that " +
+               "map to a known field, and no output document design. Wire at least one field (or " +
+               "design the output document), then save.";
     }
 }

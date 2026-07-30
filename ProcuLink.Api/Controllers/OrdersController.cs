@@ -1244,13 +1244,14 @@ public sealed class OrdersController : ControllerBase
         _logger.LogInformation(
             "Mapping override promote for order {OrderId} (org {OrgId}): " +
             "supplier {SupplierId}, {Header} header + {Lines} line + {OutHeader} out-header + " +
-            "{OutLines} out-line fields, nothingToPromote={Nothing}, fingerprint {Hash}",
+            "{OutLines} out-line fields, outputTree={Tree}, nothingToPromote={Nothing}, fingerprint {Hash}",
             id, _tenant.OrganisationId,
             result.SupplierId,
             result.HeaderFieldsPromoted,
             result.LineFieldsPromoted,
             result.OutputHeaderFieldsPromoted,
             result.OutputLineFieldsPromoted,
+            result.OutputTreePromoted,
             result.NothingToPromote,
             result.SchemaFingerprintHash ?? "(none)");
 
@@ -1261,6 +1262,9 @@ public sealed class OrdersController : ControllerBase
             lineFieldsPromoted         = result.LineFieldsPromoted,
             outputHeaderFieldsPromoted = result.OutputHeaderFieldsPromoted,
             outputLineFieldsPromoted   = result.OutputLineFieldsPromoted,
+            // WP-12: a promoted output TREE contributes no field count, so it needs its own key —
+            // the UI must be able to say "the document design was saved" without lying about counts.
+            outputTreePromoted         = result.OutputTreePromoted,
             totalFieldsPromoted        = result.TotalFieldsPromoted,
             nothingToPromote           = result.NothingToPromote,
             schemaFingerprintHash      = result.SchemaFingerprintHash,

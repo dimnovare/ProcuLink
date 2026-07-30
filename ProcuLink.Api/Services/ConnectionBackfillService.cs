@@ -270,11 +270,21 @@ public sealed class ConnectionBackfillService : IConnectionBackfillService
     }
 
     /// <summary>
-    /// Extracts the supplier-promoted Output section of a <c>SupplierPoMapping.ConfigJson</c> as
-    /// the revision-consumable snapshot JSON: a camelCase-serialized <see cref="OutputMappingConfig"/>,
-    /// exactly what the pinned-revision transform path deserializes from <c>output_mapping_json</c>.
-    /// Returns null — meaning "fixed transformer", today's behaviour — when the config is
-    /// null/blank, malformed, or carries no usable Output
+    /// Extracts the supplier-promoted output surface of a <c>SupplierPoMapping.ConfigJson</c> as the
+    /// revision-consumable snapshot JSON — exactly what the pinned-revision transform path
+    /// deserializes from <c>output_mapping_json</c>. It is ONE of two shapes, and the transform side
+    /// tells them apart by the presence of a <c>root</c> property:
+    /// <list type="number">
+    ///   <item>WP-12 — a camelCase-serialized <see cref="OutputNodeTemplate"/> when the supplier
+    ///        carries a promoted output TREE. It WINS over the flat map (mirroring the per-order and
+    ///        live-transform precedence), so a pinned order reproduces the document the operator
+    ///        actually designed instead of the leaf-rule fallback underneath it.</item>
+    ///   <item>otherwise a camelCase-serialized <see cref="OutputMappingConfig"/> when the supplier
+    ///        carries a promoted flat Output.</item>
+    /// </list>
+    /// Returns null — meaning "fixed transformer", today's behaviour — when the config is null/blank,
+    /// malformed, or carries neither a usable tree
+    /// (<see cref="OrderMappingOverrideReader.HasUsablePromotedOutputTree"/>) nor a usable Output
     /// (<see cref="OrderMappingOverrideReader.HasUsablePromotedOutput"/>). Never throws.
     /// </summary>
     internal static string? TryExtractPromotedOutputJson(string? configJson)
@@ -284,13 +294,18 @@ public sealed class ConnectionBackfillService : IConnectionBackfillService
         try
         {
             var config = JsonSerializer.Deserialize<PoMappingConfig>(configJson, PoMappingJsonOptions);
+
+            if (OrderMappingOverrideReader.HasUsablePromotedOutputTree(config))
+                return JsonSerializer.Serialize(config!.OutputTree, PromotedOutputJsonOptions);
+
             if (!OrderMappingOverrideReader.HasUsablePromotedOutput(config)) return null;
             return JsonSerializer.Serialize(config!.Output, PromotedOutputJsonOptions);
         }
         catch (JsonException)
         {
-            // Not a parseable PoMappingConfig (legacy/free-form mapping JSON) — there is no
-            // promoted output to snapshot; the fixed transformer stays in control, as today.
+            // Not a parseable PoMappingConfig (legacy/free-form mapping JSON, or a structurally
+            // broken saved tree) — there is no promoted output to snapshot; the fixed transformer
+            // stays in control, as today.
             return null;
         }
     }

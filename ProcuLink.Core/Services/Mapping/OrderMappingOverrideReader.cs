@@ -99,4 +99,26 @@ public static class OrderMappingOverrideReader
     /// </summary>
     public static bool HasUsableTemplate(OrderMappingOverride? @override) =>
         !string.IsNullOrWhiteSpace(@override?.OutputTemplate);
+
+    /// <summary>
+    /// True only when an output TREE actually describes a document: a non-null template whose root
+    /// either has children or is itself a value-carrying leaf. A null tree, or the default empty
+    /// root (<c>new OutputNodeTemplate()</c> — what a half-saved designer state or a
+    /// <c>{"format":"json"}</c> fragment deserialises to), must NOT divert the transform: it would
+    /// emit an empty document in place of the supplier's order. The lower rungs (flat output mapping,
+    /// then the fixed transformer) stay in control, byte-for-byte identical to today.
+    /// </summary>
+    public static bool HasUsableOutputTree(OutputNodeTemplate? tree) =>
+        tree?.Root is { } root
+        && (root.Children.Count > 0
+            || (root.NodeType is OutputNodeType.Field or OutputNodeType.Attribute && root.Rule is not null));
+
+    /// <summary>
+    /// Supplier-config equivalent of <see cref="HasUsableOutputTree"/> (WP-12 — consuming a promoted
+    /// output tree): true only when a supplier-level <see cref="PoMappingConfig"/> carries a promoted
+    /// <see cref="PoMappingConfig.OutputTree"/> that describes a real document. A null config, a null
+    /// tree, or an empty root leaves the existing behaviour untouched.
+    /// </summary>
+    public static bool HasUsablePromotedOutputTree(PoMappingConfig? config) =>
+        HasUsableOutputTree(config?.OutputTree);
 }

@@ -66,7 +66,20 @@ public class SupplierConnectionRevision
     public string? InputMappingJson { get; set; }
 
     // ── Bundle: output template / field-map ──────────────────────────────────
-    /// <summary>Snapshot of the assigned org <c>OutputTemplate.ConfigJson</c>, else null (= fixed transformer).</summary>
+    /// <summary>
+    /// Snapshot of the supplier's promoted OUTPUT surface, taken from
+    /// <c>SupplierPoMapping.ConfigJson</c> (NOT from an org <c>OutputTemplate</c> — that was never
+    /// where this came from; see <c>ConnectionBackfillService.TryExtractPromotedOutputJson</c>, the
+    /// only writer). It holds ONE of two shapes, which the transform path tells apart by the presence
+    /// of a <c>root</c> property:
+    /// <list type="number">
+    ///   <item>a serialized <c>OutputNodeTemplate</c> — the promoted output TREE (WP-12), when the
+    ///        supplier carries one. It wins over the flat map, so a pinned order reproduces the
+    ///        document the operator designed.</item>
+    ///   <item>a serialized <c>OutputMappingConfig</c> — the promoted flat header/line rule map.</item>
+    /// </list>
+    /// Null = the fixed transformer drives the output.
+    /// </summary>
     public string? OutputMappingJson { get; set; }
 
     /// <summary>'xml' | 'csv' | 'cxml' | 'json' | 'ubl' | 'x12' — from SupplierDeliveryConfig.OutputFormat.</summary>
