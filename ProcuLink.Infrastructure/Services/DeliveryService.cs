@@ -478,6 +478,23 @@ public sealed class DeliveryService : IDeliveryService
         return (attempt, false);
     }
 
+    /// <summary>Why a crash-recovery re-drive was parked: the channel cannot de-duplicate a re-send.</summary>
+    internal const string ParkReasonCannotDeduplicate =
+        "Crash-recovery re-drive on a channel that cannot de-duplicate a re-send. "
+        + "The artifact may have been sent, but the outcome was never observed; "
+        + "re-sending could duplicate the PO, so the order is parked for an operator decision.";
+
+    /// <summary>
+    /// Why a crash-recovery re-drive was parked on a file-drop channel: it cannot DUPLICATE, but with
+    /// overwriteExisting off it cannot finish either — it would refuse, retry, and dead-letter an
+    /// order the supplier may already hold in full.
+    /// </summary>
+    internal const string ParkReasonCannotRepairOwnFile =
+        "Crash-recovery re-drive on a file-drop connection with \"replace existing files\" turned off. "
+        + "The artifact may have been written to the supplier's server, in full or in part, but the "
+        + "outcome was never observed; a re-send would refuse rather than replace it, so the order is "
+        + "parked for an operator decision instead of being retried into dead-letter.";
+
     /// <summary>
     /// The unknown-outcome park: finalise the re-adopted in-flight row as
     /// <c>unconfirmed</c> and stop. NO send occurs. The result is
@@ -502,23 +519,6 @@ public sealed class DeliveryService : IDeliveryService
     /// keep nagging until a human resolves it, just on a renewed timer rather than the old one.
     /// </para>
     /// </summary>
-    /// <summary>Why a crash-recovery re-drive was parked: the channel cannot de-duplicate a re-send.</summary>
-    internal const string ParkReasonCannotDeduplicate =
-        "Crash-recovery re-drive on a channel that cannot de-duplicate a re-send. "
-        + "The artifact may have been sent, but the outcome was never observed; "
-        + "re-sending could duplicate the PO, so the order is parked for an operator decision.";
-
-    /// <summary>
-    /// Why a crash-recovery re-drive was parked on a file-drop channel: it cannot DUPLICATE, but with
-    /// overwriteExisting off it cannot finish either — it would refuse, retry, and dead-letter an
-    /// order the supplier may already hold in full.
-    /// </summary>
-    internal const string ParkReasonCannotRepairOwnFile =
-        "Crash-recovery re-drive on a file-drop connection with \"replace existing files\" turned off. "
-        + "The artifact may have been written to the supplier's server, in full or in part, but the "
-        + "outcome was never observed; a re-send would refuse rather than replace it, so the order is "
-        + "parked for an operator decision instead of being retried into dead-letter.";
-
     private async Task<DeliveryResult> ParkUnconfirmedAsync(
         PurchaseOrderEntity order,
         DeliveryAttempt attempt,
