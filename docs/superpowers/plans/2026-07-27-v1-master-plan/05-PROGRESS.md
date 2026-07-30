@@ -415,6 +415,48 @@ and fix the one pre-existing failure.
   audit's D5 contrast failure survives in that one file because WP-24 delegates `unrouted` to the shipped
   banner rather than restyling it. One-line token swap to `--amber-text`.
 
+### 2026-07-30 — merge sweep: 13 open PRs, 11 not ready, reasons per PR
+
+**Merged this pass: BE #81** (`34ce1e1`). CI on `main` in progress at time of writing — per merge-train
+rule 6, nothing else merges until it is green.
+
+**#81 was worth merging on its own merits, and it is a WP-02-class fix.**
+`FireIntegrationTriggerJobReliabilityTests.TwoConcurrentFinalFailures_OnPostgres_…` proved a RELATIONAL
+guarantee — the consecutive-failure count increments via a relative `ExecuteUpdateAsync` so two interleaving
+failures land at base+2 rather than losing one, which EF InMemory cannot translate. It was gated on a local
+dev Postgres at `:5435`; `ci.yml` has no such service, **so on CI the gate always missed and xUnit reported
+`Passed` having asserted nothing.** A production guarantee that had never once been exercised. Moved to an
+Integration test with a real container.
+Also confirmed it does NOT touch the retired inbound webhook channel — it is the OUTBOUND subscription
+failure counter, which survives BE #75. The near-namesake trap did not bite.
+
+Also already on `main`: **BE #80** (`cd7feba`), the dead `CustomTemplates` plan flag.
+
+**ELEVEN PRs ARE NOT READY, and "draft" is the authors' own signal — do not override it.**
+
+| PR | State | Why it is not merging |
+|---|---|---|
+| FE #49 | non-draft, CLEAN | **HELD by me, not by CI.** See below — it can block six concurrent sessions from committing |
+| FE #53 | draft, **UNSTABLE** | CI red. The residency stage-3 correction |
+| FE #45 / BE #79 | draft, CLEAN | WP-02 no-vacuous-passes, both repos |
+| FE #44 / BE #78 | draft, BE **UNSTABLE** | WP-14. Also carries a **known unfixed defect**: `ItemMappingService.cs:96-100` seeds the batch dictionary with the case-insensitive comparer, so an order carrying `B-1` and `b-1` as different products writes line 1's supplier code onto line 2 |
+| FE #43 / BE #77 | draft, CLEAN | WP-20. **BE #77 is a FOUNDER GATE** — SFTP/FTPS filenames change from `PO-123.dat` to `PO-123-a1b2c3d4.xml`, so any supplier globbing `*.dat` stops seeing files. Needs a customer conversation, not an engineering sign-off. FE #43 is a HARD dependency: without it the config editor destroys `overwriteExisting` on the next save and the backend fix silently reverts in production |
+| BE #83 | draft, CLEAN | Residency ground truth doc |
+| BE #75 | draft, **UNSTABLE** | Wave-1 backend retirements. Held on a deploy-ordering defect, and **green-but-ungated** |
+| BE #76 / BE #74 | draft, was UNKNOWN | Merge refs computed via `gh api` (rule 5 — `gh pr view` does not trigger it). Both now `clean`. WP-04 guard and WP-12 |
+
+**FE #49 — held for a reason its author could not see from inside one worktree.** The pre-commit hook runs
+`check:pageshell --strict` and `lint:vocab` **repo-wide**, not over staged files, and `core.hooksPath` is
+repo-level config shared by ~13 worktrees. **WP-25 is actively renaming ~50 nouns and re-aiming the vocab
+gate itself** — mid-packet that tree legitimately fails, so the hook would stop that session committing its
+own work. Worse, `install-hooks.mjs` is wired to `package.json` `prepare`, so `bun install` silently
+installs it — and our own protocol REQUIRES `bun install` in every fresh frontend worktree. Asked for the
+gates to be scoped to staged files, which is also just more correct: a pre-commit hook should judge the
+commit, not the working tree.
+Its author's reasoning on the part they could see is right and worth keeping: the full vitest suite stays
+CI-only because "a two-minute pre-commit hook teaches people to type `--no-verify`, and a bypassed gate
+enforces nothing."
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
