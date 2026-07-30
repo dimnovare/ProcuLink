@@ -115,13 +115,17 @@ public class WidenedOutputRowTests
         return reader.ReadToEnd();
     }
 
-    /// <summary>The single data cell of a one-column CSV (line 2, after the header row).</summary>
+    /// <summary>
+    /// The single data cell of a one-column CSV (line 2, after the header row).
+    ///
+    /// <para>Normalises CRLF first and does NOT drop empty entries. Both matter: an empty cell makes
+    /// the data row an EMPTY line, which <c>RemoveEmptyEntries</c> would discard — on Windows the
+    /// stray <c>\r</c> kept it alive, so the test passed locally and failed only on Linux CI. Splitting
+    /// a normalised string keeps index 1 meaning "the data row" on both.</para>
+    /// </summary>
     private static string SingleCsvValue(PurchaseOrderEntity order, OrderMappingOverride @override)
     {
-        var lines = RenderCsv(order, @override)
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(l => l.TrimEnd('\r'))
-            .ToList();
+        var lines = RenderCsv(order, @override).Replace("\r\n", "\n").Split('\n');
         lines.Should().HaveCountGreaterThan(1, "a one-column CSV should have a header row and one data row");
         return lines[1].Trim('"');
     }
