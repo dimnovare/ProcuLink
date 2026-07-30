@@ -98,6 +98,52 @@ holding 12 agents" to diagnose it.** If both sessions run wide, coordinate the c
 | `/one-pager` unreachable in-app | print collateral, published only via `sitemap.ts` | link it, or delete it — founder call |
 | This is the reverse of what the guard checks | `route-reachability.test.ts` finds routes with no inbound link; this is an inbound link with no route | extend the guard to check both directions |
 
+### TRAPS — read these before touching the named file
+
+Not notes. Each one is a wrong inference a competent agent is likely to make, with the reason it is
+wrong. Add to this list whenever a review catches one.
+
+**TRAP 1 — "the webhook controller was deleted, so I can prune the status edges it justified."**
+WRONG. BE #75 removed `/api/webhook-ingress/{slug}/*` and `OrderStatusMachine.WebhookReportableFrom`,
+but it deliberately left `OrderStatusMachine.Allowed` UNCHANGED. The edges once justified by "a supplier
+status webhook" are still reachable through three other live paths: `OrderResolutionService.cs:256`,
+`DeliveryService.cs:771`, and `MarkDelivered`. Pruning them narrows the order lifecycle and strands
+orders. **Applies to: WP-19**, which rewrites that machine.
+
+**TRAP 2 — "the near-namesake is dead too."** Three similarly-named things exist and only one was
+retired: inbound WEBHOOK ingress (gone), inbound EMAIL (live, `InboundEmailController`), and OUTBOUND
+webhook subscriptions (live, a paid feature). BE #75 added a guard test
+`TheLiveNearNamesakes_AreStillPresent` for exactly this. **Applies to: WP-22**, which rewrites
+`InboundEmailController` and is the packet most able to weaken that guard.
+
+**TRAP 3 — "the retirement was total."** `RuleDefinition` was KEPT. Only the page died. **Applies to:
+WP-17.**
+
+**TRAP 4 — "no inbound link means it is dead."** `/welcome` had no inbound link in `src/` and is
+load-bearing — `StripeBillingService.cs:335` routes every paying customer there post-checkout. The
+reachability guard cannot see a link that originates in the backend. **Applies to: any orphan
+classification.** Corollary: `route-reachability.test.ts` checks routes-with-no-link but not
+links-with-no-route, which is how a 404 to `/admin/guides/unfreeze-a-pilot-workspace` is shipping today.
+
+**TRAP 5 — "a green suite means it is cleared."** BE PR #75 is green with 4029 tests and 0 failures and
+has NOT been through the adversarial gate; it is recorded as **green-but-ungated**. The gate is what
+caught six real regressions in WP-12 that a green 1723-test suite missed. A green suite proves nothing
+was broken that a test already covered; it says nothing about what no test covers.
+
+### Classifying an orphan — the standard, after WP-04 raised it
+
+Because TRAP 4 exists, an allowlist reason must carry evidence, not an impression:
+- **A reason:** "no reader found in EITHER repo at `origin/main` as of 2026-07-30".
+- **Not a reason:** "appears unused".
+Also required: consider that a store can be legitimately **write-mostly** — an audit log's consumer may
+be a human answering a compliance question, not code. And check for non-EF readers: `Memberships` may be
+read through Clerk rather than through the DbContext.
+
+**The goal is not to avoid founder questions. It is to make sure the ones we raise are the ones only a
+founder can answer.** Half the "needs a founder decision" items in `AUDIT-2026-07-27.md` were answerable
+from the code by someone willing to go look — the revision-authority P0 died to a ten-second
+`railway variables | grep`, and `/welcome` was settled by reading one line of `StripeBillingService`.
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
