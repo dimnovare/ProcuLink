@@ -158,6 +158,55 @@ request, until DB-1/DB-2/DB-6 return. In-flight work continues; only launches ar
 correction worth keeping: "7 starts / 0 results" was 4 initial + 3 retries, not 7 failures — the
 retries that died were pre-throttle, and the attempts running after it are healthy.
 
+### 2026-07-30, merge train — parallel-execution session
+
+**Merged this pass.** FE `#53` residency correction, `#43` delivery-config key destruction, `#45` WP-02 e2e.
+BE `#83` residency ground truth, `#76` orphan guard. FE `#49` and `#54` were merged by their own chip
+sessions. FE main `09ecfb7`; BE main `14c8bc9`.
+
+**Held deliberately, each on an unresolved founder gate — not on code quality.** All are green.
+
+| PR | Gate that holds it |
+|---|---|
+| BE #75 Wave-1 retirements | merging destroys `output_templates` + `validation_rules` rows irreversibly; `Down` restores shape, not data |
+| BE #77 + FE #43-pair WP-20 | SFTP/FTPS filename changes on the wire; customer notice drafted, not sent |
+| BE #78 + FE #44 WP-14 | changes bytes delivered to existing suppliers; blast-radius query written, not run against production |
+| BE #74 WP-12 | fixed after refutation but never re-gated adversarially |
+| BE #79 WP-02 | `CONFLICTING/DIRTY` — needs a rebase before anything else |
+| FE #56 | went `dirty` behind #49 |
+
+**FE #55 rebased and reduced.** It originally also widened the link crawl; PR #54 landed that same fix
+independently — same two planted probes, same evidence — so both conflicted files were resolved to `main`
+and the crawl half dropped as redundant. What remains is the parse-stall escalation, which nothing else
+covers: `useOrderReview` was already computing `isStuck` and rendering it nowhere, and after #47 no surface
+in `src/` had any escalation at all. Gates green, 122 files / 1276 tests.
+
+### ⚠️ A started background task will cause a production outage if it lands
+
+`task_70692e4c "Ship the deferred webhook_secret column drop"` is running in its own session. **That
+migration must not merge yet.** The Wave-1 fix deliberately kept the `DropColumn` out of BE #75, because
+`MigrateAsync()` applies every pending migration in one startup — so a second migration file in the same
+deploy is byte-identical in effect to the bug it fixes.
+
+Required order, and it cannot be compressed:
+1. merge + deploy BE #75 — both services stop mapping the column, which still exists, so draining replicas stay safe
+2. confirm **both** Railway services are on the new build: `ProcuLink` (API) **and** `aware-amazement` (Worker)
+3. only then merge the drop migration, deleting `Wave1ColumnDropStaysDeferredTests` in the same PR
+
+Skipping step 2 stops IMAP polling and every Worker billing gate with
+`ERROR: column o.webhook_secret_encrypted does not exist`, for as long as the Worker deploy lags.
+
+### Two process defects worth keeping
+
+**A draft PR cannot be merged, and `gh pr merge` fails quietly enough to look like success.** A merge loop
+that echoed its own status text reported four merges that never happened; only `git log` on `origin/main`
+showed the truth. Check the merge by reading `mergedAt`, never by trusting the command's exit path.
+
+**Local green can come from a working tree the pushed commit does not contain.** The WP-14 agent edited two
+test files *after* creating its commit, pushed only the commit, and reported a green local suite — CI built
+a tree that still had the old test. The tell was a test-count mismatch between local and CI (1358 vs 1346).
+One `git status` before claiming would have caught it. Verify the pushed blob, not the working tree.
+
 ### New small packets found in passing — unowned
 
 | Item | Evidence | Options |
