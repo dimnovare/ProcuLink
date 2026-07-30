@@ -109,7 +109,29 @@
 
 | id | claim as shipped | true? | action |
 |---|---|:-:|---|
-| `eu-residency` | "All order data is processed and stored in EU-region infrastructure" | **NO — worse than first assessed** | Postmark carries the OUTBOUND PO as an attachment (`EmailApiDeliveryDispatcher.cs:109`), so a US subprocessor receives the whole document — and the copy calls that category "inbound email". `EGRESS-GEO` (delivery POST egressing from Durham NC) is still unresolved. `R2Endpoint` is empty in prod config and no repo file records the Neon region. See AUDIT-2026-07-27.md section 11b. **WP-10 must establish the regions before asserting one.** |
+| `eu-residency` | "All order data is processed and stored in EU-region infrastructure" | **NO — and one value cannot carry the answer** | Superseded by the residency table below. See AUDIT-2026-07-27.md section 11b. **WP-10 must establish both columns before asserting anything.** |
+
+### Residency — DEPLOY REGION and EGRESS PATH are two different facts
+
+Collapsing them into one value is how the copy became false. A container deployed in Amsterdam can
+egress through a NAT that geolocates to Durham, NC — **both measurements are true simultaneously**, and
+the customer asking "does our order data cross the Atlantic" is asking about the **egress path**, because
+that is what their data actually travels. One value cannot carry both facts, so the ledger carries two.
+
+| Leg | Deploy region | Source | Egress path | Source |
+|---|---|---|---|---|
+| Railway (API + Worker) | **EU West "Metal" = Amsterdam, Netherlands**. Identifier is **`europe-west4-drams3a`** | Railway regions doc, fetched 2026-07-30 | **UNKNOWN** — measured once at `152.55.184.78` (Durham, NC, US) | `docs/qa/2026-06-29-prelaunch-audit-and-test-plan.md:1065`, filed again `:1090`, never resolved |
+| Neon (Postgres) | **AWS `eu-central-1`, Frankfurt, Germany** | the region is in the host itself: `ep-…-c-3.eu-central-1.aws.neon.tech`. ⚠️ read from the `railway variables` call that leaked three keys on 2026-07-27 — **do not re-derive it that way**; use the Neon console or a host-only grep | UNKNOWN | — |
+| Cloudflare R2 | **UNKNOWN** — `R2Endpoint` is empty at `appsettings.Production.json:21` | — | UNKNOWN | — |
+| Postmark | **US** — and it carries the **OUTBOUND PO** as an attachment, not just inbound mail | `EmailApiDeliveryDispatcher.cs:109`; its test asserts the attachment is `PO-1.xml` | US | same |
+| OpenAI | **US** — receives PO line text | `appsettings.Production.json` sets `Ai:Provider=openai`; no endpoint override exists in the repo | US | same |
+
+**Corrections logged against this table.** "`europe-west4`" is not a Railway identifier — the real one is
+`europe-west4-drams3a`, so the shipped copy quotes a string the vendor does not use. And this plan
+previously asserted Railway "runs on AWS": **retracted** — Railway's docs name no cloud provider for any
+region and describe them as its own hardware. That AWS evidence was real but belonged to **Neon**; two
+providers were conflated inside one sentence. Same failure shape as the rest of the correction log, with
+the unchecked step being *which subject each fact belonged to*.
 | `subprocessor-dpa` | OpenAI DPA + SCCs | ✓ | corrected in `c315a76` (#66). **Audit claim was wrong — do not re-open** |
 | `customers-pilots` | two sized pilot profiles | **✗** | contradicted by production inventory. Replace (WP-10) |
 | `format-counts` | hero "10 inbound / 6 outbound / 6 channels" | ✓ | derived from the catalogue, build-time checked |

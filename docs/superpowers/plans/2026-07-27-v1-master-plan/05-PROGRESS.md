@@ -236,6 +236,7 @@ Kept because the shape of the mistake repeats, and naming it is cheaper than re-
 |---|---|---|
 | "a 404 ships to admins at `/admin/guides/unfreeze-a-pilot-workspace`" | **RETRACTED** | Registry checked, filesystem checked, **renderer never checked**. |
 | "revision authority is off in production" (audit P0) | **REFUTED** | `appsettings.Development.json` read; the deployed environment never read. |
+| "Railway `europe-west4` runs on AWS" (this plan, 2026-07-30) | **RETRACTED** | Railway's docs name no cloud provider and call the regions "Metal". The AWS evidence was real but belonged to **Neon** — two providers conflated in one sentence. The unchecked step was *which subject each fact belonged to*. |
 | "`/welcome` is an orphan" | **REFUTED** | Frontend links searched; the backend caller never searched. |
 | "`/subprocessors` claims an OpenAI DPA we lack" | **NOT-A-FINDING** | Local tree read; it was 9 commits stale and already fixed. |
 
