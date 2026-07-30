@@ -12,7 +12,6 @@ public enum BillingFeature
     AdvancedAudit,
     WebhookDelivery,
     EmailIngestion,
-    CustomTemplates,
     ErpConnectors,
     CustomSupplierRules,
     SlaOnboarding,

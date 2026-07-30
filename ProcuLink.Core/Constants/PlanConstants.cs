@@ -285,7 +285,6 @@ public static class PlanConstants
             [BillingFeature.EmailIngestion]     = Growth,
             [BillingFeature.SftpIngestion]      = Growth,
             [BillingFeature.S3Ingestion]        = Growth,
-            [BillingFeature.CustomTemplates]    = Integration,
             [BillingFeature.ErpConnectors]      = Enterprise,
             [BillingFeature.CustomSupplierRules]= Enterprise,
             [BillingFeature.SlaOnboarding]      = Enterprise,
