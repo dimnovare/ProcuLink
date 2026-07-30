@@ -106,7 +106,11 @@ internal sealed class OrderServiceShared
             .Where(p => p.OrgId == organisationId && p.SupplierId == supplierId && p.IsActive)
             .ToListAsync(ct);
 
-        var dict = new Dictionary<string, SupplierProduct>(StringComparer.OrdinalIgnoreCase);
+        // WP-14: the comparer is named ONCE, in ItemCodeComparison, and referenced from both here
+        // and ItemMappingService. Before that, this dictionary was OrdinalIgnoreCase while the
+        // learned-mapping resolver used an ordinal `==` — so the same code resolved through the
+        // catalog and not through the mapping. Editing one file can no longer split them.
+        var dict = new Dictionary<string, SupplierProduct>(ItemCodeComparison.Comparer);
         foreach (var p in products)
         {
             if (!string.IsNullOrWhiteSpace(p.Code))       dict.TryAdd(p.Code, p);

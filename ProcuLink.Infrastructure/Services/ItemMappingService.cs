@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 
@@ -18,59 +19,106 @@ public sealed class ItemMappingService : IItemMappingService
         _db = db;
     }
 
+    /// <summary>
+    /// One candidate row, projected so the deterministic tie-break below can run client-side over a
+    /// tiny set instead of being expressed as fragile ordering inside the SQL.
+    /// </summary>
+    private sealed record MappingCandidate(
+        Guid Id, string BuyerItemCode, string SupplierItemCode, DateTime UpdatedAt);
+
+    /// <summary>
+    /// Picks ONE row when a code matches several (only possible for case-variant rows written before
+    /// <see cref="UpsertAsync"/> became case-aware). An exact-case row always wins; otherwise the
+    /// most recently updated, with the id as a final tie-break so the answer never depends on the
+    /// order the database happened to return. Determinism matters more than which row wins: a
+    /// resolver that alternates between two supplier codes ships two different documents for the
+    /// same order.
+    /// </summary>
+    private static MappingCandidate? PickDeterministically(
+        IEnumerable<MappingCandidate> candidates, string trimmedRequested)
+    {
+        var list = candidates.ToList();
+        if (list.Count == 0) return null;
+
+        var exact = list.FirstOrDefault(
+            c => string.Equals(c.BuyerItemCode, trimmedRequested, StringComparison.Ordinal));
+        if (exact is not null) return exact;
+
+        return list
+            .OrderByDescending(c => c.UpdatedAt)
+            .ThenBy(c => c.Id)
+            .First();
+    }
+
+    // ── Query-plan note (WP-14) ──────────────────────────────────────────────────
+    // The predicates below fold case with `.ToLower()`, which cannot be served by the plain btree
+    // index IX(org_id, supplier_id, buyer_item_code) on its third column. This is NOT a sequential
+    // scan of the table: the (org_id, supplier_id) equality prefix of that same index still applies,
+    // so the case-folded term only filters within ONE supplier's mapping partition — a set sized by
+    // how many codes one buyer taught for one supplier, not by the whole table. The exact-match term
+    // is OR'd in FIRST so the planner keeps the fully-indexed path available for the common case.
+    // No functional index and no migration were added: that would mean DDL on the production table
+    // for a partition that is small by construction. If a single (org, supplier) ever accumulates
+    // enough mappings for this to matter, the fix is `CREATE INDEX CONCURRENTLY ... (lower(buyer_item_code))`
+    // — deliberately deferred rather than done blind.
+
     /// <inheritdoc/>
     public async Task<string?> ResolveAsync(
         Guid orgId, Guid supplierId, string buyerItemCode, CancellationToken ct)
     {
-        var normalised = buyerItemCode.Trim();
+        var trimmed = buyerItemCode.Trim();
+        var key     = ItemCodeComparison.Key(trimmed);
 
-        var mapping = await _db.ItemMappings
+        var candidates = await _db.ItemMappings
             .AsNoTracking()
             .Where(m => m.OrgId == orgId
                      && m.SupplierId == supplierId
-                     && m.BuyerItemCode == normalised)
-            .Select(m => m.SupplierItemCode)
-            .FirstOrDefaultAsync(ct);
+                     && (m.BuyerItemCode == trimmed || m.BuyerItemCode.ToLower() == key))
+            .Select(m => new MappingCandidate(m.Id, m.BuyerItemCode, m.SupplierItemCode, m.UpdatedAt))
+            .ToListAsync(ct);
 
-        return mapping;
+        return PickDeterministically(candidates, trimmed)?.SupplierItemCode;
     }
 
     /// <inheritdoc/>
     public async Task<IReadOnlyDictionary<string, string?>> ResolveManyAsync(
         Guid orgId, Guid supplierId, IEnumerable<string> buyerItemCodes, CancellationToken ct)
     {
-        // Distinct, trimmed, non-blank set of codes to look up. Keyed case-sensitively
-        // to mirror ResolveAsync (BuyerItemCode == normalised) exact matching.
+        // Distinct, trimmed, non-blank set of codes to look up — de-duplicated under the SHARED item
+        // code rule, so "B-1" and "b-1" arriving on the same order are one lookup, not two.
         var requested = buyerItemCodes
             .Where(c => !string.IsNullOrWhiteSpace(c))
             .Select(c => c.Trim())
-            .Distinct(StringComparer.Ordinal)
+            .Distinct(ItemCodeComparison.Comparer)
             .ToList();
 
-        // Seed every requested code with null so callers can treat the dictionary as
-        // total over the (non-blank) input set — a missing key never throws.
-        var result = new Dictionary<string, string?>(requested.Count, StringComparer.Ordinal);
+        // Seed every requested code with null so callers can treat the dictionary as total over the
+        // (non-blank) input set — a missing key never throws. Keyed with the shared comparer so a
+        // caller looking up `line.BuyerItemCode.Trim()` hits regardless of the spelling it holds.
+        var result = new Dictionary<string, string?>(requested.Count, ItemCodeComparison.Comparer);
         foreach (var code in requested)
             result[code] = null;
 
         if (requested.Count == 0)
             return result;
 
-        // One org+supplier-scoped IN query for all codes instead of N point lookups.
+        var keys = requested.Select(ItemCodeComparison.Key).ToList();
+
+        // One org+supplier-scoped query for all codes instead of N point lookups.
         var rows = await _db.ItemMappings
             .AsNoTracking()
             .Where(m => m.OrgId == orgId
                      && m.SupplierId == supplierId
-                     && requested.Contains(m.BuyerItemCode))
-            .Select(m => new { m.BuyerItemCode, m.SupplierItemCode })
+                     && (requested.Contains(m.BuyerItemCode) || keys.Contains(m.BuyerItemCode.ToLower())))
+            .Select(m => new MappingCandidate(m.Id, m.BuyerItemCode, m.SupplierItemCode, m.UpdatedAt))
             .ToListAsync(ct);
 
-        foreach (var row in rows)
+        // Resolve per REQUESTED code (not per row) so the same tie-break as ResolveAsync applies and
+        // the two resolvers cannot disagree about which of two case-variant rows wins.
+        foreach (var code in requested)
         {
-            // Only overwrite a key that was actually requested (case-sensitive) so
-            // behaviour matches ResolveAsync even if the DB collation is broader.
-            if (result.ContainsKey(row.BuyerItemCode))
-                result[row.BuyerItemCode] = row.SupplierItemCode;
+            var matches = rows.Where(r => ItemCodeComparison.Matches(r.BuyerItemCode, code));
+            result[code] = PickDeterministically(matches, code)?.SupplierItemCode;
         }
 
         return result;
@@ -83,13 +131,25 @@ public sealed class ItemMappingService : IItemMappingService
         MappingSource source, CancellationToken ct)
     {
         var normalised = buyerItemCode.Trim();
+        var key        = ItemCodeComparison.Key(normalised);
         var sourceStr  = source.ToString().ToLowerInvariant();
 
-        var existing = await _db.ItemMappings
+        // The WRITE side must use the SAME case rule as the read side. Fixing resolution alone is a
+        // trap: with a case-blind resolver but a case-SENSITIVE existing-row lookup, an operator
+        // correcting "b-1" while "B-1" is already stored inserts a SECOND row (the unique index is
+        // case-sensitive, so the database permits it) — and the resolver then has two candidates for
+        // one code. That converts a missed mapping into an unstable one, which is worse. Matching
+        // case-insensitively here means a correction always UPDATES the mapping it corrects.
+        var candidates = await _db.ItemMappings
             .Where(m => m.OrgId == orgId
                      && m.SupplierId == supplierId
-                     && m.BuyerItemCode == normalised)
-            .FirstOrDefaultAsync(ct);
+                     && (m.BuyerItemCode == normalised || m.BuyerItemCode.ToLower() == key))
+            .ToListAsync(ct);
+
+        var existing = candidates.Count == 0
+            ? null
+            : candidates.FirstOrDefault(m => string.Equals(m.BuyerItemCode, normalised, StringComparison.Ordinal))
+              ?? candidates.OrderByDescending(m => m.UpdatedAt).ThenBy(m => m.Id).First();
 
         var now = DateTime.UtcNow;
 

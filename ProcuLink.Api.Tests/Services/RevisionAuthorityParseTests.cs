@@ -177,23 +177,38 @@ public class RevisionAuthorityParseTests
     }
 
     [Fact]
-    public void ResolveFromSnapshot_MirrorsResolveManySemantics_TrimmedOrdinalKeys()
+    public void ResolveFromSnapshot_MirrorsResolveManySemantics_TrimmedCaseInsensitiveKeys()
     {
-        // Trimmed keying, Ordinal case-sensitivity, total over the non-blank input set,
-        // last duplicate snapshot row wins — exactly ItemMappingService.ResolveManyAsync.
+        // Trimmed keying, total over the non-blank input set, last duplicate snapshot row wins —
+        // exactly ItemMappingService.ResolveManyAsync.
+        //
+        // WP-14 CHANGED ONE CLAUSE OF THIS CONTRACT, deliberately. This test used to assert that a
+        // snapshot row spelled "b-2" did NOT match a requested "B-2", mirroring the live resolver's
+        // ordinal `==`. That mirroring was faithful and the behaviour was wrong: the supplier
+        // CATALOG matched the same code case-insensitively, so one code resolved through one path
+        // and not the other, and a buyer whose ERP changed the casing of its export silently lost
+        // every mapping their operators had taught. All three resolvers now share
+        // ItemCodeComparison; the agreement itself is asserted in ItemMappingCaseParityTests.
         var snapshot = new[]
         {
             new EffectiveRevisionItemMapping("B-1", "REV-OLD"),
             new EffectiveRevisionItemMapping("B-1", "REV-NEW"),   // duplicate — last wins
-            new EffectiveRevisionItemMapping("b-2", "REV-LOWER"), // case differs from requested "B-2" — no match
+            new EffectiveRevisionItemMapping("b-2", "REV-LOWER"), // case differs from requested "B-2" — NOW matches
         };
         var lines = Lines("  B-1  ", "B-2", "", "   ");
 
         var map = OrderIngestionService.ResolveFromSnapshot(snapshot, lines);
 
-        Assert.Equal(2, map.Count);            // blanks excluded; keys trimmed
+        Assert.Equal(2, map.Count);                // blanks excluded; keys trimmed
         Assert.Equal("REV-NEW", map["B-1"]);
-        Assert.Null(map["B-2"]);               // present (total) but unresolved → review downstream
+        Assert.Equal("REV-LOWER", map["B-2"]);     // case-variant snapshot row resolves, as the catalog always did
+
+        // Still total and still case-insensitive on lookup, so a caller holding either spelling hits.
+        Assert.Equal("REV-NEW", map["b-1"]);
+
+        // A genuinely unknown code is still present-but-null → the line flows to review, unchanged.
+        var unknown = OrderIngestionService.ResolveFromSnapshot(snapshot, Lines("B-9"));
+        Assert.Null(unknown["B-9"]);
     }
 
     // ── Snapshot semantics: parse mapping ──────────────────────────────────────

@@ -2225,10 +2225,16 @@ internal sealed class OrderIngestionService
     /// <summary>
     /// Exact-match resolution against the pinned revision's item-mapping snapshot. Mirrors
     /// <c>ItemMappingService.ResolveManyAsync</c> semantics precisely: the returned dictionary is
-    /// keyed by the TRIMMED buyer item code (Ordinal), is total over the non-blank input set
-    /// (missing mapping ⇒ null value ⇒ the line flows to review exactly as today), and matches
-    /// snapshot rows case-sensitively against the trimmed requested codes (the last duplicate
-    /// snapshot row wins, like the live resolver's row loop).
+    /// keyed by the TRIMMED buyer item code, is total over the non-blank input set (missing
+    /// mapping ⇒ null value ⇒ the line flows to review exactly as today), and matches snapshot rows
+    /// against the trimmed requested codes (the last duplicate snapshot row wins, like the live
+    /// resolver's row loop).
+    ///
+    /// <para>WP-14: the case rule is <see cref="ItemCodeComparison"/> — the SAME member the live
+    /// resolver and the catalog lookup use. This resolver exists so a REPLAY reproduces what the
+    /// live path did; if it applied a different case rule, a replay could resolve a line the
+    /// original run left for review (or the reverse), which is not a replay. Its agreement with the
+    /// other two paths is asserted directly by <c>ItemMappingCaseParityTests</c>.</para>
     /// </summary>
     internal static IReadOnlyDictionary<string, string?> ResolveFromSnapshot(
         IReadOnlyList<EffectiveRevisionItemMapping> snapshot,
@@ -2238,19 +2244,20 @@ internal sealed class OrderIngestionService
             .Select(l => l.BuyerItemCode)
             .Where(c => !string.IsNullOrWhiteSpace(c))
             .Select(c => c.Trim())
-            .Distinct(StringComparer.Ordinal)
+            .Distinct(ItemCodeComparison.Comparer)
             .ToList();
 
-        var result = new Dictionary<string, string?>(requested.Count, StringComparer.Ordinal);
+        var result = new Dictionary<string, string?>(requested.Count, ItemCodeComparison.Comparer);
         foreach (var code in requested)
             result[code] = null;
 
         foreach (var mapping in snapshot)
         {
-            // Only overwrite a key that was actually requested (case-sensitive) — same guard
-            // as the live resolver.
-            if (result.ContainsKey(mapping.BuyerItemCode))
-                result[mapping.BuyerItemCode] = mapping.SupplierItemCode;
+            // Only overwrite a key that was actually requested — same guard as the live resolver,
+            // and now the same case rule too.
+            var trimmed = mapping.BuyerItemCode?.Trim();
+            if (!string.IsNullOrEmpty(trimmed) && result.ContainsKey(trimmed))
+                result[trimmed] = mapping.SupplierItemCode;
         }
 
         return result;
