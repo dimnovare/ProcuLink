@@ -241,7 +241,8 @@ public sealed class AdminAccountStatusPostgresTests : IClassFixture<AdminAccount
             db, config, NullLogger<StripeBillingService>.Instance, new FakeAnalyticsService());
 
         var ctrl = new AdminController(
-            db, billing, config, NullLogger<AdminController>.Instance, new NoopErasureService());
+            db, billing, config, NullLogger<AdminController>.Instance, new NoopErasureService(),
+            new ProcuLink.Infrastructure.Services.ItemMappingService(db));
 
         var identity = new ClaimsIdentity(
             new[] { new Claim("sub", sub), new Claim("email", email) }, authenticationType: "Test");

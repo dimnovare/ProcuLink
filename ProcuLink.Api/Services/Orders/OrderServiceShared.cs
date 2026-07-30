@@ -102,8 +102,18 @@ internal sealed class OrderServiceShared
     public static async Task<IReadOnlyDictionary<string, SupplierProduct>> BuildCatalogLookupAsync(
         ProcuLinkDbContext db, Guid organisationId, Guid supplierId, CancellationToken ct)
     {
+        // ORDERED, because the dictionary below is case-INSENSITIVE while the unique index on
+        // (org_id, supplier_id, code) is case-SENSITIVE: a catalog may legally hold "AB-1" and
+        // "ab-1" as two rows, and `TryAdd` is first-wins. Without an ORDER BY the winner was
+        // whatever order Postgres happened to return, so the same order could resolve to a
+        // different product between two runs — the same class of defect as two resolvers
+        // disagreeing, one level down. Id is the final tie-break so the answer never depends on
+        // physical row order. (The same applies to a Barcode/MPN/ExternalId on one row colliding
+        // with a Code on another.)
         var products = await db.SupplierProducts.AsNoTracking()
             .Where(p => p.OrgId == organisationId && p.SupplierId == supplierId && p.IsActive)
+            .OrderBy(p => p.Code)
+            .ThenBy(p => p.Id)
             .ToListAsync(ct);
 
         // WP-14: the comparer is named ONCE, in ItemCodeComparison, and referenced from both here

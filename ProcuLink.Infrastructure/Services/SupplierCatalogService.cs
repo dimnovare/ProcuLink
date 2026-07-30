@@ -74,6 +74,25 @@ public sealed class SupplierCatalogService : ISupplierCatalogService
     public async Task<(int Created, int Updated)> UpsertManyAsync(
         Guid orgId, Guid supplierId, IEnumerable<SupplierProduct> products, CancellationToken ct)
     {
+        // ── DELIBERATELY Ordinal, unlike every READ of this column ───────────────────────────
+        // The catalog RESOLVER folds case (OrderServiceShared.BuildCatalogLookupAsync,
+        // CatalogRetrievalService, the auto-detect probe — all ItemCodeComparison). This WRITE path
+        // does not, and that asymmetry is the intended answer, not an oversight:
+        //
+        //   * Folding here would collapse "AB-1" and "ab-1" arriving in ONE supplier feed into one
+        //     draft and silently DELETE a product from the customer's catalog. The item code is a
+        //     namespace the SUPPLIER controls; an import must not decide two of their SKUs are the
+        //     same thing. Losing a row on import is worse than holding a twin.
+        //   * A twin here is not an outage: the read side resolves it deterministically
+        //     (BuildCatalogLookupAsync orders by Code then Id before its first-wins TryAdd), so the
+        //     same order always reaches the same product.
+        //   * Merging existing twins is a decision about a customer's data — the founder's, not an
+        //     importer's. IItemMappingService.FindCaseVariantTwinsAsync reports the analogous
+        //     situation for learned mappings rather than acting on it, for the same reason.
+        //
+        // Registered as an accepted exception in ItemCodeComparerGuardTests; changing it means
+        // changing that reason too.
+        //
         // Collapse the input to one draft per trimmed code (last wins), dropping blanks.
         var drafts = new Dictionary<string, SupplierProduct>(StringComparer.Ordinal);
         foreach (var p in products)

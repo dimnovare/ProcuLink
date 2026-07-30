@@ -680,9 +680,15 @@ public sealed class ReplayService : IReplayService
         if (parsed.Lines.Count == 0)
             return ParseLegFailed("Re-parse produced no line items under this revision's input mapping.");
 
-        // Item-code resolution: the revision's snapshot governs when non-empty (exact-match,
-        // trimmed Ordinal — OrderIngestionService.ResolveFromSnapshot); an EMPTY snapshot falls
-        // back to the live item mappings, mirroring BuildLineEntitiesAsync's runtime contract.
+        // Item-code resolution: the revision's snapshot governs when non-empty
+        // (OrderIngestionService.ResolveFromSnapshot); an EMPTY snapshot falls back to the live item
+        // mappings, mirroring BuildLineEntitiesAsync's runtime contract.
+        //
+        // Both branches key the returned dictionary Ordinal on the TRIMMED code the line carries,
+        // and both MATCH stored rows case-insensitively under ItemCodeComparison — including the
+        // same exact-case-wins tie-break when a supplier holds case-variant rows. That agreement is
+        // what makes this a replay rather than a re-derivation: the two paths must pick the same
+        // row, not merely both "resolve". Asserted in ItemMappingCaseParityTests.
         IReadOnlyDictionary<string, string?> resolvedMap;
         try
         {
@@ -779,7 +785,12 @@ public sealed class ReplayService : IReplayService
             CodesResolvedDifferently: resolvedDifferently);
     }
 
-    /// <summary>Trimmed-key lookup mirroring <c>ItemMappingService.ResolveManyAsync</c> / <c>ResolveFromSnapshot</c> keying.</summary>
+    /// <summary>
+    /// Trimmed-key lookup mirroring <c>ItemMappingService.ResolveManyAsync</c> /
+    /// <c>ResolveFromSnapshot</c> keying: both build Ordinal dictionaries keyed by the exact
+    /// trimmed code the line carries, so this must NOT fold case itself — doing so here would
+    /// answer a "b-1" line from a "B-1" key and report a code change that never happened.
+    /// </summary>
     private static string? ResolveCodeFromMap(IReadOnlyDictionary<string, string?> map, string? buyerItemCode)
     {
         if (string.IsNullOrWhiteSpace(buyerItemCode)) return null;
