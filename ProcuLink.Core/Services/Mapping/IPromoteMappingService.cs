@@ -36,6 +36,14 @@ public sealed record PromoteMappingResult(
     string? SchemaFingerprintHash,
     string Message)
 {
+    /// <summary>
+    /// True when a structured OUTPUT TREE — the layout drawn in the visual output designer — was
+    /// saved onto the supplier's reusable mapping (WP-12). A tree carries structure rather than a
+    /// countable list of field rules, so it is reported as a flag rather than a count; it still
+    /// counts as a real promotion for <see cref="NothingToPromote"/>.
+    /// </summary>
+    public bool OutputTreePromoted { get; init; }
+
     /// <summary>Total inbound (SourceMap) field rules promoted.</summary>
     public int InboundFieldsPromoted => HeaderFieldsPromoted + LineFieldsPromoted;
 
@@ -46,11 +54,11 @@ public sealed record PromoteMappingResult(
     public int TotalFieldsPromoted => InboundFieldsPromoted + OutputFieldsPromoted;
 
     /// <summary>
-    /// True when the order carried no promotable mapping at all (no SourceMap and no output mapping),
-    /// so the supplier mapping was left unchanged. The caller surfaces <see cref="Message"/> as a
-    /// clear "nothing to save" notice rather than a misleading success.
+    /// True when the order carried no promotable mapping at all (no SourceMap, no output mapping and
+    /// no output tree), so the supplier mapping was left unchanged. The caller surfaces
+    /// <see cref="Message"/> as a clear "nothing to save" notice rather than a misleading success.
     /// </summary>
-    public bool NothingToPromote => TotalFieldsPromoted == 0;
+    public bool NothingToPromote => TotalFieldsPromoted == 0 && !OutputTreePromoted;
 }
 
 /// <summary>
@@ -98,4 +106,18 @@ public interface IPromoteMappingService
     /// </summary>
     Task<PromoteMappingResult?> PromoteAsync(
         Guid orgId, Guid orderId, CancellationToken ct);
+
+    /// <summary>
+    /// UN-PROMOTE: removes the supplier's stored <see cref="PoMappingConfig.OutputTree"/>, leaving
+    /// every other member of the config (inbound rules, flat output mapping) untouched. Returns
+    /// <c>true</c> when a tree was present and removed, <c>false</c> when there was nothing to remove
+    /// (idempotent — a second call is a no-op, not an error).
+    ///
+    /// <para>Exists because promotion used to be a ONE-WAY door: the merge preserved
+    /// <c>existing.OutputTree</c> unconditionally, so a layout that could never render this
+    /// supplier's document survived every subsequent promote with no way to take it back. Every
+    /// promote now also re-checks and drops a stored tree that cannot deliver; this is the explicit
+    /// version of the same thing, for an operator who simply wants their layout gone.</para>
+    /// </summary>
+    Task<bool> ClearPromotedOutputTreeAsync(Guid orgId, Guid supplierId, CancellationToken ct);
 }

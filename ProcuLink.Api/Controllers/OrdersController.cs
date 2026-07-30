@@ -892,39 +892,46 @@ public sealed class OrdersController : ControllerBase
                 order.Supplier = supplier;
         }
 
+        // ── The format this preview is FOR ────────────────────────────────────────
+        // Resolved BEFORE the tree modes because a structured tree only DRIVES the document when it
+        // renders THIS format — the same gate OrderTransformService.TreeDrivesTheDocument applies at
+        // delivery (the bytes come from tree.Format, but artifact.Format, the delivered content type
+        // and the file name all come from the connection's). Without mirroring it here the workshop
+        // rendered a promoted JSON layout while delivery correctly shipped the connection's CSV
+        // document: preview ≠ delivered bytes, the one thing this endpoint promises not to do.
+        //
+        // PARSE only. The unknown-format 400 stays in the field-by-field mode below, so a tree or
+        // template preview with an odd `format` behaves exactly as it did before (null = no opinion,
+        // and the tree still renders).
+        var effectiveConfig = _effectiveConfig is null
+            ? EffectiveConnectionConfig.Live
+            : await _effectiveConfig.ResolveAsync(_tenant.OrganisationId, order.ConnectionRevisionId, ct);
+
+        var previewFormat = ParsePreviewFormat(format);
+        if (!honorFormat
+            && effectiveConfig.IsRevision
+            && Enum.TryParse<OutputFormat>(effectiveConfig.OutputFormat, ignoreCase: true, out var pinnedPreviewFormat)
+            && MappedTransformService.SupportsOverrideFormat(pinnedPreviewFormat))
+            previewFormat = pinnedPreviewFormat;
+
         // ── Mode 0: STRUCTURED OUTPUT TREE (Phase B — HIGHEST precedence) ─────────
         // When the effective override carries an OutputNode tree, render the whole document from it via
         // the SAME emitter the delivery path uses (same value machinery, source tokens, and catalog), so
         // the preview equals the delivered bytes. Errors surface as { ok:false, error } at HTTP 200.
-        if (effectiveOverride?.OutputTree is not null)
-        {
-            try
-            {
-                var treeTokens = ProcuLink.Transform.Output.SourceTokenSerialization
-                    .FromTokensJson(order.SourceCapture?.TokensJson);
-                var treeCatalog = await ProcuLink.Api.Services.OrderServiceShared.BuildCatalogLookupAsync(
-                    _db, _tenant.OrganisationId, order.SupplierId ?? Guid.Empty, ct);
-                var treeResult = new OutputTemplateEmitter().Emit(
-                    effectiveOverride.OutputTree, order, effectiveOverride, treeTokens, treeCatalog);
-                using var treeReader = new StreamReader(treeResult.Content);
-                var treeContent = await treeReader.ReadToEndAsync(ct);
-                return Ok(new
-                {
-                    format      = effectiveOverride.OutputTree.Format.ToString(),
-                    contentType = treeResult.ContentType,
-                    content     = treeContent,
-                });
-            }
-            catch (TransformValidationException ex)
-            {
-                return Ok(new { ok = false, error = ex.Message }); // unresolved order — show inline
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Order {OrderId}: OutputTree preview failed.", id);
-                return Ok(new { ok = false, error = $"Output preview failed: {ex.Message}" });
-            }
-        }
+        //
+        // WS-12 exception, mirrored from OrderTransformService and asked of the SAME shared predicate:
+        // a tree the emitter cannot render (cXML/X12 carry only the connection's sender/receiver
+        // identity; UBL/Peppol/X12-850/EDIFACT carry nothing) is NOT handed to the emitter. Doing so
+        // produced an { ok:false } error for an order that delivers perfectly well, so it falls through
+        // to the field-by-field path below exactly as delivery does.
+        //
+        // The format gate mirrors delivery exactly (see `previewFormat` above): a layout designed for
+        // another format falls through to the field-by-field path here, because that is what delivery
+        // does with it. An unparseable `format` means "no opinion" and does not drop the layout.
+        if (effectiveOverride?.OutputTree is { } perOrderTree
+            && OrderMappingOverrideReader.CanRenderTree(perOrderTree)
+            && (previewFormat is null || perOrderTree.Format == previewFormat))
+            return await RenderTreePreviewAsync(perOrderTree, order, effectiveOverride, id, ct);
 
         // ── Mode 1: WHOLE-DOCUMENT TEMPLATE (takes precedence) ────────────────────
         // When the effective override carries a usable template, render it. A compile/render error is
@@ -948,10 +955,6 @@ public sealed class OrdersController : ControllerBase
         // Read-parity (launch batch 7 follow-up): resolve the pinned revision's bundle ONCE through
         // the SAME resolver the transform uses. Live bundle when the flag is off / the order is
         // unpinned / the pin is orphaned / no resolver — byte-identical to the pre-read-parity path.
-        var effectiveConfig = _effectiveConfig is null
-            ? EffectiveConnectionConfig.Live
-            : await _effectiveConfig.ResolveAsync(_tenant.OrganisationId, order.ConnectionRevisionId, ct);
-
         // Config fallback — parity with OrderTransformService when neither the draft nor the stored
         // override carries a USABLE output mapping:
         //   • PINNED (flag on): the pinned revision's output snapshot drives delivery, and the live
@@ -965,6 +968,20 @@ public sealed class OrdersController : ControllerBase
                 ? TryBuildPinnedRevisionOverride(effectiveConfig, effectiveOverride, id)
                 : await TryBuildSupplierPromotedOverrideAsync(order.SupplierId ?? Guid.Empty, effectiveOverride, ct);
 
+        // ── Mode 0b: a PROMOTED / PINNED structured tree (WP-12) ──────────────────
+        // The fallback above can carry a tree as well as a flat mapping, and when it does the tree is
+        // what delivery renders — so the preview must render it too, through the SAME emitter. Without
+        // this the workshop showed the FIXED document (or 400'd for want of a body) while delivery
+        // shipped the designed layout: the exact preview ≠ delivered bytes this endpoint promises not
+        // to do. A cXML/X12 tree is excluded for the same WS-12 reason as Mode 0.
+        // The per-order tree ALWAYS wins (it reached here only by being unrenderable, where the fixed
+        // transformer owns the document) — so a promoted tree is never adopted over one.
+        if (effectiveOverride?.OutputTree is null
+            && configFallback?.OutputTree is { } fallbackTree
+            && OrderMappingOverrideReader.CanRenderTree(fallbackTree)
+            && (previewFormat is null || fallbackTree.Format == previewFormat))
+            return await RenderTreePreviewAsync(fallbackTree, order, configFallback, id, ct);
+
         // This path needs an override. Preserve the original contract: a request without a body (and
         // with no stored template/override AND no revision/supplier-promoted output mapping) still
         // requires a body for the field-mapping preview.
@@ -974,16 +991,7 @@ public sealed class OrdersController : ControllerBase
         var fieldOverride = configFallback ?? effectiveOverride ?? request!;
 
         // Preview supports every entity-based output format an override can influence.
-        var fmt = (format?.Trim().ToLowerInvariant()) switch
-        {
-            "csv"  => OutputFormat.Csv,
-            "json" => OutputFormat.Json,
-            "xml"  => OutputFormat.Xml,
-            "cxml" => OutputFormat.CXml,
-            "ubl"  => OutputFormat.Ubl,
-            "x12"  => OutputFormat.X12,
-            _      => (OutputFormat?)null,
-        };
+        var fmt = ParsePreviewFormat(format);
         if (fmt is null || !MappedTransformService.SupportsOverrideFormat(fmt.Value))
             return BadRequest(new { error = "Override preview supports csv, json, xml, cxml, ubl, and x12." });
 
@@ -1123,6 +1131,65 @@ public sealed class OrdersController : ControllerBase
         }
     }
 
+
+    /// <summary>
+    /// The one place the <c>format</c> query string is turned into an <see cref="OutputFormat"/>.
+    /// Null = unrecognised, which the tree modes read as "no opinion" and the field-by-field mode
+    /// turns into a 400 (exactly as before). Spelled once so the tree gate and the field-by-field
+    /// path can never disagree about what the caller asked for.
+    /// </summary>
+    private static OutputFormat? ParsePreviewFormat(string? format) => (format?.Trim().ToLowerInvariant()) switch
+    {
+        "csv"  => OutputFormat.Csv,
+        "json" => OutputFormat.Json,
+        "xml"  => OutputFormat.Xml,
+        "cxml" => OutputFormat.CXml,
+        "ubl"  => OutputFormat.Ubl,
+        "x12"  => OutputFormat.X12,
+        _      => null,
+    };
+
+    /// <summary>
+    /// Renders an <see cref="OutputNodeTemplate"/> through the SAME emitter, source tokens and catalog
+    /// the delivery path uses, so the preview equals the delivered bytes. ONE implementation for both
+    /// tree sources — the order's own override and the promoted / pinned fallback — because two copies
+    /// is exactly how the two drifted apart. Errors surface as <c>{ ok:false, error }</c> at HTTP 200
+    /// so the editor shows them inline; never a 400/500.
+    /// </summary>
+    private async Task<IActionResult> RenderTreePreviewAsync(
+        OutputNodeTemplate tree,
+        PurchaseOrderEntity order,
+        OrderMappingOverride @override,
+        Guid orderId,
+        CancellationToken ct)
+    {
+        try
+        {
+            var treeTokens = ProcuLink.Transform.Output.SourceTokenSerialization
+                .FromTokensJson(order.SourceCapture?.TokensJson);
+            var treeCatalog = await ProcuLink.Api.Services.OrderServiceShared.BuildCatalogLookupAsync(
+                _db, _tenant.OrganisationId, order.SupplierId ?? Guid.Empty, ct);
+            var treeResult = new OutputTemplateEmitter().Emit(tree, order, @override, treeTokens, treeCatalog);
+            using var treeReader = new StreamReader(treeResult.Content);
+            var treeContent = await treeReader.ReadToEndAsync(ct);
+            return Ok(new
+            {
+                format      = tree.Format.ToString(),
+                contentType = treeResult.ContentType,
+                content     = treeContent,
+            });
+        }
+        catch (TransformValidationException ex)
+        {
+            return Ok(new { ok = false, error = ex.Message }); // unresolved order — show inline
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Order {OrderId}: OutputTree preview failed.", orderId);
+            return Ok(new { ok = false, error = $"Output preview failed: {ex.Message}" });
+        }
+    }
+
     /// <summary>
     /// Preview-side twin of <c>OrderTransformService.TryReadSupplierPromotedOutputAsync</c> (launch
     /// batch 4A): reads the supplier's reusable <see cref="PoMappingConfig"/> and wraps a USABLE
@@ -1139,13 +1206,19 @@ public sealed class OrdersController : ControllerBase
         try
         {
             var supplierConfig = await _poMappings.GetAsync(_tenant.OrganisationId, supplierId, ct);
-            if (!OrderMappingOverrideReader.HasUsablePromotedOutput(supplierConfig))
+
+            // WP-12: the promoted structured TREE is carried too. Delivery renders it, so a preview
+            // that only ever knew about the flat mapping showed a document the supplier never receives.
+            var hasFlat = OrderMappingOverrideReader.HasUsablePromotedOutput(supplierConfig);
+            var hasTree = OrderMappingOverrideReader.HasUsablePromotedOutputTree(supplierConfig);
+            if (!hasFlat && !hasTree)
                 return null;
 
             var synthetic = new OrderMappingOverride
             {
                 CustomFields = effectiveOverride?.CustomFields ?? new List<CustomField>(),
-                Output       = supplierConfig!.Output,
+                Output       = hasFlat ? supplierConfig!.Output     : null,
+                OutputTree   = hasTree ? supplierConfig!.OutputTree : null,
             };
 
             return ValidateOverrideManipulators(synthetic) is null ? synthetic : null;
@@ -1173,8 +1246,12 @@ public sealed class OrdersController : ControllerBase
     private OrderMappingOverride? TryBuildPinnedRevisionOverride(
         EffectiveConnectionConfig effective, OrderMappingOverride? effectiveOverride, Guid orderId)
     {
+        // WP-12: both halves of the pinned bundle — the flat snapshot in output_mapping_json AND the
+        // structured tree inside input_mapping_json — exactly as the transform reads them.
         var synthetic = ReplayService.BuildRevisionOverride(
-            effectiveOverride, ReplayService.DeserializeOutputConfig(effective.OutputMappingJson));
+            effectiveOverride,
+            ReplayService.DeserializeOutputConfig(effective.OutputMappingJson),
+            ReplayService.DeserializeSnapshotTree(effective.InputMappingJson));
         if (synthetic is null)
             return null;
 

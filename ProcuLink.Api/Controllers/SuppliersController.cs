@@ -529,14 +529,75 @@ public class SuppliersController : ControllerBase
 
     // ── PUT /api/suppliers/{id}/po-mapping ────────────────────────────────────
 
+    /// <summary>
+    /// Saves the supplier's PO mapping. The body is the mapping EDITOR's view of the config — the
+    /// frontend type declares only <c>hasHeaderRecord / separator / header / lines</c> — so members it
+    /// does not know about are PRESERVED rather than rebuilt away (see
+    /// <see cref="PreserveUnsentMembers"/>). Before that, one ordinary save from the mapping editor
+    /// silently deleted the output layout a promote had just stored.
+    /// </summary>
     [HttpPut("{id:guid}/po-mapping")]
     public async Task<IActionResult> UpsertPoMapping(Guid id, [FromBody] PoMappingConfig config, CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
         var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id && s.DeletedAt == null).FirstOrDefaultAsync(ct);
         if (supplier is null) return NotFound();
-        var saved = await _poMappingService.UpsertAsync(orgId, id, config, ct);
+        var merged = await PreserveUnsentMembers(orgId, id, config, ct);
+        var saved = await _poMappingService.UpsertAsync(orgId, id, merged, ct);
         return Ok(saved);
+    }
+
+    /// <summary>
+    /// Carries forward the promoted OUTPUT members (<see cref="PoMappingConfig.Output"/> and
+    /// <see cref="PoMappingConfig.OutputTree"/>) when the incoming body does not carry them.
+    ///
+    /// <para>Same defect class as the delivery-config whitelist fixed in FE #43: a partial body that
+    /// is bound into a full record and written wholesale DELETES every member the sender had never
+    /// heard of. The frontend's <c>PoMappingConfig</c> TypeScript type carries four members; the
+    /// server record carries six. Every save from the mapping editor — and every apply-template —
+    /// therefore wiped the supplier's promoted output.</para>
+    ///
+    /// <para>A body that DOES carry a value still replaces it, so the layout stays editable. Clearing
+    /// one is an explicit act: <c>DELETE {id}/po-mapping/output-tree</c>. Model binding cannot tell
+    /// "absent" from "null", and between the two readings the safe default is the one that never
+    /// destroys work the operator cannot recover.</para>
+    /// </summary>
+    private async Task<PoMappingConfig> PreserveUnsentMembers(
+        Guid orgId, Guid supplierId, PoMappingConfig incoming, CancellationToken ct)
+    {
+        if (incoming.Output is not null && incoming.OutputTree is not null) return incoming;
+
+        var existing = await _poMappingService.GetAsync(orgId, supplierId, ct);
+        if (existing is null) return incoming;
+
+        return incoming with
+        {
+            Output     = incoming.Output     ?? existing.Output,
+            OutputTree = incoming.OutputTree ?? existing.OutputTree,
+        };
+    }
+
+    // ── DELETE /api/suppliers/{id}/po-mapping/output-tree ─────────────────────
+
+    /// <summary>
+    /// UN-PROMOTE the supplier's saved output layout, leaving the rest of the mapping intact. The
+    /// inverse of "Save this layout for the supplier", and the recovery door for a layout that cannot
+    /// deliver this supplier's format. Idempotent: 204 whether or not a layout was stored.
+    /// </summary>
+    [HttpDelete("{id:guid}/po-mapping/output-tree")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ClearPromotedOutputTree(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id && s.DeletedAt == null).FirstOrDefaultAsync(ct);
+        if (supplier is null) return NotFound();
+
+        var existing = await _poMappingService.GetAsync(orgId, id, ct);
+        if (existing?.OutputTree is not null)
+            await _poMappingService.UpsertAsync(orgId, id, existing with { OutputTree = null }, ct);
+
+        return NoContent();
     }
 
     // ── DELETE /api/suppliers/{id}/po-mapping ─────────────────────────────────
@@ -593,7 +654,11 @@ public class SuppliersController : ControllerBase
         if (template is null)
             return NotFound(new { error = $"Unknown starter template '{request.TemplateId}'." });
 
-        var saved = await _poMappingService.UpsertAsync(orgId, id, template.Config, ct);
+        // A starter template describes the INBOUND mapping only — it has no opinion about the
+        // supplier's output layout — so applying one must not delete a promoted output the same way a
+        // partial editor save must not (see PreserveUnsentMembers).
+        var merged = await PreserveUnsentMembers(orgId, id, template.Config, ct);
+        var saved = await _poMappingService.UpsertAsync(orgId, id, merged, ct);
         return Ok(saved);
     }
 

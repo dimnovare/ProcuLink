@@ -62,15 +62,27 @@ public class SupplierConnectionRevision
     public bool? TestPassed { get; set; }
 
     // ── Bundle: input / parse mapping ────────────────────────────────────────
-    /// <summary>Snapshot of <c>SupplierPoMapping.ConfigJson</c> (= serialized PoMappingConfig). Null = none.</summary>
+    /// <summary>
+    /// Snapshot of <c>SupplierPoMapping.ConfigJson</c> (= serialized <c>PoMappingConfig</c>), byte-identical.
+    /// Null = none.
+    ///
+    /// <para>Because it is the WHOLE config, it also carries the additive
+    /// <c>PoMappingConfig.OutputTree</c> — the structured output layout designed in the visual
+    /// designer (WP-12). A pinned order therefore reproduces the layout its revision was published
+    /// with, and adding the tree needed no new column here.</para>
+    /// </summary>
     public string? InputMappingJson { get; set; }
 
     // ── Bundle: output field-map ─────────────────────────────────────────────
     /// <summary>
-    /// Snapshot of the supplier-promoted Output section extracted from
+    /// Snapshot of the supplier-promoted FLAT Output section extracted from
     /// <c>SupplierPoMapping.ConfigJson</c> — see
     /// <c>ConnectionBackfillService.TryExtractPromotedOutputJson</c>, the only writer.
     /// Null = no usable promoted Output, i.e. the fixed transformer path.
+    ///
+    /// <para>Outranked by the structured tree inside <see cref="InputMappingJson"/> when both are
+    /// present AND the tree renders for the effective format, mirroring the per-order and
+    /// live-supplier ladders.</para>
     /// </summary>
     public string? OutputMappingJson { get; set; }
 
