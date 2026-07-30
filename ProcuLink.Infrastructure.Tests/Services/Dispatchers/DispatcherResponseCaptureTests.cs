@@ -156,8 +156,21 @@ public class DispatcherResponseCaptureTests
         UpdatedAt = DateTime.UtcNow,
     };
 
+    /// <summary>
+    /// Waved through: the dispatchers built here are inspected for their declarations, and the one
+    /// that DOES dispatch talks to a stubbed transport, so the guard's real SSRF verdict is not what
+    /// is under test (<c>OutboundRequestGuardTests</c> owns that). Mirrors the sibling files'
+    /// <c>AllowAllGuard()</c> — a bare empty configuration refuses the fictional hostname before the
+    /// stub handler is ever reached, which shows up as a null ResponseCode.
+    /// </summary>
     private static OutboundRequestGuard Guard() =>
-        new(new ConfigurationBuilder().Build(), NullLogger<OutboundRequestGuard>.Instance);
+        new(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Delivery:AllowPrivateNetworkTargets"] = "true",
+                })
+                .Build(),
+            NullLogger<OutboundRequestGuard>.Instance);
 
     private static IReadOnlyList<IDeliveryDispatcher> AllProductionDispatchers() => new IDeliveryDispatcher[]
     {

@@ -142,7 +142,7 @@ public class DeliveryReliabilityOptionsTests
     {
         var worst = Standard().NextRetryDelay(
             failedAttempts: 99,                       // clamps to the last step, 120 min
-            supplierRetryAfter: TimeSpan.FromDays(1), // already bounded by RetryAfterHeader
+            supplierRetryAfter: TimeSpan.FromDays(1), // hostile/absurd — must be re-bounded HERE
             jitterSample: 1.0);
 
         worst.Should().BeLessThan(TimeSpan.FromHours(3),

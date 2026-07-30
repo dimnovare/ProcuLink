@@ -586,6 +586,10 @@ public class OrderStatusMachineTests
         {
             [Ready]              = new HashSet<string>(StringComparer.Ordinal) { Transforming },
             [Transforming]       = new HashSet<string>(StringComparer.Ordinal) { ReadyToDeliver },
+            // ready_to_deliver needs a row of its own now that the invariant enumerates TARGETS as
+            // well as keys — without one it would be a second (accidental) dead end and this test
+            // would stop isolating the one it is about.
+            [ReadyToDeliver]     = new HashSet<string>(StringComparer.Ordinal) { Ready },
             // The defect, reproduced: a failure state with nowhere to go that nobody declared final.
             [RejectedBySupplier] = new HashSet<string>(StringComparer.Ordinal),
             // A declared ending in the same map, so the assertion below shows the guard
@@ -594,7 +598,7 @@ public class OrderStatusMachineTests
         };
 
         DeadEnds(synthetic, OrderStatusMachine.DeclaredTerminal)
-            .Should().Equal(RejectedBySupplier);
+            .Should().Equal(new[] { RejectedBySupplier });
     }
 
     /// <summary>
@@ -628,7 +632,7 @@ public class OrderStatusMachineTests
         };
 
         DeadEnds(synthetic, OrderStatusMachine.DeclaredTerminal)
-            .Should().Equal(quarantined,
+            .Should().Equal(new[] { quarantined },
                 "a status reachable only as a target has no outgoing edges at all — NextStatuses " +
                 "returns the empty set and IsTerminal returns true — so it is a dead end the " +
                 "product never declared, and examining only the map's keys cannot see it");

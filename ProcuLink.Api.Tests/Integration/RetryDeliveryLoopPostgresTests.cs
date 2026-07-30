@@ -173,8 +173,12 @@ public sealed class RetryDeliveryLoopPostgresTests : IAsyncLifetime
         result.Outcome.Should().Be(DeliveryOutcome.Dispatched, "the payload reached the dispatcher");
         dispatcher.Calls.Should().Be(1);
         jobs.Captured.Should().HaveCount(1, "a 5xx is transient — the retry queue owns it");
+        // First backoff step (30 min) plus up to RetryJitterPercent (20%) on top — a band, not a
+        // point, because a fixed offset re-fires a whole failed batch as one burst. The lower bound
+        // still pins that jitter is upward-only.
         ((ScheduledState)jobs.Captured.Single().State).EnqueueAt
-            .Should().BeCloseTo(before.AddMinutes(30), TimeSpan.FromMinutes(1));
+            .Should().BeOnOrAfter(before.AddMinutes(30).AddSeconds(-1))
+            .And.BeOnOrBefore(before.AddMinutes(36).AddSeconds(1));
 
         await using var verify = NewContext();
         var attempts = await verify.DeliveryAttempts.CountAsync(a => a.OrderId == ids.OrderId);

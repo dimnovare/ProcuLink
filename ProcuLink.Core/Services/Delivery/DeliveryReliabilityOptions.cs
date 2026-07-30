@@ -84,9 +84,18 @@ public sealed class DeliveryReliabilityOptions
     {
         var step = BackoffFor(failedAttempts);
 
-        // The floor: whichever of "our schedule" and "what they asked for" is longer.
-        if (supplierRetryAfter is { } asked && asked > step)
-            step = asked;
+        // The floor: whichever of "our schedule" and "what they asked for" is longer — and the
+        // asked-for value is re-bounded HERE, not only where it was read off the wire. RetryAfterHeader
+        // already clamps it, but a bound that lives at one call site is a bound the next caller does
+        // not have: this method takes a plain TimeSpan? and cannot see where it came from. An
+        // unbounded value would push the retry past the stranded sweep's 3h window, where the sweep
+        // re-drives the order anyway — so the wait would not be honoured, merely mis-scheduled.
+        if (supplierRetryAfter is { } asked)
+        {
+            var bounded = asked > RetryAfterHeader.MaxHonoured ? RetryAfterHeader.MaxHonoured : asked;
+            if (bounded > step)
+                step = bounded;
+        }
 
         var percent = Math.Max(0, RetryJitterPercent);
         if (percent == 0)
