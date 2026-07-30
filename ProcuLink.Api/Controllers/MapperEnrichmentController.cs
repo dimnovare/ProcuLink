@@ -129,8 +129,25 @@ public sealed class MapperEnrichmentController : ControllerBase
     /// <summary>
     /// Returns per-field validation states for the order's mapper rows. Reuses
     /// <see cref="ISupplierAcceptanceService.ValidateOrderAsync"/>: a failing rule → an amber
-    /// "review" badge (blocking when severity is error); everything else stays "valid".
+    /// "review" badge; everything else stays "valid".
     /// 404 when the order does not belong to the caller's org (the service returns null).
+    ///
+    /// <para><b><c>Blocking</c> means the server will refuse the send — nothing weaker.</b> It used
+    /// to be computed here as <c>failed &amp;&amp; severity == "error"</c> over EVERY row, and the
+    /// mandatory invariants (<c>invariant.po_number_present</c>, <c>invariant.currency_present</c>,
+    /// <c>invariant.quantity_positive</c>) are all error severity. So an order with a missing PO
+    /// number came back with a blocking badge, the mapper counted it into its blocker total and
+    /// disabled Deliver — while the acceptance gate deliberately does NOT enforce invariants and
+    /// transformed and delivered that order anyway. The screen and the server disagreed, which is
+    /// the same defect this work package exists to close, moved one layer along.</para>
+    ///
+    /// <para>So the badge now comes from
+    /// <see cref="ISupplierAcceptanceService.GetBlockingFailuresAsync"/> — the SAME answer
+    /// <c>IAcceptanceGate</c> acts on — matched back onto the shown rows by (code, line). Advisory
+    /// rows (invariants, <c>output.*</c>, warnings) keep their amber "review" badge and their
+    /// sentence; they simply stop claiming to stop the send. Promoting invariants INTO the gate
+    /// instead would have started refusing orders that deliver fine today, silently, for every
+    /// existing customer.</para>
     /// </summary>
     [HttpGet("{id:guid}/validation")]
     [ProducesResponseType(typeof(IReadOnlyList<FieldValidationStateDto>), StatusCodes.Status200OK)]
@@ -144,16 +161,23 @@ public sealed class MapperEnrichmentController : ControllerBase
         if (results is null)
             return NotFound();
 
+        // The gate's own blocking set, keyed exactly as the shown rows are (a line-scoped rule
+        // blocks per line, so the line is part of the identity). A null answer — the order vanished
+        // between the two reads, or a collaborator that does not implement it — means "nothing is
+        // blocking", which errs towards the advisory badge rather than towards a claim we cannot back.
+        var blocking = (await _acceptance.GetBlockingFailuresAsync(orgId, id, ct) ?? Array.Empty<AcceptanceBlocker>())
+            .Select(b => (b.Code, b.LineNumber))
+            .ToHashSet();
+
         var states = results
             .Select(r =>
             {
                 var failed = string.Equals(r.Status, "fail", StringComparison.OrdinalIgnoreCase);
-                var blocking = failed && string.Equals(r.Severity, "error", StringComparison.OrdinalIgnoreCase);
                 return new FieldValidationStateDto(
                     Key: r.Code,
                     State: failed ? "review" : "valid",
                     Reason: failed && !string.IsNullOrWhiteSpace(r.Message) ? r.Message : null,
-                    Blocking: blocking);
+                    Blocking: failed && blocking.Contains((r.Code, r.LineNumber)));
             })
             .ToList();
 

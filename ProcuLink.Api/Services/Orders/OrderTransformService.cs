@@ -340,7 +340,52 @@ internal sealed class OrderTransformService
         // use, so it lands in transform_failed: visible in ops health, opens the operator-workable
         // exception row, surfaces its message as the order's errorMessage, and stays re-claimable so
         // a fix (or an override) plus another Send re-drives it.
-        var gate = await _acceptanceGate.EvaluateAsync(organisationId, orderId, ct);
+        //
+        // WHAT IF THE GATE ITSELF FAILS — refuse, visibly. EvaluateAsync runs two reads (the
+        // effective acceptance profile, the latest override audit row) and it sits AFTER the claim
+        // and OUTSIDE the try/catch below, so a throw here — a DB blip, a malformed pin — unwound
+        // straight through the Hangfire job and left the order in 'transforming': no artifact, no
+        // transform_failed, no sentence, and no sweep looking for it. A document we could not check
+        // against the supplier's rules is not one to send, so the failure is caught and routed
+        // through the SAME FailTransformAsync as every other terminal failure. That is recoverable
+        // by construction: transform_failed is re-claimable, and TransformOrderJob's own
+        // AutomaticRetry re-drives it, so a transient lookup failure heals itself on the next run.
+        // Cancellation is NOT swallowed — a cancelled request is not a refusal.
+        AcceptanceGateDecision? gate;
+        try
+        {
+            gate = await _acceptanceGate.EvaluateAsync(organisationId, orderId, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Order {OrderId} (org {OrgId}): the supplier acceptance gate could not be evaluated — refusing the "
+              + "transform rather than sending a document nobody checked. The order is marked transform_failed and "
+              + "stays re-claimable, so a retry re-drives it.",
+                orderId, organisationId);
+
+            const string reason =
+                "This order couldn't be checked against the supplier's rules, so it wasn't sent. "
+              + "Try sending it again in a moment.";
+
+            _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(
+                organisationId, orderId, AcceptanceGateAudit.BlockedAction, new
+                {
+                    blockers = Array.Empty<object>(),
+                    stage    = "transform",
+                    // The gate did not refuse this order — it could not answer. Recorded distinctly
+                    // so an operator reading the trail is never told the supplier rejected it.
+                    error    = "acceptance_gate_unavailable",
+                }));
+
+            await FailTransformAsync(entity, organisationId, orderId, reason, ct);
+            return Result<TransformResponse>.Fail(reason);
+        }
+
         if (gate is { Blocked: true })
         {
             var reason = string.IsNullOrWhiteSpace(gate.Reason)

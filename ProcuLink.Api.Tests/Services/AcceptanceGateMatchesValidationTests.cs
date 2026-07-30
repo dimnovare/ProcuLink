@@ -45,20 +45,27 @@ public sealed class AcceptanceGateMatchesValidationTests
 
         var rules = await db.SupplierAcceptanceRules.AsNoTracking().ToDictionaryAsync(r => r.Id);
 
+        // Compared as (code, line) — the FAILURE's identity, not the override key's. The key also
+        // carries the profile version and a digest of the judged values, which is exactly what makes
+        // an override specific; folding that in here would turn a comparison of "which rules refuse
+        // this order" into a comparison of key formatting.
         var expected = shown!
             .Where(r => r.Status == "fail"
                      && r.RuleId is Guid id
                      && rules.TryGetValue(id, out var rule)
                      && (rule.BlockOnFail || string.Equals(rule.Severity, "error", StringComparison.OrdinalIgnoreCase)))
-            .Select(r => r.LineNumber is int ln ? $"{r.Code}#{ln}" : r.Code)
-            .OrderBy(k => k, StringComparer.Ordinal)
+            .Select(r => (r.Code, r.LineNumber))
+            .OrderBy(k => k.Code, StringComparer.Ordinal).ThenBy(k => k.LineNumber)
             .ToList();
 
         // ── Side B: what the transform ENFORCES ───────────────────────────────
         var blockers = await acceptance.GetBlockingFailuresAsync(orgId, orderId, CancellationToken.None);
         Assert.NotNull(blockers);
 
-        var actual = blockers!.Select(b => b.Key).OrderBy(k => k, StringComparer.Ordinal).ToList();
+        var actual = blockers!
+            .Select(b => (b.Code, b.LineNumber))
+            .OrderBy(k => k.Code, StringComparer.Ordinal).ThenBy(k => k.LineNumber)
+            .ToList();
 
         Assert.Equal(expected, actual);
 
@@ -71,6 +78,40 @@ public sealed class AcceptanceGateMatchesValidationTests
         Assert.True(actual.Count < shown!.Count(r => r.Status == "fail"),
             "the gate must be a strict subset of what the panel shows failing, otherwise this fixture "
           + "does not distinguish 'blocking' from 'failing' at all");
+    }
+
+    /// <summary>
+    /// Every blocker carries the identity its override key is built from. Without this the key
+    /// silently degrades to the old rule-and-line-only shape and the "a re-parse is not covered"
+    /// promise quietly stops holding — with every test in <c>AcceptanceGateTests</c> still green,
+    /// because they exercise the key end to end and would simply see the same key on both sides.
+    /// </summary>
+    [Fact]
+    public async Task EveryBlocker_carriesTheRuleTheProfileVersionAndTheJudgedValues()
+    {
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedMixedOrderAsync(db);
+
+        var blockers = (await new SupplierAcceptanceService(db)
+            .GetBlockingFailuresAsync(orgId, orderId, CancellationToken.None))!;
+
+        Assert.NotEmpty(blockers);
+        Assert.All(blockers, b =>
+        {
+            Assert.NotNull(b.RuleId);
+            Assert.Equal(1, b.ProfileVersion);           // the seeded profile's VersionNo
+        });
+
+        // The line-scoped price rule fails on line 2 only, and the blocker carries BOTH halves of
+        // what makes that failure specific: the cap that was demanded and the price that was found.
+        var price = Assert.Single(blockers.Where(b => b.Code == "unitPrice.max"));
+        Assert.Equal(2, price.LineNumber);
+        Assert.Equal("20", price.ExpectedValue);
+        Assert.Equal("99", price.ActualValue);
+
+        // …and every blocker's key differs from every other's, which is the property the override
+        // relies on to excuse one failure without excusing its neighbours.
+        Assert.Equal(blockers.Count, blockers.Select(b => b.Key).Distinct(StringComparer.Ordinal).Count());
     }
 
     /// <summary>The messages are shared too — the operator must read the same words in both places.</summary>

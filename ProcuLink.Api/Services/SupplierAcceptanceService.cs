@@ -242,13 +242,27 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         // widening OrderValidationResult (which is a persisted, frontend-facing shape).
         var ruleById = profile.Rules.ToDictionary(r => r.Id);
 
-        return EvaluateProfile(orgId, orderId, profile, order, DateTime.UtcNow)
-            .Where(r => r.Status == "fail"
-                     && r.RuleId is Guid ruleId
-                     && ruleById.TryGetValue(ruleId, out var rule)
-                     && IsBlocking(rule))
-            .Select(r => new AcceptanceBlocker(r.Code, r.LineNumber, r.Message))
-            .ToList();
+        var blockers = new List<AcceptanceBlocker>();
+        foreach (var r in EvaluateProfile(orgId, orderId, profile, order, DateTime.UtcNow))
+        {
+            if (r.Status != "fail") continue;
+            if (r.RuleId is not Guid ruleId) continue;                    // invariant / output row
+            if (!ruleById.TryGetValue(ruleId, out var rule)) continue;
+            if (!IsBlocking(rule)) continue;
+
+            // Everything that makes this failure THIS failure travels with it: which rule, which
+            // line, which version of the profile, what was demanded, and what the order said. The
+            // gate composes those into AcceptanceBlocker.Key, which is what an override excuses —
+            // so a re-parse, a rule edit, or a republished profile is a failure nobody signed off.
+            blockers.Add(new AcceptanceBlocker(
+                r.Code, r.LineNumber, r.Message,
+                RuleId:         ruleId,
+                ProfileVersion: profile.VersionNo,
+                ExpectedValue:  rule.ExpectedValue,
+                ActualValue:    r.ActualValue));
+        }
+
+        return blockers;
     }
 
     /// <summary>
@@ -401,6 +415,9 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         ProfileId = profileId, RuleId = rule.Id, LineNumber = lineNumber,
         Severity = rule.Severity, Status = pass ? "pass" : "fail",
         Code = $"{rule.FieldPath}.{rule.Operator}",
+        // Transient (NotMapped) — the value this rule judged, carried to the gate so an operator
+        // override is pinned to the failure it actually saw rather than to the rule's name.
+        ActualValue = actualValue,
         // Plain-language, fixable message (was the developer template
         // "unitPrice ('100') failed rule max 50000"). See AcceptanceMessages.
         Message = pass

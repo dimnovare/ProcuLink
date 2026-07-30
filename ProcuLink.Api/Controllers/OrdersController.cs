@@ -50,6 +50,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
     private readonly IConfidenceCalibrationService? _calibration;
     private readonly ICxmlCredentialResolver?      _cxmlResolver;
+    private readonly IAcceptanceGate               _acceptanceGate;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -87,7 +88,8 @@ public sealed class OrdersController : ControllerBase
         IPoMappingService?           poMappings = null,
         IEffectiveConnectionConfigResolver? effectiveConfig = null,
         IConfidenceCalibrationService? calibration = null,
-        ICxmlCredentialResolver?       cxmlResolver = null)
+        ICxmlCredentialResolver?       cxmlResolver = null,
+        IAcceptanceGate?               acceptanceGate = null)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -127,6 +129,71 @@ public sealed class OrdersController : ControllerBase
         // constructions / unregistered hosts) every suggestion reports its RAW confidence as the
         // calibrated value with IsCalibrated=false, so behaviour is byte-identical to pre-V9.
         _calibration      = calibration;
+        // WP-17 — the server-side acceptance gate, consulted by the MANUAL SEND endpoints below
+        // (redeliver / retry-delivery). Optional in the ctor only so the ~35 positional test
+        // constructions of this class stay valid; the field is NEVER null, because an enforcement
+        // dependency that defaults to "off" is precisely the failure this work package exists to
+        // close. The concrete gate needs nothing this controller does not already hold — the same
+        // DbContext and the same ISupplierAcceptanceService — so the fallback is the real thing,
+        // not a permissive stub.
+        _acceptanceGate   = acceptanceGate ?? new AcceptanceGate(db, acceptance);
+    }
+
+    // ── WP-17 — the acceptance gate on the MANUAL SEND endpoints ──────────────
+
+    /// <summary>
+    /// Refuses a human-initiated send of an ALREADY-TRANSFORMED order when the supplier's blocking
+    /// acceptance rules say no, or returns null to let the send proceed.
+    ///
+    /// <para><b>Why the transform gate was not enough.</b> <c>Organisation.AutoDeliver</c> defaults
+    /// to FALSE, so a live order comes to rest in <c>ready_to_deliver</c> holding its artifact and
+    /// waits for a person. That person clicks "Send selected" in the inbox, which calls
+    /// <c>POST /api/orders/{id}/redeliver</c> once per row — never the transform. Gating only the
+    /// transform therefore left the busiest send path in the product wide open, including for orders
+    /// transformed long before the rule they now break was written.</para>
+    ///
+    /// <para><b>409, not 400.</b> The request is well-formed and the order is in a valid state; what
+    /// refuses it is a rule about the order's content. The body keeps the existing
+    /// <c>{ error }</c> shape every other refusal on these endpoints uses, so the inbox's bulk-send
+    /// already surfaces the sentence next to the PO with no client change, and adds the individual
+    /// blockers for a UI that wants to list them.</para>
+    ///
+    /// <para>A null decision means the gate had nothing to say about this id — which, after the
+    /// caller has already resolved the order for this org, can only be a race with a deletion. The
+    /// send proceeds and dispatch is org-scoped anyway, so nothing escapes.</para>
+    /// </summary>
+    private async Task<IActionResult?> RefusedBySupplierRulesAsync(
+        Guid orgId, Guid orderId, string stage, CancellationToken ct)
+    {
+        var decision = await _acceptanceGate.EvaluateAsync(orgId, orderId, ct);
+        if (decision is not { Blocked: true })
+            return null;
+
+        var reason = string.IsNullOrWhiteSpace(decision.Reason)
+            ? "This order wasn't sent because it doesn't meet what the supplier accepts."
+            : decision.Reason!;
+
+        _db.AuditEvents.Add(ProcuLink.Api.Services.OrderServiceShared.BuildAuditEvent(
+            orgId, orderId, AcceptanceGateAudit.BlockedAction, new
+            {
+                blockers = decision.Blockers
+                    .Select(b => new { code = b.Code, line = b.LineNumber, message = b.Message })
+                    .ToList(),
+                stage,
+            }));
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogWarning(
+            "Order {OrderId} (org {OrgId}): manual send via '{Stage}' refused — {Count} blocking supplier acceptance rule(s).",
+            orderId, orgId, stage, decision.Blockers.Count);
+
+        return Conflict(new
+        {
+            error    = reason,
+            blockers = decision.Blockers
+                .Select(b => new { code = b.Code, line = b.LineNumber, message = b.Message })
+                .ToList(),
+        });
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -1816,6 +1883,7 @@ public sealed class OrdersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Redeliver(Guid id, CancellationToken ct)
     {
         var orgId     = _tenant.OrganisationId;
@@ -1844,6 +1912,13 @@ public sealed class OrdersController : ControllerBase
 
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before redelivering." });
+
+        // WP-17 — this is the inbox's bulk "Send selected" and the parked order's "Send again": a
+        // person deciding, now, to put this document in front of the supplier. The artifact may have
+        // been produced before the rule that now refuses it existed, so the transform-time answer is
+        // not this decision's answer. Checked BEFORE the enqueue, so a refusal sends nothing.
+        if (await RefusedBySupplierRulesAsync(orgId, id, "redeliver", ct) is { } refusal)
+            return refusal;
 
         // B2 (lost-order): DO NOT pre-flip to 'delivering'. The order stays in its claimable status
         // so the enqueued job's atomic claim succeeds; a FRESH 'delivering' row is REJECTED by the
@@ -2030,6 +2105,7 @@ public sealed class OrdersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> RetryDelivery(Guid id, CancellationToken ct)
     {
         var orgId     = _tenant.OrganisationId;
@@ -2065,6 +2141,13 @@ public sealed class OrdersController : ControllerBase
 
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before retrying delivery." });
+
+        // WP-17 — "Retry now" is the same human decision as Redeliver, one status along, so it gets
+        // the same answer. (The AUTOMATIC backoff queue this endpoint seeds is deliberately NOT
+        // gated: it continues a dispatch that already started and may already have reached the
+        // supplier — see IAcceptanceGate.)
+        if (await RefusedBySupplierRulesAsync(orgId, id, "retry-delivery", ct) is { } refusal)
+            return refusal;
 
         // B2 (lost-order): DO NOT pre-flip to 'delivering'. RetryDeliveryAsync's atomic claim only
         // accepts OrderStatusMachine.ClaimableForRetryFrom or a STALE 'delivering' (UpdatedAt older

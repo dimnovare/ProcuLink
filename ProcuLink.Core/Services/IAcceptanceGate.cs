@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace ProcuLink.Core.Services;
 
@@ -11,16 +13,82 @@ namespace ProcuLink.Core.Services;
 /// NEVER re-worded downstream, so the operator reads the same words in the workshop, in the error
 /// message, and in the audit trail.</para>
 /// </summary>
-public sealed record AcceptanceBlocker(string Code, int? LineNumber, string Message)
+/// <param name="Code">The stored <c>{fieldPath}.{operator}</c> validation code.</param>
+/// <param name="LineNumber">The line a line-scoped rule failed on; null for an order-scoped rule.</param>
+/// <param name="Message">The plain-language sentence, shared verbatim with the workshop panel.</param>
+/// <param name="RuleId">The acceptance rule that refused. Null only for a blocker built without a
+/// rule behind it (which the gate never does — see <c>GetBlockingFailuresAsync</c>).</param>
+/// <param name="ProfileVersion">The acceptance profile's <c>VersionNo</c> at evaluation time.</param>
+/// <param name="ExpectedValue">What the rule demanded, verbatim from the rule row.</param>
+/// <param name="ActualValue">What the order actually said — the value the rule judged.</param>
+public sealed record AcceptanceBlocker(
+    string  Code,
+    int?    LineNumber,
+    string  Message,
+    Guid?   RuleId         = null,
+    int?    ProfileVersion = null,
+    string? ExpectedValue  = null,
+    string? ActualValue    = null)
 {
     /// <summary>
-    /// Stable identity of ONE blocking failure — this is what an operator override excuses.
-    /// A line-scoped rule blocks per line, so the line number is part of the identity: excusing
-    /// "line 3 is over the price cap" must not silently excuse line 7 as well.
+    /// Stable identity of ONE blocking failure — this is what an operator override excuses, and the
+    /// ONLY thing it excuses.
+    ///
+    /// <para><b>Why it carries this much.</b> The key was once just
+    /// <c>{fieldPath}.{operator}#{line}</c>, which named the rule and the line and nothing else. An
+    /// override recorded against "line 3 is 50,001 over a 50,000 cap" therefore also excused line 3
+    /// at 900,000 after a re-parse, and excused it again after the supplier lowered the cap to 100,
+    /// and again under a newly published profile version — three different failures wearing one
+    /// name. The interface promised the opposite in prose. So the identity now spans everything that
+    /// makes a failure THIS failure:</para>
+    /// <list type="bullet">
+    ///   <item><description><b>which rule</b> — <see cref="RuleId"/>, so a different rule producing
+    ///     the same code is a different failure;</description></item>
+    ///   <item><description><b>which line</b> — excusing line 3 must never excuse line 7;</description></item>
+    ///   <item><description><b>which version of the profile</b> — an override is consent to send
+    ///     under the terms the operator read, not under every version published afterwards;</description></item>
+    ///   <item><description><b>what was demanded and what was found</b> — digested together, so a
+    ///     re-parse that changes the judged value, or an edit that tightens the threshold, produces a
+    ///     key nobody has signed off.</description></item>
+    /// </list>
+    ///
+    /// <para>The demanded/found pair is hashed rather than spelled out so the key stays a bounded,
+    /// delimiter-safe token: order values are free text and would otherwise be able to forge a key
+    /// boundary. Truncation to 16 hex characters is deliberate — this is a change detector inside an
+    /// org-scoped, server-derived key, not a security boundary; an override cannot be forged in the
+    /// first place, because the excused set is always recomputed server-side from the order's own
+    /// current failures.</para>
+    ///
+    /// <para><b>Keys recorded before this shape existed no longer match anything.</b> Those
+    /// overrides stop covering their orders, which blocks the order again until an operator
+    /// re-signs. That is the safe direction — the alternative is honouring an authorisation whose
+    /// subject we cannot identify.</para>
     /// </summary>
-    public string Key => LineNumber is int ln
-        ? $"{Code}#{ln.ToString(CultureInfo.InvariantCulture)}"
-        : Code;
+    public string Key
+    {
+        get
+        {
+            var line    = LineNumber?.ToString(CultureInfo.InvariantCulture) ?? "-";
+            var rule    = RuleId?.ToString("N", CultureInfo.InvariantCulture) ?? "-";
+            var version = ProfileVersion?.ToString(CultureInfo.InvariantCulture) ?? "-";
+            return $"{Code}#{line}@{rule}.v{version}~{ValueDigest}";
+        }
+    }
+
+    /// <summary>
+    /// Short digest of (expected, actual). <c>U+001F</c> (ASCII unit separator) joins them: it is a
+    /// control character, so it cannot occur in a rule's expected value or in a parsed order field,
+    /// and two different pairs can therefore never digest the same input.
+    /// </summary>
+    private string ValueDigest
+    {
+        get
+        {
+            var payload = $"{ExpectedValue}\u001F{ActualValue}";
+            var hash    = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
+            return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
+        }
+    }
 }
 
 /// <summary>
@@ -153,15 +221,38 @@ public static class AcceptanceGateMessage
 /// had exactly two production callers and both were HTTP controllers, so enforcement was
 /// BROWSER-ONLY: an order that the supplier profile UI said would be blocked went out anyway
 /// through any path that did not pass through those two endpoints. The product stated a guarantee
-/// it did not keep. This interface is the one place that guarantee is now kept, and
-/// <c>OrderTransformService.TransformAsync</c> — the single server-side transform door — consults
-/// it, so every ingress channel inherits the same answer.</para>
+/// it did not keep. This interface is the one place that guarantee is now kept.</para>
+///
+/// <para><b>Where it is consulted — and why the transform alone was not enough.</b>
+/// <list type="bullet">
+///   <item><description><c>OrderTransformService.TransformAsync</c>, the single server-side
+///     transform door, so browser send, REST ingress, inbound email and every auto-drive inherit one
+///     answer before any document exists.</description></item>
+///   <item><description>The MANUAL SEND endpoints, which dispatch a document that already exists:
+///     <c>OrdersController.Redeliver</c> (the inbox's bulk "Send selected" and a parked order's
+///     "Send again"), <c>OrdersController.RetryDelivery</c>, and <c>OpsController.RequeueDelivery</c>.
+///     <c>Organisation.AutoDeliver</c> defaults to FALSE, so <c>ready_to_deliver</c> is the ordinary
+///     resting state of a live order and those endpoints — not the transform — are how most orders
+///     actually reach a supplier. Gating only the transform left the busiest send path open.</description></item>
+/// </list></para>
+///
+/// <para><b>What is deliberately NOT gated.</b> The automatic continuations of a dispatch that has
+/// already begun: <c>RetryDeliveryJob</c>'s backoff queue, <c>DeliverOrderJob</c>'s scheduled retry,
+/// <c>StrandedReadyOrderDetectionService</c>, and <c>TransformOrderJob</c>'s inline stranded
+/// recovery. Delivery is at-least-once, so by the time those run the supplier may already hold the
+/// document; refusing there un-sends nothing and converts a transient failure — or a lost enqueue —
+/// into a permanent strand. The line is: the gate answers "may a person send this?" wherever a
+/// HUMAN decides to send, and it does not re-answer inside a send it already admitted.</para>
 ///
 /// <para><b>Scope, deliberately narrow.</b> Only SUPPLIER ACCEPTANCE RULES block: a rule whose
 /// severity is <c>error</c>, or which sets <c>BlockOnFail</c>. The mandatory invariants
 /// (<c>invariant.*</c>) and the output-render checks (<c>output.*</c>) stay ADVISORY — they are
 /// shown, not enforced. Promoting them here would start silently refusing orders that deliver fine
-/// today, which is the opposite of keeping a promise.</para>
+/// today, which is the opposite of keeping a promise. Because that is the server's real behaviour,
+/// <c>GET /api/orders/{id}/validation</c> derives its <c>Blocking</c> badge from
+/// <see cref="ISupplierAcceptanceService.GetBlockingFailuresAsync"/> — the same answer — rather than
+/// from row severity, which used to badge a failing invariant as blocking while the gate sent the
+/// order anyway.</para>
 /// </summary>
 public interface IAcceptanceGate
 {
@@ -173,8 +264,10 @@ public interface IAcceptanceGate
 
     /// <summary>
     /// Records an operator override for the order's CURRENT blockers, with who and why, into the
-    /// audit trail. The override excuses exactly the failures that exist right now — a blocker that
-    /// appears later is NOT covered and blocks again.
+    /// audit trail. The override excuses exactly the failures that exist right now, identified by
+    /// <see cref="AcceptanceBlocker.Key"/> — so a blocker that appears later, a rule edited
+    /// underneath it, a re-parse that changes the judged value, or a newly published profile version
+    /// all produce failures the override does not cover, and the gate refuses again.
     /// </summary>
     Task<AcceptanceOverrideResult> RecordOverrideAsync(
         Guid orgId, Guid orderId, string actor, string reason, CancellationToken ct);

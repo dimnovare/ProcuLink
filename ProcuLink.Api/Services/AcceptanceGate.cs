@@ -17,10 +17,12 @@ namespace ProcuLink.Api.Services;
 /// are the same row.</para>
 ///
 /// <para><b>An override excuses failures, not orders.</b> The excused set is pinned to the blockers
-/// that existed when the operator signed off. If the order later fails a DIFFERENT rule — a new rule
-/// version, an edited line, a re-parse — that failure is not covered and the gate refuses again.
-/// A blanket "this order is forever exempt" flag would quietly hand back the guarantee we are here
-/// to keep.</para>
+/// that existed when the operator signed off, by <see cref="AcceptanceBlocker.Key"/> — which spans
+/// the rule, the line, the profile version, and a digest of (what was demanded, what was found). So
+/// a new rule version, a rule tightened underneath the override, an edited or re-parsed line, and a
+/// different rule failing later all yield keys the recorded override does not contain, and the gate
+/// refuses again. A blanket "this order is forever exempt" flag would quietly hand back the
+/// guarantee we are here to keep — and so, quietly, did a key that named only the rule and the line.</para>
 /// </summary>
 public sealed class AcceptanceGate : IAcceptanceGate
 {
