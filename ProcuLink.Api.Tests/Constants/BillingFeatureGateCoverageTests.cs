@@ -68,23 +68,22 @@ public class BillingFeatureGateCoverageTests
     /// Features whose REMOVAL is owned by other work in flight, so WP-11 must neither enforce
     /// them nor delete them — three concurrent edits to one enum is how a member gets silently
     /// reassigned. They are exempt from the enforcement and boundary checks below, and ONLY
-    /// these two: <see cref="ExemptionList_IsExactlyTheTwoOwnedElsewhere"/> fails if the
+    /// this one: <see cref="ExemptionList_IsExactlyTheOneOwnedElsewhere"/> fails if the
     /// exemption is ever used to wave through a genuinely unenforced gate.
     ///
-    /// <para>Both are dead gates today, so exempting them hides nothing that is being sold:</para>
+    /// <para>It is a dead gate today, so exempting it hides nothing that is being sold:</para>
     /// <list type="bullet">
     ///   <item><c>ValidationRules</c> — BE #75 retires the whole <c>ValidationRule</c>
     ///   subsystem (working CRUD, no evaluator) along with this flag.</item>
-    ///   <item><c>CustomTemplates</c> — gated the output-template editor that BE #75 deletes.
-    ///   Verified zero readers repo-wide: the declaration and its plan-map row are the only
-    ///   two references. A separate session owns removing it.</item>
     /// </list>
     ///
-    /// <para>When both land, this set empties and the exemption branch becomes dead code —
-    /// delete it then rather than letting it become a parking space.</para>
+    /// <para><c>CustomTemplates</c> was the second entry and is gone: BE #80 deleted the member
+    /// outright, which is why it no longer needs exempting. When BE #75 lands, this set empties
+    /// and the exemption branch becomes dead code — delete it then rather than letting it become
+    /// a parking space.</para>
     /// </summary>
     public static readonly IReadOnlySet<BillingFeature> RetiredElsewhere =
-        new HashSet<BillingFeature> { BillingFeature.ValidationRules, BillingFeature.CustomTemplates };
+        new HashSet<BillingFeature> { BillingFeature.ValidationRules };
 
     /// <summary>Ladder order, lowest → highest. Mirrors <c>PlanConstants.PlanOrder</c>.</summary>
     private static readonly string[] Ladder =
@@ -107,14 +106,13 @@ public class BillingFeatureGateCoverageTests
     }
 
     [Fact]
-    public void ExemptionList_IsExactlyTheTwoOwnedElsewhere()
+    public void ExemptionList_IsExactlyTheOneOwnedElsewhere()
     {
         // The exemption exists for a specific, temporary reason. Anything else appearing here
         // means an unenforced gate was waved through instead of being enforced or deleted.
         RetiredElsewhere.Should().BeEquivalentTo(new[]
         {
             BillingFeature.ValidationRules,   // BE #75 — subsystem retired
-            BillingFeature.CustomTemplates,   // separate session — dead gate, retired editor
         });
     }
 

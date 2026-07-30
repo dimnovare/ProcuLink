@@ -18,7 +18,9 @@
 /// <c>DeliveryHistory</c> (no plan card sells it, and withholding "did my purchase order
 /// actually go out?" from a paying customer is not a differentiator); and
 /// <c>SlaOnboarding</c> (an SLA and named onboarding are commitments fulfilled by people --
-/// no code path could ever check them).</para>
+/// no code path could ever check them). <c>CustomTemplates</c> went the same way: it gated
+/// the output-template editor that WP-06 retired, so by the time this enum was audited there
+/// was no surface left behind the gate.</para>
 ///
 /// <para>Deleting members here is ordinal-safe: <c>BillingFeature</c> is never persisted or
 /// serialized -- verified repo-wide, its only non-gate reference is a doc comment in
@@ -34,8 +36,6 @@ public enum BillingFeature
     AdvancedAudit,
     WebhookDelivery,
     EmailIngestion,
-    /// <summary>Custom output templates. Dead gate for the retired template editor.</summary>
-    CustomTemplates,
     ErpConnectors,
     CustomSupplierRules,
     SftpIngestion,
