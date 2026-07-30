@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
@@ -161,7 +161,7 @@ public class ApiKeyAuthHandlerTenantUnificationTests
         // 2) Drive the controller off the SAME context via the shared resolver.
         var tenant     = new CurrentTenantService(new HttpContextAccessor { HttpContext = ctx });
         var idempotency = new IdempotencyService(db);
-        var controller = new IngressController(db, idempotency, tenant, NullLogger<IngressController>.Instance)
+        var controller = new IngressController(db, idempotency, tenant, TestDoubles.PermissiveBilling.Service(), NullLogger<IngressController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = ctx },
         };
@@ -257,7 +257,7 @@ public class ApiKeyAuthHandlerTenantUnificationTests
 
         var tenant      = new CurrentTenantService(new HttpContextAccessor { HttpContext = ctx });
         var idempotency = new IdempotencyService(db);
-        var controller  = new IngressController(db, idempotency, tenant, NullLogger<IngressController>.Instance)
+        var controller  = new IngressController(db, idempotency, tenant, TestDoubles.PermissiveBilling.Service(), NullLogger<IngressController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = ctx },
         };
