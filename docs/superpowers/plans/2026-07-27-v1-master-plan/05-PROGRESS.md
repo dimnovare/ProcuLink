@@ -162,7 +162,7 @@ retries that died were pre-throttle, and the attempts running after it are healt
 
 | Item | Evidence | Options |
 |---|---|---|
-| **A 404 is shipping to admins today** | `src/lib/guides.ts:262-263` registers slug `unfreeze-a-pilot-workspace` at `/admin/guides/unfreeze-a-pilot-workspace`; `git ls-tree -r --name-only origin/main \| grep -i unfreeze`(piped) returns nothing | **Write the page** (preferred) or delete the entry. The capability EXISTS — BE #59 (`0e1ac58`) shipped `POST /api/admin/organisations/{id}/account-status`, and STATUS.md already documents the recipe including the critical detail that it is TWO calls in order: extend the trial via `.../limits` FIRST while still `read_only`, THEN flip the status, or the lapsed Pilot window re-expires it immediately. The runbook prose exists; only the page is missing. Deleting the entry stops the 404 but loses the one runbook that recovers a frozen customer org. |
+| ~~A 404 is shipping to admins today~~ **RETRACTED 2026-07-30 — NOT a 404** | `guides.ts:263` registers it and no page exists — both true — BUT `GuideIndex.tsx:97` renders any guide whose `status !== "live"` as a `<span>` with a "Coming soon" badge, **never a `<Link>`**. It is `status: "planned"`. Nobody can click it. Same for `/help/guides/set-up-your-workspace` (`guides.ts:79`). | Write the page eventually — the write-not-delete argument stands on its own merits (capability shipped in BE #59, runbook prose exists in STATUS.md, the two-call ordering detail deserves a discoverable home) — but it is **not urgent and not a defect**. |
 | `/one-pager` unreachable in-app | print collateral, published only via `sitemap.ts` | link it, or delete it — founder call |
 | This is the reverse of what the guard checks | `route-reachability.test.ts` finds routes with no inbound link; this is an inbound link with no route | extend the guard to check both directions |
 
@@ -211,6 +211,37 @@ read through Clerk rather than through the DbContext.
 founder can answer.** Half the "needs a founder decision" items in `AUDIT-2026-07-27.md` were answerable
 from the code by someone willing to go look — the revision-authority P0 died to a ten-second
 `railway variables | grep`, and `/welcome` was settled by reading one line of `StripeBillingService`.
+
+### TRAPS added 2026-07-30 (second pass)
+
+**TRAP 6 — "a registry href with no page behind it is a dead link."** WRONG, and it hides the real
+defect. `src/lib/guides.ts` carries `href:` literals for `status: "planned"` guides that
+`GuideIndex.tsx:97` never renders as links. Those hrefs are not dead links — they are **phantom link
+TARGETS** feeding the reachability guard. Proven: a refuter created a genuinely orphaned
+`admin/guides/unfreeze-a-pilot-workspace/page.tsx` and the guard **passed 8/8**, because `guides.ts`
+supplied a matching href. `guides.ts` is a second launch-filtered registry with exactly the
+`/drafts`-in-`NAV_MAIN` shape, and it was not excluded. **Applies to: WP-04 frontend guard.**
+
+**TRAP 7 — "enumerating `page.tsx` enumerates the routes."** It covers **52%**. Verified:
+`next.config.ts:20` sets `pageExtensions: ["ts", "tsx", "mdx"]`, and `origin/main` carries **45
+`page.mdx`** against **49 `page.tsx`**. A guard filtering `basename === "page.tsx"` is blind to 45 real
+routes, so a synthetic orphaned `.mdx` page passes. **Applies to: WP-04 frontend guard.** Related:
+comments count as links there too — `UserChipMenu.tsx:10` already credits `/` from a `//` comment.
+
+### CORRECTION LOG — findings this plan got wrong
+
+Kept because the shape of the mistake repeats, and naming it is cheaper than re-making it.
+
+| Claim | Verdict | The unchecked step |
+|---|---|---|
+| "a 404 ships to admins at `/admin/guides/unfreeze-a-pilot-workspace`" | **RETRACTED** | Registry checked, filesystem checked, **renderer never checked**. |
+| "revision authority is off in production" (audit P0) | **REFUTED** | `appsettings.Development.json` read; the deployed environment never read. |
+| "`/welcome` is an orphan" | **REFUTED** | Frontend links searched; the backend caller never searched. |
+| "`/subprocessors` claims an OpenAI DPA we lack" | **NOT-A-FINDING** | Local tree read; it was 9 commits stale and already fixed. |
+
+**The shape, every time: two true facts with one unchecked step between them.** Registry and filesystem
+but not the renderer. Dev config but not prod. Frontend links but not backend callers. Before reporting
+an inference drawn from two verified facts, name the step between them and go check it.
 
 ## Wave 0 — Ground truth & guardrails
 

@@ -109,7 +109,7 @@
 
 | id | claim as shipped | true? | action |
 |---|---|:-:|---|
-| `eu-residency` | "All order data is processed and stored in EU-region infrastructure" | **✗** | 4 US subprocessors; PO text → `api.openai.com`. Rewrite (WP-10) |
+| `eu-residency` | "All order data is processed and stored in EU-region infrastructure" | **NO — worse than first assessed** | Postmark carries the OUTBOUND PO as an attachment (`EmailApiDeliveryDispatcher.cs:109`), so a US subprocessor receives the whole document — and the copy calls that category "inbound email". `EGRESS-GEO` (delivery POST egressing from Durham NC) is still unresolved. `R2Endpoint` is empty in prod config and no repo file records the Neon region. See AUDIT-2026-07-27.md section 11b. **WP-10 must establish the regions before asserting one.** |
 | `subprocessor-dpa` | OpenAI DPA + SCCs | ✓ | corrected in `c315a76` (#66). **Audit claim was wrong — do not re-open** |
 | `customers-pilots` | two sized pilot profiles | **✗** | contradicted by production inventory. Replace (WP-10) |
 | `format-counts` | hero "10 inbound / 6 outbound / 6 channels" | ✓ | derived from the catalogue, build-time checked |
