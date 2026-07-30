@@ -1,4 +1,6 @@
 using Hangfire;
+using ProcuLink.Core.Constants;
+using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Jobs;
 
@@ -13,11 +15,16 @@ namespace ProcuLink.Worker.Jobs;
 public sealed class SftpPollOrgJob
 {
     private readonly ISftpIngressService _sftpIngress;
+    private readonly IBillingService _billing;
     private readonly ILogger<SftpPollOrgJob> _logger;
 
-    public SftpPollOrgJob(ISftpIngressService sftpIngress, ILogger<SftpPollOrgJob> logger)
+    public SftpPollOrgJob(
+        ISftpIngressService sftpIngress,
+        IBillingService billing,
+        ILogger<SftpPollOrgJob> logger)
     {
         _sftpIngress = sftpIngress;
+        _billing = billing;
         _logger = logger;
     }
 
@@ -35,6 +42,18 @@ public sealed class SftpPollOrgJob
     [PerOrgDistributedMutex(orgArgumentIndex: 0, timeoutSeconds: 300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
+        // Billing gate FIRST — before any network work. Mirrors EmailPollOrgJob, which has
+        // early-returned on a missing feature since it shipped; SFTP polling skipped the
+        // check entirely, so an org whose plan does not include SFTP ingestion (or one that
+        // is frozen — HasFeatureAsync is false for every read-only status) kept having its
+        // server connected to and its files imported. Early-returning here also means a
+        // gated org never has its credentials decrypted or its endpoint dialled.
+        if (!await _billing.HasFeatureAsync(orgId, BillingFeature.SftpIngestion, ct))
+        {
+            _logger.LogInformation("SftpPollOrgJob: plan does not include SFTP ingestion for org {OrgId}.", orgId);
+            return;
+        }
+
         _logger.LogInformation("SftpPollOrgJob: starting SFTP poll for org {OrgId}.", orgId);
 
         var count = await _sftpIngress.PollAsync(orgId, ct);

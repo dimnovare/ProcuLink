@@ -1,7 +1,8 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 
@@ -21,13 +22,41 @@ public sealed class ConnectionsController : ControllerBase
     private readonly ISupplierConnectionService _service;
     private readonly IReplayService             _replay;
     private readonly ICurrentTenantService      _tenant;
+    private readonly IBillingService            _billing;
 
     public ConnectionsController(
-        ISupplierConnectionService service, IReplayService replay, ICurrentTenantService tenant)
+        ISupplierConnectionService service, IReplayService replay, ICurrentTenantService tenant,
+        IBillingService billing)
     {
         _service = service;
         _replay  = replay;
         _tenant  = tenant;
+        _billing = billing;
+    }
+
+    /// <summary>
+    /// 403 when the draft bundle selects a delivery channel or output format the org's plan does
+    /// not include, else null.
+    ///
+    /// <para>A revision is what a PINNED order actually delivers through, so this path reaches
+    /// the same behaviour as the live delivery-config row. Gating only that row would have left
+    /// the whole thing bypassable: save a draft with <c>DeliveryProtocol = "http"</c>, publish,
+    /// and a Pilot org delivers by webhook. Both paths share
+    /// <see cref="DeliveryCapabilityGate.RequiredFeature"/> so they cannot drift.</para>
+    /// </summary>
+    private async Task<IActionResult?> GateBundleAsync(ConnectionRevisionBundleDto? bundle, CancellationToken ct)
+    {
+        if (bundle is null) return null;
+
+        var gated = await DeliveryCapabilityGate.FirstUnmetAsync(
+            _billing, OrgId, bundle.DeliveryProtocol, bundle.OutputFormat, ct);
+        if (gated is null) return null;
+
+        return StatusCode(StatusCodes.Status403Forbidden, new
+        {
+            error = BillingGateErrors.RequiresPlan(gated.Value.Capability, gated.Value.Feature),
+            upgradeUrl = "/settings",
+        });
     }
 
     private Guid OrgId => _tenant.OrganisationId;
@@ -97,6 +126,8 @@ public sealed class ConnectionsController : ControllerBase
         Guid connectionId, [FromBody] CreateConnectionRevisionRequest? request, CancellationToken ct)
     {
         request ??= new CreateConnectionRevisionRequest();
+        if (await GateBundleAsync(request.Bundle, ct) is { } denied) return denied;
+
         var input = request.Bundle is null ? null : ToInput(request.Bundle);
         var draft = await _service.CreateDraftAsync(
             OrgId, connectionId, input, request.CloneFromActive, CurrentUser, ct);
@@ -110,6 +141,8 @@ public sealed class ConnectionsController : ControllerBase
     public async Task<IActionResult> UpdateDraft(
         Guid connectionId, Guid revisionId, [FromBody] UpdateConnectionRevisionRequest request, CancellationToken ct)
     {
+        if (await GateBundleAsync(request.Bundle, ct) is { } denied) return denied;
+
         var result = await _service.UpdateDraftAsync(OrgId, connectionId, revisionId, ToInput(request.Bundle), ct);
         return result switch
         {
