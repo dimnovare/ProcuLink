@@ -154,9 +154,28 @@ public static class ScribanFieldEvaluator
     /// <summary>
     /// Canonical numeric line fields. Exposed as <see cref="decimal"/> so expressions can do
     /// arithmetic (<c>line.Quantity * line.UnitPrice</c>) instead of string concatenation.
+    ///
+    /// <para>WP-14 added the three money fields below. Without them <c>line.NetAmount * 2</c>
+    /// concatenated instead of multiplying, while the identical expression on
+    /// <c>line.UnitPrice</c> did the arithmetic — a split personality inside one expression
+    /// language, and one that produces a plausible-looking wrong number rather than an error.</para>
+    ///
+    /// <para><b>LineAmount and TaxRate are deliberately NOT here.</b> Both were bindable BEFORE
+    /// WP-14, so live Scriban expressions may already depend on them being strings (e.g.
+    /// <c>line.LineAmount + " EUR"</c>, which concatenates today and would become an arithmetic
+    /// error, or a decimal's trailing-zero rendering differing from the stored string). Promoting
+    /// them changes bytes delivered to existing suppliers, which is exactly what this PR is being
+    /// careful not to do. The three new names cannot have an existing dependant because they could
+    /// not be bound at all until this change. Fixing the older pair is a separate, opt-in
+    /// change.</para>
     /// </summary>
     private static readonly HashSet<string> NumericLineKeys =
-        new(StringComparer.Ordinal) { "Quantity", "UnitPrice", "LineTotal", "LineNumber" };
+        new(StringComparer.Ordinal)
+        {
+            "Quantity", "UnitPrice", "LineTotal", "LineNumber",
+            // WP-14 — new in this change, no pre-existing expression can reference them.
+            "TaxAmount", "DiscountPercent", "NetAmount",
+        };
 
     private static ScriptObject BuildScopeObject(
         IReadOnlyDictionary<string, string> row, HashSet<string> numericKeys)

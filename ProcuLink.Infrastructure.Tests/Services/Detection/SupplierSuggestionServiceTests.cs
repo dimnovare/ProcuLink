@@ -330,6 +330,46 @@ public class SupplierSuggestionServiceTests
         Assert.Equal(SupplierSuggestionScoring.CatalogOverlapWeight * 0.5, overlap.Contribution, 3);
     }
 
+    [Fact]
+    public async Task SuggestAsync_catalogOverlap_appliesTheSameCaseRuleAsTheCatalogLookup()
+    {
+        // WP-14 folded case when RESOLVING a code against SupplierProduct.Code
+        // (OrderServiceShared.BuildCatalogLookupAsync). This probe reads the SAME column and must
+        // not disagree: if it stays ordinal, a supplier whose ERP exports lower-case scores ZERO on
+        // auto-detect while resolving perfectly once routed. The order parks `unrouted` looking, to
+        // the operator, exactly like "we do not recognise this supplier" — a silent failure with no
+        // error anywhere, unlike a wrong code, which is at least visible on the document.
+        await using var db = NewDb();
+        var acme = SeedSupplier(db, "Acme GmbH");
+        SeedCatalog(db, acme.Id, "AAA", "BBB");
+        await db.SaveChangesAsync();
+
+        var result = await NewService(db).SuggestAsync(
+            Input(lineCodes: new[] { "aaa", "bbb", "ccc", "ddd" }), default);
+
+        var overlap = Assert.Single(result).Signals.Single(s => s.Signal == SupplierSignalKind.CatalogOverlap);
+        Assert.Equal(SupplierSuggestionScoring.CatalogOverlapWeight * 0.5, overlap.Contribution, 3);
+        Assert.Contains("2 of 4", overlap.Detail);
+    }
+
+    [Fact]
+    public async Task SuggestAsync_catalogOverlap_countsTwoCaseVariantsOfOneCodeOnce()
+    {
+        // The dedupe of the DOCUMENT's codes must fold case too, or "AAA" and "aaa" on one order
+        // inflate the denominator and depress every supplier's score.
+        await using var db = NewDb();
+        var acme = SeedSupplier(db, "Acme GmbH");
+        SeedCatalog(db, acme.Id, "AAA");
+        await db.SaveChangesAsync();
+
+        var result = await NewService(db).SuggestAsync(
+            Input(lineCodes: new[] { "AAA", "aaa", "ZZZ" }), default);
+
+        var overlap = Assert.Single(result).Signals.Single(s => s.Signal == SupplierSignalKind.CatalogOverlap);
+        Assert.Equal(SupplierSuggestionScoring.CatalogOverlapWeight * 0.5, overlap.Contribution, 3);
+        Assert.Contains("1 of 2", overlap.Detail);
+    }
+
     // ── Sender domain ─────────────────────────────────────────────────────────
 
     [Fact]

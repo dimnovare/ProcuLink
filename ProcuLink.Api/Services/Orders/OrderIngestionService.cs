@@ -1824,6 +1824,9 @@ internal sealed class OrderIngestionService
         // Pass 1 — deterministic resolve for every line. Either the pinned revision's
         // item-mapping SNAPSHOT (launch batch 7 — exact-match, in-memory, mirrors
         // ResolveManyAsync's trimmed Ordinal keying) or the live table in a single query.
+        // Both dictionaries are keyed Ordinal on the trimmed code the LINE carries: the case rule
+        // lives in the match against stored rows, not in the keys, so two lines whose codes differ
+        // only in case still get one answer each.
         var resolvedMap = itemMappingSnapshot is not null
             ? ResolveFromSnapshot(itemMappingSnapshot, lines)
             : await _mappings.ResolveManyAsync(
@@ -1832,7 +1835,7 @@ internal sealed class OrderIngestionService
                 lines.Select(l => l.BuyerItemCode),
                 ct);
 
-        // Lookup helper mirroring ResolveManyAsync's trimmed, case-sensitive keys.
+        // Lookup helper mirroring both resolvers' trimmed, Ordinal keys.
         static string? ResolveFromMap(IReadOnlyDictionary<string, string?> map, string? buyerItemCode)
         {
             if (string.IsNullOrWhiteSpace(buyerItemCode)) return null;
@@ -2225,15 +2228,28 @@ internal sealed class OrderIngestionService
     /// <summary>
     /// Exact-match resolution against the pinned revision's item-mapping snapshot. Mirrors
     /// <c>ItemMappingService.ResolveManyAsync</c> semantics precisely: the returned dictionary is
-    /// keyed by the TRIMMED buyer item code (Ordinal), is total over the non-blank input set
-    /// (missing mapping ⇒ null value ⇒ the line flows to review exactly as today), and matches
-    /// snapshot rows case-sensitively against the trimmed requested codes (the last duplicate
-    /// snapshot row wins, like the live resolver's row loop).
+    /// keyed by the TRIMMED, exactly-as-supplied buyer item code (Ordinal), is total over the
+    /// non-blank input set (missing mapping ⇒ null value ⇒ the line flows to review exactly as
+    /// today), and matches snapshot rows case-insensitively under
+    /// <see cref="ItemCodeComparison"/> — the SAME member the live resolver and the catalog lookup
+    /// use.
+    ///
+    /// <para><b>Including the tie-break.</b> Sharing a comparer is not enough: this resolver used to
+    /// keep "last snapshot row wins" while the live resolver picks "exact-case wins, then most
+    /// recently updated". For a supplier carrying case-variant twins those two rules select
+    /// DIFFERENT rows, so a replay of a delivered order silently substituted a different supplier
+    /// code. The snapshot record carries no timestamp, so the equivalent here is: exact-case wins;
+    /// otherwise the last matching snapshot row, which is deterministic because the snapshot is an
+    /// ordered immutable list. Asserted against the live resolver's actual answer by
+    /// <c>ItemMappingCaseParityTests.ResolveFromSnapshot_PicksTheSameTwinAsTheLiveResolver</c> —
+    /// a comparison between the two paths, not two independent restatements of one rule.</para>
     /// </summary>
     internal static IReadOnlyDictionary<string, string?> ResolveFromSnapshot(
         IReadOnlyList<EffectiveRevisionItemMapping> snapshot,
         IReadOnlyList<ParsedOrderLine> lines)
     {
+        // Ordinal, for the same reason ResolveManyAsync is: two spellings on one order may be two
+        // different products, and each line must get its own answer.
         var requested = lines
             .Select(l => l.BuyerItemCode)
             .Where(c => !string.IsNullOrWhiteSpace(c))
@@ -2245,12 +2261,36 @@ internal sealed class OrderIngestionService
         foreach (var code in requested)
             result[code] = null;
 
+        if (requested.Count == 0) return result;
+
+        // Bucket the snapshot ONCE by folded code so the per-code resolve is a dictionary hit rather
+        // than a scan of the whole snapshot per line.
+        var byFoldedCode = new Dictionary<string, List<EffectiveRevisionItemMapping>>(
+            ItemCodeComparison.Comparer);
         foreach (var mapping in snapshot)
         {
-            // Only overwrite a key that was actually requested (case-sensitive) — same guard
-            // as the live resolver.
-            if (result.ContainsKey(mapping.BuyerItemCode))
-                result[mapping.BuyerItemCode] = mapping.SupplierItemCode;
+            var trimmed = mapping.BuyerItemCode?.Trim();
+            if (string.IsNullOrEmpty(trimmed)) continue;
+            if (!byFoldedCode.TryGetValue(trimmed, out var bucket))
+                byFoldedCode[trimmed] = bucket = new List<EffectiveRevisionItemMapping>();
+            bucket.Add(mapping with { BuyerItemCode = trimmed });
+        }
+
+        foreach (var code in requested)
+        {
+            if (!byFoldedCode.TryGetValue(code, out var bucket)) continue;
+
+            string? exact = null;
+            string? loose = null;
+            foreach (var row in bucket)
+            {
+                if (string.Equals(row.BuyerItemCode, code, StringComparison.Ordinal))
+                    exact = row.SupplierItemCode;
+                else
+                    loose = row.SupplierItemCode;
+            }
+
+            result[code] = exact ?? loose;
         }
 
         return result;
@@ -2409,8 +2449,11 @@ internal sealed class OrderIngestionService
             // (2) otherwise the supplier's own code, exact (case-insensitive) — no separator strip.
             if (hits.Count == 0)
             {
+                // ItemCodeComparison.Matches, not a hand-written OrdinalIgnoreCase: same behaviour,
+                // but the rule is now named where it is applied, so a later edit to the shared rule
+                // reaches here too.
                 hits = rows
-                    .Where(p => string.Equals(p.Code?.Trim(), rawTrimmed, StringComparison.OrdinalIgnoreCase))
+                    .Where(p => ItemCodeComparison.Matches(p.Code, rawTrimmed))
                     .ToList();
             }
 
@@ -2421,7 +2464,7 @@ internal sealed class OrderIngestionService
             var distinctCodes = hits
                 .Select(p => p.Code?.Trim() ?? string.Empty)
                 .Where(c => c.Length > 0)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Distinct(ItemCodeComparison.Comparer)
                 .ToList();
 
             if (distinctCodes.Count == 1)
@@ -2737,7 +2780,7 @@ internal sealed class OrderIngestionService
 
         return scored
             .OrderByDescending(s => s.Score)
-            .ThenBy(s => s.Product.Code, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.Product.Code, ItemCodeComparison.Comparer)
             .Take(take)
             .Select(s => s.Product);
     }

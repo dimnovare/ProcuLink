@@ -1,0 +1,315 @@
+using System.Text;
+using System.Text.Json;
+using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using ProcuLink.Core.Entities;
+using ProcuLink.Infrastructure;
+using ProcuLink.Transform.Output;
+using Testcontainers.PostgreSql;
+using Xunit;
+using Xunit.Abstractions;
+
+namespace ProcuLink.Api.Tests.Integration;
+
+/// <summary>
+/// WP-14 — makes the blast radius KNOWN instead of assumed empty.
+///
+/// <para><b>The claim this exists to stop being asserted.</b> Widening the output row bag from 21
+/// keys to 53 is byte-identical ONLY for suppliers whose stored output config does not name one of
+/// the 32 new fields. For a supplier that DOES name one, the delivered document changes on deploy:
+/// an empty cell becomes populated, and — through a <c>Fallback</c> manipulator whose first
+/// argument used to be unresolvable — a value can change into a DIFFERENT value. Pinned revisions
+/// do not protect, because the row bag is code rather than part of the snapshot, and
+/// <c>ReplayService</c> re-renders through the same path.</para>
+///
+/// <para><b>The artefact.</b> <c>docs/ops/wp14-widened-field-blast-radius.sql</c> is a READ-ONLY
+/// query the founder runs against production (or a read replica) before merging. This test executes
+/// THAT FILE — not a copy of it — against a seeded local Postgres, so the script that ships is the
+/// script that was proven to work, and writes the result to a report file. A test with its own
+/// inline SQL would prove a sibling of the artefact, which is worth nothing.</para>
+///
+/// <para><b>Non-vacuity.</b> The seed contains both POSITIVES (a canonicalField rule, a Fallback
+/// manipulator param, a Scriban expression, a per-order override, a published revision) and
+/// NEGATIVES (a config naming only pre-WP-14 fields; a supplier column whose NAME happens to be a
+/// new field but which carries no rule). The test asserts the query finds every positive and no
+/// negative — a scan that matched everything, or nothing, would fail.</para>
+///
+/// <para>Docker-gated like every other <c>*PostgresTests</c>. Nothing here writes to production;
+/// the SQL file is additionally asserted to contain no mutating keyword.</para>
+/// </summary>
+[Collection("postgres-container")]
+public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
+{
+    private readonly ITestOutputHelper _output;
+    private PostgreSqlContainer? _pg;
+    private DbContextOptions<ProcuLinkDbContext>? _options;
+    private string? _connectionString;
+
+    public WidenedFieldBlastRadiusPostgresTests(ITestOutputHelper output) => _output = output;
+
+    public async Task InitializeAsync()
+    {
+        if (DockerProbe.UnavailableReason is not null)
+            return;
+
+        _pg = new PostgreSqlBuilder()
+            .WithImage("postgres:16")
+            .WithDatabase($"proculink_blast_{Guid.NewGuid():N}")
+            .WithUsername("postgres")
+            .WithPassword("postgres")
+            .Build();
+
+        await _pg.StartAsync();
+
+        _connectionString = new NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        {
+            Pooling = false,
+        }.ConnectionString;
+
+        _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseNpgsql(_connectionString)
+            .Options;
+
+        await using var migrateDb = new ProcuLinkDbContext(_options);
+        await migrateDb.Database.MigrateAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        if (_pg is not null)
+            await _pg.DisposeAsync();
+    }
+
+    // ── Locating the shipped artefact ────────────────────────────────────────
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ProcuLink.slnx")))
+            dir = dir.Parent;
+        dir.Should().NotBeNull("the test executes the shipped .sql file, so it must find the repo root");
+        return dir!.FullName;
+    }
+
+    private static string ScriptPath() =>
+        Path.Combine(RepoRoot(), "docs", "ops", "wp14-widened-field-blast-radius.sql");
+
+    /// <summary>
+    /// The 32 names WP-14 added, derived from the declared field lists rather than retyped, so the
+    /// SQL literal cannot silently drift from what the code actually exposes.
+    /// </summary>
+    private static IReadOnlyList<string> NewlyExposedNames()
+    {
+        // Pre-WP-14 the row bag held these 10 header + 11 line keys.
+        var preWp14 = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "PoNumber", "OrderDate", "BuyerName", "Currency", "SupplierName",
+            "SubTotal", "TaxTotal", "GrandTotal", "PaymentTerms", "RequestedDeliveryDate",
+            "LineNumber", "BuyerItemCode", "SupplierItemCode", "Description",
+            "Quantity", "Unit", "UnitPrice", "LineTotal", "LineAmount", "TaxRate", "DeliveryDate",
+        };
+
+        return CanonicalRowFields.Header
+            .Concat(CanonicalRowFields.Line)
+            .Where(n => !preWp14.Contains(n))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
+    // ── The safety property ──────────────────────────────────────────────────
+
+    [Fact]
+    public void TheScript_IsReadOnly()
+    {
+        // It is handed to the founder to run against production. A mutating statement sneaking in
+        // later must fail here, not there.
+        var sql = File.ReadAllText(ScriptPath());
+
+        var forbidden = new[]
+        {
+            "INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "TRUNCATE ", "CREATE ", "GRANT ", "COPY ",
+        };
+
+        // Strip comment lines first: the header prose legitimately names these words.
+        var body = string.Join('\n', File.ReadAllLines(ScriptPath())
+            .Where(l => !l.TrimStart().StartsWith("--")));
+
+        foreach (var keyword in forbidden)
+            body.ToUpperInvariant().Should().NotContain(keyword,
+                "the blast-radius script is run against production and must only ever SELECT");
+
+        sql.Should().Contain("SELECT", "a query that selects nothing cannot report anything");
+    }
+
+    [Fact]
+    public void TheScriptsFieldList_MatchesWhatWp14ActuallyExposed()
+    {
+        // Guards the artefact against the code moving on without it.
+        var sql = File.ReadAllText(ScriptPath());
+
+        foreach (var name in NewlyExposedNames())
+            sql.Should().Contain($"('{name}')",
+                "the blast-radius script must probe every newly exposed field; '{0}' is missing", name);
+    }
+
+    // ── The run ──────────────────────────────────────────────────────────────
+
+    [DockerRequiredFact]
+    public async Task TheQuery_FindsEveryAffectedConfig_AndNothingElse()
+    {
+        var orgId      = Guid.NewGuid();
+        var supplierA  = Guid.NewGuid();   // POSITIVE — canonicalField rule on a new name
+        var supplierB  = Guid.NewGuid();   // POSITIVE — Fallback manipulator param + Scriban
+        var supplierC  = Guid.NewGuid();   // NEGATIVE — only pre-WP-14 names
+        var now        = DateTime.UtcNow;
+
+        await using (var db = new ProcuLinkDbContext(_options!))
+        {
+            db.Organisations.Add(new Organisation
+            {
+                Id = orgId, Name = "Blast Radius Co", ClerkOrgId = $"org_{Guid.NewGuid():N}",
+                Slug = $"blast-{Guid.NewGuid():N}"[..20], CreatedAt = now,
+            });
+            foreach (var (id, name) in new[] { (supplierA, "A"), (supplierB, "B"), (supplierC, "C") })
+            {
+                db.Suppliers.Add(new Supplier
+                {
+                    Id = id, OrgId = orgId, Name = $"Supplier {name}", Code = name,
+                    CreatedAt = now,
+                });
+            }
+            await db.SaveChangesAsync();
+
+            // POSITIVE 1 — the machine-generated shape. OutputNodeTemplateInferrer auto-binds this
+            // for any sample column containing "manufacturerpart", so it is not hypothetical.
+            db.SupplierPoMappings.Add(NewPoMapping(orgId, supplierA, now, """
+                {"header":{"po":{"outputPath":"po","canonicalField":"PoNumber","fieldManipulators":[]}},
+                 "lines":{"mpn":{"outputPath":"mpn","canonicalField":"ManufacturerPartNumber","fieldManipulators":[]}}}
+                """));
+
+            // POSITIVE 2 — a Fallback manipulator whose FIRST argument was unresolvable before
+            // WP-14 and resolves now: the value CHANGES rather than filling a blank. Plus a Scriban
+            // expression naming another new field.
+            db.SupplierPoMappings.Add(NewPoMapping(orgId, supplierB, now, """
+                {"header":{"ship":{"outputPath":"ship","fieldManipulators":[
+                    {"type":"Fallback","params":{"fields":"ShipToName,BuyerName"}}]},
+                  "note":{"outputPath":"note","expression":"{{order.Incoterms}}-{{order.ShipToCity}}","fieldManipulators":[]}},
+                 "lines":{}}
+                """));
+
+            // NEGATIVE — a perfectly ordinary config naming only pre-WP-14 fields.
+            db.SupplierPoMappings.Add(NewPoMapping(orgId, supplierC, now, """
+                {"header":{"po":{"outputPath":"po","canonicalField":"PoNumber","fieldManipulators":[]},
+                           "cur":{"outputPath":"cur","canonicalField":"Currency","fieldManipulators":[]}},
+                 "lines":{"qty":{"outputPath":"qty","canonicalField":"Quantity","fieldManipulators":[]}}}
+                """));
+
+            await db.SaveChangesAsync();
+        }
+
+        // ── run the SHIPPED script ───────────────────────────────────────────
+        var rows = await RunScriptAsync();
+
+        var report = BuildReport(rows);
+        var reportPath = Path.Combine(RepoRoot(), "docs", "ops", "wp14-blast-radius-local-run.md");
+        await File.WriteAllTextAsync(reportPath, report);
+        _output.WriteLine(report);
+
+        // POSITIVES found …
+        rows.Should().Contain(r => r.ScopeId == supplierA.ToString()
+                                   && r.ReferencedField == "ManufacturerPartNumber",
+            "the auto-bound ManufacturerPartNumber rule is exactly the config that starts emitting "
+            + "a value it never emitted before");
+
+        rows.Should().Contain(r => r.ScopeId == supplierB.ToString() && r.ReferencedField == "ShipToName",
+            "a Fallback whose first argument becomes resolvable returns a DIFFERENT value");
+        rows.Should().Contain(r => r.ScopeId == supplierB.ToString() && r.ReferencedField == "Incoterms");
+        rows.Should().Contain(r => r.ScopeId == supplierB.ToString() && r.ReferencedField == "ShipToCity");
+
+        // … and the negative NOT found. Without this the query could be `WHERE true`.
+        rows.Should().NotContain(r => r.ScopeId == supplierC.ToString(),
+            "a config naming only pre-WP-14 fields is unaffected and must not be reported — a scan "
+            + "that flags everything tells the founder nothing");
+    }
+
+    [DockerRequiredFact]
+    public async Task TheQuery_ReportsNothing_WhenNoConfigNamesANewField()
+    {
+        // The answer the founder most wants is "zero rows". It has to be reachable, or a non-empty
+        // result carries no information.
+        var rows = await RunScriptAsync();
+
+        rows.Should().BeEmpty(
+            "an empty database has no affected configs; if this reports rows the scan is matching "
+            + "something other than a stored configuration");
+    }
+
+    // ── Plumbing ─────────────────────────────────────────────────────────────
+
+    private sealed record Hit(
+        string SourceTable, Guid RowId, Guid OrgId, string? ScopeId, string ReferencedField, string Shape);
+
+    private async Task<List<Hit>> RunScriptAsync()
+    {
+        var sql = await File.ReadAllTextAsync(ScriptPath());
+
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        var hits = new List<Hit>();
+        while (await reader.ReadAsync())
+        {
+            hits.Add(new Hit(
+                reader.GetString(0),
+                reader.GetGuid(1),
+                reader.GetGuid(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5)));
+        }
+        return hits;
+    }
+
+    private static string BuildReport(IReadOnlyList<Hit> rows)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("# WP-14 blast radius — LOCAL TEST DATA");
+        sb.AppendLine();
+        sb.AppendLine("Generated by `WidenedFieldBlastRadiusPostgresTests` by executing");
+        sb.AppendLine("`docs/ops/wp14-widened-field-blast-radius.sql` against a seeded local");
+        sb.AppendLine("postgres:16. **This is local fixture data, NOT production.** The same script");
+        sb.AppendLine("must be run against a production read replica before merge — that number is");
+        sb.AppendLine("the founder's to obtain, and this file cannot stand in for it.");
+        sb.AppendLine();
+        sb.AppendLine($"Rows found in the local fixture: **{rows.Count}**");
+        sb.AppendLine();
+
+        if (rows.Count == 0)
+        {
+            sb.AppendLine("_(no affected configuration in the fixture)_");
+            return sb.ToString();
+        }
+
+        sb.AppendLine("| source table | org | scope | field | shape |");
+        sb.AppendLine("|---|---|---|---|---|");
+        foreach (var r in rows.OrderBy(r => r.SourceTable).ThenBy(r => r.ReferencedField, StringComparer.Ordinal))
+            sb.AppendLine($"| {r.SourceTable} | {r.OrgId} | {r.ScopeId} | {r.ReferencedField} | {r.Shape} |");
+
+        return sb.ToString();
+    }
+
+    private static SupplierPoMapping NewPoMapping(Guid orgId, Guid supplierId, DateTime now, string configJson) =>
+        new()
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            SupplierId = supplierId,
+            ConfigJson = configJson,
+            CreatedAt  = now,
+            UpdatedAt  = now,
+        };
+}

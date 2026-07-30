@@ -67,15 +67,18 @@ public sealed class CatalogRetrievalService : ICatalogRetrievalService
             // Result accumulator: code-keyed, insertion-ordered so exact matches (added first)
             // outrank fuzzy ones, mirroring the in-memory scorer's exact-before-fuzzy ordering.
             var ordered = new List<SupplierProduct>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(ItemCodeComparison.Comparer);
 
             // ── Pass 1 — EXACT code / barcode match (indexed) ─────────────────────────────
             // Buyer codes are the strong key: a buyer code may equal a supplier code OR a barcode.
-            // Case-insensitive to mirror the in-memory scorer (which lowercases both sides).
+            // The case rule is ItemCodeComparison — the SAME member the learned-mapping resolver and
+            // BuildCatalogLookupAsync use. It was a hand-written OrdinalIgnoreCase here, which is
+            // the same behaviour today but is exactly how the rule drifts: two spellings of one rule
+            // in two files, and only one of them gets edited.
             var buyerCodes = queries
                 .Select(q => (q.BuyerItemCode ?? string.Empty).Trim())
                 .Where(c => c.Length > 0)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Distinct(ItemCodeComparison.Comparer)
                 .ToList();
 
             if (buyerCodes.Count > 0)
