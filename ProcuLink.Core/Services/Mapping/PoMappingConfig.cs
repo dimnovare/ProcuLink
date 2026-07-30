@@ -46,6 +46,16 @@ public record PoMappingConfig
     /// <see cref="Output"/>, mirroring the per-order ladder. A malformed or unusable value falls back
     /// to the fixed transformer with a logged warning — never a throw.
     /// </para>
+    ///
+    /// <para>
+    /// TWO conditions decide whether a stored tree actually drives a document, and BOTH are asked of
+    /// the shared predicates so promote can never claim what delivery will not honour: the emitter must
+    /// render the tree's <see cref="OutputNodeTemplate.Format"/> at all
+    /// (<see cref="OutputTreeFormats.IsRenderable"/> — JSON/XML/CSV), AND that format must be the one
+    /// the connection delivers. A tree failing either is refused at promote, dropped at adoption, and
+    /// cleaned off this config by the next promote; <c>DELETE {id}/po-mapping/output-tree</c> removes
+    /// it outright.
+    /// </para>
     /// </summary>
     public OutputNodeTemplate? OutputTree { get; init; }
 }

@@ -53,6 +53,23 @@ public sealed class OutputTemplateEmitter
 
         var orderedLines = order.Lines.OrderBy(l => l.LineNumber).ToList();
 
+        // ONE gate, asked of the SHARED predicate every caller uses to decide whether to route here at
+        // all (OutputTreeFormats.IsRenderable). Spelling the refusal as its own format list is exactly
+        // how the emitter and the "usable layout" predicate drifted: the predicate said "not cXML/X12"
+        // while this switch also refused Ubl, UblOrder, X12_850 and EdifactOrders through its `_` arm,
+        // so promoting a tree in one of those formats bricked every future order for the supplier.
+        //
+        // A non-renderable format needs the standard's own envelope/DOCTYPE (cXML's Header, Peppol's
+        // UBLVersionID/CustomizationID/ProfileID, X12's ISA/GS, EDIFACT's UNB/UNH), none of which a
+        // generic node tree carries. Emitting one anyway would deliver a well-formed document the
+        // receiver REJECTS (offer ⇔ works). Those formats deliver through their dedicated transform.
+        if (!OutputTreeFormats.IsRenderable(template.Format))
+            throw new ArgumentException(
+                $"The output-structure editor cannot produce valid {template.Format} (it needs the format's " +
+                "envelope/DOCTYPE, not a generic element tree). This supplier delivers via the dedicated " +
+                $"{template.Format} transform — design the output as generic XML/JSON/CSV, or remove the output tree.",
+                nameof(template));
+
         return template.Format switch
         {
             OutputFormat.Json =>
@@ -61,24 +78,25 @@ public sealed class OutputTemplateEmitter
                 Result(EmitXml(template, headerRow, LineRowFor, orderedLines), "application/xml", ".xml"),
             OutputFormat.Csv =>
                 Result(EmitCsv(template, headerRow, LineRowFor, orderedLines), "text/csv", ".csv"),
-            // cXML / UBL are NOT tree-emittable validly: a real cXML needs the DOCTYPE + From/To/Sender
-            // Header envelope, and Peppol UBL needs the mandatory UBLVersionID/CustomizationID/ProfileID
-            // — none of which a generic node tree carries. Producing them here would deliver a
-            // well-formed-but-receiver-REJECTED document (offer⇔works). They deliver through the
-            // dedicated CxmlTransformService / UblOrderTransformService instead. Fail loud.
-            OutputFormat.CXml or OutputFormat.Ubl =>
-                throw new ArgumentException(
-                    $"The output-structure editor cannot produce valid {template.Format} (it needs the format's " +
-                    "envelope/DOCTYPE, not a generic element tree). This supplier delivers via the dedicated " +
-                    $"{template.Format} transform — design the output as generic XML, or remove the output tree.",
-                    nameof(template)),
-            _ => throw new ArgumentException(
-                     $"OutputTemplateEmitter does not support format '{template.Format}' (tree formats: JSON, XML, CSV).",
-                     nameof(template)),
+            _ => throw new InvalidOperationException(
+                     $"OutputTreeFormats.IsRenderable admitted '{template.Format}' but OutputTemplateEmitter has " +
+                     "no arm for it. The predicate and the emitter are one decision — change them together."),
         };
     }
 
     // ── JSON ─────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The children a walk may safely dereference. <see cref="OutputNode.Children"/> is an
+    /// <c>init</c> List with a default, but System.Text.Json overwrites the default with null for
+    /// <c>"children": null</c> AND puts a null INTO the list for <c>"children": [null]</c> - both
+    /// reachable from the <c>[FromBody] PoMappingConfig</c> PUT that stores the config verbatim. Every
+    /// walk site goes through here so a hand-posted tree can never NullReference mid-document, after
+    /// bytes have already been written. (<c>HasUsableOutputTree</c> keeps such a tree away from the
+    /// emitter at the ROOT; a null nested deeper than the root passes that check.)
+    /// </summary>
+    private static IEnumerable<OutputNode> RealChildren(OutputNode node) =>
+        node.Children?.Where(c => c is not null) ?? Enumerable.Empty<OutputNode>();
 
     private static byte[] EmitJson(
         OutputNodeTemplate template,
@@ -104,7 +122,7 @@ public sealed class OutputTemplateEmitter
         {
             case OutputNodeType.Object:
                 w.WriteStartObject();
-                foreach (var child in node.Children)
+                foreach (var child in RealChildren(node))
                 {
                     if (child.NodeType == OutputNodeType.Attribute) continue; // attributes are XML-only
                     if (!ShouldEmit(child, row, lineScope)) continue;         // conditional field
@@ -116,7 +134,7 @@ public sealed class OutputTemplateEmitter
 
             case OutputNodeType.Array:
                 w.WriteStartArray();
-                var item = node.Children.FirstOrDefault();
+                var item = RealChildren(node).FirstOrDefault();
                 if (item is not null)
                     foreach (var line in orderedLines)
                     {
@@ -191,11 +209,11 @@ public sealed class OutputTemplateEmitter
     /// <summary>A Prefix with no Namespace URI is an unrenderable half-state (the prefix would be silently dropped). Fail loud.</summary>
     private static bool AnyPrefixWithoutNamespace(OutputNode node) =>
         (node.Prefix is { Length: > 0 } && node.Namespace is not { Length: > 0 })
-        || node.Children.Any(AnyPrefixWithoutNamespace);
+        || RealChildren(node).Any(AnyPrefixWithoutNamespace);
 
     private static bool AnyNamespacedNode(OutputNode node) =>
         node.Namespace is { Length: > 0 } || node.Prefix is { Length: > 0 }
-        || node.Children.Any(AnyNamespacedNode);
+        || RealChildren(node).Any(AnyNamespacedNode);
 
     private static IReadOnlyDictionary<string, string> CollectPrefixedNamespaces(OutputNode root)
     {
@@ -204,7 +222,7 @@ public sealed class OutputTemplateEmitter
         {
             if (n.Prefix is { Length: > 0 } p && n.Namespace is { Length: > 0 } ns)
                 map[p] = ns;   // last write wins; a prefix maps to one URI per document (XML rule)
-            foreach (var c in n.Children) Walk(c);
+            foreach (var c in RealChildren(n)) Walk(c);
         }
         Walk(root);
         return map;
@@ -225,10 +243,10 @@ public sealed class OutputTemplateEmitter
                     foreach (var (prefix, uri) in rootNamespaces)
                         w.WriteAttributeString("xmlns", prefix, null, uri);
                 // Attributes first, then element children. Conditional (IncludeWhen) nodes are skipped.
-                foreach (var attr in node.Children.Where(c => c.NodeType == OutputNodeType.Attribute))
+                foreach (var attr in RealChildren(node).Where(c => c.NodeType == OutputNodeType.Attribute))
                     if (ShouldEmit(attr, row, lineScope))
                         WriteXmlAttribute(w, attr, row, lineScope);
-                foreach (var child in node.Children.Where(c => c.NodeType != OutputNodeType.Attribute))
+                foreach (var child in RealChildren(node).Where(c => c.NodeType != OutputNodeType.Attribute))
                     if (ShouldEmit(child, row, lineScope))
                         WriteXmlNode(w, child, row, lineScope, lineRowFor, orderedLines);
                 w.WriteEndElement();
@@ -241,7 +259,7 @@ public sealed class OutputTemplateEmitter
                 // (unwrapped repetition) would double-nest the line element.
                 var wrapped = !string.IsNullOrWhiteSpace(node.Name);
                 if (wrapped) StartElement(w, node);
-                var item = node.Children.FirstOrDefault();
+                var item = RealChildren(node).FirstOrDefault();
                 if (item is not null)
                     foreach (var line in orderedLines)
                     {
@@ -285,10 +303,10 @@ public sealed class OutputTemplateEmitter
         IReadOnlyList<PurchaseOrderLineEntity> orderedLines)
     {
         var root = template.Root;
-        var headerFields = root.Children.Where(c => c.NodeType == OutputNodeType.Field).ToList();
-        var arrayNode    = root.Children.FirstOrDefault(c => c.NodeType == OutputNodeType.Array);
-        var lineItem     = arrayNode?.Children.FirstOrDefault();
-        var lineFields   = lineItem?.Children.Where(c => c.NodeType == OutputNodeType.Field).ToList()
+        var headerFields = RealChildren(root).Where(c => c.NodeType == OutputNodeType.Field).ToList();
+        var arrayNode    = RealChildren(root).FirstOrDefault(c => c.NodeType == OutputNodeType.Array);
+        var lineItem     = arrayNode is null ? null : RealChildren(arrayNode).FirstOrDefault();
+        var lineFields   = lineItem is null ? null : RealChildren(lineItem).Where(c => c.NodeType == OutputNodeType.Field).ToList()
                            ?? new List<OutputNode>();
 
         var sb = new StringBuilder();

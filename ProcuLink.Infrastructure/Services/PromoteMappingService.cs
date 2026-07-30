@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -157,12 +158,19 @@ public sealed class PromoteMappingService : IPromoteMappingService
         // saving something delivery will not honour (offer ⇔ works). It is also the null-safe one: a
         // hand-posted `"root": null` used to throw a NullReferenceException straight out of this
         // endpoint as a 500.
-        var tree          = @override?.OutputTree;
-        var hasUsableTree = OrderMappingOverrideReader.HasUsableOutputTree(tree);
+        var tree = @override?.OutputTree;
+
+        // …and the SAME format question the transform's adoption gate asks. The bytes come from
+        // tree.Format while the artifact row, the delivered content type and the file name all come
+        // from the CONNECTION's format, so a tree in any other format can never drive this supplier's
+        // document. Refusing it HERE means the operator learns at the click instead of discovering it
+        // in a delivered file.
+        var supplierFormat = await ResolveSupplierOutputFormatAsync(orgId, supplierId, ct);
+        var hasUsableTree  = IsHonestForThisSupplier(tree, supplierFormat);
 
         // A cXML/X12 template is never rendered — only its envelope identity is honoured — so the
         // confirmation must name the identity, not a file layout that will never apply.
-        var treeIsIdentityOnly = hasUsableTree && OrderMappingOverrideReader.IsFixedFormatTree(tree);
+        var treeIsIdentityOnly = hasUsableTree && OrderMappingOverrideReader.IsEnvelopeOnlyTree(tree);
 
         // Decide whether anything is actually promotable. If the order has no SourceMap entries that
         // map to a known canonical field AND no usable output mapping AND no usable output tree,
@@ -178,21 +186,42 @@ public sealed class PromoteMappingService : IPromoteMappingService
                 OutputHeaderFieldsPromoted: 0,
                 OutputLineFieldsPromoted:   0,
                 SchemaFingerprintHash:      orderRow.SchemaFingerprintHash,
-                Message:                    BuildNothingToPromoteMessage(@override));
+                Message:                    BuildNothingToPromoteMessage(@override, supplierFormat));
         }
 
         // Build the merged config. Inbound rules merge into Header/Lines (additive). The output mapping
         // and the output tree are each set only when this order carries a usable one — otherwise the
         // existing supplier value (if any) is preserved unchanged.
+        //
+        // EXCEPT that an already-stored tree is re-checked against the SAME predicate before it is
+        // carried forward. `existing.OutputTree` used to be preserved unconditionally, so a tree
+        // promoted while the predicate was wrong (a Ubl/EDIFACT layout, or one in a format this
+        // supplier does not deliver) survived every subsequent promote — there was no way to
+        // un-poison the supplier at all. Now any promote also cleans it, and
+        // DELETE /api/suppliers/{id}/po-mapping/output-tree removes it outright.
         var merged = existing with
         {
             Header     = header,
             Lines      = lines,
             Output     = hasUsableOutput ? output : existing.Output,
-            OutputTree = hasUsableTree   ? tree   : existing.OutputTree,
+            OutputTree = hasUsableTree
+                             ? tree
+                             : IsHonestForThisSupplier(existing.OutputTree, supplierFormat)
+                                 ? existing.OutputTree
+                                 : null,
         };
 
         // Upsert is idempotent (overwrites the existing mapping row — no duplication).
+        //
+        // CONCURRENCY (D9b, accepted risk — stated, not hidden): read (above) → merge → write is not
+        // atomic, and SupplierPoMapping carries no concurrency token, so two promotes racing on the
+        // SAME supplier can lose one side's fields. Accepted because: promote is a deliberate,
+        // per-supplier human click (not a job, not a fan-out), it is idempotent — re-clicking the
+        // losing order re-promotes exactly the same rules — and the outcome is now fully recoverable
+        // through the clear endpoint. Adding an xmin concurrency token to this table is a model +
+        // snapshot + migration change whose blast radius (every EF InMemory test in the suite loses
+        // token support) is far larger than the risk it removes; if promotion ever becomes automated,
+        // that is the moment to add it.
         await _poMappingService.UpsertAsync(orgId, supplierId, merged, ct);
 
         return new PromoteMappingResult(
@@ -210,6 +239,59 @@ public sealed class PromoteMappingService : IPromoteMappingService
         {
             OutputTreePromoted = hasUsableTree,
         };
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> ClearPromotedOutputTreeAsync(Guid orgId, Guid supplierId, CancellationToken ct)
+    {
+        var existing = await _poMappingService.GetAsync(orgId, supplierId, ct);
+        if (existing?.OutputTree is null) return false;   // idempotent — nothing to un-promote
+
+        await _poMappingService.UpsertAsync(orgId, supplierId, existing with { OutputTree = null }, ct);
+        return true;
+    }
+
+    // ── Format honesty ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The supplier's configured output format, read from the LIVE delivery config — the same row the
+    /// controller reads to decide which format to transform into. Null when no delivery config exists
+    /// or its format is blank/unrecognised, in which case there is nothing for a tree to contradict.
+    /// </summary>
+    private async Task<OutputFormat?> ResolveSupplierOutputFormatAsync(
+        Guid orgId, Guid supplierId, CancellationToken ct)
+    {
+        var raw = await _db.SupplierDeliveryConfigs
+            .AsNoTracking()
+            .Where(c => c.OrgId == orgId && c.SupplierId == supplierId)
+            .Select(c => c.OutputFormat)
+            .FirstOrDefaultAsync(ct);
+
+        return Enum.TryParse<OutputFormat>(raw, ignoreCase: true, out var parsed) ? parsed : null;
+    }
+
+    /// <summary>
+    /// May this tree be stored against this supplier and reported as saved? Two questions, both shared
+    /// with the transform so promote can never claim something delivery will refuse:
+    ///
+    /// <list type="bullet">
+    ///   <item><description><see cref="OrderMappingOverrideReader.HasUsableOutputTree"/> — does it
+    ///     contribute anything at all? (Renderability comes from <see cref="OutputTreeFormats"/>, the
+    ///     source the emitter dispatches on, so a Ubl / UblOrder / X12_850 / EdifactOrders layout can
+    ///     no longer be stored and announced as "the file layout you designed" and then kill every
+    ///     future order in the emitter.)</description></item>
+    ///   <item><description>and, for a tree that RENDERS its own document, does it render the format
+    ///     this supplier is configured to receive? A cXML/X12 tree is exempt — it contributes only
+    ///     envelope identity, never bytes, so its own Format is not the document's format.</description></item>
+    /// </list>
+    /// </summary>
+    private static bool IsHonestForThisSupplier(OutputNodeTemplate? tree, OutputFormat? supplierFormat)
+    {
+        if (!OrderMappingOverrideReader.HasUsableOutputTree(tree)) return false;
+
+        if (!OrderMappingOverrideReader.CanRenderTree(tree)) return true;   // envelope-only: no bytes
+
+        return supplierFormat is null || tree!.Format == supplierFormat;
     }
 
     // ── Translation helpers ──────────────────────────────────────────────────
@@ -274,20 +356,52 @@ public sealed class PromoteMappingService : IPromoteMappingService
     /// Distinguishes "no per-order mapping at all" from "a mapping exists but none of its fields
     /// map to a known canonical field / output rule".
     /// </summary>
-    private static string BuildNothingToPromoteMessage(OrderMappingOverride? @override)
+    private static string BuildNothingToPromoteMessage(
+        OrderMappingOverride? @override, OutputFormat? supplierFormat)
     {
         if (@override is null)
             return "Nothing to save — this order has no custom field mapping yet. " +
                    "Wire some fields (or edit the output mapping) first, then save.";
 
+        var tree = @override.OutputTree;
+
         // The honest answer for a cXML/X12 template: its nodes are never used, so drawing them saved
         // nothing. Say what WOULD be saved instead of implying the layout is the problem.
-        if (OrderMappingOverrideReader.IsFixedFormatTree(@override.OutputTree))
+        if (OrderMappingOverrideReader.IsEnvelopeOnlyTree(tree))
             return "Nothing to save — a cXML or EDI document is built to the standard's own layout, " +
                    "so the boxes drawn here are not used. Set this supplier's sender and receiver " +
                    "identity (or wire some fields), then save.";
 
+        // A layout drawn for a format nothing can render from a box tree (UBL / Peppol / EDIFACT /
+        // X12 850). Saying "saved your layout" here is what bricked suppliers: the layout was stored,
+        // adopted, and then failed every future order inside the emitter.
+        if (tree is not null && !OrderMappingOverrideReader.CanRenderTree(tree))
+            return $"Nothing to save — a {DisplayName(tree.Format)} document is built to the standard's own " +
+                   "layout, so a box tree cannot produce one. Design the output as XML, JSON or CSV, " +
+                   "or wire some fields, then save.";
+
+        // A perfectly good layout — for the wrong format. Name both sides so the fix is obvious.
+        if (tree is not null && supplierFormat is not null && tree.Format != supplierFormat)
+            return $"Nothing to save — this layout is designed as {DisplayName(tree.Format)}, but this " +
+                   $"supplier receives {DisplayName(supplierFormat.Value)}. Switch the layout to " +
+                   $"{DisplayName(supplierFormat.Value)} (or change the supplier's format), then save.";
+
         return "Nothing to save — the current field mapping has no source or output rules that map " +
                "to a known field. Wire at least one field, then save.";
     }
+
+    /// <summary>Plain-language format name for a user-facing message (never the enum spelling).</summary>
+    private static string DisplayName(OutputFormat format) => format switch
+    {
+        OutputFormat.Json          => "JSON",
+        OutputFormat.Xml           => "XML",
+        OutputFormat.Csv           => "CSV",
+        OutputFormat.CXml          => "cXML",
+        OutputFormat.Ubl           => "UBL",
+        OutputFormat.UblOrder      => "Peppol UBL order",
+        OutputFormat.X12           => "X12",
+        OutputFormat.X12_850       => "X12 850",
+        OutputFormat.EdifactOrders => "EDIFACT ORDERS",
+        _                          => format.ToString(),
+    };
 }

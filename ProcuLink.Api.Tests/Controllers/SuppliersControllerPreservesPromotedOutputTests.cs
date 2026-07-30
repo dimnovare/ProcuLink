@@ -157,4 +157,34 @@ public class SuppliersControllerPreservesPromotedOutputTests
         var stored = await new PoMappingService(db).GetAsync(orgId, supplierId, CancellationToken.None);
         Assert.Equal("replaced", stored!.OutputTree!.Root.Children[0].Name);
     }
+
+    [Fact]
+    public async Task TheClearEndpoint_RemovesTheLayoutAndNothingElse()
+    {
+        // Preserving unsent members means "null" can no longer mean "delete", so un-promoting needs its
+        // own explicit door — this is it, and it is the recovery path for a poisoned supplier.
+        var (controller, orgId, db) = BuildController();
+        var supplierId = await AddSupplierAsync(db, orgId);
+
+        await new PoMappingService(db).UpsertAsync(orgId, supplierId, new PoMappingConfig
+        {
+            OutputTree = PromotedTree(),
+            Output = PromotedFlatOutput(),
+            Header = { ["PoNumber"] = new FieldMappingEntry { ExternalField = "Order No" } },
+        }, CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(
+            await controller.ClearPromotedOutputTree(supplierId, CancellationToken.None));
+
+        var stored = await new PoMappingService(db).GetAsync(orgId, supplierId, CancellationToken.None);
+        Assert.Null(stored!.OutputTree);
+        Assert.NotNull(stored.Output);                                       // the flat output survives
+        Assert.Equal("Order No", stored.Header["PoNumber"].ExternalField);   // and so does the inbound map
+
+        // Idempotent, and 404 for an unknown supplier.
+        Assert.IsType<NoContentResult>(
+            await controller.ClearPromotedOutputTree(supplierId, CancellationToken.None));
+        Assert.IsType<NotFoundResult>(
+            await controller.ClearPromotedOutputTree(Guid.NewGuid(), CancellationToken.None));
+    }
 }

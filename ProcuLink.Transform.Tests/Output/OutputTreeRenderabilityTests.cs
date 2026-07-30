@@ -86,6 +86,20 @@ public class OutputTreeRenderabilityTests
         Assert.Equal(
             EmitterRenders(format),
             OrderMappingOverrideReader.HasUsableOutputTree(tree));
+
+        // …and BOTH are the one declared source of truth, not two lists that happen to agree today.
+        Assert.Equal(OutputTreeFormats.IsRenderable(format), EmitterRenders(format));
+        Assert.Equal(OutputTreeFormats.IsRenderable(format), OrderMappingOverrideReader.CanRenderTree(tree));
+    }
+
+    [Theory]
+    [MemberData(nameof(AllOutputFormats))]
+    public void NoFormatIsBothRenderableAndEnvelopeOnly(OutputFormat format)
+    {
+        // The two roles are exclusive: a format either renders its document from the tree, or (for
+        // cXML/X12 only) reads envelope identity off it. Everything else does neither — which is
+        // exactly why "not renderable" must never be treated as "envelope-bearing".
+        Assert.False(OutputTreeFormats.IsRenderable(format) && OutputTreeFormats.ReadsEnvelopeIdentity(format));
     }
 
     [Theory]

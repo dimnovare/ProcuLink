@@ -170,15 +170,15 @@ internal sealed class OrderTransformService
         // !useOutputNode (as they already gate on !useTemplate), so a null OutputTree is byte-for-byte
         // identical to today.
         //
-        // WS-12 exception: an OutputTree whose Format is cXML/X12 does NOT route to the emitter — the
-        // emitter REFUSES those (a generic node tree can't carry a valid cXML Header/DOCTYPE or X12
-        // ISA/GS envelope; it throws). For those formats the tree exists only to carry the per-connection
-        // EnvelopeConfig (OutputNodeTemplate.Envelope) into the dedicated fixed transformer below, so we
-        // keep the fixed-transformer path and read the envelope off the tree (see `envelope` resolution
-        // further down). All other tree formats (JSON/XML/CSV) keep delivering through the emitter.
+        // WS-12 exception: an OutputTree in a format the emitter cannot render does NOT route to it —
+        // the emitter REFUSES those (a generic node tree can't carry a valid cXML Header/DOCTYPE, a
+        // Peppol UBL CustomizationID or an X12 ISA/GS envelope; it throws). For cXML/X12 the tree
+        // exists only to carry the per-connection EnvelopeConfig (OutputNodeTemplate.Envelope) into the
+        // dedicated fixed transformer below, so we keep the fixed-transformer path and read the
+        // envelope off the tree (see `envelope` resolution further down).
         var perOrderTree    = mappingOverride?.OutputTree;
         var outputTree      = perOrderTree;
-        var useOutputNode   = outputTree is not null && !OrderMappingOverrideReader.IsFixedFormatTree(outputTree);
+        var useOutputNode   = TreeDrivesTheDocument(perOrderTree, effectiveFormat, orderId, "the order's own");
         // The override the emitter resolves custom fields against. Normally the order's own; when the
         // tree arrives from the supplier's promoted config (WP-12, below) it becomes the synthetic
         // supplier override, which already carries this order's custom fields.
@@ -239,10 +239,11 @@ internal sealed class OrderTransformService
         //      promoted JSON tree flipped the whole transform onto the emitter, writing JSON bytes into
         //      an artifact row that recorded 'cxml'. So a promoted tree is adopted ONLY when the order
         //      has no per-order tree at all.
-        //   2. A FIXED-FORMAT (cXML/X12) PROMOTED TREE CONTRIBUTES ONLY ITS ENVELOPE. It must not drive
-        //      the document (the emitter refuses those formats) and must not suppress or replace the
-        //      flat output config at its own layer — the suppression below is therefore reached only by
-        //      a tree that actually renders.
+        //   2. A PROMOTED TREE THE EMITTER CANNOT RENDER CONTRIBUTES AT MOST ITS ENVELOPE. cXML/X12
+        //      hand their identity to the dedicated fixed transformer; UBL / Peppol / X12-850 / EDIFACT
+        //      contribute nothing at all. Neither may drive the document, and neither may suppress or
+        //      replace the flat output config at its own layer — the suppression below is therefore
+        //      reached only by a tree that actually renders THIS connection's format.
         //
         // A pinned order takes its tree from the revision snapshot; an unpinned one from the live
         // promoted config. The two are mutually exclusive by construction (only one of the two reads
@@ -258,7 +259,7 @@ internal sealed class OrderTransformService
                                : null;
             promotedTree = promotedSource?.OutputTree;
 
-            if (promotedTree is not null && !OrderMappingOverrideReader.IsFixedFormatTree(promotedTree))
+            if (TreeDrivesTheDocument(promotedTree, effectiveFormat, orderId, "the supplier's promoted"))
             {
                 useSupplierTree = ReferenceEquals(promotedSource, supplierOverride);
                 useRevisionTree = !useSupplierTree;
@@ -297,12 +298,21 @@ internal sealed class OrderTransformService
         // Precedence mirrors the ladder above: the ORDER's own tree owns the identity when it has one,
         // and a promoted tree fills in only when the order carries no tree at all (`promotedTree` is
         // null in every other case, by the guard above).
+        //
+        // The promoted half additionally requires identity FOR THIS FORMAT. A cXML-format tree
+        // carrying only an Envelope.Cxml, delivered on an X12 connection, reaches
+        // `X12TransformService: var env = envelope?.X12;` as null — the output is byte-identical to
+        // having no envelope at all. Recording it anyway appended `|envelope:{…}` to the provenance
+        // descriptor, so two byte-identical artifacts carried different digests (and the mirror case
+        // for an X12-only envelope on cXML).
         EnvelopeConfig? envelope = null;
         var envelopeFromPromotedTree = false;
-        if (effectiveFormat is OutputFormat.CXml or OutputFormat.X12)
+        if (OutputTreeFormats.ReadsEnvelopeIdentity(effectiveFormat))
         {
             envelope = perOrderTree?.Envelope;
-            if (envelope is null && promotedTree?.Envelope is { } promotedEnvelope)
+            if (envelope is null
+                && promotedTree?.Envelope is { } promotedEnvelope
+                && OrderMappingOverrideReader.HasEnvelopeIdentityFor(promotedEnvelope, effectiveFormat))
             {
                 envelope                 = promotedEnvelope;
                 envelopeFromPromotedTree = true;
@@ -838,6 +848,47 @@ internal sealed class OrderTransformService
                 orderId, effective.Source);
             return null;
         }
+    }
+
+    /// <summary>
+    /// THE adoption gate: may <paramref name="tree"/> render the document this connection delivers?
+    /// Two conditions, and both are load-bearing.
+    ///
+    /// <list type="number">
+    ///   <item><description><b>The emitter must render the tree's format at all</b> — asked of the
+    ///     shared <see cref="OutputTreeFormats.IsRenderable"/>, the same source
+    ///     <c>OutputTemplateEmitter.Emit</c> dispatches on. Asking "is this NOT cXML/X12?" instead
+    ///     adopted Ubl / UblOrder / X12_850 / EdifactOrders trees, the emitter threw, and the order
+    ///     ended in a TERMINAL transform_failed. Promoted once, that killed every future order for the
+    ///     supplier.</description></item>
+    ///   <item><description><b>The tree's format must BE the connection's format.</b> The bytes come
+    ///     from <c>tree.Format</c>, but <c>artifact.Format</c> is <c>effectiveFormat</c> and (post-#77)
+    ///     delivery derives the content type and the file name from THAT — so a Json tree on a cXML
+    ///     connection shipped JSON bytes as <c>application/xml</c> named <c>PO-x.xml</c>, recorded as
+    ///     <c>cxml</c>. The CONNECTION's format wins: it is what the supplier's system was configured
+    ///     to accept, what the artifact row records, and what delivery announces. A mismatched tree is
+    ///     dropped (loudly) and the flat/fixed path below delivers a valid document.</description></item>
+    /// </list>
+    /// </summary>
+    private bool TreeDrivesTheDocument(
+        OutputNodeTemplate? tree, OutputFormat effectiveFormat, Guid orderId, string source)
+    {
+        if (tree is null) return false;
+
+        if (!OrderMappingOverrideReader.CanRenderTree(tree))
+            return false;   // cXML/X12 contribute an envelope (below); the rest contribute nothing.
+
+        if (tree.Format != effectiveFormat)
+        {
+            _logger.LogWarning(
+                "Order {OrderId}: {Source} output structure is designed as {TreeFormat} but this connection " +
+                "delivers {EffectiveFormat} — the structure was NOT applied (delivering {EffectiveFormat} would " +
+                "have shipped {TreeFormat} bytes under a {EffectiveFormat} content type and file name).",
+                orderId, source, tree.Format, effectiveFormat, effectiveFormat, tree.Format, effectiveFormat);
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>

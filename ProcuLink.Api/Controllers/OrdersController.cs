@@ -897,13 +897,19 @@ public sealed class OrdersController : ControllerBase
         // the SAME emitter the delivery path uses (same value machinery, source tokens, and catalog), so
         // the preview equals the delivered bytes. Errors surface as { ok:false, error } at HTTP 200.
         //
-        // WS-12 exception, mirrored from OrderTransformService: a cXML/X12 tree is NOT rendered by the
-        // emitter (which refuses those formats) — it carries only the connection's sender/receiver
-        // identity into the dedicated fixed transformer. Handing it to the emitter here produced an
-        // { ok:false } error for an order that delivers perfectly well, so it falls through to the
-        // field-by-field path below exactly as delivery does.
+        // WS-12 exception, mirrored from OrderTransformService and asked of the SAME shared predicate:
+        // a tree the emitter cannot render (cXML/X12 carry only the connection's sender/receiver
+        // identity; UBL/Peppol/X12-850/EDIFACT carry nothing) is NOT handed to the emitter. Doing so
+        // produced an { ok:false } error for an order that delivers perfectly well, so it falls through
+        // to the field-by-field path below exactly as delivery does.
+        //
+        // Format EQUALITY is deliberately NOT checked here, unlike delivery: this preview writes no
+        // artifact row and announces no content type to a supplier — it answers "what does this layout
+        // produce", and it reports the TREE's own format alongside the bytes. The two places where a
+        // format mismatch can actually reach a supplier (promote, and the transform's adoption gate)
+        // refuse it there.
         if (effectiveOverride?.OutputTree is { } perOrderTree
-            && !OrderMappingOverrideReader.IsFixedFormatTree(perOrderTree))
+            && OrderMappingOverrideReader.CanRenderTree(perOrderTree))
             return await RenderTreePreviewAsync(perOrderTree, order, effectiveOverride, id, ct);
 
         // ── Mode 1: WHOLE-DOCUMENT TEMPLATE (takes precedence) ────────────────────
@@ -951,11 +957,11 @@ public sealed class OrdersController : ControllerBase
         // this the workshop showed the FIXED document (or 400'd for want of a body) while delivery
         // shipped the designed layout: the exact preview ≠ delivered bytes this endpoint promises not
         // to do. A cXML/X12 tree is excluded for the same WS-12 reason as Mode 0.
-        // The per-order tree ALWAYS wins (it reached here only by being cXML/X12, where the fixed
+        // The per-order tree ALWAYS wins (it reached here only by being unrenderable, where the fixed
         // transformer owns the document) — so a promoted tree is never adopted over one.
         if (effectiveOverride?.OutputTree is null
             && configFallback?.OutputTree is { } fallbackTree
-            && !OrderMappingOverrideReader.IsFixedFormatTree(fallbackTree))
+            && OrderMappingOverrideReader.CanRenderTree(fallbackTree))
             return await RenderTreePreviewAsync(fallbackTree, order, configFallback, id, ct);
 
         // This path needs an override. Preserve the original contract: a request without a body (and

@@ -106,4 +106,18 @@ public interface IPromoteMappingService
     /// </summary>
     Task<PromoteMappingResult?> PromoteAsync(
         Guid orgId, Guid orderId, CancellationToken ct);
+
+    /// <summary>
+    /// UN-PROMOTE: removes the supplier's stored <see cref="PoMappingConfig.OutputTree"/>, leaving
+    /// every other member of the config (inbound rules, flat output mapping) untouched. Returns
+    /// <c>true</c> when a tree was present and removed, <c>false</c> when there was nothing to remove
+    /// (idempotent — a second call is a no-op, not an error).
+    ///
+    /// <para>Exists because promotion used to be a ONE-WAY door: the merge preserved
+    /// <c>existing.OutputTree</c> unconditionally, so a layout that could never render this
+    /// supplier's document survived every subsequent promote with no way to take it back. Every
+    /// promote now also re-checks and drops a stored tree that cannot deliver; this is the explicit
+    /// version of the same thing, for an operator who simply wants their layout gone.</para>
+    /// </summary>
+    Task<bool> ClearPromotedOutputTreeAsync(Guid orgId, Guid supplierId, CancellationToken ct);
 }

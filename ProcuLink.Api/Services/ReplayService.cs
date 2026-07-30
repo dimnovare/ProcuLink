@@ -180,6 +180,16 @@ public sealed class ReplayService : IReplayService
         }
 
         var now = DateTime.UtcNow;
+
+        // D7 — replay must see the SAME value universe delivery sees. OrderTransformService batch-loads
+        // the supplier's catalog once per transform and re-derives the source-token set from the order's
+        // persisted SourceCapture; replay emitted trees with neither, so every leaf bound to a source
+        // token (F-1) or a catalog field rendered EMPTY. Because BOTH replay sides were equally blind, a
+        // revision that changed only token-bound leaves reported "nothing changes" — the exact failure
+        // this engine exists to catch. Loaded once here: replay is scoped to ONE supplier.
+        var catalogLookup = await OrderServiceShared.BuildCatalogLookupAsync(
+            _db, orgId, revision.SupplierId, ct);
+
         var diffs = new List<ReplayOrderDiffDto>(orders.Count);
         foreach (var order in orders)
         {
@@ -190,7 +200,8 @@ public sealed class ReplayService : IReplayService
                 ? EffectiveConnectionConfig.Live
                 : await _effectiveConfig.ResolveAsync(orgId, order.ConnectionRevisionId, ct);
             var diff = BuildDiff(order, draftOutputConfig, draftOutputTree, draftFormat, currentFormat,
-                                 currentProfile, draftProfile, now, supplierPromotedOutput, supplierPromotedTree, effective);
+                                 currentProfile, draftProfile, now, supplierPromotedOutput, supplierPromotedTree, effective,
+                                 catalogLookup);
 
             // Opt-in parse-from-source leg: default-off keeps the existing contract byte-identical.
             if (request.IncludeParseLeg)
@@ -290,8 +301,12 @@ public sealed class ReplayService : IReplayService
         DateTime now,
         OutputMappingConfig? supplierPromotedOutput,
         OutputNodeTemplate? supplierPromotedTree,
-        EffectiveConnectionConfig effective)
+        EffectiveConnectionConfig effective,
+        IReadOnlyDictionary<string, SupplierProduct> catalogLookup)
     {
+        // The order's own addressable source-token universe (D7), rebuilt from the persisted capture
+        // exactly as OrderTransformService does — same helper, same JSON, so the two cannot diverge.
+        var sourceTokens = SourceTokenSerialization.FromTokensJson(order.SourceCapture?.TokensJson);
         // ── Output side ────────────────────────────────────────────────────────
         // CURRENT: mirrors the live transform's effective priority so the diff compares against what
         // delivery ACTUALLY produces today.
@@ -326,13 +341,13 @@ public sealed class ReplayService : IReplayService
         {
             currentEffective = ResolveCurrentEffectiveOverride(currentOverride, supplierPromotedOutput, supplierPromotedTree);
         }
-        var current = Render(order, currentEffective, currentSideFormat);
+        var current = Render(order, currentEffective, currentSideFormat, sourceTokens, catalogLookup);
 
         // DRAFT/replayed: the revision's output config wrapped as an override, at the revision's format.
         // The order's existing CustomFields are preserved so custom-field references in the revision's
         // output rules still resolve; only the OUTPUT mapping + format come from the revision.
         var draftOverride = BuildRevisionOverride(currentOverride, draftOutputConfig, draftOutputTree);
-        var draft = Render(order, draftOverride, draftFormat);
+        var draft = Render(order, draftOverride, draftFormat, sourceTokens, catalogLookup);
 
         var outputChanged = current.Ok && draft.Ok && !string.Equals(current.Text, draft.Text, StringComparison.Ordinal);
 
@@ -371,15 +386,25 @@ public sealed class ReplayService : IReplayService
     /// lines, broken template, unsupported format) is returned as a <see cref="RenderResult"/> error so
     /// replay never throws on a single bad order.
     /// </summary>
-    private RenderResult Render(PurchaseOrderEntity order, OrderMappingOverride? @override, OutputFormat format)
+    private RenderResult Render(
+        PurchaseOrderEntity order, OrderMappingOverride? @override, OutputFormat format,
+        IReadOnlyList<ProcuLink.Transform.Tokenizing.SourceToken> sourceTokens,
+        IReadOnlyDictionary<string, SupplierProduct> catalogLookup)
     {
         try
         {
-            // WP-12: the structured tree is the HIGHEST-precedence mode, exactly as in the transform —
-            // a cXML/X12 tree is the WS-12 exception and never routes to the emitter (it carries only
-            // envelope identity), so it keeps the fixed path below.
+            // WP-12: the structured tree is the HIGHEST-precedence mode, exactly as in the transform,
+            // and RENDERABILITY is asked of the same shared predicate the emitter dispatches on — cXML/X12
+            // carry only envelope identity, UBL/Peppol/X12-850/EDIFACT carry nothing, and handing either
+            // to the emitter throws.
+            //
+            // Format EQUALITY is deliberately NOT checked here, unlike the delivery path: replay writes
+            // no artifact row and announces no content type, and its own notion of "the format" falls
+            // back to a DEFAULT when neither the revision nor the active config names one — so equality
+            // here would silently drop a layout on a guess. The two places where a mismatch can actually
+            // reach a supplier (promote, and the transform's adoption gate) refuse it there.
             var tree = @override?.OutputTree;
-            var useOutputNode = tree is not null && !OrderMappingOverrideReader.IsFixedFormatTree(tree);
+            var useOutputNode = OrderMappingOverrideReader.CanRenderTree(tree);
             var useTemplate = !useOutputNode && OrderMappingOverrideReader.HasUsableTemplate(@override);
             var hasUsableOverride =
                 !useOutputNode
@@ -395,15 +420,16 @@ public sealed class ReplayService : IReplayService
             TransformResult result;
             if (useOutputNode)
             {
-                result = new OutputTemplateEmitter().Emit(tree!, order, @override!);
+                result = new OutputTemplateEmitter().Emit(tree!, order, @override!, sourceTokens, catalogLookup);
             }
             else if (useTemplate)
             {
-                result = new ScribanTemplateTransformService().Build(order, @override!);
+                result = new ScribanTemplateTransformService().Build(order, @override!, catalogLookup);
             }
             else if (useNativeOverride)
             {
-                result = new MappedTransformService().Build(order, @override!, format);
+                result = new MappedTransformService().Build(
+                    order, @override!, format, sourceTokens: sourceTokens, catalogLookup: catalogLookup);
             }
             else if (hasUsableOverride)
             {

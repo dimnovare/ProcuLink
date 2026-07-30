@@ -279,6 +279,90 @@ public class PromotedOutputTreeP0Tests
         Assert.Null(stored?.OutputTree);
     }
 
+    // ══ Un-promote — a promoted layout must be reversible ════════════════════════════════════════
+
+    [Fact]
+    public async Task ClearingThePromotedLayout_RestoresTheFixedDocument_AndKeepsEverythingElse()
+    {
+        await using var db = NewDb();
+        var (orgId, supplierId) = await SeedSupplierAsync(db);
+
+        await new PoMappingService(db).UpsertAsync(orgId, supplierId, new PoMappingConfig
+        {
+            OutputTree = DrawnTree(OutputFormat.Json),
+            Header = { ["PoNumber"] = new FieldMappingEntry { ExternalField = "Order No" } },
+        }, CancellationToken.None);
+
+        var cleared = await new PromoteMappingService(db, new PoMappingService(db))
+            .ClearPromotedOutputTreeAsync(orgId, supplierId, CancellationToken.None);
+        Assert.True(cleared);
+
+        var stored = await new PoMappingService(db).GetAsync(orgId, supplierId, CancellationToken.None);
+        Assert.Null(stored!.OutputTree);
+        Assert.Equal("Order No", stored.Header["PoNumber"].ExternalField);   // nothing else touched
+
+        // Idempotent — a second clear is a no-op, not an error.
+        Assert.False(await new PromoteMappingService(db, new PoMappingService(db))
+            .ClearPromotedOutputTreeAsync(orgId, supplierId, CancellationToken.None));
+
+        var orderId = await SeedOrderAsync(db, orgId, supplierId);
+        var (svc, captured) = Build(db);
+        Assert.True((await svc.TransformAsync(orgId, orderId, OutputFormat.Json, CancellationToken.None)).IsSuccess);
+        Assert.DoesNotContain("orderNumber", Encoding.UTF8.GetString(captured()!));
+    }
+
+    [Theory]
+    [InlineData(OutputFormat.Ubl)]
+    [InlineData(OutputFormat.EdifactOrders)]
+    public async Task APromoteAlsoCleansAStoredLayoutThatCanNeverDeliver(OutputFormat poisoned)
+    {
+        // The one-way door: the merge preserved existing.OutputTree UNCONDITIONALLY, so a tree stored
+        // while the predicate was wrong survived every later promote. A supplier poisoned before this
+        // fix must heal on the next ordinary promote, not stay broken forever.
+        await using var db = NewDb();
+        var (orgId, supplierId) = await SeedSupplierAsync(db);
+
+        await new PoMappingService(db).UpsertAsync(orgId, supplierId,
+            new PoMappingConfig { OutputTree = DrawnTree(poisoned) }, CancellationToken.None);
+
+        var orderId = await SeedOrderAsync(db, orgId, supplierId);
+        await new OrderMappingOverrideService(db).UpsertAsync(orgId, orderId, new OrderMappingOverride
+        {
+            SourceMap = { ["PoNumber"] = new SourceFieldRule { SourceToken = "Order No" } },
+        }, CancellationToken.None);
+
+        var promoted = await new PromoteMappingService(db, new PoMappingService(db))
+            .PromoteAsync(orgId, orderId, CancellationToken.None);
+        Assert.Equal(1, promoted!.HeaderFieldsPromoted);
+
+        var stored = await new PoMappingService(db).GetAsync(orgId, supplierId, CancellationToken.None);
+        Assert.Null(stored!.OutputTree);
+    }
+
+    [Fact]
+    public async Task APromoteKeepsAStoredLayoutThatStillDelivers()
+    {
+        // Assert the DIFFERENCE: "drop the stored tree on every promote" would pass the test above and
+        // silently undo WP-12's whole point.
+        await using var db = NewDb();
+        var (orgId, supplierId) = await SeedSupplierAsync(db);
+
+        await new PoMappingService(db).UpsertAsync(orgId, supplierId,
+            new PoMappingConfig { OutputTree = DrawnTree(OutputFormat.Json) }, CancellationToken.None);
+
+        var orderId = await SeedOrderAsync(db, orgId, supplierId);
+        await new OrderMappingOverrideService(db).UpsertAsync(orgId, orderId, new OrderMappingOverride
+        {
+            SourceMap = { ["PoNumber"] = new SourceFieldRule { SourceToken = "Order No" } },
+        }, CancellationToken.None);
+
+        await new PromoteMappingService(db, new PoMappingService(db))
+            .PromoteAsync(orgId, orderId, CancellationToken.None);
+
+        var stored = await new PoMappingService(db).GetAsync(orgId, supplierId, CancellationToken.None);
+        Assert.NotNull(stored!.OutputTree);
+    }
+
     [Fact]
     public async Task PromotingATreeThatMatchesTheSupplierFormat_IsAccepted()
     {
