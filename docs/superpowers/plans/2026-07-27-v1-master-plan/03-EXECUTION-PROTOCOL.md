@@ -1,0 +1,151 @@
+# Execution Protocol — agents, skills, tokens, and the no-new-bugs contract
+
+This file is how the plan gets built without becoming the thing the plan is fixing.
+
+---
+
+## 1. The no-new-bugs contract
+
+The audit's worst findings all share one shape: **shipped surface with no wiring behind it, and a test suite that could not tell.** Four mechanisms prevent us from repeating that.
+
+**M1 — CI is the first packet.** `WP-01` lands before anything else. Until it does, 1096 frontend assertions gate nothing and every "tests pass" claim in this plan is unverified.
+
+**M2 — The orphan guard (`WP-04`) is permanent.** A `DbSet` with no non-CRUD reader, or a route with no inbound link, fails the build. This is the mechanism that makes R1 real. It is RED today on five surfaces — that is the point.
+
+**M3 — RED-first is checked, not trusted.** Every PR body must contain the failing output of the first test run, verbatim. A packet that cannot produce one is re-scoped: it means the test does not test the thing.
+
+**M4 — The three-way gate before merge.** In order, no skipping:
+1. `superpowers:verification-before-completion` — commands run, output pasted, no claim without evidence.
+2. `code-review:code-review` on the diff.
+3. An **adversarial verify agent** whose only instruction is to refute the PR's own claim of correctness, defaulting to "refuted" when uncertain. *(This is exactly the mechanism that killed 12 of 25 findings in the audit that produced this plan — it works, and it is cheap relative to shipping a wrong fix.)*
+
+**M5 — Assert the difference (R6).** Where two paths must agree — mock vs real, dashboard count vs inbox count, tree emitter vs flat emitter — the test fails if either changes alone. Three of the plan's regression guards are of this form: `WP-05`, `WP-29`, `WP-12`'s byte-parity assertion.
+
+---
+
+## 2. Agent topology
+
+One packet = one worktree = one agent chain. Never run parallel agents in a shared checkout — EF snapshot and `.next` collisions are a known failure mode in this repo.
+
+**Per-packet chain (the default):**
+
+```
+scout ──> plan ──> implement ──> review ──> verify
+(read)   (write)   (TDD)        (diff)    (refute)
+```
+
+- **scout** — read-only. Loads only the files named in the packet, confirms the cited line numbers still hold, reports drift. *Cheap; catches the "auditor read a stale tree" failure that produced two wrong P0s in the source audit.*
+- **plan** — `superpowers:writing-plans`. Emits the RED test first, then the change.
+- **implement** — `superpowers:test-driven-development`. Worktree-isolated.
+- **review** — `code-review:code-review`.
+- **verify** — adversarial refuter (M4.3).
+
+**Concurrency:** 4–6 packets in flight. The real limit is founder review bandwidth, not agents. Do not queue more than you can merge in a day.
+
+**Model routing:**
+- scout / mechanical renames / deletions → cheaper tier
+- plan / implement on `L`+ packets, all of Wave 2, anything touching delivery or billing → strongest tier
+- verify → strongest tier, always. A cheap refuter is worse than none.
+
+**Worktrees:** `superpowers:using-git-worktrees`. Note the known trap — a worktree's `node_modules` is empty and resolution walks up to the main repo. Use `bun run`, never `npx` (it downloaded `next@16` against a 15.5 build once).
+
+---
+
+## 3. Skill routing
+
+| Situation | Skill |
+|---|---|
+| Any packet touching ≥3 files, or any packet with a **decision** in it | `superpowers:brainstorming` **first** |
+| `M`+ packet | `superpowers:writing-plans` → `superpowers:executing-plans` |
+| Every implementation | `superpowers:test-driven-development` |
+| A bug surviving one fix attempt | `superpowers:systematic-debugging` |
+| Before any "done" | `superpowers:verification-before-completion` |
+| Before every merge | `code-review:code-review` |
+| Any UI packet | `frontend-design` + `ui-ux-pro-max` |
+| Any packet with a11y or contrast in scope | `web-design-guidelines` |
+| After a UI wave | `design-review` |
+| Wave 4 packets | the matching brief from `02-DESIGN-BRIEFS.md` **before** any code |
+| Independent packets ready together | `superpowers:dispatching-parallel-agents` |
+| Wave complete | `superpowers:finishing-a-development-branch` |
+
+`/frontend-design` is a **quality lens on the locked Bridge Layer direction**, not a licence to invent an aesthetic (R10).
+
+---
+
+## 4. Token discipline
+
+The audit cost ~6.7M subagent tokens across 69 agents. Most of that was re-exploration. Four rules cut it hard.
+
+**T1 — Packets carry their own context.** Every `01-WORK-PACKETS.md` entry names its files and line numbers. An agent opens those and nothing else. If a packet needs exploration to start, the packet is under-specified — fix the packet, do not send the agent hunting.
+
+**T2 — One context pack per wave, not per packet.** Before a wave starts, one scout agent produces a ≤300-line orientation note for that wave's subsystem. Every packet in the wave receives it verbatim. Written once, read many.
+
+**T3 — `git grep` from the repo root, never `grep -r`.** `.claude/worktrees/` contains full copies of the repo; a raw recursive grep returns other sessions' worktrees and reads as evidence of a separate track. This wasted real time during the audit. `git grep` sees tracked files at HEAD only.
+
+**T4 — Read `origin/main`, not the working tree.** Production deploys from `origin/main`. The local tree drifts (it was 9 commits behind during the audit, which produced two wrong P0s). Use `git -C <repo> show origin/main:<path>` when a file matters.
+
+**T5 — Structured returns.** Subagents return JSON against a schema, never prose. Prose gets re-summarised; JSON gets consumed.
+
+**T6 — Caveman for chat, normal for artifacts.** Chat replies compressed. Code, commits, PR bodies, and these docs written normally.
+
+---
+
+## 5. Merge train
+
+Sequential merges, one at a time, per wave. Never batch — the 2026-07-24 wave hit two real collisions on shared queue docs and both were caught only because merges were sequential.
+
+**Per merge:**
+1. Rebase on current `main`.
+2. Full local suite: `dotnet test ProcuLink.slnx` and `bun run test` + `bun run build`.
+3. Push, then **`gh run list`** — local green ≠ CI green (Windows dev, Linux CI).
+4. Merge.
+5. Watch the deploy: Vercel from FE `main`, Railway from BE `main`. Vercel has dropped a main-push webhook before; confirm the deploy is Ready rather than assuming.
+6. Post-merge smoke on the touched surface.
+
+**`git merge-base --is-ancestor` lies about squash-merged PRs.** To check whether something landed, grep `main` for the content.
+
+---
+
+## 6. Wave exit gates
+
+A wave is not done when its packets merge. It is done when its gate passes.
+
+| Wave | Exit gate |
+|---|---|
+| 0 | A deliberately-broken assertion fails a PR check. `dotnet test` prints zero silent skips. WP-03's two answers are in the ledger. |
+| 1 | WP-04's orphan guard is green with **zero suppressions**. Every marketing string maps to a ledger row. |
+| 2 | Design an output on order A → promote → identical file → order B renders **byte-identically**, unattended, and contains a delivery address. |
+| 3 | The state-machine invariant test passes: no non-terminal status has an empty edge set. A configured blocking rule blocks on all four entry paths. |
+| 4 | A stranger completes sign-up → delivered PO unaided, recorded. Vocab gate green on the extended jargon list. |
+| 5 | Every failure status has a control that performs a real recovery, proven by a test that iterates `OrderStatusMachine`. |
+| 6 | Zero ledger rows claim `live-proven` without an evidence link. |
+
+---
+
+## 7. Standing hazards (each cost real debugging time — respect them)
+
+- **The Worker is mandatory.** Nothing parses, transforms or delivers without the single Railway Hangfire worker. "Nothing happens" usually means the worker is down.
+- **AI "broken everywhere"** = the per-org monthly token cap latched. Check `GET /api/billing/ai-usage` *before* debugging code.
+- **EF traps.** `GetByIdAsync` is `AsNoTracking` — mutate + `SaveChanges` is a silent no-op. `ExecuteUpdate`/`ExecuteDelete` commit immediately outside `SaveChanges`; wrap mixed persistence in one explicit transaction. `ExecuteDeleteAsync` removes rows but tells the change tracker nothing — detach stale entries or the *next* writer in scope becomes the victim.
+- **Never fire-and-forget on a scoped `DbContext`.**
+- **InMemory masks Postgres FK and insert-order issues.** Anything concurrency-shaped needs a real-Postgres test.
+- **Make new Postgres fixtures class-scoped.** xUnit builds one class instance per test; the repo's per-test `IAsyncLifetime` convention starts and migrates one container *per test*.
+- **429 has three meanings** — pilot expired / order limit / rate limit. Read the body.
+- **Delivery routes via the pinned revision snapshot.** Editing the legacy delivery config is inert for pinned orders.
+- **`bun` only.** Never `npm install`.
+- **Never create a Neon database branch.** The project has exactly one branch, `production`.
+
+---
+
+## 8. Founder-only gates (agents must stop and ask)
+
+Stripe live-mode objects · secrets rotation · production data deletion beyond a posted pre-list · DPA counter-signature · anything sending a real PO to a real third-party supplier · enabling `WP-33`'s auto-send for the first time on a live org.
+
+---
+
+## 9. Day one
+
+1. Answer the four blocking decisions in `00-MASTER-PLAN.md §6`. All four are one-liners; three of them are "retire it".
+2. Run **WP-03** (two production checks — `railway variables | grep -i RevisionAuthority`, and one test email). Either answer may delete work from Wave 3.
+3. Merge **WP-01**. Fifteen lines. Everything after it is measurable.
+4. Start **WP-04** and **WP-12** in parallel worktrees. WP-12 is the longest pole and the highest value in the plan.

@@ -9,6 +9,12 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 > capability ground truth is
 > [`docs/prompts/2026-07-02-fable5-production-push-master-prompt.md`](docs/prompts/2026-07-02-fable5-production-push-master-prompt.md).
 
+> **ACTIVE PLAN (2026-07-27):** [`docs/superpowers/plans/2026-07-27-v1-master-plan/`](docs/superpowers/plans/2026-07-27-v1-master-plan/00-MASTER-PLAN.md)
+> — 41 work packets in 6 waves, from the full product/UX/architecture/market audit run against
+> BE `63b89b5` / FE `e5da230`. Start at `00-MASTER-PLAN.md §6`: **four founder decisions block
+> four packets**. `04-CAPABILITY-TRUTH-LEDGER.md` is the new source of truth for what we may
+> claim; it also lists the audit findings that were **refuted** — do not re-open those.
+
 ---
 
 ## Snapshot (2026-07-27) — manufacturer part number is a real matching key (BE PR, OPEN)
