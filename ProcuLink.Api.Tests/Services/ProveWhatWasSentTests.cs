@@ -167,6 +167,14 @@ public class ProveWhatWasSentTests
         Assert.True(transform.IsSuccess, transform.Error);
         var artifact = await db.OutboundArtifacts.AsNoTracking().SingleAsync(a => a.OrderId == orderId);
 
+        // PRECONDITION, not decoration. Without it this test passes vacuously: Assert.NotEqual
+        // succeeds for (null, "9f86d0…"), so a recorded hash of null satisfies the corruption
+        // assertion below just as well as a correct one. Null is REACHABLE — provenance capture
+        // in OrderTransformService sits inside a swallow-all try/catch and leaves ArtifactSha256
+        // null on any failure — so a regression that stopped recording hashes entirely would
+        // turn this guard-against-vacuity into the vacuum it exists to rule out.
+        Assert.NotNull(artifact.ArtifactSha256);
+
         try
         {
             // Corrupt the stored blob behind the row's back.
