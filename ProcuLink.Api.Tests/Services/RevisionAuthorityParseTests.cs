@@ -25,8 +25,12 @@ namespace ProcuLink.Api.Tests.Services;
 /// <list type="bullet">
 ///   <item><b>Snapshot semantics</b> — the internal helpers (<c>BuildLineEntitiesAsync</c> with a
 ///   snapshot, <c>ResolveSnapshotPoMapping</c>, <c>ResolveFromSnapshot</c>) are unit-tested
-///   directly (InternalsVisibleTo) so the exact-match / trimmed-Ordinal / unresolved→review
-///   contract mirrors <c>ItemMappingService.ResolveManyAsync</c> precisely.</item>
+///   directly (InternalsVisibleTo). The item-code contract has two halves that differ on purpose:
+///   <b>Ordinal result keys</b> (each requested spelling gets its own answer) with a
+///   <b>case-insensitive match</b> against stored rows (<c>ItemCodeComparison</c>), plus
+///   unresolved→review. <c>ResolveFromSnapshot</c> is compared against
+///   <c>ItemMappingService.ResolveManyAsync</c>'s ACTUAL answers rather than a restated
+///   expectation, so neither path can change its case rule alone.</item>
 ///   <item><b>Wiring proof</b> — <c>ParseStoredFileAsync</c> is driven end-to-flush and the LIVE
 ///   services (<c>IPoMappingService.GetAsync</c>, <c>IItemMappingService.ResolveManyAsync</c>) are
 ///   verified NEVER consulted for a pinned order with usable snapshots — and consulted exactly as
@@ -176,39 +180,108 @@ public class RevisionAuthorityParseTests
         Assert.Equal("LIVE-1", Assert.Single(entities).SupplierItemCode);
     }
 
-    [Fact]
-    public void ResolveFromSnapshot_MirrorsResolveManySemantics_TrimmedCaseInsensitiveKeys()
+    /// <summary>
+    /// Seeds the LIVE item_mappings table with the given rows, one minute apart in the order given,
+    /// so the live resolver's "most recently updated" tie-break is well-defined rather than
+    /// depending on insertion order.
+    /// </summary>
+    private static async Task<(ItemMappingService Live, Guid OrgId, Guid SupplierId)> SeedLiveMappingsAsync(
+        ProcuLinkDbContext db, params (string BuyerCode, string SupplierCode)[] rows)
     {
-        // Trimmed keying, total over the non-blank input set, last duplicate snapshot row wins —
-        // exactly ItemMappingService.ResolveManyAsync.
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var stamp      = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        foreach (var (buyerCode, supplierCode) in rows)
+        {
+            db.ItemMappings.Add(new ItemMapping
+            {
+                Id               = Guid.NewGuid(),
+                OrgId            = orgId,
+                SupplierId       = supplierId,
+                BuyerItemCode    = buyerCode,
+                SupplierItemCode = supplierCode,
+                Source           = "manual",
+                Confidence       = 1f,
+                CreatedAt        = stamp,
+                UpdatedAt        = stamp,
+            });
+            stamp = stamp.AddMinutes(1);
+        }
+
+        await db.SaveChangesAsync();
+        return (new ItemMappingService(db), orgId, supplierId);
+    }
+
+    [Fact]
+    public async Task ResolveFromSnapshot_MirrorsResolveManySemantics_TrimmedOrdinalKeys_CaseInsensitiveMatch()
+    {
+        // The contract has TWO halves and they differ on purpose:
+        //   • the MATCH against stored rows folds case (ItemCodeComparison), because the supplier
+        //     CATALOG always did, and a resolver that disagreed with it made a buyer whose ERP
+        //     changed its export casing silently lose every mapping their operators had taught;
+        //   • the KEYS are Ordinal, because "B-1" and "b-1" may be two different LINES on one order
+        //     and each must get its own answer. Folding the keys made the dictionary answer the
+        //     second line from the first line's row — the WRONG ITEM ordered, with no review flag.
         //
-        // WP-14 CHANGED ONE CLAUSE OF THIS CONTRACT, deliberately. This test used to assert that a
-        // snapshot row spelled "b-2" did NOT match a requested "B-2", mirroring the live resolver's
-        // ordinal `==`. That mirroring was faithful and the behaviour was wrong: the supplier
-        // CATALOG matched the same code case-insensitively, so one code resolved through one path
-        // and not the other, and a buyer whose ERP changed the casing of its export silently lost
-        // every mapping their operators had taught. All three resolvers now share
-        // ItemCodeComparison; the agreement itself is asserted in ItemMappingCaseParityTests.
+        // This test's OLD name said "TrimmedCaseInsensitiveKeys" and its body asserted exactly that,
+        // which is why the batch resolver's collapse went unnoticed for so long. A test whose name
+        // claims a MIRROR must verify the mirror, so it no longer restates what ResolveManyAsync
+        // ought to return — it seeds the live table with the same rows and compares the two
+        // resolvers' ACTUAL answers, key for key. If either path changes its case rule alone, the
+        // comparison fails even though each would still look reasonable on its own.
+        await using var db = NewDb();
+
+        // Case-variant twins are a REAL production state, not a contrived one: the unique index on
+        // (org_id, supplier_id, buyer_item_code) is case-SENSITIVE on Postgres's default collation,
+        // so both rows are legal. "b-2" is stored ONLY in lower case.
+        var (live, orgId, supplierId) = await SeedLiveMappingsAsync(db,
+            ("B-1", "REV-UPPER"),
+            ("b-1", "REV-LOWER"),
+            ("b-2", "REV-LOWER-ONLY"));
+
         var snapshot = new[]
         {
-            new EffectiveRevisionItemMapping("B-1", "REV-OLD"),
-            new EffectiveRevisionItemMapping("B-1", "REV-NEW"),   // duplicate — last wins
-            new EffectiveRevisionItemMapping("b-2", "REV-LOWER"), // case differs from requested "B-2" — NOW matches
+            new EffectiveRevisionItemMapping("B-1", "REV-UPPER"),
+            new EffectiveRevisionItemMapping("b-1", "REV-LOWER"),
+            new EffectiveRevisionItemMapping("b-2", "REV-LOWER-ONLY"),
         };
-        var lines = Lines("  B-1  ", "B-2", "", "   ");
 
-        var map = OrderIngestionService.ResolveFromSnapshot(snapshot, lines);
+        // Padding, both spellings of one code, a code stored only in lower case, an unknown code,
+        // and the blanks the contract says are skipped.
+        var lines = Lines("  B-1  ", "b-1", "B-2", "B-9", "", "   ");
 
-        Assert.Equal(2, map.Count);                // blanks excluded; keys trimmed
-        Assert.Equal("REV-NEW", map["B-1"]);
-        Assert.Equal("REV-LOWER", map["B-2"]);     // case-variant snapshot row resolves, as the catalog always did
+        var fromSnapshot = OrderIngestionService.ResolveFromSnapshot(snapshot, lines);
+        var fromLive     = await live.ResolveManyAsync(
+            orgId, supplierId, lines.Select(l => l.BuyerItemCode), CancellationToken.None);
 
-        // Still total and still case-insensitive on lookup, so a caller holding either spelling hits.
-        Assert.Equal("REV-NEW", map["b-1"]);
+        // THE mirror assertion — the whole dictionaries, keys and values, compared to each other.
+        Assert.Equal(
+            fromLive.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList(),
+            fromSnapshot.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList());
 
-        // A genuinely unknown code is still present-but-null → the line flows to review, unchanged.
-        var unknown = OrderIngestionService.ResolveFromSnapshot(snapshot, Lines("B-9"));
-        Assert.Null(unknown["B-9"]);
+        // …and non-vacuously: two matching empties would satisfy the comparison above, so pin the
+        // shared answer as the RIGHT one.
+        Assert.Equal(4, fromSnapshot.Count);                  // blanks skipped; "B-1" and "b-1" distinct
+        Assert.Equal("REV-UPPER", fromSnapshot["B-1"]);        // exact-case wins over the twin…
+        Assert.Equal("REV-LOWER", fromSnapshot["b-1"]);        // …and the other line gets ITS OWN row
+        Assert.Equal("REV-LOWER-ONLY", fromSnapshot["B-2"]);   // the MATCH still folds case
+        Assert.Null(fromSnapshot["B-9"]);                      // unknown → present-but-null → review
+        Assert.False(fromSnapshot.ContainsKey("b-2"),
+            "keys are the caller's exact spelling; a spelling nobody asked about is absent, not aliased");
+
+        // Snapshot-ONLY: a snapshot is a copied LIST and can carry one spelling twice, which the
+        // live table cannot (the unique index forbids it) — so there is nothing to compare against
+        // here. Last row wins, the snapshot's deterministic stand-in for "most recently updated".
+        var duplicated = OrderIngestionService.ResolveFromSnapshot(
+            new[]
+            {
+                new EffectiveRevisionItemMapping("B-7", "REV-OLD"),
+                new EffectiveRevisionItemMapping("B-7", "REV-NEW"),
+            },
+            Lines("B-7"));
+
+        Assert.Equal("REV-NEW", duplicated["B-7"]);
     }
 
     // ── Snapshot semantics: parse mapping ──────────────────────────────────────

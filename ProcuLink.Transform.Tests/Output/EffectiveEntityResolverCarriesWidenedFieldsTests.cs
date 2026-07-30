@@ -180,4 +180,120 @@ public class EffectiveEntityResolverCarriesWidenedFieldsTests
             "an output rule named after a newly bindable field must not overwrite the typed column "
             + "that the fixed structured transforms render from");
     }
+
+    // ── The write-back set is a CONTRACT the frontend picker mirrors ─────────────
+    //
+    // For a structured format (cXML/UBL/X12/XML) an output rule can only change the document by
+    // rewriting a canonical value this resolver recognises; every other rule is silently skipped.
+    // The frontend greys those names out in the source picker rather than offering a binding that
+    // does nothing — so the exact membership of these two sets is now a cross-repo contract, and
+    // `src/lib/api/canonicalFields.test.ts` pins the same lists on that side.
+    //
+    // Pinned BEHAVIOURALLY (does a rule actually rewrite the column?) rather than by reflecting the
+    // private HashSets: a reflection test would pass if the sets were right but ResolveTargetField
+    // stopped consulting them.
+
+    public static TheoryData<string, string> RecognisedHeaderFields() => new()
+    {
+        { "PoNumber", "REWRITTEN" },
+        { "Currency", "USD" },
+        { "SupplierName", "REWRITTEN" },
+        { "BuyerName", "REWRITTEN" },
+    };
+
+    [Theory]
+    [MemberData(nameof(RecognisedHeaderFields))]
+    public void ARecognisedHeaderField_DoesRewriteTheTypedColumn(string field, string value)
+    {
+        // Non-vacuity for the test above: the write-back set must not be EMPTY, or
+        // "does not hijack" would pass for every name and mean nothing.
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = new() { [field] = new OutputFieldRule { OutputPath = field, FixedValue = value } },
+            },
+        };
+
+        var clone = EffectiveEntityResolver.Resolve(PopulatedOrder(), ov);
+
+        var actual = field switch
+        {
+            "PoNumber"     => clone.PoNumber,
+            "Currency"     => clone.Currency,
+            "SupplierName" => clone.SupplierName,
+            "BuyerName"    => clone.BuyerName,
+            _              => null,
+        };
+        actual.Should().Be(value,
+            "'{0}' is in the structured write-back set, so a rule targeting it must reach the "
+            + "delivered document — this is what the frontend picker keeps offering for cXML/UBL/X12",
+            field);
+    }
+
+    [Theory]
+    [InlineData("LineNumber", "7")]
+    [InlineData("BuyerItemCode", "REWRITTEN")]
+    [InlineData("SupplierItemCode", "REWRITTEN")]
+    [InlineData("Description", "REWRITTEN")]
+    [InlineData("Unit", "BOX")]
+    public void ARecognisedLineField_DoesRewriteTheTypedColumn(string field, string value)
+    {
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Lines = new() { [field] = new OutputFieldRule { OutputPath = field, FixedValue = value } },
+            },
+        };
+
+        var line = EffectiveEntityResolver.Resolve(PopulatedOrder(), ov).Lines.Single();
+
+        var actual = field switch
+        {
+            "LineNumber"       => line.LineNumber.ToString(),
+            "BuyerItemCode"    => line.BuyerItemCode,
+            "SupplierItemCode" => line.SupplierItemCode,
+            "Description"      => line.Description,
+            "Unit"             => line.Unit,
+            _                  => null,
+        };
+        actual.Should().Be(value, "'{0}' is in the structured write-back LINE set", field);
+    }
+
+    [Theory]
+    [InlineData("Incoterms")]
+    [InlineData("BuyerTaxId")]
+    [InlineData("ShipToName")]
+    [InlineData("ContactEmail")]
+    [InlineData("BillToCity")]
+    public void AWidenedHeaderField_IsNotInTheWriteBackSet(string field)
+    {
+        // The other side of the cross-repo contract: these are BINDABLE (they emit on CSV/JSON) but
+        // NOT write-back, so a structured-format rule naming them is skipped — which is exactly what
+        // the frontend now greys out instead of pretending it works.
+        var source = PopulatedOrder();
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = new() { [field] = new OutputFieldRule { OutputPath = field, FixedValue = "HIJACKED" } },
+            },
+        };
+
+        var clone = EffectiveEntityResolver.Resolve(source, ov);
+
+        var actual = field switch
+        {
+            "Incoterms"    => clone.Incoterms,
+            "BuyerTaxId"   => clone.BuyerTaxId,
+            "ShipToName"   => clone.ShipToName,
+            "ContactEmail" => clone.ContactEmail,
+            "BillToCity"   => clone.BillToCity,
+            _              => null,
+        };
+        actual.Should().NotBe("HIJACKED",
+            "'{0}' must stay outside the write-back set, or an existing customer's output column of "
+            + "that name starts rewriting their real data", field);
+    }
 }
