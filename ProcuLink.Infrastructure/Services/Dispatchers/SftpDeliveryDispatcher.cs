@@ -28,8 +28,14 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Sftp;
 
-    // The deterministic filename is overwritten on re-send, so a crash-recovery re-drive
+    // The deterministic PER-ORDER filename is overwritten on re-send, so a crash-recovery re-drive
     // cannot leave the supplier holding two copies.
+    //
+    // WP-20 note: this stays Safe only because DeliveryService now names the file
+    // '{PO}-{orderId}{ext}'. Under the old bare-PO name, "overwrite" could also replace a DIFFERENT
+    // order that happened to share the PO number. Overwriting is now scoped to this order's own
+    // previous upload — and an operator may still switch it off per supplier
+    // (overwriteExisting=false), which makes a re-send fail loudly instead of replacing anything.
     public ResendSafety ResendSafety => ResendSafety.Safe;
 
     public SftpDeliveryDispatcher(ILogger<SftpDeliveryDispatcher> logger, OutboundRequestGuard guard)
@@ -48,9 +54,10 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         string? idempotencyKey = null)
     {
         // A3 idempotency: SFTP is already idempotent by construction. The remote filename is the
-        // deterministic sanitised PO filename and UploadFile below uses canOverride:true, so a
-        // crash-recovery re-upload OVERWRITES the same path rather than creating a second file —
-        // no supplier idempotency key is needed (idempotencyKey is intentionally unused here).
+        // deterministic per-order filename DeliveryService builds, and UploadFile below overwrites
+        // by default, so a crash-recovery re-upload OVERWRITES the same path rather than creating a
+        // second file — no supplier idempotency key is needed (idempotencyKey is intentionally
+        // unused here).
         try
         {
             var cfg = JsonSerializer.Deserialize<SftpConfig>(config.ConfigJson, JsonOpts);
@@ -80,8 +87,11 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
             if (!guardResult.Allowed)
                 return new DeliveryResult(false, $"SFTP delivery blocked: {guardResult.Reason}");
 
+            var overwrite = ResolveOverwriteExisting(config.ConfigJson);
+
             // SSH.NET is synchronous — wrap in Task.Run so we honour the CancellationToken.
-            return await Task.Run(() => UploadSync(content, remotePath, connectionInfo, cfg.MakeDirectories, ct), ct);
+            return await Task.Run(
+                () => UploadSync(content, remotePath, connectionInfo, cfg.MakeDirectories, overwrite, ct), ct);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -104,6 +114,7 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         string remotePath,
         ConnectionInfo connectionInfo,
         bool makeDirectories,
+        bool overwriteExisting,
         CancellationToken ct)
     {
         using var client = new SftpClient(connectionInfo);
@@ -131,10 +142,30 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
             EnsureRemoteDirectoryExists(client, GetDirectoryPath(remotePath));
         }
 
+        // Overwrite opt-out: when the supplier's drop directory must be append-only, a pre-existing
+        // file at this path is a hard stop with a precise message, not a silent replacement.
+        // (SSH.NET's canOverride:false surfaces only as a generic SshException, hence the pre-check.)
+        if (!overwriteExisting)
+        {
+            try
+            {
+                if (client.Exists(remotePath))
+                {
+                    try { client.Disconnect(); } catch { /* swallow */ }
+                    return new DeliveryResult(false,
+                        $"SFTP upload skipped: '{remotePath}' already exists and overwriteExisting is false for this supplier.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "SFTP existence pre-check failed; continuing without overwrite.");
+            }
+        }
+
         using var ms = new MemoryStream(content);
         try
         {
-            client.UploadFile(ms, remotePath, canOverride: true);
+            client.UploadFile(ms, remotePath, canOverride: overwriteExisting);
         }
         catch (SftpPathNotFoundException)
         {
@@ -207,6 +238,26 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         var safe = new string(fileName.Select(c => char.IsLetterOrDigit(c) || c is '.' or '_' or '-' ? c : '_').ToArray());
         return safe.Trim('_').Length > 0 ? safe : "delivery.bin";
     }
+
+    /// <summary>
+    /// Whether an upload may replace a file already sitting at the remote path.
+    ///
+    /// <para>
+    /// Defaults to TRUE, which preserves the A3 crash-recovery contract: the remote filename is
+    /// deterministic PER ORDER, so overwriting can only ever replace THIS order's own earlier
+    /// upload, and a re-drive after an unknown outcome heals instead of failing. (Before WP-20 the
+    /// filename was the bare PO number, so the same default could silently clobber a DIFFERENT
+    /// order sharing that PO number — that is fixed by the filename, not by this flag.)
+    /// </para>
+    ///
+    /// <para>
+    /// Set <c>"overwriteExisting": false</c> in the supplier's delivery config JSON for a drop
+    /// directory that must be append-only. Trade-off: a crash-recovery re-drive then FAILS with an
+    /// explicit "already exists" message instead of re-uploading, and needs an operator decision.
+    /// </para>
+    /// </summary>
+    internal static bool ResolveOverwriteExisting(string? configJson) =>
+        DeliveryConfigFlags.ReadBool(configJson, DeliveryConfigFlags.OverwriteExisting, fallback: true);
 
     internal static string GetDirectoryPath(string remotePath)
     {

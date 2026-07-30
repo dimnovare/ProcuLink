@@ -162,6 +162,27 @@ public sealed class ConnectorManifestCatalogTests
         required.Should().Contain("username", "FtpsDeliveryDispatcher validates Username");
     }
 
+    [Theory]
+    [InlineData("sftp")]
+    [InlineData("ftps")]
+    public void FileDropManifests_DeclareTheFileNamingAndOverwriteSwitches(string key)
+    {
+        // WP-20. Both switches are honoured by the dispatchers / DeliveryService straight out of
+        // ConfigJson, so if the manifest does not declare them the connector UI cannot offer them
+        // and an operator has no way to discover either:
+        //   overwriteExisting=false — an append-only supplier drop directory.
+        //   legacyFileName=true     — a supplier whose pickup automation matches the exact bare PO
+        //                             filename, i.e. the escape hatch out of the new
+        //                             '{PO}-{orderId}{ext}' name.
+        var m = ConnectorManifestCatalog.ByKey[key];
+
+        var names = m.Fields.Select(f => f.Name).ToList();
+        names.Should().Contain("overwriteExisting");
+        names.Should().Contain("legacyFileName");
+        m.Fields.Where(f => f.Name is "overwriteExisting" or "legacyFileName")
+            .Should().OnlyContain(f => !f.Required && !f.Secret && f.Type == "bool");
+    }
+
     [Fact]
     public void Email_RequiredFields_ContainsToAddresses()
     {

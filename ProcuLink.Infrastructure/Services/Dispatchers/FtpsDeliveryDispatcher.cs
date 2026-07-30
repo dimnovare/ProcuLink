@@ -29,8 +29,9 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Ftps;
 
-    // The deterministic filename is overwritten on re-send, so a crash-recovery re-drive
-    // cannot leave the supplier holding two copies.
+    // The deterministic PER-ORDER filename is overwritten on re-send, so a crash-recovery re-drive
+    // cannot leave the supplier holding two copies. See SftpDeliveryDispatcher.ResolveOverwriteExisting
+    // for why overwriting is scoped to this order's own file since WP-20.
     public ResendSafety ResendSafety => ResendSafety.Safe;
 
     public FtpsDeliveryDispatcher(ILogger<FtpsDeliveryDispatcher> logger, OutboundRequestGuard guard)
@@ -49,9 +50,10 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         string? idempotencyKey = null)
     {
         // A3 idempotency: FTPS is already idempotent by construction. The remote filename is the
-        // deterministic sanitised PO filename and UploadStream below uses FtpRemoteExists.Overwrite,
-        // so a crash-recovery re-upload OVERWRITES the same path rather than creating a second file —
-        // no supplier idempotency key is needed (idempotencyKey is intentionally unused here).
+        // deterministic per-order filename DeliveryService builds and UploadStream below defaults to
+        // FtpRemoteExists.Overwrite, so a crash-recovery re-upload OVERWRITES the same path rather
+        // than creating a second file — no supplier idempotency key is needed (idempotencyKey is
+        // intentionally unused here).
         FtpsConfig? cfg;
         FtpsCredentials? creds;
 
@@ -88,6 +90,7 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         var remoteDir = NormaliseRemoteDir(cfg.RemotePath);
         var remotePath = $"{remoteDir.TrimEnd('/')}/{SanitiseFileName(fileName)}";
         var makeDirectories = cfg.MakeDirectories;
+        var remoteExists = ResolveRemoteExists(config.ConfigJson);
         var timeoutSeconds = cfg.TimeoutSeconds is > 0 ? cfg.TimeoutSeconds!.Value : 30;
         var timeoutMs = timeoutSeconds * 1000;
 
@@ -135,13 +138,19 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
                 var status = await client.UploadStream(
                     ms,
                     remotePath,
-                    FtpRemoteExists.Overwrite,
+                    remoteExists,
                     createRemoteDir: makeDirectories,
                     progress: null,
                     token: token).ConfigureAwait(false);
 
-                return status == FtpStatus.Success
-                    ? new DeliveryResult(true, null)
+                if (status == FtpStatus.Success) return new DeliveryResult(true, null);
+
+                // FtpRemoteExists.Skip reports Skipped when the file is already there. That is the
+                // operator's overwriteExisting=false opt-out doing its job — report it precisely
+                // rather than as a generic upload failure, because nothing was written.
+                return status == FtpStatus.Skipped
+                    ? new DeliveryResult(false,
+                        $"FTPS upload skipped: '{remotePath}' already exists and overwriteExisting is false for this supplier.")
                     : new DeliveryResult(false, "FTPS upload did not complete successfully.");
             }
         }
@@ -190,6 +199,23 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         if (policyErrors == SslPolicyErrors.None) return true;
         return allowInvalidCertificate;
     }
+
+    /// <summary>
+    /// Whether an upload may replace a file already sitting at the remote path. Defaults to TRUE —
+    /// see <see cref="SftpDeliveryDispatcher.ResolveOverwriteExisting"/> for the full rationale
+    /// (the per-order filename means overwriting can only replace this order's own upload).
+    /// </summary>
+    internal static bool ResolveOverwriteExisting(string? configJson) =>
+        DeliveryConfigFlags.ReadBool(configJson, DeliveryConfigFlags.OverwriteExisting, fallback: true);
+
+    /// <summary>
+    /// Maps the supplier's overwrite decision onto FluentFTP's remote-exists policy.
+    /// <see cref="FtpRemoteExists.Skip"/> (rather than a blind overwrite) leaves the existing file
+    /// untouched and reports <see cref="FtpStatus.Skipped"/>, which the caller turns into an
+    /// explicit failure.
+    /// </summary>
+    internal static FtpRemoteExists ResolveRemoteExists(string? configJson) =>
+        ResolveOverwriteExisting(configJson) ? FtpRemoteExists.Overwrite : FtpRemoteExists.Skip;
 
     private static string NormaliseRemoteDir(string? remotePath)
     {

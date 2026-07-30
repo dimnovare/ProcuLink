@@ -364,13 +364,16 @@ public sealed class DeliveryService : IDeliveryService
         if (reAdopted && dispatcher.ResendSafety == ResendSafety.Unsafe)
             return await ParkUnconfirmedAsync(order, attempt, config, ct);
 
+        // Single source of truth for how the artifact is labelled on the wire (WP-20).
+        var formatDescriptor = ResolveDeliveryFormat(artifact);
+
         DeliveryResult result;
         try
         {
             result = await dispatcher.DispatchAsync(
                 content,
-                BuildFileName(order, artifact),
-                GetContentType(artifact.Format),
+                BuildFileName(order, formatDescriptor, config),
+                formatDescriptor.ContentType,
                 config,
                 credentials,
                 ct,
@@ -903,34 +906,57 @@ public sealed class DeliveryService : IDeliveryService
             result.Success ? "success" : "failed");
     }
 
-    private static string BuildFileName(PurchaseOrderEntity order, OutboundArtifact artifact)
+    /// <summary>
+    /// Resolves the supplier-facing content type + file extension for an artifact from the single
+    /// <see cref="DeliveryArtifactFormat"/> table, WARNING when the format is not in it.
+    ///
+    /// <para>
+    /// This used to be a local switch that only knew xml/json/csv, so every cXML, UBL and X12
+    /// artifact went out as <c>application/octet-stream</c> named <c>PO-xxx.dat</c>. Receivers that
+    /// gate on content type or extension reject that, while the pipeline records the delivery as a
+    /// success — a silent interop failure. An unknown format must therefore be loud.
+    /// </para>
+    /// </summary>
+    private DeliveryFormatDescriptor ResolveDeliveryFormat(OutboundArtifact artifact)
     {
-        var extension = artifact.Format switch
-        {
-            "xml" => "xml",
-            "csv" => "csv",
-            "json" => "json",
-            _ => "dat",
-        };
+        if (DeliveryArtifactFormat.TryResolve(artifact.Format, out var descriptor))
+            return descriptor;
 
-        return $"{SanitizeFileToken(order.PoNumber)}.{extension}";
+        _logger.LogWarning(
+            "Delivery: artifact {ArtifactId} (order {OrderId}) has unrecognised output format '{Format}' — "
+            + "dispatching as {ContentType} with extension {FileExtension}. Known formats: {KnownFormats}. "
+            + "Suppliers that gate on content type or file extension are likely to reject it.",
+            artifact.Id,
+            artifact.OrderId,
+            artifact.Format,
+            DeliveryArtifactFormat.Unknown.ContentType,
+            DeliveryArtifactFormat.Unknown.FileExtension,
+            string.Join(", ", DeliveryArtifactFormat.KnownFormats));
+
+        return DeliveryArtifactFormat.Unknown;
     }
 
-    private static string SanitizeFileToken(string value)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var chars = value.Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray();
-        var sanitized = new string(chars).Trim();
-        return string.IsNullOrWhiteSpace(sanitized) ? "order" : sanitized;
-    }
+    /// <summary>
+    /// The name the supplier receives. File-drop channels (SFTP/FTPS) get the collision-proof
+    /// <c>{PO}-{orderId}{ext}</c> form because two orders may legitimately share a PO number and
+    /// the upload overwrites; every other channel keeps the human-readable <c>{PO}{ext}</c>.
+    ///
+    /// <para>
+    /// Backward compatibility: a supplier whose pickup automation matches the exact bare PO
+    /// filename can opt back in by setting <c>"legacyFileName": true</c> in the delivery config
+    /// JSON — at the cost of reinstating the same-PO clobber for that supplier.
+    /// </para>
+    /// </summary>
+    private static string BuildFileName(
+        PurchaseOrderEntity order,
+        DeliveryFormatDescriptor descriptor,
+        SupplierDeliveryConfig config) =>
+        DeliveryArtifactFormat.IsFileDropProtocol(config.Protocol) && !UsesLegacyFileName(config)
+            ? DeliveryArtifactFormat.UniqueFileNameFor(order.PoNumber, order.Id, descriptor)
+            : DeliveryArtifactFormat.FileNameFor(order.PoNumber, descriptor);
 
-    private static string GetContentType(string format) => format switch
-    {
-        "xml" => "application/xml",
-        "json" => "application/json",
-        "csv" => "text/csv",
-        _ => "application/octet-stream",
-    };
+    private static bool UsesLegacyFileName(SupplierDeliveryConfig config) =>
+        DeliveryConfigFlags.ReadBool(config.ConfigJson, DeliveryConfigFlags.LegacyFileName, fallback: false);
 
     private static string? TruncateResponseBody(string? body)
     {

@@ -116,6 +116,10 @@ public static class ConnectorManifestCatalog
                 help: "Create the remote directory hierarchy if it does not exist."),
             Field("timeoutSeconds",       "Timeout (s)",         "number",
                 help: "Connection and upload timeout in seconds (default: 30)."),
+            Field("overwriteExisting",    "Replace existing file", "bool",
+                help: "Default on. Each order uploads to its own filename, so this only ever replaces the SAME order's earlier upload (how a re-send after an unknown outcome heals). Turn it off for an append-only drop directory — a re-send then fails with 'already exists' instead."),
+            Field("legacyFileName",       "Legacy PO filename",  "bool",
+                help: "Default off. Uploads as the bare PO number instead of PO-{orderId}. Only for a supplier whose pickup automation matches the exact old filename — two orders sharing a PO number will overwrite each other."),
             // ── Credentials (encrypted) ────────────────────────────────────────
             Field("username",             "Username",            "string", required: true, secret: true,
                 help: "SFTP login username."),
@@ -152,6 +156,10 @@ public static class ConnectorManifestCatalog
                 help: "Connection and upload timeout in seconds (default: 30)."),
             Field("allowInvalidCertificate", "Allow invalid cert",     "bool",
                 help: "Accept self-signed or expired TLS certificates (operator opt-in per supplier)."),
+            Field("overwriteExisting",       "Replace existing file",  "bool",
+                help: "Default on. Each order uploads to its own filename, so this only ever replaces the SAME order's earlier upload (how a re-send after an unknown outcome heals). Turn it off for an append-only drop directory — a re-send then fails with 'already exists' instead."),
+            Field("legacyFileName",          "Legacy PO filename",     "bool",
+                help: "Default off. Uploads as the bare PO number instead of PO-{orderId}. Only for a supplier whose pickup automation matches the exact old filename — two orders sharing a PO number will overwrite each other."),
             // ── Credentials (encrypted) ────────────────────────────────────────
             Field("username",                "Username",               "string", required: true, secret: true,
                 help: "FTPS login username."),
