@@ -184,6 +184,56 @@ public class RetryDeliveryJobBackoffTests
             "bytes cannot help, and the delivery claim refuses the resulting status anyway");
     }
 
+    /// <summary>
+    /// A bulk of orders that fail together must NOT come back together.
+    ///
+    /// <para><b>The defect.</b> <see cref="DeliveryReliabilityOptions.BackoffMinutes"/> is a FIXED
+    /// schedule — 30 → 60 → 120 — with no jitter anywhere in the repository. So N orders for one
+    /// supplier that fail in the same minute (a rate limit, a credential rotation, a brief outage:
+    /// every cause that fails a batch fails all of it) are all scheduled at the same offset, and the
+    /// whole batch re-fires as one synchronised burst — three times, at three fixed offsets. The
+    /// only thing standing between the supplier and N simultaneous deliveries is the Worker's
+    /// <c>WorkerCount = 10</c>, which is a concurrency limit, not a rate limit. This is the one
+    /// failure mode here that grows with order volume rather than staying per-order.</para>
+    ///
+    /// <para>Asserted as SPREAD rather than as any particular delay, so the test states the property
+    /// that matters (the burst is broken up) and not an implementation of it.</para>
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_ABulkFailingTogether_IsSpreadAcrossAWindow_NotOneBurst()
+    {
+        const int bulk = 24;
+        var scheduled = new List<DateTime>();
+
+        for (var i = 0; i < bulk; i++)
+        {
+            var orgId = Guid.NewGuid();
+            var orderId = Guid.NewGuid();
+
+            var delivery = new Mock<IDeliveryService>();
+            // The same transient failure for every order in the bulk — one supplier, one outage.
+            delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(new DeliveryResult(false, "HTTP 503", 503));
+            delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(1);
+
+            var jobs = new CapturingJobClient();
+            var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+            await job.ExecuteAsync(orderId, orgId, default);
+
+            scheduled.Add(((ScheduledState)jobs.Captured.Single().State).EnqueueAt);
+        }
+
+        var spread = scheduled.Max() - scheduled.Min();
+
+        spread.Should().BeGreaterThan(TimeSpan.FromMinutes(1),
+            $"{bulk} orders that failed together were all scheduled within {spread.TotalSeconds:F1}s " +
+            "of each other, so they re-fire at the supplier as a single synchronised burst — and " +
+            "then twice more, at the next two fixed offsets. A jittered backoff spreads the retry " +
+            "across a window instead of re-creating the thundering herd that caused the failure");
+    }
+
     [Fact]
     public async Task ExecuteAsync_AtAttemptCap_DoesNotSchedule()
     {

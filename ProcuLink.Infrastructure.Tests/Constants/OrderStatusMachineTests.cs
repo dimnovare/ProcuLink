@@ -547,6 +547,43 @@ public class OrderStatusMachineTests
     }
 
     /// <summary>
+    /// The hole the guard above still had: it only ever looked at the map's KEYS.
+    ///
+    /// <para>A status that appears only as a TARGET is never examined — and yet
+    /// <see cref="OrderStatusMachine.NextStatuses"/> returns the empty set for it and
+    /// <see cref="OrderStatusMachine.IsTerminal"/> returns <c>true</c>, so it is a real dead end by
+    /// every definition the product uses. An order routed there has no way out and the invariant
+    /// stays green. That is not a hypothetical shape: it is what happens the first time someone adds
+    /// a status by writing the edge INTO it and forgetting to give it a row of its own — the exact
+    /// omission that made <c>rejected_by_supplier</c> a dead end, arriving through the one door the
+    /// guard does not watch.</para>
+    ///
+    /// <para>Reproduced with a target that has no key, so the assertion below fails on the
+    /// key-only implementation and passes once the invariant enumerates targets too.</para>
+    /// </summary>
+    [Fact]
+    public void DeadEndInvariant_CatchesAStatusThatExistsOnlyAsATransitionTarget()
+    {
+        const string quarantined = "quarantined";
+
+        var synthetic = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+        {
+            // 'quarantined' is reachable — and has no row, so nothing can move an order out of it.
+            [Ready]        = new HashSet<string>(StringComparer.Ordinal) { Transforming, quarantined },
+            [Transforming] = new HashSet<string>(StringComparer.Ordinal) { ReadyToDeliver },
+            [ReadyToDeliver] = new HashSet<string>(StringComparer.Ordinal) { Ready },
+            // A declared ending, so the assertion shows the guard still DISTINGUISHES the two.
+            [Failed]       = new HashSet<string>(StringComparer.Ordinal),
+        };
+
+        DeadEnds(synthetic, OrderStatusMachine.DeclaredTerminal)
+            .Should().Equal(quarantined,
+                "a status reachable only as a target has no outgoing edges at all — NextStatuses " +
+                "returns the empty set and IsTerminal returns true — so it is a dead end the " +
+                "product never declared, and examining only the map's keys cannot see it");
+    }
+
+    /// <summary>
     /// <see cref="OrderStatusMachine.DeclaredTerminal"/> is a product decision, pinned exactly so
     /// widening it is a deliberate edit and not a convenient way to quiet the invariant above.
     /// </summary>
