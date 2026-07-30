@@ -70,23 +70,10 @@ public sealed class OrphanGuardTests
     /// </remarks>
     private static readonly IReadOnlyList<KnownWriteOnly> KnownWriteOnlyStores = new[]
     {
-        // ── Retired by founder decision 2026-07-30 ───────────────────────────────────────
-        new KnownWriteOnly("OutputTemplate",
-            "scheduled for deletion in WP-06 / WP-07 — retired by founder decision 2026-07-30. "
-            + "Evidence: the table's only reader is OutputTemplateService, and IOutputTemplateService "
-            + "is referenced by nothing but OutputTemplatesController and the DI roots — no transform "
-            + "path consults it, because output shape comes from the pinned connection revision. The "
-            + "customer-facing surface is still live (project-proculink origin/main: "
-            + "src/lib/api-client.ts ~L2066 against /api/templates, src/app/(app)/library/templates/), "
-            + "so a user can currently author a template that renders nothing."),
-        new KnownWriteOnly("ValidationRule",
-            "scheduled for deletion in WP-06 / WP-07 — retired by founder decision 2026-07-30. "
-            + "Superseded, not merely unused: the live validation stack is RuleDefinition "
-            + "(RuleDefinitionService + RuleDefinitionBackfillService), SupplierAcceptanceRule, and "
-            + "OrderValidationResult (read by PassportService and SupplierAcceptanceService). Nothing "
-            + "evaluates a ValidationRule row. The frontend still offers full CRUD including an "
-            + "enable/disable toggle (project-proculink origin/main src/lib/api-client.ts ~L2011 "
-            + "against /api/rules), so a user can enable a rule that never runs."),
+        // The two entries that sat here — the retired output-template and validation-rule stores —
+        // were deleted when Wave 1 removed those entities (#75). That is the allowlist working as
+        // designed: it is shrink-only, it named the orphans while they still existed, and it emptied
+        // itself as they were retired. Do not re-add an entry for a store that no longer exists.
 
         // ── Read by code that is not in this repo ────────────────────────────────────────
         new KnownWriteOnly("DataProtectionKey",
@@ -249,8 +236,9 @@ public sealed class OrphanGuardTests
     /// <summary>
     /// The other half of "cannot rot": an entry that is no longer an orphan is a stale excuse, and
     /// a stale excuse is how a list like this stops meaning anything. Deleting the line is the fix.
-    /// This is also what keeps the guard honest about OutputTemplate and ValidationRule — they are
-    /// still detected as orphans today; they are recorded, not forgiven.
+    /// This is what kept the guard honest about the two stores Wave 1 retired: while they existed
+    /// they were still detected as orphans every run — recorded, not forgiven — and when the
+    /// entities were deleted this test is what demanded their entries go too.
     /// </summary>
     [Fact]
     public void KnownWriteOnly_EntriesAreStillOrphans()
@@ -1025,8 +1013,8 @@ public static class OrphanDetector
 
     /// <summary>
     /// Folds a file stem or a DbSet/entity name onto the concept it is about, so
-    /// <c>OutputTemplatesController</c>, <c>IOutputTemplateService</c>, <c>OutputTemplates</c> and
-    /// <c>OutputTemplate</c> all land on one key. <c>Entity</c> and <c>Def</c> are stripped because
+    /// <c>SupplierCatalogsController</c>, <c>ISupplierCatalogService</c>, <c>SupplierCatalogs</c> and
+    /// <c>SupplierCatalog</c> all land on one key. <c>Entity</c> and <c>Def</c> are stripped because
     /// they are type-naming noise here (<c>PurchaseOrderEntity</c>, <c>CanonicalFieldDef</c>)
     /// rather than part of the concept's name.
     ///
