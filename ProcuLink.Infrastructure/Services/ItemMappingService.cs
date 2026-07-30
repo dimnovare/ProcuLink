@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 
 namespace ProcuLink.Infrastructure.Services;
 
@@ -19,28 +20,44 @@ public sealed class ItemMappingService : IItemMappingService
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Case policy: <see cref="BuyerItemCodeMatch"/> — trim, match case-insensitively, prefer an
+    /// ordinal-exact row. This is the SAME policy the supplier-catalog lookup already used, so a
+    /// code that differs only in case no longer resolves on one path and not the other.
+    /// </remarks>
     public async Task<string?> ResolveAsync(
         Guid orgId, Guid supplierId, string buyerItemCode, CancellationToken ct)
     {
         var normalised = buyerItemCode.Trim();
+        if (normalised.Length == 0) return null;
 
-        var mapping = await _db.ItemMappings
+        // ToLower() rather than EF.Functions.ILike: it translates on Npgsql AND on the EF InMemory
+        // provider the unit tests use — the same choice OrderIngestionService's catalog pass makes.
+        var lowered = normalised.ToLower();
+
+        var candidates = await _db.ItemMappings
             .AsNoTracking()
             .Where(m => m.OrgId == orgId
                      && m.SupplierId == supplierId
-                     && m.BuyerItemCode == normalised)
-            .Select(m => m.SupplierItemCode)
-            .FirstOrDefaultAsync(ct);
+                     && m.BuyerItemCode.ToLower() == lowered)
+            .Select(m => new { m.BuyerItemCode, m.SupplierItemCode })
+            .ToListAsync(ct);
 
-        return mapping;
+        return BuyerItemCodeMatch.Pick(
+            candidates.Select(c => (c.BuyerItemCode, c.SupplierItemCode)).ToList(), normalised);
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Keys stay the codes the CALLER asked for (trimmed, Ordinal) and the dictionary stays total
+    /// over the non-blank input set — the ingestion loop looks each line up by its own printed code,
+    /// so re-keying to the stored casing would break every consumer. Only the MATCHING folds case.
+    /// </remarks>
     public async Task<IReadOnlyDictionary<string, string?>> ResolveManyAsync(
         Guid orgId, Guid supplierId, IEnumerable<string> buyerItemCodes, CancellationToken ct)
     {
-        // Distinct, trimmed, non-blank set of codes to look up. Keyed case-sensitively
-        // to mirror ResolveAsync (BuyerItemCode == normalised) exact matching.
+        // Distinct, trimmed, non-blank set of codes to look up. Still keyed Ordinal: two lines whose
+        // codes differ only in case are two distinct keys that happen to resolve to the same row.
         var requested = buyerItemCodes
             .Where(c => !string.IsNullOrWhiteSpace(c))
             .Select(c => c.Trim())
@@ -56,21 +73,27 @@ public sealed class ItemMappingService : IItemMappingService
         if (requested.Count == 0)
             return result;
 
-        // One org+supplier-scoped IN query for all codes instead of N point lookups.
+        // One org+supplier-scoped IN query for all codes instead of N point lookups. The IN list is
+        // lower-cased on both sides so the fetch matches BuyerItemCodeMatch's case policy; a code
+        // that is not case-folded out of the fetch can still be rejected by Pick below.
+        var lowered = requested.Select(c => c.ToLower()).Distinct(StringComparer.Ordinal).ToList();
+
         var rows = await _db.ItemMappings
             .AsNoTracking()
             .Where(m => m.OrgId == orgId
                      && m.SupplierId == supplierId
-                     && requested.Contains(m.BuyerItemCode))
+                     && lowered.Contains(m.BuyerItemCode.ToLower()))
             .Select(m => new { m.BuyerItemCode, m.SupplierItemCode })
             .ToListAsync(ct);
 
-        foreach (var row in rows)
+        foreach (var code in requested)
         {
-            // Only overwrite a key that was actually requested (case-sensitive) so
-            // behaviour matches ResolveAsync even if the DB collation is broader.
-            if (result.ContainsKey(row.BuyerItemCode))
-                result[row.BuyerItemCode] = row.SupplierItemCode;
+            var candidates = rows
+                .Where(r => BuyerItemCodeMatch.Matches(r.BuyerItemCode, code))
+                .Select(r => (r.BuyerItemCode, r.SupplierItemCode))
+                .ToList();
+
+            result[code] = BuyerItemCodeMatch.Pick(candidates, code);
         }
 
         return result;

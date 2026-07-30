@@ -1832,7 +1832,9 @@ internal sealed class OrderIngestionService
                 lines.Select(l => l.BuyerItemCode),
                 ct);
 
-        // Lookup helper mirroring ResolveManyAsync's trimmed, case-sensitive keys.
+        // Lookup helper mirroring ResolveManyAsync's keying: the map is keyed by the trimmed code
+        // AS THIS LINE PRINTED IT (Ordinal), so looking a line up by its own code always hits.
+        // Case folding happens inside the resolver (BuyerItemCodeMatch), never in the key.
         static string? ResolveFromMap(IReadOnlyDictionary<string, string?> map, string? buyerItemCode)
         {
             if (string.IsNullOrWhiteSpace(buyerItemCode)) return null;
@@ -2223,12 +2225,15 @@ internal sealed class OrderIngestionService
     }
 
     /// <summary>
-    /// Exact-match resolution against the pinned revision's item-mapping snapshot. Mirrors
+    /// Resolution against the pinned revision's item-mapping snapshot. Mirrors
     /// <c>ItemMappingService.ResolveManyAsync</c> semantics precisely: the returned dictionary is
-    /// keyed by the TRIMMED buyer item code (Ordinal), is total over the non-blank input set
-    /// (missing mapping ⇒ null value ⇒ the line flows to review exactly as today), and matches
-    /// snapshot rows case-sensitively against the trimmed requested codes (the last duplicate
-    /// snapshot row wins, like the live resolver's row loop).
+    /// keyed by the TRIMMED buyer item code (Ordinal) and is total over the non-blank input set
+    /// (missing mapping ⇒ null value ⇒ the line flows to review exactly as today).
+    ///
+    /// <para>Case policy is <see cref="BuyerItemCodeMatch"/> — the SAME policy the live resolver
+    /// uses (WP-14 part 3). It has to be: this method exists so a pinned revision reproduces what
+    /// the live table would have done, so if only the live side folded case, a replay would resolve
+    /// FEWER codes than the original run.</para>
     /// </summary>
     internal static IReadOnlyDictionary<string, string?> ResolveFromSnapshot(
         IReadOnlyList<EffectiveRevisionItemMapping> snapshot,
@@ -2242,15 +2247,15 @@ internal sealed class OrderIngestionService
             .ToList();
 
         var result = new Dictionary<string, string?>(requested.Count, StringComparer.Ordinal);
-        foreach (var code in requested)
-            result[code] = null;
 
-        foreach (var mapping in snapshot)
+        foreach (var code in requested)
         {
-            // Only overwrite a key that was actually requested (case-sensitive) — same guard
-            // as the live resolver.
-            if (result.ContainsKey(mapping.BuyerItemCode))
-                result[mapping.BuyerItemCode] = mapping.SupplierItemCode;
+            var candidates = snapshot
+                .Where(m => BuyerItemCodeMatch.Matches(m.BuyerItemCode, code))
+                .Select(m => (m.BuyerItemCode, m.SupplierItemCode))
+                .ToList();
+
+            result[code] = BuyerItemCodeMatch.Pick(candidates, code);
         }
 
         return result;

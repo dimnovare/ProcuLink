@@ -275,6 +275,15 @@ public sealed class MappedTransformService
     /// overrides that do not reference them are unaffected (the fixed transforms never read
     /// this bag). Adding a key to the row bag cannot change fixed-transform output.
     ///
+    /// <para>WP-14 widening: the bag now carries EVERY business column on
+    /// <see cref="PurchaseOrderEntity"/> — notably the whole <c>ShipTo*</c> delivery-address block and
+    /// the <c>BillTo*</c> invoicing block, plus <c>Contact*</c>, <c>Incoterms</c>,
+    /// <c>ShippingMethod</c>, <c>BuyerOrderRef</c>, <c>BuyerTaxId</c> and <c>DocumentType</c>.
+    /// Same additive contract: present-but-empty when the column is null, and inert until a rule
+    /// names the key. Completeness is enforced by reflection in
+    /// <c>CanonicalRowCompletenessTests.HeaderRow_ExposesEveryBusinessFieldOnTheEntity</c>, so a new
+    /// column cannot silently become unbindable — add it here or add a named exclusion there.</para>
+    ///
     /// <para>F-1 Seam A (bind ANY source field): when <paramref name="sourceTokens"/> is non-null,
     /// every header-scope token (<c>Group != "line"</c>, OR a line-scope token whose addressed ordinal
     /// matches no line) is appended under the reserved key <c>"src::"+token.Id</c> with its VERBATIM
@@ -333,6 +342,47 @@ public sealed class MappedTransformService
             ["RequestedDeliveryDate"]  = order.RequestedDeliveryDate.HasValue
                                              ? order.RequestedDeliveryDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
                                              : string.Empty,
+
+            // WP-14: the rest of the parsed header. The row bag is the ONLY vocabulary a custom
+            // output mapping / designed output tree can bind, so anything missing here is
+            // unreachable no matter how correctly it was parsed and persisted. Before this block a
+            // physical purchase order could not emit a DELIVERY ADDRESS through any custom output
+            // path — the fixed CsvTransformService already emitted ShipTo columns from these very
+            // same typed columns, so the data was present and only the vocabulary was short.
+            // Every key is INERT until a rule names it (proven by the unbound-fields guard in
+            // CanonicalRowCompletenessTests), so this widening changes no existing document.
+            // Kept in sync by the reflection-driven completeness test: a new business column on
+            // PurchaseOrderEntity fails the build until it is exposed here or explicitly excluded.
+            ["DocumentType"]           = order.DocumentType ?? string.Empty,
+
+            // Buyer-side contact + commercial terms.
+            ["ContactName"]            = order.ContactName ?? string.Empty,
+            ["ContactEmail"]           = order.ContactEmail ?? string.Empty,
+            ["ContactPhone"]           = order.ContactPhone ?? string.Empty,
+            ["Incoterms"]              = order.Incoterms ?? string.Empty,
+            ["ShippingMethod"]         = order.ShippingMethod ?? string.Empty,
+            ["BuyerOrderRef"]          = order.BuyerOrderRef ?? string.Empty,
+            ["BuyerTaxId"]             = order.BuyerTaxId ?? string.Empty,
+
+            // Ship-to block — the delivery address. Not optional on a physical PO.
+            ["ShipToName"]             = order.ShipToName ?? string.Empty,
+            ["ShipToDeliverTo"]        = order.ShipToDeliverTo ?? string.Empty,
+            ["ShipToStreet"]           = order.ShipToStreet ?? string.Empty,
+            ["ShipToCity"]             = order.ShipToCity ?? string.Empty,
+            ["ShipToPostalCode"]       = order.ShipToPostalCode ?? string.Empty,
+            ["ShipToCountry"]          = order.ShipToCountry ?? string.Empty,
+            ["ShipToEmail"]            = order.ShipToEmail ?? string.Empty,
+            ["ShipToPhone"]            = order.ShipToPhone ?? string.Empty,
+
+            // Bill-to block — the invoicing address.
+            ["BillToName"]             = order.BillToName ?? string.Empty,
+            ["BillToDeliverTo"]        = order.BillToDeliverTo ?? string.Empty,
+            ["BillToStreet"]           = order.BillToStreet ?? string.Empty,
+            ["BillToCity"]             = order.BillToCity ?? string.Empty,
+            ["BillToPostalCode"]       = order.BillToPostalCode ?? string.Empty,
+            ["BillToCountry"]          = order.BillToCountry ?? string.Empty,
+            ["BillToEmail"]            = order.BillToEmail ?? string.Empty,
+            ["BillToPhone"]            = order.BillToPhone ?? string.Empty,
         };
 
         foreach (var cf in @override.CustomFields)
@@ -365,6 +415,13 @@ public sealed class MappedTransformService
     /// Line-scope field bag for one line: the recognised canonical line fields, plus header fields
     /// (so a line rule can reference order-level values), plus any line-scoped custom field's value
     /// for this line number. Header custom fields are included too.
+    ///
+    /// <para>WP-14 widening: the bag now carries EVERY business column on
+    /// <see cref="PurchaseOrderLineEntity"/> — <c>TaxAmount</c>, <c>ManufacturerPartNumber</c>,
+    /// <c>ManufacturerName</c>, <c>CustomerPartNumber</c>, <c>DiscountPercent</c>, <c>Unspsc</c>,
+    /// <c>Recipient</c>, <c>ContractNumber</c> and <c>NetAmount</c>. Additive and inert exactly like
+    /// the header block; kept complete by reflection in
+    /// <c>CanonicalRowCompletenessTests.LineRow_ExposesEveryBusinessFieldOnTheEntity</c>.</para>
     ///
     /// <para>Phase 2 catalog wiring: when <paramref name="catalogLookup"/> is non-null and this line's
     /// resolved <c>SupplierItemCode</c> / <c>ManufacturerPartNumber</c> matches a catalog row, the
@@ -410,6 +467,28 @@ public sealed class MappedTransformService
         row["DeliveryDate"]     = line.DeliveryDate.HasValue
                                       ? line.DeliveryDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
                                       : string.Empty;
+
+        // WP-14: the rest of the parsed line. Same reasoning as the header block — a column absent
+        // from this bag cannot be bound by any custom output mapping or designed tree, so the
+        // manufacturer part number, the customer part number, the discount and the net/tax amounts
+        // were unreachable despite being parsed and persisted. Nullable decimals follow the TaxRate
+        // precedent exactly (invariant culture, string.Empty when absent — never a misleading 0).
+        // Kept in sync by the reflection-driven completeness test.
+        row["TaxAmount"]              = line.TaxAmount.HasValue
+                                            ? line.TaxAmount.Value.ToString(CultureInfo.InvariantCulture)
+                                            : string.Empty;
+        row["ManufacturerPartNumber"] = line.ManufacturerPartNumber ?? string.Empty;
+        row["ManufacturerName"]       = line.ManufacturerName ?? string.Empty;
+        row["CustomerPartNumber"]     = line.CustomerPartNumber ?? string.Empty;
+        row["DiscountPercent"]        = line.DiscountPercent.HasValue
+                                            ? line.DiscountPercent.Value.ToString(CultureInfo.InvariantCulture)
+                                            : string.Empty;
+        row["Unspsc"]                 = line.Unspsc ?? string.Empty;
+        row["Recipient"]              = line.Recipient ?? string.Empty;
+        row["ContractNumber"]         = line.ContractNumber ?? string.Empty;
+        row["NetAmount"]              = line.NetAmount.HasValue
+                                            ? line.NetAmount.Value.ToString(CultureInfo.InvariantCulture)
+                                            : string.Empty;
 
         foreach (var cf in @override.CustomFields)
         {

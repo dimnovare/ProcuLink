@@ -179,21 +179,29 @@ public class RevisionAuthorityParseTests
     [Fact]
     public void ResolveFromSnapshot_MirrorsResolveManySemantics_TrimmedOrdinalKeys()
     {
-        // Trimmed keying, Ordinal case-sensitivity, total over the non-blank input set,
-        // last duplicate snapshot row wins — exactly ItemMappingService.ResolveManyAsync.
+        // Trimmed Ordinal KEYS, total over the non-blank input set, last duplicate snapshot row
+        // wins — exactly ItemMappingService.ResolveManyAsync.
+        //
+        // WP-14 part 3: MATCHING now folds case (BuyerItemCodeMatch), on both this snapshot path
+        // and the live resolver, so "b-2" DOES answer a requested "B-2". Before the fix a code
+        // whose case drifted resolved on the supplier-catalog path but not here — and a replay
+        // would then resolve fewer codes than the original run. Keys stay Ordinal: the map is
+        // looked up by each line's own printed code.
         var snapshot = new[]
         {
             new EffectiveRevisionItemMapping("B-1", "REV-OLD"),
             new EffectiveRevisionItemMapping("B-1", "REV-NEW"),   // duplicate — last wins
-            new EffectiveRevisionItemMapping("b-2", "REV-LOWER"), // case differs from requested "B-2" — no match
+            new EffectiveRevisionItemMapping("b-2", "REV-LOWER"), // case differs from requested "B-2"
+            new EffectiveRevisionItemMapping("B-3", "REV-3"),
         };
-        var lines = Lines("  B-1  ", "B-2", "", "   ");
+        var lines = Lines("  B-1  ", "B-2", "", "   ", "b-4");
 
         var map = OrderIngestionService.ResolveFromSnapshot(snapshot, lines);
 
-        Assert.Equal(2, map.Count);            // blanks excluded; keys trimmed
-        Assert.Equal("REV-NEW", map["B-1"]);
-        Assert.Null(map["B-2"]);               // present (total) but unresolved → review downstream
+        Assert.Equal(3, map.Count);            // blanks excluded; keys trimmed
+        Assert.Equal("REV-NEW", map["B-1"]);   // exact duplicate — last still wins
+        Assert.Equal("REV-LOWER", map["B-2"]); // case-differing snapshot row now matches
+        Assert.Null(map["b-4"]);               // present (total) but unresolved → review downstream
     }
 
     // ── Snapshot semantics: parse mapping ──────────────────────────────────────
