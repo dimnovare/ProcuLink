@@ -11,6 +11,71 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-30) — post-merge CI on `main` was being cancelled; fixed in BOTH repos
+
+- **BE [PR #86](https://github.com/dimnovare/ProcuLink/pull/86) MERGED `a38cb9f`; FE
+  [PR #58](https://github.com/dimnovare/project-proculink/pull/58) MERGED `c319c805`.** One-line
+  concurrency fix, identical in both `ci.yml` files, plus a comment correction (below).
+- **The bug.** Both repos had `concurrency: {group: ci-${{ github.ref }}, cancel-in-progress: true}`.
+  Every merge to `main` shares the ref `refs/heads/main`, so **each merge cancelled the PREVIOUS
+  commit's post-merge run.** Six voided main runs measured on 2026-07-30 alone:
+
+  | repo | commit | main-push run |
+  |---|---|---|
+  | FE | `9cea6e5` (FE #54) | unit+lint+conformance ✅, build ✅, Playwright **cancelled** |
+  | FE | FE #53 | **cancelled at 29s** |
+  | FE | FE #43 | **cancelled at 14s** |
+  | BE | `d5a20fb` (BE #83) | **cancelled** ~25s in, when BE #76 landed |
+  | BE | BE #79 | **cancelled**, when BE #85 landed |
+  | BE | `5d3dc31` (BE #85) | **cancelled**, when `051b2eb` landed |
+
+  A `cancelled` conclusion is **not a pass and not a failure — it is no information.** Never report
+  one as green.
+- **Why it mattered.** FE #49 landed in the seconds *between* FE #54's pre-merge base-SHA check and
+  its merge, so `main` became a combination no run had covered — and the post-merge run that exists
+  to catch exactly that had been cancelled. FE #54 was only confirmed green because it was
+  re-verified by hand. Re-reading the base SHA before merging is necessary but **not sufficient**
+  while several sessions merge concurrently; the post-merge run is what closes the window. BE #85's
+  base then went stale three times in ~30 minutes, which is the same story.
+- **`cancel-in-progress: false` alone would NOT have fixed it** — and that was this session's own
+  first recommendation, which was wrong. Per the workflow-syntax docs: *"any existing `pending` job
+  or workflow in the same concurrency group will be canceled and the new queued job or workflow
+  will take its place."* With a shared group a merge train still loses every run except the first
+  in-progress one and the last queued one. **The group itself has to differ per commit:**
+
+  ```yaml
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  ```
+
+  `pull_request` → group by ref, so a new push to a PR still cancels its own older run (that
+  cancelling is the point). `push` on main → group by SHA, unique per commit, so nothing can cancel
+  another commit's verification and runs go in parallel rather than queueing.
+  `cancel-in-progress` is set from an expression rather than deleted, so the PR path is unchanged
+  by construction.
+- **Verified:** both files parsed with `yaml.parse` before pushing (group, `cancel-in-progress`,
+  `on.push.branches` and every job id read back unchanged); both workflows then parsed on GitHub —
+  PR runs appeared and went green (BE 1 check, FE 4 checks) — and **both main-push runs dispatched
+  after merge**, which is what proves the expression evaluates on the `push` path too. Frontend
+  gates: `bunx tsc --noEmit` exit **0** (clean since FE #56), `bun run test` 122 files / 1276 tests
+  green, lint + pageshell + vocab clean.
+- **Limit, stated plainly:** a PR run can only exercise the `pull_request` branch of the
+  expression. The anti-cancellation behaviour itself is only observable on the next merge train.
+  **If a main-push run ever shows `cancelled` again, this did not work.**
+- **Also fixed: an overclaim in `src/test/route-reachability.test.ts`.** Its MUTATION COVERAGE
+  header credited *"an out-of-tree harness that reverts each one in turn"*. **That harness is in
+  neither repo** — the only occurrences of the phrase were the comment and a STATUS.md entry
+  quoting it. A claim of coverage nobody can re-run is not coverage. Replaced with the reproducible
+  procedure and one dated result: reverting comment stripping in `src/test/sourceScan.ts` reddens
+  **both** guards (3 failures in the reachability guard, 2 in the crawl), which is also what proves
+  the shared module is genuinely shared. The mutation target moved into `sourceScan.ts` — mutate
+  that module, not the guard.
+- **Closes the follow-up list from the FE #54 entry below.** FE #57 merged (parse-gate stall
+  escalation), FE #55 closed (superseded duplicate parser), FE #56 merged (CI now typechecks, and
+  it fixed the two long-standing `tsc` errors). Nothing outstanding from that wave.
+
+---
+
 ## Snapshot (2026-07-30) — Wave 1 WP-09 column drop is BLOCKED, not forgotten (no code shipped)
 
 - **The contract half of `organisations.webhook_secret_encrypted` was NOT written.** Its
