@@ -289,7 +289,10 @@ public class SuppliersControllerCatalogSourceTests
         var status = result.Should().BeOfType<ObjectResult>().Subject;
         status.StatusCode.Should().Be(403);
         string error = ((dynamic)status.Value!).error;
-        error.Should().Be("catalog_sync_requires_integration");
+        // WP-11: was pinned to "catalog_sync_requires_integration". Catalog sync gates on
+        // SftpIngestion, whose minimum is Growth — the old expectation defended a 403 that
+        // named a tier six times the price of the one that actually unlocks the feature.
+        error.Should().Be($"catalog_sync_requires_{PlanConstants.GetMinimumPlan(BillingFeature.SftpIngestion)}");
     }
 
     [Fact]

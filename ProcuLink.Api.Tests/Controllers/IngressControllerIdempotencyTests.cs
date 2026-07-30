@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -86,6 +86,7 @@ public class IngressControllerIdempotencyTests
             db,
             idempotency,
             tenant,
+            TestDoubles.PermissiveBilling.Service(),
             NullLogger<IngressController>.Instance);
 
         controller.ControllerContext = new ControllerContext { HttpContext = httpContext };

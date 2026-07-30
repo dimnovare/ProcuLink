@@ -1,7 +1,8 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 
@@ -14,11 +15,34 @@ public sealed class SupplierAcceptanceController : ControllerBase
 {
     private readonly ISupplierAcceptanceService _service;
     private readonly ICurrentTenantService      _tenant;
+    private readonly IBillingService            _billing;
 
-    public SupplierAcceptanceController(ISupplierAcceptanceService service, ICurrentTenantService tenant)
+    public SupplierAcceptanceController(
+        ISupplierAcceptanceService service,
+        ICurrentTenantService tenant,
+        IBillingService billing)
     {
         _service = service;
         _tenant  = tenant;
+        _billing = billing;
+    }
+
+    /// <summary>
+    /// 403 when the plan does not include per-supplier custom acceptance rules (the
+    /// Enterprise "custom transformation rules"), else null. Authoring a new version and
+    /// activating one are both gated; reading existing versions is not, so an org that
+    /// downgrades can still see what its suppliers enforce.
+    /// </summary>
+    private async Task<IActionResult?> GateAsync(CancellationToken ct)
+    {
+        if (await _billing.HasFeatureAsync(_tenant.OrganisationId, BillingFeature.CustomSupplierRules, ct))
+            return null;
+
+        return StatusCode(StatusCodes.Status403Forbidden, new
+        {
+            error = BillingGateErrors.RequiresPlan("custom_supplier_rules", BillingFeature.CustomSupplierRules),
+            upgradeUrl = "/settings",
+        });
     }
 
     [HttpGet]
@@ -43,6 +67,8 @@ public sealed class SupplierAcceptanceController : ControllerBase
     public async Task<IActionResult> CreateVersion(
         Guid supplierId, [FromBody] CreateAcceptanceProfileRequest request, CancellationToken ct)
     {
+        if (await GateAsync(ct) is { } denied) return denied;
+
         var rules = (request.Rules ?? new List<AcceptanceRuleDto>())
             .Select(r => new AcceptanceRuleInput(r.Scope, r.FieldPath, r.Operator, r.ExpectedValue, r.Severity, r.BlockOnFail))
             .ToList();
@@ -67,8 +93,14 @@ public sealed class SupplierAcceptanceController : ControllerBase
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Activate(Guid supplierId, int versionNo, CancellationToken ct)
-        => await _service.ActivateVersionAsync(_tenant.OrganisationId, supplierId, versionNo, ct)
+    {
+        // Gated too: activating a stored version is how a rule set actually starts blocking
+        // orders, so leaving it open would make the create gate cosmetic.
+        if (await GateAsync(ct) is { } denied) return denied;
+
+        return await _service.ActivateVersionAsync(_tenant.OrganisationId, supplierId, versionNo, ct)
             ? NoContent() : NotFound();
+    }
 
     private static AcceptanceProfileDto ToDto(SupplierAcceptanceProfile p) => new(
         p.Id, p.SupplierId, p.VersionNo, p.Status, p.Protocol, p.OutputFormat,

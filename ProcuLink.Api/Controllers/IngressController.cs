@@ -27,6 +27,7 @@ public sealed class IngressController : ControllerBase
     private readonly ProcuLinkDbContext        _db;
     private readonly IIdempotencyService       _idempotency;
     private readonly ICurrentTenantService     _tenant;
+    private readonly IBillingService           _billing;
     private readonly ILogger<IngressController> _logger;
 
     /// <summary>Max accepted length for Idempotency-Key — guards against accidental garbage.</summary>
@@ -36,11 +37,13 @@ public sealed class IngressController : ControllerBase
         ProcuLinkDbContext        db,
         IIdempotencyService       idempotency,
         ICurrentTenantService     tenant,
+        IBillingService           billing,
         ILogger<IngressController> logger)
     {
         _db          = db;
         _idempotency = idempotency;
         _tenant      = tenant;
+        _billing     = billing;
         _logger      = logger;
     }
 
@@ -110,6 +113,36 @@ public sealed class IngressController : ControllerBase
             _logger.LogWarning(
                 "Idempotency key {Key} mapped to missing order {OrderId}; creating a new order",
                 idempotencyKey, existingOrderId.Value);
+        }
+
+        // ── Billing gate ───────────────────────────────────────────────────
+        // Byte-for-byte the gate OrdersController.Upload applies. REST ingress had NO
+        // billing gate at all, so a frozen / trial-expired org whose browser uploads were
+        // already being refused could keep pushing orders through the API indefinitely.
+        //
+        // Placed AFTER the idempotency short-circuit on purpose: an at-least-once retry of
+        // an order that was already accepted must keep returning that order, not start
+        // 429-ing once the account state changes.
+        //
+        // CheckOrderLimitAsync is the SOFT-CAP-SAFE gate: its Allowed flag is
+        // BillingStatus.CanProcessOrders, which for an active paid plan ignores volume
+        // entirely. Going over the monthly allowance still succeeds here and accrues
+        // €0.50/order overage — only a non-processing account status (or an expired Pilot,
+        // whose cap is a trial limit rather than a volume block) refuses.
+        var limitCheck = await _billing.CheckOrderLimitAsync(orgId, ct);
+        if (!limitCheck.Allowed)
+        {
+            _logger.LogInformation(
+                "Ingress push refused for org {OrgId}: plan {Plan}, pilotExpired={PilotExpired}",
+                orgId, limitCheck.Plan, limitCheck.PilotExpired);
+
+            return StatusCode(429, new
+            {
+                error      = limitCheck.PilotExpired ? "pilot_expired" : "order_limit_reached",
+                plan       = limitCheck.Plan,
+                limit      = limitCheck.Limit,
+                upgradeUrl = "/settings",
+            });
         }
 
         // Resolve supplier by GUID or by Name (ExternalId not present on Supplier entity)
