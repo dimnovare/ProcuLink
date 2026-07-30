@@ -270,9 +270,22 @@ public sealed class AcceptanceGateTests
         Assert.Equal("Supplier confirmed USD by phone.", payload.GetProperty(AcceptanceGateAudit.ReasonKey).GetString());
         Assert.Equal("Order", ev.EntityType);
 
+        // ONE excused key, and it identifies the FAILURE rather than merely the rule: the code, the
+        // (absent) line, the rule id, the profile version, and a digest of demanded-vs-found. It is
+        // asserted by structure, not spelled out — the rule id is a fresh Guid per run and the digest
+        // is derived, so a literal here would be a literal that had to be regenerated, which is how
+        // a key assertion stops meaning anything.
         var excused = payload.GetProperty(AcceptanceGateAudit.ExcusedKey)
-            .EnumerateArray().Select(e => e.GetString()).ToList();
-        Assert.Equal(new[] { "currency.equals" }, excused);
+            .EnumerateArray().Select(e => e.GetString()!).ToList();
+        var key = Assert.Single(excused);
+
+        var ruleId = await db.SupplierAcceptanceRules.AsNoTracking()
+            .Where(r => r.FieldPath == "currency").Select(r => r.Id).FirstAsync();
+
+        Assert.StartsWith("currency.equals#-@", key);          // code, and no line (order-scoped rule)
+        Assert.Contains(ruleId.ToString("N"), key);            // which rule
+        Assert.Contains(".v1~", key);                          // which version of the profile
+        Assert.Matches(@"~[0-9a-f]{16}$", key);                // the (expected, actual) digest
 
         // The human-readable copy stands alone even if the rule is later edited or deleted.
         var blocked = payload.GetProperty("blocked").EnumerateArray().Select(e => e.GetString()!).ToList();

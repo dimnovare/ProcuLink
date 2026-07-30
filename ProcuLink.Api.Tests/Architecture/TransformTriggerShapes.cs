@@ -19,90 +19,96 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// names the axis the detector is blind to instead of a strawman. Nothing here is ever executed —
 /// the arguments would be null — and nothing references these types from production code; they
 /// exist to be READ, by the detector.</para>
+///
+/// <para>Each shape is a TOP-LEVEL type, not a nested one. The detector attributes a reference to
+/// the outermost declaring type, because lambdas, local functions and async bodies all live in
+/// compiler-generated nested classes and reporting those would name a type nobody wrote. Nesting the
+/// fixtures would collapse all eight onto this registry class and the test would report every shape
+/// as missed while the detector was working perfectly — which is exactly what happened first.</para>
 /// </summary>
 internal static class TransformTriggerShapes
 {
     /// <summary>The eight shapes, each paired with the type that carries it.</summary>
     public static IReadOnlyList<(string Description, Type Type)> All => new (string, Type)[]
     {
-        ("the shape TransformOrderJob uses today",     typeof(TodaysCallSite)),
-        ("a differently-named service field",          typeof(DifferentlyNamedField)),
-        ("a differently-named cancellation token",     typeof(DifferentlyNamedToken)),
-        ("an assignment with short locals",            typeof(AssignmentWithShortLocals)),
-        ("a delayed enqueue",                          typeof(DelayedEnqueue)),
-        ("a recurring sweep",                          typeof(RecurringSweep)),
-        ("a job built from an expression",             typeof(JobFromExpression)),
-        ("a direct generic enqueue",                   typeof(DirectGenericEnqueue)),
+        ("the shape TransformOrderJob uses today",     typeof(ShapeTodaysCallSite)),
+        ("a differently-named service field",          typeof(ShapeDifferentlyNamedField)),
+        ("a differently-named cancellation token",     typeof(ShapeDifferentlyNamedToken)),
+        ("an assignment with short locals",            typeof(ShapeAssignmentWithShortLocals)),
+        ("a delayed enqueue",                          typeof(ShapeDelayedEnqueue)),
+        ("a recurring sweep",                          typeof(ShapeRecurringSweep)),
+        ("a job built from an expression",             typeof(ShapeJobFromExpression)),
+        ("a direct generic enqueue",                   typeof(ShapeDirectGenericEnqueue)),
     };
+}
 
-    // ── Running a transform: IOrderService.TransformAsync ─────────────────────
+// ── Running a transform: IOrderService.TransformAsync ─────────────────────────
 
-    internal static class TodaysCallSite
+internal static class ShapeTodaysCallSite
+{
+    public static async Task Run(IOrderService _orderService, Guid organisationId, Guid orderId, OutputFormat outputFormat, CancellationToken ct)
     {
-        public static async Task Run(IOrderService _orderService, Guid organisationId, Guid orderId, OutputFormat outputFormat, CancellationToken ct)
-        {
-            var result = await _orderService.TransformAsync(organisationId, orderId, outputFormat, ct);
-            GC.KeepAlive(result);
-        }
+        var result = await _orderService.TransformAsync(organisationId, orderId, outputFormat, ct);
+        GC.KeepAlive(result);
     }
+}
 
-    internal static class DifferentlyNamedField
+internal static class ShapeDifferentlyNamedField
+{
+    public static async Task Run(IOrderService _orders, Guid organisationId, Guid orderId, OutputFormat outputFormat, CancellationToken ct)
     {
-        public static async Task Run(IOrderService _orders, Guid organisationId, Guid orderId, OutputFormat outputFormat, CancellationToken ct)
-        {
-            var result = await _orders.TransformAsync(organisationId, orderId, outputFormat, ct);
-            GC.KeepAlive(result);
-        }
+        var result = await _orders.TransformAsync(organisationId, orderId, outputFormat, ct);
+        GC.KeepAlive(result);
     }
+}
 
-    internal static class DifferentlyNamedToken
+internal static class ShapeDifferentlyNamedToken
+{
+    public static async Task Run(IOrderService _orderService, Guid organisationId, Guid orderId, OutputFormat outputFormat, CancellationToken cancellationToken)
     {
-        public static async Task Run(IOrderService _orderService, Guid organisationId, Guid orderId, OutputFormat outputFormat, CancellationToken cancellationToken)
-        {
-            var result = await _orderService.TransformAsync(organisationId, orderId, outputFormat, cancellationToken);
-            GC.KeepAlive(result);
-        }
+        var result = await _orderService.TransformAsync(organisationId, orderId, outputFormat, cancellationToken);
+        GC.KeepAlive(result);
     }
+}
 
-    internal static class AssignmentWithShortLocals
+internal static class ShapeAssignmentWithShortLocals
+{
+    public static async Task Run(IOrderService svc, Guid orgId, Guid orderId, OutputFormat format, CancellationToken ct)
     {
-        public static async Task Run(IOrderService svc, Guid orgId, Guid orderId, OutputFormat format, CancellationToken ct)
-        {
-            var r = await svc.TransformAsync(orgId, orderId, format, ct);
-            GC.KeepAlive(r);
-        }
+        var r = await svc.TransformAsync(orgId, orderId, format, ct);
+        GC.KeepAlive(r);
     }
+}
 
-    // ── Starting a transform: scheduling TransformOrderJob ────────────────────
+// ── Starting a transform: scheduling TransformOrderJob ────────────────────────
 
-    internal static class DelayedEnqueue
-    {
-        public static void Run(IBackgroundJobClient jobs, Guid orderId, Guid orgId, string format) =>
-            jobs.Schedule<TransformOrderJob>(
-                j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None),
-                TimeSpan.FromMinutes(5));
-    }
+internal static class ShapeDelayedEnqueue
+{
+    public static void Run(IBackgroundJobClient jobs, Guid orderId, Guid orgId, string format) =>
+        jobs.Schedule<TransformOrderJob>(
+            j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None),
+            TimeSpan.FromMinutes(5));
+}
 
-    internal static class RecurringSweep
-    {
-        public static void Run(Guid orderId, Guid orgId, string format) =>
-            RecurringJob.AddOrUpdate<TransformOrderJob>(
-                "nightly-resend",
-                j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None),
-                Cron.Daily());
-    }
+internal static class ShapeRecurringSweep
+{
+    public static void Run(Guid orderId, Guid orgId, string format) =>
+        RecurringJob.AddOrUpdate<TransformOrderJob>(
+            "nightly-resend",
+            j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None),
+            Cron.Daily());
+}
 
-    internal static class JobFromExpression
-    {
-        public static Job Run(Guid orderId, Guid orgId, string format) =>
-            Job.FromExpression<TransformOrderJob>(
-                j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None));
-    }
+internal static class ShapeJobFromExpression
+{
+    public static Job Run(Guid orderId, Guid orgId, string format) =>
+        Job.FromExpression<TransformOrderJob>(
+            j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None));
+}
 
-    internal static class DirectGenericEnqueue
-    {
-        public static void Run(IBackgroundJobClient jobs, Guid orderId, Guid orgId, string format) =>
-            jobs.Enqueue<TransformOrderJob>(
-                j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None));
-    }
+internal static class ShapeDirectGenericEnqueue
+{
+    public static void Run(IBackgroundJobClient jobs, Guid orderId, Guid orgId, string format) =>
+        jobs.Enqueue<TransformOrderJob>(
+            j => j.ExecuteAsync(orderId, orgId, format, CancellationToken.None));
 }
