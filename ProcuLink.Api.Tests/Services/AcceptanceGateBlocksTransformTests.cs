@@ -50,7 +50,7 @@ public sealed class AcceptanceGateBlocksTransformTests
 
         Assert.False(result.IsSuccess);
         Assert.Contains("Currency must be EUR", result.Error!);
-        Assert.Contains("Set Currency to EUR", result.Error!);
+        Assert.Contains("Set currency to EUR", result.Error!);
 
         // Nothing was produced, and nothing was uploaded — a refused order must not leave an
         // artifact behind that a later delivery sweep could pick up.
@@ -154,7 +154,7 @@ public sealed class AcceptanceGateBlocksTransformTests
 
         var blockers = blockedEvent.Payload!.RootElement.GetProperty("blockers");
         Assert.Equal("currency.equals", blockers[0].GetProperty("code").GetString());
-        Assert.Contains("Currency must be EUR", blockers[0].GetProperty("message").GetString()!);
+        Assert.Contains("currency must be EUR", blockers[0].GetProperty("message").GetString()!);
 
         // The failure the workshop shows the user carries the same sentence.
         var failure = await db.AuditEvents.AsNoTracking()

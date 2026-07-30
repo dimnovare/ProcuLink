@@ -84,15 +84,19 @@ public sealed class OrderAcceptanceGateController : ControllerBase
 
         var result = await _gate.RecordOverrideAsync(orgId, id, _tenant.ClerkUserId, reason, ct);
 
-        if (!result.Recorded)
+        // Branch on the TYPED refusal, never on the message text: the message is written for a
+        // human and will be reworded, and a status code that silently depends on its wording is a
+        // trap for whoever rewords it.
+        switch (result.Refusal)
         {
-            // "Order not found" is the only 404 the gate reports; a blank reason is the caller's
-            // mistake (400); "nothing to override" means the order is already sendable (409).
-            if (string.Equals(result.Error, "Order not found.", StringComparison.Ordinal))
+            case AcceptanceOverrideRefusal.None:
+                break;
+            case AcceptanceOverrideRefusal.OrderNotFound:
                 return NotFound();
-            if (result.Excused.Count == 0 && result.Error is not null && result.Error.Contains("isn't blocked", StringComparison.Ordinal))
+            case AcceptanceOverrideRefusal.NotBlocked:
                 return Conflict(new { error = result.Error });
-            return BadRequest(new { error = result.Error });
+            default:
+                return BadRequest(new { error = result.Error });
         }
 
         // Answer with the gate's NEW state so the caller can act on one round trip: the order should

@@ -46,9 +46,27 @@ public sealed record AcceptanceGateDecision(
         new(false, Array.Empty<AcceptanceBlocker>(), null);
 }
 
+/// <summary>Why an override was not recorded. Typed so callers map it to a status code without
+/// matching on message text — a message is for a human to read, never for code to branch on.</summary>
+public enum AcceptanceOverrideRefusal
+{
+    /// <summary>Recorded successfully.</summary>
+    None = 0,
+
+    /// <summary>No such order for this organisation.</summary>
+    OrderNotFound,
+
+    /// <summary>No reason given. An override without a stated reason is not an audit trail.</summary>
+    ReasonMissing,
+
+    /// <summary>Nothing to override — the supplier's rules do not refuse this order.</summary>
+    NotBlocked,
+}
+
 /// <summary>Outcome of recording an operator override.</summary>
 public sealed record AcceptanceOverrideResult(
     bool                             Recorded,
+    AcceptanceOverrideRefusal        Refusal,
     string?                          Error,
     IReadOnlyList<AcceptanceBlocker> Excused);
 
@@ -97,7 +115,7 @@ public static class AcceptanceGateMessage
         if (blockers.Count == 0) return string.Empty;
 
         var who   = string.IsNullOrWhiteSpace(supplierName) ? "this supplier" : supplierName.Trim();
-        var shown = blockers.Take(MaxSpelledOut).Select(b => b.Message.Trim().TrimEnd('.') + ".");
+        var shown = blockers.Take(MaxSpelledOut).Select(b => Sentence(b.Message));
         var body  = string.Join(" ", shown);
 
         var more = blockers.Count > MaxSpelledOut
@@ -106,6 +124,24 @@ public static class AcceptanceGateMessage
 
         return $"This order wasn't sent because it doesn't meet what {who} accepts. {body}{more} "
              + "Fix the order and send it again, or record an override saying why it should go anyway.";
+    }
+
+    /// <summary>
+    /// One blocker message as a standalone sentence: capitalised and full-stopped.
+    ///
+    /// <para>The stored message is composed field-name-first and un-capitalised
+    /// (<c>"currency must be EUR — it's “USD”. Set currency to EUR."</c>) because the UI renders it
+    /// UNDER the rule's own headline, where a capital would read as a second title. Spliced into a
+    /// prose paragraph here it is the sentence, so it gets sentence case. The stored message itself
+    /// is untouched — the workshop's existing wording is pinned by <c>AcceptanceMessagesTests</c>
+    /// and is not this work package's to change.</para>
+    /// </summary>
+    private static string Sentence(string message)
+    {
+        var trimmed = message.Trim();
+        if (trimmed.Length == 0) return string.Empty;
+        if (!trimmed.EndsWith('.')) trimmed += ".";
+        return char.IsLower(trimmed[0]) ? char.ToUpperInvariant(trimmed[0]) + trimmed[1..] : trimmed;
     }
 }
 

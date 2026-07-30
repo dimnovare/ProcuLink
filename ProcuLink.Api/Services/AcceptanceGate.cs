@@ -83,14 +83,15 @@ public sealed class AcceptanceGate : IAcceptanceGate
     {
         var trimmed = (reason ?? string.Empty).Trim();
         if (trimmed.Length < MinReasonLength)
-            return Refused("Say why this order should be sent even though the supplier's rules refuse it.");
+            return Refused(AcceptanceOverrideRefusal.ReasonMissing,
+                "Say why this order should be sent even though the supplier's rules refuse it.");
 
         var blockers = await _acceptance.GetBlockingFailuresAsync(orgId, orderId, ct);
         if (blockers is null)
-            return Refused("Order not found.");
+            return Refused(AcceptanceOverrideRefusal.OrderNotFound, "Order not found.");
 
         if (blockers.Count == 0)
-            return Refused(
+            return Refused(AcceptanceOverrideRefusal.NotBlocked,
                 "This order isn't blocked by the supplier's rules, so there's nothing to override. Send it as normal.");
 
         // The excused set is captured HERE, from the failures that exist right now — that is what
@@ -114,7 +115,8 @@ public sealed class AcceptanceGate : IAcceptanceGate
             "Order {OrderId} (org {OrgId}): {Actor} recorded an acceptance override for {Count} blocking rule(s). Reason: {Reason}",
             orderId, orgId, actor, blockers.Count, trimmed);
 
-        return new AcceptanceOverrideResult(Recorded: true, Error: null, Excused: blockers);
+        return new AcceptanceOverrideResult(
+            Recorded: true, Refusal: AcceptanceOverrideRefusal.None, Error: null, Excused: blockers);
     }
 
     /// <summary>Records that a transform actually CONSUMED an override — the moment the guarantee
@@ -131,8 +133,8 @@ public sealed class AcceptanceGate : IAcceptanceGate
 
     // ── Internals ─────────────────────────────────────────────────────────────
 
-    private static AcceptanceOverrideResult Refused(string error) =>
-        new(Recorded: false, Error: error, Excused: Array.Empty<AcceptanceBlocker>());
+    private static AcceptanceOverrideResult Refused(AcceptanceOverrideRefusal refusal, string error) =>
+        new(Recorded: false, Refusal: refusal, Error: error, Excused: Array.Empty<AcceptanceBlocker>());
 
     /// <summary>
     /// The most recent override recorded for this order, as (excused keys, actor, reason). Returns

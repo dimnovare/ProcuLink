@@ -20,9 +20,9 @@ namespace ProcuLink.Api.Tests.Services;
 /// </summary>
 public sealed class AcceptanceGateTests
 {
-    private static ProcuLinkDbContext NewDb() =>
+    private static ProcuLinkDbContext NewDb(string? store = null) =>
         new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .UseInMemoryDatabase(store ?? Guid.NewGuid().ToString())
             .Options);
 
     private static IAcceptanceGate Build(ProcuLinkDbContext db) =>
@@ -106,11 +106,18 @@ public sealed class AcceptanceGateTests
         Assert.True(decision!.Blocked);
         var blocker = Assert.Single(decision.Blockers);
         Assert.Equal("currency.equals", blocker.Code);
-        // Plain language: what failed, actual vs expected, how to fix — no dev-rule jargon.
-        Assert.Contains("Currency must be EUR", blocker.Message);
+        // Plain language: what failed, actual vs expected, how to fix — no dev-rule jargon. This is
+        // the workshop's existing un-capitalised wording, which the gate reuses verbatim rather than
+        // inventing a second vocabulary for the same failure.
+        Assert.Contains("currency must be EUR", blocker.Message);
         Assert.Contains("USD", blocker.Message);
-        Assert.Contains("Set Currency to EUR", blocker.Message);
+        Assert.Contains("Set currency to EUR", blocker.Message);
+        Assert.DoesNotContain("failed rule", blocker.Message);
+
+        // The gate's own paragraph names the supplier, reads as prose, and offers the way out.
         Assert.Contains("Acme GmbH", decision.Reason!);
+        Assert.Contains("Currency must be EUR", decision.Reason!);
+        Assert.Contains("record an override", decision.Reason!);
     }
 
     /// <summary>
@@ -269,7 +276,7 @@ public sealed class AcceptanceGateTests
 
         // The human-readable copy stands alone even if the rule is later edited or deleted.
         var blocked = payload.GetProperty("blocked").EnumerateArray().Select(e => e.GetString()!).ToList();
-        Assert.Contains(blocked, m => m.Contains("Currency must be EUR"));
+        Assert.Contains(blocked, m => m.Contains("currency must be EUR"));
     }
 
     /// <summary>
@@ -280,28 +287,48 @@ public sealed class AcceptanceGateTests
     [Fact]
     public async Task OverrideDoesNotExcuse_aBlockerThatAppearsLater()
     {
-        await using var db = NewDb();
-        var seed = await SeedOrderAsync(db, currency: "USD");
-        await SeedRuleAsync(db, seed, "order", "currency", "equals", "EUR", "error", false);
-        var gate = Build(db);
+        // Three contexts over ONE store, because that is the real shape: the override is granted in
+        // one request, the rule is added in another, and the transform evaluates in a third. Reusing
+        // a single context would let the gate answer from a change tracker that still holds the
+        // old profile — it would pass while proving nothing about a rule added later.
+        var store = Guid.NewGuid().ToString();
 
-        await gate.RecordOverrideAsync(seed.OrgId, seed.OrderId, "user_2abcOPS", "Confirmed by phone.", CancellationToken.None);
-        Assert.False((await gate.EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None))!.Blocked);
+        Seed seed;
+        await using (var db = NewDb(store))
+        {
+            seed = await SeedOrderAsync(db, currency: "USD");
+            await SeedRuleAsync(db, seed, "order", "currency", "equals", "EUR", "error", false);
+
+            var granted = await Build(db).RecordOverrideAsync(
+                seed.OrgId, seed.OrderId, "user_2abcOPS", "Confirmed by phone.", CancellationToken.None);
+            Assert.True(granted.Recorded, granted.Error);
+        }
+
+        await using (var db = NewDb(store))
+            Assert.False((await Build(db).EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None))!.Blocked);
 
         // A SECOND blocking rule the operator never saw.
-        var profile = await db.SupplierAcceptanceProfiles.Include(p => p.Rules)
-            .FirstAsync(p => p.OrgId == seed.OrgId && p.SupplierId == seed.SupplierId);
-        profile.Rules.Add(new SupplierAcceptanceRule
+        await using (var db = NewDb(store))
         {
-            Id = Guid.NewGuid(), ProfileId = profile.Id, Scope = "line", FieldPath = "unitPrice",
-            Operator = "max", ExpectedValue = "5", Severity = "error", BlockOnFail = false,
-        });
-        await db.SaveChangesAsync();
+            var profile = await db.SupplierAcceptanceProfiles.Include(p => p.Rules)
+                .FirstAsync(p => p.OrgId == seed.OrgId && p.SupplierId == seed.SupplierId);
+            profile.Rules.Add(new SupplierAcceptanceRule
+            {
+                Id = Guid.NewGuid(), ProfileId = profile.Id, Scope = "line", FieldPath = "unitPrice",
+                Operator = "max", ExpectedValue = "5", Severity = "error", BlockOnFail = false,
+            });
+            await db.SaveChangesAsync();
+        }
 
-        var after = await gate.EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None);
+        await using var check = NewDb(store);
+        var after = await Build(check).EvaluateAsync(seed.OrgId, seed.OrderId, CancellationToken.None);
+
         Assert.True(after!.Blocked);
         Assert.False(after.Overridden);
         Assert.Contains(after.Blockers, b => b.Code == "unitPrice.max" && b.LineNumber == 1);
+        // The already-excused failure is still listed — it did not vanish, it just stopped being
+        // the thing standing in the way.
+        Assert.Contains(after.Blockers, b => b.Code == "currency.equals");
     }
 
     [Fact]

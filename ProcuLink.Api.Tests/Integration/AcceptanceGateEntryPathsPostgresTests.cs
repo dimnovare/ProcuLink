@@ -286,7 +286,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests : IAsyncLifetime
         // Plain language, one sentence per failure: what failed, actual vs expected, and the fix.
         Assert.Contains("Currency must be EUR", outcome.ErrorMessage!);
         Assert.Contains("USD", outcome.ErrorMessage!);
-        Assert.Contains("Set Currency to EUR", outcome.ErrorMessage!);
+        Assert.Contains("Set currency to EUR", outcome.ErrorMessage!);
         // No dev-rule jargon leaking into the operator's face.
         Assert.DoesNotContain("failed rule", outcome.ErrorMessage!);
         Assert.DoesNotContain("BlockOnFail", outcome.ErrorMessage!);
