@@ -209,6 +209,34 @@ A wave is not done when its packets merge. It is done when its gate passes.
 
 ---
 
+## 6b. DO NOT SPAWN TESTCONTAINERS LOCALLY — 2026-07-30
+
+**Rule: never run `dotnet test` on `ProcuLink.Api.Tests` or `ProcuLink.Infrastructure.Tests` on the
+founder's machine. Push and read the CI run instead.**
+
+Docker wedged on 2026-07-30 with six sessions live — `docker ps` timing out at 120s and the engine
+returning `500 Internal Server Error`, with the founder reporting his PC slowing down. Two multipliers stack:
+
+1. **Containers are per-TEST, not per-class.** xUnit builds one test-class instance per test, and the repo's
+   per-test `IAsyncLifetime` convention starts AND MIGRATES one Postgres container *per test*. 155
+   real-Postgres attributes across 47 classes. `PostgresContainerCollection`'s own comment warns about
+   exactly this load.
+2. **N sessions doing it concurrently.** Already recorded once in STATUS.md: a sibling session left
+   **76 orphan Testcontainers** on the host, 17 tests failed `Npgsql: Timeout during reading attempt`, and
+   reaping them returned the identical commit to green.
+
+**And locally they buy nothing.** Docker is dead on this box, so real-Postgres tests only actually EXECUTE on
+CI. Every local run on those two projects starts containers that wedge the engine and produce no coverage.
+
+- `ProcuLink.Transform.Tests` is pure — no Docker, safe locally.
+- Real-Postgres claims are proven by a **CI run id**, which is already the standard for concurrency claims.
+- A locally "skipped" Postgres test is **not** a passing test. Never claim an AC from a skip.
+- If you add a fixture, make it **class-scoped**. Per-test is the documented defect.
+
+**CLEANUP IS FOUNDER-ONLY AND MUST BE FILTERED.** Never run a broad `docker rm` or `docker prune`. The reap
+filter is `label=org.testcontainers=true` **ONLY** — the four named dev databases carry no such label, and
+they must be verified absent from the set *before* anything is deleted.
+
 ## 7. Standing hazards (each cost real debugging time — respect them)
 
 - **The Worker is mandatory.** Nothing parses, transforms or delivers without the single Railway Hangfire worker. "Nothing happens" usually means the worker is down.
