@@ -35,6 +35,41 @@ internal sealed class OrderResolutionService
         _aiDecisions = aiDecisions;
     }
 
+    // ── The terminal-status guard (WP-19 follow-up) ───────────────────────────
+    //
+    // OrderStatusMachine.DeclaredTerminal states the product's answer to "is an order that reaches
+    // this status finished?", and the dead-end invariant (NoNonTerminalStatus_IsADeadEnd) only bites
+    // because that answer is declared INDEPENDENTLY of the transition map. It said {failed}, and it
+    // justified itself with re-parse (ParseOrderJob refuses to re-drive a failed order) and transform
+    // (OrdersController.Transform answers "Upload a corrected file before transforming").
+    //
+    // Neither argument covered THIS file, and all three status writers here carried no from-status
+    // check at all. A failed source file leaves NO lines behind, so every `Lines.Any(NeedsReview)`
+    // recompute over that empty collection lands on 'ready' — which is transformable, and then
+    // deliverable. A header-only edit was enough to trigger it:
+    //   POST /api/orders/{failedOrderId}/resolve {"poNumber":"X"}  →  ready
+    //
+    // Two readings were available and only one is consistent: either 'failed' is genuinely terminal
+    // and these writers need the guard, or it is not and the declaration must change. The second
+    // would mean an order whose source document never parsed can be pushed into the transform and
+    // delivery pipeline — the exact thing the two existing refusals already prevent on their own
+    // paths. So the declaration is right and the writers were wrong; deriving the guard FROM
+    // DeclaredTerminal is what makes the declaration load-bearing instead of decorative.
+    //
+    // Honest about the cost: this DOES close an existing path. Any operator who has been recovering
+    // a failed order by resolving it must now upload a corrected file as a new order — which is what
+    // the product's own copy tells them everywhere else. Pinned by OrderServiceTerminalOrderGuardTests,
+    // whose positive controls keep the guard narrow: pending_review and rejected_by_supplier must
+    // still resolve, or this would restore the dead end WP-19 removed.
+
+    /// <summary>The one sentence an operator reads, in the product's own words for this case.</summary>
+    private const string SourceFileCannotBeFixedHere =
+        "This order's source file could not be read, so there is nothing here to correct. " +
+        "Upload a corrected file as a new order.";
+
+    private static bool IsFinished(string status) =>
+        OrderStatusMachine.DeclaredTerminal.Contains(status);
+
     // ── ResolveAsync ──────────────────────────────────────────────────────────
 
     public async Task<Result<PurchaseOrderEntity>> ResolveAsync(
@@ -54,6 +89,9 @@ internal sealed class OrderResolutionService
 
         if (entity is null)
             return Result<PurchaseOrderEntity>.Fail("Order not found.");
+
+        if (IsFinished(entity.Status))
+            return Result<PurchaseOrderEntity>.Fail(SourceFileCannotBeFixedHere);
 
         // Validate all resolutions before mutating anything
         foreach (var res in resolutions)
@@ -252,6 +290,14 @@ internal sealed class OrderResolutionService
         if (entity is null)
             return Result<PurchaseOrderEntity>.Fail("Order not found.");
 
+        // The laundering route, and the reason this guard cannot live on ResolveAsync alone: WP-19
+        // deliberately gave rejected_by_supplier exits (resolve → pending_review|ready, and the
+        // transform claim). Marking a FAILED order rejected would move it into a status with a
+        // documented way back to 'ready' — around the guard above — while also asserting something
+        // false, since no supplier ever saw a document that did not parse.
+        if (IsFinished(entity.Status))
+            return Result<PurchaseOrderEntity>.Fail(SourceFileCannotBeFixedHere);
+
         var now = DateTime.UtcNow;
         entity.Status    = OrderStatusConstants.RejectedBySupplier;
         entity.UpdatedAt = now;
@@ -308,6 +354,11 @@ internal sealed class OrderResolutionService
 
         if (entity is null)
             return Result<int>.Fail("Order not found.");
+
+        // The status recompute below runs even when nothing is accepted — zero suggestions over zero
+        // lines still writes 'ready' — so this needs the same guard as ResolveAsync, not a weaker one.
+        if (IsFinished(entity.Status))
+            return Result<int>.Fail(SourceFileCannotBeFixedHere);
 
         var acceptedCount = 0;
 

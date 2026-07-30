@@ -54,6 +54,13 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
     // (CannotRepairItsOwnFile). See SftpDeliveryDispatcher.OverwriteExistingFromConfig.
     public ResendSafety ResendSafety => ResendSafety.Safe;
 
+    // No HTTP status codes exist on this channel at all — every DeliveryResult it returns carries a
+    // null ResponseCode, so the classification never reaches its 400 branch and there is no supplier
+    // reason to capture. Declared explicitly rather than inherited: the whole point of the capability
+    // is that a dispatcher states what it can see, and "nothing, because there is nothing to see" is
+    // an answer, not an omission.
+    public bool CapturesSupplierResponseBody => false;
+
     public FtpsDeliveryDispatcher(ILogger<FtpsDeliveryDispatcher> logger, OutboundRequestGuard guard)
         : this(logger, guard, sessionFactory: null)
     {

@@ -287,6 +287,54 @@ public class DeliveryServiceRejectionTests
         attempt.ErrorMessage.Should().Contain("delivery settings");
     }
 
+    /// <summary>
+    /// The same bare 400 from a channel that CANNOT read the response body, end-to-end through
+    /// <c>DeliveryService</c> — which is what proves the stamp works, not just the pure table.
+    ///
+    /// <para><b>The defect.</b> The test above asserts a property of the HTTP dispatcher: it read
+    /// the response and there was nothing in it. Three other dispatchers never read one at all —
+    /// <c>ErpDeliveryDispatcherBase</c> returned <c>(Success, ErrorMessage, ResponseCode)</c> and
+    /// <c>EmailApiDeliveryDispatcher</c> the same — so their 400s took this branch by DEFAULT and
+    /// were re-dispatched to the live endpoint up to the cap. Email is the canonical outbound path,
+    /// live on production; both ERP channels declare <c>ResendSafety.Unsafe</c>.</para>
+    ///
+    /// <para>All three capture the body now, so this shape has no production dispatcher today. It is
+    /// pinned anyway, because the next dispatcher inherits <c>false</c> and must land here.</para>
+    /// </summary>
+    [Fact]
+    public async Task DispatchArtifactAsync_BareBadRequest_FromAChannelThatCannotSeeTheBody_IsNotRetried()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(
+            db,
+            new FakeDispatcher(
+                new DeliveryResult(false, "HTTP 400: endpoint returned an error.", 400),
+                capturesSupplierResponseBody: false),
+            encryption);
+
+        var result = await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var order = await db.PurchaseOrders.SingleAsync();
+        order.Status.Should().Be(OrderStatusConstants.RejectedBySupplier,
+            "we cannot show the supplier said nothing, so the safe reading is that the refusal was " +
+            "theirs: no further requests, and an order in a status that (since WP-19) an operator " +
+            "can resolve or re-transform out of");
+
+        SupplierResponseClassification.SuppressesAutomaticRetry(result).Should().BeTrue(
+            "the status decision and the retry gate are ONE decision — a status the delivery claim " +
+            "refuses but the queue keeps retrying burns the backoff budget on 0 claimed rows");
+
+        result.SupplierReasonObservable.Should().BeFalse(
+            "DeliveryService must stamp the dispatcher's capability onto the result it returns, or " +
+            "the two jobs read a different answer than the status decision did");
+    }
+
     [Fact]
     public async Task DispatchArtifactAsync_5xxResponse_SetsDeliveryFailedAndLeavesRejectionReasonNull()
     {
@@ -351,12 +399,25 @@ public class DeliveryServiceRejectionTests
             => Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Stands in for the <c>http</c> dispatcher, which DOES read the supplier's response body — so
+    /// it must say so, exactly as the real one does. <c>DeliveryService</c> stamps
+    /// <c>SupplierReasonObservable</c> onto the result from this declaration, and the bare-400 split
+    /// turns on it: a fake that stayed silent would quietly turn every 400 in this fixture into a
+    /// business rejection, which is the RIGHT answer for a channel that cannot see the body and the
+    /// wrong one for the channel this fake represents.
+    /// </summary>
     private sealed class FakeDispatcher : IDeliveryDispatcher
     {
         private readonly DeliveryResult _result;
         public string Protocol => "http";
+        public bool CapturesSupplierResponseBody { get; }
 
-        public FakeDispatcher(DeliveryResult result) => _result = result;
+        public FakeDispatcher(DeliveryResult result, bool capturesSupplierResponseBody = true)
+        {
+            _result = result;
+            CapturesSupplierResponseBody = capturesSupplierResponseBody;
+        }
 
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,

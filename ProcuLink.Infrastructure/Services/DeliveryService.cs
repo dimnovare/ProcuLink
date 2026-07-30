@@ -401,6 +401,16 @@ public sealed class DeliveryService : IDeliveryService
             result = new DeliveryResult(false, $"Delivery dispatch failed: {ex.Message}");
         }
 
+        // Stamp what this CHANNEL could see, from the dispatcher we just called. The 400 split turns
+        // on whether a blank ResponseBody is evidence of "they said nothing" or of "we never looked",
+        // and three dispatchers used to make it silently mean the second while the classification
+        // assumed the first. Stamping here rather than trusting each dispatcher to set the flag means
+        // the status decision (PersistAttemptAsync, below) and the two retry gates (DeliverOrderJob /
+        // RetryDeliveryJob, which only ever see this returned result) all read ONE value that the
+        // dispatcher cannot forget — including on the catch path above, where no dispatcher ran at
+        // all. A dispatcher that declares nothing gets `false`, the conservative direction.
+        result = result with { SupplierReasonObservable = dispatcher.CapturesSupplierResponseBody };
+
         _logger.LogInformation(
             "Delivery {OrderId}: dispatch returned success={Success} code={Code}",
             orderId, result.Success, result.ResponseCode);
@@ -842,13 +852,11 @@ public sealed class DeliveryService : IDeliveryService
         // everything else lands in delivery_failed, which is retryable, dead-letterable and
         // re-sendable, i.e. somewhere the operator can still act.
         var isSupplierRejection = !result.Success
-            && SupplierResponseClassification
-                .Classify(result.ResponseCode, result.ResponseBody)
-                .IsBusinessRejection;
+            && SupplierResponseClassification.Classify(result).IsBusinessRejection;
 
         order.Status = result.Success
             ? OrderStatusConstants.Delivered
-            : SupplierResponseClassification.FailedOrderStatusFor(result.ResponseCode, result.ResponseBody);
+            : SupplierResponseClassification.FailedOrderStatusFor(result);
         order.UpdatedAt = now;
 
         // The message the operator actually reads (OrdersController surfaces the latest attempt's
@@ -858,8 +866,7 @@ public sealed class DeliveryService : IDeliveryService
         // dispatcher's message, unchanged: the supplier's reason IS the explanation there.
         var failureMessage = result.Success
             ? null
-            : SupplierResponseClassification.DescribeFailure(
-                result.ResponseCode, result.ResponseBody, result.ErrorMessage);
+            : SupplierResponseClassification.DescribeFailure(result);
 
         // SLA timer: a terminal supplier outcome closes the SLA window — clear the deadline and breach
         // flag so the sweep can never nag a settled order. A confirmed delivery settles it, and so does

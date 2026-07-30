@@ -54,9 +54,21 @@ public readonly record struct SupplierResponseVerdict(SupplierResponseKind Kind,
 /// operator control that could move it, and a database edit as the only recourse.</para>
 ///
 /// <para><b>The rule.</b> <c>rejected_by_supplier</c> is reserved for a refusal of the ORDER: a
-/// 422, or a 400 that carries a reason from the supplier. Everything else — including a bare 400
-/// with no body — is <c>delivery_failed</c>, which is retryable, dead-letterable and re-sendable,
-/// i.e. somewhere the operator can act.</para>
+/// 422, or a 400 that carries a reason from the supplier. Everything else — including a 400 the
+/// supplier really did send bare — is <c>delivery_failed</c>, which is retryable, dead-letterable
+/// and re-sendable, i.e. somewhere the operator can act.</para>
+///
+/// <para><b>"Bare" has to be OBSERVED, not assumed.</b> The bare-400 branch asserts something
+/// specific: the endpoint answered and offered no reason. That is only knowable on a channel that
+/// reads the body. Three did not — <c>erp_erply</c>, <c>erp_directo</c> and <c>email</c> each
+/// returned <c>(Success, ErrorMessage, ResponseCode)</c> and never set <c>ResponseBody</c>, though
+/// both underlying connectors had the body in hand and folded it into a summary string. Every 400 on
+/// the canonical email path and on the two <c>ResendSafety.Unsafe</c> ERP channels therefore
+/// classified bare and was re-dispatched to the live endpoint up to the cap. The connectors now
+/// carry the body verbatim, AND <see cref="Classify"/> takes a third argument saying whether a blank
+/// one is evidence: a dispatcher that cannot see the reason gets the CONSERVATIVE answer (treat the
+/// refusal as the supplier's, stop, show a human) rather than the traffic-generating one. See
+/// <c>IDeliveryDispatcher.CapturesSupplierResponseBody</c>.</para>
 ///
 /// <para><b>One table, three consumers.</b> The status decision and the two retry gates are
 /// derived from the same <see cref="Classify"/> call, so they cannot disagree; and because the
@@ -120,13 +132,27 @@ public static class SupplierResponseClassification
     /// and for failures that never reached a response (network, timeout).
     /// </param>
     /// <param name="supplierReason">
-    /// The supplier's own response body (<c>DeliveryResult.ResponseBody</c>) — blank when the
-    /// endpoint returned nothing. This is what turns an ambiguous 400 into a business rejection:
-    /// a 400 with a reason is the supplier telling us what is wrong with the document; a bare 400
-    /// is an unexplained refusal that could equally be a bad URL or a malformed header, so it must
-    /// stay somewhere the operator can retry from.
+    /// The supplier's own response body (<c>DeliveryResult.ResponseBody</c>). Blank means one of two
+    /// different things, and <paramref name="supplierReasonObservable"/> is what tells them apart —
+    /// read its docs before assuming a blank body says anything. This is what turns an ambiguous 400
+    /// into a business rejection: a 400 with a reason is the supplier telling us what is wrong with
+    /// the document; a 400 they genuinely sent bare is an unexplained refusal that could equally be a
+    /// bad URL or a malformed header, so it must stay somewhere the operator can retry from.
     /// </param>
-    public static SupplierResponseVerdict Classify(int? responseCode, string? supplierReason)
+    /// <param name="supplierReasonObservable">
+    /// Whether this channel can SEE the counterparty's reason at all — i.e. whether a blank
+    /// <paramref name="supplierReason"/> is evidence that they sent none, or merely the absence of a
+    /// capture. Sourced from <c>DeliveryResult.SupplierReasonObservable</c>, which
+    /// <c>DeliveryService</c> stamps from the dispatcher's
+    /// <c>IDeliveryDispatcher.CapturesSupplierResponseBody</c>.
+    ///
+    /// <para>Deliberately has NO default. A default here is precisely how the original defect
+    /// survived: the doc said blank meant "the endpoint returned nothing" while three dispatchers
+    /// made it mean "nobody looked", and nothing at the call sites had to state which. Every caller
+    /// now says so out loud.</para>
+    /// </param>
+    public static SupplierResponseVerdict Classify(
+        int? responseCode, string? supplierReason, bool supplierReasonObservable)
     {
         // No code at all: network failure, timeout, or a channel that has no status codes.
         // Nothing to name, nothing to reserve — retryable, message passed through.
@@ -141,6 +167,19 @@ public static class SupplierResponseClassification
         // 400 — ambiguous by itself. WITH a reason it is a business rejection; WITHOUT one it is
         // an unexplained refusal and falls through to the generic retryable hint below.
         if (code == BadRequest && !string.IsNullOrWhiteSpace(supplierReason))
+            return new SupplierResponseVerdict(SupplierResponseKind.BusinessRejection, null);
+
+        // …and the case the rule above quietly assumed away: a 400 from a channel that cannot read
+        // the counterparty's reason. "No reason" and "we never looked" are indistinguishable in the
+        // data, so the retryable branch below would be asserting something we do not know — and it
+        // is the expensive direction to be wrong in, because it re-POSTs to a live endpoint up to the
+        // cap, on channels that are either the production email path or declare ResendSafety.Unsafe.
+        // Treat it as the supplier's own refusal: the queue stops, and rejected_by_supplier is no
+        // longer a dead end (WP-19 gave it resolve + re-transform), so the order lands in front of a
+        // human who can ask them. No production dispatcher takes this branch today — all three that
+        // return a response code now capture the body — it exists so the NEXT one cannot inherit the
+        // wrong answer by saying nothing.
+        if (code == BadRequest && !supplierReasonObservable)
             return new SupplierResponseVerdict(SupplierResponseKind.BusinessRejection, null);
 
         // A refusal whose cause we can name.
@@ -165,10 +204,32 @@ public static class SupplierResponseClassification
     /// The order status a FAILED delivery attempt lands in. The single decision
     /// <c>DeliveryService.PersistAttemptAsync</c> makes about a non-success result.
     /// </summary>
-    public static string FailedOrderStatusFor(int? responseCode, string? supplierReason) =>
-        Classify(responseCode, supplierReason).IsBusinessRejection
+    public static string FailedOrderStatusFor(
+        int? responseCode, string? supplierReason, bool supplierReasonObservable) =>
+        Classify(responseCode, supplierReason, supplierReasonObservable).IsBusinessRejection
             ? OrderStatusConstants.RejectedBySupplier
             : OrderStatusConstants.DeliveryFailed;
+
+    /// <summary>
+    /// The same three decisions taken straight from a <see cref="DeliveryResult"/>, so a call site
+    /// cannot pair the body with the wrong observability flag — the one mistake that reintroduces the
+    /// defect this argument exists to close. Prefer these over the loose overloads everywhere a
+    /// result is in hand.
+    /// </summary>
+    public static SupplierResponseVerdict Classify(DeliveryResult result) =>
+        Classify(result.ResponseCode, result.ResponseBody, result.SupplierReasonObservable);
+
+    /// <inheritdoc cref="FailedOrderStatusFor(int?, string?, bool)"/>
+    public static string FailedOrderStatusFor(DeliveryResult result) =>
+        FailedOrderStatusFor(result.ResponseCode, result.ResponseBody, result.SupplierReasonObservable);
+
+    /// <inheritdoc cref="SuppressesAutomaticRetry(int?, string?, bool)"/>
+    public static bool SuppressesAutomaticRetry(DeliveryResult result) =>
+        SuppressesAutomaticRetry(result.ResponseCode, result.ResponseBody, result.SupplierReasonObservable);
+
+    /// <inheritdoc cref="DescribeFailure(int?, string?, bool, string?)"/>
+    public static string? DescribeFailure(DeliveryResult result) =>
+        DescribeFailure(result.ResponseCode, result.ResponseBody, result.SupplierReasonObservable, result.ErrorMessage);
 
     /// <summary>
     /// Whether the automatic retry queue must stop. TRUE only for a business rejection: re-sending
@@ -180,17 +241,19 @@ public static class SupplierResponseClassification
     /// but the claim refuses burns the backoff budget on nothing, and a status the queue abandons
     /// but the operator has no control over is the dead end this table exists to end.</para>
     /// </summary>
-    public static bool SuppressesAutomaticRetry(int? responseCode, string? supplierReason) =>
-        Classify(responseCode, supplierReason).IsBusinessRejection;
+    public static bool SuppressesAutomaticRetry(
+        int? responseCode, string? supplierReason, bool supplierReasonObservable) =>
+        Classify(responseCode, supplierReason, supplierReasonObservable).IsBusinessRejection;
 
     /// <summary>
     /// The message an operator reads on the failed attempt. For a refusal we can name, that is our
     /// sentence plus the supplier's own words when they sent any; for everything else it is the
     /// dispatcher's message, unchanged.
     /// </summary>
-    public static string? DescribeFailure(int? responseCode, string? supplierReason, string? dispatcherMessage)
+    public static string? DescribeFailure(
+        int? responseCode, string? supplierReason, bool supplierReasonObservable, string? dispatcherMessage)
     {
-        var hint = Classify(responseCode, supplierReason).OperatorHint;
+        var hint = Classify(responseCode, supplierReason, supplierReasonObservable).OperatorHint;
         if (hint is null) return dispatcherMessage;
 
         var reason = SummarizeSupplierReason(supplierReason);

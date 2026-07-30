@@ -128,7 +128,10 @@ public class RetryDeliveryJob
             return;
         }
 
-        var delay = _options.BackoffFor(attemptsMade);
+        // Jittered, and never sooner than a Retry-After the supplier sent — the burst-breaking half
+        // of the backoff. See DeliveryReliabilityOptions.NextRetryDelay for why a fixed schedule
+        // re-creates the thundering herd that caused the failure.
+        var delay = _options.NextRetryDelay(attemptsMade, result.RetryAfter, Random.Shared.NextDouble());
         ScheduleRetry(_jobs, orderId, organisationId, delay);
         _logger.LogWarning(
             "RetryDeliveryJob: order {OrderId} delivery failed ({Error}); scheduled retry #{Next} in {Delay}.",
@@ -143,7 +146,7 @@ public class RetryDeliveryJob
     /// <c>DeliverOrderJob</c>'s identical first-failure gate, so the three cannot disagree.
     /// </summary>
     private static bool IsBusinessRejection(DeliveryResult result) =>
-        SupplierResponseClassification.SuppressesAutomaticRetry(result.ResponseCode, result.ResponseBody);
+        SupplierResponseClassification.SuppressesAutomaticRetry(result);
 
     /// <summary>Enqueue an immediate operator-triggered retry.</summary>
     public static void Enqueue(IBackgroundJobClient jobs, Guid orderId, Guid organisationId)

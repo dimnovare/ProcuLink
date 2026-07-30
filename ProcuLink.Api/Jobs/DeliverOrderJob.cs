@@ -147,7 +147,7 @@ public class DeliverOrderJob
         // a key rotation would have delivered — in a status (rejected_by_supplier) that had no exit
         // either. The predicate is shared with DeliveryService's status decision and
         // RetryDeliveryJob's identical gate, so the three cannot disagree.
-        if (SupplierResponseClassification.SuppressesAutomaticRetry(result.ResponseCode, result.ResponseBody))
+        if (SupplierResponseClassification.SuppressesAutomaticRetry(result))
             return;
 
         var maxAttempts = _reliability.MaxAttempts > 0 ? _reliability.MaxAttempts : RetryDeliveryJob.MaxAttempts;
@@ -160,7 +160,10 @@ public class DeliverOrderJob
             return;
         }
 
-        var delay = _reliability.BackoffFor(attemptsMade);
+        // Jittered, and never sooner than a Retry-After the supplier sent. A batch that fails
+        // together — one rate limit, one rotated credential — must not come back together; see
+        // DeliveryReliabilityOptions.NextRetryDelay.
+        var delay = _reliability.NextRetryDelay(attemptsMade, result.RetryAfter, Random.Shared.NextDouble());
         RetryDeliveryJob.ScheduleRetry(_jobs, orderId, organisationId, delay);
         _logger.LogInformation(
             "DeliverOrderJob: scheduled automatic retry #{Next} for order {OrderId} in {Delay}.",

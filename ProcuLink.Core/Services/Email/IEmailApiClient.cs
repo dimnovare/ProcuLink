@@ -55,4 +55,20 @@ public sealed record EmailApiHeader(string Name, string Value);
 /// Result of a single send attempt. <paramref name="StatusCode"/> is the provider's HTTP status
 /// (null when the request never completed).
 /// </summary>
-public sealed record EmailApiResult(bool Success, string? Error, int? StatusCode = null);
+/// <param name="ResponseBody">
+/// The provider's own response payload, VERBATIM. The client already parses this to pull out
+/// <c>Message</c>/<c>ErrorCode</c> for <paramref name="Error"/>; carrying the original too is what
+/// lets <c>SupplierResponseClassification</c> tell a 400 that names a fault in the message from a
+/// 400 that says nothing. Email is the canonical outbound path, so without it every provider
+/// refusal on the live channel looked unexplained and was re-sent.
+/// </param>
+/// <param name="RetryAfter">
+/// The wait the provider asked for (<c>Retry-After</c>) — Postmark sends it on a rate limit — or
+/// null when they sent none.
+/// </param>
+public sealed record EmailApiResult(
+    bool Success,
+    string? Error,
+    int? StatusCode = null,
+    string? ResponseBody = null,
+    TimeSpan? RetryAfter = null);

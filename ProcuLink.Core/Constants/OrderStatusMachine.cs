@@ -156,6 +156,18 @@ public static class OrderStatusMachine
     /// answers "Upload a corrected file before transforming" — recovery is a NEW order row, which
     /// is a real exit, just not one that runs through this order. Adding a member here is a product
     /// decision ("this order is over"), not a way to silence the invariant.</para>
+    ///
+    /// <para><b>This set is ENFORCED, not merely asserted.</b> Those two refusals were the whole
+    /// justification for a while, and they left a third writer out: <c>OrderResolutionService</c>
+    /// recomputed the status from the lines with no from-status check on every one of its paths, and
+    /// a failed source file leaves NO lines — so <c>Lines.Any(NeedsReview)</c> over an empty
+    /// collection landed on <c>ready</c>, and a header-only
+    /// <c>POST /api/orders/{id}/resolve {"poNumber":"X"}</c> walked a failed order back into the
+    /// pipeline. Marking one rejected was worse: <c>rejected_by_supplier</c> has exits (WP-19), so it
+    /// laundered the order past any guard on resolve alone. All three writers now derive their
+    /// refusal from THIS set (<c>OrderResolutionService.IsFinished</c>), which is what makes the
+    /// declaration true rather than aspirational — and what stops the next writer from quietly
+    /// contradicting it.</para>
     /// </summary>
     public static readonly IReadOnlySet<string> DeclaredTerminal = Set(Failed);
 

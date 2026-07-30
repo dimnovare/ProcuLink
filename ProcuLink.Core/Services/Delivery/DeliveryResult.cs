@@ -87,9 +87,29 @@ public enum DeliveryOutcome
 /// failure are all <c>Success=false</c> with a null <paramref name="ResponseCode"/>, yet each needs a
 /// different answer.
 /// </param>
+/// <param name="SupplierReasonObservable">
+/// Whether a blank <paramref name="ResponseBody"/> is EVIDENCE that the counterparty sent no reason,
+/// or merely the absence of a capture. <c>SupplierResponseClassification</c> splits a 400 on exactly
+/// that distinction, so conflating the two is a silent misclassification — see
+/// <see cref="IDeliveryDispatcher.CapturesSupplierResponseBody"/>, which is where the answer comes
+/// from. <c>DeliveryService</c> STAMPS this from the dispatcher it just called, so no dispatcher can
+/// forget to set it and no consumer can read a different value than the status decision did.
+///
+/// <para>Defaults to <c>false</c> — the fail-safe direction. A result nobody stamped is treated as
+/// "we could not see whether they explained themselves", which keeps an unexplained 4xx OUT of the
+/// automatic re-send path rather than firing it at a live endpoint two more times.</para>
+/// </param>
+/// <param name="RetryAfter">
+/// The wait the counterparty ASKED for (<c>Retry-After</c>), when they sent one. Honoured as a FLOOR
+/// by <see cref="DeliveryReliabilityOptions.NextRetryDelay"/> — never as a ceiling, so a supplier can
+/// slow us down but never speed us up. Null when no such header was sent, or on a channel that has
+/// no headers at all.
+/// </param>
 public record DeliveryResult(
     bool Success,
     string? ErrorMessage,
     int? ResponseCode = null,
     string? ResponseBody = null,
-    DeliveryOutcome Outcome = DeliveryOutcome.Dispatched);
+    DeliveryOutcome Outcome = DeliveryOutcome.Dispatched,
+    bool SupplierReasonObservable = false,
+    TimeSpan? RetryAfter = null);

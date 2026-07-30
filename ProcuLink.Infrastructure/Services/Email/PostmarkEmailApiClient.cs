@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Email;
 
 namespace ProcuLink.Infrastructure.Services.Email;
@@ -128,7 +129,14 @@ public sealed class PostmarkEmailApiClient : IEmailApiClient
                 : providerMessage;
             _logger.LogWarning(
                 "Postmark send failed: HTTP {Code} ErrorCode={ErrorCode} {Message}", code, errorCode, providerMessage);
-            return new EmailApiResult(false, $"Email delivery failed: {reason}", code);
+            // The raw body is carried alongside the parsed reason. Email is the canonical outbound
+            // channel, and SupplierResponseClassification's 400 split reads the BODY: dropping it
+            // (as this did) made every provider refusal on the live path look unexplained, so the
+            // order was re-sent instead of being put in front of a human.
+            return new EmailApiResult(
+                false, $"Email delivery failed: {reason}", code,
+                ResponseBody: string.IsNullOrWhiteSpace(body) ? null : body,
+                RetryAfter: RetryAfterHeader.Read(response.Headers, DateTimeOffset.UtcNow));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

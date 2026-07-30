@@ -51,12 +51,17 @@ public class DeliverOrderJob4xxSplitTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_BareBadRequest_SeedsTheRetryQueue()
+    public async Task ExecuteAsync_BareBadRequest_FromAChannelThatCouldHaveHeard_SeedsTheRetryQueue()
     {
         // Bare, a 400 is indistinguishable from a bad URL or a malformed header. Only a 400 that
         // carries the supplier's reason is a judgement on the document.
+        //
+        // SupplierReasonObservable is the load-bearing half of "bare": it says the channel READ the
+        // response and found nothing there. Set explicitly, because a result nobody stamped means
+        // the opposite — "we never looked" — and gets the conservative verdict instead. DeliveryService
+        // stamps it from the dispatcher in production; here the job is under test on its own.
         var (delivery, billing, orgId, orderId, artifactId) = Arrange(
-            new DeliveryResult(false, "HTTP 400", 400), attemptsMade: 1);
+            new DeliveryResult(false, "HTTP 400", 400, SupplierReasonObservable: true), attemptsMade: 1);
 
         var jobs = new CapturingJobClient();
         var job = new DeliverOrderJob(delivery.Object, billing.Object, jobs, NullLogger<DeliverOrderJob>.Instance);
@@ -66,13 +71,38 @@ public class DeliverOrderJob4xxSplitTests
         jobs.Captured.Should().HaveCount(1);
     }
 
+    /// <summary>
+    /// …and the same 400 from a channel that CANNOT read the body does not, because "bare" was never
+    /// established. Three dispatchers were in that position for the whole of WP-19 — erp_erply,
+    /// erp_directo and email — and every one of their 400s took the branch above, re-POSTing to a
+    /// live endpoint up to the attempt cap. They capture the body now; this pins the answer for the
+    /// dispatcher that does not exist yet.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_BareBadRequest_FromAChannelThatCouldNotHear_DoesNotSeedTheRetryQueue()
+    {
+        var (delivery, billing, orgId, orderId, artifactId) = Arrange(
+            new DeliveryResult(false, "HTTP 400", 400), attemptsMade: 1);
+
+        var jobs = new CapturingJobClient();
+        var job = new DeliverOrderJob(delivery.Object, billing.Object, jobs, NullLogger<DeliverOrderJob>.Instance);
+
+        await job.ExecuteAsync(orderId, orgId, artifactId, requireAutoDeliver: true, CancellationToken.None);
+
+        jobs.Captured.Should().BeEmpty(
+            "an unexplained refusal we could not have heard an explanation for is not proof the " +
+            "supplier gave none — and the wrong guess here costs real requests against a live " +
+            "endpoint, on channels that are either the production email path or ResendSafety.Unsafe");
+    }
+
     [Theory]
     [InlineData(422, null)]
     [InlineData(400, "{\"error\":\"unknown buyer code BC-9\"}")]
     public async Task ExecuteAsync_BusinessRejection_DoesNotSeedTheRetryQueue(int code, string? body)
     {
         var (delivery, billing, orgId, orderId, artifactId) = Arrange(
-            new DeliveryResult(false, $"HTTP {code}", code, ResponseBody: body), attemptsMade: 1);
+            new DeliveryResult(false, $"HTTP {code}", code, ResponseBody: body,
+                SupplierReasonObservable: true), attemptsMade: 1);
 
         var jobs = new CapturingJobClient();
         var job = new DeliverOrderJob(delivery.Object, billing.Object, jobs, NullLogger<DeliverOrderJob>.Instance);

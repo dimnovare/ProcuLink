@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Security;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Erp;
 
 namespace ProcuLink.Infrastructure.Services.Erp;
@@ -69,9 +70,16 @@ public sealed class ErplyConnector : IErpConnector
             var body = await response.Content.ReadAsStringAsync(requestCt);
             var code = (int)response.StatusCode;
 
+            // The body is carried VERBATIM as well as summarised: the summary is for the operator,
+            // the original is what SupplierResponseClassification reads to tell a refusal OF THE
+            // DOCUMENT from a refusal of the request. Dropping it (as this did) made every ERP 400
+            // look unexplained, so it was re-dispatched to an endpoint that cannot de-duplicate.
             return response.IsSuccessStatusCode
                 ? new ErpDeliveryResult(true, null, code)
-                : new ErpDeliveryResult(false, BuildFailureMessage("Erply", code, body), code);
+                : new ErpDeliveryResult(
+                    false, BuildFailureMessage("Erply", code, body), code,
+                    ResponseBody: NullIfBlank(body),
+                    RetryAfter: RetryAfterHeader.Read(response.Headers, DateTimeOffset.UtcNow));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -115,6 +123,9 @@ public sealed class ErplyConnector : IErpConnector
                     headerName);
         }
     }
+
+    private static string? NullIfBlank(string? body) =>
+        string.IsNullOrWhiteSpace(body) ? null : body;
 
     private static string BuildFailureMessage(string connector, int code, string body)
     {
