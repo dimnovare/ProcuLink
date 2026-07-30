@@ -46,10 +46,13 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// nothing.</para>
 ///
 /// <para><b>Deliberate limits.</b> This is a floor, not a proof. It is textual, so a reader
-/// reached through an indirection it cannot see is a false negative. Conversely a store whose
-/// only consumer is the frontend — reached through its own CRUD controller — is flagged, because
-/// R1 is about the engine consuming what the engine writes. When the guard is wrong, the fix is
-/// a <see cref="KnownWriteOnly"/> entry that says WHY in prose. Never a silent skip.</para>
+/// reached through an indirection it cannot see is a false negative. And it only reads THIS
+/// repo: a store whose real consumer is the frontend, reached through its own CRUD controller,
+/// is flagged even though it is perfectly alive. <c>CanonicalFieldDef</c> is exactly that — the
+/// mapper in <c>project-proculink</c> consumes it — and the entry on the allowlist says so.
+/// Before recording anything here as dead, go and look in the other repo. When the guard is
+/// wrong, the fix is a <see cref="KnownWriteOnly"/> entry that says WHY in prose, with the
+/// evidence. Never a silent skip.</para>
 /// </summary>
 public sealed class OrphanGuardTests
 {
@@ -58,13 +61,32 @@ public sealed class OrphanGuardTests
     /// exemption: the reason is prose a reviewer can disagree with, and the tests below delete
     /// the hiding place as soon as the store is fixed or removed.
     /// </summary>
+    /// <remarks>
+    /// Every reason below was settled by going and looking, in BOTH repos at <c>origin/main</c> on
+    /// 2026-07-30 — this backend and <c>project-proculink</c> — rather than by inferring from the
+    /// guard's output. That mattered: <c>CanonicalFieldDef</c> looked like a dead surface and is
+    /// not one. "Appears unused" is not a reason. Name the reader you failed to find, and where
+    /// you looked for it.
+    /// </remarks>
     private static readonly IReadOnlyList<KnownWriteOnly> KnownWriteOnlyStores = new[]
     {
         // ── Retired by founder decision 2026-07-30 ───────────────────────────────────────
         new KnownWriteOnly("OutputTemplate",
-            "scheduled for deletion in WP-06 / WP-07 — retired by founder decision 2026-07-30"),
+            "scheduled for deletion in WP-06 / WP-07 — retired by founder decision 2026-07-30. "
+            + "Evidence: the table's only reader is OutputTemplateService, and IOutputTemplateService "
+            + "is referenced by nothing but OutputTemplatesController and the DI roots — no transform "
+            + "path consults it, because output shape comes from the pinned connection revision. The "
+            + "customer-facing surface is still live (project-proculink origin/main: "
+            + "src/lib/api-client.ts ~L2066 against /api/templates, src/app/(app)/library/templates/), "
+            + "so a user can currently author a template that renders nothing."),
         new KnownWriteOnly("ValidationRule",
-            "scheduled for deletion in WP-06 / WP-07 — retired by founder decision 2026-07-30"),
+            "scheduled for deletion in WP-06 / WP-07 — retired by founder decision 2026-07-30. "
+            + "Superseded, not merely unused: the live validation stack is RuleDefinition "
+            + "(RuleDefinitionService + RuleDefinitionBackfillService), SupplierAcceptanceRule, and "
+            + "OrderValidationResult (read by PassportService and SupplierAcceptanceService). Nothing "
+            + "evaluates a ValidationRule row. The frontend still offers full CRUD including an "
+            + "enable/disable toggle (project-proculink origin/main src/lib/api-client.ts ~L2011 "
+            + "against /api/rules), so a user can enable a rule that never runs."),
 
         // ── Read by code that is not in this repo ────────────────────────────────────────
         new KnownWriteOnly("DataProtectionKey",
@@ -72,35 +94,48 @@ public sealed class OrphanGuardTests
             + "AddDataProtection().PersistKeysToDbContext<ProcuLinkDbContext>() in ProcuLink.Api/Program.cs. "
             + "The reader is framework code outside this repo, so no in-repo reader can exist. "
             + "Permanent entry — do not 'fix'."),
+        new KnownWriteOnly("CanonicalFieldDef",
+            "2026-07-30 — flagged by this guard but NOT a dead surface. Corrected after checking the "
+            + "other repo: the only in-repo reader is its own CanonicalFieldsController, which is all a "
+            + "backend-only scan can see, but the real consumer is the mapper in project-proculink "
+            + "(origin/main src/components/bridge/mapper/useMapperModel.ts:249 fetches it through "
+            + "src/lib/api/canonical-fields.ts, and mergeCanonicalNodes places a custom field alongside "
+            + "the system spine so it can be wired exactly like a built-in — the resulting wire lands in "
+            + "the mapping tables the engine DOES read). Recorded as a limit of the guard, not as a "
+            + "cleanup target. Do not delete this on the strength of this entry."),
 
         // ── WP-04 findings, 2026-07-30. Recorded, NOT fixed: each belongs to another packet.
         new KnownWriteOnly("Buyer",
-            "WP-04 finding 2026-07-30 — FOUNDER CALL NEEDED. A complete CRUD surface (table, "
-            + "service, controller, UI) whose data reaches nothing: IBuyerService is referenced only "
-            + "by BuyersController and the DI roots, and no parse / mapping / transform / delivery / "
-            + "billing path reads a Buyer row (orders carry a denormalised BuyerName column instead). "
-            + "Same defect class as OutputTemplate, but deleting a customer-visible surface is not an "
-            + "obvious cleanup. Needs a real consumer or an explicit retirement decision."),
-        new KnownWriteOnly("CanonicalFieldDef",
-            "WP-04 finding 2026-07-30: its only reader is its own CanonicalFieldsController. Tier-2 "
-            + "user-defined canonical fields are stored and listed back to the UI, but no mapping or "
-            + "transform code reads the definitions — so a user-defined field cannot yet affect output. "
-            + "Either the extensible-canonical path consumes them or the surface should not offer them."),
+            "WP-04 finding 2026-07-30 — FOUNDER CALL. Both repos checked at origin/main before writing "
+            + "this. The surface is live: project-proculink src/app/(app)/library/buyers/page.tsx, full "
+            + "CRUD at src/lib/api-client.ts L1917-L1946 against /api/buyers. But no row of this table "
+            + "reaches the engine: PurchaseOrderEntity has NO BuyerId foreign key — BuyerService.ListAsync "
+            + "joins buyers to orders on the denormalised buyer_name STRING, for display counts only — and "
+            + "IBuyerService is referenced by nothing but BuyersController and the DI roots. Buyers is "
+            + "therefore a directory the user maintains that no parse / mapping / transform / delivery / "
+            + "billing path reads. Whether the concept should exist at all is a product decision, which is "
+            + "why this one is a founder question and the others are not."),
         new KnownWriteOnly("MappingCorrection",
-            "WP-04 finding 2026-07-30: written by ItemMappingService when a user corrects a mapping "
-            + "(~L120) and read by nothing, anywhere. The learning signal it captures is discarded — "
+            "WP-04 finding 2026-07-30: written by ItemMappingService (~L120) when a user changes a "
+            + "mapping's supplier item code, and read by NOTHING — no reader in any of the five "
+            + "production projects, no endpoint anywhere in ProcuLink.Api, and no route referencing it "
+            + "in project-proculink at origin/main. The correction trail is captured and discarded; "
             + "fingerprint learning runs off SchemaFingerprint, not this table."),
         new KnownWriteOnly("Membership",
-            "WP-04 finding 2026-07-30, judged INERT rather than write-mostly: it has no in-repo reader "
-            + "AND no in-repo writer. Tenancy is resolved from Clerk organisation claims, not from this "
-            + "table (see the note at OrdersController.cs ~L1936). Mapped and migrated but never "
+            "WP-04 finding 2026-07-30, judged INERT rather than write-mostly — checked before calling it "
+            + "dead, including the Clerk hypothesis. No reader AND no writer in app code; no route in "
+            + "ProcuLink.Api; no frontend call (the OrgSwitcher / UserChipMenu / select-organization hits "
+            + "in project-proculink are Clerk's OWN memberships, not this table). Tenancy resolves from "
+            + "Clerk organisation claims. The comment at OrdersController.cs:1936 — 'org membership lives "
+            + "in Membership' — describes an intent that was never wired. Mapped and migrated, never "
             + "populated. Keep-or-drop decision owed; do not build on it in the meantime."),
         new KnownWriteOnly("RetentionAuditLog",
-            "WP-04 finding 2026-07-30, judged LEGITIMATELY write-only: an append-only evidence trail "
-            + "written by BlobRetentionService for the blob-retention sweep, read out-of-band by "
-            + "operators over SQL when a deletion has to be accounted for. An in-app reader would give "
-            + "the application a way to consume its own audit trail, which is the opposite of the point. "
-            + "Expected to stay on this list."),
+            "WP-04 finding 2026-07-30, judged LEGITIMATELY write-mostly: an append-only evidence trail "
+            + "written by BlobRetentionService (~L225) with a DetailsJson payload, so that 'what did the "
+            + "retention sweep delete, and when' can be answered later. It deliberately has no in-app "
+            + "reader — no endpoint in ProcuLink.Api exposes it and no frontend route references it at "
+            + "origin/main — because the consumer is a human answering a compliance question over SQL. "
+            + "An audit trail the application can read back is a weaker audit trail. Expected to stay."),
     };
 
     /// <summary>
@@ -270,6 +305,11 @@ public sealed class OrphanGuardTests
     /// connect "CanonicalFields" to the entity "CanonicalFieldDef". The store is caught here
     /// structurally instead — the controller both reads and writes it, and nothing references the
     /// controller — so the catch does not depend on the two names resembling each other.
+    ///
+    /// <para>This asserts the DETECTOR still sees the shape, not that the store is dead: this
+    /// particular one is consumed by the frontend mapper, which is written up on its allowlist
+    /// entry. The shape — a table whose only reader is the controller that maintains it — is what
+    /// has to keep being visible, because the next one will not have a frontend behind it.</para>
     /// </summary>
     [Fact]
     public void Guard_CatchesAStore_WhoseOnlyReaderIsItsOwnController()
