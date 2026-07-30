@@ -62,13 +62,29 @@ public class DeliveryMediaTypeTableTests
     [InlineData(OutputFormat.CXml,          "application/xml",     ".xml")]
     [InlineData(OutputFormat.Json,          "application/json",    ".json")]
     [InlineData(OutputFormat.Ubl,           "application/xml",     ".xml")]
-    [InlineData(OutputFormat.X12,           "application/EDI-X12", ".x12")]
+    [InlineData(OutputFormat.X12,           "application/edi-x12", ".x12")]
     [InlineData(OutputFormat.UblOrder,      "application/xml",     ".xml")]
-    [InlineData(OutputFormat.X12_850,       "application/EDI-X12", ".x12")]
-    [InlineData(OutputFormat.EdifactOrders, "application/EDIFACT", ".edi")]
+    [InlineData(OutputFormat.X12_850,       "application/edi-x12", ".x12")]
+    [InlineData(OutputFormat.EdifactOrders, "application/edifact", ".edi")]
     public void TheRows_AreExactly(OutputFormat format, string contentType, string extension)
     {
         DeliveryMediaTypes.For(format).Should().Be(new DeliveryMediaType(contentType, extension));
+    }
+
+    [Theory]
+    [InlineData(OutputFormat.X12)]
+    [InlineData(OutputFormat.X12_850)]
+    [InlineData(OutputFormat.EdifactOrders)]
+    public void TheEdiMediaTypes_AreTheLowercaseSpellingProductionAlreadyEmits(OutputFormat format)
+    {
+        // Pinned as a decision, not an accident. RFC 9110 §8.3.1 makes media types
+        // case-insensitive, so the registered mixed-case spellings ("application/EDI-X12",
+        // "application/EDIFACT") would be equally correct — and a naive receiver comparing with
+        // == "application/edi-x12" would nonetheless stop matching. X12TransformService already
+        // emitted the lowercase form, so keeping it means this packet changes NOTHING on the wire
+        // for X12 (and nothing in R2 object metadata) while it fixes cXML and UBL.
+        DeliveryMediaTypes.For(format).ContentType
+            .Should().Be(DeliveryMediaTypes.For(format).ContentType.ToLowerInvariant());
     }
 
     // ── The persisted token index is a projection of the same rows ────────────
@@ -89,7 +105,7 @@ public class DeliveryMediaTypeTableTests
 
     [Theory]
     [InlineData("peppol",  "application/xml", ".xml")]
-    [InlineData("edifact", "application/EDIFACT", ".edi")]
+    [InlineData("edifact", "application/edifact", ".edi")]
     [InlineData("CXML",    "application/xml", ".xml")]
     public void KnownAliasesAndCasingResolve(string token, string contentType, string extension)
     {

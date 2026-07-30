@@ -42,14 +42,26 @@ public static class DeliveryMediaTypes
             [OutputFormat.Json] = new("application/json", ".json"),
             // UBL 2.1 / Peppol BIS Order 3 is likewise an XML document.
             [OutputFormat.Ubl]  = new("application/xml", ".xml"),
-            // IANA-registered media type for ASC X12 interchanges (case is as registered; media
-            // types compare case-insensitively, so a receiver matching "application/edi-x12" matches).
-            [OutputFormat.X12]  = new("application/EDI-X12", ".x12"),
+            // The EDI media types, LOWERCASE — deliberately not the mixed-case IANA spellings
+            // ("application/EDI-X12", "application/EDIFACT" in RFC 1767).
+            //
+            // Both spellings are equally correct: RFC 9110 §8.3.1 makes media types
+            // case-insensitive, so a conforming receiver matches either. The reason to write the
+            // lowercase one is that it is what ProcuLink has ALREADY been putting on the wire —
+            // X12TransformService emitted "application/edi-x12" — and this packet's job is to stop
+            // documents being mis-typed, not to introduce a new spelling nobody has tested against.
+            // A receiver comparing with a naive `== "application/edi-x12"` is not conforming, but it
+            // exists, and switching to the canonical casing would break it for no gain we can name.
+            // Lowercase also keeps the R2 object metadata on X12 artifacts byte-identical to what
+            // production already stores, so this packet changes nothing at all for X12 while fixing
+            // cXML/UBL. If a supplier ever demands the registered casing, it is a one-row change
+            // here and the receiver still matches under RFC 9110 either way.
+            [OutputFormat.X12]  = new("application/edi-x12", ".x12"),
 
             // Named standards-profile identifiers (conformance layer). Same documents, same envelopes.
             [OutputFormat.UblOrder]      = new("application/xml", ".xml"),
-            [OutputFormat.X12_850]       = new("application/EDI-X12", ".x12"),
-            [OutputFormat.EdifactOrders] = new("application/EDIFACT", ".edi"),
+            [OutputFormat.X12_850]       = new("application/edi-x12", ".x12"),
+            [OutputFormat.EdifactOrders] = new("application/edifact", ".edi"),
         };
 
     /// <summary>
@@ -125,6 +137,8 @@ public static class DeliveryMediaTypes
     /// Reverse lookup: the extension for a media type this table knows. Used where the content type
     /// is the input (operator-supplied Scriban template content types) so a template declaring
     /// <c>application/EDI-X12</c> is named the same way the built-in X12 transform names its output.
+    /// Matching is case-INSENSITIVE, per RFC 9110 §8.3.1 — an operator who types the registered
+    /// mixed-case spelling gets the same extension as one who types the lowercase one.
     /// </summary>
     public static bool TryExtensionForContentType(string? contentType, out string extension)
     {

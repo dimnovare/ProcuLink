@@ -45,10 +45,11 @@ public sealed class OrderExceptionService : IOrderExceptionService
             return ("delivery_failed", "Deliver", "error", "Delivery to the supplier failed.");
         // Severity is 'warning', not 'error': we do not know that this delivery failed, and an
         // unknown outcome dressed as a failure is what makes an operator click Send again — handing
-        // the supplier the duplicate PO the park exists to prevent. The sentence is the park's OWN,
-        // reused rather than restated so the two surfaces can never drift into contradicting each
-        // other. Null protocol = the channel-agnostic wording: reconcile works from order status and
-        // has no delivery channel to name.
+        // the supplier the duplicate PO the park exists to prevent. This is the FALLBACK wording:
+        // ReconcileAsync prefers the sentence the park itself wrote to the attempt row, because that
+        // one knows WHY the order parked (a file-drop connection that will refuse a repeat send
+        // needs the opposite advice from a channel that cannot de-duplicate one). Null protocol =
+        // the channel-agnostic wording: this method works from order status alone.
         if (status == OrderStatusConstants.DeliveryUnconfirmed)
             return ("delivery_unconfirmed", "Deliver", "warning",
                 DeliveryService.BuildUnconfirmedMessage(protocol: null));
@@ -72,6 +73,28 @@ public sealed class OrderExceptionService : IOrderExceptionService
         var hasUnresolved = await _db.PurchaseOrderLines
             .AnyAsync(l => l.OrderId == orderId && l.NeedsReview, ct);
         var problem = ProblemFor(order.Status, hasUnresolved);
+
+        // A parked order's sentence is the park's OWN, read back rather than rebuilt. The park
+        // knows WHY it stopped and writes that to the attempt it finalises; this method knows only
+        // the status, and the two reasons need OPPOSITE advice — telling the operator of a
+        // file-drop connection that will refuse a repeat send to "send it again" walks the order
+        // into dead-letter and takes "mark it delivered" away with it. Reusing the builder was not
+        // enough: it reused the FORM, not the sentence. Falls back to the generic wording if no
+        // parked attempt carries one (a park written before this shipped, or a hand-set status).
+        if (problem is { } parked && parked.Code == "delivery_unconfirmed")
+        {
+            var parkSentence = await _db.DeliveryAttempts
+                .AsNoTracking()
+                .Where(a => a.OrgId == orgId
+                         && a.OrderId == orderId
+                         && a.Status == DeliveryAttempt.StatusUnconfirmed)
+                .OrderByDescending(a => a.AttemptedAt)
+                .Select(a => a.ErrorMessage)
+                .FirstOrDefaultAsync(ct);
+
+            if (!string.IsNullOrWhiteSpace(parkSentence))
+                problem = (parked.Code, parked.Stage, parked.Severity, parkSentence!);
+        }
 
         // Load EVERY exception for this order — open, ignored AND resolved — so dedup can
         // consider resolved rows too. Considering resolved rows is what stops a resolved

@@ -30,7 +30,7 @@ public class DeliveryContentTypeAndFileNameTests
 
     [Theory]
     [InlineData("cxml", "application/xml",     ".xml")]
-    [InlineData("x12",  "application/EDI-X12", ".x12")]
+    [InlineData("x12",  "application/edi-x12", ".x12")]
     [InlineData("ubl",  "application/xml",     ".xml")]
     [InlineData("xml",  "application/xml",     ".xml")]
     [InlineData("json", "application/json",    ".json")]

@@ -527,7 +527,7 @@ public sealed class DeliveryService : IDeliveryService
         CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        var message = BuildUnconfirmedMessage(config.Protocol);
+        var message = BuildUnconfirmedMessage(config.Protocol, parkReason);
 
         attempt.Status = DeliveryAttempt.StatusUnconfirmed;
         attempt.AttemptedAt = now;
@@ -569,33 +569,66 @@ public sealed class DeliveryService : IDeliveryService
         // operator to believe the red one and re-send — the duplicate PO this park exists to stop.
         await SafeReconcileExceptionsAsync(order.OrgId, order.Id, ct);
 
+        // The reason, not a restatement of one of them. This line used to assert "cannot
+        // de-duplicate a re-send" for BOTH parks — false of a file-drop connection, which
+        // de-duplicates perfectly and simply refuses to overwrite.
         _logger.LogWarning(
-            "DeliveryUnconfirmed: order {OrderId} (org {OrgId}) parked — a crash-recovery re-drive "
-            + "re-adopted an in-flight send on {Protocol}, which cannot de-duplicate a re-send. "
-            + "NOT re-sent; waiting for an operator to send again or mark delivered.",
-            order.Id, order.OrgId, config.Protocol);
+            "DeliveryUnconfirmed: order {OrderId} (org {OrgId}) parked on {Protocol} — {ParkReason} "
+            + "NOT re-sent; waiting for an operator.",
+            order.Id, order.OrgId, config.Protocol, parkReason);
 
         return new DeliveryResult(false, message, ResponseCode: null, ResponseBody: null,
             Outcome: DeliveryOutcome.NotRetryable);
     }
 
     /// <summary>
-    /// The operator-facing park sentence. Plain language, one sentence of what happened plus what
-    /// to do — never internal vocabulary (no "idempotency", "re-adopt", "dispatching row", "park").
-    /// Says only what a re-adopted in-flight row PROVES: the send was ATTEMPTED, not that it
-    /// succeeded — a crash between the marker commit and the network write, or a cancelled token on
-    /// shutdown, parks with no send at all. Never fabricate an observed outcome.
+    /// The operator-facing park sentence. Plain language, what happened plus what to do — never
+    /// internal vocabulary (no "idempotency", "re-adopt", "dispatching row", "park"). Says only what
+    /// a re-adopted in-flight row PROVES: the send was ATTEMPTED, not that it succeeded — a crash
+    /// between the marker commit and the network write, or a cancelled token on shutdown, parks with
+    /// no send at all. Never fabricate an observed outcome.
+    /// <para>
+    /// It is REASON-SPECIFIC, because the two parks leave the operator in opposite situations and
+    /// the advice that fits one destroys the other. On a channel that cannot de-duplicate, sending
+    /// again is a real choice (it may duplicate, which is why a human makes it). On a file-drop
+    /// connection with "replace existing files" off it is not a choice at all: the park has already
+    /// finalised the in-flight row, so a repeat send opens a fresh attempt, meets the file its
+    /// predecessor left, is REFUSED, and walks the retry ladder into dead-letter — at which point
+    /// "mark it delivered" (which only accepts an order whose delivery is unconfirmed) is no longer
+    /// reachable either. Telling that operator to send it again destroys their only honest exit.
+    /// </para>
     /// <para>
     /// A null <paramref name="protocol"/> yields the channel-agnostic wording, for callers that know
-    /// the order is parked but not which channel parked it (<c>OrderExceptionService.ProblemFor</c>
-    /// works from order status alone). Shared rather than restated: two operator surfaces telling
-    /// different stories about the same order is the failure this whole feature guards against.
+    /// the order is parked but not which channel parked it. Callers that know neither channel nor
+    /// reason read the sentence back off the parked attempt row
+    /// (<c>OrderExceptionService.ReconcileAsync</c>) rather than rebuilding a generic one — two
+    /// operator surfaces telling different stories about the same order is the failure this whole
+    /// feature guards against.
     /// </para>
     /// </summary>
-    internal static string BuildUnconfirmedMessage(string? protocol) =>
-        $"Delivery unconfirmed. We may have sent this order, but lost the connection before the "
-        + $"supplier confirmed it, and {DescribeChannel(protocol)} cannot tell us whether it arrived. "
-        + $"Check with the supplier, then either send it again or mark it delivered.";
+    internal static string BuildUnconfirmedMessage(string? protocol, string? parkReason = null) =>
+        parkReason == ParkReasonCannotRepairOwnFile
+            ? UnconfirmedCannotRepairOwnFileMessage
+            : $"Delivery unconfirmed. We may have sent this order, but lost the connection before the "
+              + $"supplier confirmed it, and {DescribeChannel(protocol)} cannot tell us whether it arrived. "
+              + $"Check with the supplier, then either send it again or mark it delivered.";
+
+    /// <summary>
+    /// The file-drop wording. Both halves of the generic sentence are false here: this channel CAN
+    /// tell us whether a file arrived (that is the whole point of it), and a repeat send cannot get
+    /// through while the setting that caused the park is still off. So it says what is actually
+    /// true — the file may already be there and we will not overwrite it — and offers the two
+    /// remedies that exist: turn the setting back on, or confirm with the supplier and mark it
+    /// delivered.
+    /// </summary>
+    internal const string UnconfirmedCannotRepairOwnFileMessage =
+        "Delivery unconfirmed. We may have written this order to the supplier's server — in full, or "
+        + "only partly — but lost the connection before we could confirm it. This connection is set "
+        + "not to replace existing files, so a repeat send would be refused rather than replacing "
+        + "what is there. Check with the supplier. If they have the order, mark it delivered. If they "
+        + "do not, turn \"replace existing files\" back on for this supplier first — the next send "
+        + "then replaces this order's own file instead of being refused, and still cannot create a "
+        + "second copy.";
 
     private static string DescribeChannel(string? protocol) => protocol?.ToLowerInvariant() switch
     {
@@ -682,10 +715,15 @@ public sealed class DeliveryService : IDeliveryService
         if (credentials is null)
             return new DeliveryTestResult(false, "Delivery credentials could not be decrypted.", null);
 
+        // The fixed test document, named from the SHARED constant rather than a local literal: the
+        // file-drop dispatchers recognise that name to tell an operator the truth when a repeat test
+        // meets the previous test's file on an overwrite-off connection. A literal here would drift
+        // from the one there and quietly restore the message that talks about "this order" when
+        // there is no order (see DeliveryTestArtifact).
         var result = await dispatcher.DispatchAsync(
-            Encoding.UTF8.GetBytes("test,from\r\nproculink,true\r\n"),
-            "proculink-test.csv",
-            "text/csv",
+            Encoding.UTF8.GetBytes(DeliveryTestArtifact.Body),
+            DeliveryTestArtifact.FileName,
+            DeliveryTestArtifact.ContentType,
             config,
             credentials,
             ct);
