@@ -176,8 +176,8 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
                     remotePath,
                     makeDirectories,
                     // THE wire between the operator's saved setting and the live transfer. Covered
-                    // end-to-end by FtpsDeliveryDispatcherOverwriteWiringTests — hardcoding this to
-                    // true makes an OFF setting a no-op on the live path and must not be able to pass.
+                    // end-to-end by FileDropOverwriteWiringTests — hardcoding this to true makes an
+                    // OFF setting a no-op on the live path and must not be able to pass.
                     SftpDeliveryDispatcher.OverwriteExistingFromConfig(config.ConfigJson),
                     token).ConfigureAwait(false);
             }

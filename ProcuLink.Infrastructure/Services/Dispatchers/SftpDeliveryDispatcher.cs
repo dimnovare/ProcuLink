@@ -116,8 +116,8 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
 
             // THE wire between the operator's saved setting and the live upload. Read once, here,
             // from the config row the operator actually edited. Covered end-to-end by
-            // SftpDeliveryDispatcherOverwriteWiringTests — hardcoding this to true makes an OFF
-            // setting a no-op on the live path and must not be able to pass.
+            // FileDropOverwriteWiringTests — hardcoding this to true makes an OFF setting a no-op
+            // on the live path and must not be able to pass.
             var overwriteExisting = OverwriteExistingFromConfig(config.ConfigJson);
 
             var fakeSession = _sessionFactory?.Invoke(connectionInfo);
