@@ -10,7 +10,7 @@ namespace ProcuLink.Infrastructure.Services;
 /// P2 hardening — LOG-ONLY observer for the purchase-order state machine.
 ///
 /// <para>Order status is written from many scattered call sites (parse, resolve, transform,
-/// delivery, stuck-detection, ops requeue, supplier status webhooks). Rather than wiring a
+/// delivery, stuck-detection, ops requeue, operator settlement). Rather than wiring a
 /// check into each one, this <see cref="SaveChangesInterceptor"/> watches the single
 /// chokepoint every tracked write flows through — <c>SaveChanges</c> — and logs a WARNING
 /// whenever an order moves through a transition outside the allowed map below.</para>
@@ -91,21 +91,29 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             [OrderStatusConstants.TransformFailed] = Set(
                 OrderStatusConstants.Ready, OrderStatusConstants.Transforming,
                 OrderStatusConstants.PendingReview),
-            // Delivery: manual/automatic dispatch, re-transform, supplier status webhooks
-            // (which may report a terminal state straight from ready_to_deliver), and a
+            // Delivery: manual/automatic dispatch, re-transform, a pre-claim failure, and a
             // billing hold (delivery_held) when the org can't process orders at delivery time.
+            // → delivered is GONE (WP-09): it existed for the retired inbound supplier-status
+            // webhook, which could report a terminal state straight from ready_to_deliver. Nothing
+            // else can write 'delivered' from here — MarkDelivered admits delivery_unconfirmed only,
+            // and DeliveryService writes the outcome only after its claim moved the row to
+            // 'delivering'. Listing an edge with no writer costs the WARNING that should fire the
+            // day something starts performing it. Mirrors OrderStatusMachine — both maps or neither
+            // (the d4d6eac drift lesson); pinned by
+            // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter.
             [OrderStatusConstants.ReadyToDeliver] = Set(
                 OrderStatusConstants.Delivering, OrderStatusConstants.Transforming,
-                OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
+                OrderStatusConstants.DeliveryFailed,
                 OrderStatusConstants.DeliveryHeld, OrderStatusConstants.RejectedBySupplier),
-            // Billing hold → released back to ready_to_deliver (re-driven) on reactivation, or a
-            // late supplier ACK for an order that was already sent before the hold landed. A held
+            // Billing hold → released back to ready_to_deliver (re-driven) on reactivation. A held
             // PARK (HeldFromStatus == delivery_unconfirmed) is instead RESTORED to
             // delivery_unconfirmed on release — never re-driven. Mirrors OrderStatusMachine —
             // both maps or neither (the d4d6eac drift lesson).
+            // → delivered is GONE (WP-09) — it was the "late supplier ACK for an order sent before
+            // the hold landed" edge, and the webhook that performed it no longer exists.
             [OrderStatusConstants.DeliveryHeld] = Set(
                 OrderStatusConstants.ReadyToDeliver, OrderStatusConstants.Ready,
-                OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryUnconfirmed,
+                OrderStatusConstants.DeliveryUnconfirmed,
                 OrderStatusConstants.RejectedBySupplier),
             [OrderStatusConstants.Delivering] = Set(
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
@@ -127,25 +135,31 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             // 'ready' here, every such edit logged a false "unexpected transition" WARNING.
             [OrderStatusConstants.Delivered] = Set(
                 OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.Ready),
-            // Failed deliveries: retry, dead-letter, late supplier ACK, re-transform, or
-            // return to the review loop after corrections. A5: a backoff retry that fires after the
-            // org lapsed (read_only/past_due) is held via HoldForBillingAsync → delivery_held.
+            // Failed deliveries: retry, dead-letter, re-transform, or return to the review loop
+            // after corrections. A5: a backoff retry that fires after the org lapsed
+            // (read_only/past_due) is held via HoldForBillingAsync → delivery_held.
+            // → delivered is GONE (WP-09) — the "late positive ACK after a failed attempt" edge,
+            // whose only writer was the retired inbound webhook.
             [OrderStatusConstants.DeliveryFailed] = Set(
                 OrderStatusConstants.Delivering, OrderStatusConstants.DeliveryDeadLetter,
-                OrderStatusConstants.Delivered, OrderStatusConstants.RejectedBySupplier,
+                OrderStatusConstants.RejectedBySupplier,
                 OrderStatusConstants.Transforming, OrderStatusConstants.PendingReview,
                 OrderStatusConstants.Ready, OrderStatusConstants.DeliveryHeld),
-            // Dead-letter: ops requeue back into delivery; a late supplier ACK may still land.
+            // Dead-letter: ops requeue back into delivery.
+            // → delivered is GONE (WP-09) — the "late supplier ACK may still land" edge, whose only
+            // writer was the retired inbound webhook.
             [OrderStatusConstants.DeliveryDeadLetter] = Set(
-                OrderStatusConstants.Delivering, OrderStatusConstants.Delivered,
+                OrderStatusConstants.Delivering,
                 OrderStatusConstants.DeliveryFailed, OrderStatusConstants.RejectedBySupplier),
             // Rejected: corrected and re-driven through the loop.
             //
-            // → delivered is GONE: the webhook can no longer un-reject an order (Status gates terminal
-            // callbacks on OrderStatusMachine.WebhookReportableFrom, which excludes
-            // rejected_by_supplier), and no dispatch can write 'delivered' onto one either — the
+            // → delivered is GONE: no dispatch can write 'delivered' onto a rejected order — the
             // delivery claim (DispatchArtifactAsync / RetryDeliveryAsync) never admits
-            // rejected_by_supplier. With no writer left, listing it would bless an impossible move.
+            // rejected_by_supplier, and OrdersController.MarkDelivered admits only
+            // delivery_unconfirmed (OrderStatusMachine.ManuallyDeliverableFrom). With no writer left,
+            // listing it would bless an impossible move. (This comment used to justify the removal by
+            // the inbound supplier-status webhook's own status gate; that whole subsystem, gate
+            // included, was retired in WP-09, so nothing un-rejects an order any more.)
             //
             // → delivery_failed STAYS: it is still reachable WITHOUT the webhook. DeliveryService's
             // PRE-CLAIM failure paths (FailMissingConfigAsync / FailBeforeDispatchAsync) write

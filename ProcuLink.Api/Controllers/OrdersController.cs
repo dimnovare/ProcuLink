@@ -1889,7 +1889,13 @@ public sealed class OrdersController : ControllerBase
 
         var order = getResult.Value!;
 
-        if (order.Status != OrderStatusConstants.DeliveryUnconfirmed)
+        // Both this gate and the TOCTOU re-check below derive from the SAME named set rather than
+        // repeating a status literal: OrderStatusMachine.ManuallyDeliverableFrom is the canonical
+        // "an operator may settle this as delivered" rule, and it is what
+        // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter reads to prove that
+        // every X -> delivered edge in the two transition maps has a writer. Two hand-written copies
+        // of one rule is the drift class that bit the delivery-claim gates four times.
+        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(order.Status))
             return BadRequest(new
             {
                 error = $"Only an order whose delivery is unconfirmed can be marked delivered "
@@ -1912,7 +1918,7 @@ public sealed class OrdersController : ControllerBase
         // no concurrency token, so re-checking the TRACKED row here is what stops this endpoint from
         // silently overwriting an in-flight send back to 'delivered' — the order moved under us, so
         // the operator's assertion (made against the stale snapshot) no longer applies.
-        if (tracked.Status != OrderStatusConstants.DeliveryUnconfirmed)
+        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(tracked.Status))
             return BadRequest(new
             {
                 error = $"Only an order whose delivery is unconfirmed can be marked delivered "

@@ -48,15 +48,16 @@ public class OrderStatusMachineTests
     // to prevent. See ReleaseBillingHeldOrdersAsync.
     [InlineData(DeliveryHeld, DeliveryUnconfirmed)]
     [InlineData(DeliveryDeadLetter, Delivering)] // ops requeue rescue
-    [InlineData(DeliveryDeadLetter, DeliveryFailed)] // requeued dead-letter fails again / late failure webhook (aligns with the observer map)
+    [InlineData(DeliveryDeadLetter, DeliveryFailed)] // requeued dead-letter fails again (aligns with the observer map)
     [InlineData(DeliveryDeadLetter, Ready)]      // MV-1 sibling: mapping edit after dead-letter
-    // Supplier status webhook: a late positive ACK from every dispatched state. All four are
-    // documented as intended in OrderStatusTransitionObserver and gated by WebhookReportableFrom.
-    [InlineData(ReadyToDeliver, Delivered)]      // ACK races our own 'delivering' write
-    [InlineData(DeliveryFailed, Delivered)]      // late positive ACK after a failed attempt
-    [InlineData(DeliveryDeadLetter, Delivered)]  // late positive ACK after dead-lettering
-    [InlineData(DeliveryHeld, Delivered)]        // ACK for an order sent before the billing hold
-    [InlineData(Delivered, DeliveryFailed)]      // webhook late-failure edge
+    // The four "late positive ACK" edges that used to sit here — ready_to_deliver / delivery_failed /
+    // delivery_dead_letter / delivery_held → delivered — are GONE with the inbound supplier-status
+    // webhook (WP-09). They are now asserted IMPOSSIBLE, below and in
+    // EveryInboundDeliveredEdge_HasAProductionWriter.
+    // delivered → delivery_failed survives WITHOUT the webhook: DeliveryService's pre-claim failure
+    // paths (FailMissingConfigAsync / FailBeforeDispatchAsync) write delivery_failed with no
+    // from-status check, racing the enqueue-time guards in Redeliver / RequeueDelivery.
+    [InlineData(Delivered, DeliveryFailed)]
     [InlineData(Ready, RejectedBySupplier)]      // mark-rejected (from any non-terminal)
     [InlineData(Delivering, RejectedBySupplier)]
     // Routing (Phase 0): an order can be parked unrouted while it awaits a supplier, then
@@ -76,7 +77,14 @@ public class OrderStatusMachineTests
     [InlineData(RejectedBySupplier, Ready)]
     [InlineData(Delivered, Transforming)]
     [InlineData(Parsing, Delivered)]
-    [InlineData(RejectedBySupplier, Delivered)]  // terminal for webhooks: no silent un-rejection
+    [InlineData(RejectedBySupplier, Delivered)]  // no silent un-rejection: nothing writes it
+    // WP-09: the retired inbound supplier-status webhook was the ONLY writer of these four. An
+    // operator settlement (OrdersController.MarkDelivered) admits delivery_unconfirmed alone, and
+    // DeliveryService writes 'delivered' only after its claim has moved the row to 'delivering'.
+    [InlineData(ReadyToDeliver, Delivered)]
+    [InlineData(DeliveryFailed, Delivered)]
+    [InlineData(DeliveryDeadLetter, Delivered)]
+    [InlineData(DeliveryHeld, Delivered)]
     public void IsAllowed_ImpossibleTransitions_AreRejected(string from, string to)
         => OrderStatusMachine.IsAllowed(from, to).Should().BeFalse($"{from} -> {to} must never happen");
 
@@ -87,7 +95,7 @@ public class OrderStatusMachineTests
         => OrderStatusMachine.IsTerminal(status).Should().BeTrue();
 
     [Theory]
-    [InlineData(Delivered)]            // a webhook can still flip it to delivery_failed
+    [InlineData(Delivered)]            // a pre-claim delivery failure can still flip it to delivery_failed
     [InlineData(DeliveryDeadLetter)]   // an ops requeue can still rescue it
     [InlineData(Ready)]
     // transform_failed is a FAILURE state but NOT a terminal one: unlike 'failed' (a bad source file,
@@ -234,6 +242,76 @@ public class OrderStatusMachineTests
             "every KnownObserverOnlyEdges entry must still be a live disagreement between the two maps. A stale " +
             "entry means the edge was reconciled (or removed from the observer) without pruning the exemption, " +
             "which would silently re-open the drift it was hiding. Delete the listed entries.");
+    }
+
+    /// <summary>
+    /// EVERY edge that ends in <c>delivered</c>, in BOTH maps, must have a production writer.
+    ///
+    /// <para><b>Why this test exists.</b> The two-sided invariant above compares the maps to EACH
+    /// OTHER, so it is structurally blind to an edge both maps agree on that nothing performs — and
+    /// WP-09 created four of them at once. The retired inbound webhook was the writer for
+    /// <c>ready_to_deliver → delivered</c>, <c>delivery_held → delivered</c>,
+    /// <c>delivery_failed → delivered</c> and <c>delivery_dead_letter → delivered</c>; when it went,
+    /// the edges stayed in both maps with comments still citing "supplier status webhooks" and "a
+    /// late supplier ACK". The observer would then have stayed SILENT on four transitions nothing
+    /// can perform — the exact drift its own "both maps or neither" comment warns about, in the one
+    /// direction the sibling test cannot see.</para>
+    ///
+    /// <para><b>Why <c>delivered</c> specifically is testable.</b> Its writers are enumerable and
+    /// each one is gated by a NAMED set rather than a literal, so this assertion reads the same
+    /// declarations production reads instead of keeping a third hand-copied list:</para>
+    /// <list type="bullet">
+    ///   <item><c>DeliveryService.PersistAttemptAsync</c> — the automatic writer. It is only ever
+    ///     reached AFTER the dispatch/retry claim, and the claim resyncs the tracked entity's
+    ///     <c>Status</c> AND its <c>OriginalValue</c> to <c>delivering</c> (both the relational and
+    ///     the InMemory branch) precisely so the observer diffs <c>delivering → delivered</c>. Its
+    ///     pre-claim siblings (<c>FailMissingConfigAsync</c> / <c>FailBeforeDispatchAsync</c>) pass
+    ///     a FAILED result, so they can only write <c>delivery_failed</c> /
+    ///     <c>rejected_by_supplier</c>, never <c>delivered</c>.</item>
+    ///   <item><c>OrdersController.MarkDelivered</c> — the manual writer, gated (twice) on
+    ///     <see cref="OrderStatusMachine.ManuallyDeliverableFrom"/>.</item>
+    /// </list>
+    ///
+    /// <para><b>The general case is NOT tested, and deliberately so.</b> "Every edge in both maps
+    /// has a writer" cannot be asserted in general: a status write is an arbitrary assignment
+    /// anywhere in the solution, tracked or via <c>ExecuteUpdateAsync</c>, and reflection cannot see
+    /// method bodies. A source scan for <c>Status =</c> would find the writes but not the from-state
+    /// each one is reachable in, which is the whole question. So the invariant is enforced where the
+    /// writers ARE named — and adding a status to a named gate is the moment to extend this test to
+    /// it.</para>
+    /// </summary>
+    [Fact]
+    public void EveryInboundDeliveredEdge_HasAProductionWriter()
+    {
+        // delivering: DeliveryService's claim leaves every claimed row here before the outcome
+        // write. ManuallyDeliverableFrom: the operator settlement endpoint's own gate.
+        var writable = new HashSet<string>(OrderStatusMachine.ManuallyDeliverableFrom, StringComparer.Ordinal)
+        {
+            Delivering,
+        };
+
+        var machineInbound = OrderStatusMachine.Transitions
+            .Where(kv => kv.Value.Contains(Delivered))
+            .Select(kv => kv.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var observerInbound = OrderStatusTransitionObserver.AllowedTransitions
+            .Where(kv => kv.Value.Contains(Delivered))
+            .Select(kv => kv.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+        machineInbound.Should().BeEquivalentTo(writable,
+            "OrderStatusMachine.Transitions may list an X -> delivered edge only where production can " +
+            "actually write 'delivered' from X: DeliveryService's post-claim outcome write (always from " +
+            "'delivering'), or OrdersController.MarkDelivered (gated on ManuallyDeliverableFrom). An extra " +
+            "from-state blesses a move nothing performs; a missing one would make IsAllowed reject a real " +
+            "flow. If a new writer is genuinely added, widen its NAMED gate — not this list");
+
+        observerInbound.Should().BeEquivalentTo(writable,
+            "OrderStatusTransitionObserver.AllowedTransitions may treat an X -> delivered edge as expected " +
+            "only where production can actually write 'delivered' from X. The observer is generous by " +
+            "design, but generosity toward an IMPOSSIBLE edge buys nothing and costs the warning that would " +
+            "otherwise fire the day something starts performing it");
     }
 
     // ── The canonical delivery-claim sets (#36) ──────────────────────────────────────────────

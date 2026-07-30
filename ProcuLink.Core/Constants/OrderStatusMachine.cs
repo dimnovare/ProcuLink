@@ -49,21 +49,22 @@ public static class OrderStatusMachine
             // the artifact and resets the order so the next Send re-transforms.
             // ready_to_deliver → delivery_held: a billing flip pauses (not fails) delivery. This fires
             // BEFORE the 'delivering' claim, so it moves a still-idle, NEVER-dispatched order.
-            // ready_to_deliver → delivered/rejected_by_supplier: an operator settles the order by
-            // hand (OrdersController.MarkDelivered / OrderResolutionService). Most orders resting
-            // here were never sent at all, so the edge stays permitted but is never automatic.
-            [ReadyToDeliver]     = Set(Delivering, Delivered, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier),
+            // → delivered is GONE (WP-09). It was listed for the retired inbound supplier-status
+            // webhook, and no other writer can perform it: OrdersController.MarkDelivered is gated on
+            // ManuallyDeliverableFrom (delivery_unconfirmed only, checked twice), and DeliveryService
+            // only writes 'delivered' AFTER its claim has moved the row to 'delivering'. Pinned by
+            // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter.
+            [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier),
             // Billing hold → released back to ready_to_deliver when the org returns to good standing.
             // delivery_held → delivery_unconfirmed: the release RESTORES a held PARK instead of
             // re-driving it — HoldForBillingAsync records the origin (HeldFromStatus) and
             // ReleaseBillingHeldOrdersAsync branches on it, because an automatic re-send of an
             // unknown-outcome PO on a channel that cannot de-duplicate is the duplicate the park
             // exists to prevent.
-            // delivery_held → delivered/rejected_by_supplier: an operator settles an order sent
-            // before the hold landed (delivery_failed → delivery_held is real, A5). A hold placed by
-            // the PRE-CLAIM billing gate has NO dispatch behind it, so a settlement from this state
-            // is a human judgement, never an automatic write.
-            [DeliveryHeld]       = Set(ReadyToDeliver, Delivered, DeliveryUnconfirmed, Ready, RejectedBySupplier),
+            // → delivered is GONE (WP-09) — same reason as ready_to_deliver above. A held order is
+            // settled by RELEASING it (→ ready_to_deliver, or → delivery_unconfirmed for a held
+            // park) and settling it from there; it cannot be marked delivered in place.
+            [DeliveryHeld]       = Set(ReadyToDeliver, DeliveryUnconfirmed, Ready, RejectedBySupplier),
             // delivering → delivery_unconfirmed: the park — a crash-recovery re-drive on a channel
             // that cannot de-duplicate stops rather than risk a duplicate PO.
             // delivering → delivery_dead_letter: StuckDeliveryDetectionService dead-letters an order
@@ -75,9 +76,12 @@ public static class OrderStatusMachine
             // un-re-transformed), so the order resets and the next Send re-transforms.
             // delivery_failed → delivery_held: A5 — a backoff retry for an org that lapsed to
             // read_only/past_due since the first attempt is held (not delivered) via HoldForBillingAsync.
-            // delivery_failed/delivery_dead_letter → delivered: an operator confirms out-of-band that
-            // the supplier did receive it, so the order is not re-sent.
-            [DeliveryFailed]     = Set(Delivering, Delivered, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
+            // → delivered is GONE (WP-09) — same reason as ready_to_deliver above. An operator who
+            // learns out-of-band that the supplier DID receive a failed-looking send cannot settle it
+            // from here: MarkDelivered admits delivery_unconfirmed only. That is a real product gap,
+            // named in PR #75 as a follow-up, not something to paper over by listing an edge no code
+            // can perform.
+            [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
             // Unknown-outcome park. The operator decides: send again (→ delivering) or confirm the
             // supplier got it (→ delivered). A mapping edit invalidates the artifact (→ ready, the
             // MV-1 sibling). Dead-letter/failed remain reachable if a later re-send exhausts retries.
@@ -89,7 +93,8 @@ public static class OrderStatusMachine
             // re-adopted in-flight row), so the evidence that a send BEGAN survives for that call.
             [DeliveryUnconfirmed] = Set(Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
             // dead_letter → delivery_failed: an ops requeue that fails again.
-            [DeliveryDeadLetter] = Set(Delivering, Delivered, DeliveryFailed, Ready, RejectedBySupplier),
+            // → delivered is GONE (WP-09) — same reason as delivery_failed above.
+            [DeliveryDeadLetter] = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
             [RejectedBySupplier] = Set(),
             [Failed]             = Set(),
             // transform_failed is a FAILURE state, not a terminal one — unlike 'failed' (a bad source
@@ -114,12 +119,14 @@ public static class OrderStatusMachine
         Transitions.TryGetValue(from, out var next) ? next : EmptySet;
 
     /// <summary>
-    /// A status with no outgoing transitions. <c>delivered</c> is NOT terminal: a supplier status
-    /// callback can still reject it (HTTP 200 is transport success, not business acceptance), and an
-    /// MV-1 mapping edit resets it to <c>ready</c> for re-transform. (It can NOT be webhook-flipped to
-    /// delivery_failed — that callback writes rejected_by_supplier. The delivered → delivery_failed
-    /// entry survives for DeliveryService's pre-claim failure paths, which write delivery_failed with
-    /// no status check.)
+    /// A status with no outgoing transitions. <c>delivered</c> is NOT terminal, and the reasons are
+    /// all human or local now that the inbound supplier-status webhook is retired (WP-09):
+    /// <c>OrderResolutionService.MarkRejectedAsync</c> carries no from-status guard, so an operator
+    /// can still reject a delivered order (HTTP 200 is transport success, not business acceptance);
+    /// an MV-1 mapping edit resets it to <c>ready</c> for re-transform; and the
+    /// <c>delivered → delivery_failed</c> entry survives for DeliveryService's PRE-CLAIM failure
+    /// paths (<c>FailMissingConfigAsync</c> / <c>FailBeforeDispatchAsync</c>), which write
+    /// <c>delivery_failed</c> with no status check and can race an enqueue-time guard.
     /// </summary>
     public static bool IsTerminal(string status) => NextStatuses(status).Count == 0;
 
@@ -232,6 +239,24 @@ public static class OrderStatusMachine
     /// </summary>
     public static readonly IReadOnlySet<string> RetryableFrom =
         Set(DeliveryFailed);
+
+    /// <summary>
+    /// <c>OrdersController.MarkDelivered</c>'s admission guard — the ONLY statuses from which a
+    /// human may settle an order as <c>delivered</c> without sending it. Named for the same reason
+    /// as <see cref="RetryableFrom"/>: the endpoint gates on it TWICE (once against the detached
+    /// read, once as a TOCTOU re-check against the tracked row), and two hand-written literals of
+    /// the same rule is how the four claim lists drifted apart four times.
+    ///
+    /// <para>It is also the load-bearing half of
+    /// <c>OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter</c>: together with
+    /// the delivery claim's single automatic writer (<c>delivering</c> — <c>DeliveryService</c>
+    /// resyncs the claimed row's tracked value AND <c>OriginalValue</c> to <c>delivering</c> before
+    /// <c>PersistAttemptAsync</c> writes the outcome), this set IS the complete inbound edge list
+    /// for <c>delivered</c>. Widening it here without widening the endpoint — or vice versa — is
+    /// what that test catches.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> ManuallyDeliverableFrom =
+        Set(DeliveryUnconfirmed);
 
     private static readonly IReadOnlySet<string> EmptySet =
         new HashSet<string>(StringComparer.Ordinal);
