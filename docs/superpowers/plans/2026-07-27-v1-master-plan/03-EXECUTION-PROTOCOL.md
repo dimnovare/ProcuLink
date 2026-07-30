@@ -106,6 +106,46 @@ Sequential merges, one at a time, per wave. Never batch — the 2026-07-24 wave 
 
 ---
 
+## 5b. Merge-order constraints (earned the hard way, 2026-07-30)
+
+Discovered by the parallel execution session while landing real PRs. These are ordering facts, not
+preferences — violating one produces a broken deploy or an unverifiable claim.
+
+1. **FRONTEND retirements merge BEFORE backend retirements.** Otherwise a live page calls an endpoint
+   that has already been deleted.
+2. **WP-01 merges before any other frontend PR.** Until the CI gate lands, no frontend test claim on
+   any other PR has actually been checked.
+3. **WP-20 merges before WP-19.** Both rewrite `DeliveryService`; doing them concurrently guarantees a
+   conflict in the one file where a bad merge is most expensive.
+4. **WP-11 merges before WP-22.** Both edit `IngressController.cs` — WP-11 adds the billing gate the
+   controller has never had (a frozen Pilot can currently still push orders), WP-22 replaces
+   check-then-create idempotency with an atomic claim. The small additive guard lands first; the
+   delicate rewrite rebases on top.
+5. **A new PR gets ZERO Actions runs until GitHub computes its merge ref.** `gh pr view --json mergeable`
+   does NOT trigger the computation. `gh api repos/OWNER/REPO/pulls/N` DOES. Empty commits and
+   close/reopen both fail. This silently costs ~20 minutes per PR if you do not know it.
+
+**Generalised rule, from (3) and from the WP-04 sequencing finding:** backend `ci.yml` runs an
+unfiltered `dotnet test ProcuLink.slnx` on `push: [main]`, so **any** packet that lands a
+deliberately-RED guard turns main red and blocks every queued merge behind it. This is not a WP-04
+constraint — it applies to every guard packet either session writes (WP-02, WP-04, and any future
+architecture test). Land guards GREEN with a dated, shrink-only allowlist; never land a red gate.
+
+## 5c. Two sessions, one repo
+
+Both sessions collided on WP-01 and WP-12 on 2026-07-27/30 — four branches for two packets, roughly a
+day of duplicated agent work. What prevents a repeat:
+
+- **`05-PROGRESS.md` is the shared source of truth.** Claim a packet there BEFORE starting it, and
+  update it when a PR opens or lands. It is the only artifact both sessions read.
+- **Announce before starting**, and check `git branch --sort=-committerdate` plus `gh pr list` in both
+  repos first. A branch you did not create means someone else is on it.
+- **Do not discard a colliding branch unread.** Both collisions produced work worth keeping: one
+  session found the CI mock-mode defect empirically by pushing to a real runner, the other found it by
+  inspection — and on WP-12 each found defects the other missed. Reconcile, do not restart.
+- **The session with working CI wins the tie.** A green PR beats a locally-green branch, because
+  Windows-local green is not Linux-CI green.
+
 ## 6. Wave exit gates
 
 A wave is not done when its packets merge. It is done when its gate passes.

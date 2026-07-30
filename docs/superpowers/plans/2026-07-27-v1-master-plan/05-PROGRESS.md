@@ -15,6 +15,41 @@ marked otherwise.** BE `main` is still diverged (6 local vs 9 origin) and needs 
 
 ---
 
+## Who owns what — 2026-07-30
+
+TWO sessions are executing this plan. Ownership below is settled; do not cross it.
+
+**Parallel-execution session** owns twelve packets, each in its own worktree, each opening a draft PR:
+WP-01 (**FE PR #40 — green, non-draft, MERGEABLE, all 5 checks SUCCESS**), WP-02, WP-04 (both repos),
+WP-06, WP-07, WP-08, WP-09, WP-10, WP-11 (both repos), WP-12 (**BE PR #74, draft**), WP-14 (both
+repos), WP-20.
+
+**Plan-authoring session** owns: the design briefs (DB-1, DB-2, DB-6 — Wave 4 and WP-15/16 are blocked
+without them), WP-22, WP-24, and this documentation.
+
+Its earlier fix round for WP-01/04/12/14/20 and WP-08/09/10 was **stopped and conceded** once the
+collision surfaced; all refutation findings were handed over rather than discarded.
+
+### Writing convention for this file
+
+Two sessions write here. **Append under your own dated subsection; do not edit shared prose.** A
+concurrent write then merges trivially instead of conflicting.
+
+### State as of 2026-07-30 — parallel-execution session
+
+- **Merged: none.** Both repos' `main` are untouched by this plan.
+- **Ready, awaiting founder: FE PR #40 (WP-01)** — non-draft, MERGEABLE/CLEAN, all five checks green
+  on run `30526225189`. **The single highest-leverage merge available**: until it lands, no frontend
+  "tests pass" claim in either session has actually been checked. Merging is a founder gate — FE main
+  auto-deploys to Vercel.
+- **Draft, mid-fix: BE PR #74 (WP-12)** — 8 defects being fixed (2 corroborated independently by both
+  sessions, 6 found only by the execution session). The real-Postgres jsonb round-trip is **green on
+  CI run `30527129110`** — Docker is dead on the founder's box, so CI is the only place these run.
+- **Blocked, needs the founder: WP-03 check 2.** The `unrouted` test email needs the Postmark webhook
+  token AND `X-Inbound-Proxy-Secret` plus authenticated production API access. Neither session will
+  read live secrets into a transcript — that is the exact operation that leaked three keys on
+  2026-07-27, and those three are still unrotated.
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
