@@ -374,3 +374,56 @@ exactly the failure class this plan exists to remove, and it was caught before a
    the first customer's job the mirror of the documented ICP?
 6. **Decide `Buyers`** — a full CRUD surface whose data reaches nothing. Same class as
    `OutputTemplate`. Retire, or wire?
+
+### 2026-07-30 — third session (`claude/stoic-tu-b94642`): the last local-Postgres-gated test now runs on CI
+
+**Owns: no WP packet.** This was an unowned small packet, found and closed in one pass. Recording it so
+a fourth session does not re-derive it.
+
+**BE PR #81 — open, MERGEABLE, CI green.** `FireIntegrationTriggerJobReliabilityTests.`
+`TwoConcurrentFinalFailures_OnPostgres_IncrementFailureCountByExactlyTwo` was the ONLY proof of the
+`FailureCount = FailureCount + 1` relational lost-update guarantee, and it was gated on
+`Host=localhost;Port=5435`. `ci.yml` has no postgres service and no port 5435, so on CI the gate always
+missed and the test reported **Passed having asserted nothing**. Moved to
+`ProcuLink.Api.Tests/Integration/WebhookFailureCountAtomicIncrementPostgresTests.cs` on the repo's
+existing Testcontainers idiom — per-class `postgres:16`, `[DockerRequiredFact]`,
+`[Collection("postgres-container")]`, `MigrateAsync()`. **No `ci.yml` change, no new package
+reference**, test files only, production code byte-identical to `origin/main`.
+
+- **CI run `30534967667`** — `Passed …TwoConcurrentFinalFailures_OnPostgres_IncrementFailureCountByExactlyTwo [57 ms]`.
+  Not Skipped. Api.Tests 1709 → **1710**, Infrastructure.Tests 1150 → **1149**, 0 skipped in both. The
+  old fully-qualified name appears **0 times** in the log — moved, not duplicated.
+- **Not vacuous, proven by mutation:** replacing the relative increment with a load-modify-save bump
+  fails it with `Expected sub.FailureCount to be 3 …, but found 2`. Reverted, rebuilt, re-ran green.
+- This was the **last** test in either repo gated on `localhost:5435`. Nothing now depends on the local
+  dev database.
+
+**Relation to WP-02.** WP-02 re-gated this same test as a declared skip via `[LocalPostgresRequiredFact]`,
+which made the reporting honest but left the coverage gap: it then reported *skipped* on CI. That edit is
+now moot — the test actually runs there. Expect a small conflict in
+`FireIntegrationTriggerJobReliabilityTests.cs` whichever of #81/WP-02 lands second; resolution is to keep
+#81's version (the test is deleted from that file).
+
+**Relation to BE #75 — checked, compatible in either merge order.** #81 covers the SURVIVING outbound
+webhook subscriptions (`FireIntegrationTriggerJob`, `IntegrationSubscription`), which #75's own
+`TheLiveNearNamesakes_AreStillPresent` lists as LIVE. `git grep` for
+`WebhookIngress|WebhookReportableFrom|HasDispatchMarker|webhook-ingress` across both #81 files returns
+**zero matches**, and #81 trips none of #75's forbidden-pattern list. #75 deletes
+`WebhookStatusClaimPostgresTests.cs`, which #81 used only as a pattern template, never as a dependency;
+`DockerProbe` (in `EndToEndPipelineTests.cs`) and `PostgresContainerCollection.cs` both survive on
+`origin/wave1/backend-retirements`. **No file is shared between #81 and #75.**
+
+**Corroborates the standing environment fact on BE `main`, independently.** Hit it before reading this
+file: a branch cut from local `main` was born `mergeable: false, mergeable_state: "dirty"` conflicting on
+`STATUS.md` — a file it never touched — and therefore received **zero** CI runs. Local `main` is 9 merged
+PRs behind `origin/main` AND carries 6 unpushed local docs commits (`80e04a5` back to `aa8554d`). Fix is
+`git rebase --onto origin/main <stale-main-sha>`, which replays only your own commits and leaves the
+unpushed docs commits where they belong. Note also: after force-pushing, the REST poke
+(`gh api repos/O/R/pulls/N`) returns the **old** head sha on the first call — call it twice before
+concluding anything about `mergeable`.
+
+**One correction to the shared prose, offered not applied** (append-only convention): "Docker is dead on
+this machine" was not true for this session — `docker info` returned server version 29.5.3 and local
+container runs succeeded (Api.Tests 1710/0/0 locally, matching CI exactly). The operative rule still
+holds and is the reason #81 exists: a locally-skipped Postgres test is not a passing test, so the CI run
+id is the citation.
