@@ -427,3 +427,135 @@ this machine" was not true for this session — `docker info` returned server ve
 container runs succeeded (Api.Tests 1710/0/0 locally, matching CI exactly). The operative rule still
 holds and is the reason #81 exists: a locally-skipped Postgres test is not a passing test, so the CI run
 id is the citation.
+
+### 2026-07-30 — merge session: Wave 1 landed in both repos, BE #75 held on a deploy-ordering defect
+
+**Owns: no WP packet.** This session's job was to land what other sessions had built — commit, merge,
+push, in the recorded order. Founder authorised the full Wave-1 sequence. Six PRs merged; one held.
+
+| # | PR | `main` after | Evidence |
+|---|---|---|---|
+| 1 | FE #42 — WP-10 marketing truth | `214b3f3` | CI success |
+| 2 | FE #46 — WP-10b setup-fee waiver | `a2b25f8` | CI success |
+| 3 | FE #48 — WP-11 billing (FE) | `1cea11a` | CI success (run superseded on `main` by `cancel-in-progress`) |
+| 4 | FE #47 — Wave 1 FE retirements | `ded9e04` | **FE `main` CI success** |
+| 5 | BE #82 — WP-11 billing (BE) | `46b29fe` | **BE `main` CI success** |
+| 6 | BE #80 — retire the `CustomTemplates` flag | `cd7feba` | **BE `main` CI success** |
+
+**Order was load-bearing, twice.** FE #47 before BE #75 per the recorded constraint — verified rather
+than assumed: on the merged #47 tree, `api/templates` and `api/rules` survive only inside a comment
+explaining their removal, `webhook-ingress` has zero references, and `rule-definitions` correctly
+survives (TRAP 3). FE #48 before BE #82, because #48 makes the frontend derive the plan from the API
+response instead of matching code literals, so it tolerates the old codes *and* the new ones; the
+reverse order would have shipped a frontend that mismatches live 403s.
+
+**WP-06's "hold until WP-12 lands" did not apply.** The constraint was recorded as "the redirect needs a
+live target". `src/lib/retired-routes.ts` points `/library/templates` at `/library/suppliers`, which is
+already live — not at anything WP-12 introduces. Wave 1 shipped without WP-12/BE #74.
+
+**Verified on production, not inferred.** All five retired routes answer 308 to the right destination,
+including the parameterised one preserving the id (`/upload/preview/abc123` → `/inbox/abc123`).
+`/customers` no longer serves the two fabricated pilot profiles and states it has no public references.
+`api.proculink.eu/health` 200 after both backend deploys.
+
+---
+
+#### ⚠️ BE #75 IS NOT MERGED — its column drop breaks the Worker. This is a real defect, not caution.
+
+The founder authorised the drop after a census showed it destroys almost nothing:
+
+| Target | Production contents |
+|---|---|
+| `output_templates` | **0 rows** |
+| `organisations.webhook_secret_encrypted` | **0 non-null values** |
+| `validation_rules` | **7 rows, 1 org** — 6 created within 73 ms of each other on 2026-05-31 (the seeded defaults this migration deliberately refuses to migrate), plus one row named `asd`. Every row has `created_at == updated_at`: never edited. |
+
+**Row count was the wrong risk metric.** A session working `wave1/backend-retirements` concurrently found
+the actual hazard and is converting the migration to expand/contract. Recording it here because it
+generalises well beyond this packet:
+
+Migrations run **only at API startup** (`ProcuLink.Api/Program.cs` — `await db.Database.MigrateAsync()`).
+The Worker (Railway service `aware-amazement`) is a **separate service that deploys independently and
+never migrates**. EF enumerates every mapped column for a non-projected entity query, and two hot paths
+materialise the whole `Organisation`: `StripeBillingService.LoadOrgAsync` — reached from
+`EmailPollOrgJob`'s `HasFeatureAsync` gate on *every* IMAP poll cycle — and
+`EmailSettingsService.UpdateAsync`. So from the moment a new API migrates until the Worker redeploys, the
+still-old Worker throws Npgsql `42703 — column o.webhook_secret_encrypted does not exist` on every org
+load: IMAP polling and every Worker-side billing gate stop, for an unbounded window if the Worker deploy
+lags. Per CLAUDE.md the Worker is mandatory.
+
+**The two `DROP TABLE`s are exempt** — no build, old or new, queries `output_templates` or
+`validation_rules` at all, so they are safe in that same window. The hazard is specific to a column still
+enumerated by a mapped entity.
+
+Required sequence: (1) unmap the column, keep it physically; (2) confirm **both** Railway services run the
+new build; (3) only then a hand-written drop migration — `dotnet ef migrations add` will not generate it,
+since the model already omits the property. `Wave1ColumnDropStaysDeferredTests` exists to make step 3 a
+deliberate act.
+
+**→ Proposed as TRAP 6, offered not applied** (append-only convention): *"a column with no data is safe to
+drop."* WRONG. Data loss and schema/code skew are different risks. `webhook_secret_encrypted` had zero
+non-null values and dropping it would still have taken IMAP polling down. Applies to any packet dropping a
+mapped column while the Worker deploys separately.
+
+---
+
+#### FE `main` went red at `e8fff8b`, and the cause was merge order
+
+Not the Wave-1 merges — `ded9e04` was green. FE #41 (the route-reachability guard) merged **after** #47
+deleted five routes, and #41 was built against a tree where they still existed. Two failures, both in
+`src/test/route-reachability.test.ts`:
+
+- `KNOWN_DEEP_LINK_ONLY` still parked `/drafts`, `/upload/preview/[orderId]` and
+  `/library/rule-definitions`, annotated "going away when the packet that owns them lands". #47 *is* that
+  packet. `the allowlist cannot rot` caught it — the test working exactly as designed.
+- `a launch-filtered registry entry is not a link (the /drafts shape)` pinned the only two **live**
+  examples of a registry href never rendered as a link: `/drafts` (in `NAV_MAIN`, filtered out by
+  `LAUNCH_CORE_HREFS`) and `/library/rule-definitions` (a `match`-only `HUB_TABS` entry). #47 deleted both
+  pages *and* both registry entries, so it failed with `expected [] to include '/library/rule-definitions'`.
+
+Fixed in **FE PR #50**: shrink the allowlist, and rewrite the second test around the invariant rather than
+the two dead entries. No coverage lost — `a registry href for something never rendered as a link is a
+phantom target` already pins that mechanism with a fixture, which is the form that does not decay when the
+app's registries change.
+
+**A guard that pins live data instead of a fixture has a shelf life.** #41's own self-link test says as
+much in its comment ("pinned with a fixture because the real app has no self-only route"), and the two
+assertions that did the opposite are exactly the two that broke.
+
+---
+
+#### Process notes for the next session that lands work
+
+**A clean worktree does not mean the chip finished.** `wave1/backend-retirements` showed `0` dirty files
+and `0 0` against origin at the start of this session; ~40 minutes later it had 6 modified files and a new
+`Wave1ColumnDropStaysDeferredTests.cs`, most recent write 3 minutes old. Merging on the strength of the
+earlier reading would have shipped the version that session was mid-way through fixing. Re-check the newest
+mtime **immediately before each merge**, excluding `node_modules`, `.git`, `.next`, `obj`, `bin` — and
+`tsconfig.tsbuildinfo`, which gave a false "live" reading.
+
+**A dirty worktree can be mid-mutation-check, not mid-feature.** `wp04/route-reachability-fe` looked like
+uncommitted work worth rescuing. Its tree contained `if (false) continue;` — a probe disabling the registry
+exclusion — and the *uncommitted* diff was the restoration plus the two meta-tests that catch it.
+Committing that snapshot would have landed a dead guard. To back out of a chip's branch without disturbing
+its files: `git reset --mixed <pushed-head>` leaves the working tree untouched. Back the files up first —
+`git merge --abort` cannot always reconstruct pre-existing local modifications.
+
+**Several branches had `origin/main` as their upstream.** `feat/promote-output-tree-to-supplier`,
+`feat/widen-canonical-output-row`, `fix/delivery-content-type-and-filename`, `test/orphan-guard`,
+`ci/run-the-tests-we-already-wrote` — a bare `git push` from any of them pushes to **`main`** and deploys.
+Always use an explicit `src:dst` refspec when pushing chip branches.
+
+**Eight branches held commits that existed only on this disk** (unreachable from any remote), including
+local `main`'s four docs commits and the 9-commit `codex/video-remake-2026-07` track. Pushed as backup refs
+— CI in both repos triggers only on `main` and on PRs targeting `main`, so a backup ref costs nothing.
+Local BE `main` was left diverged and untouched; its commits are preserved at
+`backup/be-main-local-2026-07-30`.
+
+**`bun install --frozen-lockfile` before trusting any frontend result** — the standing note is right, and
+the failure is deceptive rather than loud: the shared checkout was missing `remark-gfm`, which fails 3
+files at **collect** while the summary reports `Tests 1165 passed` and `0 failed`. After installing:
+107 files / 1205 tests pass.
+
+**BE #77 (WP-20) untouched**, per the founder gate — it changes what real suppliers receive. Its hard
+dependency FE #43 is likewise unmerged, so nothing has half-shipped.
