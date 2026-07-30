@@ -50,11 +50,59 @@ concurrent write then merges trivially instead of conflicting.
   read live secrets into a transcript — that is the exact operation that leaked three keys on
   2026-07-27, and those three are still unrotated.
 
+### 2026-07-30 later — first merge, and four facts that change other packets
+
+**WP-01 IS MERGED.** `origin/main` FE is at `3b0feea`. The push-to-main run confirms
+`Unit tests + lint + conformance gates => success`. **From here, frontend "tests pass" claims in either
+session are actually checked.** This was the highest-leverage merge available; it is done. The founder
+authorised this one specifically — everything else stays draft.
+
+**BE PR #75 (draft, CI green, 4029 tests / 0 failures)** — Wave 1 backend retirements. Four outcomes that
+other packets must respect:
+
+1. **`RuleDefinition` was KEPT — it has live consumers.** `RuleDefinitionService` +
+   `RuleDefinitionBackfillService` are DI-registered at `Program.cs:508-509` and bound into the live
+   acceptance engine via `SupplierAcceptanceRule.RuleDefinitionId`. So `/library/rule-definitions` (the
+   page) dies and `/api/rule-definitions` (the API) stays. **→ WP-17 must not assume the deletion was
+   total when it touches the acceptance engine.**
+2. **12 endpoints removed** — four `/api/templates`, five `/api/rules`, three
+   `/api/webhook-ingress/{slug}/*`. Also gone with the dead callback: `OrderStatusMachine.WebhookReportableFrom`,
+   `HasDispatchMarker`, the `"webhook"` rate-limit policy, and the `IDistributedCache` nonce store.
+   **Outbound webhook subscriptions untouched**, protected by a new guard test
+   `TheLiveNearNamesakes_AreStillPresent`. **→ WP-22 lives in `InboundEmailController`, the near-namesake
+   most at risk from a future cleanup — it must not weaken that guard.**
+3. **`OrderStatusMachine.Allowed` deliberately left unchanged.** The edges once justified by "a supplier
+   status webhook" are still reachable via `OrderResolutionService.cs:256`, `DeliveryService.cs:771` and
+   `MarkDelivered`. No order lifecycle was narrowed. **→ WP-19 rewrites that machine and must not read the
+   endpoint deletion as licence to prune edges.**
+4. **`/welcome` is NOT an orphan — finding resolved, not escalated.**
+   `ProcuLink.Api/Services/StripeBillingService.cs:335` sets
+   `SuccessUrl = "{frontendUrl}/welcome?upgraded={plan}&interval={interval}&session_id={CHECKOUT_SESSION_ID}"`.
+   Every paying customer lands there after checkout — hence the `?upgraded=` param, the `noindex`, and the
+   deliberate sitemap absence. Deleting it would have broken the post-payment experience.
+   Docs nit: `welcome/layout.tsx:3` says "post-signup"; it is post-**checkout**. STATUS.md is right, the
+   comment is wrong.
+
+**Rate contention is real and is being managed.** The execution session held 9-12 concurrent agents; the
+plan session's design round recorded 7 agent starts and 0 completions against a burst of
+`API Error: 529 Overloaded`. The execution session has voluntarily paused new launches until DB-1/DB-2/DB-6
+return, because those block Wave 4 and WP-15/16 and sit further down the critical path. **Lesson: 7 starts
+with 0 results reads as "bad API day" from inside one session — it takes the other session saying "I am
+holding 12 agents" to diagnose it.** If both sessions run wide, coordinate the ceiling.
+
+### New small packets found in passing — unowned
+
+| Item | Evidence | Options |
+|---|---|---|
+| **A 404 is shipping to admins today** | `src/lib/guides.ts:262-263` registers slug `unfreeze-a-pilot-workspace` at `/admin/guides/unfreeze-a-pilot-workspace`; `git ls-tree -r --name-only origin/main \| grep -i unfreeze`(piped) returns nothing | **Write the page** (preferred) or delete the entry. The capability EXISTS — BE #59 (`0e1ac58`) shipped `POST /api/admin/organisations/{id}/account-status`, and STATUS.md already documents the recipe including the critical detail that it is TWO calls in order: extend the trial via `.../limits` FIRST while still `read_only`, THEN flip the status, or the lapsed Pilot window re-expires it immediately. The runbook prose exists; only the page is missing. Deleting the entry stops the 404 but loses the one runbook that recovers a frozen customer org. |
+| `/one-pager` unreachable in-app | print collateral, published only via `sitemap.ts` | link it, or delete it — founder call |
+| This is the reverse of what the guard checks | `route-reachability.test.ts` finds routes with no inbound link; this is an inbound link with no route | extend the guard to check both directions |
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
 |---|---|---|---|---|
-| 01 | CI runs the tests we already wrote | 🟠 | `ci/wp01-reconciled` (in flight) | **Two sessions built this independently.** `wp01/ci-gate@c00dc39` (chip) is CI-validated and carries the `NEXT_PUBLIC_USE_MOCK:'false'` fix; `ci/run-the-tests-we-already-wrote@4728000` (mine) has the guard test but the mock-mode defect and 3 vacuous assertions. FIX-01 merges best-of-both. |
+| 01 | CI runs the tests we already wrote | 🟢 **MERGED** `3b0feea` | `ci/wp01-reconciled` (in flight) | **Two sessions built this independently.** `wp01/ci-gate@c00dc39` (chip) is CI-validated and carries the `NEXT_PUBLIC_USE_MOCK:'false'` fix; `ci/run-the-tests-we-already-wrote@4728000` (mine) has the guard test but the mock-mode defect and 3 vacuous assertions. FIX-01 merges best-of-both. |
 | 02 | No test may pass vacuously | ⬜ | — | Every live-transport test is an env-gated silent `return`. `Live_ImapIngress` dead since `de4ea0e`. |
 | 03 | Two production truth-checks | 🟡 **half done** | — | **Check 1 DONE 2026-07-27: `Connections__RevisionAuthority = true` on BOTH Railway services — refutes a P0 and rescopes WP-21.** Check 2 (is `unrouted` reachable on prod) still open: needs one test email with the org default cleared. |
 | 04 | Orphan guard | 🟠 | BE `test/orphan-guard@8e3b8c7` · FE `@93fe22e` | Correctly RED (8 BE orphans, 3 FE). Refuted on 8 counts incl. 2 vacuous meta-tests. FIX-04 also lands the **shrink-only dated allowlist** so main stays green. |
