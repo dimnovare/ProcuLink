@@ -40,7 +40,7 @@
 | `in-sftp-pull` | ✓ | ✓ | supplier Delivery tab | ~ | ~ env-gated | ✗ | local `atmoz/sftp` only |
 | `in-s3-pull` | ✓ | ✓ | supplier Delivery tab | ~ | ~ env-gated | ✗ | local MinIO only |
 | `in-imap` | ✓ | ✓ | `/settings?tab=email` | ~ | **✗ dead since `de4ea0e`** | ✗ | never run against a real mailbox |
-| `in-webhook-ack` | ✓ | ✓ | **✗** | **✗** | ~ | ✗ | org HMAC secret has no writer → every callback 401s (WP-09) |
+| `in-webhook-ack` | — | — | — | — | — | — | **RETIRED by founder decision 2026-07-27** (WP-09). Never reachable — the org HMAC secret had no writer, so every callback 401'd. Remove from `/formats`, the help centre and all marketing. Re-introduce only for a named customer |
 
 ### Outbound delivery
 
@@ -96,9 +96,9 @@
 | `reusable-output-mapping` | ✓ | **✗** | **✗** | ✓ | ✗ | no editor exists for `PoMappingConfig.Output` |
 | `output-designer` | ✓ | ✓ | **✗** | ✓ | ✗ | per-order only — the wedge, unfinished (WP-12) |
 | `output-templates-page` | **✗ orphan** | ✓ | ✗ | ~ | ✗ | writes to a table nothing reads; body silently discarded (WP-06) |
-| `validation-rules` | **✗ never evaluated** | ✓ | ✗ | ✗ | ✗ | working CRUD, zero evaluator (WP-07) |
+| `validation-rules` | — | — | — | — | — | **RETIRED by founder decision 2026-07-27** (WP-09/WP-07). Was working CRUD with zero evaluator. `acceptance-profiles` below is now the ONE rules concept in the product. Do not migrate the six seeded defaults as data — they were never evaluated, so importing them would silently start blocking orders |
 | `acceptance-profiles` | ✓ | ✓ | ~ | ✓ | ✗ | **browser-only enforcement**, and none below 1024px (WP-17/18) |
-| `revision-pinning` | ✓ | ✓ | ~ | ✓ | **? flag** | gated on `Connections:RevisionAuthority` — **WP-03 answers this** |
+| `revision-pinning` | ✓ | ✓ | ~ | ✓ | **✓ flag ON** | `Connections__RevisionAuthority = true` on BOTH Railway services, verified 2026-07-27. Reproducibility is LIVE. The audit's "inert in production" P0 is **refuted**. Still unproven: that a pinned order does not re-route after a live config edit (WP-21) |
 | `replay-impact-diff` | ✓ | ✓ | ~ | ✓ | ✗ | shows impact; cannot re-process (WP-35) |
 | `retry-dead-letter` | ✓ | ✓ | ~ | ✓ real PG | ✓ | genuinely strong; any 4xx dead-ends (WP-19) |
 | `order-passport` | ✓ | ✓ | ~ | ✓ | ✓ | no bytes, no hash (WP-34) |
@@ -123,7 +123,7 @@
 
 | # | Unknown | How to settle | Packet |
 |---|---|---|---|
-| 1 | Is `Connections:RevisionAuthority` on in production? | `railway variables \| grep -i RevisionAuthority` | WP-03 |
+| 1 | ~~Is `Connections:RevisionAuthority` on in production?~~ | **RESOLVED 2026-07-27 — YES, `true` on both the `ProcuLink` API and the `aware-amazement` Worker.** ⚠️ run `railway variables` filtered through `grep`; an unfiltered call leaked three live secrets | ~~WP-03~~ done |
 | 2 | Is `unrouted` reachable on production since `3a12f22`? | one test email with the org default cleared | WP-03 |
 | 3 | Do SFTP / FTPS / ERP delivery work **at all**? | one real transfer each, SHA-256 compared at the receiver | WP-38 |
 | 4 | Does the authenticated production UI behave as the code suggests? | recorded pass through all 12 journeys, both viewports | WP-39 |

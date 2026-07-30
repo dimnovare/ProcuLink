@@ -37,7 +37,10 @@ Every packet is self-contained: an agent should be able to execute it from this 
 **Do:**
 1. `railway variables | grep -i RevisionAuthority` — is `Connections:RevisionAuthority` set on the API and Worker services? `EffectiveConnectionConfigResolver.cs:18,32,39-40` gates the entire versioning story on it; `appsettings.Development.json:46` sets it true and production config does not.
 2. With the org default cleared, send one real email to `{slug}@orders.proculink.eu` and confirm the order parks `unrouted`. `3a12f22` (#68) removed the oldest-active-supplier fallback in code but this has never been re-measured live.
-**AC:** both answers written into `04-CAPABILITY-TRUTH-LEDGER.md` with a date. WP-21's scope is set by answer 1.
+**STATUS 2026-07-27 — check 1 DONE, check 2 OPEN.**
+Check 1 result: **`Connections__RevisionAuthority = true` on BOTH Railway services** (`ProcuLink` API and `aware-amazement` Worker). Revision authority is ON in production; the audit's P0 is refuted and WP-21 is rescoped accordingly.
+⚠️ **Run `railway variables` FILTERED.** An unfiltered call on 2026-07-27 printed the live OpenAI API key, the PostHog project key and the Neon Postgres password into a session transcript — all three now need rotating. Always pipe through `grep` for the single key you need.
+**AC:** both answers written into `04-CAPABILITY-TRUTH-LEDGER.md` with a date.
 **Deps:** none. Read-only except the test email. **Skills:** none.
 
 ## WP-04 · Orphan guard — `M` — risk: low
@@ -69,13 +72,14 @@ Every packet is self-contained: an agent should be able to execute it from this 
 **Deps:** WP-04. Ideally sequence **after** WP-12/WP-13 so the redirect target exists — otherwise redirect to `/library/suppliers` in the interim.
 **Skills:** `superpowers:brainstorming` (deletion scope), `code-review:code-review`.
 
-## WP-07 · Resolve the rules duplication — `M` — risk: medium — **BLOCKED on decision 1**
+## WP-07 · Retire the duplicate rules engine — `M` — risk: medium — **DECISION 1 ANSWERED: Path A, retire**
 **Why:** `/library/rules` is working CRUD over `ValidationRule`, seeded with six default rules including "Order total mismatch" marked error/auto-block — and the **only** consumer of `IValidationRuleService` is its own controller. The drawer even reports "Triggered 0 times". Meanwhile `SupplierAcceptanceRule` is the engine that runs. Two rule engines is the confusion.
 **Files:** `BE/ProcuLink.Infrastructure/Services/ValidationRuleService.cs`, `BE/ProcuLink.Api/Controllers/ValidationRulesController.cs`, `FE/src/app/(app)/library/rules/**`, `FE/src/app/(app)/library/rule-definitions/**`
-**Path A (recommended — retire):** delete `ValidationRule` + controller + both pages; redirect `/library/rules` → the supplier Validation-rules tab; keep `RuleDefinition` only if it has a live consumer (verify — `/library/rule-definitions` has **no inbound link anywhere**).
-**Path B (wire):** make `ValidationRule` the org-wide default acceptance profile consumed by `SupplierAcceptanceService`, with per-supplier rules overriding.
-**AC:** exactly one rules concept remains in the UI, and toggling it changes what happens to an order. Prove with a RED-first test: a rule that blocks, blocks.
-**Deps:** decision 1; sequence before WP-17. **Skills:** `superpowers:brainstorming`, `superpowers:test-driven-development`.
+**RULING (2026-07-27): retire.** Delete `ValidationRule`, `ValidationRuleService`, `ValidationRulesController`, `/library/rules` and `/library/rule-definitions`. Ship the drop migration. Permanent redirect `/library/rules` → the supplier **Validation rules** tab (R4). `SupplierAcceptanceRule` becomes the single rules concept in the product.
+**Before deleting `RuleDefinition`, verify it separately** — it may or may not have a live consumer; `/library/rule-definitions` has **no inbound link anywhere**, which is why it is in scope. If `RuleDefinition` *does* have a consumer, keep the entity and delete only the orphan page.
+**AC:** exactly one rules concept remains in the UI, and toggling it changes what happens to an order. Prove with a RED-first test: a rule that blocks, blocks. Orphan guard (WP-04) goes green on `ValidationRule` and `/library/rule-definitions`. No help article or search result 404s.
+**Do NOT** carry the six seeded default rules forward as data — they were never evaluated, so migrating them would import six rules that silently start blocking orders. If the equivalent defaults are wanted, they are a separate, deliberate seeding decision on `SupplierAcceptanceRule`.
+**Deps:** WP-04; sequence before WP-17. **Skills:** `superpowers:brainstorming`, `superpowers:test-driven-development`.
 
 ## WP-08 · Retire the dead routes — `S` — risk: low
 **Why:** `/drafts` is a nav destination that can never contain anything. `/upload/preview/[orderId]` is unreachable, backed by a 1,539-line component; its only consumer `parseStall.ts` has one importer.
@@ -84,12 +88,13 @@ Every packet is self-contained: an agent should be able to execute it from this 
 **AC:** orphan guard green; both redirects test-pinned; no nav item points at an empty destination.
 **Deps:** WP-04. **Skills:** none.
 
-## WP-09 · Webhook ingress: writer or retire — `M` — risk: low — **BLOCKED on decision 2**
+## WP-09 · Retire webhook ingress — `M` — risk: low — **DECISION 2 ANSWERED: Path B, retire**
 **Why:** `Organisation.WebhookSecretEncrypted` doc-comments "Set/rotated by org admins"; `git grep` on `origin/main` finds **4 non-test hits, all reads**. No writer, no endpoint, no UI. Every supplier callback 401s forever.
-**Path A (ship):** `POST /api/settings/webhook-secret` — generate + rotate, return once, encrypt via `DeliveryEncryptionService`; surface on `/settings?tab=api` beside API keys.
-**Path B (retire):** delete `WebhookIngressController`, the column, the FE surface; remove the channel from the ledger and all docs.
-**AC:** either a customer can obtain a secret and a signed callback returns 200, or the channel is gone from every claim surface.
-**Deps:** decision 2. **Skills:** `superpowers:test-driven-development`.
+**RULING (2026-07-27): retire.** No customer has asked for it and it has been unreachable since it shipped. Re-introduce only when a named customer needs it — at that point the writer is a half-day.
+**Delete:** `WebhookIngressController`, the `Organisation.WebhookSecretEncrypted` column (drop migration), `HmacWebhookVerifier` **only if** it has no other consumer — verify first; the outbound webhook subscriptions are a *different* feature and must keep working. Remove the channel from the FE, `/formats`, the help centre, the capability ledger and every marketing surface.
+**AC:** the channel is gone from every claim surface, outbound webhook subscriptions still fire with a valid HMAC, and the orphan guard goes green on `WebhookSecretEncrypted`.
+**Careful:** inbound *email* and inbound *webhook* are separate channels sharing similar names. Do not touch `InboundEmailController`, the Postmark path, or the CF verify-Worker.
+**Deps:** WP-04. **Skills:** `superpowers:test-driven-development`.
 
 ## WP-10 · Marketing truth — `S` — risk: none
 **Why:** `/security:40-41` claims *"All order data is processed and stored in EU-region infrastructure. No data leaves the region without an explicit, contracted subprocessor agreement"* while four named subprocessors are US and `appsettings.Production.json` sets `Ai:Provider=openai` with no endpoint override (`OpenAiPdfOrderExtractor.cs:259,294`) — PO line text reaches `api.openai.com`. `/customers:28,34,42` ships two invented pilot profiles ("Mid-market wholesaler · ~120 POs/month") contradicted by the production inventory.
@@ -189,13 +194,15 @@ Every packet is self-contained: an agent should be able to execute it from this 
 **Tests:** table-driven mime/ext test; an SFTP test proving no clobber.
 **Deps:** none. **Skills:** none.
 
-## WP-21 · Revision authority decision — `M`/`L` — risk: high — **BLOCKED on decision 4 + WP-03**
-**Why:** the whole versioning/reproducibility story is gated on `Connections:RevisionAuthority`, set true only in `appsettings.Development.json:46`. If it is off in production, every "processed under the config it was ingested with" claim is false there, and replay vets a bundle that may not govern delivery.
-**Path A (enable):** turn it on in Railway; accept that pinned orders freeze config; add a production smoke proving a pinned order does not re-route after a live config edit.
-**Path B (retire):** delete `SupplierConnection`, `SupplierConnectionRevision`, `ConnectionRevisionItemMapping`, `ConnectionBackfillService`, the `/connections` surface and the replay UI.
-**AC:** either reproducibility is real and proven on production, or the concept is gone from the product and the ledger.
-**Risk: high** — Path A changes live behaviour for in-flight orders. Ship behind a staged rollout and watch `/operations/log`.
-**Deps:** decision 4, WP-03. **Skills:** `superpowers:brainstorming`, `superpowers:writing-plans`.
+## WP-21 · Prove revision authority — `M` — risk: low — **RESCOPED 2026-07-27: the flag is ALREADY ON**
+**What changed:** the audit's P0 said the versioning subsystem was inert in production because `Connections:RevisionAuthority` is set true only in `appsettings.Development.json:46`. **That was a wrong reading.** Verified 2026-07-27: `Connections__RevisionAuthority = true` on **both** Railway services — `ProcuLink` (API) and `aware-amazement` (Worker). Reproducibility is live. Path B (retire the subsystem) is off the table; it is load-bearing.
+**Do:**
+1. A production smoke proving a pinned order does **not** re-route after a live config edit. The behaviour is live and has never been observed — this is the packet's real deliverable.
+2. Correct every doc and code comment describing the flag as Development-only, including the audit's own claim and anything in `STATUS.md`.
+3. Add a startup assertion (or a `/health/ready` line) that surfaces the flag's effective value, so it can never again be a fact nobody can read.
+4. Confirm the flag is set on any future service that resolves an effective config.
+**AC:** an operator edits a supplier's delivery config while an order is pinned to an earlier revision, and that order still delivers under its pinned bundle — proven on production with the order id recorded in the ledger.
+**Deps:** none (WP-03 is done). **Skills:** `superpowers:verification-before-completion`.
 
 ## WP-22 · Ingest duplicate prevention — `M` — risk: medium
 **Why:** Postmark PUSH inbound email has **no message-id or content dedupe** while the IMAP PULL path does. REST ingress idempotency is **check-then-create, not an atomic claim** — concurrent duplicates create two orders. The three pull channels already do this correctly (claim-first against a unique index); copy that pattern.
@@ -286,13 +293,21 @@ Every packet is self-contained: an agent should be able to execute it from this 
 
 # WAVE 5 — Self-running
 
-## WP-33 · Auto-send when clean — `L` — risk: high — **BLOCKED on decision 3**
+## WP-33 · Auto-send when clean — `L` — risk: high — **DECISION 3 ANSWERED: automation, dry-run first**
 **Why:** `TransformOrderJob.Enqueue` has exactly **one caller** — `OrdersController.cs:1475`, the manual transform endpoint. No order advances past `ready` without a human click. The 100th identical PO that auto-resolves every line still needs an operator to open it and press Send. The recurring-order case — the commercial premise — saves mapping work but saves no clicks.
-**Do (if decision 3 = automation):** a per-supplier `AutoTransform`, or reuse `AutoDeliver` as one "auto-send when clean" switch, **default OFF**; enqueue from the parse completion when status lands `ready` and no blocking issue exists; a visible per-supplier indicator and an org-level kill switch.
+**RULING (2026-07-27): ProcuLink is an automation product.** Build it — but ship it in three stages, and do not skip stage 1.
+
+**Stage 1 — dry run (ships first, on for one week).** The switch exists, defaults OFF, and when ON it **logs the PO it would have sent and does not send it**. An audit row per would-be send: order id, supplier, artifact SHA-256, the channel it would have used, and the reason it was considered clean. One week of this data is what earns the right to stage 2.
+
+**Stage 2 — live, one supplier.** Flip a single supplier the founder chooses. Watch `/operations/log`.
+
+**Stage 3 — generally available**, still per-supplier opt-in, still default OFF, with an **org-level kill switch** that stops every automatic send immediately without touching per-supplier config.
+
+**Build:** a per-supplier `AutoTransform` flag, or reuse `AutoDeliver` as one "auto-send when clean" switch — decide from the code, and say which and why. Enqueue from parse completion when the status lands `ready` **and** no blocking issue exists **and** the supplier has a delivery config. A visible per-supplier indicator so an operator can always see which suppliers are automatic.
 **AC:** with the switch on, a fully-resolved recurring PO goes ingest → delivered with **zero human interaction**, and every such send is audited as automatic.
 **Tests:** real-Postgres end-to-end; a negative test proving an order with any blocking issue never auto-sends; an idempotency test proving a Hangfire refetch cannot double-send.
-**Risk: high** — this sends real POs unattended. Ship default-off, with a per-supplier opt-in and a dry-run mode that logs what it would have sent for one week.
-**Deps:** decision 3, WP-17, WP-19. **Skills:** `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:test-driven-development`.
+**Risk: high** — this sends real POs unattended. The three-stage rollout above is the mitigation and is not optional. Stage 1 (dry run) must run a full week and its log must be read before stage 2.
+**Deps:** WP-17, WP-19. **Skills:** `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:test-driven-development`.
 
 ## WP-34 · Prove what was sent — `M` — risk: low
 **Why:** `GET /api/orders/{id}/artifacts/{artifactId}/download` exists (`OrdersController.cs:2137`) and `getDownloadUrl` wraps it (`api-client.ts:905`) — with **zero callers**. The passport shows a file *key* and no SHA-256, so an operator disputing a supplier claim cannot retrieve or fingerprint the bytes.

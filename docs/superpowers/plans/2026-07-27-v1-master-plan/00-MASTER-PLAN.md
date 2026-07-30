@@ -181,14 +181,30 @@ This is how "true to our claims" stops being a periodic audit and becomes a buil
 
 ---
 
-## 6. Decisions only the founder can make — **BLOCKING**
+## 6. Founder decisions — **ALL FOUR ANSWERED 2026-07-27**
 
-Four packets cannot start until these are answered. Answer them before Wave 1 begins; they are all one-liners.
+These are settled. Do not re-litigate them; build to the ruling.
 
-1. **`/library/rules`** — wire the org-wide `ValidationRule` table into `SupplierAcceptanceService` as the default profile, or retire it and keep only per-supplier acceptance rules? *(Recommend: retire. Two rule engines is the confusion, not the coverage.)* → WP-07
-2. **Webhook ingress** — ship the org HMAC secret writer, or retire the channel until a customer asks? *(Recommend: retire; no customer has asked, and it is currently unreachable anyway.)* → WP-09
-3. **Auto-send** — is ProcuLink an automation product or a review workbench? *(Recommend: automation with a per-supplier "auto-send when clean" switch, default OFF. It is the only answer that makes journey #3 worth paying for.)* → WP-33
-4. **Revision authority** — turn the flag on in production and accept that pinned orders freeze their config, or retire the versioning subsystem? *(Recommend: turn it on. It is a genuine differentiator EDI VANs bill separately for — but only if it is actually on.)* → WP-21
+**1. `/library/rules` → RETIRE.** Delete the `ValidationRule` table, `ValidationRuleService`, `ValidationRulesController`, `/library/rules` and `/library/rule-definitions`. Permanent redirect `/library/rules` → the supplier **Validation rules** tab. `SupplierAcceptanceRule` becomes the one and only rules concept in the product. Two rule engines was the confusion, not the coverage. → **WP-07 takes Path A.**
+
+**2. Webhook ingress → RETIRE.** Delete `WebhookIngressController`, the `Organisation.WebhookSecretEncrypted` column, and every FE surface referencing the channel. Remove it from the capability ledger, `/formats`, the help centre and all marketing. No customer has asked for it, and it has been unreachable since it shipped. Re-introduce only when a named customer needs it. → **WP-09 takes Path B.**
+
+**3. Auto-send → AUTOMATION.** ProcuLink is an automation product, not a review workbench. Ship a **per-supplier "auto-send when clean" switch, default OFF**, with an org-level kill switch. Ship it in **dry-run mode for the first week** — it logs the PO it *would* have sent without sending, so the decision can be audited before a real order moves unattended. Only then flip a single supplier live. This is the only answer that makes journey #3 worth paying for. → **WP-33 builds this shape.**
+
+**4. Revision authority → ALREADY ON. Decision answered by fact, not by choice.**
+Verified 2026-07-27: `Connections__RevisionAuthority = true` on **both** Railway services — `ProcuLink` (API) and `aware-amazement` (Worker). The audit's P0 "the versioning subsystem is inert in production" is **REFUTED**; the flag being Development-only was a wrong reading of the config.
+**WP-21 is therefore rescoped, and shrinks from `L` to `M`:**
+- (a) a production smoke proving a pinned order does **not** re-route after a live config edit — the behaviour is live and has never been observed;
+- (b) correct every doc and comment that describes the flag as Development-only;
+- (c) confirm the flag is set on any future service that resolves an effective config.
+Path B (retire the versioning subsystem) is **off the table** — it is live and load-bearing.
+
+---
+
+### Still open — not blocking, but resolve before Wave 4
+
+- **WP-03 check 2** — is `unrouted` reachable on production since `3a12f22` (#68)? Needs one real email to `{slug}@orders.proculink.eu` with the org default supplier cleared. Until then, "an order with no identifiable supplier parks safely" is an unproven claim.
+- **The ICP question.** The only two real customer POs in the repo (`real-cxml-1.2-ariba-punchout-mpn-differs.xml`, `real-cxml-1.1-mpn-equals-supplier-part.xml`) are orders **received by** the ProcuLink user, not sent by them. Either convenience fixtures, or the first real customer's job is the mirror of the documented ICP. Confirm before WP-25/WP-26 rewrite the vocabulary around "outbound".
 
 Plus one non-blocking but important question the audit could not resolve: **the only two real customer POs in the repo (`real-cxml-1.2-ariba-punchout-mpn-differs.xml`, `real-cxml-1.1-mpn-equals-supplier-part.xml`) are orders *received by* the ProcuLink user, not sent by them.** Either they are convenience fixtures, or your first real customer's job is the mirror image of the documented ICP. Confirm before Wave 4 fixes the vocabulary around "outbound".
 
