@@ -28,8 +28,11 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Sftp;
 
-    // The deterministic filename is overwritten on re-send, so a crash-recovery re-drive
-    // cannot leave the supplier holding two copies.
+    // Safe in the sense ResendSafety means: a re-send after an unknown outcome cannot DUPLICATE at
+    // the supplier. The remote path is a deterministic function of the order, so a re-send either
+    // replaces its own file (overwriteExisting on, the default) or refuses outright (overwriteExisting
+    // off) — neither produces a second copy. See OverwriteExistingFromConfig for the trade-off the
+    // off setting makes.
     public ResendSafety ResendSafety => ResendSafety.Safe;
 
     public SftpDeliveryDispatcher(ILogger<SftpDeliveryDispatcher> logger, OutboundRequestGuard guard)
@@ -47,9 +50,9 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         CancellationToken ct,
         string? idempotencyKey = null)
     {
-        // A3 idempotency: SFTP is already idempotent by construction. The remote filename is the
-        // deterministic sanitised PO filename and UploadFile below uses canOverride:true, so a
-        // crash-recovery re-upload OVERWRITES the same path rather than creating a second file —
+        // A3 idempotency: SFTP is already idempotent by construction. The remote filename is a
+        // deterministic function of the ORDER (PO number + order id — see DeliveryService.BuildFileName),
+        // so a crash-recovery re-upload targets the same path rather than creating a second file —
         // no supplier idempotency key is needed (idempotencyKey is intentionally unused here).
         try
         {
@@ -81,7 +84,10 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
                 return new DeliveryResult(false, $"SFTP delivery blocked: {guardResult.Reason}");
 
             // SSH.NET is synchronous — wrap in Task.Run so we honour the CancellationToken.
-            return await Task.Run(() => UploadSync(content, remotePath, connectionInfo, cfg.MakeDirectories, ct), ct);
+            return await Task.Run(
+                () => UploadSync(content, remotePath, connectionInfo, cfg.MakeDirectories,
+                                 OverwriteExistingFromConfig(config.ConfigJson), ct),
+                ct);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -104,6 +110,7 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         string remotePath,
         ConnectionInfo connectionInfo,
         bool makeDirectories,
+        bool overwriteExisting,
         CancellationToken ct)
     {
         using var client = new SftpClient(connectionInfo);
@@ -124,17 +131,53 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
             return new DeliveryResult(false, "SFTP connection timed out.");
         }
 
+        try
+        {
+            return UploadCore(new SshNetUploadSession(client), content, remotePath,
+                              makeDirectories, overwriteExisting, _logger, ct);
+        }
+        finally
+        {
+            try { client.Disconnect(); } catch { /* swallow */ }
+        }
+    }
+
+    /// <summary>
+    /// Everything that happens on a connected SFTP session: the overwrite decision, directory
+    /// creation, the upload, and the error mapping. Split out from the transport so it can be
+    /// exercised against a fake session — the overwrite behaviour is a live-path decision about
+    /// real purchase orders and must be covered by a test that fails when it changes.
+    /// </summary>
+    internal static DeliveryResult UploadCore(
+        ISftpUploadSession session,
+        byte[] content,
+        string remotePath,
+        bool makeDirectories,
+        bool overwriteExisting,
+        ILogger logger,
+        CancellationToken ct)
+    {
         ct.ThrowIfCancellationRequested();
 
         if (makeDirectories)
         {
-            EnsureRemoteDirectoryExists(client, GetDirectoryPath(remotePath));
+            EnsureRemoteDirectoryExists(session, GetDirectoryPath(remotePath));
+        }
+
+        // Explicit refusal rather than a silent replace, when the operator has turned overwrite off.
+        // Reported as a normal failed delivery (retry/dead-letter as usual), never as a success.
+        if (!overwriteExisting && session.Exists(remotePath))
+        {
+            return new DeliveryResult(false,
+                $"A file named '{remotePath}' is already on the supplier's server and this connection " +
+                "is set not to replace existing files. Remove or rename the file there, or turn " +
+                "\"replace existing files\" back on for this supplier.");
         }
 
         using var ms = new MemoryStream(content);
         try
         {
-            client.UploadFile(ms, remotePath, canOverride: true);
+            session.UploadFile(ms, remotePath, canOverride: overwriteExisting);
         }
         catch (SftpPathNotFoundException)
         {
@@ -146,15 +189,49 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "SFTP upload failed after connection.");
+            logger.LogWarning(ex, "SFTP upload failed after connection.");
             return new DeliveryResult(false, "SFTP upload failed after a successful connection.");
-        }
-        finally
-        {
-            try { client.Disconnect(); } catch { /* swallow */ }
         }
 
         return new DeliveryResult(true, null);
+    }
+
+    /// <summary>
+    /// Whether an upload may replace a file already at the remote path. Absent key ⇒ TRUE, which is
+    /// exactly what every SFTP connection did before this setting existed, so no configured supplier
+    /// changes behaviour on deploy.
+    ///
+    /// <para>
+    /// True is also the safe default on the reliability axis, not merely the compatible one.
+    /// Delivery here is at-least-once: a crash between the network write and the outcome commit
+    /// leaves a re-drive that must be able to REPAIR its own possibly-truncated file. With overwrite
+    /// off that re-drive refuses instead, and the supplier keeps a partial document until a human
+    /// clears it. The clobber this packet fixes — two DIFFERENT orders sharing a PO number — is
+    /// solved by the filename carrying the order id, not by this flag; the flag exists for operators
+    /// whose remote directory must be strictly append-only and who accept that trade.
+    /// </para>
+    /// </summary>
+    internal static bool OverwriteExistingFromConfig(string? configJson)
+    {
+        if (string.IsNullOrWhiteSpace(configJson)) return true;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(configJson);
+            return !doc.RootElement.TryGetProperty("overwriteExisting", out var flag)
+                || flag.ValueKind switch
+                {
+                    JsonValueKind.False => false,
+                    JsonValueKind.True  => true,
+                    // Anything else (null, a string, a number) is not an operator saying "no".
+                    _ => true,
+                };
+        }
+        catch (JsonException)
+        {
+            // Malformed config is reported by the caller's own parse; never silently flip to refuse.
+            return true;
+        }
     }
 
     private static ConnectionInfo BuildConnectionInfo(string host, int port, SftpCredentials creds)
@@ -178,16 +255,16 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         throw new InvalidOperationException("SFTP credentials must include either a password or a private key.");
     }
 
-    private static void EnsureRemoteDirectoryExists(SftpClient client, string dirPath)
+    private static void EnsureRemoteDirectoryExists(ISftpUploadSession session, string dirPath)
     {
         if (string.IsNullOrEmpty(dirPath) || dirPath == "/" || dirPath == ".") return;
-        if (client.Exists(dirPath)) return;
+        if (session.Exists(dirPath)) return;
 
         var parent = GetDirectoryPath(dirPath);
         if (!string.IsNullOrEmpty(parent) && parent != "/" && parent != dirPath)
-            EnsureRemoteDirectoryExists(client, parent);
+            EnsureRemoteDirectoryExists(session, parent);
 
-        try { client.CreateDirectory(dirPath); }
+        try { session.CreateDirectory(dirPath); }
         catch (Renci.SshNet.Common.SftpPathNotFoundException) { /* race or parent missing */ }
         catch (Renci.SshNet.Common.SshException) { /* already exists or permission */ }
     }
@@ -222,6 +299,30 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         string? RemotePath,
         bool MakeDirectories,
         int? TimeoutSeconds);
+
+    // ── Upload seam ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The three SSH.NET calls the upload actually makes. Exists so <see cref="UploadCore"/> — which
+    /// owns the overwrite decision for real purchase orders — is testable without an SSH server.
+    /// </summary>
+    internal interface ISftpUploadSession
+    {
+        bool Exists(string path);
+        void CreateDirectory(string path);
+        void UploadFile(Stream input, string path, bool canOverride);
+    }
+
+    private sealed class SshNetUploadSession : ISftpUploadSession
+    {
+        private readonly SftpClient _client;
+        public SshNetUploadSession(SftpClient client) => _client = client;
+
+        public bool Exists(string path) => _client.Exists(path);
+        public void CreateDirectory(string path) => _client.CreateDirectory(path);
+        public void UploadFile(Stream input, string path, bool canOverride) =>
+            _client.UploadFile(input, path, canOverride);
+    }
 
     private sealed record SftpCredentials(
         string Username,

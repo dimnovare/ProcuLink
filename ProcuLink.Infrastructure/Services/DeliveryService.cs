@@ -369,7 +369,7 @@ public sealed class DeliveryService : IDeliveryService
         {
             result = await dispatcher.DispatchAsync(
                 content,
-                BuildFileName(order, artifact),
+                BuildFileName(order, artifact, config.Protocol),
                 GetContentType(artifact.Format),
                 config,
                 credentials,
@@ -903,34 +903,79 @@ public sealed class DeliveryService : IDeliveryService
             result.Success ? "success" : "failed");
     }
 
-    private static string BuildFileName(PurchaseOrderEntity order, OutboundArtifact artifact)
+    /// <summary>
+    /// The name the supplier sees. The extension comes from <see cref="DeliveryMediaTypes"/> — the
+    /// one table — so a cXML document is never handed over as <c>PO-1234.dat</c> again.
+    ///
+    /// <para>
+    /// On the FILE-DROP channels (SFTP/FTPS) the name is additionally qualified with the order id.
+    /// There the filename is the document's only identity in a shared remote directory: two
+    /// different orders that happen to share a PO number resolved to the SAME remote path, and the
+    /// second upload silently replaced the first — one supplier order simply gone, with a delivery
+    /// recorded as successful for both. The qualifier is the ORDER ID, deliberately not a timestamp:
+    /// it keeps the path DETERMINISTIC per order, which is what lets a crash-recovery re-drive or a
+    /// retry of the same artifact re-target its own file instead of accumulating copies (see the A3
+    /// idempotency note on <see cref="Dispatchers.SftpDeliveryDispatcher"/>).
+    /// </para>
+    /// <para>
+    /// Channels where the name is not an identity keep the bare PO number: HTTP and the ERP
+    /// connectors carry the order in the payload, and the email dispatchers put this name in front
+    /// of a human ("Purchase Order PO-1234") where an id suffix would be noise.
+    /// </para>
+    /// </summary>
+    internal static string BuildFileName(PurchaseOrderEntity order, OutboundArtifact artifact, string protocol)
     {
-        var extension = artifact.Format switch
-        {
-            "xml" => "xml",
-            "csv" => "csv",
-            "json" => "json",
-            _ => "dat",
-        };
+        var media = DeliveryMediaTypes.ForTokenOrUnknown(artifact.Format);
+        var stem  = SanitizeFileToken(order.PoNumber);
 
-        return $"{SanitizeFileToken(order.PoNumber)}.{extension}";
+        if (IsFileDropProtocol(protocol))
+            stem = $"{stem}-{OrderFileQualifier(order.Id)}";
+
+        return stem + media.FileExtension;
     }
 
-    private static string SanitizeFileToken(string value)
+    /// <summary>
+    /// Channels whose destination is a directory of files, where the filename alone decides whether
+    /// two documents collide.
+    /// </summary>
+    private static bool IsFileDropProtocol(string protocol) =>
+        protocol.Equals(DeliveryProtocolConstants.Sftp, StringComparison.OrdinalIgnoreCase)
+        || protocol.Equals(DeliveryProtocolConstants.Ftps, StringComparison.OrdinalIgnoreCase)
+        || protocol.Equals(DeliveryProtocolConstants.Ftp, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Short, stable, collision-free-in-practice per-order token for a filename.</summary>
+    internal static string OrderFileQualifier(Guid orderId) => orderId.ToString("N")[..8];
+
+    /// <summary>
+    /// Reduce a PO number to characters every filesystem and transfer protocol accepts.
+    ///
+    /// <para>
+    /// Deliberately an explicit allow-list rather than <c>Path.GetInvalidFileNameChars()</c>: that
+    /// BCL call returns a DIFFERENT set per platform — Windows rejects <c>: ? * " &lt; &gt; |</c>
+    /// that Linux happily allows — so the same PO number produced a different remote filename in
+    /// development (Windows) than in production (Linux), and a production filename could not be
+    /// reproduced locally. The allow-list below also matches the SFTP/FTPS dispatchers' own
+    /// <c>SanitiseFileName</c>, so the name this method builds survives that second pass unchanged.
+    /// </para>
+    /// </summary>
+    internal static string SanitizeFileToken(string value)
     {
-        var invalid = Path.GetInvalidFileNameChars();
-        var chars = value.Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray();
-        var sanitized = new string(chars).Trim();
+        if (string.IsNullOrWhiteSpace(value)) return "order";
+
+        var chars = value.Trim()
+            .Select(ch => char.IsAsciiLetterOrDigit(ch) || ch is '.' or '_' or '-' ? ch : '-')
+            .ToArray();
+        var sanitized = new string(chars).Trim('-');
         return string.IsNullOrWhiteSpace(sanitized) ? "order" : sanitized;
     }
 
-    private static string GetContentType(string format) => format switch
-    {
-        "xml" => "application/xml",
-        "json" => "application/json",
-        "csv" => "text/csv",
-        _ => "application/octet-stream",
-    };
+    /// <summary>
+    /// The media type for a persisted artifact format token, from the one table. An unrecognised
+    /// token (a legacy row, a hand-written format) resolves to
+    /// <see cref="DeliveryMediaTypes.Unknown"/> — the only place octet-stream is still honest.
+    /// </summary>
+    private static string GetContentType(string format) =>
+        DeliveryMediaTypes.ForTokenOrUnknown(format).ContentType;
 
     private static string? TruncateResponseBody(string? body)
     {

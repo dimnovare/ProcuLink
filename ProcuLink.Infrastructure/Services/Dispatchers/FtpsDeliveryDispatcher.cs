@@ -29,8 +29,10 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
 
     public string Protocol => DeliveryProtocolConstants.Ftps;
 
-    // The deterministic filename is overwritten on re-send, so a crash-recovery re-drive
-    // cannot leave the supplier holding two copies.
+    // Safe in the sense ResendSafety means: a re-send after an unknown outcome cannot DUPLICATE at
+    // the supplier. The remote path is a deterministic function of the order, so a re-send either
+    // replaces its own file (overwriteExisting on, the default) or refuses outright (overwriteExisting
+    // off) — neither produces a second copy. See SftpDeliveryDispatcher.OverwriteExistingFromConfig.
     public ResendSafety ResendSafety => ResendSafety.Safe;
 
     public FtpsDeliveryDispatcher(ILogger<FtpsDeliveryDispatcher> logger, OutboundRequestGuard guard)
@@ -48,9 +50,9 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         CancellationToken ct,
         string? idempotencyKey = null)
     {
-        // A3 idempotency: FTPS is already idempotent by construction. The remote filename is the
-        // deterministic sanitised PO filename and UploadStream below uses FtpRemoteExists.Overwrite,
-        // so a crash-recovery re-upload OVERWRITES the same path rather than creating a second file —
+        // A3 idempotency: FTPS is already idempotent by construction. The remote filename is a
+        // deterministic function of the ORDER (PO number + order id — see DeliveryService.BuildFileName),
+        // so a crash-recovery re-upload targets the same path rather than creating a second file —
         // no supplier idempotency key is needed (idempotencyKey is intentionally unused here).
         FtpsConfig? cfg;
         FtpsCredentials? creds;
@@ -131,18 +133,13 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
 
                 await client.Connect(token).ConfigureAwait(false);
 
-                await using var ms = new MemoryStream(content);
-                var status = await client.UploadStream(
-                    ms,
+                return await UploadCoreAsync(
+                    new FluentFtpUploadSession(client),
+                    content,
                     remotePath,
-                    FtpRemoteExists.Overwrite,
-                    createRemoteDir: makeDirectories,
-                    progress: null,
-                    token: token).ConfigureAwait(false);
-
-                return status == FtpStatus.Success
-                    ? new DeliveryResult(true, null)
-                    : new DeliveryResult(false, "FTPS upload did not complete successfully.");
+                    makeDirectories,
+                    SftpDeliveryDispatcher.OverwriteExistingFromConfig(config.ConfigJson),
+                    token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -177,6 +174,50 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
             return new DeliveryResult(false, "FTPS delivery failed before the upload could complete.");
         }
     }
+
+    /// <summary>
+    /// The upload itself, once connected: the overwrite decision, the transfer, and the mapping of
+    /// FluentFTP's status to a delivery outcome. Split out from the transport so the overwrite
+    /// behaviour — a live-path decision about real purchase orders — is covered by a test that
+    /// fails when it changes.
+    /// </summary>
+    internal static async Task<DeliveryResult> UploadCoreAsync(
+        IFtpsUploadSession session,
+        byte[] content,
+        string remotePath,
+        bool makeDirectories,
+        bool overwriteExisting,
+        CancellationToken token)
+    {
+        await using var ms = new MemoryStream(content);
+        var status = await session.UploadStream(
+            ms,
+            remotePath,
+            RemoteExistsModeFor(overwriteExisting),
+            createRemoteDir: makeDirectories,
+            token: token).ConfigureAwait(false);
+
+        return status switch
+        {
+            FtpStatus.Success => new DeliveryResult(true, null),
+            // Skipped is only reachable when the operator turned overwrite off AND a file is already
+            // there. FluentFTP treats that as a benign no-op; a purchase order that was not sent is
+            // not benign, so it becomes an explicit failure with the reason spelled out.
+            FtpStatus.Skipped => new DeliveryResult(false,
+                $"A file named '{remotePath}' is already on the supplier's server and this connection " +
+                "is set not to replace existing files. Remove or rename the file there, or turn " +
+                "\"replace existing files\" back on for this supplier."),
+            _ => new DeliveryResult(false, "FTPS upload did not complete successfully."),
+        };
+    }
+
+    /// <summary>
+    /// How the transfer treats a file already at the remote path. Overwrite (the default) keeps a
+    /// crash-recovery re-drive able to repair its own partial upload; Skip refuses to touch what is
+    /// there and <see cref="UploadCoreAsync"/> turns that refusal into a failed delivery.
+    /// </summary>
+    internal static FtpRemoteExists RemoteExistsModeFor(bool overwriteExisting) =>
+        overwriteExisting ? FtpRemoteExists.Overwrite : FtpRemoteExists.Skip;
 
     /// <summary>
     /// Determines whether a server certificate should be accepted.
@@ -218,4 +259,28 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
     private sealed record FtpsCredentials(
         string Username,
         string? Password);
+
+    // ── Upload seam ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The one FluentFTP call the upload makes. Exists so <see cref="UploadCoreAsync"/> — which owns
+    /// the overwrite decision for real purchase orders — is testable without an FTPS server.
+    /// </summary>
+    internal interface IFtpsUploadSession
+    {
+        Task<FtpStatus> UploadStream(
+            Stream input, string remotePath, FtpRemoteExists existsMode,
+            bool createRemoteDir, CancellationToken token);
+    }
+
+    private sealed class FluentFtpUploadSession : IFtpsUploadSession
+    {
+        private readonly AsyncFtpClient _client;
+        public FluentFtpUploadSession(AsyncFtpClient client) => _client = client;
+
+        public Task<FtpStatus> UploadStream(
+            Stream input, string remotePath, FtpRemoteExists existsMode,
+            bool createRemoteDir, CancellationToken token) =>
+            _client.UploadStream(input, remotePath, existsMode, createRemoteDir, progress: null, token: token);
+    }
 }

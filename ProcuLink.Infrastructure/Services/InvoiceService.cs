@@ -181,15 +181,11 @@ public sealed class InvoiceService : IInvoiceService
 
         var bytes = await transformer.TransformAsync(inv, inv.Lines, ct);
 
-        var (contentType, ext) = outputFormat.ToLowerInvariant() switch
-        {
-            "csv"    => ("text/csv", ".csv"),
-            "xml"    => ("application/xml", ".xml"),
-            "json"   => ("application/json", ".json"),
-            // Peppol BIS Billing 3.0 — a UBL 2.1 XML document.
-            "peppol" => ("application/xml", ".xml"),
-            _        => ("application/octet-stream", ".bin"),
-        };
+        // One table for the whole product (WP-20): the same rows that decide how an outbound PO is
+        // typed and named decide it for a forwarded invoice. "peppol" resolves through the table's
+        // alias for UBL — Peppol BIS Billing 3.0 is a UBL 2.1 XML document.
+        var media = ProcuLink.Core.Services.Delivery.DeliveryMediaTypes.ForTokenOrUnknown(outputFormat);
+        var (contentType, ext) = (media.ContentType, media.FileExtension);
 
         // Advance status to forwarded
         inv.Status    = "forwarded";

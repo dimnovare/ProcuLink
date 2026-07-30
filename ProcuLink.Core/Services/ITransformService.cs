@@ -56,4 +56,18 @@ public record TransformResult(
     Stream Content,
     string ContentType,
     string FileExtension
-);
+)
+{
+    /// <summary>
+    /// Build the result with the envelope <see cref="Delivery.DeliveryMediaTypes"/> declares for
+    /// this format. Every built-in transform goes through here so the content type and extension a
+    /// document is STORED with and the ones it is DELIVERED with come from the same single row —
+    /// they used to be independent literals per transform and drifted (cXML stored as
+    /// <c>.cxml</c>, delivered as <c>.dat</c>).
+    /// </summary>
+    public static TransformResult For(OutputFormat format, Stream content)
+    {
+        var media = Delivery.DeliveryMediaTypes.For(format);
+        return new TransformResult(content, media.ContentType, media.FileExtension);
+    }
+}

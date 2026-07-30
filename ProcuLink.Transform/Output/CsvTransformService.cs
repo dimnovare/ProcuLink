@@ -107,11 +107,7 @@ public sealed class CsvTransformService : ITransformService
         var bytes  = Encoding.UTF8.GetBytes(sb.ToString());
         var stream = new MemoryStream(bytes);
 
-        return Task.FromResult(new TransformResult(
-            Content:       stream,
-            ContentType:   "text/csv",
-            FileExtension: ".csv"
-        ));
+        return Task.FromResult(TransformResult.For(OutputFormat.Csv, stream));
     }
 
     private static void ValidateOrder(PurchaseOrderEntity order)

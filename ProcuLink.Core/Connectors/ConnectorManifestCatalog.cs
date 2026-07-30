@@ -114,6 +114,11 @@ public static class ConnectorManifestCatalog
                 help: "Target directory on the SFTP server (e.g. /orders/inbound)."),
             Field("makeDirectories",      "Auto-create dirs",    "bool",
                 help: "Create the remote directory hierarchy if it does not exist."),
+            Field("overwriteExisting",    "Replace existing files", "bool",
+                help: "On (default) a re-send replaces its own earlier file, so a delivery that was "
+                    + "interrupted can be repaired. Off refuses to write when anything is already at "
+                    + "that path — for append-only drop directories. Orders never overwrite each "
+                    + "other either way: each file name carries its own order."),
             Field("timeoutSeconds",       "Timeout (s)",         "number",
                 help: "Connection and upload timeout in seconds (default: 30)."),
             // ── Credentials (encrypted) ────────────────────────────────────────
@@ -148,6 +153,11 @@ public static class ConnectorManifestCatalog
                 help: "Target directory on the FTPS server."),
             Field("makeDirectories",         "Auto-create dirs",       "bool",
                 help: "Let FluentFTP create the remote directory tree if absent."),
+            Field("overwriteExisting",       "Replace existing files", "bool",
+                help: "On (default) a re-send replaces its own earlier file, so a delivery that was "
+                    + "interrupted can be repaired. Off refuses to write when anything is already at "
+                    + "that path — for append-only drop directories. Orders never overwrite each "
+                    + "other either way: each file name carries its own order."),
             Field("timeoutSeconds",          "Timeout (s)",            "number",
                 help: "Connection and upload timeout in seconds (default: 30)."),
             Field("allowInvalidCertificate", "Allow invalid cert",     "bool",

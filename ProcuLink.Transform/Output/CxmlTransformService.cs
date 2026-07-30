@@ -193,11 +193,9 @@ public sealed class CxmlTransformService : ITransformService
         var bytes  = Encoding.UTF8.GetBytes(doc.Declaration + Environment.NewLine + doc.ToString());
         var stream = new MemoryStream(bytes);
 
-        return Task.FromResult(new TransformResult(
-            Content:       stream,
-            ContentType:   "application/xml",
-            FileExtension: ".cxml"
-        ));
+        // .xml, not .cxml: cXML IS an XML document, ".cxml" is registered nowhere, and receivers
+        // that filter on extension expect .xml. The table is the one authority (WP-20).
+        return Task.FromResult(TransformResult.For(OutputFormat.CXml, stream));
     }
 
     // ── DOCTYPE (T7) ──────────────────────────────────────────────────────────

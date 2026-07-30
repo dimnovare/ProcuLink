@@ -102,7 +102,11 @@ public class X12TransformServiceTests
         var svc = new X12TransformService();
         var result = await svc.TransformAsync(BuildOrder(), OutputFormat.X12, CancellationToken.None);
 
-        result.ContentType.Should().Be("application/edi-x12");
+        // WP-20: the envelope now comes from the one DeliveryMediaTypes table, so the type this
+        // transform STORES is the same string delivery puts on the wire. "application/EDI-X12" is
+        // the IANA registration; media types compare case-insensitively, so a receiver matching the
+        // lowercase spelling still matches.
+        result.ContentType.Should().Be("application/EDI-X12");
         result.FileExtension.Should().Be(".x12");
 
         var edi  = await ReadContentAsString(result);
