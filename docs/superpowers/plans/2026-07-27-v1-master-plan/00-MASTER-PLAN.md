@@ -245,6 +245,8 @@ Assumes: one founder reviewing and merging; 4–6 concurrent agent worktrees; th
 | File | Purpose |
 |---|---|
 | `00-MASTER-PLAN.md` | this file — waves, gates, decisions, timeline |
+| `AUDIT-2026-07-27.md` | the source audit: verdicts, scorecard, capability matrix, market comparison, and the 12 findings the adversarial pass KILLED |
+| `05-PROGRESS.md` | **live tracker — what is done and what is not.** Update it whenever a packet changes state |
 | `01-WORK-PACKETS.md` | WP-01…WP-41: scope, files, acceptance criteria, tests, deps, skills, risk |
 | `02-DESIGN-BRIEFS.md` | Claude Design briefs for the seven surfaces that need design, with locked constraints |
 | `03-EXECUTION-PROTOCOL.md` | agent topology, skill routing, token discipline, merge train, no-new-bugs enforcement |
