@@ -120,11 +120,17 @@ public static class OrderStatusMachine
             // not because it is good: the dispatch may still be in flight, and its outcome write
             // lands on whatever the resolve left behind. Same follow-up as the unrouted row — the
             // cure is a from-status guard on the endpoint, a product decision, not a map edit.
-            [Delivering]         = Set(Delivered, DeliveryFailed, DeliveryUnconfirmed, DeliveryDeadLetter, RejectedBySupplier, PendingReview, Ready),
-            // + RR (→ ready was already here as the MV-1 edge; → pending_review is new — and it is
-            // the edge that started this packet: an operator resolves a delivered order, the
-            // price-variance guard re-flags a line, and both maps called the result impossible).
-            [Delivered]          = Set(DeliveryFailed, Ready, RejectedBySupplier, PendingReview),
+            // REFUTE-MUTATION I (WP-23), edit 1 of 2: c61fe30's two DELIVERING recompute edges are
+            // pruned. mutation-h only pruned the UNROUTED pair, so nothing has yet shown that
+            // EveryResolveHeldStatus_KeepsBothRecomputeEdges protects the second held status too.
+            // Expected RED: EveryResolveHeldStatus_KeepsBothRecomputeEdges. Not for merge.
+            [Delivering]         = Set(Delivered, DeliveryFailed, DeliveryUnconfirmed, DeliveryDeadLetter, RejectedBySupplier),
+            // REFUTE-MUTATION I, edit 2 of 2: c61fe30's two DELIVERED recompute edges are pruned.
+            // 'delivered' is NOT in ResolveHeldFrom, so it is still inside the narrowed range of
+            // EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges — this is the check that
+            // WP-23's third .Except() did not hollow that test out. Expected RED:
+            // EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges. Not for merge.
+            [Delivered]          = Set(DeliveryFailed, RejectedBySupplier),
             // delivery_failed/delivery_dead_letter → ready: the MV-1 sibling — a mapping edit after a
             // failed/dead-lettered delivery invalidates the stored artifact (Retry/requeue would ship it
             // un-re-transformed), so the order resets and the next Send re-transforms.
