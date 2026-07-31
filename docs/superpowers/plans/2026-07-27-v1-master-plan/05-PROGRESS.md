@@ -314,6 +314,18 @@ source cannot tell code from a comment, and a source-text assertion is not a beh
 technique is used in at least two places (`plain-language-copy.test.ts` names it as the pattern).
 Where the question is "is it mounted", render it and assert on the DOM.
 
+**Third instance the same day, inside a gate — and the class now has a named remedy.**
+`check-vocabulary.mjs:482` is `new RegExp(\`\bconst\s+${name}\b\`).exec(src)`, first match wins, no
+comment stripping. A packet added the explanatory comment `// \`const FILTER_CHIPS\` in
+src/components/bridge/InboxView.tsx` and the gate re-anchored onto the comment. Measured: rename at
+`478b809` → exit 1 `registry-moved`; identical rename on the branch → **exit 0**; delete the array
+outright → **exit 0**, label count silently 43→37. `FILTER_CHIPS` is the **only** one of six
+`NOUN_REGISTRIES` carrying a duplicate `const NAME` token, so inspection would never find it.
+
+**Remedy: reuse `src/test/sourceScan.ts`'s stripper. Do not write a second one.** A duplicated
+stripper was deleted in the backend (`504d9cc`) for exactly this reason — two copies drift, and the
+one nobody fixed is the one still shipping the bug.
+
 **TRAP 14 — "it passed the vocabulary gate."** `scripts/check-vocabulary.mjs` is roughly half-blind,
 and this is a **gate limitation, not any packet's defect**. Three verified gaps, proved by injecting
 probes and watching them pass:
@@ -330,7 +342,8 @@ Interpolated headings are everywhere, so "checked against the vocab gate" means 
 checked. Unowned as of 2026-07-31.
 
 **Widened 2026-07-31 (WP-28), and this is the larger half.** The scanner is **line-based** —
-`check-vocabulary.mjs:436` is `readFileSync(file, "utf8").split(/?
+`check-vocabulary.mjs:436` is `readFileSync(file, "utf8").split(/
+?
 /)` and every rule runs per
 line. So a **JSX text node that spans lines is never scanned at all**. Proof from the field:
 `MapperWorkbench`'s shipped banner copy *"Shown as dashed wires"* — a retired noun — has always been
@@ -431,6 +444,20 @@ disabled control state its reason. Every acceptance-validation assertion is unto
 locator repair, not a weakened guard — **but the check that settles it is reconstructing the original
 regression and confirming the guard still catches it**, which is what WP-28's refuter was tasked to
 do. Read the diff before deciding; do not skip the reconstruction because the diff looks innocent.
+
+**TRAP 20 — "the guard has a test, so the guard works."** The test may never run the guard against
+the tree that matters. **A test that exercises a guard against a fixture proves the guard's
+*plumbing*, not its *coverage of the repo*.**
+
+`src/lib/vocabulary.test.ts:264` is named *"--nouns FAILS LOUDLY if a policed registry is renamed or
+moved away"*. It calls `runGate(["--nouns"], root)` where `root` is a **synthetic fixture tree in
+which the registry files do not exist** — so it asserts `file-not-found` and passes identically
+whether the real guard works or is completely dead. The `--nouns` guard was dead on
+`claude/wp29-inbox` for the life of the branch and this test stayed green throughout.
+
+This is TRAP 14/17 one level up: there the *gate* had a false scope, here the *test certifying the
+gate* does. **Ask of every meta-tested guard: does anything run this against the real tree?** A
+fixture test and a real-tree smoke test answer different questions and a guard needs both.
 
 ### TRAPS added 2026-07-30 (second pass)
 
