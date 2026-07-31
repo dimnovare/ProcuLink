@@ -158,6 +158,17 @@ public sealed class RevisionAuthorityReadinessSurfaceTests
         Assert.Equal("Healthy", entry.GetProperty("status").GetString());
 
         var data = entry.GetProperty("data");
+
+        // Rule R5 — the check's own comment says "SECURITY: no secret value is read or emitted, so
+        // this is safe on the unauthenticated probe". /health/ready is anonymous, so that sentence
+        // is a proof obligation, and asserting the four expected keys are PRESENT does not
+        // discharge it: adding ["connectionString"] = cfg["ConnectionStrings:DefaultConnection"]
+        // would keep such a test green while publishing the database password to the internet.
+        // Pin the key set EXACTLY, so any new field has to come past this assertion.
+        Assert.Equal(
+            new[] { "configurationKey", "enabled", "environmentVariable", "hostsRequiringTheFlag" },
+            data.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+
         Assert.Equal(JsonValueKind.True, data.GetProperty("enabled").ValueKind);
         Assert.Equal(
             EffectiveConnectionConfigResolver.FlagKey,

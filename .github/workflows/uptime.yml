@@ -67,6 +67,23 @@ jobs:
             exit 1
           fi
 
+          # WP-21: revision authority must be ON in production. Connections__RevisionAuthority
+          # is set on both Railway services, and every reproducibility claim ProcuLink makes
+          # ("this order was sent under the contract it was ingested with") depends on it. The
+          # flag going off is silent by construction — orders keep flowing, they just start
+          # reading the live tables — so it is invisible until someone looks. Before this check
+          # nobody looked: a 2026-07-27 audit filed a P0 on a GUESS about this value because it
+          # was served nowhere. This is the thing that now looks, every run.
+          revision_authority="$(printf '%s' "$json" | jq -r '.revisionAuthority')"
+          echo "revisionAuthority=$revision_authority"
+          if [ "$revision_authority" != "true" ]; then
+            echo "::error title=Revision authority is OFF::API readiness reports revisionAuthority=$revision_authority. Pinned orders are being processed against the LIVE config instead of the revision they were ingested with, so reproducibility claims are false while this lasts. Either the Connections__RevisionAuthority variable was lost on the Railway 'ProcuLink' service, or a deploy dropped the readiness check — check .checks[] for a 'revisionAuthority' entry to tell which. Runbook: docs/ops/revision-authority-production-smoke.md."
+            exit 1
+          fi
+
+          # The Worker serves no HTTP, so this endpoint cannot speak for it. Its value is
+          # announced in its startup log — see the runbook §2.
+
       - name: Probe marketing site
         run: |
           echo "Probing $SITE_URL"

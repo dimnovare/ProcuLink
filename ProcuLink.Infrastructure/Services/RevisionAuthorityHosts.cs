@@ -33,11 +33,16 @@ public sealed record RevisionAuthorityHost(
 /// here, and adding an entry forces its author to name the deployed service — the step that would
 /// otherwise be forgotten. The same test asserts the production runbook names every entry.</para>
 ///
-/// <para><b>Verified deployed state.</b> <c>Connections__RevisionAuthority = true</c> on both
-/// Railway services (<c>ProcuLink</c> and <c>aware-amazement</c>), confirmed 2026-07-27 and
-/// re-confirmed 2026-07-31. Revision authority is LIVE in production; the 2026-07-27 audit finding
-/// that called the versioning subsystem "inert in production" read
-/// <c>appsettings.Development.json</c> and never read the deployed environment. See
+/// <para><b>Deployed state — an observation with a date, not a standing fact.</b>
+/// <c>Connections__RevisionAuthority = true</c> on both Railway services (<c>ProcuLink</c> and
+/// <c>aware-amazement</c>) when last read, 2026-07-27 and 2026-07-31. This sentence is exactly the
+/// kind of claim that rots: nothing in this repository can assert it, and removing the variable
+/// tomorrow would leave it silently false. So it is NOT the authority — the authority is
+/// <c>GET /health/ready</c> (<c>revisionAuthority</c>) for the API, and the startup log for the
+/// Worker, both read live. <c>.github/workflows/uptime.yml</c> fails on the API's value not being
+/// true, so the flag going off pages rather than rotting. The 2026-07-27 audit finding that called
+/// the versioning subsystem "inert in production" read <c>appsettings.Development.json</c> and
+/// never read the deployed environment. See
 /// <c>docs/ops/revision-authority-production-smoke.md</c>.</para>
 /// </summary>
 public static class RevisionAuthorityHosts

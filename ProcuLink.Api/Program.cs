@@ -900,18 +900,26 @@ app.MapControllers();
 
 // Liveness (/health) is served by HealthController (fast, dependency-free 200) so
 // Railway's container probe is never blocked by a slow dependency. Readiness
-// (/health/ready) runs ONLY the "ready"-tagged dependency checks (DB + storage +
-// migration flag + worker heartbeat) and reports the aggregate status so
-// monitoring can see degraded state without taking the process down.
+// (/health/ready) runs ONLY the "ready"-tagged checks — DB, storage, migration flag,
+// worker heartbeat, and the revision-authority flag's effective value (WP-21) — and
+// reports the aggregate status so monitoring can see degraded state without taking
+// the process down.
 //
 // HTTP status: Healthy/Degraded → 200, Unhealthy → 503 (the default
 // MapHealthChecks status-code map). A stale Worker is Degraded → 200, but the JSON
 // body carries workerHealthy:false so the external uptime workflow alerts on it.
+// The revisionAuthority check is ALWAYS Healthy — the flag's value is information,
+// never a reason to evict the process — so it reaches monitoring purely through the
+// body.
 //
 // BODY: a structured JSON payload (instead of the default plain "Healthy" string)
-// with per-check status/description/duration + a flattened workerHealthy flag the
-// uptime workflow + dashboards can read. ResponseWriter is the only customisation —
-// it NEVER includes secrets (each check's Data bag is counts/ages/booleans only).
+// with per-check status/description/duration + TWO flattened booleans the uptime
+// workflow + dashboards read: workerHealthy and revisionAuthority. Both are asserted
+// by .github/workflows/uptime.yml, which fails the run on either being false.
+// ResponseWriter is the only customisation — it NEVER includes secrets (each check's
+// Data bag is counts/ages/booleans/config KEY names only, never a config VALUE; the
+// revisionAuthority bag's key set is pinned by RevisionAuthorityReadinessSurfaceTests
+// so a future field cannot quietly widen it on this anonymous endpoint).
 app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),

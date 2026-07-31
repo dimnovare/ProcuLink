@@ -44,9 +44,25 @@ curl -s https://api.proculink.eu/health/ready | jq '{status, workerHealthy, revi
 **PASS:** `"revisionAuthority": true`.
 **FAIL:** `false`, or the field is missing.
 
-- `false` → the Railway `ProcuLink` service has lost the variable. Fix per §8 before anything else;
-  every pinned order the API previews or manually sends is currently reading live tables.
-- field missing → the deployed build predates WP-21. Redeploy `main` and re-read.
+`false` has **two** possible causes and the top-level boolean cannot tell them apart — it is
+rendered `false` both when the flag is off and when the readiness *check* is missing from the
+build. Disambiguate with the checks array before doing anything:
+
+```bash
+curl -s https://api.proculink.eu/health/ready | jq '.checks[] | select(.name=="revisionAuthority")'
+```
+
+- **A `revisionAuthority` entry exists** and the boolean is `false` → the Railway `ProcuLink`
+  service has lost the variable. Fix per §8; every pinned order the API previews or manually sends
+  is reading live tables until you do.
+- **No such entry** → the deployed build predates WP-21, or a deploy dropped the check
+  registration. Redeploy `main` and re-read. Do **not** go set the variable — it is very likely
+  already set and you would learn nothing.
+- **The field is missing entirely** → a build older than the response-writer change. Redeploy.
+
+This ambiguity is deliberate rather than papered over: a missing check must never read as "on".
+The uptime workflow fails on `false` either way, which is the correct behaviour — both causes mean
+the value is not confirmed on.
 
 The Worker serves no HTTP, so it is read from its log instead:
 

@@ -36,17 +36,23 @@ namespace ProcuLink.Api.Tests.Integration;
 /// reverse — and only a real database can prove it does not.</para>
 ///
 /// <para><b>Rule R6 — this asserts the DIFFERENCE, not the sameness.</b> Both routes are resolved
-/// in the same run against the same database:
-/// <list type="bullet">
-///   <item>the PINNED order must dispatch to v1's OLD endpoint;</item>
-///   <item>an UNPINNED order must dispatch to the edited LIVE/v2 NEW endpoint;</item>
-///   <item>and the two destinations must DIFFER.</item>
+/// in the same run against the same database, and the difference is asserted FIRST, before either
+/// endpoint is named. That ordering is the whole point: an <c>Assert.NotEqual</c> placed after two
+/// <c>Assert.Equal</c>s against distinct constants can never fail — both operands are already
+/// pinned by the time it runs — so it would document R6 while proving nothing. Asserted here, in
+/// order:
+/// <list type="number">
+///   <item>the two destinations DIFFER (fails if either route moves onto the other);</item>
+///   <item>the two CREDENTIAL payloads differ, and each is its own route's — the contract is more
+///     than a URL;</item>
+///   <item>only then, which endpoint is which.</item>
 /// </list>
 /// Break either side alone — a status filter added to
 /// <see cref="EffectiveConnectionConfigResolver"/> so archived pins stop resolving, or a republish
-/// that fails to carry the edit forward — and the pair collapses to one endpoint, failing the
-/// difference assertion. The companion test below then removes any doubt that the flag is what
-/// produces the difference: with revision authority OFF the two routes are IDENTICAL.</para>
+/// that fails to carry the edit forward — and the pair collapses to one endpoint, so assertion (1)
+/// fails before anything else is checked. The companion test below then removes any doubt that the
+/// flag is what produces the difference: with revision authority OFF the two routes are
+/// IDENTICAL.</para>
 /// </summary>
 [Collection("postgres-container")]
 public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsyncLifetime
@@ -110,19 +116,35 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         Assert.Contains(OldUrl, versions.V1DeliveryConfigJson);
         Assert.Contains(NewUrl, versions.V2DeliveryConfigJson);
 
+        // ── R6 FIRST: the DIFFERENCE, before either endpoint is named ─────────
+        // These two lines are the load-bearing ones. Break either route alone and the pair
+        // collapses onto one endpoint / one credential set, and execution stops HERE — not at a
+        // later Assert.Equal against a constant, which is what a difference assertion placed after
+        // the equals would degrade into.
+        Assert.NotEqual(destinations.Pinned, destinations.Unpinned);
+        Assert.NotEqual(destinations.PinnedCredentials, destinations.UnpinnedCredentials);
+
         // The pinned order was ingested under v1 and STAYS on v1's endpoint, even though v1 is now
         // archived and the active pointer has moved. This is the whole reproducibility claim.
         Assert.Equal(OldUrl, destinations.Pinned);
 
-        // The unpinned order takes the operator's edit — the live-resolution path still moves.
+        // …and on v1's CREDENTIALS. "Processed under the contract it was ingested with" is not a
+        // URL claim: the revision snapshots the encrypted credential payload verbatim, and the
+        // dispatcher must receive THAT decrypted, not the ones the operator saved with the edit.
+        // A resolver that took the endpoint from the pin but the secret from the live row would
+        // authenticate as the wrong party against the right host — and pass every URL-only test.
+        Assert.Equal("""{"type":"v1"}""", destinations.PinnedCredentials);
+
+        // The unpinned order takes the operator's edit — the live-resolution path still moves,
+        // endpoint and credentials together.
         Assert.Equal(NewUrl, destinations.Unpinned);
+        Assert.Equal("""{"type":"v2"}""", destinations.UnpinnedCredentials);
 
-        // R6 — the DIFFERENCE is the assertion. If either route changed alone the two would be
-        // equal here and this line is what fails.
-        Assert.NotEqual(destinations.Pinned, destinations.Unpinned);
-
-        // The audit trail agrees with what the dispatcher was handed — an operator reading
-        // delivery history sees the real destination, not the current live config.
+        // The persisted attempt row records the endpoint the send actually used. (It is derived
+        // from the same resolved config the dispatcher was handed — DeliveryService builds both
+        // from one object — so this is NOT independent corroboration of the routing. What it does
+        // prove is that the audit trail is written from the RESOLVED config and never re-reads the
+        // live supplier row, which is what an operator reading delivery history depends on.)
         Assert.Equal(OldUrl, destinations.PinnedAttemptDestination);
         Assert.Equal(NewUrl, destinations.UnpinnedAttemptDestination);
     }
@@ -138,15 +160,21 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
     {
         var (destinations, _) = await RunTheEditAndDispatchBothOrdersAsync(revisionAuthority: false);
 
+        // Sameness first, for the same reason the sibling asserts difference first: after two
+        // Assert.Equals against one constant, an Assert.Equal between them is already decided.
+        Assert.Equal(destinations.Pinned, destinations.Unpinned);
+        Assert.Equal(destinations.PinnedCredentials, destinations.UnpinnedCredentials);
+
         Assert.Equal(NewUrl, destinations.Pinned);   // the pin is ignored — pre-batch-7 behaviour
         Assert.Equal(NewUrl, destinations.Unpinned);
-        Assert.Equal(destinations.Pinned, destinations.Unpinned);
+        Assert.Equal("""{"type":"v2"}""", destinations.PinnedCredentials);
     }
 
     // ── the shared scenario ───────────────────────────────────────────────────
 
     private sealed record Destinations(
         string Pinned, string Unpinned,
+        string? PinnedCredentials, string? UnpinnedCredentials,
         string? PinnedAttemptDestination, string? UnpinnedAttemptDestination);
 
     private sealed record Versions(
@@ -218,6 +246,8 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
             new Destinations(
                 UrlOf(pinnedDispatcher.LastConfigJson),
                 UrlOf(unpinnedDispatcher.LastConfigJson),
+                pinnedDispatcher.LastCredentials,
+                unpinnedDispatcher.LastCredentials,
                 pinnedAttempt,
                 unpinnedAttempt),
             new Versions(

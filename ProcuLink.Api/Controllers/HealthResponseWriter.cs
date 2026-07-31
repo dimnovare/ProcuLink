@@ -55,9 +55,16 @@ public static class HealthResponseWriter
 
         // WP-21: flatten the revision-authority check's EFFECTIVE value the same way, so the one
         // configuration fact that decides whether ProcuLink's reproducibility claims are true can
-        // be read with `jq -e '.revisionAuthority'` instead of a Railway shell. Defaults to false
-        // when the check is absent, matching the code default — a missing check must never read as
-        // "on". See RevisionAuthorityHealthCheck for why the value is worth serving at all.
+        // be read with `jq -e '.revisionAuthority'` instead of a Railway shell. Consumed by
+        // .github/workflows/uptime.yml, which FAILS the run when it is not true — the flag going
+        // off is otherwise completely silent (orders keep flowing, they just stop honouring pins).
+        //
+        // Renders false when the check is absent, matching the code default — a missing check must
+        // never read as "on". That deliberately conflates "flag off" with "check missing" in this
+        // one boolean; the two are told apart by looking for a `revisionAuthority` entry in
+        // checks[], and docs/ops/revision-authority-production-smoke.md §2 walks an operator
+        // through exactly that. Conflating them is the safe direction: both mean "not confirmed
+        // on", which is what the uptime workflow should fail on.
         var revisionAuthority =
             report.Entries.TryGetValue("revisionAuthority", out var revAuth)
             && revAuth.Data.TryGetValue("enabled", out var enabled)

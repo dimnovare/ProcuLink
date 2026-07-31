@@ -31,44 +31,125 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// </summary>
 public class RevisionAuthorityHostCoverageTests
 {
-    /// <summary>The DI registration that makes a host an effective-config resolver.</summary>
-    private static readonly Regex Registration = new(
-        @"AddScoped\s*<\s*IEffectiveConnectionConfigResolver\s*,",
+    /// <summary>
+    /// Any mention of the resolver ABSTRACTION or its implementation. Deliberately not a
+    /// registration-shaped pattern.
+    ///
+    /// <para>The first version of this test matched
+    /// <c>AddScoped&lt;IEffectiveConnectionConfigResolver,</c> in files named <c>Program.cs</c>. An
+    /// adversarial review broke it in one minute: the single-generic factory overload
+    /// (<c>AddScoped&lt;IFoo&gt;(sp =&gt; new Foo(...))</c>) has no comma after the type argument
+    /// and so did not match — and that idiom is used THREE times in this repo's own hosts today
+    /// (<c>ProcuLink.Api/Program.cs:358</c>, <c>:515</c>, <c>ProcuLink.Worker/Program.cs:174</c>).
+    /// So did <c>AddSingleton</c>, <c>AddTransient</c>, <c>AddScoped(typeof(..), typeof(..))</c>,
+    /// <c>TryAdd*</c>, direct <c>new EffectiveConnectionConfigResolver(...)</c>, and registration
+    /// from any file not called <c>Program.cs</c> (a <c>ServiceCollectionExtensions</c>, a shared
+    /// <c>AddProcuLinkInfrastructure()</c>). A guard that a competent engineer defeats by writing
+    /// idiomatic code is not a guard.</para>
+    ///
+    /// <para>So the scan is now the opposite shape: ANY production file that names the resolver at
+    /// all marks its project. Over-matching is the safe direction — a false positive is one line
+    /// added to the roster; a false negative is a deployed host silently reading the live tables.
+    /// The defining projects are excluded by <see cref="DefiningProjects"/> because declaring a
+    /// type is not resolving a config with it.</para>
+    /// </summary>
+    private static readonly Regex ResolverMention = new(
+        @"\b(I?EffectiveConnectionConfigResolver)\b",
         RegexOptions.Compiled);
 
     /// <summary>
-    /// Every host project whose <c>Program.cs</c> registers the resolver must be declared in
-    /// <see cref="RevisionAuthorityHosts.All"/> — and every declared host must really register it,
-    /// so the list cannot rot in the other direction either.
+    /// The projects that DEFINE the resolver (interface in Core, implementation in Infrastructure).
+    /// They are libraries — they never resolve a config for a deployed process of their own — so
+    /// naming the type there is not host behaviour.
+    /// </summary>
+    private static readonly string[] DefiningProjects = { "ProcuLink.Core", "ProcuLink.Infrastructure" };
+
+    /// <summary>
+    /// Every host project that so much as NAMES the effective-config resolver must be declared in
+    /// <see cref="RevisionAuthorityHosts.All"/> — and every declared host must really use it, so
+    /// the list cannot rot in the other direction either.
     /// </summary>
     [Fact]
     public void EveryHostThatResolvesAnEffectiveConfig_IsDeclaredInTheEnforcedHostList()
     {
         var root = FindRepoRoot();
 
-        var registeringProjects = Directory
-            .EnumerateFiles(root, "Program.cs", SearchOption.AllDirectories)
-            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
-                     && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
-                     && !p.Contains($"{Path.DirectorySeparatorChar}.claude{Path.DirectorySeparatorChar}"))
-            .Where(p => Registration.IsMatch(File.ReadAllText(p)))
-            .Select(p => Path.GetFileName(Path.GetDirectoryName(p))!)
+        var usingProjects = ProductionSourceFiles(root)
+            .Where(f => ResolverMention.IsMatch(File.ReadAllText(f.Path)))
+            .Select(f => f.Project)
+            .Where(p => !DefiningProjects.Contains(p, StringComparer.Ordinal))
+            .Distinct(StringComparer.Ordinal)
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
 
-        registeringProjects.Should().NotBeEmpty(
-            "the scan must find the known hosts — an empty result means the regex, not the code, changed");
+        usingProjects.Should().NotBeEmpty(
+            "the scan must find the known hosts — an empty result means the scan, not the code, changed");
 
         var declared = RevisionAuthorityHosts.All
             .Select(h => h.ProjectName)
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
 
-        registeringProjects.Should().BeEquivalentTo(declared,
+        usingProjects.Should().BeEquivalentTo(declared,
             "every host that resolves an effective connection config MUST be listed in "
             + "RevisionAuthorityHosts.All, because that list is what tells a deployer which Railway "
             + "service needs Connections__RevisionAuthority set. A host missing from the list ships "
             + "reading the live tables while its siblings honour the pin — silently.");
+    }
+
+    /// <summary>
+    /// Rule R5 — <c>StartupConfigurationValidator.AnnounceRevisionAuthority</c>'s own comment claims
+    /// that riding the <c>Validate</c> seam "guarantees a new host cannot gain the announcement by
+    /// accident and lose it by omission". That guarantee is worth exactly as much as the claim that
+    /// every host calls <c>Validate</c> — which, until this test, nothing asserted. A third host
+    /// that skipped it would announce nothing and no other test would notice, so the Worker-shaped
+    /// hole (no HTTP, therefore no health endpoint, therefore the log line is the ONLY surface)
+    /// would reopen in silence.
+    /// </summary>
+    [Fact]
+    public void EveryDeclaredHost_CallsTheStartupValidator_WhichIsWhatCarriesTheAnnouncement()
+    {
+        var root = FindRepoRoot();
+
+        foreach (var host in RevisionAuthorityHosts.All)
+        {
+            var sources = ProductionSourceFiles(root)
+                .Where(f => string.Equals(f.Project, host.ProjectName, StringComparison.Ordinal))
+                .ToList();
+
+            sources.Should().NotBeEmpty($"{host.ProjectName} must have production sources to scan");
+
+            sources.Any(f => File.ReadAllText(f.Path).Contains("StartupConfigurationValidator.Validate"))
+                .Should().BeTrue(
+                    $"{host.ProjectName} must call StartupConfigurationValidator.Validate — that call is "
+                    + "what emits the effective revision-authority value at startup, and for a host that "
+                    + "serves no HTTP it is the only surface on which the value can ever be observed");
+        }
+    }
+
+    private sealed record SourceFile(string Project, string Path);
+
+    /// <summary>
+    /// Every checked-in production .cs file, tagged with its owning project directory. Excludes
+    /// build output, other sessions' worktrees under <c>.claude/</c>, and the test projects — a
+    /// test naming the resolver is not a host resolving a config with it, which is precisely how a
+    /// real host would hide from a naive scan.
+    /// </summary>
+    private static IEnumerable<SourceFile> ProductionSourceFiles(string root) =>
+        Directory
+            .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                     && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+                     && !p.Contains($"{Path.DirectorySeparatorChar}.claude{Path.DirectorySeparatorChar}"))
+            .Select(p => new SourceFile(ProjectOf(root, p), p))
+            .Where(f => f.Project.Length > 0 && !f.Project.EndsWith("Tests", StringComparison.Ordinal));
+
+    /// <summary>The top-level project directory a file belongs to, relative to the repo root.</summary>
+    private static string ProjectOf(string root, string path)
+    {
+        var relative = Path.GetRelativePath(root, path);
+        var first = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0];
+        return first.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ? "" : first;
     }
 
     /// <summary>
