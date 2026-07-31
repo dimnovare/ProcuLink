@@ -2336,3 +2336,56 @@ blocked on staleness, not on judgement — which is the cheap kind of blocked.
 | Mid-parse (WP-23a) | idle; owns BE #119 draft + #121/#122 mutation branches | no |
 
 Both owners informed of the collisions above, including the cross-chip pair neither could see alone.
+
+---
+
+## 2026-07-31 — F7 fixed and shipped as BE #126, ahead of WP-27
+
+WP-27's refutation produced twelve findings; six were silently dropped by the fix round and appear in
+neither PR body (F6, **F7**, F8, F9, F11, F12). Its owner recorded them rather than carrying them
+quietly and named F7 as the one they would not let ship silently. Verified and fixed here, because it
+is unowned and it gates WP-27 rather than following it.
+
+### The defect
+
+`DashboardController` carried **zero** `IsSample` references. Seven other controllers and services
+honour the exclusion, and `OnboardingController` states the invariant for the whole product:
+
+> Every flag/count EXCLUDES sample data (IsSample suppliers/orders): running the sample order must
+> never "complete" onboarding with zero real data.
+
+The dashboard was the one place that did not. Every KPI, the sidebar badge, the notifications bell and
+the wire topology counted the practice order as real work — and since the practice order seeds its own
+`__sample__` supplier, the landing page also drew a wire for a supplier the user never added.
+
+**It was latent until WP-27.** The practice order could not previously reach `delivered`; WP-27 closes
+the practice delivery loop, which makes it reachable. A brand-new account that runs the practice flow
+would read **"1 delivered"**. Same class as the Group J2 fabricated-data purge — staged content
+rendering as real for real users — and the reason it ships *in front of* WP-27, not behind it.
+
+### Scope and verification
+
+Eight query sites across three actions: `GetStats` (four counts), `GetSummary` (the status `GROUP BY`
+behind the sidebar badge and notifications bell), and `GetTopology` (supplier health, wires, and the
+legacy `canonical_json` fallback — three separate query paths, each needing its own guard).
+
+Each test pins **one** site, so reverting a single guard turns exactly the matching test red.
+Mutation-checked by exit code: all eight guards removed → **6/6 fail**; restored → 6/6 pass.
+`--filter Dashboard` → 12/12 with the pre-existing suite unaffected. `GetStats` had **no test at all**
+before this.
+
+### A note on the mutation procedure itself
+
+Restoring the mutation with `git checkout <file>` reverted the file to `HEAD` — which discarded the
+**fix** along with the mutation, since the fix was uncommitted. The tests then passed against
+unguarded code for the wrong reason. Caught because the restore step printed the guard count and it
+read `0`.
+
+**Commit the fix before mutating it, or mutate a copy.** A mutation harness that restores from source
+control assumes the thing under test is already in source control. Fifth instrument failure recorded
+today, and the same shape as the others: the step that verifies the harness was itself the broken one.
+
+### The other five dropped findings — unowned, not fixed
+
+F6 (three `SupplierDeliveryConfigs` writers, so the docstring's "cannot drift apart" invariant is now
+false), F8, F9, F11, F12. Recorded here so they survive the fix round that dropped them.
