@@ -302,8 +302,14 @@ public static class OrderStatusMachine
     /// <c>POST /api/orders/{id}/accept-ai-suggestions</c>. Gating only the first would leave both
     /// holes open through the second, which shares the writer and validates nothing.</para>
     /// </summary>
+    // MUTATION-CHECK C (WP-23): the canonical set is REPLACED here on purpose — the two real holes
+    // are dropped and a status that belongs to DeclaredTerminal is put in their place. Expected RED:
+    // all nine controller rows, the two 'failed' positive controls (failed would now 409), plus
+    // ResolveHeldFrom_IsExactlyTheTwoHolesTheRecomputeDestroys,
+    // ResolveHeldFrom_AndDeclaredTerminal_AreDisjoint and
+    // EveryResolveHeldStatus_KeepsBothRecomputeEdges. Not for merge.
     public static readonly IReadOnlySet<string> ResolveHeldFrom =
-        Set(Unrouted, Delivering);
+        Set(Failed);
 
     /// <summary>
     /// The sentence an operator reads when <see cref="ResolveHeldFrom"/> refuses their correction.
