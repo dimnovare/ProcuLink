@@ -53,8 +53,18 @@ public class OrdersControllerResolveStatusGuardTests
     /// recompute legal from delivered / delivery_failed / rejected_by_supplier / ready_to_deliver /
     /// delivery_held / delivery_unconfirmed / delivery_dead_letter / transforming, so a guard that
     /// blocked any of them would undo that packet. <c>failed</c> is in here too, on purpose: it is
-    /// refused one layer down by the service's terminal guard with a 400 and its own sentence, and
-    /// this endpoint guard must not take that case over.
+    /// refused one layer down by the service's terminal guard, and this endpoint guard must not take
+    /// that case over.
+    ///
+    /// <para><b>Read the <c>parsing</c> row for what it is.</b> It asserts that THIS GUARD does not
+    /// refuse a parsing order — which is true, and is not the same as asserting that it should not.
+    /// It should: both parse-persist claims require <c>Status == Parsing</c>
+    /// (<c>OrderIngestionService.cs:1167</c> / <c>:1458</c>) and return <c>Fail</c> on 0 rows BEFORE
+    /// inserting the lines (<c>:1217</c> / <c>:1469</c>), so a resolve issued mid-parse makes the
+    /// parse discard its entire result. WP-23 was scoped to the two from-states c61fe30 named and
+    /// deliberately did not remove a third operator control without a product decision; the evidence
+    /// is recorded on <see cref="OrderStatusMachine.ResolveHeldFrom"/>. Adding <c>parsing</c> to that
+    /// set moves this row into <see cref="HeldStatuses"/> automatically — no edit here.</para>
     /// </summary>
     public static TheoryData<string> NotHeldStatuses()
     {

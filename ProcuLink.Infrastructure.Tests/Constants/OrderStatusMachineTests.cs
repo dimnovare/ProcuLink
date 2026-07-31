@@ -881,20 +881,63 @@ public class OrderStatusMachineTests
     }
 
     /// <summary>
-    /// WP-23 — the hold is exactly the two holes c61fe30 named, and no more. Exact rather than a
+    /// WP-23 — the hold is exactly the statuses this guard refuses, and no more. Exact rather than a
     /// superset for the same reason as
     /// <see cref="RedeliverableFrom_IsExactlyTheThreeOperatorSendableStatuses"/>: every status added
     /// here takes a control away from operators, so widening must be a deliberate edit with a
     /// product argument, never a side effect of a refactor.
+    ///
+    /// <para><b>This asserts a DECISION, not a survey.</b> It was first written as
+    /// <c>…IsExactlyTheTwoHolesTheRecomputeDestroys</c>, and an adversarial review showed that name
+    /// and its justification were simply false: <c>parsing</c> is a third from-state where the
+    /// recompute destroys something, and worse than the two below rather than milder. Both
+    /// parse-persist claims require <c>Status == Parsing</c>
+    /// (<c>OrderIngestionService.cs:1167</c> / <c>:1458</c>) and return <c>Fail</c> on 0 rows BEFORE
+    /// inserting the lines (<c>:1217</c> / <c>:1469</c>), so a resolve issued mid-parse makes the
+    /// parse discard its whole result. Naming the set after a claim about the world meant the test
+    /// asserted that claim (R5) — and the claim was wrong. It now asserts what the product decided,
+    /// and <see cref="OrderStatusMachine.ResolveHeldFrom"/>'s doc carries the open item.</para>
     /// </summary>
     [Fact]
-    public void ResolveHeldFrom_IsExactlyTheTwoHolesTheRecomputeDestroys()
+    public void ResolveHeldFrom_IsExactlyTheStatusesThisGuardRefuses()
         => OrderStatusMachine.ResolveHeldFrom.Should().BeEquivalentTo(
             new[] { Unrouted, Delivering },
-            "unrouted: the recompute clears the routing hold with SupplierId still null, after which " +
-            "AssignSupplier's atomic `Status == Unrouted` claim answers 409 forever and no control in " +
-            "the product can route the order. delivering: a row SITS in that status, so the recompute " +
-            "overwrites a live dispatch claim whose outcome write then lands on top of the correction");
+            "these are the two from-states c61fe30 named and WP-23 closed. unrouted: the recompute " +
+            "clears the routing hold with SupplierId still null, after which AssignSupplier's atomic " +
+            "`Status == Unrouted` claim answers 409 forever and no control in the product can route " +
+            "the order. delivering: a row SITS in that status, so the recompute overwrites a live " +
+            "dispatch claim whose outcome write then lands on top of the correction. This is NOT the " +
+            "complete list of destructive from-states — 'parsing' is a known, evidenced third one, " +
+            "left open deliberately and recorded on ResolveHeldFrom. Adding it is a product decision " +
+            "about removing an operator control, so it must land as a deliberate edit here");
+
+    /// <summary>
+    /// WP-23 — <c>ResolveHoldMessage</c>'s <c>switch</c> arms are the ONE place a held status is
+    /// spelled out a second time, so they are the one place the set can silently drift from its
+    /// consumer. A status removed from <see cref="OrderStatusMachine.ResolveHeldFrom"/> whose arm is
+    /// left behind fails nothing on its own: the arm is simply never reached, and the next reader
+    /// finds a sentence implying a refusal the product no longer performs.
+    ///
+    /// <para>So the complement is asserted: every status the guard does NOT refuse must fall through
+    /// to the generic arm. Derived from <see cref="OrderStatusMachine.AllStatuses"/>, so this needs
+    /// no maintenance when a status is added on either side.</para>
+    /// </summary>
+    [Fact]
+    public void ResolveHoldMessage_HasNoArmForAStatusTheGuardDoesNotRefuse()
+    {
+        var fallback = OrderStatusMachine.ResolveHoldMessage("a-status-the-machine-has-never-heard-of");
+
+        var stray = OrderStatusMachine.AllStatuses
+            .Except(OrderStatusMachine.ResolveHeldFrom, StringComparer.Ordinal)
+            .Where(s => !string.Equals(OrderStatusMachine.ResolveHoldMessage(s), fallback, StringComparison.Ordinal))
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+
+        stray.Should().BeEmpty(
+            "a bespoke refusal sentence for a status the guard admits is unreachable code that reads " +
+            "like a rule — the second hand-written enumeration of the held set, and the exact drift " +
+            "the five delivery-claim literals were centralised to prevent");
+    }
 
     /// <summary>
     /// WP-23 — the two refusals on the resolve path stay separate concepts.

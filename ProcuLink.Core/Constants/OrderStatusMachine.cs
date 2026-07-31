@@ -291,16 +291,48 @@ public static class OrderStatusMachine
     ///
     /// <para><b>Deliberately NOT here: <c>failed</c>.</b> It is already refused, one layer down and
     /// for a different reason — <c>OrderResolutionService.IsFinished</c> derives from
-    /// <see cref="DeclaredTerminal"/> and answers 400 with "there is nothing here to correct; upload
-    /// a corrected file as a new order". That is a permanent verdict about the order; this set is a
+    /// <see cref="DeclaredTerminal"/> and answers "there is nothing here to correct; upload a
+    /// corrected file as a new order". That is a permanent verdict about the order; this set is a
     /// temporary one about the moment ("do X first, then correct it"), which is why it earns a
     /// different status code and a different sentence. The two sets are asserted DISJOINT so the two
-    /// refusals cannot quietly merge.</para>
+    /// refusals cannot quietly merge.
+    /// <br/>Precise about what the operator actually receives, because the two endpoints differ and
+    /// it would be easy to write "400" here and be half wrong: <c>/resolve</c> maps that failure to
+    /// <b>400 + the sentence</b> (<c>OrdersController.Resolve</c>'s <c>BadRequest(new { error })</c>),
+    /// while <c>/accept-ai-suggestions</c> collapses EVERY service failure to a bare
+    /// <b>404 with no body</b> (<c>if (!result.IsSuccess) return NotFound();</c>). That asymmetry
+    /// predates this set and is not fixed here — WP-23 gated the two endpoints identically for the
+    /// statuses below, and deliberately did not re-open how they report the terminal refusal.</para>
+    ///
+    /// <para><b>NOT exhaustive, and saying so is the point.</b> A third from-state has the same
+    /// shape and is knowingly left open: <c>parsing</c>. Both parse-persist claims require
+    /// <c>Status == Parsing</c> (<c>OrderIngestionService.cs:1167</c> and <c>:1458</c>) and, on 0
+    /// rows, return <c>Fail</c> BEFORE the lines are inserted (<c>:1217</c> / <c>:1469</c>) — so a
+    /// resolve issued mid-parse moves the order to ready/pending_review and the parse then discards
+    /// its entire result. That is the same defect class as the two below, not a milder one. It is
+    /// excluded because WP-23 was scoped to the two holes <c>c61fe30</c> named, because refusing it
+    /// removes a control from operators, and because the shipped UI already returns a reading screen
+    /// for a parsing order (<c>OrderWorkshop.tsx:556</c>) so the path is API-reachable but not
+    /// UI-reachable — none of which makes it safe, only lower-priority. Adding it here is a one-token
+    /// change and the derived tests would cover it automatically; it wants a decision, not a
+    /// refactor. <c>transforming</c> is a weaker fourth candidate on the same argument and was not
+    /// ruled out either. This paragraph is the reason
+    /// <c>ResolveHeldFrom_IsExactlyTheStatusesThisGuardRefuses</c> asserts membership of a DECISION
+    /// and no longer claims to enumerate every destructive from-state.</para>
     ///
     /// <para>Consumed by <c>OrdersController.RefusedByResolveHoldAsync</c>, which gates BOTH
     /// recompute endpoints — <c>POST /api/orders/{id}/resolve</c> and
     /// <c>POST /api/orders/{id}/accept-ai-suggestions</c>. Gating only the first would leave both
     /// holes open through the second, which shares the writer and validates nothing.</para>
+    ///
+    /// <para><b>Refused, not made impossible — and for <c>delivering</c>, narrowed rather than
+    /// closed.</b> The guard is a check-then-act read at the endpoint, and
+    /// <c>PurchaseOrderEntity</c> carries no concurrency token, so an order that enters
+    /// <c>delivering</c> between this read and <c>OrderResolutionService</c>'s
+    /// <c>SaveChangesAsync</c> is still overwritten last-writer-wins. The ordinary operator path is
+    /// shut; the race is not. Closing it needs an atomic claim on the resolve write itself, in the
+    /// shape <c>OrdersController.AssignSupplier</c> already uses. <c>unrouted</c> has no such gap —
+    /// nothing moves an order INTO the routing hold after ingest.</para>
     /// </summary>
     public static readonly IReadOnlySet<string> ResolveHeldFrom =
         Set(Unrouted, Delivering);
