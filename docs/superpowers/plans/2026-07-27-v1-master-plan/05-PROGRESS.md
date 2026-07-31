@@ -2076,3 +2076,66 @@ caught only because the harness was built to **fail loudly on a non-matching pat
   blank for the most common signed-out path. The second refuter was checking whether `performance.now()`
   anchoring breaks under App Router **soft navigation** — it measures since the *document*, which a
   client-side nav does not reset, collapsing the budget to its 1500 ms floor. **Unverified.** Now on main.
+
+---
+
+## 2026-07-31 — sweep #2 final: six landed, both mains verified green
+
+FE #72 (WP-28) landed as `f9ab894` once its owner fixed the semantic break and re-checked containment.
+Final state of both repos:
+
+| Repo | `main` | CI |
+|---|---|---|
+| FE `project-proculink` | `f9ab894` | ✅ success |
+| BE `ProcuLink` | `2c8b8f4` | ✅ success |
+
+Six packets merged: **FE #74** (WP-18 follow-up), **FE #76** (WP-32 follow-up), **FE #72** (WP-28),
+**BE #98** (WP-21), **BE #97** (WP-22), **BE #99** (WP-23).
+
+### FE #72 closed the gap that FE #74's merge exposed
+
+`src/components/bridge/workshop/acceptanceGateModel.test.ts` **now exists.** Its absence is the whole
+of TRAP 24 — the module FE #74 was built to correct had no direct coverage, and the follow-up fix was
+itself unpinned until its owner mutation-checked it (forcing the advisory count to zero passed all
+1676 tests). `b8d9eae` carries the fix and its guard together: 36 new cases across 10 test files, both
+halves of the asymmetry mutation-checked by exit code.
+
+The packet that broke on the merge is the packet that closed the gap the merge revealed. Worth
+recording because the sequence is not a coincidence: `update-branch` forced a build of the merged
+program, the build failed, and fixing it required someone to finally read what the model actually
+promised.
+
+### TRAP 23, sharpened
+
+The original clause — "`MERGEABLE` is a claim about text" — is true but understates it. The sharper
+statement, from the WP-28 owner:
+
+> All three signals were scoped to one side each. Green CI tested the **branch**. `MERGEABLE` tested
+> the **textual merge**. Nothing tested the merged **program**. A symbol deleted in one file and
+> called from another is invisible to all three by construction.
+
+That also explains why `gh pr update-branch` is what caught it: it is the only step in the sequence
+that builds the merge result. **Practical consequence — update branches early, not at merge time.**
+The defect surfaced within minutes of the update instead of after a merge to `main`.
+
+### HOLD — FE #77 (WP-31) is green and must not be swept on that
+
+Its owner reports the packet's agent died running final gates, so the mutation checks never ran.
+Green CI is precisely the signal TRAP 24 says cannot speak to coverage, and this is a live instance
+rather than a hypothetical: do not merge #77 until its owner confirms the gates ran.
+
+### Still held at sweep close
+
+FE #65 (CONFLICTING after #74/#76), FE #69 / #71 (behind main), FE #70 / #75 (green, re-refuting),
+FE #77 (above), FE #73 + BE #100 (the WP-27 rate cap), BE #116 (conflicting), BE #119 (draft),
+BE #118 / #121 / #122 (throwaway mutation branches).
+
+### Resolved in passing: the `stripComments` move is justified
+
+The relocation from `src/test/sourceScan.ts` to `scripts/lib/stripComments.mjs` (re-exported from its
+old home) rests on a premise that has now been checked rather than assumed: `.github/workflows/ci.yml`
+has **no `setup-node` step at all**, so `lint:vocab` runs `scripts/check-vocabulary.mjs` under bare
+`node` on an unpinned `ubuntu-latest`. A `.ts` import from there would depend on
+`--experimental-strip-types` being available in a runtime nobody pinned. Plain ESM under `scripts/` is
+the correct resolution; `4c7350a`'s fix is intact and there is still exactly one copy for three
+consumers.
