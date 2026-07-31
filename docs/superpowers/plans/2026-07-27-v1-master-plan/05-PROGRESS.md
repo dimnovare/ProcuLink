@@ -2503,3 +2503,39 @@ Its owner's addition to the rule is the right one: **write the negative down.** 
 over-inclusive trigger whose negatives go unrecorded gets re-read by the next sweeper, or worse,
 learns a reputation for "always comes back clean" and stops being run. A trigger that only ever fired
 on true positives would have to be a detector, and we established a detector is not available here.
+
+---
+
+## 2026-07-31 — F7 landed as `a7437a3`, and the rule for where a latent defect belongs
+
+BE #126 merged. **Eight packets landed today**: FE #74, #76, #72; BE #98, #97, #99, #125, #126.
+FE main `f9ab894`, BE main `a7437a3`, both verified green at every intermediate point
+(`c8ae076` cancelled-by-supersede, `faba3bf` ✅, `2c8b8f4` ✅, `25cb8b7` ✅).
+
+### The ordering principle — worth keeping, because the obvious version is wrong
+
+F7 shipped **ahead of** WP-27 rather than inside it. The instinct is the opposite: a defect *my*
+packet surfaced belongs *in* my packet. WP-27's owner argued the correct version and it generalises:
+
+> **When a packet makes a latent defect reachable, the defect is not the packet's to carry.**
+
+`DashboardController` never honoured `IsSample`, and every other consumer already did. WP-27 only gave
+a practice order a path to `delivered` for the first time, which made the existing violation
+*reachable*. Bundling the fix would have done two bad things: written a pre-existing invariant
+violation into a packet's history as though that packet caused it, and held a correct standalone fix
+behind a re-refutation gate with nothing to do with it.
+
+Same shape as TRAP 22's mock-divergence finding — inert until something crossed a boundary. **The fix
+belongs where the defect lives, not where it surfaced.**
+
+### Verification discipline worth copying, from the #100 rebase
+
+Its owner re-checked `origin/main` by `rev-parse` and subject line rather than trusting the SHA passed
+in a message, and confirmed `merge-base --is-ancestor` read NO before the merge and YES after —
+i.e. verified the *transition*, not just the end state. Then ran `ProcuLink.Transform.Tests` locally
+(1449 passed / 0 failed / 2 skipped) because that project is Docker-free, so #125's CSV-dialect and
+typed-JSON-leaf work is proven **on the merged tree** rather than only on the branch where it was
+written.
+
+That is TRAP 23's lesson applied without being prompted: green on the branch and green on the merged
+program are different claims.
