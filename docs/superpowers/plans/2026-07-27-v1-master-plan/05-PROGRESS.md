@@ -319,7 +319,7 @@ Where the question is "is it mounted", render it and assert on the DOM.
 stripping:
 
 ```js
-const decl = new RegExp(`const\s+${name}`).exec(src);
+const decl = new RegExp(`\bconst\s+${name}\b`).exec(src);
 ```
 
 A packet added an explanatory comment naming `const FILTER_CHIPS` above the real declaration, and
@@ -342,7 +342,7 @@ probes and watching them pass:
 | `label: value` in a data array | caught |
 | `<h1>…{name}</h1>` — any interpolated heading | **missed** — `looksLikeProse`'s char class at `:299` excludes `{` and `}` |
 | `name="…"` | **missed** — `name` is absent from `ATTR_RE` at `:254` |
-| `detailLabel="…"` | **missed** — `label` needs a word boundary that `detailLabel` does not give |
+| `detailLabel="…"` | **missed** — `\blabel` needs a word boundary that `detailLabel` does not give |
 
 Interpolated headings are everywhere, so "checked against the vocab gate" means *some* copy was
 checked. Unowned as of 2026-07-31.
