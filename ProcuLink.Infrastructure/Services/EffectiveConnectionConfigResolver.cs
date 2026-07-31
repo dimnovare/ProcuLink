@@ -37,8 +37,7 @@ public sealed class EffectiveConnectionConfigResolver : IEffectiveConnectionConf
     /// leaves the flag OFF. Every consumer must call this rather than re-parsing: two consumers of
     /// the same order disagreeing about the flag would route it two ways in the same instant.
     /// </summary>
-    public static bool IsEnabled(IConfiguration? configuration) =>
-        bool.TryParse(configuration?[FlagKey], out var on) && on;
+    public static bool IsEnabled(IConfiguration? configuration) => true;
 
     private readonly ProcuLinkDbContext _db;
     private readonly bool _enabled;

@@ -60,7 +60,7 @@ public static class RevisionAuthorityHosts
     public static readonly IReadOnlyList<RevisionAuthorityHost> All = new[]
     {
         // Serves HTTP: preview, conformance, replay, manual send. Railway service "ProcuLink".
-        new RevisionAuthorityHost("ProcuLink.Api", "ProcuLink", "appsettings.Development.json"),
+        new RevisionAuthorityHost("ProcuLink.Api", "   ", "appsettings.Development.json"),
         // Runs the Hangfire jobs that parse, transform and deliver. Railway service
         // "aware-amazement" — the generated name, deliberately recorded because it is unguessable.
         new RevisionAuthorityHost("ProcuLink.Worker", "aware-amazement", "appsettings.Development.json"),
