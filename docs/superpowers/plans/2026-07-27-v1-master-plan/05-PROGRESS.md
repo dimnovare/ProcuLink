@@ -436,6 +436,18 @@ worktree's line-ending convention is part of the pattern.** Verify the mutation 
 before trusting the run. Second instrument failure the same day — the other was `spawnSync` argv
 quoting, which cost six already-recorded rows.
 
+**The sub-class worth naming: the renderer and the verifier were the same instrument.** Two of the
+day's three instrument failures share it. The CRLF harness wrote and checked through the same layer
+that mismatched. And while writing TRAP 13's third instance into this file, shell escaping turned
+two `\b` sequences in the quoted regex into literal **0x08 bytes** — which render as *nothing*, so
+the entry looked correct in `git show`, in `grep`, and in the editor, and shipped wrong through
+three commits. `cat -A` was the only view that could see it.
+
+**A trap about exact regexes, published with its regex silently wrong.** When an artifact must be
+byte-exact, verify it through a *different* layer than the one that produced it — `cat -A`,
+`xxd`, a re-read from a fresh process. The `spawnSync` failure does **not** share this shape, so it
+is a genuinely different mechanism and does not belong under this heading.
+
 **TRAP 19 — "a packet edited another packet's guard to make itself pass."** Sometimes true and the
 most serious thing on the board; sometimes the guard's *locator* simply broke. **Separate the two
 before escalating:**
