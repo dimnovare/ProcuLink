@@ -2889,3 +2889,57 @@ shape.
 - **FE #70 / #75** — #70 owns the vocabulary gate that G1+G2 must build on; #75's glossary overlaps G4.
 - **BE #100** — updated onto `e4d4ac5`, re-running.
 - **BE #116** — targets `docs/v1-master-plan`, conflicting, no checks. Cannot merge as configured.
+
+---
+
+## 2026-08-01 overnight — seventeen landed, and two orphaned PRs rescued by hand
+
+| Merged | Packet | Result |
+|---|---|---|
+| BE #100 | WP-27 backend — practice delivery loop + `IsSample` on the DTO | BE `a4e78f6` |
+| FE #79 | G4 — one failure vocabulary at the render sites, derived from `STATUS_META` | FE `e0e1be5` |
+| FE #81 | G1+G2 — a string literal naming a registry no longer disarms the gate | FE `dc34947` |
+| FE #70 | WP-29 — make the valuable state visible in the inbox | FE `dc34425` |
+
+BE #100 landed **before** FE #73, so the `sample-order` rate cap exists before anything can call it.
+
+### G4 reconciled instead of duplicating, and the dispatch error cost nothing
+
+Told that FE #75 already owned the glossary, the G4 session **dropped**
+`dashboard-and-statuses/page.mdx` — the file with 4 conflict hunks — and kept only the half #75 does
+not touch: the four render sites. TRAP 27 was caught early enough that the duplicate work was never
+written.
+
+### Two orphaned PRs rescued — their owner's session had ended
+
+**FE #70** had gone `CONFLICTING`. Two conflicts, neither resolvable by picking a side:
+
+- `BridgeDashboard.tsx` — **main's own comment documented the defect** as "unfixed and deliberately
+  named rather than papered over": `countReady` sums `ready` AND `ready_to_deliver`, so both its
+  labels under-describe the number. #70 fixes it by splitting the segment into "Ready to send" and
+  "Queued to send" — which is what main's comment says the fix would be. Took #70.
+- `api-client.ts` — **combined.** #70 replaced a raw `throw new Error(res.text())` with
+  `ApiHttpError` + `parseApiErrorBody`, so the operator sees the backend's sentence and a 403's
+  `upgradeUrl` survives for the banner. G4 renamed the copy off "Transform failed" but still
+  interpolated the raw body. Kept #70's structure, took G4's wording.
+
+Then #81 landed and made #70's `scripts/lib/stripComments.mjs` redundant, so the gate files went to
+main wholesale and that module was deleted rather than carried.
+
+**The "ONE COPY, THREE CONSUMERS" guard earned itself on its first real merge.** It exists to turn CI
+red when a branch carries its own copy of the shared scanner — precisely what #70 was about to do. Its
+comment named `stripComments.mjs` by filename, which is what dated it; reworded to name the hazard.
+
+**FE #75** failed on something better designed than the failure it caused. G4 deferred two help
+articles to #75 rather than rewrite them twice, and guarded the deferral with a test asserting each
+deferred file is **still dirty** — *"deliberately not a silent skip. An exemption that outlives its
+reason is a lie."* Merging main carried that guard onto #75's branch, where the file is already
+rewritten, so the exemption became false and the test named it. Removed; 97/97.
+
+> **A deferral that verifies its own necessity is worth the six lines.** Both halves of this worked:
+> G4 skipped work it would have duplicated, and the skip announced its own expiry instead of rotting.
+
+### Ordering held all night
+
+Enforcement before claims (BE #127 → FE #78), backend before frontend (BE #100 → FE #73), gate owner
+before gate consumer (#81 → #70). No merge went in on green CI alone.
