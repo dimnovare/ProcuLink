@@ -2777,3 +2777,75 @@ branches change a user-visible claim in one file.
 | BE main | `a7437a3` |
 | Held | FE #73 (G6, above) · #69 (refuted twice) · #70/#75 (blocked on G1 + rebase) · #77 (stacked on #69) · BE #100 (pairs with #73) · BE #124 (behind main) · #116 (behind, conflicting) · #119/#121/#122 (drafts/throwaways) |
 | Re-running | FE #65 |
+
+---
+
+## 2026-07-31 — ten landed, and TRAP 27: I dispatched two packets into work that already existed
+
+FE #65 (WP-13, the promote control) merged as **`1d5e86d`** — tenth packet today. BE main moved to
+**`3c75daf`** when the mid-parse session landed WP-23a (#119). A read-only collision lookout was posted
+over the seven concurrent sessions and returned findings that change what happens next.
+
+### TRAP 27 — dispatching against `main` when the prerequisite lives in an unmerged PR
+
+I dispatched two chips whose work already existed in open, green, unmerged pull requests. Neither chip
+could have known; **both briefs were mine.**
+
+| Dispatched | Already existed in | Result |
+|---|---|---|
+| **G4** — reconcile the failure vocabulary | **FE #75** rewrote the same `dashboard-and-statuses/page.mdx` from the identical base blob `ff7a528` | A real 3-way merge yields **4 conflict hunks**, plus two competing tests for one invariant (`help-status-labels.test.ts` vs `statusVocabulary.test.ts`) |
+| **G1+G2** — close the gate's literal blind spot | **FE #70** already extracted the scanner to `scripts/lib/stripComments.mjs` | G1 is building `scripts/lib/sourceScan.mjs` — same extraction, different filename, into a directory **neither base has**, so the two cannot merge |
+
+The mechanism: I wrote each brief against `origin/main`, because that is where a new packet should
+start. But the prerequisite for both was sitting in a PR that had not landed — so from `main`'s point
+of view the work looked undone, and each chip correctly set about doing it.
+
+> **Before dispatching, check the open PR set, not just `main`. A packet's prerequisite may be
+> written, reviewed and green, and still invisible from `main`.**
+
+This is the dispatch-time twin of TRAP 24. There, green CI was mistaken for coverage; here, `main` was
+mistaken for the sum of the work. Both are a narrower thing standing in for a wider one.
+
+Corrected both sessions in flight: G4 told to read #75 first and either adopt or explicitly supersede
+it (its genuinely unique half — the four render sites `healthTiles.ts:37-41`, `ExceptionDetail.tsx`,
+`BridgeTopbar.tsx`, `problemCopy.ts` — is untouched by #75 and is the real packet); G1 told to base on
+`origin/claude/wp29-inbox` and **add** `maskLiterals` to #70's module rather than fork it. G1's actual
+finding stands and is not duplicated: #70 closed comments, G1 found literals.
+
+### C4 — main already contradicts itself, and nothing in flight fixes it
+
+- **BE #89** (WP-19, merged 07-30) made `rejected_by_supplier` **recoverable**:
+  `OrderStatusMachine[RejectedBySupplier]` went from `Set()` to `Set(PendingReview, Ready, Transforming)`.
+- **FE #61** (WP-24, merged 07-31, *a day later*) shipped `problemActions.ts` asserting it is
+  **terminal**: `transformOrder: new Set(["ready","pending_review","transform_failed"])`.
+
+Both on main. **The frontend refuses a recovery the backend accepts.** Two merged packets, a day
+apart, and the contradiction belongs to neither — TRAP 25's shape across a *merge boundary in time*
+rather than across two branches. Routed to the WP-19+WP-24 session, whose scope it is.
+
+### The lookout's methodology worked where mine failed
+
+Its containment pre-pass correctly identified `wp30-tokens ⊂ wp31-a11y` and excluded the pair — the
+step whose absence gave me two wrong overlap answers earlier today. WP-31's own diff is **33 files,
+not 78**.
+
+It also found what no ref-based audit can: **six of the seven "in-flight" packets have zero pushed
+commits.** The real work is uncommitted worktree state. If a session is interrupted, that work is
+unrecoverable — worth knowing before anyone reorders anything.
+
+### Two blockers on the merge order
+
+- **FE #77 (WP-31)**: only **Vercel** has reported. Build, unit and e2e checks have **never run**. It
+  is also stacked on a `wp30-tokens` head that has since diverged from its own session's third pass
+  (57 files apart). Must not merge on the strength of a green Vercel badge.
+- **BE #116**: targets `docs/v1-master-plan`, not `main`, and is **CONFLICTING** with no checks. It
+  cannot merge as configured.
+
+### Ordering that is now fixed, not advisory
+
+**Behaviour lands before the prose that describes it.** WP-19+24 rewrites the actions inside
+`problemCopy.ts`'s `rejected_by_supplier` entry; G4 renames the badges in the same file on different
+lines. Git auto-merges, TypeScript compiles, and nothing checks that the prose still describes the
+behaviour. Both sessions have been told the order and the reason.
+
+Likewise the vocabulary gate: G1 owns it, and G4's `check-vocabulary.mjs` copy edit lands after.
