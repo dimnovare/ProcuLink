@@ -416,6 +416,12 @@ exercised by real merge traffic in both repos. **No main-push run has been cance
   **Growth** (`PlanConstants.cs:286`) — the code name is misleading. (b) `CLAUDE.md` §11.5 has
   drifted from `PlanConstants.cs`: Integration is 1,500 orders (not 1,000) and **Distributor**
   is missing from the documented ladder.
+  > **BOTH RESOLVED 2026-07-30 — do not act on the codes above.** (a) is fixed by BE
+  > [#82](https://github.com/dimnovare/ProcuLink/pull/82): the code is now
+  > `catalog_sync_requires_growth`, derived from `PlanConstants.GetMinimumPlan` rather than
+  > written by hand, so it cannot name the wrong plan again. (b) is fixed by FE
+  > [#48](https://github.com/dimnovare/project-proculink/pull/48). Left in place as the record
+  > of what the runbook worked around; corrected here because this file is read as current truth.
 ## Snapshot (2026-07-27) — P0: supplier auto-detect was registered but never wired (PR open)
 
 - **BE #70 produced zero suggestions on production, on every path, since it shipped.** `OrderService`
@@ -970,6 +976,10 @@ never checked, and one was my own error. Corrected in place, each with its evide
   `IsEnabled:true` 403s `catalog_sync_requires_integration`
   (`SuppliersController.cs:957`). Config-save (`IsEnabled:false`), `test-fetch`, and
   `catalog/import` are **not** gated. Lifting this is a founder billing decision.
+  > **Code corrected 2026-07-30 (BE [#82](https://github.com/dimnovare/ProcuLink/pull/82)):**
+  > the 403 is now `catalog_sync_requires_growth`. The GATE itself is unchanged — still
+  > `BillingFeature.SftpIngestion` at Growth — so the block described here, and the founder
+  > billing decision it needs, both still stand. Only the error string was wrong.
   **Prod inventory:** none of the six vendors exists as a supplier — all 18 are demo/`ZZ`-test/
   sample, and only "FastParts Inc" has any catalog source (https, disabled, no creds). So
   nothing was pre-configured and nothing could be verified by reading prod.

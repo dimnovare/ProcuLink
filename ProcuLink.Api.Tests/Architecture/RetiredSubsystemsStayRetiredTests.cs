@@ -195,7 +195,12 @@ public class RetiredSubsystemsStayRetiredTests
         //    compiles fine) — what makes the feature real is that the plan gate answers for it. Parsed
         //    by name so deleting the member fails HERE rather than at compile time.
         Enum.TryParse<BillingFeature>("WebhookDelivery", out var webhookDelivery)
-            .Should().BeTrue("BillingFeature.WebhookDelivery gates the LIVE outbound webhook subscriptions");
+            // Precise on purpose: WebhookDelivery gates the http DELIVERY CHANNEL a purchase order
+            // is sent over (SuppliersController.UpsertDeliveryConfig, via DeliveryCapabilityGate).
+            // It does NOT gate IntegrationSubscription — the order.created/delivered/failed events
+            // fired at the customer's own systems, which are deliberately ungated. The old wording
+            // here conflated the two and read as a claim that POST /api/integrations is plan-gated.
+            .Should().BeTrue("BillingFeature.WebhookDelivery gates the http delivery channel, which is live");
         PlanConstants.PlanHasFeature(PlanConstants.Growth, webhookDelivery)
             .Should().BeTrue("outbound webhook delivery is a Growth+ feature and must stay gated, not removed");
         PlanConstants.PlanHasFeature(PlanConstants.Pilot, webhookDelivery)

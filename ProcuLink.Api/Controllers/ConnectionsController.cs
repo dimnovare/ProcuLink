@@ -59,6 +59,40 @@ public sealed class ConnectionsController : ControllerBase
         });
     }
 
+    /// <summary>
+    /// The gate for ACTIVATING an already-stored revision — publish and rollback — as opposed to
+    /// authoring one.
+    ///
+    /// <para><b>Why authoring-time gating is not enough.</b> <see cref="GateBundleAsync"/> runs when
+    /// a draft is written, and nothing revokes a stored revision when an org changes plan. Rollback
+    /// clones a previously-published, now archived bundle — <c>DeliveryProtocol</c> and
+    /// <c>OutputFormat</c> verbatim — into a NEW published revision and moves the connection's
+    /// active pointer to it. So an org that held Enterprise, published an <c>erp_erply</c> revision,
+    /// moved to a stock channel and then dropped to Growth could press Rollback and be delivering
+    /// over ERP again: a capability handed back on request through the one door of three that did
+    /// not ask. Publish has the same shape for a draft authored before a downgrade.</para>
+    ///
+    /// <para>A missing revision returns null rather than a 403 so the service's own
+    /// <c>NotFound</c>/<c>Conflict</c> answer still wins — a gate must not tell a caller whether a
+    /// revision they cannot see exists.</para>
+    /// </summary>
+    private async Task<IActionResult?> GateStoredRevisionAsync(
+        Guid connectionId, Guid revisionId, CancellationToken ct)
+    {
+        var revision = await _service.GetRevisionAsync(OrgId, connectionId, revisionId, ct);
+        if (revision is null) return null;
+
+        var gated = await DeliveryCapabilityGate.FirstUnmetAsync(
+            _billing, OrgId, revision.DeliveryProtocol, revision.OutputFormat, ct);
+        if (gated is null) return null;
+
+        return StatusCode(StatusCodes.Status403Forbidden, new
+        {
+            error = BillingGateErrors.RequiresPlan(gated.Value.Capability, gated.Value.Feature),
+            upgradeUrl = "/settings",
+        });
+    }
+
     private Guid OrgId => _tenant.OrganisationId;
     private string? CurrentUser => User?.FindFirst("sub")?.Value;
 
@@ -178,8 +212,11 @@ public sealed class ConnectionsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Publish(Guid connectionId, Guid revisionId, CancellationToken ct)
     {
+        if (await GateStoredRevisionAsync(connectionId, revisionId, ct) is { } gate) return gate;
+
         var result = await _service.PublishAsync(OrgId, connectionId, revisionId, CurrentUser, ct);
         return result switch
         {
@@ -200,8 +237,11 @@ public sealed class ConnectionsController : ControllerBase
     [ProducesResponseType(typeof(ConnectionRevisionDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Rollback(Guid connectionId, Guid revisionId, CancellationToken ct)
     {
+        if (await GateStoredRevisionAsync(connectionId, revisionId, ct) is { } gate) return gate;
+
         var result = await _service.RollbackAsync(OrgId, connectionId, revisionId, CurrentUser, ct);
         return result.Status switch
         {

@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Hangfire;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -74,15 +74,40 @@ public class BillingFeatureEnforcementTests
         return billing;
     }
 
-    private static void Assert403NamingTheRightPlan(IActionResult result, BillingFeature feature)
+    /// <summary>
+    /// Asserts the refusal is a 403 carrying a well-formed <c>{capability}_requires_{plan}</c> code
+    /// naming the plan that really unlocks <paramref name="feature"/>.
+    ///
+    /// <para><b>Why this is a full-shape match and not <c>EndWith</c>.</b> The original form checked
+    /// only the <c>_requires_&lt;plan&gt;</c> suffix, so a 403 whose capability segment named a
+    /// DIFFERENT capability passed — and the capability is a hand-written literal sitting next to
+    /// the feature at each gate (<c>RequiresPlan("s3_ingestion", BillingFeature.SftpIngestion)</c> is
+    /// a one-word copy-paste away). That mismatch is invisible to the plan check yet lands a
+    /// customer on an upsell for the wrong feature. Pass <paramref name="capability"/> wherever
+    /// production hardcodes one, and the exact string is pinned.</para>
+    /// </summary>
+    private static void Assert403NamingTheRightPlan(
+        IActionResult result, BillingFeature feature, string? capability = null)
     {
         var status = result.Should().BeOfType<ObjectResult>(
             $"the {feature} gate must refuse, not fall through").Subject;
         status.StatusCode.Should().Be(403);
 
         var error = (string)((dynamic)status.Value!).error;
-        error.Should().EndWith($"_requires_{PlanConstants.GetMinimumPlan(feature)}",
-            "the 403 must name the plan that actually unlocks the feature (WP-11 defect #1)");
+
+        if (capability is not null)
+        {
+            error.Should().Be(BillingGateErrors.RequiresPlan(capability, feature),
+                "the 403 must name both the capability being refused and the plan that unlocks it");
+            return;
+        }
+
+        // No capability supplied (the delivery gates derive theirs from DeliveryCapabilityGate, and
+        // ConnectionLifecycleBillingGateTests pins those exactly): still require a well-formed code
+        // with a non-empty snake_case capability segment, so a malformed or bare code cannot pass.
+        error.Should().MatchRegex($"^[a-z0-9]+(_[a-z0-9]+)*_requires_{PlanConstants.GetMinimumPlan(feature)}$",
+            "the 403 must be a complete {capability}_requires_{plan} code naming the plan that "
+          + "actually unlocks the feature (WP-11 defect #1)");
     }
 
     private static void AssertNot403(IActionResult result, BillingFeature feature) =>
@@ -229,7 +254,7 @@ public class BillingFeatureEnforcementTests
 
         var result = await h.Controller.ImportMappings(h.Supplier.Id, CsvFile("buyer,supplier\nA-1,S-1\n"), CancellationToken.None);
 
-        Assert403NamingTheRightPlan(result, BillingFeature.BulkMapping);
+        Assert403NamingTheRightPlan(result, BillingFeature.BulkMapping, "bulk_mapping_import");
     }
 
     [Fact]
@@ -269,7 +294,7 @@ public class BillingFeatureEnforcementTests
             new CreateAcceptanceProfileRequest("sftp", "xml", new List<AcceptanceRuleDto>()),
             CancellationToken.None);
 
-        Assert403NamingTheRightPlan(result, BillingFeature.CustomSupplierRules);
+        Assert403NamingTheRightPlan(result, BillingFeature.CustomSupplierRules, "custom_supplier_rules");
         svc.Verify(s => s.CreateVersionAsync(
                 It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>(),
                 It.IsAny<IReadOnlyList<AcceptanceRuleInput>>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
@@ -283,7 +308,7 @@ public class BillingFeatureEnforcementTests
 
         var result = await controller.Activate(Guid.NewGuid(), 2, CancellationToken.None);
 
-        Assert403NamingTheRightPlan(result, BillingFeature.CustomSupplierRules);
+        Assert403NamingTheRightPlan(result, BillingFeature.CustomSupplierRules, "custom_supplier_rules");
     }
 
     [Fact]
@@ -317,7 +342,7 @@ public class BillingFeatureEnforcementTests
 
         var result = await controller.GetAuditLog(ct: CancellationToken.None);
 
-        Assert403NamingTheRightPlan(result, BillingFeature.AdvancedAudit);
+        Assert403NamingTheRightPlan(result, BillingFeature.AdvancedAudit, "advanced_audit");
     }
 
     [Fact]
@@ -369,7 +394,7 @@ public class BillingFeatureEnforcementTests
             new UpdateEmailSettingsRequest(true, "imap.example.com", 993, true, "buyer", "pw", "INBOX", h.Supplier.Id),
             CancellationToken.None);
 
-        Assert403NamingTheRightPlan(result, BillingFeature.EmailIngestion);
+        Assert403NamingTheRightPlan(result, BillingFeature.EmailIngestion, "email_ingestion");
     }
 
     [Fact]
@@ -381,7 +406,7 @@ public class BillingFeatureEnforcementTests
             new UpdateSftpIngressRequest(true, "sftp.example.com", 22, "buyer", "pw", "/in", h.Supplier.Id),
             CancellationToken.None);
 
-        Assert403NamingTheRightPlan(result, BillingFeature.SftpIngestion);
+        Assert403NamingTheRightPlan(result, BillingFeature.SftpIngestion, "sftp_ingestion");
     }
 
     [Fact]
@@ -393,7 +418,7 @@ public class BillingFeatureEnforcementTests
             new UpdateS3IngressRequest(true, "orders", "in/", "eu-central-1", "AKIA", "sk", h.Supplier.Id),
             CancellationToken.None);
 
-        Assert403NamingTheRightPlan(result, BillingFeature.S3Ingestion);
+        Assert403NamingTheRightPlan(result, BillingFeature.S3Ingestion, "s3_ingestion");
     }
 
     [Fact]
@@ -412,7 +437,7 @@ public class BillingFeatureEnforcementTests
                 SyncIntervalHours: 24, IsEnabled: true),
             settings, guard, CancellationToken.None);
 
-        Assert403NamingTheRightPlan(result, BillingFeature.SftpIngestion);
+        Assert403NamingTheRightPlan(result, BillingFeature.SftpIngestion, "catalog_sync");
     }
 
     // ═══ Sso ═════════════════════════════════════════════════════════════════
