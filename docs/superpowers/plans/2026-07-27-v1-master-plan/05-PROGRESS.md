@@ -350,6 +350,37 @@ inference dressed as an observation on 2026-07-31 — this one, and a `useQuerie
 count taken from a stale working tree. The shape recurs under parallelism because nobody re-derives
 a number that already has a method attached.
 
+**TRAP 16 — "the token gate is green, so the colours are accessible."** The two are **structurally
+orthogonal** and no amount of tightening the first will imply the second. A token lint looks for raw
+hex. A contrast failure between **two tokens** has no raw hex on either side — both are `var(--…)` —
+so it is invisible to the gate forever. Verified live on `settings/page.tsx:675`:
+`color: var(--amber)` on `background: var(--amber-soft)` at 12.5px/400 = **3.65:1**, under the 4.5:1
+floor, with `lint:tokens` green.
+
+WP-30's AC bundled the two into one sentence as though passing the hex gate implied AA. It does not.
+**Contrast needs its own check, computed from resolved token values, not from source text.**
+
+The second half of this is the retraction shape and it is the more general lesson. An earlier
+contrast pair was retracted correctly for `AssignSupplierBanner` — and the retraction was applied to
+the **file** without grepping the **pair**, so the same pairing still shipped elsewhere. *A fix
+verified where it was applied is not verified where the defect class lives.* When a finding is about
+a combination, the unit of repair is the combination, not the file it was first seen in.
+
+**TRAP 17 — "the baseline ratchets."** `scripts/check-tokens.mjs` fails only when a file's count
+**exceeds** its recorded budget (`--strict`, which `lint:tokens` does pass — growth genuinely exits
+1, and that property holds). Two consequences it does not have:
+
+- **28 → 28 with one violation swapped for another passes silently.** Only the count is compared.
+- **28 → 27 prints `[STALE]` and exits 0**, by explicit design (*"fixing a file must not turn CI red"*
+  — a defensible call). But the budget is not re-cut automatically, so a file swept 122 → 1 keeps
+  **121 slots of permanent re-entry allowance**, up to ~729 across the ledger, until a human
+  re-emits the baseline. A ratchet that never tightens itself is a ceiling.
+
+And **"cleaned to zero" means zero by the hex regex.** `rgb()`, `rgba()`, `hsl()`, 3-digit hex,
+`color-mix()`, named colours and string-concatenated hex all walk past — including seven `rgba()`
+restatements of `#1E66C9` inside a page reported as cleaned. Same family as TRAP 14: **know what
+your gate scans before quoting its number as coverage.**
+
 ### TRAPS added 2026-07-30 (second pass)
 
 **TRAP 6 — "a registry href with no page behind it is a dead link."** WRONG, and it hides the real
