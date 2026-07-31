@@ -2340,3 +2340,777 @@ catch this class, and merging before it reports skips it.
    two read-only commands that answer "is the flag on right now" without touching data.
 5. **The three leaked keys are still unrotated** — OpenAI, PostHog, Neon, from the unfiltered
    `railway variables` call on 2026-07-27. Every `railway` call this session was filtered through `grep`.
+---
+
+## 2026-07-31 — TRAP 25: two packets, both correct, one false claim
+
+The WP-27 rate-cap hold is **lifted**. Verified at source on `origin/claude/wp27-sample`, not taken
+from the owner's report: a dedicated `sample-order` policy at `permit: 5, seconds: 60`
+(`Program.cs:338`), the attribute on the action (`SampleOrderController.cs:39`), the `[InlineData]`
+catalog row (`RateLimitPolicyAppliedTests.cs:56`), and a **live 429 probe**
+(`SampleOrder_Returns429_AfterExceedingPolicyLimit`, `:165`). The cap is proven by behaviour rather
+than by the attribute's presence, and the dedicated partition is better than reusing `support` —
+a burst on one cannot eat the other's budget.
+
+WP-27 remains held: BE #100 does not contain current `main` (`2c8b8f4`, WP-23 landed after it was
+built), and its owner wants a re-refutation after the fix round.
+
+### TRAP 25 — a merge can be textually and semantically sound and still ship a lie
+
+Distinct from TRAP 23, and worse, because nothing mechanical catches it.
+
+WP-28 deleted the practice-order band — one of the seven chrome bands that packet exists to remove —
+and moved its copy into a chip plus a `PracticeNote` in the Issues column. That note read:
+
+> "Sending stops at 'delivery not set up' — that's expected for a practice run."
+
+True when written. WP-27 then seeds an email delivery for the practice order, which is the entire
+point of the packet: the dead end goes away. Git conflicted on the text and the conflict was resolved
+correctly. **Underneath it sat a claim that the other packet had just made false.**
+
+Neither author erred. WP-28 could not know delivery would be seeded; WP-27 could not know the band
+would be gone. Both packets were right in isolation, and the merged product would have shipped a
+sentence contradicting its own behaviour with every test green.
+
+**Why no signal catches it:** TRAP 23's failure was a symbol — a deleted export and a surviving
+caller, which the first build of the merged tree reports as a `ReferenceError`. This is a *claim*.
+Copy asserting something about behaviour is not type-checked against that behaviour, so CI,
+`MERGEABLE`, and building the merge result are all silent. The only thing that catches it is reading
+what the merged copy now promises.
+
+**Practical rule:** when two packets in flight touch the same screen, and one of them changes what the
+product *does* while the other changes what the product *says about it*, the merge needs a copy read,
+not just a green build. Resolution here: keep WP-28's structure, carry WP-27's three-branch
+`practiceDelivers` copy into its new home.
+
+### Related, from the same fix round — a vacuous test wearing a passing test's clothes
+
+`practiceFraming`'s `MapperWorkbench` mock **dropped `issuesSlot`**, so six assertions read as "the
+note does not render" when the note was never handed anywhere to render. `invariants.test.tsx:209`
+and `validationEveryBreakpoint.test.tsx:140` already mock it correctly — the pattern existed and this
+file predated it. Same family as WP-31's vacuous 24px assertion: the test ran, reported confidently,
+and was scoped to something narrower than its name implied.
+
+---
+
+## 2026-07-31 — TRAP 25 amended: the detection was luck, so the rule has to change
+
+The WP-27 owner sharpened TRAP 25 and the amendment matters more than the original entry.
+
+My framing was "neither packet could have known", which is true and **not actionable**. Theirs is the
+actionable half: **what surfaced the contradiction was the textual conflict**, and resolving it forced
+someone to read both sides of the copy. Had WP-28 moved the band to a different file, or had WP-27
+touched only `PracticeOrderPrompt`, git would have merged silently and the false claim would have
+shipped green.
+
+So the detection was **luck of file layout, not process**. The rule cannot be "resolve conflicts
+carefully" — conflicts are exactly the case that already works. It has to be closer to: *when two
+packets touch the same user-visible claim, someone reads the merged copy even when git does not ask.*
+
+### A mechanical trigger, since a mechanical detector does not look possible
+
+Detecting the contradiction automatically would mean type-checking prose against behaviour. But the
+**condition under which one is possible** is cheaply computable, and that is enough to route a human
+or an agent read:
+
+> For each pair of in-flight branches, intersect the copy-bearing files each touches (component and
+> content files, excluding tests). A non-empty intersection at the *screen* level — not the file level
+> — means both packets are editing what one screen says. Flag the pair for a copy read at merge time,
+> whether or not git conflicts.
+
+This detects nothing about truth. It detects that two packets are both writing claims about the same
+surface, which is precisely the state that file-layout luck otherwise hides. Component-directory
+proximity is a serviceable proxy for "same screen" in this repo's structure.
+
+Not built. Recorded because the next instance will not conflict textually, and then there is no
+second chance.
+
+### WP-23 × WP-27 interaction: checked, and clean
+
+The owner took the BE merge early rather than at landing time. `claude/wp27-sample` now contains BE
+main `2c8b8f4`; head `fa051e3`. `dotnet build ProcuLink.slnx` clean — but a build answers the symbol
+question, and the open question was behavioural, since WP-23 gates `resolve` and the practice loop
+calls it:
+
+```
+OrderStatusMachine.cs:337   ResolveHeldFrom = Set(Unrouted, Delivering)
+SampleOrderService.cs:160   Status = "parsing" → parse job → pending_review
+```
+
+The practice order seeds its own `__sample__` supplier, so it routes and never reaches `unrouted`;
+the deliberate 2-of-3 fixture gap lands it in `pending_review`, which the guard admits. The single
+resolve the practice loop issues is not refused. **No interaction — as a checked fact, not a green
+build.**
+
+### A docstring worth copying
+
+WP-23's guard documents its own limits precisely: `delivering` is **narrowed, not closed**, because
+the check is check-then-act and `PurchaseOrderEntity` carries no concurrency token, so an order
+entering `delivering` between the read and `SaveChangesAsync` is still last-writer-wins. It shuts the
+operator path and says plainly that it does not shut the race.
+
+That is the standard `navigationClock.ts`'s docstring was reaching for and did not quite hit — it
+asserted its premise (the script is document-requested) rather than stating what it had and had not
+closed. Point at `OrderStatusMachine.cs:337` next time a claim goes into a comment.
+
+---
+
+## 2026-07-31 — the TRAP 25 trigger, run for real
+
+Seven merged today. BE #125 (WP-15 S6+S7, CSV dialect and typed JSON leaves) landed as `25cb8b7`:
+contained main, green, `MERGEABLE`, and — the TRAP 24 check — `CsvDialectTests.cs` and
+`JsonTypedLeafTests.cs` beside three production files.
+
+Then I ran the overlap trigger proposed in the TRAP 25 amendment against every open branch in both
+repos, rather than leaving it as a note. Method: per branch,
+`git diff --name-only $(git merge-base origin/main $B) $B`, pairwise-intersect the non-test `src/`
+files. It cost one command and found things no session could see from inside itself.
+
+### FE overlap matrix
+
+| Pair | Files | Note |
+|---|---|---|
+| **#77 × #69** | **48** | WP-31 a11y × WP-30 tokens, spanning `src/app/**`, `bridge/{mapper,review,workshop}`, `components/help`, marketing. |
+| #77 × #73 | 4 | `OnboardingWizard`, `InboxView`, `SupplierDockList`, `UploadWorkbench` — the plan predicted this one. |
+| #70 × #69 · #73 × #70 · #73 × #69 | 2 each | `InboxView.tsx` appears in **four** branches. |
+| **#73 × #65** | 2 | `workshop/OrderWorkshop.tsx`, `api-client.ts` — **cross-chip** (Wave 4 × wedge). |
+| #70 × #65 | 1 | `api-client.ts`, also cross-chip. Three branches, two owners, one file. |
+
+`#77 × #69` at 48 files is the expensive one and the plan already sequences WP-31 after WP-30 — so
+land #69 first and rebase #77 onto it, or pay the 48-file rebase twice.
+
+### The trigger caught its own case
+
+**`src/lib/help-articles.ts` is touched by three branches: #75, #69 and #77.** #75 *is* the help-copy
+packet — its whole job is making the glossary teach the labels the product renders, derived from
+`STATUS_META` rather than word-patched. A token or a11y edit that rewords a label in that file
+desynchronises it again, and nothing textual necessarily conflicts.
+
+That is the TRAP 25 condition exactly: two packets writing claims about one surface, where detection
+would otherwise be luck of file layout. The trigger does not know the claims disagree — it only says
+*read this merged file even if git does not ask*. That is the whole intended value and it fired on its
+first real run.
+
+### Merge state after the pass
+
+Only **FE #73** contains current FE main (`f9ab894`); every other FE branch is behind. BE #100
+contains BE main and passes CI but stays held on its owner's re-refutation gate. So the FE side is
+blocked on staleness, not on judgement — which is the cheap kind of blocked.
+
+### Chip ledger
+
+| Chip | State | Archivable |
+|---|---|---|
+| Close Wave 3 | complete — WP-18, WP-21, WP-23 all merged; notified | **yes** |
+| Wave 4 UI | running; owns FE #70/#73/#75/#77 + BE #100 | no |
+| Finish the wedge | idle; owns FE #65/#71 + BE #124/#116 | no |
+| Mid-parse (WP-23a) | idle; owns BE #119 draft + #121/#122 mutation branches | no |
+
+Both owners informed of the collisions above, including the cross-chip pair neither could see alone.
+
+---
+
+## 2026-07-31 — F7 fixed and shipped as BE #126, ahead of WP-27
+
+WP-27's refutation produced twelve findings; six were silently dropped by the fix round and appear in
+neither PR body (F6, **F7**, F8, F9, F11, F12). Its owner recorded them rather than carrying them
+quietly and named F7 as the one they would not let ship silently. Verified and fixed here, because it
+is unowned and it gates WP-27 rather than following it.
+
+### The defect
+
+`DashboardController` carried **zero** `IsSample` references. Seven other controllers and services
+honour the exclusion, and `OnboardingController` states the invariant for the whole product:
+
+> Every flag/count EXCLUDES sample data (IsSample suppliers/orders): running the sample order must
+> never "complete" onboarding with zero real data.
+
+The dashboard was the one place that did not. Every KPI, the sidebar badge, the notifications bell and
+the wire topology counted the practice order as real work — and since the practice order seeds its own
+`__sample__` supplier, the landing page also drew a wire for a supplier the user never added.
+
+**It was latent until WP-27.** The practice order could not previously reach `delivered`; WP-27 closes
+the practice delivery loop, which makes it reachable. A brand-new account that runs the practice flow
+would read **"1 delivered"**. Same class as the Group J2 fabricated-data purge — staged content
+rendering as real for real users — and the reason it ships *in front of* WP-27, not behind it.
+
+### Scope and verification
+
+Eight query sites across three actions: `GetStats` (four counts), `GetSummary` (the status `GROUP BY`
+behind the sidebar badge and notifications bell), and `GetTopology` (supplier health, wires, and the
+legacy `canonical_json` fallback — three separate query paths, each needing its own guard).
+
+Each test pins **one** site, so reverting a single guard turns exactly the matching test red.
+Mutation-checked by exit code: all eight guards removed → **6/6 fail**; restored → 6/6 pass.
+`--filter Dashboard` → 12/12 with the pre-existing suite unaffected. `GetStats` had **no test at all**
+before this.
+
+### A note on the mutation procedure itself
+
+Restoring the mutation with `git checkout <file>` reverted the file to `HEAD` — which discarded the
+**fix** along with the mutation, since the fix was uncommitted. The tests then passed against
+unguarded code for the wrong reason. Caught because the restore step printed the guard count and it
+read `0`.
+
+**Commit the fix before mutating it, or mutate a copy.** A mutation harness that restores from source
+control assumes the thing under test is already in source control. Fifth instrument failure recorded
+today, and the same shape as the others: the step that verifies the harness was itself the broken one.
+
+### The other five dropped findings — unowned, not fixed
+
+F6 (three `SupplierDeliveryConfigs` writers, so the docstring's "cannot drift apart" invariant is now
+false), F8, F9, F11, F12. Recorded here so they survive the fix round that dropped them.
+### 2026-07-31 later — Wave 4 after the rate limit: WP-27 green, and a correction I owe the record
+
+**Correcting my own earlier entry.** I reported FE #73 as "green except Playwright in flight." It was
+not in flight — it had **FAILED**, and I read `IN_PROGRESS` twice without going back for the terminal
+state. #73 is now genuinely green on all five checks at `792938b`.
+
+**The failure was the sharpest instance of this plan's own trap that I have produced.**
+`first-run-to-delivered.spec.ts:93` matched `/doesn'?t count against your plan/i` against copy that
+renders **U+2019** after the WP-28 merge. `'?` makes the straight quote *optional*; it does not match a
+different codepoint. **The same merge commit fixed this exact defect in `practiceFraming.test.tsx` and
+`sample-order-happy-path.spec.ts` and missed the flagship** — because that commit's gate list omitted
+`test:e2e`. So the packet's headline journey, the one proving its entire AC, was red while every other
+check on the PR read green. *A fix verified where it was applied is not verified where the defect class
+lives* — quoted at two agents that same hour, in the commit that committed it.
+
+**F2 is closed after surviving two refutations.** The journey could not distinguish "transform stopped
+at `ready_to_deliver` and a dispatch delivered it" from "transform teleported and nothing was sent" —
+`useSendFlow` short-circuits on an already-delivered order, so every assertion was satisfied by a mock
+that never dispatched. It now asserts the in-flight notice `useSendFlow` sets **only** on the dispatch
+path. Mutation-checked: `mockTransformOrder` writing `delivered` now **exits 1**; it exited 0 through
+both prior passes.
+
+**A default is indistinguishable from a correct value.** `nounLower` was optional with a `"supplier"`
+default, so deleting it from one call site silently reproduced the exact regression it was added to
+close — 1709 tests green, `tsc` blind. Now required. Worth generalising: an optional prop with a
+plausible default cannot be pinned by any test that does not enumerate the call sites.
+
+**WP-31 (#77): CONFIRMED-WITH-DEFECTS, six vacuous tests.** The missing mutation table was hiding them.
+Two block: the AC *"zero controls below either floor"* is **false** — the floors are scoped to
+`(pointer: coarse), (max-width: 639px)` (`globals.css:996`) and the spec measures only at 390×844, so
+the claim is never tested at the scope it is stated; at 1280×900 both surfaces the packet names by name
+fail. And the popover conformance test is `src.includes("modal: false")` over the whole file, so a
+comment defeats it — third instance that day of a source-text assertion standing in for a behavioural
+one. Credit: the dialog contract is genuinely pinned (11 of 13 mutations red across all 8 rendered
+dialogs), the registry guard does catch a new conventionally-written dialog, and the hero-toggle
+correction was itself found by mutation testing.
+
+**Six WP-27 findings the fix round silently dropped**, recorded rather than carried: F6, **F7**, F8, F9,
+F11, F12. F7 is the one that should not ship quietly — `DashboardController` has zero `IsSample`
+references, so a brand-new account reads **"1 delivered"**, contradicting `OnboardingController.cs:40`'s
+stated invariant, and it is newly reachable *because* WP-27 makes the practice order deliverable.
+
+**On the branch-overlap trigger: `diff $(merge-base) $B` cannot distinguish "both packets edited this"
+from "one packet contains the other."** #77 × #69 reported 48 overlapping files; #77 *contains* #69
+(verified by `merge-base --is-ancestor`), so every file WP-30 touched counted twice. Check
+ancestry between each pair first, or every stacked branch reports maximal overlap with its own base —
+the loudest possible signal for the least interesting case. The genuine hit was `src/lib/help-articles.ts`
+across #69 and #75; reading the merged content took ninety seconds and returned a definite negative
+(#69 edits a hex-value comment, #75 edits `blurb`/`keywords`). **Record negatives** — otherwise the next
+sweeper re-reads them, or learns to skip the trigger because it "always comes back clean."
+
+**Live cross-branch claim conflict, found by that trigger in my own branches:** `api-client.ts` is edited
+by #73 and #70. #70 routes transform errors through `parseApiErrorBody` so a raw JSON body never reaches
+the user; #73's `realRunSampleOrder` throws `new Error(await res.text())` and prints it verbatim — the
+same defect #70 fixes one function over. Different functions, so git merges them silently.
+
+---
+
+## 2026-07-31 — the overlap trigger corrected: my 48-file collision was an artifact
+
+**I reported `#77 × #69` as a 48-file collision and recommended landing #69 first. Both wrong.
+#77 *contains* #69** — `merge-base --is-ancestor origin/claude/wp30-tokens origin/claude/wp31-a11y`
+→ YES. Its owner merged the token branch in before opening #77, because WP-31's changes must pass
+WP-30's `lint:tokens`. The sequencing I "recommended" was already done, and there is no rebase waiting
+in either direction.
+
+### The method has three distinct inflation modes, and I hit all three
+
+| Attempt | Method | Inflation |
+|---|---|---|
+| 1 | `diff $(merge-base main B) B`, pairwise-intersect | A **stacked** branch reports maximal overlap with its own base — the loudest possible signal for the least interesting case. |
+| 2 | `diff $(merge-base A B)` for each of A and B | Fixes stacking, but if one branch contains recent `main` and the other is behind, their common ancestor is old, so **main's own commits** count as shared. Packet-vs-main staleness reported as packet-vs-packet. |
+| 3 | diff each branch from its *true* base (newest of main + any contained sibling) | Correct in principle. My selection loop required `main` to be an ancestor of the candidate — but #69 does **not** contain main, so #77 fell back to main and `#69 × #77` stayed inflated. |
+
+The general lesson is not about git. **A pairwise-difference metric over a set of objects that can
+contain one another needs a containment pre-pass, or it reports the containment as similarity.**
+The cheap guard is `merge-base --is-ancestor` between every pair before measuring anything.
+
+### What survives — the hotspot table, which is the useful output anyway
+
+Discounting the `#77 ⊃ #69` double-count, files edited by three or more independent packets:
+
+| File | Branches |
+|---|---|
+| `workshop/OrderWorkshop.tsx` | #65 #69 #70 #71 #73 #75 |
+| `InboxView.tsx` | #69 #70 #71 #73 #75 |
+| `workshop/WorkshopStatusBar.tsx` | #65 #69 #70 #71 #75 |
+| `lib/api-client.ts` | #65 #69 #70 #73 |
+| `mapper/MapperWorkbench.tsx`, `workshop/{WorkshopLinesView,MobileTriage,sendBarLabel}`, `mapper/MapperPreviewPane.tsx`, `help/HelpArticleShell.tsx` | #69 #70 #71 #75 |
+
+`OrderWorkshop.tsx` is the file TRAP 23 already fired in. Six independent packets are editing it.
+
+### The trigger's first true positive — and it is a real claim conflict
+
+`api-client.ts` sits in four branches across two owners. Its owner read the merged content and found
+that **#73 and #70 disagree about a claim right now**: `realRunSampleOrder` (#73) throws
+`new Error(await res.text())` and prints the raw body verbatim, which is **exactly the defect #70
+fixes one function over** — #70's entire point is that a raw JSON body must never reach the user.
+Different functions in the same file, so git will merge them silently and cleanly, and the product
+will contradict itself.
+
+That is the TRAP 25 shape, surfaced by the trigger, in two branches held by the same owner who could
+not see it from inside either one.
+
+### Record the negatives too
+
+`help-articles.ts` fired and came back **clean**: #69 edits a comment listing hex values, #75 edits
+`blurb`/`keywords` — the user-facing content. Different lines, different concerns, no shared claim.
+Ninety seconds to read, definite negative.
+
+Its owner's addition to the rule is the right one: **write the negative down.** A coarse
+over-inclusive trigger whose negatives go unrecorded gets re-read by the next sweeper, or worse,
+learns a reputation for "always comes back clean" and stops being run. A trigger that only ever fired
+on true positives would have to be a detector, and we established a detector is not available here.
+
+---
+
+## 2026-07-31 — F7 landed as `a7437a3`, and the rule for where a latent defect belongs
+
+BE #126 merged. **Eight packets landed today**: FE #74, #76, #72; BE #98, #97, #99, #125, #126.
+FE main `f9ab894`, BE main `a7437a3`, both verified green at every intermediate point
+(`c8ae076` cancelled-by-supersede, `faba3bf` ✅, `2c8b8f4` ✅, `25cb8b7` ✅).
+
+### The ordering principle — worth keeping, because the obvious version is wrong
+
+F7 shipped **ahead of** WP-27 rather than inside it. The instinct is the opposite: a defect *my*
+packet surfaced belongs *in* my packet. WP-27's owner argued the correct version and it generalises:
+
+> **When a packet makes a latent defect reachable, the defect is not the packet's to carry.**
+
+`DashboardController` never honoured `IsSample`, and every other consumer already did. WP-27 only gave
+a practice order a path to `delivered` for the first time, which made the existing violation
+*reachable*. Bundling the fix would have done two bad things: written a pre-existing invariant
+violation into a packet's history as though that packet caused it, and held a correct standalone fix
+behind a re-refutation gate with nothing to do with it.
+
+Same shape as TRAP 22's mock-divergence finding — inert until something crossed a boundary. **The fix
+belongs where the defect lives, not where it surfaced.**
+
+### Verification discipline worth copying, from the #100 rebase
+
+Its owner re-checked `origin/main` by `rev-parse` and subject line rather than trusting the SHA passed
+in a message, and confirmed `merge-base --is-ancestor` read NO before the merge and YES after —
+i.e. verified the *transition*, not just the end state. Then ran `ProcuLink.Transform.Tests` locally
+(1449 passed / 0 failed / 2 skipped) because that project is Docker-free, so #125's CSV-dialect and
+typed-JSON-leaf work is proven **on the merged tree** rather than only on the branch where it was
+written.
+
+That is TRAP 23's lesson applied without being prompted: green on the branch and green on the merged
+program are different claims.
+
+---
+
+## 2026-07-31 — TRAP 26: the fixture that pins a ban re-emits the banned thing
+
+FE #69 (WP-30) was **refuted a second time**, five blocking. Notably *not* for weak tests — all 15
+mutations reproduced, 14/14 contrast numbers agree to 4 decimal places, the ratchet narrowing is
+correct. The tests are sound and the AC is still false.
+
+The headline finding is a shape neither session had written down.
+
+### The mechanism, verified independently
+
+```
+tailwind.config.ts:25            "./src/**/*.{ts,tsx}"        ← no test exclusion
+src/test/check-tokens.test.ts:189  writeFileSync(outside,
+    `export const ring = "focus-visible:ring-[#28C55E]";\n`)  ← the emerald-ban fixture
+```
+
+`bun run build` succeeds, and the built CSS still contains
+`.focus-visible\:ring-\[\#28C55E\]:focus-visible{--tw-ring-color:rgb(40 197 94/…)}`.
+
+Tailwind's content scanner is a **regex over file text**. It does not parse, and it has no idea the
+string is a fixture being written to a temp file by a test. It sees a class name in a scanned file and
+emits the rule. So **the test written to pin the emerald ban is what puts emerald back into production
+CSS.**
+
+Both new token guards skip `*.test.tsx?` by design. Tailwind does not. The author verified "built CSS
+free of `28C55E`" and it was not — because **the verification and the emission ran through different
+scanners.**
+
+### The generalisable form
+
+> When two tools scan the same file set with **different exclusion rules**, an exclusion in one is not
+> an exclusion in the other. A fixture invisible to the guard can still be visible to the compiler.
+
+This is the instrument class inverted. Every previous instance was a check that failed to *see* a
+defect — `looksLikeProse`'s char class, the source-text popover assertion, my status reducer putting
+PENDING ahead of FAILURE. This is a check that **creates** the defect it exists to prevent. One-line
+fix (concatenate the literal in the fixture, or exclude tests from `content`), but the shape is worth
+more than the fix.
+
+### The other four, recorded so they are not re-derived
+
+- **F1** — third "verified where applied, not where the defect class lives" instance this round.
+  `ghostTierColor`'s return is the fill of a 7px/800 SVG `<text>` numeral: `#B36D14` on white is
+  4.1061:1, the `ok` tier 4.1613:1, both under 4.5. The same commit **rewrote that function's doc
+  comment asserting it is non-text**, and fixed the byte-identical construction at
+  `WireTopology.tsx:365` one file over.
+- **F5** — the AC's escape clause does not cover the failures. It defers to "the 798 ledgered
+  violations", but the ledger is `src/app/**` only, and all nine live sub-4.5:1 text pairs found this
+  round are in `src/components/**` — including `OnboardingChecklist:451` at 3.65:1, the same pair the
+  packet claims to have swept.
+- **F3** — the new rule is repo-wide in *file* scope but narrow in *syntax* scope: it matches
+  `color:`/`fg:` followed by a quoted literal **on one line**. Eight genuine spellings evade (variable
+  indirection, non-`fg` map key, a ternary's else branch, `className="text-amber"`, an arbitrary
+  class, an SVG `fill=`, a template literal, and every `.css` file — the regex requires a quote before
+  `var(`, and CSS never quotes).
+- `#28C55E` was **10** live uses, not 9; `RETIRED_RE` is hex-only so `rgb(40,197,94)` walks past; and
+  `COLOR_FN_RE` lacks the `i` flag so `RGBA(` evades.
+
+Genuinely good in the same diff: the codemod made **zero wrong-direction moves across 52 sites**, the
+growth test restores byte-for-byte in a `finally`, and the gate prints a "WHAT THIS GATE DOES NOT DO"
+header on every run — which the refuter singled out as the best thing in it, and which is the same
+virtue as `OrderStatusMachine.cs:337` documenting what it did *not* close.
+
+### 2026-07-31 — Wave 4 second-pass refutations: #69 REFUTED again, #70/#75 confirmed-with-defects
+
+**FE #69 (WP-30) — REFUTED, 5 blocking, zero vacuous tests.** All 15 mutations reproduced, the ratchet
+narrowing is exactly as instructed, 14/14 contrast figures agree to 4dp. The tests are sound; the AC is
+still false.
+
+- **The fixture that pins the ban re-emits it.** `bun run build` succeeds and the production CSS still
+  ships `.focus-visible\:ring-\[\#28C55E\]`. `tailwind.config.ts` scans `./src/**/*.{ts,tsx}` with no
+  test exclusion, so Tailwind's content scanner reads the banned class name out of
+  `src/test/check-tokens.test.ts:189` — **the fixture written to prove the emerald is gone** — and emits
+  the rule. Both new guards skip `*.test.tsx?` by design; Tailwind does not. Not a check that fails to
+  see a defect: **a check that creates the defect it exists to prevent.** One-line fix (concatenate the
+  class name, or exclude tests from `content`), but a new trap shape.
+- **`ghostTierColor` is the fill of a 7px/800 SVG `<text>`** — `#B36D14` on white = 4.1061:1, `ok` tier
+  4.1613:1. The same commit **rewrote that function's comment asserting it is non-text** and correctly
+  fixed the byte-identical construction at `WireTopology.tsx:365`. Verified where applied, not where the
+  class lives — third instance this round.
+- **The AC's escape clause names the wrong region.** It defers to "the 798 ledgered violations", but the
+  ledger is `src/app/**` only and **all nine live failures are in `src/components/**`** — reachable from
+  `/bridge`, `/inbox/[orderId]`, `/operations/*`. Includes `OnboardingChecklist:451` at 3.65:1, the same
+  pair the packet claims to have swept.
+- The new repo-wide rule is repo-wide in FILE scope, narrow in SYNTAX scope: it matches `color:`/`fg:`
+  plus a **quoted literal on one line**. Eight spellings evade, each isolated with a passing control.
+
+**FE #70 + #75 (WP-29) — CONFIRMED-WITH-DEFECTS, 88 mutations reproduced, all four pass-1 vacuities
+dead.** R4/R6/R8/R10 all exit 1 now; the count-parity test was not weakened (R1/R2/R3 still exit 1); the
+CI-enforced deferral is **real** — merging #75 into #70 fails with the exact missing chip row named.
+
+- **G1, and it is the same trap one layer down.** The `blockBody` fix strips comments, but
+  `stripComments` **preserves string and template literals by design** (the link guards need them), so
+  the same `const NAME` token in a **string literal, template literal or JSX text node** still disarms
+  `registry-moved` on all seven blocks. Reproduced on the real tree using the file's own guard-error
+  idiom: `checked 37 navigation label(s) … OK`, exit 0 — **43 → 37, six chip labels silently unpoliced.**
+  The fix is precise and already in the repo: **`maskLiterals` is exported at `sourceScan.ts:99`, is
+  offset-preserving, and is used two lines away in `extractRaw` for exactly this reason.** Anchor on
+  `maskLiterals(stripComments(src))`. Also wants a per-block floor — a captured-but-empty body
+  contributes zero labels and raises no offence.
+- **G4: a THIRD indexed help article still teaches the pre-rename failure vocabulary**
+  (`help/exceptions-and-stuck-orders/page.mdx:20-24`), linked twice from the two #75 rewrote. #75's guard
+  reads only the two articles it fixed. **Do not silently align it** — `healthTiles.ts:39`,
+  `ExceptionDetail.tsx:48/50`, `BridgeTopbar.tsx:260` and `problemCopy.ts:260` still render the old names,
+  so the PRODUCT carries two failure vocabularies and #75 aligned the articles with one of them. The
+  reconciliation is its own packet.
+- G2: the stripper move to untyped `.mjs` dropped the `SourceSyntax` union from a shared guard's public
+  type — `stripComments("x","bogus")` now typechecks. G3: the meta-test's own registry list is a
+  source-text regex over a `>= 6` floor on a list of exactly 6, so a seventh entry written multi-line is
+  silently uncovered. G10: both branches sit on `d119e91`, not `f9ab894`; WP-28 also edits `InboxView.tsx`.
+
+**Handoff:** #69 needs a third pass. #70/#75 need G1 (cheap, mechanism identified above) and a rebase.
+#73 green at `792938b`, BE #100 rebased at `6555d41`, #77 green at `6147a76` with both blockers closed.
+
+---
+
+## 2026-07-31 — Wave 4 handed back: what its owner left open, and where it went
+
+The Wave 4 session closed after eight adversarial passes, ~20 vacuous tests found, two packets landed,
+and **nothing merged on green CI alone**. Its parting state:
+
+| PR | State |
+|---|---|
+| FE #72, #76 | merged (`f9ab894`, `d119e91`) |
+| FE #73 · BE #100 | green `792938b` · rebased `6555d41`, contains `a7437a3` |
+| FE #77 | green `6147a76`, both blockers closed, PR body rewritten |
+| FE #69 | **refuted twice** — needs a third pass |
+| FE #70 · #75 | confirmed-with-defects — G1 + rebase |
+
+Three unowned items came back with it. All three are now dispatched as chips rather than left in a
+report.
+
+### G1 — TRAP 13's third instance is still open, one layer down
+
+The `blockBody` fix strips comments. But **`stripComments` preserves string and template literals by
+design**, because the link guards need them. So the same `const NAME` token inside a string literal,
+template literal or JSX text node still disarms `registry-moved` — **on all seven policed blocks**.
+Reproduced on the real tree: `checked 37 navigation label(s) … OK`, exit 0, where it should see 43.
+**Six chip labels silently unpoliced.**
+
+The fix is already in the repo: `maskLiterals` is exported at `sourceScan.ts:99`, is offset-preserving
+by construction, and sits two lines from `extractRaw` which uses it for exactly this reason. Anchor on
+`maskLiterals(stripComments(src))`, plus a per-block floor — a captured-but-empty body currently
+contributes zero labels and raises no offence at all.
+
+Its owner **declined to do it and said why**, which is the right call recorded the right way: it means
+moving `maskLiterals` and `readLiteral` across the same TS→ESM boundary `stripComments` just crossed,
+updating the re-export, and re-verifying three consumer guards plus the gate — on a branch #77 is
+stacked on. "Recording the mechanism precisely is worth more than a half-verified refactor of the file
+`4c7350a` already fixed once." Dispatched as its own chip, with FE #70/#75 named as blocked on it.
+
+### G4 — the product carries two failure vocabularies, and one packet aligned half of them
+
+`help/exceptions-and-stuck-orders/page.mdx:20-24` still teaches **Parse failed / Transform failed /
+Delivery failed / Rejected by supplier**, and is linked twice from the two articles #75 rewrote. But
+`healthTiles.ts:39`, `ExceptionDetail.tsx:48/50`, `BridgeTopbar.tsx:260` and `problemCopy.ts:260`
+**still render those old names**.
+
+So aligning the third article with the rewritten two would make it contradict the exceptions screen
+the user is looking at. **Do not quick-fix this.** It is TRAP 25's shape as a standing condition
+rather than a merge event: two vocabularies, no mechanical check, and the obvious repair makes it
+worse. Dispatched as its own packet, instructed to derive the inventory from `STATUS_META` rather than
+grep the words that look wrong — the technique that found five extra wrong labels last time.
+
+### G2 and G10 — two for the merge preconditions
+
+- **G2:** the stripper's move to untyped `.mjs` dropped the `SourceSyntax` union from a shared guard's
+  public type. `stripComments("x", "bogus")` now typechecks where it did not at `d119e91`. Folded into
+  the G1 chip, since it is the same file and the same boundary.
+- **G10:** #70 and #75 sit on `d119e91`, not `f9ab894`, and **WP-28 also edits `InboxView.tsx`**, where
+  #70's diff is 508 lines. That merge wants **reading**, not just CI — TRAP 23 and TRAP 25 both apply
+  to the same file at once.
+
+### Dispatched this session
+
+Seven chips total, all unowned and file-disjoint from anything in flight: WP-10 remediation, WP-11
+billing gates, WP-02 vacuous tests, WP-19+WP-24 recovery, **G1+G2 guard fix**, **G4 vocabulary
+reconciliation**, **WP-30 third pass**.
+
+---
+
+## 2026-07-31 — nine landed; seven sessions now in flight; a lookout posted
+
+FE #71 (WP-15 S1+S2+S4+S5 — stop deleting rule fields, describe the real manipulators, make node order
+changeable) merged as **`d733c10`**. Ninth packet today. Its wedge owner had rebased it *and* resolved
+#65's conflict since the last sweep, so both came back sweepable without anyone asking.
+
+#71 met every precondition and was **fully disjoint** from the other two candidates — it touches
+`OutputStructureDesigner`, `mapper/mapperModel`, `outputNamespaceModel`, `outputRuleModel` and
+`api/types.ts`; no `OrderWorkshop.tsx`, no `api-client.ts`. 61 new test cases. FE #65 is updated onto
+`d733c10` and re-running.
+
+### FE #73 (WP-27) held — G6 verified at source, not taken on report
+
+```
+src/lib/api-client.ts:1593   const t = await res.text().catch(() => "");
+                     :1594   throw new Error(t || `sample-order: ${res.status}`);
+```
+
+`realRunSampleOrder` throws the **raw response body** as the user-facing message. That is exactly the
+defect FE #70 (WP-29) exists to fix one function over — its whole point is that a raw JSON body must
+never reach the user. Merging #73 now would ship the thing another in-flight packet is fixing, in the
+same file.
+
+This is the claim collision the overlap trigger surfaced, and it is worth noting that **it is now the
+reason a merge is held**, not merely an observation. The trigger paid for itself twice: once by
+finding it, once by making it actionable at merge time.
+
+It routes naturally to the **WP-19+WP-24** session, whose scope is exactly 4xx error shaping — so G6
+does not need a packet of its own.
+
+### Seven sessions in flight — the collision surface is now the risk
+
+WP-10, WP-11, WP-02, WP-19+WP-24, G1+G2, G4, WP-30 third pass. Known danger points from the file map:
+
+| Risk | Detail |
+|---|---|
+| **WP-30 vs everyone** | its token sweep touches ~69 files app-wide, including the marketing pages WP-10 edits and the pricing page WP-11 edits |
+| **G4 × WP-19+24** | both reach `ExceptionDetail.tsx`, `BridgeTopbar.tsx`, `healthTiles.ts`, `problemCopy.ts`. G4 changes what those screens **say**; WP-19+24 changes what they **do**. TRAP 25's exact shape, and no build catches it |
+| **G1+G2 × WP-30** | adjacent in `src/test/` and `scripts/`; WP-30's fix may exclude tests from `tailwind.config.ts` `content`, which G1 does not touch |
+| **WP-02 × WP-30/G1** | all three touch test files, though WP-02 is BE-weighted |
+
+A read-only **collision lookout** is posted with a strict methodology brief: containment pre-pass
+before any pairwise diff (the failure that produced two wrong answers earlier today), hotspot
+detection at 3+ independent branches, and explicit instruction to quote both sides wherever two
+branches change a user-visible claim in one file.
+
+### Sweep state
+
+| | |
+|---|---|
+| FE main | `d733c10` |
+| BE main | `a7437a3` |
+| Held | FE #73 (G6, above) · #69 (refuted twice) · #70/#75 (blocked on G1 + rebase) · #77 (stacked on #69) · BE #100 (pairs with #73) · BE #124 (behind main) · #116 (behind, conflicting) · #119/#121/#122 (drafts/throwaways) |
+| Re-running | FE #65 |
+
+---
+
+## 2026-07-31 — ten landed, and TRAP 27: I dispatched two packets into work that already existed
+
+FE #65 (WP-13, the promote control) merged as **`1d5e86d`** — tenth packet today. BE main moved to
+**`3c75daf`** when the mid-parse session landed WP-23a (#119). A read-only collision lookout was posted
+over the seven concurrent sessions and returned findings that change what happens next.
+
+### TRAP 27 — dispatching against `main` when the prerequisite lives in an unmerged PR
+
+I dispatched two chips whose work already existed in open, green, unmerged pull requests. Neither chip
+could have known; **both briefs were mine.**
+
+| Dispatched | Already existed in | Result |
+|---|---|---|
+| **G4** — reconcile the failure vocabulary | **FE #75** rewrote the same `dashboard-and-statuses/page.mdx` from the identical base blob `ff7a528` | A real 3-way merge yields **4 conflict hunks**, plus two competing tests for one invariant (`help-status-labels.test.ts` vs `statusVocabulary.test.ts`) |
+| **G1+G2** — close the gate's literal blind spot | **FE #70** already extracted the scanner to `scripts/lib/stripComments.mjs` | G1 is building `scripts/lib/sourceScan.mjs` — same extraction, different filename, into a directory **neither base has**, so the two cannot merge |
+
+The mechanism: I wrote each brief against `origin/main`, because that is where a new packet should
+start. But the prerequisite for both was sitting in a PR that had not landed — so from `main`'s point
+of view the work looked undone, and each chip correctly set about doing it.
+
+> **Before dispatching, check the open PR set, not just `main`. A packet's prerequisite may be
+> written, reviewed and green, and still invisible from `main`.**
+
+This is the dispatch-time twin of TRAP 24. There, green CI was mistaken for coverage; here, `main` was
+mistaken for the sum of the work. Both are a narrower thing standing in for a wider one.
+
+Corrected both sessions in flight: G4 told to read #75 first and either adopt or explicitly supersede
+it (its genuinely unique half — the four render sites `healthTiles.ts:37-41`, `ExceptionDetail.tsx`,
+`BridgeTopbar.tsx`, `problemCopy.ts` — is untouched by #75 and is the real packet); G1 told to base on
+`origin/claude/wp29-inbox` and **add** `maskLiterals` to #70's module rather than fork it. G1's actual
+finding stands and is not duplicated: #70 closed comments, G1 found literals.
+
+### C4 — main already contradicts itself, and nothing in flight fixes it
+
+- **BE #89** (WP-19, merged 07-30) made `rejected_by_supplier` **recoverable**:
+  `OrderStatusMachine[RejectedBySupplier]` went from `Set()` to `Set(PendingReview, Ready, Transforming)`.
+- **FE #61** (WP-24, merged 07-31, *a day later*) shipped `problemActions.ts` asserting it is
+  **terminal**: `transformOrder: new Set(["ready","pending_review","transform_failed"])`.
+
+Both on main. **The frontend refuses a recovery the backend accepts.** Two merged packets, a day
+apart, and the contradiction belongs to neither — TRAP 25's shape across a *merge boundary in time*
+rather than across two branches. Routed to the WP-19+WP-24 session, whose scope it is.
+
+### The lookout's methodology worked where mine failed
+
+Its containment pre-pass correctly identified `wp30-tokens ⊂ wp31-a11y` and excluded the pair — the
+step whose absence gave me two wrong overlap answers earlier today. WP-31's own diff is **33 files,
+not 78**.
+
+It also found what no ref-based audit can: **six of the seven "in-flight" packets have zero pushed
+commits.** The real work is uncommitted worktree state. If a session is interrupted, that work is
+unrecoverable — worth knowing before anyone reorders anything.
+
+### Two blockers on the merge order
+
+- **FE #77 (WP-31)**: only **Vercel** has reported. Build, unit and e2e checks have **never run**. It
+  is also stacked on a `wp30-tokens` head that has since diverged from its own session's third pass
+  (57 files apart). Must not merge on the strength of a green Vercel badge.
+- **BE #116**: targets `docs/v1-master-plan`, not `main`, and is **CONFLICTING** with no checks. It
+  cannot merge as configured.
+
+### Ordering that is now fixed, not advisory
+
+**Behaviour lands before the prose that describes it.** WP-19+24 rewrites the actions inside
+`problemCopy.ts`'s `rejected_by_supplier` entry; G4 renames the badges in the same file on different
+lines. Git auto-merges, TypeScript compiles, and nothing checks that the prose still describes the
+behaviour. Both sessions have been told the order and the reason.
+
+Likewise the vocabulary gate: G1 owns it, and G4's `check-vocabulary.mjs` copy edit lands after.
+
+---
+
+## 2026-08-01 overnight — WP-11 landed as a pair, enforcement first
+
+Running an unattended merge watch until 10:00. Merges gated on: contains current `main`, a CI run
+*since* that, and test-side changes beside the production files.
+
+| Merged | Packet | Result |
+|---|---|---|
+| BE #124 | WP-15 S3 — pin the manipulator contract from the C# side | BE `a138ce4` |
+| BE #127 | WP-11 follow-through — prove the gates against compiled code | BE `e4d4ac5` |
+| FE #78 | WP-11 follow-through — the tier a capability is sold on must be the tier that gates it | FE `0e3c445` |
+
+**Thirteen packets today.**
+
+### The WP-11 halves were deliberately ordered, and the rule is the same one G4 got
+
+FE #78 went green and merge-ready *before* BE #127 and was **held anyway**. #78 is the claims half —
+marketing copy, `plans.ts`, the billing FAQ. #127 is the enforcement half. Landing the claims first
+would have published tier promises that nothing enforced yet, which is precisely the defect WP-11
+exists to close, so the packet would have briefly *caused* its own bug.
+
+**Behaviour lands before the prose that describes it.** Same ordering given to G4 vs WP-19+24 on
+`problemCopy.ts`, and it is now applied twice from two different directions.
+
+BE #127 also earns a note on instrument quality: it proves the gates with an **IL scanner**
+(`BillingGateIlScanner.cs`) reading compiled code, not a source-text grep. Three source-text
+assertions were caught standing in for behavioural ones today — this is the opposite, and the right
+shape.
+
+### Still held overnight, each for a stated reason
+
+- **FE #77** (WP-31) — only Vercel has ever reported. Build, unit and e2e have **never run**.
+- **FE #73** (WP-27) — `api-client.ts:1593-94` throws the raw response body to the user (G6). Routed to
+  the WP-19+24 session.
+- **FE #69** — refuted twice; its third pass is in flight.
+- **FE #70 / #75** — #70 owns the vocabulary gate that G1+G2 must build on; #75's glossary overlaps G4.
+- **BE #100** — updated onto `e4d4ac5`, re-running.
+- **BE #116** — targets `docs/v1-master-plan`, conflicting, no checks. Cannot merge as configured.
+
+---
+
+## 2026-08-01 overnight — seventeen landed, and two orphaned PRs rescued by hand
+
+| Merged | Packet | Result |
+|---|---|---|
+| BE #100 | WP-27 backend — practice delivery loop + `IsSample` on the DTO | BE `a4e78f6` |
+| FE #79 | G4 — one failure vocabulary at the render sites, derived from `STATUS_META` | FE `e0e1be5` |
+| FE #81 | G1+G2 — a string literal naming a registry no longer disarms the gate | FE `dc34947` |
+| FE #70 | WP-29 — make the valuable state visible in the inbox | FE `dc34425` |
+
+BE #100 landed **before** FE #73, so the `sample-order` rate cap exists before anything can call it.
+
+### G4 reconciled instead of duplicating, and the dispatch error cost nothing
+
+Told that FE #75 already owned the glossary, the G4 session **dropped**
+`dashboard-and-statuses/page.mdx` — the file with 4 conflict hunks — and kept only the half #75 does
+not touch: the four render sites. TRAP 27 was caught early enough that the duplicate work was never
+written.
+
+### Two orphaned PRs rescued — their owner's session had ended
+
+**FE #70** had gone `CONFLICTING`. Two conflicts, neither resolvable by picking a side:
+
+- `BridgeDashboard.tsx` — **main's own comment documented the defect** as "unfixed and deliberately
+  named rather than papered over": `countReady` sums `ready` AND `ready_to_deliver`, so both its
+  labels under-describe the number. #70 fixes it by splitting the segment into "Ready to send" and
+  "Queued to send" — which is what main's comment says the fix would be. Took #70.
+- `api-client.ts` — **combined.** #70 replaced a raw `throw new Error(res.text())` with
+  `ApiHttpError` + `parseApiErrorBody`, so the operator sees the backend's sentence and a 403's
+  `upgradeUrl` survives for the banner. G4 renamed the copy off "Transform failed" but still
+  interpolated the raw body. Kept #70's structure, took G4's wording.
+
+Then #81 landed and made #70's `scripts/lib/stripComments.mjs` redundant, so the gate files went to
+main wholesale and that module was deleted rather than carried.
+
+**The "ONE COPY, THREE CONSUMERS" guard earned itself on its first real merge.** It exists to turn CI
+red when a branch carries its own copy of the shared scanner — precisely what #70 was about to do. Its
+comment named `stripComments.mjs` by filename, which is what dated it; reworded to name the hazard.
+
+**FE #75** failed on something better designed than the failure it caused. G4 deferred two help
+articles to #75 rather than rewrite them twice, and guarded the deferral with a test asserting each
+deferred file is **still dirty** — *"deliberately not a silent skip. An exemption that outlives its
+reason is a lie."* Merging main carried that guard onto #75's branch, where the file is already
+rewritten, so the exemption became false and the test named it. Removed; 97/97.
+
+> **A deferral that verifies its own necessity is worth the six lines.** Both halves of this worked:
+> G4 skipped work it would have duplicated, and the skip announced its own expiry instead of rotting.
+
+### Ordering held all night
+
+Enforcement before claims (BE #127 → FE #78), backend before frontend (BE #100 → FE #73), gate owner
+before gate consumer (#81 → #70). No merge went in on green CI alone.
