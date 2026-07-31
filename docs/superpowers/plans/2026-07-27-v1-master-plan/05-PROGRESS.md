@@ -2139,3 +2139,32 @@ has **no `setup-node` step at all**, so `lint:vocab` runs `scripts/check-vocabul
 `--experimental-strip-types` being available in a runtime nobody pinned. Plain ESM under `scripts/` is
 the correct resolution; `4c7350a`'s fix is intact and there is still exactly one copy for three
 consumers.
+
+---
+
+## 2026-07-31 — next batch dispatched, and the chip ledger
+
+Sweep #2 closed at six merged, FE main `f9ab894` and BE main `2c8b8f4` both green. Four new packets
+dispatched as chips, chosen because they are unowned, unblocked, and touch files nobody else holds:
+
+| Packet | Why now |
+|---|---|
+| **WP-10 remediation** | FE #42 shipped refuted — wrong `/security` EU-residency copy is **live**. Truth defect on a trust page. |
+| **WP-11** billing gate honesty | 10 of 16 gates unenforced, 4 wrong error codes (3 tests pin the wrong string), REST ingress ungated, cancel→read-only undisclosed. |
+| **WP-02** no vacuous tests | Wave 0 foundation. Every live-transport test is an env-gated silent `return`; the suites this plan's verification method rests on cannot currently fail. |
+| **WP-19 + WP-24** | Dispatched as one packet — a failure that names its cause, then a screen that acts on it. Unblocked now that FE #72 landed and the workshop files are clear. WP-24 starts from its earlier refutation, not from scratch. |
+
+Each chip was given the mutation-check and adversarial-refutation requirements explicitly, since
+TRAP 24 established that green CI is not evidence the diff is covered.
+
+### Chip ledger
+
+| Chip | State | Archivable |
+|---|---|---|
+| Close Wave 3 (WP-18, WP-21, WP-23) | scope complete — all three merged (`d1a6b9c`, `c8ae076`, `2c8b8f4`) | **yes** |
+| Wave 4 UI | running; owns FE #70/#75/#77 + BE #100 | no |
+| Finish the wedge | idle; owns FE #65/#71 + BE #124/#125 (WP-15 still in flight) | no |
+| Mid-parse correction (WP-23a) | idle; owns BE #119 draft + mutation branches #121/#122 | no |
+
+Note: the wedge chip's session metadata still shows PR #97 as OPEN. It merged as `faba3bf`. Session
+`prState` lags; do not read it as the packet's state.
