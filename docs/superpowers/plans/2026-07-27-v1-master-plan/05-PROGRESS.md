@@ -2539,3 +2539,68 @@ written.
 
 That is TRAP 23's lesson applied without being prompted: green on the branch and green on the merged
 program are different claims.
+
+---
+
+## 2026-07-31 — TRAP 26: the fixture that pins a ban re-emits the banned thing
+
+FE #69 (WP-30) was **refuted a second time**, five blocking. Notably *not* for weak tests — all 15
+mutations reproduced, 14/14 contrast numbers agree to 4 decimal places, the ratchet narrowing is
+correct. The tests are sound and the AC is still false.
+
+The headline finding is a shape neither session had written down.
+
+### The mechanism, verified independently
+
+```
+tailwind.config.ts:25            "./src/**/*.{ts,tsx}"        ← no test exclusion
+src/test/check-tokens.test.ts:189  writeFileSync(outside,
+    `export const ring = "focus-visible:ring-[#28C55E]";\n`)  ← the emerald-ban fixture
+```
+
+`bun run build` succeeds, and the built CSS still contains
+`.focus-visible\:ring-\[\#28C55E\]:focus-visible{--tw-ring-color:rgb(40 197 94/…)}`.
+
+Tailwind's content scanner is a **regex over file text**. It does not parse, and it has no idea the
+string is a fixture being written to a temp file by a test. It sees a class name in a scanned file and
+emits the rule. So **the test written to pin the emerald ban is what puts emerald back into production
+CSS.**
+
+Both new token guards skip `*.test.tsx?` by design. Tailwind does not. The author verified "built CSS
+free of `28C55E`" and it was not — because **the verification and the emission ran through different
+scanners.**
+
+### The generalisable form
+
+> When two tools scan the same file set with **different exclusion rules**, an exclusion in one is not
+> an exclusion in the other. A fixture invisible to the guard can still be visible to the compiler.
+
+This is the instrument class inverted. Every previous instance was a check that failed to *see* a
+defect — `looksLikeProse`'s char class, the source-text popover assertion, my status reducer putting
+PENDING ahead of FAILURE. This is a check that **creates** the defect it exists to prevent. One-line
+fix (concatenate the literal in the fixture, or exclude tests from `content`), but the shape is worth
+more than the fix.
+
+### The other four, recorded so they are not re-derived
+
+- **F1** — third "verified where applied, not where the defect class lives" instance this round.
+  `ghostTierColor`'s return is the fill of a 7px/800 SVG `<text>` numeral: `#B36D14` on white is
+  4.1061:1, the `ok` tier 4.1613:1, both under 4.5. The same commit **rewrote that function's doc
+  comment asserting it is non-text**, and fixed the byte-identical construction at
+  `WireTopology.tsx:365` one file over.
+- **F5** — the AC's escape clause does not cover the failures. It defers to "the 798 ledgered
+  violations", but the ledger is `src/app/**` only, and all nine live sub-4.5:1 text pairs found this
+  round are in `src/components/**` — including `OnboardingChecklist:451` at 3.65:1, the same pair the
+  packet claims to have swept.
+- **F3** — the new rule is repo-wide in *file* scope but narrow in *syntax* scope: it matches
+  `color:`/`fg:` followed by a quoted literal **on one line**. Eight genuine spellings evade (variable
+  indirection, non-`fg` map key, a ternary's else branch, `className="text-amber"`, an arbitrary
+  class, an SVG `fill=`, a template literal, and every `.css` file — the regex requires a quote before
+  `var(`, and CSS never quotes).
+- `#28C55E` was **10** live uses, not 9; `RETIRED_RE` is hex-only so `rgb(40,197,94)` walks past; and
+  `COLOR_FN_RE` lacks the `i` flag so `RGBA(` evades.
+
+Genuinely good in the same diff: the codemod made **zero wrong-direction moves across 52 sites**, the
+growth test restores byte-for-byte in a `finally`, and the gate prints a "WHAT THIS GATE DOES NOT DO"
+header on every run — which the refuter singled out as the best thing in it, and which is the same
+virtue as `OrderStatusMachine.cs:337` documenting what it did *not* close.
