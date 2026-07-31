@@ -1938,3 +1938,74 @@ downstream (WP-06, WP-13) can be planned on it.
 The wave tables at lines 914–965 are the original 2026-07-27 authoring and have **not** been
 maintained — they still show WP-18 and WP-21 as ⬜ after both shipped. Read the dated sections for
 live state; treat the tables as history.
+
+---
+
+## 2026-07-31 — merge sweep #2, closed: five landed
+
+BE #99 (WP-23, refuse a resolve issued from a status the recompute would destroy) landed as
+`2c8b8f4` after `faba3bf` came back green. Final tally for the sweep:
+
+| PR | Packet | Merged as |
+|---|---|---|
+| FE #74 | WP-18 follow-up (P1) | FE `d119e91` ✅ main green |
+| FE #76 | WP-32 follow-up to #67 | FE `d119e91` ✅ main green |
+| BE #98 | WP-21 — prove revision authority | BE `c8ae076` |
+| BE #97 | WP-22 — one inbound document, one order | BE `faba3bf` ✅ main green |
+| BE #99 | WP-23 — resolve status guard | BE `2c8b8f4` |
+
+Note for anyone reading BE run history: the `c8ae076` run shows **cancelled**, not failed. #97's merge
+superseded it through the concurrency group. `faba3bf` is the run that verifies both.
+
+### TRAP 24 — green CI is not evidence that the change is covered
+
+The precondition adopted this morning — *a branch may merge only if it contains current `main` and has
+had a CI run since* — is about **staleness**. It says nothing about **coverage**, and I merged FE #74
+believing it said more than it does.
+
+`workshop/acceptanceGateModel.ts` is the module FE #74 exists to correct. It shipped with **no test
+file at all**. The WP-28 owner then mutation-checked the follow-up fix and found the entire advisory
+count could be forced to zero with **all 1676 tests still passing**. A packet whose whole thesis is
+"read the gate's decision, not the override-blind flag" had no test that reads a decision.
+
+The suite passing is a claim about the suite. It is not a claim about the diff. Same family as TRAP 23
+(`MERGEABLE` is a claim about text) and TRAP 11 (`.base.sha` is a claim about the base branch) —
+each is a true signal answering a narrower question than the one being asked of it.
+
+**Added to the sweep precondition:** before merging, check that the diff's production files have
+test-side changes alongside them. Cheap version, and it is what gated BE #99 into this sweep:
+
+```
+gh pr diff <N> --name-only          # is there a test file per production file?
+gh pr diff <N> | grep -cE '^\+.*\[(Fact|Theory)\]'
+```
+
+BE #99 passed it — two production files, a matching test file for each, 12 new cases. It is a
+heuristic, not a proof; a mutation check is the proof. But it would have caught `acceptanceGateModel`.
+
+### WP-32 nav-clock concern — checked and REFUTED, do not re-open
+
+FE #76 merged green-but-ungated; its refuter was killed mid-flight while testing whether
+`performance.now()` anchoring breaks under App Router soft navigation. The worry: `performance.now()`
+measures from `timeOrigin` (the *document*), which a client-side nav does not reset, so a user who
+spends minutes on marketing and then clicks Sign in would arrive with the budget collapsed to its
+1500 ms floor and see a false "sign-in service unavailable" card on a healthy system.
+
+**It does not reproduce.** The claim depends on the Clerk script *not* being requested until the soft
+nav. It is:
+
+1. `src/app/layout.tsx:105` mounts `<ClerkProvider>` unconditionally around `{children}`, `(marketing)`
+   included — structural.
+2. Production confirms it at runtime. `curl https://proculink.eu/` (signed-out marketing landing)
+   returns `src="https://clerk.proculink.eu/npm/@clerk/clerk-js@6/dist/clerk.browser.js"`. The script
+   is in the marketing document's HTML.
+3. `useDependencyReady.ts` computes `Math.max(MIN_WAIT_AFTER_MOUNT_MS, timeoutMs - msSinceNavigationStart())`
+   — a floor, never zero.
+
+So minutes on marketing are minutes the script genuinely had, and not resetting the clock is measuring
+the real thing. Hard nav resets `timeOrigin` and re-requests; soft nav keeps the clock and the script
+has had the whole time. Neither path charges the user for time the script was not loading. A false
+card would require Clerk to be un-ready for minutes and then ready within 1.5s of mount.
+
+`navigationClock.ts` argues all of this in its own docstring. That is why point 2 exists — the
+docstring is the claim, not the check.
