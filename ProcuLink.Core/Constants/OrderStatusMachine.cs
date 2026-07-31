@@ -1,4 +1,4 @@
-using static ProcuLink.Core.Constants.OrderStatusConstants;
+﻿using static ProcuLink.Core.Constants.OrderStatusConstants;
 
 namespace ProcuLink.Core.Constants;
 
@@ -350,6 +350,14 @@ public static class OrderStatusMachine
     /// </summary>
     public static string ResolveHoldMessage(string status) => status switch
     {
+        // MUTATION-CHECK J (WP-23): a STALE ARM — a bespoke sentence for a status the guard does not
+        // refuse, exactly what is left behind when a status is removed from ResolveHeldFrom without
+        // removing its message. Expected RED:
+        // ResolveHoldMessage_HasNoArmForAStatusTheGuardDoesNotRefuse, and nothing else.
+        // Not for merge.
+        Parsing =>
+            "This order is still being read, so it cannot be corrected yet. "
+          + "Wait for reading to finish, then make your corrections.",
         Unrouted =>
             "This order is still waiting to be routed. Route it first, then make your corrections — "
           + "correcting it now would take it out of the routing queue while it still has nowhere to go.",
