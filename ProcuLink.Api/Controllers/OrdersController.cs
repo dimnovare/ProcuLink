@@ -196,6 +196,66 @@ public sealed class OrdersController : ControllerBase
         });
     }
 
+    // ── WP-23 — the resolve status guard ─────────────────────────────────────
+
+    /// <summary>
+    /// Refuses an operator-issued correction when the order sits in a status the status recompute
+    /// would DESTROY something from, or returns null to let it proceed.
+    ///
+    /// <para><b>What this is not.</b> It is not a transition rule. c61fe30 settled that question
+    /// deliberately, adding <c>unrouted → ready|pending_review</c> and
+    /// <c>delivering → ready|pending_review</c> to both status maps because the write was real and
+    /// the maps were wrong — and NAMED these two from-states as wanting an endpoint guard, "which is
+    /// a product decision". This is that decision, and the two concepts stay apart:
+    /// <see cref="OrderStatusMachine.Transitions"/> answers "may an order in X ever reach Y?"; this
+    /// answers "may a PERSON issue a correction while the order is in X?". Refusing here does not
+    /// make the transition impossible, so the edges must not be pruned on the strength of it —
+    /// <c>OrderStatusMachineTests.EveryResolveHeldStatus_KeepsBothRecomputeEdges</c> fails if anyone
+    /// tries.</para>
+    ///
+    /// <para><b>Why both recompute endpoints call it.</b>
+    /// <c>OrderResolutionService.ResolveAsync</c> (:242) and <c>AcceptAiSuggestionsAsync</c> (:393)
+    /// end with the identical unconditional
+    /// <c>Status = Lines.Any(NeedsReview) ? pending_review : ready</c>. The hole is the WRITE, not
+    /// the URL — and the accept-AI recompute runs even when nothing is accepted (its own comment at
+    /// :358: "zero suggestions over zero lines still writes 'ready'"), so gating only
+    /// <c>/resolve</c> would leave an <c>unrouted</c> order one unauthenticated-by-status POST away
+    /// from being permanently unassignable. One helper, two call sites, one canonical set.</para>
+    ///
+    /// <para><b>409, not 400.</b> The request is well-formed; what refuses it is the order's current
+    /// state, and that state changes — "wait, then retry" is a true instruction here, which is what
+    /// 409 means and 400 does not. It also keeps this refusal distinct from the terminal one a layer
+    /// down (<c>OrderResolutionService.IsFinished</c> → 400 for <c>failed</c>), whose verdict is
+    /// permanent. The two sets are asserted disjoint so the two answers cannot merge.</para>
+    ///
+    /// <para>Org-scoped, and an unknown/cross-tenant id returns null rather than a 409: answering
+    /// 409 for a row this org cannot see would confirm it exists. Those fall through to the normal
+    /// not-found path.</para>
+    /// </summary>
+    private async Task<IActionResult?> RefusedByResolveHoldAsync(Guid orderId, CancellationToken ct)
+    {
+        var status = await _db.PurchaseOrders.AsNoTracking()
+            .Where(o => o.Id == orderId && o.OrgId == _tenant.OrganisationId)
+            .Select(o => o.Status)
+            .FirstOrDefaultAsync(ct);
+
+        // Derived from the canonical set, never a literal — the same discipline the five
+        // delivery-claim lists were centralised under after drifting apart four times.
+        if (status is null || !OrderStatusMachine.ResolveHeldFrom.Contains(status))
+            return null;
+
+        _logger.LogInformation(
+            "Order {OrderId} (org {OrgId}): correction refused — the order is in '{Status}', which the " +
+            "status recompute would overwrite destructively.",
+            orderId, _tenant.OrganisationId, status);
+
+        return Conflict(new
+        {
+            error  = OrderStatusMachine.ResolveHoldMessage(status),
+            status,
+        });
+    }
+
     // ── POST /api/orders/upload ───────────────────────────────────────────────
 
     /// <summary>
@@ -551,11 +611,19 @@ public sealed class OrdersController : ControllerBase
     [ProducesResponseType(typeof(OrderDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Resolve(
         Guid id,
         [FromBody] ResolveRequest request,
         CancellationToken ct)
     {
+        // WP-23 — before the body, because the answer does not depend on it. A header-only resolve
+        // is the shape that made 'unrouted' a real hole rather than a theoretical one: this endpoint
+        // accepts a body with no line resolutions at all, so {"poNumber":"X"} was enough to recompute
+        // an order out of the routing hold with SupplierId still null.
+        if (await RefusedByResolveHoldAsync(id, ct) is { } held)
+            return held;
+
         // A resolve must do something: either resolve at least one line OR correct a
         // header field (order date / buyer / currency / PO number / supplier name).
         // Header-only edits are valid.
@@ -1733,12 +1801,20 @@ public sealed class OrdersController : ControllerBase
     [EnableRateLimiting("ai")]
     [ProducesResponseType(typeof(AcceptAiSuggestionsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> AcceptAiSuggestions(
         Guid id,
         [FromQuery] double minConfidence = 0.85,
         CancellationToken ct = default)
     {
+        // WP-23 — the same guard as /resolve, because this is the same writer reached by a different
+        // door: AcceptAiSuggestionsAsync (:393) ends with the identical status recompute, and it runs
+        // even when nothing is accepted. Guarding /resolve alone would leave both named holes open
+        // here, where the endpoint has never validated anything at all.
+        if (await RefusedByResolveHoldAsync(id, ct) is { } held)
+            return held;
+
         var result = await _orders.AcceptAiSuggestionsAsync(
             _tenant.OrganisationId, id, minConfidence, ct);
 
