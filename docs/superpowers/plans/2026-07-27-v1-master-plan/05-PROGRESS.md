@@ -3114,3 +3114,43 @@ rewritten, so the exemption became false and the test named it. Removed; 97/97.
 
 Enforcement before claims (BE #127 → FE #78), backend before frontend (BE #100 → FE #73), gate owner
 before gate consumer (#81 → #70). No merge went in on green CI alone.
+
+---
+
+## 2026-08-01 overnight — nineteen landed; every Wave 4 orphan is home
+
+FE #75 (`docs(help)`) merged as **`9278aec`**. With #70 and #81 already in, all three PRs orphaned by
+the Wave 4 session's end are on main. BE #116 also landed, so the Wave 3 session's closure record is
+preserved on the plan branch alongside the sweep log.
+
+**Nineteen packets in the day:** FE #74, #76, #72, #71, #65, #78, #79, #81, #70, #75 · BE #98, #97,
+#99, #125, #126, #124, #127, #100, #116.
+
+### Guards that caught real drift tonight, all three written by the packets they later blocked
+
+1. **The self-retiring deferral.** G4 skipped two help articles it would have duplicated and asserted
+   each skipped file is *still dirty*. On #75's branch one was already rewritten, so the exemption
+   became false and the test named it. *"An exemption that outlives its reason is a lie."*
+2. **ONE COPY, THREE CONSUMERS.** Turned red on a branch carrying its own copy of the shared scanner
+   — exactly what #70 was about to do once #81 landed the superset.
+3. **The chip table binds to the rendered list.** WP-29 split the queue's `ready` chip into "Ready to
+   send" and "Queued to send"; the toolbar went to six chips and `inbox-basics` documented five.
+   #75's own guard — *"the chip table lists exactly the chips the toolbar renders, in order"* —
+   failed by name.
+
+The third is the one worth generalising. TRAP 25 says copy is not type-checked against behaviour and
+nothing mechanical catches prose drift. **That is true by default and false where someone binds the
+prose to the source of truth.** All three of tonight's catches were packets that wrote the binding
+themselves, and each one blocked a *later* packet — not its own author. That is the shape to copy: a
+guard is worth most when it fails for someone who was not in the room when it was written.
+
+### FE #82 (WP-19+24) — red, diagnosed, handed back
+
+Three e2e specs assert `/order not found/i`. The gate is **intact and improved**: WP-19 replaced
+main's flat `order === null ? "Order not found" : "Failed to load order"` with branched 4xx copy —
+`"We can't find this order"`, `"You've been signed out"`, `"This order isn't yours to open"`. So the
+phrase was deliberately retired and three pre-existing specs still pin it.
+
+I flagged uncertainty about whether the gate had vanished, then resolved it rather than leaving the
+doubt with its owner. Advised pinning by *meaning* — the "Back to inbox" action and the absence of
+Retry — rather than by sentence, since an exact-phrase assertion breaks on the next reword.
