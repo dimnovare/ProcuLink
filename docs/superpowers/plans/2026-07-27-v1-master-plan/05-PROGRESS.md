@@ -999,3 +999,48 @@ dependency. The FE main checkout is on a `main` that predates `remark-gfm@^4.0.1
 worktree** (~90s), not at the repo root, which other sessions share and which would reinstall the stale
 branch's dep set. Afterwards revert `public/mockServiceWorker.js` — msw's postinstall rewrites it and it is
 tracked.
+
+### 2026-07-31 — Wave 4 CLAIMED: WP-27, WP-28, WP-29, WP-30, WP-31, WP-32
+
+Session `claude/agitated-chebyshev-339d7b` (frontend). All six Wave-4 UI packets claimed. Branches, one
+worktree each off FE `origin/main` = `478b809`:
+
+| Packet | Branch | Batch |
+|---|---|---|
+| WP-27 onboarding | `claude/wp27-onboarding` (+ BE `claude/wp27-sample`) | 1 |
+| WP-29 inbox `ready` state | `claude/wp29-inbox` | 1 |
+| WP-30 design-token lint | `claude/wp30-tokens` | 1 |
+| WP-32 Clerk degraded state | `claude/wp32-degraded` | 1 |
+| WP-28 workshop density | `claude/wp28-workshop` | 2 — sequenced after WP-24's files settle |
+| WP-31 a11y | `claude/wp31-a11y` | 3 — deps WP-30; touches `OnboardingWizard` which WP-27 rewrites |
+
+**Sequencing reasons, not arbitrary:** WP-31 owns all 17 `aria-modal` dialogs including
+`OnboardingWizard.tsx`, which WP-27 is rewriting — running them together guarantees a conflict.
+WP-31 also depends on WP-30's token work. WP-28 edits `workshop/OrderWorkshop.tsx`, which WP-24
+(`7cabd4f`) changed by 117 lines five days ago.
+
+**⚠️ CORRECTION TO WP-27's PREMISE — verified first-hand, recorded before the packet builds on it.**
+The packet says first run "dead-ends at delivery configuration because every terminal channel needs
+supplier cooperation." That is **not wholly true**.
+`ProcuLink.Core/Constants/DeliveryProtocolConstants.cs` already ships `Email = "email"` — delivery via
+the Postmark HTTP API, whose own docstring says *"Supplier supplies only recipient addresses; mail is
+sent FROM ProcuLink's verified sender"* — plus `EmailApiDeliveryDispatcher`. `Smtp` is explicitly
+RETIRED there (Railway blocks outbound SMTP ports 25/465/587) and kept only for legacy configs and
+self-host opt-in. The frontend `DeliveryProtocol` union at `src/lib/api/types.ts:568` already lists
+`"email"`.
+So the real gaps are narrower and more tractable than the packet states: whether `email` is **offered
+and defaulted** in the onboarding delivery step, whether a **`download` terminal channel that actually
+transitions an order to `delivered`** exists at all (WP-34 shipped artifact download, which is not the
+same thing), and whether the sample order seeds a delivery config. Same failure shape as the other
+five corrections — two true facts (delivery needs an endpoint; onboarding dead-ends) with one
+unchecked step between them (what `DeliveryProtocolConstants` already contains).
+
+**Other line numbers that have already moved since the packets were written** — every agent is
+instructed to re-verify rather than trust them:
+- WP-28's emoji-as-icon is at `src/components/bridge/workshop/OrderWorkshop.tsx:733`, not `:746`, and
+  the file is under `workshop/`, not directly under `bridge/`.
+- WP-29's `InboxView.tsx` / `UnifiedStatusBadge.tsx` / `BridgeDashboard.tsx` line numbers predate
+  WP-24 (`7cabd4f`, +160 lines in `InboxView`) and WP-25 (`478b809`, which rewrote
+  `UnifiedStatusBadge` labels wholesale). The "Ready to send" count divergence may already be fixed;
+  the cross-screen count-parity test ships either way, because the test is the deliverable.
+
