@@ -3,12 +3,19 @@ using ProcuLink.Core.Entities;
 namespace ProcuLink.Core.Services;
 
 /// <summary>
-/// Launch batch 7 — REVISION AUTHORITY. Resolves the effective configuration bundle for ONE
+/// Launch batch 7 — REVISION AUTHORITY. <b>ON in production</b> —
+/// <c>Connections__RevisionAuthority = true</c> on both Railway services (<c>ProcuLink</c> and
+/// <c>aware-amazement</c>), verified 2026-07-27 and re-verified 2026-07-31; the code default being
+/// OFF says nothing about the deployed value. Read the effective value from
+/// <c>GET /health/ready</c> (<c>revisionAuthority</c>) or a host's startup log, never from an
+/// appsettings file.
+///
+/// <para>Resolves the effective configuration bundle for ONE
 /// order: when the <c>Connections:RevisionAuthority</c> flag is ON and the order carries a
 /// resolvable <c>ConnectionRevisionId</c> pin, the bundle is the pinned PUBLISHED revision's
 /// immutable snapshot; in every other case (flag off, unpinned order, orphaned pin, lookup
 /// failure) it is <see cref="EffectiveConnectionConfig.Live"/>, which tells the caller to keep
-/// reading the live mutable tables — byte-for-byte the pre-batch-7 behaviour.
+/// reading the live mutable tables — byte-for-byte the pre-batch-7 behaviour.</para>
 ///
 /// <para>Consumed by the four processing services (parse-mapping + item-code resolution,
 /// acceptance validation, output transform, delivery dispatch) so a pinned order is processed

@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -318,4 +319,58 @@ public sealed class WorkerHeartbeatHealthCheck : IHealthCheck
         int ActiveWorkers,
         double? SecondsSinceHeartbeat,
         bool Healthy);
+}
+
+/// <summary>
+/// WP-21 — reports the EFFECTIVE value of <c>Connections:RevisionAuthority</c> on this process.
+///
+/// <para><b>Why a health check for a boolean.</b> The flag decides whether a pinned order is
+/// processed under the contract it was ingested with or under whatever the live tables say right
+/// now — so it decides whether every reproducibility claim ProcuLink makes is true. On 2026-07-27
+/// an audit read <c>appsettings.Development.json</c>, saw the flag set only there, and filed a P0
+/// saying the whole versioning subsystem was inert in production. It was wrong: the deployed value
+/// is <c>true</c> on both Railway services. But nobody could tell without shelling into Railway,
+/// because the effective value was served nowhere. That is the gap this closes — the fact is now
+/// readable from the running process.</para>
+///
+/// <para>ALWAYS <see cref="HealthStatus.Healthy"/>, whatever the value. The flag being off is a
+/// deliberate configuration, not an outage, and readiness must never 503 over it. The value
+/// travels in the data bag and, flattened by <see cref="HealthResponseWriter"/>, as a top-level
+/// <c>revisionAuthority</c> boolean the uptime workflow can <c>jq -e</c>.</para>
+///
+/// <para>SECURITY: a boolean, a configuration KEY NAME, an environment VARIABLE NAME, and a list
+/// of service names. No secret value is read or emitted, so this is safe on the unauthenticated
+/// probe alongside the existing checks.</para>
+/// </summary>
+public sealed class RevisionAuthorityHealthCheck : IHealthCheck
+{
+    private readonly IConfiguration _configuration;
+
+    public RevisionAuthorityHealthCheck(IConfiguration configuration) => _configuration = configuration;
+
+    public Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        var enabled = EffectiveConnectionConfigResolver.IsEnabled(_configuration);
+
+        var data = new Dictionary<string, object>
+        {
+            ["enabled"]             = enabled,
+            ["configurationKey"]    = EffectiveConnectionConfigResolver.FlagKey,
+            ["environmentVariable"] = EffectiveConnectionConfigResolver.EnvironmentVariableName,
+            // Every host that resolves an effective config must carry the variable. Naming them
+            // here means the probe tells an operator WHERE to look, not just what the value is.
+            ["hostsRequiringTheFlag"] = RevisionAuthorityHosts.All
+                .Select(h => h.DeployedServiceName)
+                .ToArray(),
+        };
+
+        var description = enabled
+            ? "Revision authority is ON — a pinned order is processed under the published revision "
+              + "it was ingested with, not the current live config."
+            : "Revision authority is OFF — every order is processed against the live mutable tables, "
+              + "so a config edit changes how already-ingested orders are processed.";
+
+        return Task.FromResult(HealthCheckResult.Healthy(description, data));
+    }
 }

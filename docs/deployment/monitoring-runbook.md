@@ -51,9 +51,12 @@ Fails on:
 - curl failure / timeout (25 s) → `::error title=API unreachable::`
 - any status other than 200 → `::error title=API readiness not 200::`
 - a 200 body whose `.workerHealthy` is not `true` → `::error title=Worker unhealthy::`
+- a 200 body whose `.revisionAuthority` is not `true` → `::error title=Revision authority is OFF::`
+  (WP-21 — see [`revision-authority-production-smoke.md`](../ops/revision-authority-production-smoke.md))
 
 That third condition is the point of the whole workflow. `/health/ready` runs the
-`ready`-tagged health checks (database, storage, migration flag, Worker heartbeat) and maps
+`ready`-tagged health checks (database, storage, migration flag, Worker heartbeat, and the
+revision-authority flag's effective value) and maps
 **Healthy *and* Degraded → HTTP 200**, Unhealthy → 503. A dead Worker is deliberately
 **Degraded, not Unhealthy** — see `WorkerHeartbeatHealthCheck` in
 `ProcuLink.Api/Controllers/HealthController.cs`: a Worker outage must not evict the API from

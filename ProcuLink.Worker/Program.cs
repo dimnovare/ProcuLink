@@ -198,7 +198,13 @@ builder.Services.AddSingleton(sp =>
 });
 // Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by the
 // Worker's parse (ParseOrderJob → OrderService), transform (TransformOrderJob), and delivery
-// jobs. Flag-gated by Connections:RevisionAuthority (default OFF = live tables, byte-identical).
+// jobs. Flag-gated by Connections:RevisionAuthority. The CODE default is OFF (live tables,
+// byte-identical), but that is NOT the deployed value: production sets
+// Connections__RevisionAuthority = true on the Railway "aware-amazement" service, so revision
+// authority is ON for the host that actually runs parse/transform/deliver. This process serves no
+// HTTP, so its effective value is announced in the startup log (StartupConfigurationValidator)
+// rather than on a health endpoint. See ProcuLink.Infrastructure/Services/RevisionAuthorityHosts.cs
+// and docs/ops/revision-authority-production-smoke.md.
 builder.Services.AddScoped<IEffectiveConnectionConfigResolver, EffectiveConnectionConfigResolver>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 // cXML network credentials resolver — consumed by the Worker's TransformOrderJob (OrderService →
