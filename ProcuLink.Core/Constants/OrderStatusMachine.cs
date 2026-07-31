@@ -1,4 +1,4 @@
-using static ProcuLink.Core.Constants.OrderStatusConstants;
+﻿using static ProcuLink.Core.Constants.OrderStatusConstants;
 
 namespace ProcuLink.Core.Constants;
 
@@ -78,7 +78,13 @@ public static class OrderStatusMachine
             // operator out of the one action the routing hold exists for. Named as a follow-up
             // rather than papered over here — closing it is an endpoint guard, a product decision
             // about what a resolve may do to an unrouted order, not a transition-map edit.
-            [Unrouted]           = Set(Parsing, PendingParse, Failed, RejectedBySupplier, PendingReview, Ready),
+            // MUTATION-CHECK H (WP-23): TRAP 1 simulated — c61fe30's two unrouted recompute edges are
+            // PRUNED here on the (wrong) reasoning that the WP-23 endpoint guard leaves them with no
+            // writer. Expected RED: EveryResolveHeldStatus_KeepsBothRecomputeEdges, which exists to
+            // stop exactly this. Expected still GREEN:
+            // EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges, which now excludes unrouted —
+            // i.e. the new test is the one holding this line, not the old one. Not for merge.
+            [Unrouted]           = Set(Parsing, PendingParse, Failed, RejectedBySupplier),
             [PendingReview]      = Set(Ready, PendingReview, RejectedBySupplier),
             [Ready]              = Set(Transforming, PendingReview, RejectedBySupplier),
             // transforming → transform_failed: a TERMINAL transform failure (a template that would not
