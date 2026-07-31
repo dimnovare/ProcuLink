@@ -11,6 +11,35 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-31) — the orphan guard's comment stripper: one scanner, no duplicate
+
+**Shipped — BE [#95](https://github.com/dimnovare/ProcuLink/pull/95), merged `504d9cc`, PR run green
+on base `49dd828`, post-merge main run `30626700557` green.** Deleted the private `StripComments`
+that `AcceptanceGateSingleDoorTests` had carried since WP-17 (#91); that file now loads its corpus
+through `OrphanDetector.LoadSources`. One stripper in the repo, held by its own regression tests.
+
+**The defect it descends from was already fixed.** #92 (`7ed0961`, 07-30) replaced
+`OrphanDetector.StripComments` — two regex passes, block comments first — with a single
+left-to-right scanner that tracks string/char literal state. A regex cannot tell a comment opener
+from the same two characters inside a literal: `ProcuLink.Api/Program.cs:421` is a LINE comment
+mentioning the wildcard CORS origin `https://*.vercel.app`, and that `/*` opened a block comment
+which closed at the `catch { /* swallow */ }` at `:1102` — **681 lines swallowed** before any scan
+saw them. Measured on the real file: `builder.Services.AddScoped<` went **72 → 2** and the
+`IAcceptanceGate` registration vanished, so `BothHosts_registerTheGate` was asserting against a
+composition root it could not see. The failure mode is a FALSE ORPHAN and a silently blind
+architecture guard — never a crash.
+
+**Do not "fix" this by swapping the pass order.** That only moves the hole: a `//` inside a string
+literal then truncates the line. The duplicate in `AcceptanceGateSingleDoorTests` was exactly that
+workaround, which is why #95 deletes it instead of keeping it. Corpus equivalence checked before the
+swap — 506 files either way, zero diff, both `Program.cs` present.
+
+**Provenance note.** The report that prompted #95 asked for the pass swap and described
+`StripComments` as still two regexes; it was four commits behind `origin/main`, written before #92
+landed. Read this function at `origin/main` before acting on any report about it.
+
+---
+
 ## Snapshot (2026-07-31) — the resolve recompute is reconciled; two real holes it exposed are NOT
 
 `OrderResolutionService.ResolveAsync` and `AcceptAiSuggestionsAsync` both end with
