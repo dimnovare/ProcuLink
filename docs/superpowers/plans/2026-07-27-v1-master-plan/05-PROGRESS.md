@@ -2849,3 +2849,43 @@ lines. Git auto-merges, TypeScript compiles, and nothing checks that the prose s
 behaviour. Both sessions have been told the order and the reason.
 
 Likewise the vocabulary gate: G1 owns it, and G4's `check-vocabulary.mjs` copy edit lands after.
+
+---
+
+## 2026-08-01 overnight — WP-11 landed as a pair, enforcement first
+
+Running an unattended merge watch until 10:00. Merges gated on: contains current `main`, a CI run
+*since* that, and test-side changes beside the production files.
+
+| Merged | Packet | Result |
+|---|---|---|
+| BE #124 | WP-15 S3 — pin the manipulator contract from the C# side | BE `a138ce4` |
+| BE #127 | WP-11 follow-through — prove the gates against compiled code | BE `e4d4ac5` |
+| FE #78 | WP-11 follow-through — the tier a capability is sold on must be the tier that gates it | FE `0e3c445` |
+
+**Thirteen packets today.**
+
+### The WP-11 halves were deliberately ordered, and the rule is the same one G4 got
+
+FE #78 went green and merge-ready *before* BE #127 and was **held anyway**. #78 is the claims half —
+marketing copy, `plans.ts`, the billing FAQ. #127 is the enforcement half. Landing the claims first
+would have published tier promises that nothing enforced yet, which is precisely the defect WP-11
+exists to close, so the packet would have briefly *caused* its own bug.
+
+**Behaviour lands before the prose that describes it.** Same ordering given to G4 vs WP-19+24 on
+`problemCopy.ts`, and it is now applied twice from two different directions.
+
+BE #127 also earns a note on instrument quality: it proves the gates with an **IL scanner**
+(`BillingGateIlScanner.cs`) reading compiled code, not a source-text grep. Three source-text
+assertions were caught standing in for behavioural ones today — this is the opposite, and the right
+shape.
+
+### Still held overnight, each for a stated reason
+
+- **FE #77** (WP-31) — only Vercel has ever reported. Build, unit and e2e have **never run**.
+- **FE #73** (WP-27) — `api-client.ts:1593-94` throws the raw response body to the user (G6). Routed to
+  the WP-19+24 session.
+- **FE #69** — refuted twice; its third pass is in flight.
+- **FE #70 / #75** — #70 owns the vocabulary gate that G1+G2 must build on; #75's glossary overlaps G4.
+- **BE #100** — updated onto `e4d4ac5`, re-running.
+- **BE #116** — targets `docs/v1-master-plan`, conflicting, no checks. Cannot merge as configured.
