@@ -617,12 +617,9 @@ public sealed class OrdersController : ControllerBase
         [FromBody] ResolveRequest request,
         CancellationToken ct)
     {
-        // WP-23 — before the body, because the answer does not depend on it. A header-only resolve
-        // is the shape that made 'unrouted' a real hole rather than a theoretical one: this endpoint
-        // accepts a body with no line resolutions at all, so {"poNumber":"X"} was enough to recompute
-        // an order out of the routing hold with SupplierId still null.
-        if (await RefusedByResolveHoldAsync(id, ct) is { } held)
-            return held;
+        // MUTATION-CHECK A (WP-23): the /resolve call site is REVERTED here on purpose. Expected
+        // RED: the seven Resolve_* rows. Expected still GREEN: the two AcceptAiSuggestions rows.
+        // Not for merge.
 
         // A resolve must do something: either resolve at least one line OR correct a
         // header field (order date / buyer / currency / PO number / supplier name).
