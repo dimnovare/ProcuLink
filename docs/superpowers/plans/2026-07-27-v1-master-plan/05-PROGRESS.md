@@ -2604,3 +2604,54 @@ Genuinely good in the same diff: the codemod made **zero wrong-direction moves a
 growth test restores byte-for-byte in a `finally`, and the gate prints a "WHAT THIS GATE DOES NOT DO"
 header on every run — which the refuter singled out as the best thing in it, and which is the same
 virtue as `OrderStatusMachine.cs:337` documenting what it did *not* close.
+
+### 2026-07-31 — Wave 4 second-pass refutations: #69 REFUTED again, #70/#75 confirmed-with-defects
+
+**FE #69 (WP-30) — REFUTED, 5 blocking, zero vacuous tests.** All 15 mutations reproduced, the ratchet
+narrowing is exactly as instructed, 14/14 contrast figures agree to 4dp. The tests are sound; the AC is
+still false.
+
+- **The fixture that pins the ban re-emits it.** `bun run build` succeeds and the production CSS still
+  ships `.focus-visible\:ring-\[\#28C55E\]`. `tailwind.config.ts` scans `./src/**/*.{ts,tsx}` with no
+  test exclusion, so Tailwind's content scanner reads the banned class name out of
+  `src/test/check-tokens.test.ts:189` — **the fixture written to prove the emerald is gone** — and emits
+  the rule. Both new guards skip `*.test.tsx?` by design; Tailwind does not. Not a check that fails to
+  see a defect: **a check that creates the defect it exists to prevent.** One-line fix (concatenate the
+  class name, or exclude tests from `content`), but a new trap shape.
+- **`ghostTierColor` is the fill of a 7px/800 SVG `<text>`** — `#B36D14` on white = 4.1061:1, `ok` tier
+  4.1613:1. The same commit **rewrote that function's comment asserting it is non-text** and correctly
+  fixed the byte-identical construction at `WireTopology.tsx:365`. Verified where applied, not where the
+  class lives — third instance this round.
+- **The AC's escape clause names the wrong region.** It defers to "the 798 ledgered violations", but the
+  ledger is `src/app/**` only and **all nine live failures are in `src/components/**`** — reachable from
+  `/bridge`, `/inbox/[orderId]`, `/operations/*`. Includes `OnboardingChecklist:451` at 3.65:1, the same
+  pair the packet claims to have swept.
+- The new repo-wide rule is repo-wide in FILE scope, narrow in SYNTAX scope: it matches `color:`/`fg:`
+  plus a **quoted literal on one line**. Eight spellings evade, each isolated with a passing control.
+
+**FE #70 + #75 (WP-29) — CONFIRMED-WITH-DEFECTS, 88 mutations reproduced, all four pass-1 vacuities
+dead.** R4/R6/R8/R10 all exit 1 now; the count-parity test was not weakened (R1/R2/R3 still exit 1); the
+CI-enforced deferral is **real** — merging #75 into #70 fails with the exact missing chip row named.
+
+- **G1, and it is the same trap one layer down.** The `blockBody` fix strips comments, but
+  `stripComments` **preserves string and template literals by design** (the link guards need them), so
+  the same `const NAME` token in a **string literal, template literal or JSX text node** still disarms
+  `registry-moved` on all seven blocks. Reproduced on the real tree using the file's own guard-error
+  idiom: `checked 37 navigation label(s) … OK`, exit 0 — **43 → 37, six chip labels silently unpoliced.**
+  The fix is precise and already in the repo: **`maskLiterals` is exported at `sourceScan.ts:99`, is
+  offset-preserving, and is used two lines away in `extractRaw` for exactly this reason.** Anchor on
+  `maskLiterals(stripComments(src))`. Also wants a per-block floor — a captured-but-empty body
+  contributes zero labels and raises no offence.
+- **G4: a THIRD indexed help article still teaches the pre-rename failure vocabulary**
+  (`help/exceptions-and-stuck-orders/page.mdx:20-24`), linked twice from the two #75 rewrote. #75's guard
+  reads only the two articles it fixed. **Do not silently align it** — `healthTiles.ts:39`,
+  `ExceptionDetail.tsx:48/50`, `BridgeTopbar.tsx:260` and `problemCopy.ts:260` still render the old names,
+  so the PRODUCT carries two failure vocabularies and #75 aligned the articles with one of them. The
+  reconciliation is its own packet.
+- G2: the stripper move to untyped `.mjs` dropped the `SourceSyntax` union from a shared guard's public
+  type — `stripComments("x","bogus")` now typechecks. G3: the meta-test's own registry list is a
+  source-text regex over a `>= 6` floor on a list of exactly 6, so a seventh entry written multi-line is
+  silently uncovered. G10: both branches sit on `d119e91`, not `f9ab894`; WP-28 also edits `InboxView.tsx`.
+
+**Handoff:** #69 needs a third pass. #70/#75 need G1 (cheap, mechanism identified above) and a rebase.
+#73 green at `792938b`, BE #100 rebased at `6555d41`, #77 green at `6147a76` with both blockers closed.
