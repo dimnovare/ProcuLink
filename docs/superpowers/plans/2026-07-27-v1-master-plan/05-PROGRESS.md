@@ -301,6 +301,34 @@ attached: a re-run against current main is **required** before merging a PR whos
 especially one that ships a gate with a baseline (WP-30's `lint:tokens` per-file ratchet is state a
 sibling merge invalidates). Pushing the rebase is the cheap way to force the fresh run.
 
+**TRAP 13 — "a source-text assertion proves the thing is mounted."** It proves the *characters* are
+in the file. `ClerkAvailabilityGate.test.tsx:196-212` reads `(app)/layout.tsx` as a string and
+regexes `/<ClerkAvailabilityGate>/`. Verified: comment the JSX out and the regex **still matches
+inside `{/* */}`**; or leave `<ClerkAvailabilityGate>{null}</ClerkAvailabilityGate>` beside an
+ungated shell. Under the second, WP-32's refuter ran `tsc --noEmit` (exit 0), `bun run test` (1594
+pass), `next lint` and `next build` — **four gates, zero detection**, with the forever-spinner fully
+restored.
+
+This is the same class as FE `4c7350a` ("a comment after a colon is still a comment"): **a regex over
+source cannot tell code from a comment, and a source-text assertion is not a behavioural one.** The
+technique is used in at least two places (`plain-language-copy.test.ts` names it as the pattern).
+Where the question is "is it mounted", render it and assert on the DOM.
+
+**TRAP 14 — "it passed the vocabulary gate."** `scripts/check-vocabulary.mjs` is roughly half-blind,
+and this is a **gate limitation, not any packet's defect**. Three verified gaps, proved by injecting
+probes and watching them pass:
+
+| Construct | Scanned? |
+|---|---|
+| body paragraph | caught |
+| `label: value` in a data array | caught |
+| `<h1>…{name}</h1>` — any interpolated heading | **missed** — `looksLikeProse`'s char class at `:299` excludes `{` and `}` |
+| `name="…"` | **missed** — `name` is absent from `ATTR_RE` at `:254` |
+| `detailLabel="…"` | **missed** — `label` needs a word boundary that `detailLabel` does not give |
+
+Interpolated headings are everywhere, so "checked against the vocab gate" means *some* copy was
+checked. Unowned as of 2026-07-31.
+
 ### TRAPS added 2026-07-30 (second pass)
 
 **TRAP 6 — "a registry href with no page behind it is a dead link."** WRONG, and it hides the real
