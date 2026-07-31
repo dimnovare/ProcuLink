@@ -1808,12 +1808,10 @@ public sealed class OrdersController : ControllerBase
         [FromQuery] double minConfidence = 0.85,
         CancellationToken ct = default)
     {
-        // WP-23 — the same guard as /resolve, because this is the same writer reached by a different
-        // door: AcceptAiSuggestionsAsync (:393) ends with the identical status recompute, and it runs
-        // even when nothing is accepted. Guarding /resolve alone would leave both named holes open
-        // here, where the endpoint has never validated anything at all.
-        if (await RefusedByResolveHoldAsync(id, ct) is { } held)
-            return held;
+        // MUTATION-CHECK B (WP-23): the /accept-ai-suggestions call site is REVERTED here on
+        // purpose — this is the mutation that decides whether "both holes are closed" is a real
+        // claim or a claim about one URL. Expected RED: the two AcceptAiSuggestions_FromAHeldStatus
+        // rows. Expected still GREEN: every Resolve_* row. Not for merge.
 
         var result = await _orders.AcceptAiSuggestionsAsync(
             _tenant.OrganisationId, id, minConfidence, ct);
