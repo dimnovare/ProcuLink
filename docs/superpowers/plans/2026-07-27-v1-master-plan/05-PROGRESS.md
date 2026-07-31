@@ -2281,3 +2281,58 @@ operator path and says plainly that it does not shut the race.
 That is the standard `navigationClock.ts`'s docstring was reaching for and did not quite hit — it
 asserted its premise (the script is document-requested) rather than stating what it had and had not
 closed. Point at `OrderStatusMachine.cs:337` next time a claim goes into a comment.
+
+---
+
+## 2026-07-31 — the TRAP 25 trigger, run for real
+
+Seven merged today. BE #125 (WP-15 S6+S7, CSV dialect and typed JSON leaves) landed as `25cb8b7`:
+contained main, green, `MERGEABLE`, and — the TRAP 24 check — `CsvDialectTests.cs` and
+`JsonTypedLeafTests.cs` beside three production files.
+
+Then I ran the overlap trigger proposed in the TRAP 25 amendment against every open branch in both
+repos, rather than leaving it as a note. Method: per branch,
+`git diff --name-only $(git merge-base origin/main $B) $B`, pairwise-intersect the non-test `src/`
+files. It cost one command and found things no session could see from inside itself.
+
+### FE overlap matrix
+
+| Pair | Files | Note |
+|---|---|---|
+| **#77 × #69** | **48** | WP-31 a11y × WP-30 tokens, spanning `src/app/**`, `bridge/{mapper,review,workshop}`, `components/help`, marketing. |
+| #77 × #73 | 4 | `OnboardingWizard`, `InboxView`, `SupplierDockList`, `UploadWorkbench` — the plan predicted this one. |
+| #70 × #69 · #73 × #70 · #73 × #69 | 2 each | `InboxView.tsx` appears in **four** branches. |
+| **#73 × #65** | 2 | `workshop/OrderWorkshop.tsx`, `api-client.ts` — **cross-chip** (Wave 4 × wedge). |
+| #70 × #65 | 1 | `api-client.ts`, also cross-chip. Three branches, two owners, one file. |
+
+`#77 × #69` at 48 files is the expensive one and the plan already sequences WP-31 after WP-30 — so
+land #69 first and rebase #77 onto it, or pay the 48-file rebase twice.
+
+### The trigger caught its own case
+
+**`src/lib/help-articles.ts` is touched by three branches: #75, #69 and #77.** #75 *is* the help-copy
+packet — its whole job is making the glossary teach the labels the product renders, derived from
+`STATUS_META` rather than word-patched. A token or a11y edit that rewords a label in that file
+desynchronises it again, and nothing textual necessarily conflicts.
+
+That is the TRAP 25 condition exactly: two packets writing claims about one surface, where detection
+would otherwise be luck of file layout. The trigger does not know the claims disagree — it only says
+*read this merged file even if git does not ask*. That is the whole intended value and it fired on its
+first real run.
+
+### Merge state after the pass
+
+Only **FE #73** contains current FE main (`f9ab894`); every other FE branch is behind. BE #100
+contains BE main and passes CI but stays held on its owner's re-refutation gate. So the FE side is
+blocked on staleness, not on judgement — which is the cheap kind of blocked.
+
+### Chip ledger
+
+| Chip | State | Archivable |
+|---|---|---|
+| Close Wave 3 | complete — WP-18, WP-21, WP-23 all merged; notified | **yes** |
+| Wave 4 UI | running; owns FE #70/#73/#75/#77 + BE #100 | no |
+| Finish the wedge | idle; owns FE #65/#71 + BE #124/#116 | no |
+| Mid-parse (WP-23a) | idle; owns BE #119 draft + #121/#122 mutation branches | no |
+
+Both owners informed of the collisions above, including the cross-chip pair neither could see alone.
