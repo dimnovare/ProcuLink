@@ -1,4 +1,4 @@
-using Hangfire;
+﻿using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -241,7 +241,11 @@ public sealed class OrdersController : ControllerBase
 
         // Derived from the canonical set, never a literal — the same discipline the five
         // delivery-claim lists were centralised under after drifting apart four times.
-        if (status is null || !OrderStatusMachine.ResolveHeldFrom.Contains(status))
+        // MUTATION-CHECK F (WP-23): the guard now refuses EVERY known status — the canonical-set
+        // test is deleted from the condition. Expected RED: all 28 *_FromEveryOtherStatus_* positive
+        // controls. Expected still GREEN: the org-scoping test (the read is still org-scoped).
+        // Not for merge.
+        if (status is null)
             return null;
 
         _logger.LogInformation(
