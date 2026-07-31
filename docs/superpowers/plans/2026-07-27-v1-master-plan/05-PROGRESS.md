@@ -261,6 +261,24 @@ founder can answer.** Half the "needs a founder decision" items in `AUDIT-2026-0
 from the code by someone willing to go look — the revision-authority P0 died to a ten-second
 `railway variables | grep`, and `/welcome` was settled by reading one line of `StripeBillingService`.
 
+### TRAPS added 2026-07-31 (parallel-session hazards)
+
+**TRAP 8 — "the scratchpad is mine."** It is not. The scratchpad directory is shared across every
+concurrent session. An agent this round deleted another session's mutation harness believing it was
+its own stale artefact. **Prefix every file you write with your packet id, and never delete a file
+you did not create in this turn.**
+
+**TRAP 9 — "the dev server on 8099 is the one I started."** An agent bound a port a sibling session
+already held, measured *that* session's app, and reported a false regression that read as real.
+**Check the port is free before binding, and confirm the page you measured is the build you made.**
+
+**TRAP 10 — "my branch's green is still green."** `d1a6b9c` (WP-18) added 53 lines to
+`OrderWorkshop.tsx` and pinned them with a 382-line `validationEveryBreakpoint.test.tsx`. Any packet
+that branched before it and touches the same file — WP-28 compresses the chrome bands there — can
+re-introduce a breakpoint-conditional mount and silently undo the fix. **Re-introducing a
+`hidden lg:flex` gate around anything that participates in acceptance validation is the specific
+regression.** Read `d1a6b9c` before editing that file.
+
 ### TRAPS added 2026-07-30 (second pass)
 
 **TRAP 6 — "a registry href with no page behind it is a dead link."** WRONG, and it hides the real
