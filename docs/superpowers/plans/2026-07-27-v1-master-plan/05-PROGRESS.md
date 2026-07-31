@@ -1486,3 +1486,142 @@ gate/override` is live server-side with audit + typed refusals and has no browse
 an override can be honoured but not created. Also note `useMapperModel`'s `blockingCount`
 still reads the raw `/validation` flag and remains override-blind — a pre-existing
 inconsistency WP-18 deliberately did not take on.
+
+### 2026-07-31 — wedge session: WP-13 and WP-22 delivered, WP-15 started
+
+Own packets: **WP-13, WP-22, WP-15/16**. Three PRs open, none merged (merges are a founder gate).
+
+| Packet | PR | State | Evidence |
+|---|---|---|---|
+| WP-22 | BE **#97** | **ready, MERGEABLE** | CI `30628196330` pass · re-run with the new guard `30631208317` pass |
+| WP-13 | FE **#65** | draft, MERGEABLE | RED 13/8 → 1654 tests green · **23/23 mutations RED** |
+| WP-15 S1+S2 | FE **#71** | draft | RED 4 → green · **14/14 mutations RED** |
+
+#### WP-22 — the work existed; what it needed was verification, and one gap CI could not see
+
+Rebased `fc6876a`/`b6aa80e` onto `origin/main`. **The rebase reconciliation was not mechanical.**
+`IngestPathBillingGateTests` (added on main by WP-11) had two `Times.Never` assertions — *"a refused
+push must not create an order"* — verifying `IOrderService.CreateStubFromParsedOrderAsync`. WP-22
+moves REST ingress onto `IClaimedOrderCreator`, so **both assertions would have passed with the
+billing gate deleted.** Re-targeted, plus the harness now stubs `ClaimAsync` instead of the
+check-then-create lookup it replaces.
+
+**Mutation-checked on CI, one per channel** (local `dotnet test` is banned, so CI is the only place
+these run):
+
+| Mutation | Run | Result |
+|---|---|---|
+| A — a LIVE idempotency claim reports as new (the check-then-create failure mode) | `30629557271` | **Failed: 4**, all REST-ingress |
+| B — an existing email claim never SKIPs | `30629561917` | **Failed: 4**, all Postmark |
+
+Disjoint sets, right channel each time. Both throwaway branches closed and deleted.
+
+**Three cells survived both mutations and the PR says so rather than claiming 8/8.** They race on
+the INSERT, where the unique index is the guard; neither mutation touches that path. Falsifying it
+would mean dropping a database constraint in a migration.
+
+**The gap CI did not close, now closed (`a0ba373`).** `IngressController.ReceiveOrder` takes
+`IClaimedOrderCreator` via `[FromServices]` and **every test hands it a mock** — a missing DI
+registration is invisible to all of them and would surface as a 500 on every REST-ingress POST plus a
+dead Postmark webhook, in production, with both dedupe channels unreachable while their tests stayed
+green. `OrderServiceCompositionRootTests` does not cover it: it MIRRORS the registrations in its own
+`ServiceCollection` rather than reading `Program.cs`. New `PushIngressSeamRegistrationTests` reads
+both host files through the shared `OrphanDetector.StripComments` (so a commented-out registration
+reads as absent) and pins that `OrderService` still implements the interface — an explicit
+implementation, so dropping it compiles everywhere except the registration cast. Mutation-proven 3/3
+on a filtered local run that starts no containers.
+
+TRAP 2 respected: this PR adds to `InboundEmailController` and leaves
+`TheLiveNearNamesakes_AreStillPresent` intact.
+
+#### WP-13 — refuted on first pass, and the refuter was right twice
+
+The control now lives on `WorkshopStatusBar`. It had to move: the mapper's own "Save mappings" button
+is inside `{!hideToolbar && …}` (`MapperWorkbench.tsx:819-969`) and the workshop passes `hideToolbar`,
+so **wiring the prop at that mount would still have rendered nothing.**
+
+**F1 (blocker).** `!order?.supplierId` never fires — an unassigned counterparty comes off the wire as
+**`Guid.Empty`, a non-empty string** — so the control was ENABLED on a real unrouted order and POSTed
+a promote for a supplier that does not exist. The repo already ships `hasAssignedSupplier()` with two
+users in that same screen. **My tests passed only because the fixture fabricated
+`supplierId: undefined`** — a shape `Order.supplierId` is typed non-optional to exclude. *A fabricated
+fixture is how a guard test proves nothing.*
+
+**F2 (blocker).** `total` counted four fields; the sentence printed two. WP-12 promotes the OUTPUT
+tree, so the output-side pair is routinely the only non-zero one — a ten-field promotion announced
+**"Saved 0 header and 0 line mappings"**, in green, and the aggregate-only shape printed
+**"undefined"**. Four mutations over that arithmetic had survived round one.
+
+Seven more fixed: the party noun now routes through `partyLabels` in the label AND the tooltip
+("counterparty" was reaching users); the notice is scoped to the same breakpoint as its trigger;
+transport failures are no longer painted in raw; the `upgradeUrl` the api layer was rewritten to
+preserve is now actually rendered as a link.
+
+**Both help articles were also wrong** — `/help/output-mapping-editor` and
+`/help/guides/map-supplier-po-fields` told operators to click **Save mappings for this supplier**, a
+label no control had ever carried.
+
+#### WP-15 — the design brief was verified before any code was written, and it does not hold up
+
+`DESIGN-DB-2` audited line-by-line against `origin/main`: **14 citations stale/wrong/non-existent**
+(plus 31 line-number drifts across 88), and **8 sections would produce a wrong output document**.
+Two would have shipped live data-loss bugs, and both are what S1+S2 fix.
+
+S1 — `setBinding`/`setFormatPreset` rebuilt `rule` from a **five-key object literal**, so
+`OutputFieldRule.Expression` (top of the backend's resolution precedence) was deleted on every rebind
+or format change, and the delivered document quietly changed. The writers now spread the previous
+rule. **The test that matters is the one proving an UNKNOWN rule field survives** — that is the class.
+
+S2 — `MANIPULATOR_TYPES` described two manipulators that do not exist. `Concat` was `["suffix"]`;
+`ConcatManipulator` needs ≥2 params, reads NAMED ROW COLUMNS and ignores the incoming value, so one
+param throws `ArgumentException` **at transform time**. `Fallback` was labelled a literal default;
+`FallbackManipulator` treats params as COLUMN NAMES and returns **null**, so that label **silently
+blanks a supplier's column**. Both re-read from `origin/main` first-hand.
+
+**Founder rulings 2026-07-31**, recorded so the remaining slices are not re-litigated:
+1. **CSV line endings** — new layouts default CRLF, existing keep LF. The dialect is nullable and
+   `null` must produce today's bytes exactly, so the WP-12 byte-parity oracle stays green.
+2. **`OutputFieldValidator` on the tree path (S14)** — ship as a **warning, not a block**. The only
+   checks it gains are non-positive quantity and negative unit price; blocking would stop orders that
+   deliver today.
+3. **`Fallback`** — expose honestly ("if this is empty, use another FIELD"), no new backend
+   manipulator.
+
+Also settled by the audit: **no cXML or Peppol namespace presets** (S15 ships UBL 2.1 / Custom /
+None). cXML is DTD-based and has no namespaces; a preset would teach a falsehood about the format.
+The repo agrees with itself here — `OutputTreeFormats.cs:27-33` and `OutputTemplateEmitter.cs:62-65`.
+
+**Remaining: S3–S16**, dependency-ordered: S3 (BE contract pin) → S4/S5 (reorder: pure `moveAt`, then
+pointer + keyboard + live region) → S6/S7 (BE CSV dialect + typed JSON leaves) → S8/S9 (FE dialect
+panel + all manipulators visible) → S10–S16 (WP-16: end the silent format rewrite, the
+format-mismatch warning, the structured conditional builder, the fail-open warning, the validator
+routing, namespace presets, the problems strip).
+
+### TRAPS added 2026-07-31
+
+**TRAP — "a fabricated fixture is a test."** WP-13's read-only guard passed against
+`supplierId: undefined`, a shape the type declares impossible and the API never sends. The live shape
+is `Guid.Empty`, a non-empty string, and the guard was inert against it. **Before trusting a guard
+test, check that its fixture is a shape the wire can actually produce.** `Order.supplierId` being
+non-optional was the tell, in the type, the whole time.
+
+**TRAP — "a pure model with passing tests is done."** Reverting `OutputStructureDesigner` to its
+inline five-key literal left `outputRuleModel.test.ts` **entirely green**. A model with the right
+behaviour and no caller is the exact defect WP-13 exists to fix. Every extraction needs a mutation
+that removes the CALL, not just one that breaks the callee — and one such mutation is not enough:
+killing the format-preset caller left the `setBinding` caller green until a test drove that writer
+too. **Mutate each call site, not each module.**
+
+**TRAP — "no CI run means the webhook was dropped."** WRONG, and it wasted three trigger attempts
+here (empty commit, close/reopen, re-push). **GitHub does not run `pull_request` workflows on a PR
+whose merge commit cannot be computed.** FE #65 had silently gone `CONFLICTING` when main moved six
+PRs ahead; the last run covered a head two commits behind, and citing it would have been the
+"green from a tree the PR head is not" failure. `gh pr view <n> --json mergeable` answers in one call.
+Check it FIRST when a run is missing.
+
+**PROCESS — commit before mutating, and the harness is why.** `react-hooks/exhaustive-deps` flagged a
+missing dep in WP-13; the fix was still uncommitted when the mutation harness ran, and the harness
+reverts with `git checkout -- <file>`. It took the mutation **and the fix** together, and the tree
+came back clean and green. Only re-reading the deps array showed it was gone. This is the failure the
+plan already warns about by name — it still happened, so it is worth restating: the harness cannot
+tell your work from its own.
