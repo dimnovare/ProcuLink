@@ -1,4 +1,4 @@
-using Hangfire;
+﻿using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -235,7 +235,10 @@ public sealed class OrdersController : ControllerBase
     private async Task<IActionResult?> RefusedByResolveHoldAsync(Guid orderId, CancellationToken ct)
     {
         var status = await _db.PurchaseOrders.AsNoTracking()
-            .Where(o => o.Id == orderId && o.OrgId == _tenant.OrganisationId)
+            // MUTATION-CHECK G (WP-23): the org filter is REMOVED here on purpose. Expected RED:
+            // Resolve_AHeldOrderInAnotherOrg_IsNotRefusedByThisGuard, and nothing else.
+            // Not for merge.
+            .Where(o => o.Id == orderId)
             .Select(o => o.Status)
             .FirstOrDefaultAsync(ct);
 
