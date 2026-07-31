@@ -621,6 +621,48 @@ gone and nobody notices until a supplier signs up.
   supplier-side software to its peers is selling to its competitors.
 
 
+### 2026-07-31 — HANDOFF SNAPSHOT. Verified against origin/main, not from memory.
+
+**FE `origin/main` = `478b809` · BE `origin/main` = `c61fe30` · ZERO open PRs in either repo.**
+
+**MERGED (verified by `git log origin/main`):**
+WP-01 CI gate · WP-04 orphan guard · WP-06/07/09 Wave-1 retirements (`44fa058`) · WP-11 billing honesty
+(`46b29fe`) · **WP-12 output-tree promotion (`d233409`) — THE WEDGE** · WP-14 backend (`7dd4261`) +
+frontend (`ddced4e`) · WP-17 acceptance gate (`8a2dbc3`) · WP-19 4xx split (`b4694ad`) · WP-20
+content-type/filename · WP-23-adjacent resolve recompute (`c61fe30`) · WP-24 recovery UI (`7cabd4f`) ·
+WP-25+26 nine nouns / four destinations (`478b809`) · WP-34 (`3878c0c`) · plus a `tsc --noEmit` CI gate.
+
+**Seven of the audit's top ten are closed.** Remaining from that list: #4 partially (WP-14 landed; the
+designer still cannot author everything), and the residency copy.
+
+**THE SINGLE HIGHEST-VALUE NEXT ITEM — WP-13, and it is an `S`.**
+`promoteMapping()` at `src/lib/api-client.ts:1925` **still has ZERO callers**, and no mount passes
+`onSaveMappings`. WP-12 merged, so the backend now carries a designed output tree to the supplier — **and
+the button that triggers it does not render.** The engine works and nothing can reach it. It also makes
+`/help/output-mapping-editor` true; that doc currently tells users to click a control that does not exist.
+
+**UNPUSHED WORK THAT EXISTS — do not rebuild it.**
+`fix/wp22-ingest-dedupe` carries two commits in the BE repo: `fc6876a` (claim-first dedupe on both push
+channels) and `b6aa80e` (stop connection churn flaking the dedupe race tests). Built and committed, never
+verified — the run was killed because it was wedging the founder's Docker. It needs a rebase, a CI run and
+a PR. Nothing more.
+
+**STILL OPEN, by wave:**
+- Wave 3: WP-18 (validation does not run below 1024px), WP-21 (prove revision authority — the flag is ON,
+  this is now a proof packet), WP-22 (above), WP-23.
+- Wave 4: WP-27 onboarding, WP-28 workshop chrome, WP-29 inbox `ready` state, WP-30 token lint,
+  WP-31 a11y, WP-32 Clerk degraded state.
+- Wave 5: WP-33 auto-send (decided: automation, dry-run one week first), WP-35 replay, WP-36, WP-37.
+- Wave 6: WP-38 SFTP host keys + live channel proof, WP-39 recorded production pass, WP-40, WP-41.
+- Wedge: **WP-13** (above), WP-15, WP-16 — `DESIGN-DB-2` is written and critiqued *buildable-with-fixes*.
+
+**FOUNDER ITEMS OUTSTANDING:** rotate the OpenAI, PostHog and Neon keys — leaked by an unfiltered
+`railway variables` call on 2026-07-27 and still live. Nothing else is blocked on the founder.
+
+**NOT BUILT, DELIBERATELY** — see `00-MASTER-PLAN.md §7`. Invoices, ASNs, Peppol/AS2/AS4, more ERP
+connectors, EDIFACT output, PunchOut, IMAP hardening, RLS, and any new top-level noun.
+
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
