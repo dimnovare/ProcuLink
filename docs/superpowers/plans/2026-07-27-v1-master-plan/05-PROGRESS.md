@@ -3154,3 +3154,62 @@ phrase was deliberately retired and three pre-existing specs still pin it.
 I flagged uncertainty about whether the gate had vanished, then resolved it rather than leaving the
 doubt with its owner. Advised pinning by *meaning* — the "Back to inbox" action and the absence of
 Retry — rather than by sentence, since an exact-phrase assertion breaks on the next reword.
+
+---
+
+## 2026-08-01 overnight — twenty-two landed; WP-27 complete end to end
+
+| Merged | Packet | Result |
+|---|---|---|
+| BE #128 | WP-02 round 2 — the vacuous-pass guard enforced one rule, not five | BE `429ee7f` |
+| FE #82 | WP-19 + WP-24 — a failure that names its cause, and a screen that acts on it | FE `756e44c` |
+| FE #73 | WP-27 — onboarding that completes in one sitting | FE `8fca74a` |
+
+**All four PRs orphaned by the Wave 4 session are now on main** (#70, #75, #81, #73), and WP-27 is
+complete end to end: BE #100's practice-delivery loop, its `sample-order` rate cap, and the frontend
+that drives them — landed in that order, so the cap existed before anything could call it.
+
+### BE #128 changes CI, and it tightens rather than loosens
+
+Worth recording because a workflow change is the one diff that can quietly disable everything else:
+
+- adds a **skip census** naming every skipped test *and its reason* in the job summary
+- **fails on a skip with no reason** — "Skipped" with an empty message is indistinguishable from a
+  test that quietly stopped existing
+- **fails when no `.trx` is produced at all** — *"the skip census cannot read the run, so it must not
+  report a pass"*
+- the artifact upload moved from `if: failure()` to `if: always()`, which the census needs
+
+That last pair is the day's "silence is not success" rule written into CI. `Live_ImapIngress`
+reported Passed for two and a half weeks; this is what makes that impossible to repeat quietly.
+Verified BE main green on `429ee7f` **after** the workflow change, not just the PR.
+
+### FE #82 cleared both of #73's blockers in one packet
+
+- **G6 fixed** — `realRunSampleOrder` now goes through `parseApiErrorBody` + `ApiHttpError` instead
+  of throwing the raw response body at the operator.
+- The 404 specs were stale, not broken: WP-19 replaced main's flat
+  `order === null ? "Order not found" : "Failed to load order"` with branched 4xx copy. I resolved
+  that ambiguity rather than leaving it with its owner, and it came back the good way.
+
+### The #73 rescue — a third conflict where neither side was right
+
+`OrderWorkshop.tsx`:
+
+- **WP-27** replaced `?sample=1` with `order.isSample`, because the param was only ever appended by
+  `useSampleOrder` — so a practice order opened from a bookmark, the back button, or an inbox row
+  rendered as **real work**, and a real order with the param pasted on rendered as practice.
+- **WP-24** (already on main) kept the old param read but added `useTabParamSync`, fixing a separate
+  real bug: "See their reply" points at `/inbox/{id}?tab=response`, a same-route navigation that does
+  not remount, so the initialiser never re-ran and **the button did nothing at all**.
+
+Kept both. Third time tonight that a conflict resolved to a combination rather than a side.
+
+**And a fourth guard fired.** `routeQueryParams` asserts every declared param is really read, and
+named the exact ambiguity: *"either the reader was removed (every link carrying it is now inert) or
+the contract names the wrong file."* It was the former — nothing appends `?sample=1` any more — so
+the registry entry went rather than the reader coming back.
+
+That is now four guards in one night, each written by one packet and each catching a **different,
+later** packet: the self-retiring deferral, ONE COPY / THREE CONSUMERS, the chip table bound to the
+rendered list, and the route-param registry. None of them caught its own author.
