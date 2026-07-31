@@ -316,14 +316,20 @@ public static class OrderStatusMachine
     /// <see cref="ResolveHeldFrom"/> — so a status added to that set tomorrow fails the suite until
     /// it is given its own sentence here, rather than silently shipping the fallback.</para>
     /// </summary>
+    // MUTATION-CHECK D+E (WP-23), two disjoint mutations in one run so each is attributable:
+    //   D — 'unrouted' now falls through to the GENERIC FALLBACK. Expected RED:
+    //       EveryHeldStatus_GetsItsOwnRefusal_NotTheGenericFallback. Expected still GREEN:
+    //       Resolve_RefusalMessage_IsPlainLanguageAnOperatorCanActOn(unrouted) — the fallback is
+    //       itself plain language, which is exactly why a separate test has to catch it.
+    //   E — 'delivering' now answers with a status-code echo naming a party, the shape
+    //       OrdersController.RetryDelivery mints today. Expected RED:
+    //       Resolve_RefusalMessage_IsPlainLanguageAnOperatorCanActOn(delivering).
+    // Not for merge.
     public static string ResolveHoldMessage(string status) => status switch
     {
-        Unrouted =>
-            "This order is still waiting to be routed. Route it first, then make your corrections — "
-          + "correcting it now would take it out of the routing queue while it still has nowhere to go.",
         Delivering =>
-            "This order is being sent right now, so it cannot be corrected mid-send. "
-          + "Wait for the send to finish, then correct it and send it again.",
+            "Order must be in one of these statuses to resolve: pending_review, ready "
+          + $"(current: '{Delivering}'). Contact the supplier if this is unexpected.",
         _ =>
             "This order cannot be corrected while the step it is in is still running. "
           + "Wait for that step to finish, then try your correction again.",
