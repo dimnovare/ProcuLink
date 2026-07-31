@@ -2258,7 +2258,11 @@ R1 violation, and a vacuous test axis. None of it would have surfaced from a gre
 |---|---|---|---|
 | WP-18 | FE `d119e91` — `#64` merged mid-review, P1 fix `#74` merged after | green | REFUTED x2 -> 6 fixed, 5 disclosed |
 | WP-21 | BE `c8ae076` (`#98`) | `30637291250` success | REFUTED -> 9 fixed, 3 disclosed |
-| WP-23 | BE `#99` open, mergeable | `30632936220` success | REFUTED -> 4 fixed, 3 standing |
+| WP-23 | BE `2c8b8f4` (`#99`) | `30645617088` success | REFUTED -> 4 fixed, 3 standing |
+
+All three are on green mains: BE `2c8b8f4`, FE `f9ab894`. WP-23's final green ran on a head carrying
+`main` merged in twice, so it is green *including* WP-21 and WP-22 — not a stale green against an
+older base.
 
 **Correction to the 2026-07-31 handoff snapshot.** It pinned BE `origin/main` at `c61fe30`. At dispatch
 it was `504d9cc` — `49dd828` and `504d9cc` had landed in between. The packets were cut from `504d9cc`.
