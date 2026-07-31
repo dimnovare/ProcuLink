@@ -2720,3 +2720,60 @@ grep the words that look wrong — the technique that found five extra wrong lab
 Seven chips total, all unowned and file-disjoint from anything in flight: WP-10 remediation, WP-11
 billing gates, WP-02 vacuous tests, WP-19+WP-24 recovery, **G1+G2 guard fix**, **G4 vocabulary
 reconciliation**, **WP-30 third pass**.
+
+---
+
+## 2026-07-31 — nine landed; seven sessions now in flight; a lookout posted
+
+FE #71 (WP-15 S1+S2+S4+S5 — stop deleting rule fields, describe the real manipulators, make node order
+changeable) merged as **`d733c10`**. Ninth packet today. Its wedge owner had rebased it *and* resolved
+#65's conflict since the last sweep, so both came back sweepable without anyone asking.
+
+#71 met every precondition and was **fully disjoint** from the other two candidates — it touches
+`OutputStructureDesigner`, `mapper/mapperModel`, `outputNamespaceModel`, `outputRuleModel` and
+`api/types.ts`; no `OrderWorkshop.tsx`, no `api-client.ts`. 61 new test cases. FE #65 is updated onto
+`d733c10` and re-running.
+
+### FE #73 (WP-27) held — G6 verified at source, not taken on report
+
+```
+src/lib/api-client.ts:1593   const t = await res.text().catch(() => "");
+                     :1594   throw new Error(t || `sample-order: ${res.status}`);
+```
+
+`realRunSampleOrder` throws the **raw response body** as the user-facing message. That is exactly the
+defect FE #70 (WP-29) exists to fix one function over — its whole point is that a raw JSON body must
+never reach the user. Merging #73 now would ship the thing another in-flight packet is fixing, in the
+same file.
+
+This is the claim collision the overlap trigger surfaced, and it is worth noting that **it is now the
+reason a merge is held**, not merely an observation. The trigger paid for itself twice: once by
+finding it, once by making it actionable at merge time.
+
+It routes naturally to the **WP-19+WP-24** session, whose scope is exactly 4xx error shaping — so G6
+does not need a packet of its own.
+
+### Seven sessions in flight — the collision surface is now the risk
+
+WP-10, WP-11, WP-02, WP-19+WP-24, G1+G2, G4, WP-30 third pass. Known danger points from the file map:
+
+| Risk | Detail |
+|---|---|
+| **WP-30 vs everyone** | its token sweep touches ~69 files app-wide, including the marketing pages WP-10 edits and the pricing page WP-11 edits |
+| **G4 × WP-19+24** | both reach `ExceptionDetail.tsx`, `BridgeTopbar.tsx`, `healthTiles.ts`, `problemCopy.ts`. G4 changes what those screens **say**; WP-19+24 changes what they **do**. TRAP 25's exact shape, and no build catches it |
+| **G1+G2 × WP-30** | adjacent in `src/test/` and `scripts/`; WP-30's fix may exclude tests from `tailwind.config.ts` `content`, which G1 does not touch |
+| **WP-02 × WP-30/G1** | all three touch test files, though WP-02 is BE-weighted |
+
+A read-only **collision lookout** is posted with a strict methodology brief: containment pre-pass
+before any pairwise diff (the failure that produced two wrong answers earlier today), hotspot
+detection at 3+ independent branches, and explicit instruction to quote both sides wherever two
+branches change a user-visible claim in one file.
+
+### Sweep state
+
+| | |
+|---|---|
+| FE main | `d733c10` |
+| BE main | `a7437a3` |
+| Held | FE #73 (G6, above) · #69 (refuted twice) · #70/#75 (blocked on G1 + rebase) · #77 (stacked on #69) · BE #100 (pairs with #73) · BE #124 (behind main) · #116 (behind, conflicting) · #119/#121/#122 (drafts/throwaways) |
+| Re-running | FE #65 |
