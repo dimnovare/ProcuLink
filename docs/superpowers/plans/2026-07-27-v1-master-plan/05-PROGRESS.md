@@ -2169,6 +2169,177 @@ TRAP 24 established that green CI is not evidence the diff is covered.
 Note: the wedge chip's session metadata still shows PR #97 as OPEN. It merged as `faba3bf`. Session
 `prState` lags; do not read it as the packet's state.
 
+## 2026-07-31 — WP-23 · The `resolve` status guard (BE PR #99, OPEN)
+
+**Part of the packet was already done, and it was done the right way.** `c61fe30` reconciled the
+resolve recompute into both status maps — 11 edges into `OrderStatusMachine.Transitions`, 13 into
+`OrderStatusTransitionObserver.AllowedTransitions` — deliberately choosing reconcile over gate,
+because the write was real and the maps were wrong. **Nothing about that was undone here.** What it
+left open, naming each one "wants an endpoint guard, which is a product decision", was the two
+from-states where the same write *destroys* something. Those two were this packet.
+
+| Hole | Consequence before this PR |
+|---|---|
+| `unrouted` | An unrouted order has lines, so a resolve — or a **header-only** one, which the endpoint accepts — recomputed it to `ready` with `SupplierId` still null. `OrdersController.AssignSupplier` claims atomically on `Status == Unrouted` (`:682`) and answers 409 otherwise, so the recompute **permanently** locked the operator out of the one action the routing hold exists for. |
+| `delivering` | A row *sits* in `delivering` (`StuckDeliveryDetectionService` exists because dispatches strand there), so a resolve wrote over a live dispatch claim whose outcome write then landed on top of the correction. |
+
+A resolve reached **14** from-states before; it now reaches **12**.
+
+**Shipped.** One canonical declaration, `OrderStatusMachine.ResolveHeldFrom = {unrouted, delivering}`,
+plus `ResolveHoldMessage(status)`. One consumer in production —
+`OrdersController.RefusedByResolveHoldAsync` — called by **both** recompute endpoints. 409 with a
+plain-language sentence; no status token, no party noun, an instruction cue. No transition edge was
+touched.
+
+**`accept-ai-suggestions` is guarded too, and that was the load-bearing call.** It shares the writer
+(`OrderResolutionService` `:242` and `:393` end with the identical recompute) and its recompute runs
+even when nothing is accepted — the file's own comment at `:358` already made that argument for the
+terminal guard. Guarding `/resolve` alone would have relocated hole 1, not closed it. Mutation **B**
+proves it: reverting only that call site turns exactly the two accept-AI rows red and nothing else.
+
+**Derivation, not enumeration.** No status name is hand-written in the new production code or in any
+theory data. Refusals derive from `ResolveHeldFrom`; the 28 positive controls derive from
+`AllStatuses` minus it. A status added to the machine tomorrow gains "must NOT be refused" rows
+automatically; a status added to the hold gains "must be refused, with its own actionable sentence"
+rows automatically.
+
+**Eight CI runs, seven of them mutations.** RED `30628462957` (9 failures, verbatim in the PR body) →
+GREEN `30629301937` → mutations **A** `30630169044`, **B** `30630324709`, **C** `30630369823`,
+**D+E** `30630471634`, **F** `30631231892`, **G** `30631245138`, **H** `30631264515`. **41 of 42 test
+cases are killed by at least one mutation.**
+
+**Two findings worth carrying forward, both stated rather than hidden.**
+
+- *Mutation C did not kill the controller theories.* Because the theory data derives from the same set
+  production reads, mutating the **set** moves the tests with it. That is the intended property and
+  simultaneously a limit on what a set-mutation can prove. Mutations that alter the **guard** (A, B, F)
+  are what prove those tests non-vacuous. Worth knowing before designing the next derived suite.
+- *The one test no mutation kills* is the pre-existing
+  `EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges`, which gained `ResolveHeldFrom` as a third
+  exclusion — what that test's own closing message asked the next packet to do. The change is
+  behaviourally inert (the edges are present either way); it is a premise correction that stops the
+  test's stated claim becoming false, and the coverage it sheds is re-asserted by the new
+  `EveryResolveHeldStatus_KeepsBothRecomputeEdges`. Mutation **H** shows the swap is real: pruning
+  c61fe30's `unrouted` edges leaves the old test green and turns the new one red.
+
+**Drift.** `OrdersController.Resolve` is at **`:554`**, not `:483`. The file has not changed since
+`c61fe30` (`git diff c61fe30 504d9cc` on it is empty), so the citation was already stale in that
+commit's message, in `OrderStatusMachine.cs:39` and in `OrderStatusMachineTests.cs:764`. The
+substance is right — `Resolve` does validate the body only, at `:559-626`. Left uncorrected: fixing
+stale citations across three files would bury this diff.
+
+**What was deliberately NOT done.**
+
+- `failed` stays where it is: refused a layer down by `OrderResolutionService.IsFinished` with a
+  **400** and a permanent-verdict sentence. This guard is a temporary verdict, so it keeps a different
+  code and a different sentence; the two sets are asserted disjoint.
+- `parsing` is **not** guarded. A resolve during parse races the parse job's own write — arguably a
+  third hole, but a different failure mode (a race, not a permanent lock-out), not one `c61fe30`
+  named, and widening the set without that argument is exactly what
+  `ResolveHeldFrom_IsExactlyTheTwoHoles…` exists to prevent. Named, not added.
+- The guard is at the **endpoint**, so a **TOCTOU window** remains between its status read and the
+  service's write: an order entering `delivering` in between is still overwritten. Closing that needs
+  an atomic claim in `OrderResolutionService` — a larger change, and it does not affect hole 1 at all.
+- **The frontend renders this 409 as raw JSON.** `project-proculink` `src/lib/api-client.ts:739`
+  unwraps the `{error}` body **only for status 400**; a 409 falls through to
+  `` throw new Error(`Resolution failed: ${t}`) `` at `:748`. The same file already handles this
+  correctly for `assign-supplier` (`:917-930`, via `ApiHttpError`). **The plain-language message is on
+  the wire; it is not yet on the screen.** Different repo, filed as a follow-up.
+
+### 2026-07-31 — Wave 3 closure session: WP-18, WP-21, WP-23 dispatched in parallel
+
+**All three packets were REFUTED by their own refuter.** That is the mechanism working, not failing.
+Between them the refuters caught one P1 regression that had already merged, two dead assertions, an
+R1 violation, and a vacuous test axis. None of it would have surfaced from a green suite (TRAP 5).
+
+**Outcome:**
+
+| Packet | Landed | CI | Refuter |
+|---|---|---|---|
+| WP-18 | FE `d119e91` — `#64` merged mid-review, P1 fix `#74` merged after | green | REFUTED x2 -> 6 fixed, 5 disclosed |
+| WP-21 | BE `c8ae076` (`#98`) | `30637291250` success | REFUTED -> 9 fixed, 3 disclosed |
+| WP-23 | BE `2c8b8f4` (`#99`) | `30645617088` success | REFUTED -> 4 fixed, 3 standing |
+
+All three are on green mains: BE `2c8b8f4`, FE `f9ab894`. WP-23's final green ran on a head carrying
+`main` merged in twice, so it is green *including* WP-21 and WP-22 — not a stale green against an
+older base.
+
+**Correction to the 2026-07-31 handoff snapshot.** It pinned BE `origin/main` at `c61fe30`. At dispatch
+it was `504d9cc` — `49dd828` and `504d9cc` had landed in between. The packets were cut from `504d9cc`.
+Anyone reading that snapshot as current should re-derive the SHA, not trust it.
+
+**WP-23 was rescoped by `c61fe30` before it started.** That commit chose *reconcile, not gate*: it
+declared the resolve recompute's edges legal and added 11 to `OrderStatusMachine.Transitions` and 13 to
+the observer. So WP-23 was never "block those transitions" — it is the two holes `c61fe30` named and
+deliberately left open (`unrouted`, `delivering`), each of which it labelled a product decision. The
+guard is an **endpoint admission rule**, kept explicitly separate from the transition rule, and
+`EveryResolveHeldStatus_KeepsBothRecomputeEdges` exists so a future session cannot prune those edges on
+TRAP-1 reasoning ("no writer performs it any more").
+
+**WP-21's CI was unblocked by a rebase, and the throttling diagnosis is not established.** The head of
+`#98` had zero check-suites after seven trigger attempts across two agents (force-push, fresh branch,
+`ready_for_review`, two new PRs, close+reopen, empty commit). Both agents concluded actor-level
+throttling. The branch was also **CONFLICTING against current `main`**, which nobody checked. A rebase
+onto `origin/main` plus a force-push produced a run within seconds, and the same worked for
+`wp21/mutb`. The causal claim is not proven either way — but the correction-log shape is present: two
+true facts (no runs here; runs on other branches) with an unchecked step between them (whether this
+branch was current against `main`). **Try the rebase before diagnosing the platform.**
+
+**Mutation set B is no longer missing.** WP-21 reported three tests with zero mutation evidence because
+Actions would not run `wp21/mutb`. That branch was also cut from the **pre-refutation** commit
+`0034c27`, so it would have evidenced code that never shipped. Re-pointed at the final head and run:
+CI `30637394173`, **failure**, killing all three —
+`PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests.RevisionAuthorityOff_BothOrdersRouteToTheSameEditedEndpoint_SoTheDifferenceIsTheFlag`,
+`RevisionAuthorityStartupAnnouncementTests.IsEnabled_IsTheSingleStrictReaderOfTheFlag` (all five theory
+rows), and `RevisionAuthorityHostCoverageTests.EveryDeclaredHost_NamesItsDeployedServiceAndItsConfigFile`.
+It also kills 17 further flag-off tests across parse, transform, validation, delivery, preview, replay,
+conformance and republish. **That breadth is itself the finding:** forcing `IsEnabled` true breaks every
+flag-off path in the codebase, which is the direct evidence that it really is the single reader — the
+claim WP-21 made when it deleted `SupplierConnectionService`'s duplicate `bool.TryParse`. PR `#118`
+closed with the evidence recorded; branch `wp21/mutb` left in place so the mutation stays reproducible.
+
+**A P1 shipped to production because a PR merged while its review was still running.** `#64` went to FE
+`main` at 12:52 with the pre-refutation code. It counted the validation endpoint's **raw** blocking-failure
+set, but the gate's real decision subtracts a recorded operator override (`AcceptanceGate.cs:62-77`) — an
+overridden order is `Blocked=false` with a **non-empty** blockers array. The UI therefore refused a send
+the server performs, and `POST /acceptance-gate/override` has no browser surface, so there was no way
+out of it. Against pre-`#64` `main`, where Send was enabled and the server decided, that is a strict
+regression. WP-17 had shipped `GET /api/orders/{id}/acceptance-gate` for exactly this and `#64` never
+called it. Fixed in `#74`. **The lesson is the merge gate, not the code:** M4.3 exists precisely to
+catch this class, and merging before it reports skips it.
+
+**Standing, and named rather than smoothed over:**
+
+- **WP-18's viewport axis is VACUOUS.** Mutation M9 — make `setViewport` a no-op — leaves 27/27 green.
+  Nothing under `workshop/` reads `innerWidth` or `matchMedia`, and jsdom applies no Tailwind, so all
+  three viewports execute one code path. The gate is breakpoint-independent *by construction* and both
+  send controls are asserted every run, but **the AC as written ("identical at 390/768/1440") is not
+  measured.** Closing it needs Playwright.
+- **WP-23's `delivering` hole is narrowed, not closed.** The guard is check-then-act and
+  `PurchaseOrderEntity` carries no concurrency token, so an order entering `delivering` between the
+  guard's read and `OrderResolutionService`'s `SaveChangesAsync` is still overwritten. The ordinary
+  operator path is shut; the race is not. `unrouted` has no equivalent gap.
+- **`parsing` is a verified third hole of the same shape** — both parse-persist paths claim on
+  `Status == Parsing` and return `Fail` *before* inserting lines, so a mid-parse resolve discards the
+  entire parse result. Not added: refusing it removes an operator control, which is a product decision.
+  Draft BE `#119` carries the RED. `transforming` is an unruled-out fourth.
+- **No operator override UI.** `POST /acceptance-gate/override` is live server-side with audit and typed
+  refusals, and now that `#74` honours it, an override can be **honoured but not created**. Own packet.
+
+**Founder decisions this session surfaced and did not take:**
+
+1. The party-noun ban vs shipped UI copy — the backend refusal says "Route it first… the routing queue"
+   while the UI says "Assign a supplier", and the UI's own wording carries the banned noun. One gives.
+2. Whether a header-only correction should be refused on an `unrouted` order. WP-23 removes that control
+   on the strength of `c61fe30`'s naming of the hole; there is no sign-off on the header-only case.
+3. Whether `parsing` and `transforming` join `ResolveHeldFrom` (BE `#119`).
+4. **The WP-21 production smoke is still owed.** Runbook checked in at
+   `docs/ops/revision-authority-production-smoke.md` with a pre-list, a disposable-request-bin
+   constraint (never a real supplier), a pass/fail/inconclusive table and a full undo. Production writes
+   were not authorized this session (R8), so the live observation remains UNPERFORMED. Its section 2 is
+   two read-only commands that answer "is the flag on right now" without touching data.
+5. **The three leaked keys are still unrotated** — OpenAI, PostHog, Neon, from the unfiltered
+   `railway variables` call on 2026-07-27. Every `railway` call this session was filtered through `grep`.
 ---
 
 ## 2026-07-31 — TRAP 25: two packets, both correct, one false claim
