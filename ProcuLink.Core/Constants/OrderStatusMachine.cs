@@ -31,6 +31,37 @@ namespace ProcuLink.Core.Constants;
 /// </summary>
 public static class OrderStatusMachine
 {
+    // ── The resolve recompute ("+ RR" below) ─────────────────────────────────────────────────
+    // OrderResolutionService.ResolveAsync and AcceptAiSuggestionsAsync both END with the same
+    // unconditional write:
+    //     entity.Status = entity.Lines.Any(l => l.NeedsReview) ? "pending_review" : "ready";
+    // (OrderResolutionService.cs:242 and :393). Neither carries a from-status guard, and neither
+    // endpoint adds one — OrdersController.Resolve (:483) validates the REQUEST BODY only, and
+    // AcceptAiSuggestions (:1737) validates nothing at all. The single guard on the path is
+    // OrderResolutionService.IsFinished, which refuses exactly DeclaredTerminal = {failed}.
+    //
+    // The reachable from-states for those two writers are therefore EVERY status except 'failed'
+    // and 'pending_parse' — the latter because nothing writes it: all four PurchaseOrderEntity
+    // construction sites override the entity's C# default (OrderIngestionService.cs:216 / :350 /
+    // :523 and SampleOrderService.cs:123), so no order is ever IN pending_parse to be resolved.
+    // Every other status owes BOTH → pending_review and → ready, and the rows below say so.
+    //
+    // → ready needs no argument beyond the write itself. → pending_review is the half that reads
+    // impossible from a post-review status and is not: ResolveAsync re-runs the connection-level
+    // price-variance guard on EVERY resolve (:206-239) and re-sets line.NeedsReview when a unit
+    // price diverges from the catalog, so a resolve on a settled order legitimately reopens the
+    // review loop. A partially-resolved order does the same thing without any guard: lines the
+    // caller did not name keep NeedsReview.
+    //
+    // WP-19 reconciled this writer for ONE from-state (rejected_by_supplier), because that status
+    // was a dead end and the edge was the way out. The WRITER is the same for every other
+    // from-state, so the rest were left calling a live production write impossible — which is what
+    // made the observer log "Unexpected order status transition" on legitimate operator actions,
+    // the false positive its own doc says trains operators to ignore it. Reconciled here rather
+    // than gated at the endpoint: the write is real and the maps were the things that were wrong.
+    // EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges now DERIVES the list from
+    // AllStatuses instead of enumerating it, so a status added tomorrow cannot repeat this.
+
     /// <summary>from-status → the set of statuses the flow can move it to.</summary>
     public static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> Transitions =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
@@ -38,13 +69,23 @@ public static class OrderStatusMachine
             [PendingParse]       = Set(Parsing, Unrouted, RejectedBySupplier),
             [Parsing]            = Set(PendingReview, Ready, Failed, PendingParse, Unrouted, RejectedBySupplier),
             // Routing hold: parked awaiting a supplier; assigning one re-enqueues parse.
-            [Unrouted]           = Set(Parsing, PendingParse, Failed, RejectedBySupplier),
+            // + RR. Reachable and consequential: an unrouted order HAS lines
+            // (OrderIngestionService.cs:523 builds the full graph and only overrides the status),
+            // so a line resolve — or a header-only one, which the endpoint accepts — recomputes it
+            // straight to ready/pending_review with SupplierId still null. That is a real hole, not
+            // just a map entry: OrdersController.AssignSupplier claims atomically on
+            // `Status == Unrouted` (:682) and answers 409 otherwise, so the recompute LOCKS the
+            // operator out of the one action the routing hold exists for. Named as a follow-up
+            // rather than papered over here — closing it is an endpoint guard, a product decision
+            // about what a resolve may do to an unrouted order, not a transition-map edit.
+            [Unrouted]           = Set(Parsing, PendingParse, Failed, RejectedBySupplier, PendingReview, Ready),
             [PendingReview]      = Set(Ready, PendingReview, RejectedBySupplier),
             [Ready]              = Set(Transforming, PendingReview, RejectedBySupplier),
             // transforming → transform_failed: a TERMINAL transform failure (a template that would not
             // render, or an output mapping that could not be applied) — neither is fixable by retrying
             // the same inputs, so the order is parked visibly rather than reverted to 'ready'.
-            [Transforming]       = Set(ReadyToDeliver, Ready, TransformFailed, Failed, RejectedBySupplier),
+            // + RR (→ ready was already here as the transform-revert edge; → pending_review is new).
+            [Transforming]       = Set(ReadyToDeliver, Ready, TransformFailed, Failed, RejectedBySupplier, PendingReview),
             // ready_to_deliver/delivered → ready: a mapping edit after transform (MV-1) invalidates
             // the artifact and resets the order so the next Send re-transforms.
             // ready_to_deliver → delivery_held: a billing flip pauses (not fails) delivery. This fires
@@ -54,7 +95,8 @@ public static class OrderStatusMachine
             // ManuallyDeliverableFrom (delivery_unconfirmed only, checked twice), and DeliveryService
             // only writes 'delivered' AFTER its claim has moved the row to 'delivering'. Pinned by
             // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter.
-            [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier),
+            // + RR (→ ready was already here as the MV-1 edge; → pending_review is new).
+            [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier, PendingReview),
             // Billing hold → released back to ready_to_deliver when the org returns to good standing.
             // delivery_held → delivery_unconfirmed: the release RESTORES a held PARK instead of
             // re-driving it — HoldForBillingAsync records the origin (HeldFromStatus) and
@@ -64,13 +106,25 @@ public static class OrderStatusMachine
             // → delivered is GONE (WP-09) — same reason as ready_to_deliver above. A held order is
             // settled by RELEASING it (→ ready_to_deliver, or → delivery_unconfirmed for a held
             // park) and settling it from there; it cannot be marked delivered in place.
-            [DeliveryHeld]       = Set(ReadyToDeliver, DeliveryUnconfirmed, Ready, RejectedBySupplier),
+            // + RR (→ pending_review). A billing hold pauses DELIVERY; it does not close the order
+            // to correction, and nothing on the resolve path consults billing state.
+            [DeliveryHeld]       = Set(ReadyToDeliver, DeliveryUnconfirmed, Ready, RejectedBySupplier, PendingReview),
             // delivering → delivery_unconfirmed: the park — a crash-recovery re-drive on a channel
             // that cannot de-duplicate stops rather than risk a duplicate PO.
             // delivering → delivery_dead_letter: StuckDeliveryDetectionService dead-letters an order
             // that kept stranding in 'delivering' after its re-drive budget was spent.
-            [Delivering]         = Set(Delivered, DeliveryFailed, DeliveryUnconfirmed, DeliveryDeadLetter, RejectedBySupplier),
-            [Delivered]          = Set(DeliveryFailed, Ready, RejectedBySupplier),
+            // + RR (BOTH halves are new here). 'delivering' is not a moment, it is a status a row
+            // SITS in — StuckDeliveryDetectionService exists precisely because dispatches strand
+            // there — and the resolve endpoint has no guard, so an operator resolving a stranded
+            // order writes ready/pending_review straight over the claim. Listed because it is real,
+            // not because it is good: the dispatch may still be in flight, and its outcome write
+            // lands on whatever the resolve left behind. Same follow-up as the unrouted row — the
+            // cure is a from-status guard on the endpoint, a product decision, not a map edit.
+            [Delivering]         = Set(Delivered, DeliveryFailed, DeliveryUnconfirmed, DeliveryDeadLetter, RejectedBySupplier, PendingReview, Ready),
+            // + RR (→ ready was already here as the MV-1 edge; → pending_review is new — and it is
+            // the edge that started this packet: an operator resolves a delivered order, the
+            // price-variance guard re-flags a line, and both maps called the result impossible).
+            [Delivered]          = Set(DeliveryFailed, Ready, RejectedBySupplier, PendingReview),
             // delivery_failed/delivery_dead_letter → ready: the MV-1 sibling — a mapping edit after a
             // failed/dead-lettered delivery invalidates the stored artifact (Retry/requeue would ship it
             // un-re-transformed), so the order resets and the next Send re-transforms.
@@ -81,7 +135,9 @@ public static class OrderStatusMachine
             // from here: MarkDelivered admits delivery_unconfirmed only. That is a real product gap,
             // named in PR #75 as a follow-up, not something to paper over by listing an edge no code
             // can perform.
-            [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
+            // + RR (→ pending_review). The OBSERVER already listed this one, so the drift was
+            // exempted rather than fixed — see the deleted KnownObserverOnlyEdges entry.
+            [DeliveryFailed]     = Set(Delivering, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier, PendingReview),
             // Unknown-outcome park. The operator decides: send again (→ delivering) or confirm the
             // supplier got it (→ delivered). A mapping edit invalidates the artifact (→ ready, the
             // MV-1 sibling). Dead-letter/failed remain reachable if a later re-send exhausts retries.
@@ -91,10 +147,12 @@ public static class OrderStatusMachine
             // on — did the PO arrive? — after checking with the supplier out-of-band. The park keeps
             // the IdempotencyKey the pre-send commit stamped (ParkUnconfirmedAsync finalises the
             // re-adopted in-flight row), so the evidence that a send BEGAN survives for that call.
-            [DeliveryUnconfirmed] = Set(Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier),
+            // + RR (→ pending_review).
+            [DeliveryUnconfirmed] = Set(Delivering, Delivered, DeliveryFailed, DeliveryDeadLetter, DeliveryHeld, Ready, RejectedBySupplier, PendingReview),
             // dead_letter → delivery_failed: an ops requeue that fails again.
             // → delivered is GONE (WP-09) — same reason as delivery_failed above.
-            [DeliveryDeadLetter] = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier),
+            // + RR (→ ready was already here as the MV-1 edge; → pending_review is new).
+            [DeliveryDeadLetter] = Set(Delivering, DeliveryFailed, Ready, RejectedBySupplier, PendingReview),
             // rejected_by_supplier is a CORRECTION LOOP, not an ending (WP-19). It used to have no
             // successors at all, and DeliveryService routed every 400–499 into it — so an expired
             // API key, a moved endpoint or a rate limit parked a deliverable PO where nothing in
@@ -104,11 +162,13 @@ public static class OrderStatusMachine
             // The exits are the two ways to produce a CORRECTED document. Re-sending the refused
             // bytes is deliberately NOT one of them — the supplier read them and said no — so no
             // delivery claim set admits this status and → delivering stays impossible.
-            //   → pending_review / ready: OrderResolutionService.ResolveAsync recomputes the status
-            //     from the lines with NO from-status guard, so correcting the line or header the
-            //     supplier named already moves the order out. That writer PREDATES this packet: the
-            //     edge was live in production while this map called the status terminal, which is
-            //     part of how the dead end read as intentional.
+            //   → pending_review / ready: the resolve recompute (+ RR — see the block above the map;
+            //     these two rows are where it was first reconciled, one from-state at a time,
+            //     before the general case was). OrderResolutionService.ResolveAsync recomputes the
+            //     status from the lines with NO from-status guard, so correcting the line or header
+            //     the supplier named already moves the order out. That writer PREDATES this packet:
+            //     the edge was live in production while this map called the status terminal, which
+            //     is part of how the dead end read as intentional.
             //   → transforming: the transform claim admits rejected_by_supplier
             //     (ClaimableForTransformFrom), exactly as it admits transform_failed — the order
             //     holds no artifact anyone may ship, and re-transforming with the corrected mapping

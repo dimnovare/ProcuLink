@@ -55,6 +55,20 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
     /// this map calls expected must be an edge the machine calls allowed. See that test for why
     /// the invariant is enforced structurally rather than trusted to review.</para>
     /// </summary>
+    // ── The resolve recompute ("+ RR" below) ─────────────────────────────────────────────────
+    // OrderResolutionService.ResolveAsync (:242) and AcceptAiSuggestionsAsync (:393) both end with
+    // `Status = Lines.Any(NeedsReview) ? pending_review : ready`, a TRACKED write with no
+    // from-status guard on the service OR either endpoint (OrdersController.Resolve :483 validates
+    // the request body only). The one guard is OrderResolutionService.IsFinished =
+    // OrderStatusMachine.DeclaredTerminal = {failed}. Tracked means these writes come through THIS
+    // observer, so every from-state a resolve can be issued from owed both edges — every status
+    // except 'failed' and the unwritten 'pending_parse'. The ones that were missing made this
+    // observer log "Unexpected order status transition" on ordinary operator actions (an operator
+    // resolving a delivered order whose price-variance guard re-flagged a line was the reported
+    // case), which is the false positive the generosity note above exists to prevent.
+    // Rationale and call-site evidence live once, in OrderStatusMachine.Transitions' own "+ RR"
+    // block — both maps or neither (the d4d6eac drift lesson).
+
     internal static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> AllowedTransitions =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
         {
@@ -69,9 +83,13 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
                 OrderStatusConstants.Ready, OrderStatusConstants.Failed,
                 OrderStatusConstants.Unrouted),
             // Routing hold → re-enters the parse flow once a supplier is assigned, or is discarded.
+            // + RR: an unrouted order has lines, so a resolve (or a header-only edit) recomputes it
+            // out of the hold with SupplierId still null. Real, and a real hole — see the machine's
+            // Unrouted row for why the fix is an endpoint guard, not a map entry.
             [OrderStatusConstants.Unrouted] = Set(
                 OrderStatusConstants.Parsing, OrderStatusConstants.PendingParse,
-                OrderStatusConstants.Failed, OrderStatusConstants.RejectedBySupplier),
+                OrderStatusConstants.Failed, OrderStatusConstants.RejectedBySupplier,
+                OrderStatusConstants.PendingReview, OrderStatusConstants.Ready),
             // Review loop: resolving lines recomputes pending_review|ready; a reviewer can
             // also mark the order rejected.
             [OrderStatusConstants.PendingReview] = Set(
@@ -83,9 +101,11 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             // Transform: success → ready_to_deliver; a TERMINAL validation/template failure parks the
             // order in transform_failed (visible), where it stays recoverable; stuck-detection fails a
             // hung transform. ready: the compensating release when a re-transform enqueue fails.
+            // + RR: → pending_review.
             [OrderStatusConstants.Transforming] = Set(
                 OrderStatusConstants.Ready, OrderStatusConstants.ReadyToDeliver,
-                OrderStatusConstants.TransformFailed, OrderStatusConstants.Failed),
+                OrderStatusConstants.TransformFailed, OrderStatusConstants.Failed,
+                OrderStatusConstants.PendingReview),
             // Recovery out of a failed transform: fix the template/mapping and re-transform (the
             // transform claim accepts transform_failed), or re-resolve back into the review loop.
             [OrderStatusConstants.TransformFailed] = Set(
@@ -101,43 +121,69 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             // day something starts performing it. Mirrors OrderStatusMachine — both maps or neither
             // (the d4d6eac drift lesson); pinned by
             // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter.
+            // + RR: → pending_review AND → ready. 'ready' was missing here for a SECOND writer as
+            // well — OrderMappingOverrideService.IsPastReady includes ready_to_deliver, so an MV-1
+            // mapping edit performs ready_to_deliver → ready as a tracked write
+            // (OrderMappingOverrideService.cs:86-87, :111) and this observer warned on every one.
+            // The machine already allowed it; only this map was wrong, which is a shape the
+            // machine-superset invariant cannot see.
             [OrderStatusConstants.ReadyToDeliver] = Set(
                 OrderStatusConstants.Delivering, OrderStatusConstants.Transforming,
                 OrderStatusConstants.DeliveryFailed,
-                OrderStatusConstants.DeliveryHeld, OrderStatusConstants.RejectedBySupplier),
+                OrderStatusConstants.DeliveryHeld, OrderStatusConstants.RejectedBySupplier,
+                OrderStatusConstants.PendingReview, OrderStatusConstants.Ready),
             // Billing hold → released back to ready_to_deliver (re-driven) on reactivation. A held
             // PARK (HeldFromStatus == delivery_unconfirmed) is instead RESTORED to
             // delivery_unconfirmed on release — never re-driven. Mirrors OrderStatusMachine —
             // both maps or neither (the d4d6eac drift lesson).
             // → delivered is GONE (WP-09) — it was the "late supplier ACK for an order sent before
             // the hold landed" edge, and the webhook that performed it no longer exists.
+            // + RR: → pending_review.
             [OrderStatusConstants.DeliveryHeld] = Set(
                 OrderStatusConstants.ReadyToDeliver, OrderStatusConstants.Ready,
                 OrderStatusConstants.DeliveryUnconfirmed,
-                OrderStatusConstants.RejectedBySupplier),
+                OrderStatusConstants.RejectedBySupplier,
+                OrderStatusConstants.PendingReview),
+            // + RR: → pending_review AND → ready. A row SITS in 'delivering' while a dispatch is in
+            // flight or stranded (StuckDeliveryDetectionService exists for the stranded case), and
+            // the resolve endpoint has no guard, so an operator can write straight over the claim.
+            // Listed because it happens, not because it is desirable — see the machine's Delivering
+            // row for the follow-up.
             [OrderStatusConstants.Delivering] = Set(
                 OrderStatusConstants.Delivered, OrderStatusConstants.DeliveryFailed,
                 OrderStatusConstants.DeliveryUnconfirmed,
-                OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.DeliveryDeadLetter),
+                OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.DeliveryDeadLetter,
+                OrderStatusConstants.PendingReview, OrderStatusConstants.Ready),
             // Unknown-outcome park: the operator sends again or confirms delivery. A "Send again"
             // for an org that lapsed since the park is held → delivery_held (the delivery_failed
             // sibling below). Mirrors OrderStatusMachine — both maps or neither (the d4d6eac
             // drift lesson).
+            // + RR: → pending_review.
             [OrderStatusConstants.DeliveryUnconfirmed] = Set(
                 OrderStatusConstants.Delivering, OrderStatusConstants.Delivered,
                 OrderStatusConstants.DeliveryFailed, OrderStatusConstants.DeliveryDeadLetter,
                 OrderStatusConstants.DeliveryHeld,
-                OrderStatusConstants.Ready, OrderStatusConstants.RejectedBySupplier),
+                OrderStatusConstants.Ready, OrderStatusConstants.RejectedBySupplier,
+                OrderStatusConstants.PendingReview),
             // A delivered order can still be rejected later (supplier business ACK ≠ HTTP 200), and
             // MV-1 resets it to ready: OrderMappingOverrideService.IsPastReady includes 'delivered',
             // so a mapping edit on a delivered order performs delivered → ready as a TRACKED write
             // (OrderMappingOverrideService.cs:86-87) — i.e. straight through this observer. Without
             // 'ready' here, every such edit logged a false "unexpected transition" WARNING.
+            // + RR: → pending_review — the edge that started this packet. An operator resolves a
+            // delivered order, ResolveAsync's connection-level price-variance guard re-flags a line
+            // (OrderResolutionService.cs:206-239), and the recompute lands on pending_review; both
+            // maps called that impossible, so this observer warned on a legitimate flow.
             [OrderStatusConstants.Delivered] = Set(
-                OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.Ready),
+                OrderStatusConstants.RejectedBySupplier, OrderStatusConstants.Ready,
+                OrderStatusConstants.PendingReview),
             // Failed deliveries: retry, dead-letter, re-transform, or return to the review loop
             // after corrections. A5: a backoff retry that fires after the org lapsed
             // (read_only/past_due) is held via HoldForBillingAsync → delivery_held.
+            // + RR: → pending_review and → ready were ALREADY here and needed no edit — this row is
+            // where the observer was right and the machine was wrong. The machine now allows
+            // pending_review too, so the KnownObserverOnlyEdges exemption that hid the drift is
+            // deleted; 'ready' was the MV-1 edge and the two maps already agreed on it.
             // → delivered is GONE (WP-09) — the "late positive ACK after a failed attempt" edge,
             // whose only writer was the retired inbound webhook.
             [OrderStatusConstants.DeliveryFailed] = Set(
@@ -148,9 +194,13 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             // Dead-letter: ops requeue back into delivery.
             // → delivered is GONE (WP-09) — the "late supplier ACK may still land" edge, whose only
             // writer was the retired inbound webhook.
+            // + RR: → pending_review AND → ready. As with ready_to_deliver, 'ready' also had a
+            // second missing writer — IsPastReady includes delivery_dead_letter, so an MV-1 mapping
+            // edit warned here too. The machine allowed it already; only this map was wrong.
             [OrderStatusConstants.DeliveryDeadLetter] = Set(
                 OrderStatusConstants.Delivering,
-                OrderStatusConstants.DeliveryFailed, OrderStatusConstants.RejectedBySupplier),
+                OrderStatusConstants.DeliveryFailed, OrderStatusConstants.RejectedBySupplier,
+                OrderStatusConstants.PendingReview, OrderStatusConstants.Ready),
             // Rejected: corrected and re-driven through the loop.
             //
             // WP-19 reconciled three of these into OrderStatusMachine, which had called the status

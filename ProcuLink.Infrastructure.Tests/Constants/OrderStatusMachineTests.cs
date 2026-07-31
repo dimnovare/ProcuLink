@@ -79,6 +79,34 @@ public class OrderStatusMachineTests
     [InlineData(RejectedBySupplier, Ready)]
     [InlineData(RejectedBySupplier, PendingReview)]
     [InlineData(RejectedBySupplier, Transforming)]
+    // ── The resolve recompute, for the OTHER from-states WP-19 left behind ────────────────────
+    // Same writer as the two rejected_by_supplier rows above: OrderResolutionService.ResolveAsync
+    // (:242) and AcceptAiSuggestionsAsync (:393) end with
+    // `Status = Lines.Any(NeedsReview) ? pending_review : ready`, with no from-status guard on the
+    // service and none on either endpoint (OrdersController.Resolve :483 validates the request body
+    // only). The one guard is IsFinished = DeclaredTerminal = {failed}. WP-19 reconciled the writer
+    // for one from-state because that status was a dead end; the writer reaches every OTHER
+    // non-terminal status identically, and those edges were live in production while both maps
+    // called them impossible.
+    //
+    // → ready follows from the write. → pending_review is the half that reads impossible from a
+    // post-review status and is not: the connection-level price-variance guard re-runs on EVERY
+    // resolve (OrderResolutionService.cs:206-239) and re-sets line.NeedsReview when a unit price
+    // diverges from the catalog, and a partial resolve leaves un-named lines flagged.
+    //
+    // Enumerated here for readability; EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges is
+    // the assertion that cannot rot, because it DERIVES the from-state list from AllStatuses.
+    [InlineData(Unrouted, PendingReview)]           // an unrouted order has lines; resolve recomputes
+    [InlineData(Unrouted, Ready)]                   // ...even a header-only one — see the Unrouted row's follow-up
+    [InlineData(Transforming, PendingReview)]
+    [InlineData(ReadyToDeliver, PendingReview)]
+    [InlineData(DeliveryHeld, PendingReview)]       // a billing hold pauses delivery, not correction
+    [InlineData(Delivering, PendingReview)]         // a row SITS in 'delivering'; the endpoint has no guard
+    [InlineData(Delivering, Ready)]
+    [InlineData(Delivered, PendingReview)]          // price-variance guard re-flags a line on a delivered order
+    [InlineData(DeliveryFailed, PendingReview)]     // the observer listed this all along; the machine did not
+    [InlineData(DeliveryUnconfirmed, PendingReview)]
+    [InlineData(DeliveryDeadLetter, PendingReview)]
     public void IsAllowed_RealTransitions_AreAllowed(string from, string to)
         => OrderStatusMachine.IsAllowed(from, to).Should().BeTrue($"{from} -> {to} is a real flow");
 
@@ -203,7 +231,12 @@ public class OrderStatusMachineTests
         // post-artifact order to 'ready' first (the MV-1 edges the machine already allows).
         Edge(ReadyToDeliver, Transforming),
         Edge(DeliveryFailed, Transforming),
-        Edge(DeliveryFailed, PendingReview),
+        // Edge(DeliveryFailed, PendingReview) used to sit here, exempted on the grounds that "no
+        // call site" performed it. That was wrong, and wrong in the way this file keeps finding:
+        // the resolve recompute has no from-status guard, so it reaches delivery_failed exactly as
+        // it reached rejected_by_supplier. The observer had it right and the machine did not, which
+        // is the same verdict WP-19 reached one entry further down. Reconciled into the machine —
+        // this exemption is deleted, not moved.
 
         // Nothing DISPATCHES an order out of 'rejected_by_supplier': the ops requeue guards on
         // dead_letter|delivery_failed (OpsController.cs:126) and every delivery claim set
@@ -694,6 +727,102 @@ public class OrderStatusMachineTests
                 "the supplier read these bytes and refused them — re-sending them unchanged is the " +
                 "one thing that certainly does not help, and it would hand the supplier a duplicate " +
                 "of a document they already answered");
+    }
+
+    // ── The resolve recompute, generalised (the WP-19 follow-up) ──────────────────────────────
+
+    /// <summary>
+    /// Statuses no order is ever IN, and which a resolve therefore cannot be issued from.
+    ///
+    /// <para><c>pending_parse</c> is the entity's C# default
+    /// (<c>PurchaseOrderEntity.Status = "pending_parse"</c>) and nothing else — every one of the
+    /// four construction sites overrides it before the row is saved
+    /// (<c>OrderIngestionService.cs:216</c> writes pending_review|ready, <c>:350</c> writes
+    /// parsing, <c>:523</c> writes unrouted|pending_review|ready, <c>SampleOrderService.cs:123</c>
+    /// writes parsing), and no writer anywhere assigns it afterwards — the stuck-order requeue
+    /// deliberately re-writes <c>parsing</c> instead, and says why
+    /// (<c>StuckOrderDetectionService.cs:90-101</c>: resetting to pending_parse made the
+    /// re-enqueued job skip the parse and strand the order). Ask the code rather than trusting
+    /// this list:</para>
+    /// <code>grep -rn 'Status *= *"pending_parse"\|Status[ ,]*OrderStatusConstants\.PendingParse' --include=*.cs</code>
+    ///
+    /// <para>This rests on exactly the same fact as
+    /// <c>Edge(PendingParse, PendingReview)</c> / <c>Edge(PendingParse, Ready)</c> in
+    /// <see cref="KnownObserverOnlyEdges"/> — one fact, two consumers, so a writer appearing
+    /// tomorrow invalidates both together rather than one of them quietly.</para>
+    /// </summary>
+    private static readonly IReadOnlySet<string> StatusesNoOrderIsEverIn =
+        new HashSet<string>(StringComparer.Ordinal) { PendingParse };
+
+    /// <summary>
+    /// The generalisation of the two <c>rejected_by_supplier</c> rows WP-19 added, and the guard
+    /// that stops this from being re-discovered one from-state at a time.
+    ///
+    /// <para><b>The defect.</b> <c>OrderResolutionService.ResolveAsync</c> (:242) and
+    /// <c>AcceptAiSuggestionsAsync</c> (:393) both end with
+    /// <c>Status = Lines.Any(NeedsReview) ? pending_review : ready</c>. Neither carries a
+    /// from-status guard; neither endpoint adds one (<c>OrdersController.Resolve</c> :483 validates
+    /// the request BODY, <c>AcceptAiSuggestions</c> :1737 validates nothing). The only guard is
+    /// <c>IsFinished</c> = <see cref="OrderStatusMachine.DeclaredTerminal"/>. So the from-states a
+    /// resolve can be issued from are every status except <c>failed</c> and the never-written
+    /// <see cref="StatusesNoOrderIsEverIn"/> — and both maps owed each of them TWO edges. WP-19
+    /// reconciled the pair for <c>rejected_by_supplier</c> alone, because that status was a dead
+    /// end and the edges were the way out; the writer is identical for the rest, which stayed
+    /// marked impossible while performing in production. The observer's cost is concrete: it
+    /// logged "Unexpected order status transition" on ordinary operator actions, the false positive
+    /// its own doc says trains operators to ignore it.</para>
+    ///
+    /// <para><b>Why it asserts over BOTH maps.</b>
+    /// <see cref="Machine_Transitions_AreASupersetOf_ObserverAllowedTransitions"/> is
+    /// one-directional by design (observer ⊆ machine), so a MACHINE edge absent from the observer
+    /// is invisible to it — which is how <c>ready_to_deliver → ready</c> and
+    /// <c>delivery_dead_letter → ready</c> stayed missing from the observer even though the machine
+    /// allowed them and <c>OrderMappingOverrideService.IsPastReady</c> (:111) performs both as
+    /// tracked MV-1 writes. Checking the two maps against the CALL SITE, rather than against each
+    /// other, is what sees that direction.</para>
+    ///
+    /// <para><b>Derived, not transcribed</b> — the from-state list comes from
+    /// <see cref="OrderStatusMachine.AllStatuses"/>, so a status added tomorrow is covered without
+    /// anyone editing this test. That is the difference between fixing eleven edges and closing the
+    /// class; the [InlineData] rows above are the readable enumeration of the same fact.</para>
+    /// </summary>
+    [Fact]
+    public void EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges()
+    {
+        var resolvableFrom = OrderStatusMachine.AllStatuses
+            .Except(OrderStatusMachine.DeclaredTerminal, StringComparer.Ordinal)
+            .Except(StatusesNoOrderIsEverIn, StringComparer.Ordinal)
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+
+        resolvableFrom.Should().HaveCountGreaterThan(10,
+            "if the machine's status list ever shrinks to nothing this assertion must fail loudly " +
+            "rather than pass over an empty list");
+
+        var missing = new List<string>();
+        foreach (var from in resolvableFrom)
+        foreach (var to in new[] { PendingReview, Ready })
+        {
+            // A self-transition is not an edge: the recompute writing the status the order is
+            // already in is a no-op the observer treats as expected and the machine need not list.
+            if (string.Equals(from, to, StringComparison.Ordinal)) continue;
+
+            if (!OrderStatusMachine.IsAllowed(from, to))
+                missing.Add($"machine: {Edge(from, to)}");
+            if (!OrderStatusTransitionObserver.IsExpected(from, to))
+                missing.Add($"observer: {Edge(from, to)}");
+        }
+
+        missing.Should().BeEmpty(
+            "a resolve can be issued from every one of these statuses — the recompute in " +
+            "OrderResolutionService.ResolveAsync/AcceptAiSuggestionsAsync has no from-status guard " +
+            "and neither endpoint adds one — so both maps must list pending_review AND ready as " +
+            "successors. A missing MACHINE edge makes IsAllowed reject a live production write; a " +
+            "missing OBSERVER edge makes the log-only observer WARN on a legitimate operator " +
+            "action, which is the false positive that teaches operators to ignore it. If a resolve " +
+            "genuinely cannot be issued from one of these, gate the endpoint and say so in " +
+            "StatusesNoOrderIsEverIn (or DeclaredTerminal) with the call-site evidence — do not " +
+            "leave the map contradicting the writer");
     }
 
     /// <summary>
