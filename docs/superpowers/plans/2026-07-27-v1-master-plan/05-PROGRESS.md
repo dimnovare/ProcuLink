@@ -381,6 +381,15 @@ And **"cleaned to zero" means zero by the hex regex.** `rgb()`, `rgba()`, `hsl()
 restatements of `#1E66C9` inside a page reported as cleaned. Same family as TRAP 14: **know what
 your gate scans before quoting its number as coverage.**
 
+**The near-fix is the lesson.** The first repair instruction for this was *"make `[STALE]` fail"* —
+which would have turned CI red on someone for **cleaning a file**, training people to leave files
+alone rather than improve them. It was caught before shipping. Generalised: **a gate that fails in
+the improvement direction trains avoidance of the improvement.** When a gate is too loose, check
+whether tightening it penalises the behaviour the gate exists to encourage; if it does, the fix is a
+better comparison (content-hash the entries) or an honest limitation note in the header — not a new
+CI failure. The remaining real gap here is only the same-count swap, and the growth property that
+*does* hold is currently unpinned by any test.
+
 ### TRAPS added 2026-07-30 (second pass)
 
 **TRAP 6 — "a registry href with no page behind it is a dead link."** WRONG, and it hides the real
