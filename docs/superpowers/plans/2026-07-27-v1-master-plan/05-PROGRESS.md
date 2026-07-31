@@ -2219,3 +2219,65 @@ note does not render" when the note was never handed anywhere to render. `invari
 and `validationEveryBreakpoint.test.tsx:140` already mock it correctly — the pattern existed and this
 file predated it. Same family as WP-31's vacuous 24px assertion: the test ran, reported confidently,
 and was scoped to something narrower than its name implied.
+
+---
+
+## 2026-07-31 — TRAP 25 amended: the detection was luck, so the rule has to change
+
+The WP-27 owner sharpened TRAP 25 and the amendment matters more than the original entry.
+
+My framing was "neither packet could have known", which is true and **not actionable**. Theirs is the
+actionable half: **what surfaced the contradiction was the textual conflict**, and resolving it forced
+someone to read both sides of the copy. Had WP-28 moved the band to a different file, or had WP-27
+touched only `PracticeOrderPrompt`, git would have merged silently and the false claim would have
+shipped green.
+
+So the detection was **luck of file layout, not process**. The rule cannot be "resolve conflicts
+carefully" — conflicts are exactly the case that already works. It has to be closer to: *when two
+packets touch the same user-visible claim, someone reads the merged copy even when git does not ask.*
+
+### A mechanical trigger, since a mechanical detector does not look possible
+
+Detecting the contradiction automatically would mean type-checking prose against behaviour. But the
+**condition under which one is possible** is cheaply computable, and that is enough to route a human
+or an agent read:
+
+> For each pair of in-flight branches, intersect the copy-bearing files each touches (component and
+> content files, excluding tests). A non-empty intersection at the *screen* level — not the file level
+> — means both packets are editing what one screen says. Flag the pair for a copy read at merge time,
+> whether or not git conflicts.
+
+This detects nothing about truth. It detects that two packets are both writing claims about the same
+surface, which is precisely the state that file-layout luck otherwise hides. Component-directory
+proximity is a serviceable proxy for "same screen" in this repo's structure.
+
+Not built. Recorded because the next instance will not conflict textually, and then there is no
+second chance.
+
+### WP-23 × WP-27 interaction: checked, and clean
+
+The owner took the BE merge early rather than at landing time. `claude/wp27-sample` now contains BE
+main `2c8b8f4`; head `fa051e3`. `dotnet build ProcuLink.slnx` clean — but a build answers the symbol
+question, and the open question was behavioural, since WP-23 gates `resolve` and the practice loop
+calls it:
+
+```
+OrderStatusMachine.cs:337   ResolveHeldFrom = Set(Unrouted, Delivering)
+SampleOrderService.cs:160   Status = "parsing" → parse job → pending_review
+```
+
+The practice order seeds its own `__sample__` supplier, so it routes and never reaches `unrouted`;
+the deliberate 2-of-3 fixture gap lands it in `pending_review`, which the guard admits. The single
+resolve the practice loop issues is not refused. **No interaction — as a checked fact, not a green
+build.**
+
+### A docstring worth copying
+
+WP-23's guard documents its own limits precisely: `delivering` is **narrowed, not closed**, because
+the check is check-then-act and `PurchaseOrderEntity` carries no concurrency token, so an order
+entering `delivering` between the read and `SaveChangesAsync` is still last-writer-wins. It shuts the
+operator path and says plainly that it does not shut the race.
+
+That is the standard `navigationClock.ts`'s docstring was reaching for and did not quite hit — it
+asserted its premise (the script is document-requested) rather than stating what it had and had not
+closed. Point at `OrderStatusMachine.cs:337` next time a claim goes into a comment.
