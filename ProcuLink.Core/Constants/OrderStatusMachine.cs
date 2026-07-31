@@ -254,6 +254,82 @@ public static class OrderStatusMachine
     // ── Operation-specific entry guards (centralised; match the prior literals) ──
 
     /// <summary>
+    /// WP-23 — the from-statuses an OPERATOR-ISSUED resolve is REFUSED from, with a 409.
+    ///
+    /// <para><b>This is an ENDPOINT ADMISSION RULE, not a transition rule, and the distinction is
+    /// load-bearing.</b> <see cref="Transitions"/> answers "may an order in status X ever end up in
+    /// status Y?" — a fact about the machine. This set answers a different question: "may a person
+    /// ISSUE a correction while the order is in status X?" — a product decision about a control in
+    /// the UI. The two are independent, and c61fe30 settled the first one deliberately: it added
+    /// <c>unrouted → ready|pending_review</c> and <c>delivering → ready|pending_review</c> to BOTH
+    /// status maps because the write was real and the maps were wrong. <b>Those edges stay.</b>
+    /// Refusing the endpoint does not make the transition impossible — it makes the endpoint stop
+    /// performing it — and pruning the edges on the strength of this set would re-create exactly the
+    /// circular reasoning <see cref="DeclaredTerminal"/> exists to break. Pinned by
+    /// <c>OrderStatusMachineTests.EveryResolveHeldStatus_KeepsBothRecomputeEdges</c>, which fails if
+    /// anyone prunes them.</para>
+    ///
+    /// <para><b>Why these two, and only these two.</b> The resolve recompute
+    /// (<c>OrderResolutionService.ResolveAsync</c> :242 and <c>AcceptAiSuggestionsAsync</c> :393)
+    /// ends with an unconditional <c>Status = Lines.Any(NeedsReview) ? pending_review : ready</c>.
+    /// From most from-states that is a correction landing where a correction should land. From these
+    /// two it destroys something:</para>
+    /// <list type="bullet">
+    /// <item><c>unrouted</c> — the routing hold. An unrouted order HAS lines
+    /// (<c>OrderIngestionService</c> builds the full graph and only overrides the status), so a line
+    /// resolve — or a header-only one, which the endpoint accepts — recomputes it to ready with
+    /// <c>SupplierId</c> still null. <c>OrdersController.AssignSupplier</c> then claims atomically on
+    /// <c>Status == Unrouted</c> (:682) and answers 409 otherwise, so the recompute locks the
+    /// operator out of the ONE action the routing hold exists for, permanently. The order becomes
+    /// unassignable by any control in the product.</item>
+    /// <item><c>delivering</c> — a live dispatch claim. <c>delivering</c> is not a moment, it is a
+    /// status a row SITS in (<c>StuckDeliveryDetectionService</c> exists precisely because
+    /// dispatches strand there), so a resolve writes straight over the claim while the send may
+    /// still be in flight — and the dispatch's own outcome write then lands on whatever the resolve
+    /// left behind.</item>
+    /// </list>
+    ///
+    /// <para><b>Deliberately NOT here: <c>failed</c>.</b> It is already refused, one layer down and
+    /// for a different reason — <c>OrderResolutionService.IsFinished</c> derives from
+    /// <see cref="DeclaredTerminal"/> and answers 400 with "there is nothing here to correct; upload
+    /// a corrected file as a new order". That is a permanent verdict about the order; this set is a
+    /// temporary one about the moment ("do X first, then correct it"), which is why it earns a
+    /// different status code and a different sentence. The two sets are asserted DISJOINT so the two
+    /// refusals cannot quietly merge.</para>
+    ///
+    /// <para>Consumed by <c>OrdersController.RefusedByResolveHoldAsync</c>, which gates BOTH
+    /// recompute endpoints — <c>POST /api/orders/{id}/resolve</c> and
+    /// <c>POST /api/orders/{id}/accept-ai-suggestions</c>. Gating only the first would leave both
+    /// holes open through the second, which shares the writer and validates nothing.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> ResolveHeldFrom =
+        Set(Unrouted, Delivering);
+
+    /// <summary>
+    /// The sentence an operator reads when <see cref="ResolveHeldFrom"/> refuses their correction.
+    ///
+    /// <para>Every one names what to DO — a status-code echo ("Order must be in one of these
+    /// statuses: …") tells an operator what the server thinks and nothing about their next move.
+    /// No raw status token appears in any of them, and no party noun: buyers first, inbound stays
+    /// supported, so a sentence that says "supplier" is wrong on half the installs. Pinned by
+    /// <c>OrdersControllerResolveStatusGuardTests</c>, which derives its rows from
+    /// <see cref="ResolveHeldFrom"/> — so a status added to that set tomorrow fails the suite until
+    /// it is given its own sentence here, rather than silently shipping the fallback.</para>
+    /// </summary>
+    public static string ResolveHoldMessage(string status) => status switch
+    {
+        Unrouted =>
+            "This order is still waiting to be routed. Route it first, then make your corrections — "
+          + "correcting it now would take it out of the routing queue while it still has nowhere to go.",
+        Delivering =>
+            "This order is being sent right now, so it cannot be corrected mid-send. "
+          + "Wait for the send to finish, then correct it and send it again.",
+        _ =>
+            "This order cannot be corrected while the step it is in is still running. "
+          + "Wait for that step to finish, then try your correction again.",
+    };
+
+    /// <summary>
     /// A manual "send again" (OrdersController.Redeliver) is valid only from a
     /// stalled-but-recoverable delivery state. (A dead-lettered order is rescued by
     /// the separate ops "requeue delivery" path, not by redeliver.)

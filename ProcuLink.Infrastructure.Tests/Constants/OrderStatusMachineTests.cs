@@ -785,6 +785,17 @@ public class OrderStatusMachineTests
     /// <see cref="OrderStatusMachine.AllStatuses"/>, so a status added tomorrow is covered without
     /// anyone editing this test. That is the difference between fixing eleven edges and closing the
     /// class; the [InlineData] rows above are the readable enumeration of the same fact.</para>
+    ///
+    /// <para><b>WP-23 — the third exclusion.</b> This test's own closing message asked the next
+    /// packet to "gate the endpoint and say so … with the call-site evidence" for any from-state a
+    /// resolve genuinely cannot be issued from. WP-23 did exactly that for the two holes c61fe30
+    /// named, so <see cref="OrderStatusMachine.ResolveHeldFrom"/> joins DeclaredTerminal and
+    /// StatusesNoOrderIsEverIn as a reason a status is NOT in this list. It is deliberately a THIRD
+    /// exclusion rather than an addition to either of those: the order genuinely IS in the status
+    /// (unlike StatusesNoOrderIsEverIn) and is not finished (unlike DeclaredTerminal) — it is simply
+    /// refused this one operation, at the endpoint, for now. <b>The edges themselves are NOT
+    /// pruned</b>, and <see cref="EveryResolveHeldStatus_KeepsBothRecomputeEdges"/> asserts the same
+    /// two edges for exactly the excluded statuses, so this narrowing costs zero coverage.</para>
     /// </summary>
     [Fact]
     public void EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges()
@@ -792,6 +803,7 @@ public class OrderStatusMachineTests
         var resolvableFrom = OrderStatusMachine.AllStatuses
             .Except(OrderStatusMachine.DeclaredTerminal, StringComparer.Ordinal)
             .Except(StatusesNoOrderIsEverIn, StringComparer.Ordinal)
+            .Except(OrderStatusMachine.ResolveHeldFrom, StringComparer.Ordinal)
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
@@ -821,9 +833,87 @@ public class OrderStatusMachineTests
             "missing OBSERVER edge makes the log-only observer WARN on a legitimate operator " +
             "action, which is the false positive that teaches operators to ignore it. If a resolve " +
             "genuinely cannot be issued from one of these, gate the endpoint and say so in " +
-            "StatusesNoOrderIsEverIn (or DeclaredTerminal) with the call-site evidence — do not " +
-            "leave the map contradicting the writer");
+            "ResolveHeldFrom (or StatusesNoOrderIsEverIn, or DeclaredTerminal) with the call-site " +
+            "evidence — do not leave the map contradicting the writer");
     }
+
+    /// <summary>
+    /// WP-23, and the guard against the pruning this packet makes tempting (TRAP 1).
+    ///
+    /// <para><see cref="OrderStatusMachine.ResolveHeldFrom"/> stops the two RECOMPUTE ENDPOINTS from
+    /// being issued against <c>unrouted</c> and <c>delivering</c>. It says nothing about whether the
+    /// transition is possible, and the next reader will be tempted to conclude that it does: "no
+    /// writer performs unrouted → ready any more, so the edge is dead — prune it." That is the
+    /// reasoning c61fe30 refused, and it is how <c>rejected_by_supplier</c> became an unintended dead
+    /// end in the first place. An edge is removed on evidence about WRITERS, never on the existence
+    /// of a guard on one caller: the machine is documented as a superset of what the code performs,
+    /// so a legal-but-unperformed edge is correct by construction, and the guard is an endpoint
+    /// admission rule that a future writer (or a lifted hold) is free to make live again.</para>
+    ///
+    /// <para>Asserted over BOTH maps and over the DERIVED set, so widening the hold tomorrow pulls
+    /// the new status into this protection automatically. Deliberately overlaps
+    /// <see cref="EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges"/>'s former range: adding
+    /// the ResolveHeldFrom exclusion there must not quietly drop these edges from coverage.</para>
+    /// </summary>
+    [Fact]
+    public void EveryResolveHeldStatus_KeepsBothRecomputeEdges()
+    {
+        OrderStatusMachine.ResolveHeldFrom.Should().NotBeEmpty(
+            "an empty hold would make this assertion pass over nothing");
+
+        var missing = new List<string>();
+        foreach (var from in OrderStatusMachine.ResolveHeldFrom)
+        foreach (var to in new[] { PendingReview, Ready })
+        {
+            if (string.Equals(from, to, StringComparison.Ordinal)) continue;
+
+            if (!OrderStatusMachine.IsAllowed(from, to))
+                missing.Add($"machine: {Edge(from, to)}");
+            if (!OrderStatusTransitionObserver.IsExpected(from, to))
+                missing.Add($"observer: {Edge(from, to)}");
+        }
+
+        missing.Should().BeEmpty(
+            "c61fe30 added these edges to both status maps deliberately, because the write was real " +
+            "and the maps were wrong. WP-23's endpoint guard changes who may ISSUE the write; it " +
+            "does not make the transition impossible, and pruning the edges on the strength of a " +
+            "guard is the circular reasoning DeclaredTerminal exists to break");
+    }
+
+    /// <summary>
+    /// WP-23 — the hold is exactly the two holes c61fe30 named, and no more. Exact rather than a
+    /// superset for the same reason as
+    /// <see cref="RedeliverableFrom_IsExactlyTheThreeOperatorSendableStatuses"/>: every status added
+    /// here takes a control away from operators, so widening must be a deliberate edit with a
+    /// product argument, never a side effect of a refactor.
+    /// </summary>
+    [Fact]
+    public void ResolveHeldFrom_IsExactlyTheTwoHolesTheRecomputeDestroys()
+        => OrderStatusMachine.ResolveHeldFrom.Should().BeEquivalentTo(
+            new[] { Unrouted, Delivering },
+            "unrouted: the recompute clears the routing hold with SupplierId still null, after which " +
+            "AssignSupplier's atomic `Status == Unrouted` claim answers 409 forever and no control in " +
+            "the product can route the order. delivering: a row SITS in that status, so the recompute " +
+            "overwrites a live dispatch claim whose outcome write then lands on top of the correction");
+
+    /// <summary>
+    /// WP-23 — the two refusals on the resolve path stay separate concepts.
+    ///
+    /// <para><see cref="OrderStatusMachine.DeclaredTerminal"/> is a permanent verdict about the ORDER
+    /// ("its source file could not be read; there is nothing here to correct"), enforced in
+    /// <c>OrderResolutionService.IsFinished</c> and answered with a 400.
+    /// <see cref="OrderStatusMachine.ResolveHeldFrom"/> is a temporary verdict about the MOMENT ("do
+    /// X first, then correct it"), enforced at the endpoint and answered with a 409. Merging them
+    /// would give one of the two cases the other's status code and the other's sentence — and it is
+    /// the sentence that decides whether the operator's next action is right.</para>
+    /// </summary>
+    [Fact]
+    public void ResolveHeldFrom_AndDeclaredTerminal_AreDisjoint()
+        => OrderStatusMachine.ResolveHeldFrom
+            .Intersect(OrderStatusMachine.DeclaredTerminal, StringComparer.Ordinal)
+            .Should().BeEmpty(
+                "a status in both sets would be refused twice with two different codes and two " +
+                "different sentences, and which one an operator sees would depend on call order");
 
     /// <summary>
     /// The transform claim set, pinned. It is written TWICE in OrderTransformService (a relational
