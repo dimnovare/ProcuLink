@@ -1044,3 +1044,66 @@ instructed to re-verify rather than trust them:
   `UnifiedStatusBadge` labels wholesale). The "Ready to send" count divergence may already be fixed;
   the cross-screen count-parity test ships either way, because the test is the deliverable.
 
+
+---
+
+## 2026-07-31 — WP-18 "Validation at every breakpoint" (FRONTEND) — shipped, PR #64
+
+Branch `wp18/validation-every-breakpoint` off FE `origin/main` `478b809`.
+PR: https://github.com/dimnovare/project-proculink/pull/64 (NOT merged).
+Commits `03dd2f2` (fix + 15 tests) and `8d2fd5c` (wire correction + 4 tests).
+
+**What was actually wrong.** The supplier acceptance answer reached the UI through one query,
+`getFieldValidation` (`GET /api/orders/{id}/validation`), living inside `useMapperModel` — which only
+`MapperWorkbench` builds. `OrderWorkshop` mounts that inside `hidden lg:flex`, and the derived
+`blockingCount` was consumed only by the mapper's own `canDeliver` (`MapperWorkbench.tsx:546`). It
+never reached `OrderWorkshop.canSend` (`:450`). The send gate was therefore computed with no
+knowledge of the supplier's rules **on every surface**, and a 390/768px operator — whose only surface
+is `MobileTriage` — was offered a Send that WP-17's server gate refuses, with no indication why.
+
+**Fix.** Hoisted the query into `OrderWorkshop` above every breakpoint-conditional subtree; projected
+its blocking rows onto `WorkshopIssue` and merged them into the single `issues` array that already
+feeds the desktop `IssuesPanel`, the status-bar blocker chips, `MobileTriage`, and
+`blockingIssues → canSend`. One merge, every breakpoint. New pure module
+`src/components/bridge/workshop/acceptanceGateModel.ts`. No layout was un-hidden; the 3-column Order
+Workshop is untouched (R10).
+
+**Defer, not mirror.** WP-17 (`8a2dbc3`) also made that endpoint's `blocking` flag derive from
+`ISupplierAcceptanceService.GetBlockingFailuresAsync` — the same call `IAcceptanceGate` acts on,
+frozen by the set comparison in `ValidationBlockingMatchesTheGateTests`. The client re-implements no
+rule; it counts rows the server already decided, so the two cannot drift. The invariant rows
+(`po_number_present` etc.) stay advisory on both sides, deliberately.
+
+**⚠️ CORRECTION TO WP-18's PREMISE — the packet's second claim is refuted.** The packet states
+"`useAcceptanceValidation` is dead code — its confirm-dialog and fix-queue branches are unreachable."
+It is imported at `OrderWorkshop.tsx:41` and mounted at `:164`; `validationResult` feeds
+`buildFixQueue` (`:189`) and `failingRuleCount`/`isStale` feed `ConfirmDialog` (`:904-905`). The
+branches are reachable. The hook was **inert, not dead**: `validate()` — the POST that populates it —
+has zero callers anywhere in `src/`, so `validationResult` was permanently `null` and the confirm
+dialog's failing-rule acknowledgement had never once appeared in production. Decision: **wired**, not
+deleted (deleting would drop a real surface with no replacement, which R4 forbids). Same failure
+shape as the other corrections: two true facts (the query is mapper-owned; the hook's outputs look
+inert) with one unchecked step between them (whether the hook itself is mounted).
+
+**Path drift.** The packet cites `src/components/bridge/review/OrderWorkshop.tsx`; the file is at
+`src/components/bridge/workshop/OrderWorkshop.tsx`. The `hidden lg:flex` container is at `:789` and
+`<MapperWorkbench>` at `:792`, not `:802`. `useMapperModel.ts:269-276` held exactly.
+
+**Self-caught defect, recorded because it is instructive.** The first wire seeded `failingRuleCount`
+from the BLOCKING count — but a blocking row sets `canSend=false`, so the confirm dialog can never
+open and that count could never be read. The signal that actually reaches the acknowledgement is the
+ADVISORY failure. Corrected in `8d2fd5c` with the R1 consumer test that was missing.
+
+**Verification.** 19 new tests at 390/768/1440 (`validationEveryBreakpoint.test.tsx`); RED first,
+verbatim output in the PR body. Three mutation checks run after committing the fix: reverting the
+`issues` merge → 9 RED; neutering the hoisted `queryFn` → all 19 RED (including the negative
+control); reverting the hook fallback to `0` → 3 RED. Full suite 136 files / 1601 tests green;
+`tsc --noEmit`, eslint, `check:pageshell --strict`, `lint:vocab` all clean. Party nouns route through
+`partyLabels`.
+
+**Deliberately not done.** No client-side rule mirror. No gating on the query's loading state (would
+flicker the primary CTA disabled on every page load). No consumption of WP-17's richer
+`GET /api/orders/{id}/acceptance-gate` or its operator-override POST — `GET /validation` already
+carries the gate-aligned answer and was already plumbed client-side; a second client for the same
+decision is one more thing that can drift. **The operator-override flow remains unbuilt on the
+frontend and wants its own packet.**
