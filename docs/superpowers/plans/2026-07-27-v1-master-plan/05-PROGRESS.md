@@ -2389,3 +2389,58 @@ today, and the same shape as the others: the step that verifies the harness was 
 
 F6 (three `SupplierDeliveryConfigs` writers, so the docstring's "cannot drift apart" invariant is now
 false), F8, F9, F11, F12. Recorded here so they survive the fix round that dropped them.
+### 2026-07-31 later — Wave 4 after the rate limit: WP-27 green, and a correction I owe the record
+
+**Correcting my own earlier entry.** I reported FE #73 as "green except Playwright in flight." It was
+not in flight — it had **FAILED**, and I read `IN_PROGRESS` twice without going back for the terminal
+state. #73 is now genuinely green on all five checks at `792938b`.
+
+**The failure was the sharpest instance of this plan's own trap that I have produced.**
+`first-run-to-delivered.spec.ts:93` matched `/doesn'?t count against your plan/i` against copy that
+renders **U+2019** after the WP-28 merge. `'?` makes the straight quote *optional*; it does not match a
+different codepoint. **The same merge commit fixed this exact defect in `practiceFraming.test.tsx` and
+`sample-order-happy-path.spec.ts` and missed the flagship** — because that commit's gate list omitted
+`test:e2e`. So the packet's headline journey, the one proving its entire AC, was red while every other
+check on the PR read green. *A fix verified where it was applied is not verified where the defect class
+lives* — quoted at two agents that same hour, in the commit that committed it.
+
+**F2 is closed after surviving two refutations.** The journey could not distinguish "transform stopped
+at `ready_to_deliver` and a dispatch delivered it" from "transform teleported and nothing was sent" —
+`useSendFlow` short-circuits on an already-delivered order, so every assertion was satisfied by a mock
+that never dispatched. It now asserts the in-flight notice `useSendFlow` sets **only** on the dispatch
+path. Mutation-checked: `mockTransformOrder` writing `delivered` now **exits 1**; it exited 0 through
+both prior passes.
+
+**A default is indistinguishable from a correct value.** `nounLower` was optional with a `"supplier"`
+default, so deleting it from one call site silently reproduced the exact regression it was added to
+close — 1709 tests green, `tsc` blind. Now required. Worth generalising: an optional prop with a
+plausible default cannot be pinned by any test that does not enumerate the call sites.
+
+**WP-31 (#77): CONFIRMED-WITH-DEFECTS, six vacuous tests.** The missing mutation table was hiding them.
+Two block: the AC *"zero controls below either floor"* is **false** — the floors are scoped to
+`(pointer: coarse), (max-width: 639px)` (`globals.css:996`) and the spec measures only at 390×844, so
+the claim is never tested at the scope it is stated; at 1280×900 both surfaces the packet names by name
+fail. And the popover conformance test is `src.includes("modal: false")` over the whole file, so a
+comment defeats it — third instance that day of a source-text assertion standing in for a behavioural
+one. Credit: the dialog contract is genuinely pinned (11 of 13 mutations red across all 8 rendered
+dialogs), the registry guard does catch a new conventionally-written dialog, and the hero-toggle
+correction was itself found by mutation testing.
+
+**Six WP-27 findings the fix round silently dropped**, recorded rather than carried: F6, **F7**, F8, F9,
+F11, F12. F7 is the one that should not ship quietly — `DashboardController` has zero `IsSample`
+references, so a brand-new account reads **"1 delivered"**, contradicting `OnboardingController.cs:40`'s
+stated invariant, and it is newly reachable *because* WP-27 makes the practice order deliverable.
+
+**On the branch-overlap trigger: `diff $(merge-base) $B` cannot distinguish "both packets edited this"
+from "one packet contains the other."** #77 × #69 reported 48 overlapping files; #77 *contains* #69
+(verified by `merge-base --is-ancestor`), so every file WP-30 touched counted twice. Check
+ancestry between each pair first, or every stacked branch reports maximal overlap with its own base —
+the loudest possible signal for the least interesting case. The genuine hit was `src/lib/help-articles.ts`
+across #69 and #75; reading the merged content took ninety seconds and returned a definite negative
+(#69 edits a hex-value comment, #75 edits `blurb`/`keywords`). **Record negatives** — otherwise the next
+sweeper re-reads them, or learns to skip the trigger because it "always comes back clean."
+
+**Live cross-branch claim conflict, found by that trigger in my own branches:** `api-client.ts` is edited
+by #73 and #70. #70 routes transform errors through `parseApiErrorBody` so a raw JSON body never reaches
+the user; #73's `realRunSampleOrder` throws `new Error(await res.text())` and prints it verbatim — the
+same defect #70 fixes one function over. Different functions, so git merges them silently.
