@@ -477,6 +477,38 @@ This is TRAP 14/17 one level up: there the *gate* had a false scope, here the *t
 gate* does. **Ask of every meta-tested guard: does anything run this against the real tree?** A
 fixture test and a real-tree smoke test answer different questions and a guard needs both.
 
+**TRAP 21 — stating the consequence at a wider scope than you checked.** The single most common
+failure of 2026-07-31, across both sessions, and the one to read first. In every instance the
+underlying **fact was true**; what was wrong was the **blast radius asserted from it**.
+
+| Fact (true) | Consequence claimed (wider than checked) | Actual |
+|---|---|---|
+| `mockTransformOrder` writes `delivered` directly | "every mock-mode delivered assertion in the suite has been free; earlier packets need re-reading" | **zero** such assertions exist — all five vitest files `vi.mock` the client; the two e2e hits are live-only or unrelated |
+| `help/**` is `BLOCK_EXEMPT` | "so nothing was ever going to catch it" | the word is **GLOSS-tier**, the gate passes it deliberately, and `help-articles.ts` is scanned and not exempt |
+| the 8s deadline starts post-hydration | "a Fast-3G user waits 11.2 s" | a cold localhost build with no cache — a synthetic worst case, not user experience |
+| `base.sha` is `831fad1`, `mergeable: true` | "both PRs are already rebased onto main" | neither contained main; both were 4 commits behind |
+| `useQueriesEnabled` grep returned 54 | quoted as the consumer count | 58 files / 31 call sites — the grep ran against a stale working tree |
+
+**Narrowing the claim to what was actually verified would have cost nothing in every one of these.**
+The check to run before publishing: *how far does my evidence reach, and does my sentence reach
+further?* Two of the five above are the main session's, so this is not one session's habit — it is
+what parallel work does to the gap between finding something and saying what it means.
+
+**TRAP 22 — "the mock is wrong, so what it backed is unsound."** Not necessarily. **A mock can only
+be wrong in a way that matters once something depends on it.** Until then the defect is inert.
+
+`mockTransformOrder` skipped `ready_to_deliver` and `delivering` — a real divergence from the status
+machine, flagged in the audit's §9 — and it invalidated **nothing**, because the transform-to-deliver
+boundary had *no* coverage of any kind. Not weak coverage: none. WP-27's onboarding journey is the
+first test to cross it, which is exactly why that packet had to fix the mock for its own journey to
+be killable.
+
+**So the risk points forward, not backward.** A freshly-written mirror of production behaviour,
+authored in one pass, with no prior test to contradict it, is inherited by every future assertion
+built on it. When a packet repairs a long-latent mock, the review question is not "what did this
+break in the past" but **"what does this now silently define for everything after it"** — verify the
+new edges against the real state machine, and look for real paths the new mock makes unreachable.
+
 ### TRAPS added 2026-07-30 (second pass)
 
 **TRAP 6 — "a registry href with no page behind it is a dead link."** WRONG, and it hides the real
