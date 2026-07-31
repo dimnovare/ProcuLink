@@ -110,8 +110,21 @@ public class RevisionAuthorityHostCoverageTests
     public void EveryDeclaredHost_CallsTheStartupValidator_WhichIsWhatCarriesTheAnnouncement()
     {
         var root = FindRepoRoot();
+        var hosts = RevisionAuthorityHosts.All;
 
-        foreach (var host in RevisionAuthorityHosts.All)
+        // The sweep below only ever checks the hosts this roster names, so an emptied or shortened
+        // roster is a green run that examined no host at all — precisely the Worker-shaped hole
+        // this test exists to keep shut, arrived at from the other side. Pinned by NAME rather than
+        // by count because a THIRD host is expected to be added here one day and must not break
+        // this test; losing one of the two known hosts is the failure worth catching.
+        hosts.Select(h => h.ProjectName).Should().Contain(
+            new[] { "ProcuLink.Api", "ProcuLink.Worker" },
+            "the API and the Worker are the two hosts that resolve an effective connection config "
+            + "today, and each is checked here only because this roster names it — a roster that "
+            + "lost one would let that host ship with no startup announcement at all, and this test "
+            + "would still report green having never looked at it");
+
+        foreach (var host in hosts)
         {
             var sources = ProductionSourceFiles(root)
                 .Where(f => string.Equals(f.Project, host.ProjectName, StringComparison.Ordinal))
@@ -134,6 +147,14 @@ public class RevisionAuthorityHostCoverageTests
     /// build output, other sessions' worktrees under <c>.claude/</c>, and the test projects — a
     /// test naming the resolver is not a host resolving a config with it, which is precisely how a
     /// real host would hide from a naive scan.
+    ///
+    /// <para><b>KNOWN BUG, deliberately NOT fixed here — see branch
+    /// <c>claude/beautiful-torvalds-04a9a5</c>.</b> The exclusion below matches the ABSOLUTE path,
+    /// and a worktree root under <c>.claude/worktrees/…</c> makes every path in the repository
+    /// contain <c>.claude</c> — so the whole corpus is excluded and both callers go red in any
+    /// worktree run. Another session found and fixed this first, with a synthetic-tree regression
+    /// test this file does not have; duplicating the fix here would only conflict with it.
+    /// The relative-path form is what <c>VacuousTestPassScanner.ExcludedSegments</c> documents.</para>
     /// </summary>
     private static IEnumerable<SourceFile> ProductionSourceFiles(string root) =>
         Directory

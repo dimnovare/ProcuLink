@@ -269,6 +269,13 @@ public sealed class SupplierRoutingMatrixPostgresTests
     [MemberData(nameof(CellIds))]
     public async Task Order_routes_to_the_supplier_the_matrix_says(string cellId)
     {
+        // The matrix IS the test: a theory runs once per ROW, so a row deleted from the table takes
+        // its channel's whole routing proof away and the suite reports green — one fewer case simply
+        // never runs, and nothing says so. Pinning the size makes a deletion deliberate.
+        Matrix.Should().HaveCount(27,
+            "the routing story documented at the top of this file is 27 cells; a row quietly dropped "
+            + "removes a channel's only routing proof and every remaining case still passes");
+
         var cell = Matrix.Single(c => c.Id == cellId);
         _output.WriteLine($"▶ {cell.Label} → expected {cell.Outcome}");
 
@@ -279,10 +286,20 @@ public sealed class SupplierRoutingMatrixPostgresTests
             $"status={actual.ParkedStatus ?? "(no order)"} http={actual.HttpStatus?.ToString() ?? "n/a"} " +
             $"orders={actual.OrderCount}");
 
+        // BOTH halves are checked, so no cell reaches the outcome switch having examined nothing:
+        // an HTTP-fronted cell must answer the status its row declares, and a pull channel has no
+        // caller to answer at all — a status appearing there means the cell drove some producer
+        // other than the one its row names.
         if (cell.ExpectedHttpStatus is { } expectedHttp)
         {
             actual.HttpStatus.Should().Be(expectedHttp,
                 "{0} must answer HTTP {1}", cell.Label, expectedHttp);
+        }
+        else
+        {
+            actual.HttpStatus.Should().BeNull(
+                "{0} is a pull channel with no HTTP caller, so a status code here means the cell "
+                + "exercised a path the matrix does not describe", cell.Label);
         }
 
         switch (cell.Outcome)
@@ -308,6 +325,14 @@ public sealed class SupplierRoutingMatrixPostgresTests
                 actual.OrderCount.Should().Be(0,
                     "{0} is refused up front, so no order may be left behind", cell.Label);
                 break;
+
+            default:
+                // A fourth outcome added to the enum would otherwise give its cells a switch with no
+                // matching arm: they would run the channel, assert nothing about where the order
+                // landed, and report Passed.
+                throw new InvalidOperationException(
+                    $"{cell.Label} declares outcome '{cell.Outcome}', which no arm asserts — give it "
+                    + "one rather than letting the cell pass having examined nothing.");
         }
     }
 

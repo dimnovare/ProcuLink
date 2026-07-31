@@ -134,6 +134,16 @@ public class BillingFeatureGateCoverageTests
     [MemberData(nameof(AllFeatures))]
     public void EveryFeature_IsOn_AtEveryPlanAboveItsMinimum(BillingFeature feature)
     {
+        // This check is worth exactly as many rungs as the ladder has. A Ladder that lost its upper
+        // tiers — or that was never more than one entry — makes the loop below run once on the
+        // minimum itself, re-proving what EveryFeature_IsOn_AtItsMinimumPlan already proves, and
+        // report green for "on every plan above" having tested no plan above anything. Pinned
+        // against the production plan list rather than a hand-typed count so that a tier added,
+        // dropped or reordered upstream fails here loudly instead of quietly shortening the sweep.
+        Ladder.Should().Equal(PlanConstants.All,
+            "this local ladder is a copy of the real plan order, and the sweep below can only find a "
+            + "capability that goes missing partway up the ladder if it actually walks every rung");
+
         var minIdx = Array.IndexOf(Ladder, PlanConstants.GetMinimumPlan(feature)!);
 
         for (var i = minIdx; i < Ladder.Length; i++)

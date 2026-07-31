@@ -35,6 +35,24 @@ public sealed class ConnectorManifestCatalogTests
     private static readonly string[] ValidFieldTypes =
         ["string", "number", "bool", "secret", "url"];
 
+    /// <summary>
+    /// How many configuration fields each connector declares — i.e. the size every per-connector
+    /// field sweep below must actually have inspected. A manifest field is a control on a
+    /// supplier-facing form, so adding or removing one is a deliberate change that updates this
+    /// table too. Without it, a manifest that declared ZERO fields would let every field sweep
+    /// report Passed having validated nothing at all.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, int> ExpectedFieldCount =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            [DeliveryProtocolConstants.Http]       = 14,
+            [DeliveryProtocolConstants.Sftp]       = 10,
+            [DeliveryProtocolConstants.Ftps]       = 9,
+            [DeliveryProtocolConstants.Email]      = 6,
+            [DeliveryProtocolConstants.ErpErply]   = 7,
+            [DeliveryProtocolConstants.ErpDirecto] = 6,
+        };
+
     // ── Catalog completeness ─────────────────────────────────────────────────
 
     [Fact]
@@ -65,6 +83,12 @@ public sealed class ConnectorManifestCatalogTests
     [Fact]
     public void All_And_ByKey_AreConsistent()
     {
+        // Pin the swept set BEFORE sweeping it: an emptied or shrunken All would let the loop
+        // below report Passed without round-tripping a single key.
+        ConnectorManifestCatalog.All.Should().HaveCount(ExpectedKeys.Length,
+            $"the catalog must still declare all {ExpectedKeys.Length} registered dispatchers — the " +
+            "consistency check is only worth anything if every one of them was actually looked up");
+
         // Every manifest in All must also be retrievable from ByKey.
         foreach (var manifest in ConnectorManifestCatalog.All)
         {
@@ -105,6 +129,17 @@ public sealed class ConnectorManifestCatalogTests
     {
         var m = ConnectorManifestCatalog.ByKey[key];
 
+        // Both levels of the sweep, pinned. Outer: these six rows must still BE the catalog, so a
+        // connector added without a row here cannot slip through untyped. Inner: this manifest
+        // must actually declare its fields, because a manifest with none passes the loop below
+        // having type-checked nothing.
+        ConnectorManifestCatalog.All.Should().HaveCount(ExpectedKeys.Length,
+            "the InlineData rows above are the whole catalog; a connector missing from them would " +
+            "never have its field types checked at all");
+        m.Fields.Should().HaveCount(ExpectedFieldCount[key],
+            $"connector '{key}' declares a known set of configuration fields and every one of them " +
+            "must have been type-checked below — zero fields is a broken supplier form, not a pass");
+
         foreach (var field in m.Fields)
         {
             field.Type.Should().BeOneOf(ValidFieldTypes,
@@ -122,6 +157,16 @@ public sealed class ConnectorManifestCatalogTests
     public void Manifest_AllFieldsHaveNonEmptyNamesAndLabels(string key)
     {
         var m = ConnectorManifestCatalog.ByKey[key];
+
+        // Both levels again: an intact catalog whose manifests all declare zero fields is just as
+        // vacuous here as an empty catalog — every label the operator reads comes from this list.
+        ConnectorManifestCatalog.All.Should().HaveCount(ExpectedKeys.Length,
+            "the InlineData rows above are the whole catalog; a connector missing from them would " +
+            "never have its field names and labels checked at all");
+        m.Fields.Should().HaveCount(ExpectedFieldCount[key],
+            $"connector '{key}' declares a known set of configuration fields and every one of them " +
+            "must have had its Name and Label checked below — an empty Fields list renders a " +
+            "supplier form with no controls, and this loop would call that a pass");
 
         foreach (var field in m.Fields)
         {

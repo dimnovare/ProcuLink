@@ -289,6 +289,15 @@ public class ItemCodeComparerGuardTests
         // its cover.
         var sites = FlaggedSites();
 
+        // The sweep below is driven BY the allowlist, which is shrink-only and whose goal state is
+        // empty — so on the day it gets there, a detector that has gone blind and a repo that is
+        // genuinely clean produce the same green. Pin the detector instead of the allowlist: it is
+        // the half that must never be empty, and it is what makes an accepted exception mean
+        // anything at all. Same assertion TheScanner_ActuallyFindsSomething already makes.
+        sites.Should().NotBeEmpty(
+            "the detector must still match the known ordinal sites — with no sites found, every "
+            + "accepted exception below is checked against nothing and this test cannot fail");
+
         foreach (var (file, fragment, _) in AcceptedExceptions)
         {
             sites.Should().Contain(
@@ -304,6 +313,16 @@ public class ItemCodeComparerGuardTests
     {
         // A reason of "ok" or "" would technically satisfy the other two tests while defeating the
         // point of the list.
+        //
+        // Two unconditional facts first, because this loop is driven by a list whose goal state is
+        // empty and would otherwise report Passed having read no reason at all: the detector is
+        // alive, and no site is covered twice. A duplicate entry is how a stale exception keeps
+        // covering a line after the entry that earned it was removed.
+        FlaggedSites().Should().NotBeEmpty(
+            "with no sites found, the exceptions below excuse nothing and their reasons go unread");
+        AcceptedExceptions.Select(e => (e.File, e.Fragment)).Should().OnlyHaveUniqueItems(
+            "two entries for the same line mean deleting one silently leaves the cover in place");
+
         foreach (var (file, fragment, reason) in AcceptedExceptions)
         {
             reason.Trim().Should().NotBeNullOrWhiteSpace(

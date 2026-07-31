@@ -190,6 +190,25 @@ public class OrdersControllerRedeliverTests
         var result = await ctrl.Redeliver(order.Id, CancellationToken.None);
 
         var error = ReadError(result);
+
+        // The loop below is driven BY RedeliverableFrom, so an emptied set makes it run zero times
+        // and this test passes for a 400 that names no status at all — the message would be a
+        // dead end for the operator and nothing here would say so. Status lists in this codebase
+        // have drifted apart four separate times, always silently, so the three the set must hold
+        // are pinned by name: growing it must not break this test (the loop covers a new status for
+        // free), but losing one — above all delivery_unconfirmed, the park's only human way out —
+        // is exactly the drift that leaves the sentence quietly incomplete.
+        OrderStatusMachine.RedeliverableFrom.Should().Contain(
+            new[]
+            {
+                OrderStatusConstants.DeliveryFailed,
+                OrderStatusConstants.ReadyToDeliver,
+                OrderStatusConstants.DeliveryUnconfirmed,
+            },
+            "these are the statuses an operator can send again from, and the message is only checked "
+            + "against the statuses this set names — an empty set would let a 400 that lists nothing "
+            + "pass as a 400 that lists everything");
+
         foreach (var status in OrderStatusMachine.RedeliverableFrom)
             error.Should().Contain(status, "the operator must be told every status they can redeliver from");
     }

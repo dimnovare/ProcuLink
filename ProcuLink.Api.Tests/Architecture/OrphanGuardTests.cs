@@ -205,6 +205,23 @@ public sealed class OrphanGuardTests
     public void KnownWriteOnly_EntriesStillCorrespondToRealDbSets()
     {
         var entityNames = Scan.Value.DbSets.Select(d => d.EntityType.Name).ToHashSet(StringComparer.Ordinal);
+
+        // The reference set has to have been FOUND before it is allowed to judge anything. Every
+        // check below asks "is this name still a DbSet?", so a reflection that came back empty — a
+        // renamed context, a property shape DbSetsOf no longer recognises, declarations moved to a
+        // base class where DeclaredOnly cannot see them — makes every answer meaningless. An empty
+        // inventory reads RED today, but only because the allowlist happens to be non-empty; the
+        // allowlist is shrink-only and an EMPTY one is its stated goal, so on the day it gets there
+        // a broken reflection and a clean repo become the same green.
+        //
+        // Pinned on the DbSet inventory rather than on the allowlist's size deliberately: the
+        // allowlist is MEANT to shrink, so a count on it would fight the very cleanup this file
+        // exists to drive, while the orders table is the one store the product cannot exist without.
+        Assert.True(entityNames.Contains("PurchaseOrderEntity"),
+            $"the DbSet reflection over ProcuLinkDbContext found {entityNames.Count} store(s) and not "
+            + "the purchase-orders table — the inventory these entries are checked against is broken, "
+            + "so nothing below would be judging the real schema");
+
         var problems = new List<string>();
 
         foreach (var entry in KnownWriteOnlyStores)
@@ -243,7 +260,23 @@ public sealed class OrphanGuardTests
     [Fact]
     public void KnownWriteOnly_EntriesAreStillOrphans()
     {
-        var stillOrphaned = Scan.Value.Orphans.Select(o => o.EntityName).ToHashSet(StringComparer.Ordinal);
+        var scan = Scan.Value;
+
+        // A scan that loaded no source files makes EVERY store look unread — nothing reads it and
+        // nothing writes it, so the detector flags all of them and every entry below is comfortably
+        // "still an orphan". The stale-entry check then passes having confirmed nothing. Not
+        // hypothetical here: the comment stripper once swallowed 677 lines of the API composition
+        // root, and any corpus that thins the same way fails green in exactly this direction.
+        //
+        // The scanned-file count is what gets pinned, not the allowlist and not the orphan set,
+        // because both of THOSE are supposed to shrink to zero — that is the guard succeeding —
+        // whereas a repo reporting fewer than a hundred production files is broken tooling.
+        Assert.True(scan.Sources.Count > 100,
+            $"only {scan.Sources.Count} production source files were scanned under {scan.RepoRoot} — "
+            + "with a truncated corpus every store looks orphaned, so every allowlist entry looks "
+            + "justified, and this test reports green without having really checked one of them");
+
+        var stillOrphaned = scan.Orphans.Select(o => o.EntityName).ToHashSet(StringComparer.Ordinal);
 
         var stale = KnownWriteOnlyStores
             .Where(k => !stillOrphaned.Contains(k.Entity))

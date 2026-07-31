@@ -272,6 +272,7 @@ public class SupplierResponseClassificationTests
     public void RetrySuppression_AndRejectedBySupplier_AreTheSameDecision()
     {
         var codes = Enumerable.Range(400, 200).Select(c => (int?)c).Append(null).ToList();
+        var decisionsCompared = 0;
 
         foreach (var code in codes)
         foreach (var reason in new[] { null, "", "   ", "the supplier explained itself" })
@@ -280,11 +281,25 @@ public class SupplierResponseClassificationTests
             var status     = SupplierResponseClassification.FailedOrderStatusFor(code, reason, observable);
             var suppressed = SupplierResponseClassification.SuppressesAutomaticRetry(code, reason, observable);
 
+            decisionsCompared++;
             suppressed.Should().Be(
                 status == OrderStatusConstants.RejectedBySupplier,
                 $"HTTP {code?.ToString() ?? "(none)"} with reason '{reason ?? "(null)"}' " +
                 $"(observable={observable}) must not land in one half of the split and be treated " +
                 "as the other half by the retry queue");
         }
+
+        // The whole value of this test is the BREADTH of the equivalence, and breadth is exactly
+        // what a green run cannot show: narrow the range to Enumerable.Range(400, 0) and every
+        // assertion above quietly disappears while the test still reports Passed — the two halves
+        // of the split would then be free to drift apart in the codes nobody swept any more. So
+        // the size of the evidence is asserted, not assumed: 400–599 plus the no-code case, times
+        // four reason shapes (absent, empty, whitespace, real), times both observability answers.
+        codes.Should().HaveCount(201,
+            "the equivalence must be swept over every 4xx AND 5xx code plus the no-code case that " +
+            "SFTP/FTPS and network failures produce");
+        decisionsCompared.Should().Be(201 * 4 * 2,
+            "every (code, reason, observability) triple must have had its STATUS decision and its " +
+            "RETRY decision compared — 1,608 of them, not zero");
     }
 }

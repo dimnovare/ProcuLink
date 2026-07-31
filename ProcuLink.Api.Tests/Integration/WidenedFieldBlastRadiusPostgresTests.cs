@@ -148,7 +148,17 @@ public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
         // Guards the artefact against the code moving on without it.
         var sql = File.ReadAllText(ScriptPath());
 
-        foreach (var name in NewlyExposedNames())
+        var newlyExposed = NewlyExposedNames();
+
+        // The sweep below is only evidence if there is something to sweep. NewlyExposedNames() is
+        // DERIVED — subtract the pre-WP-14 set from the declared field lists — so a rename on either
+        // side can silently empty it, and the loop would then confirm the script probes every one of
+        // zero fields and report green.
+        newlyExposed.Should().HaveCount(32,
+            "WP-14 widened the row bag from 21 keys to 53, so exactly 32 names must reach the check "
+            + "below; a shorter list means this test stopped covering fields it still claims to cover");
+
+        foreach (var name in newlyExposed)
             sql.Should().Contain($"('{name}')",
                 "the blast-radius script must probe every newly exposed field; '{0}' is missing", name);
     }

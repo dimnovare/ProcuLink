@@ -324,6 +324,13 @@ public class ItemMappingCaseParityTests
         var codes = new[] { "B-1", "b-1", "B-1" };
         var many  = await service.ResolveManyAsync(orgId, supplierId, codes, CancellationToken.None);
 
+        // The sweep below is only evidence if it actually swept. A batch that answered fewer codes
+        // than were asked leaves the loop comparing batch to single on a shorter set — or on none at
+        // all — and the run reports green having found no disagreement it ever looked for.
+        many.Should().HaveCount(2,
+            "both case spellings on this order must reach the comparison; a batch holding fewer "
+            + "answers means the parity check silently stopped covering one of them");
+
         foreach (var code in codes.Distinct(StringComparer.Ordinal))
         {
             var single = await service.ResolveAsync(orgId, supplierId, code, CancellationToken.None);

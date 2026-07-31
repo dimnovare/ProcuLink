@@ -193,6 +193,16 @@ public class ScribanTemplateTransformServiceTests
         var order = BuildOrder();
         var svc   = new ScribanTemplateTransformService();
 
+        // "All keys present" is the claim in the name, so the key set itself is under test.
+        // Without this the sweep below verifies whatever the list happens to hold — drop a key
+        // from the model and the test still renders every remaining key correctly and reports
+        // green, having stopped checking the one that went missing.
+        ScribanOrderModel.ShippingAddressKeys.Should().BeEquivalentTo(new[]
+        {
+            "Company", "FirstName", "LastName", "Address1", "Address2",
+            "City", "ProvinceCode", "State", "PostalCode", "CountryCode", "Phone", "Email",
+        });
+
         foreach (var key in ScribanOrderModel.ShippingAddressKeys)
         {
             var outcome = svc.Render("{{ ShippingAddress." + key + " }}", order, null);

@@ -125,6 +125,16 @@ public sealed class AcceptanceGateMatchesValidationTests
         var shown = (await acceptance.ValidateOrderAsync(orgId, orderId, CancellationToken.None))!;
         var blockers = (await acceptance.GetBlockingFailuresAsync(orgId, orderId, CancellationToken.None))!;
 
+        // "The same sentences" is only a claim about something if the fixture produced sentences to
+        // compare: an order that blocked on nothing would run the loop zero times and report green
+        // having matched none of the panel's wording against none of the gate's. The mixed order
+        // blocks on exactly three failures, and each is named so a fixture that stops producing one
+        // fails here instead of quietly shrinking the comparison.
+        Assert.Equal(3, blockers.Count);
+        Assert.Contains(blockers, b => b.Code == "currency.equals");                        // order-scope error
+        Assert.Contains(blockers, b => b.Code == "unitPrice.max" && b.LineNumber == 2);     // line-scope error
+        Assert.Contains(blockers, b => b.Code == "description.required" && b.LineNumber == 2); // warning + BlockOnFail
+
         foreach (var b in blockers)
             Assert.Contains(shown, r => r.Code == b.Code && r.LineNumber == b.LineNumber && r.Message == b.Message);
     }
