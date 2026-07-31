@@ -2168,3 +2168,54 @@ TRAP 24 established that green CI is not evidence the diff is covered.
 
 Note: the wedge chip's session metadata still shows PR #97 as OPEN. It merged as `faba3bf`. Session
 `prState` lags; do not read it as the packet's state.
+
+---
+
+## 2026-07-31 — TRAP 25: two packets, both correct, one false claim
+
+The WP-27 rate-cap hold is **lifted**. Verified at source on `origin/claude/wp27-sample`, not taken
+from the owner's report: a dedicated `sample-order` policy at `permit: 5, seconds: 60`
+(`Program.cs:338`), the attribute on the action (`SampleOrderController.cs:39`), the `[InlineData]`
+catalog row (`RateLimitPolicyAppliedTests.cs:56`), and a **live 429 probe**
+(`SampleOrder_Returns429_AfterExceedingPolicyLimit`, `:165`). The cap is proven by behaviour rather
+than by the attribute's presence, and the dedicated partition is better than reusing `support` —
+a burst on one cannot eat the other's budget.
+
+WP-27 remains held: BE #100 does not contain current `main` (`2c8b8f4`, WP-23 landed after it was
+built), and its owner wants a re-refutation after the fix round.
+
+### TRAP 25 — a merge can be textually and semantically sound and still ship a lie
+
+Distinct from TRAP 23, and worse, because nothing mechanical catches it.
+
+WP-28 deleted the practice-order band — one of the seven chrome bands that packet exists to remove —
+and moved its copy into a chip plus a `PracticeNote` in the Issues column. That note read:
+
+> "Sending stops at 'delivery not set up' — that's expected for a practice run."
+
+True when written. WP-27 then seeds an email delivery for the practice order, which is the entire
+point of the packet: the dead end goes away. Git conflicted on the text and the conflict was resolved
+correctly. **Underneath it sat a claim that the other packet had just made false.**
+
+Neither author erred. WP-28 could not know delivery would be seeded; WP-27 could not know the band
+would be gone. Both packets were right in isolation, and the merged product would have shipped a
+sentence contradicting its own behaviour with every test green.
+
+**Why no signal catches it:** TRAP 23's failure was a symbol — a deleted export and a surviving
+caller, which the first build of the merged tree reports as a `ReferenceError`. This is a *claim*.
+Copy asserting something about behaviour is not type-checked against that behaviour, so CI,
+`MERGEABLE`, and building the merge result are all silent. The only thing that catches it is reading
+what the merged copy now promises.
+
+**Practical rule:** when two packets in flight touch the same screen, and one of them changes what the
+product *does* while the other changes what the product *says about it*, the merge needs a copy read,
+not just a green build. Resolution here: keep WP-28's structure, carry WP-27's three-branch
+`practiceDelivers` copy into its new home.
+
+### Related, from the same fix round — a vacuous test wearing a passing test's clothes
+
+`practiceFraming`'s `MapperWorkbench` mock **dropped `issuesSlot`**, so six assertions read as "the
+note does not render" when the note was never handed anywhere to render. `invariants.test.tsx:209`
+and `validationEveryBreakpoint.test.tsx:140` already mock it correctly — the pattern existed and this
+file predated it. Same family as WP-31's vacuous 24px assertion: the test ran, reported confidently,
+and was scoped to something narrower than its name implied.
