@@ -1280,3 +1280,30 @@ against thirteen kept is what makes the thirteen worth acting on.
 via `Move-Item` preserves the backup's OLD mtime, so MSBuild skips recompilation and the "restored" run
 reports the MUTATED result. `git status --short` showing clean is **not** sufficient — a mutation recipe
 in this repo needs an explicit `touch` after restore.
+
+---
+
+## 2026-07-31 — Merge sweep (main session)
+
+Swept every open PR in both repos against the merge-train rules. **Five landed, two held, one
+rebased.**
+
+| PR | Verdict |
+|---|---|
+| FE #66 — comment-after-colon in `stripComments` | **Merged first, deliberately.** Both link guards import that module, so it is the one change that can invalidate another PR's green. Landing it ahead of #64/#67 means their CI ran under the corrected scanner, not the leaky one. |
+| FE #64 — WP-18 acceptance gate at every breakpoint | Merged (`d1a6b9c`). |
+| FE #67 — WP-32 bounded sign-in wait | Merged (`3593273`). |
+| FE #68 — WP-23 refusal reads as a sentence | Merged by its own session mid-sweep (`831fad1`). |
+| BE #105 — post-wave regression audit report | Merged (`630922b`), docs-only onto `main`. |
+| BE #109 — audit appended to this file | Was `dirty`: the plan branch had gained the WP-21 section at the same append point. Rebased onto `0faee14`, both sections kept in date order, merged as `6fb1cf5`. |
+| FE #65 — WP-13 promote control · BE #97 — WP-22 dedupe | **Held.** Draft, and the wedge session was mid-turn. Not ours to land. |
+| BE #100 — WP-27 sample order | **Held: RED on its own new tests.** Four failures on run `30628839145`; three of them say the same thing — no delivery-config row exists after `CreateAndEnqueueAsync` — and the fourth says `IsSample` never reaches the DTO. Handed back to the Wave 4 session with the verbatim failures. |
+| BE #98/#99/#103/#106-#108/#110-#115 | Untouched. Drafts and `[DO NOT MERGE]` mutation throwaways belonging to live Wave 3 work. |
+
+**Post-merge state.** FE `main` `831fad1`, CI run `30632392352` **green** — this is the run that
+matters, because each PR's own CI had passed against a `main` that four merges later no longer
+existed. BE `main` `630922b`. Both working trees clean.
+
+**Rule that earned its keep.** Merge-order is not arbitrary when one of the PRs edits a guard.
+#66 tightened what the reachability and link-crawl guards can see; had it landed last, #64 and
+#67 would have carried a green that was computed under the leaky scanner.
