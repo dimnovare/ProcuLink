@@ -11,6 +11,62 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-31) — the resolve recompute is reconciled; two real holes it exposed are NOT
+
+`OrderResolutionService.ResolveAsync` and `AcceptAiSuggestionsAsync` both end with
+`Status = Lines.Any(NeedsReview) ? "pending_review" : "ready"`, with **no from-status guard** on the
+service and none on either endpoint — `OrdersController.Resolve` validates the request BODY only, and
+`AcceptAiSuggestions` validates nothing. The single guard is `IsFinished` = `DeclaredTerminal` =
+`{failed}`. So **a resolve reaches 14 from-states, not one.**
+
+WP-19 (#89) reconciled that writer for `rejected_by_supplier` alone, because that status was a dead
+end and the edges were its way out. The writer is identical everywhere else, and those edges were
+live in production while `OrderStatusMachine.Transitions` and
+`OrderStatusTransitionObserver.AllowedTransitions` both called them impossible. The reported case: an
+operator resolves a **delivered** order, the connection-level price-variance guard re-flags a line,
+and the observer logs `Unexpected order status transition 'delivered' -> 'pending_review'` — a false
+positive on a legitimate flow, which is exactly what the observer's own doc says trains operators to
+ignore it.
+
+**Shipped — BE #93, merged `c61fe30`, CI run `30609018790` green (1408 + 1389 + 1979 tests, 0 failed).**
+Machine +11 edges, observer +13. The two extra observer edges (`ready_to_deliver -> ready`,
+`delivery_dead_letter -> ready`) were missing for a *second* writer as well:
+`OrderMappingOverrideService.IsPastReady` includes both, so every MV-1 mapping edit on such an order
+warned too. The machine already allowed them — the direction the observer⊆machine invariant is
+structurally blind to. `KnownObserverOnlyEdges` loses `delivery_failed -> pending_review`, whose
+"no call site performs it" justification was simply wrong.
+
+Deliberately NOT reconciled, with evidence: `failed` (guarded by `IsFinished`) and `pending_parse`
+(**nothing writes it** — all four `PurchaseOrderEntity` construction sites override the entity's C#
+default, and the stuck-order requeue deliberately re-writes `parsing`).
+
+New guard: `EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges` **derives** the from-state list
+from `AllStatuses` and asserts over BOTH maps against the call site rather than against each other,
+so a status added tomorrow cannot repeat this one from-state at a time. Mutation-checked: dropping a
+single edge fails three independent assertions.
+
+**No runtime behaviour changed.** `IsAllowed` / `NextStatuses` / `IsTerminal` have **zero production
+call sites** — the machine is documentation plus test-enforced invariants, and the observer only
+logs. Widening the map cannot break a live flow; it also means the map enforces nothing at runtime.
+
+### Two real product holes this exposed — OPEN, both want an endpoint guard
+
+1. **`unrouted -> ready` locks the operator out of supplier assignment.** An unrouted order HAS
+   lines, so a resolve — or a header-only edit, which the endpoint accepts — recomputes it out of the
+   routing hold with `SupplierId` still `null`. `OrdersController.AssignSupplier` then claims
+   atomically on `Status == Unrouted` and answers **409 forever**: the one action the hold exists for
+   is gone, and nothing in the product puts the order back.
+2. **`delivering -> ready|pending_review` writes over a live delivery claim.** A row *sits* in
+   `delivering` while a dispatch is in flight or stranded (`StuckDeliveryDetectionService` exists for
+   the stranded case). A resolve overwrites it, and the dispatch's outcome write then lands on
+   whatever the resolve left behind.
+
+Both are product decisions about what a resolve may DO, not transition-map edits, so they are named
+in the map comments and left open rather than silently changed. Neither is known to have fired in
+production; no order census was run for either.
+
+---
+
 ## Snapshot (2026-07-31) — the post-merge CI fix is PROVEN, and it already caught a red main
 
 Closes the open question left by the entry below, which said the fix "cannot be verified before it
@@ -1206,6 +1262,11 @@ enforced by `StartupConfigurationValidator` + `appsettings.Production.json` — 
   exists but isn't surfaced in-app).
 - Design consolidation per master prompt Appendix C; `feat/design-system-v1` branch is
   review-gated, not merged.
+- `POST /api/orders/{id}/resolve` has no from-status guard, and two of the 14 from-states it
+  reaches are harmful (see the 2026-07-31 snapshot): `unrouted -> ready` permanently 409s
+  `AssignSupplier`, and `delivering -> ready` overwrites a live delivery claim. Both want an
+  endpoint guard — a product decision about what a resolve may do, not a map edit. The
+  transition maps are already reconciled (#93); only the guard is outstanding.
 
 ## Open items — founder configuration gaps (feature works, config missing)
 
