@@ -329,6 +329,27 @@ probes and watching them pass:
 Interpolated headings are everywhere, so "checked against the vocab gate" means *some* copy was
 checked. Unowned as of 2026-07-31.
 
+**TRAP 15 — "the number came from a harness, so it is a measurement."** A method note, not anyone's
+defect. **A measurement inherits the scope conditions of its harness, and a number with a method
+behind it reads as more authoritative than a number without one — which is exactly when the scope
+condition goes unstated.**
+
+WP-32's refuter reported the degraded-state card arriving at **11 153 ms on Fast 3G** and **19 694 ms
+on Slow 3G**, missing the 10 s AC. Real harness: CDP `Network.emulateNetworkConditions`, timer
+started before `page.goto`. But it was a **cold localhost production build with no cache**, where
+206 kB of First Load JS crosses an artificial link — not a Vercel edge with a warm cache. The three
+significant figures made it read as field observation.
+
+The underlying finding survived and is worth fixing: the 8 s deadline starts in a `useEffect`, so it
+is a **post-hydration** budget while the AC is **wall clock**. That is a real AC defect with a real
+fix (start the clock earlier). Only the numbers were scoped wrong.
+
+**The test before you publish a number: is this what the user experiences, or what my rig
+produced?** If the second, say so in the same sentence as the number. Both sessions produced an
+inference dressed as an observation on 2026-07-31 — this one, and a `useQueriesEnabled` consumer
+count taken from a stale working tree. The shape recurs under parallelism because nobody re-derives
+a number that already has a method attached.
+
 ### TRAPS added 2026-07-30 (second pass)
 
 **TRAP 6 — "a registry href with no page behind it is a dead link."** WRONG, and it hides the real
