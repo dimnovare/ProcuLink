@@ -32,16 +32,16 @@ public class DashboardController : ControllerBase
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
 
         var totalThisMonth = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == orgId && o.CreatedAt >= monthStart, ct);
+            .CountAsync(o => o.OrgId == orgId && !o.IsSample && o.CreatedAt >= monthStart, ct);
 
         var pendingReview = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == orgId && o.Status == OrderStatusConstants.PendingReview, ct);
+            .CountAsync(o => o.OrgId == orgId && !o.IsSample && o.Status == OrderStatusConstants.PendingReview, ct);
 
         var delivered = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == orgId && o.Status == OrderStatusConstants.Delivered, ct);
+            .CountAsync(o => o.OrgId == orgId && !o.IsSample && o.Status == OrderStatusConstants.Delivered, ct);
 
         var totalOrders = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == orgId, ct);
+            .CountAsync(o => o.OrgId == orgId && !o.IsSample, ct);
 
         return Ok(new { totalOrdersThisMonth = totalThisMonth, pendingReview, delivered, totalOrders });
     }
@@ -58,7 +58,7 @@ public class DashboardController : ControllerBase
 
         var rows = await _db.PurchaseOrders
             .AsNoTracking()
-            .Where(o => o.OrgId == orgId)
+            .Where(o => o.OrgId == orgId && !o.IsSample)
             .GroupBy(o => o.Status)
             .Select(g => new { Status = g.Key, Count = g.Count() })
             .ToListAsync(ct);
@@ -115,7 +115,7 @@ public class DashboardController : ControllerBase
         // scoped to the supplier query only. Aggregated per supplier in SQL.
         var supplierRows = await _db.PurchaseOrders
             .AsNoTracking()
-            .Where(o => o.OrgId == orgId && o.CreatedAt >= supplierHealthCutoff)
+            .Where(o => o.OrgId == orgId && !o.IsSample && o.CreatedAt >= supplierHealthCutoff)
             .Select(o => new
             {
                 o.SupplierId,
@@ -137,7 +137,7 @@ public class DashboardController : ControllerBase
         // in SQL over the indexed buyer_name column — no canonical_json loaded.
         var wireRows = await _db.PurchaseOrders
             .AsNoTracking()
-            .Where(o => o.OrgId == orgId && o.BuyerName != null)
+            .Where(o => o.OrgId == orgId && !o.IsSample && o.BuyerName != null)
             .GroupBy(o => new { o.BuyerName, o.SupplierId })
             .Select(g => new
             {
@@ -155,7 +155,7 @@ public class DashboardController : ControllerBase
         // jsonb scan on the landing page.
         var legacyRows = await _db.PurchaseOrders
             .AsNoTracking()
-            .Where(o => o.OrgId == orgId && o.BuyerName == null && o.CanonicalJson != null)
+            .Where(o => o.OrgId == orgId && !o.IsSample && o.BuyerName == null && o.CanonicalJson != null)
             .OrderByDescending(o => o.CreatedAt)
             .Take(LegacyBuyerNameFallbackRows)
             .Select(o => new { o.SupplierId, o.Status, o.CanonicalJson })
