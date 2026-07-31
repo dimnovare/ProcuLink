@@ -2009,3 +2009,70 @@ card would require Clerk to be un-ready for minutes and then ready within 1.5s o
 
 `navigationClock.ts` argues all of this in its own docstring. That is why point 2 exists — the
 docstring is the claim, not the check.
+
+### 2026-07-31 — Wave 4 (WP-27…WP-32): all six built, five refuted or defect-confirmed, none merged by this session
+
+Session `claude/agitated-chebyshev-339d7b`. Every packet has a PR. **A session rate limit killed six
+running agents mid-flight**; what follows separates what was verified from what was interrupted.
+
+| Packet | PR | Refutation | State |
+|---|---|---|---|
+| WP-27 onboarding | FE #73 + BE #100 | CONFIRMED-WITH-DEFECTS (12 findings, 2 vacuous tests) | fix round interrupted |
+| WP-28 workshop | FE #72 | refuter killed before reporting | **green**, merge-break fixed |
+| WP-29 inbox | FE #70 (+ #75 split) | REFUTED (4 vacuous tests) | fixed; re-refutation interrupted |
+| WP-30 tokens | FE #69 | REFUTED (2 live AA failures + a regression it introduced) | fixed; re-refutation interrupted |
+| WP-31 a11y | FE #77 | never run | green, **mutation table not in hand** |
+| WP-32 degraded | merged `3593273` + `d119e91` | CONFIRMED-WITH-DEFECTS; follow-up refuter killed | merged twice green-but-ungated |
+
+**Six refutations, ten vacuous tests found, zero merged by this session.** The recurring defect was not
+in the code — it was **a packet claiming a scope its evidence did not reach**. WP-32 asserted an AC in
+wall clock and measured it post-hydration. WP-30 asserted "zero AA failures" from a gate that
+structurally cannot see a token-on-token contrast failure.
+
+**Findings that outlive their packets:**
+
+- **`blockBody()` in `check-vocabulary.mjs` was defeated for ALL SEVEN policed registries**, not just
+  `FILTER_CHIPS`. It takes the *first* `\bconst\s+NAME\b` match and never stripped comments, so any
+  comment quoting a declaration disarms `registry-moved`. Third instance of `4c7350a`'s class, in the
+  gate `4c7350a` already fixed once. Fixed on #70; the stripper moved to `scripts/lib/stripComments.mjs`
+  and is re-exported from `src/test/sourceScan.ts` — one copy, three consumers.
+- **`vocabulary.test.ts:264` certified that guard against a synthetic fixture tree** where the registry
+  files do not exist, so `file-not-found` satisfied it unconditionally. It passed identically whether the
+  real guard worked or was dead — and it *was* dead. A test that exercises a guard against a fixture
+  proves the guard's plumbing, not its coverage of the repo.
+- **`mockTransformOrder` wrote `delivered` directly**, skipping `ready_to_deliver` and `delivering`. The
+  transform→deliver boundary had **zero** coverage of any kind — so the divergence was inert, and WP-27's
+  journey is the first test to cross it. Risk points forward, not back: a one-pass mirror of production
+  behaviour that every future delivery assertion inherits.
+- **`acceptanceGateModel` shipped with no test file** — the module #74 centres on. Forcing
+  `OrderWorkshop`'s entire advisory count to zero passed all 1676 tests. Now pinned by nine cases,
+  both halves mutation-checked by exit code.
+- **`POST /api/onboarding/sample-order`** carries no named rate-limit policy and WP-27 turns it into a
+  mail sender with a caller-supplied recipient. Not escalated: the surface does not exist on `main`
+  (`Create(CancellationToken ct)` takes no body), so WP-27 creates it and the cap ships in the same
+  packet. `support`'s 5/min is the right precedent, **not** `upload`'s 60/min — and
+  `RateLimitPolicyAppliedTests` is a hand-written `[InlineData]` catalog, so the row must land in the
+  same commit as the attribute or the wiring is unpinned.
+
+**FE #72 was jointly red and is fixed (`b8d9eae`).** Merging `main` in left a call to
+`failingAcceptanceRows`, which #74 removed — build, vitest, e2e and Vercel all failed. The replacement is
+not a rename: `failingAcceptanceCount` returns `blockers.length` unconditionally while `acceptanceIssues`
+returns `[]` unless `blocked`, so the subtraction nets 0 for a blocked order and every blocker for an
+overridden one. That is exactly the override case #74 exists to model. Rule 6 again, from a third
+direction.
+
+**Four instrument failures in one day**, each producing a report shaped identically to a clean one:
+`spawnSync(args[], {shell:true})` joining argv unquoted so `-t "a name"` became file filters; LF mutation
+patterns matching nothing in a CRLF worktree; MSYS rewriting a leading-slash CLI argument into a Git
+install path; and a swallowed `UnicodeDecodeError` disabling a harness's cleanliness check. Three were
+caught only because the harness was built to **fail loudly on a non-matching pattern** rather than proceed.
+
+**What is NOT verified, stated plainly:**
+- **FE #77 (WP-31) has no mutation table.** Its agent was killed running final gates. Every test passes;
+  none has been shown to fail with its fix reverted. It has also had no refutation.
+- WP-27's and WP-29's/WP-30's fix rounds were interrupted mid-verification; #73's F1 party-noun fix and
+  F5 rate limit may be incomplete. WIP is committed locally in the worktrees, **unpushed**, clearly marked.
+- **WP-32 merged twice without its refuter finishing.** Its first refutation then found `/sign-in` hanging
+  blank for the most common signed-out path. The second refuter was checking whether `performance.now()`
+  anchoring breaks under App Router **soft navigation** — it measures since the *document*, which a
+  client-side nav does not reset, collapsing the budget to its 1500 ms floor. **Unverified.** Now on main.
