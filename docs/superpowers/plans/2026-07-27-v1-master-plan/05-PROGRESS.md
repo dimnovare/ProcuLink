@@ -1347,3 +1347,62 @@ existed. BE `main` `630922b`. Both working trees clean.
 **Rule that earned its keep.** Merge-order is not arbitrary when one of the PRs edits a guard.
 #66 tightened what the reachability and link-crawl guards can see; had it landed last, #64 and
 #67 would have carried a green that was computed under the leaky scanner.
+
+### 2026-07-31 — WP-18 addendum: the adversarial review REFUTED the first cut
+
+Two independent refuter runs over `wp18/validation-every-breakpoint` both returned **REFUTED**.
+Both converged on the same findings. Commit `febe84b` fixes the two P1s; the third item is
+recorded as an accepted, documented limitation.
+
+**P1-a — OVER-BLOCKING (the packet's own defect, pointing the other way).** The first cut read
+`GET /api/orders/{id}/validation`'s per-field `blocking` flag. That flag is the RAW
+blocking-failure set. The gate's decision is that set MINUS a recorded operator override
+(`AcceptanceGate.cs:62-77`), so an overridden order is `Blocked=false` with a NON-EMPTY
+`blockers` array. Counting blockers refused a send the server performs — and since
+`POST /acceptance-gate/override` has no frontend surface at all, there was no way out of it.
+That is a strict regression against `origin/main`, where Send was enabled and the server
+decided. **WP-17 shipped `GET /api/orders/{id}/acceptance-gate` for exactly this and WP-18
+did not call it.** Now consumed; the client renders `decision.blocked` and derives nothing.
+
+The shape again, exactly as the correction log predicts: two true facts — (1) WP-17 made
+`/validation`'s `blocking` derive from `GetBlockingFailuresAsync`, (2) the gate acts on
+`GetBlockingFailuresAsync` — with one unchecked step between them: **the gate does not act on
+that set directly, it acts on that set minus the override.** I verified fact (1) in the real
+controller implementation and still missed the step.
+
+**P1-b — FAIL-OPEN.** `acceptanceQuery.isError` was consulted nowhere, so a 500/timeout left
+`data` undefined → no blockers → green Send. The server refuses to transform when it cannot
+evaluate the gate (`acceptance_gate_unavailable`), so unknown must gate too. Now raises a
+legible "we couldn't check this order" blocker. Reads the query's STATUS (`isError ||
+isPending`), not `data === undefined` — the blunt version broke three existing
+`invariants.test.tsx` cases whose `useQuery` stub returns only `{data: undefined}`.
+
+**Also fixed:** the "Where →" jump was a dead click (the server's rule code is
+`{fieldPath}.{operator}`, which `resolveRowRef` cannot resolve — it splits ids on
+non-alphanumerics); `failingRuleCount` was counting invariants and `output.*` rows that
+`ConfirmDialog` labels "acceptance rules"; the same endpoint was being fetched twice per
+desktop page under two keys with divergent `staleTime`; and the test fixtures used key shapes
+the endpoint never emits, which is what concealed the dead jump.
+
+**ACCEPTED LIMITATION, not fixed — the 390/768/1440 axis is decorative in jsdom.** Mutating
+`setViewport` to a no-op leaves all 27 tests green. Nothing under `workshop/` reads
+`innerWidth`/`matchMedia` and Tailwind is not applied, so the three variants execute one code
+path. The tests DO pin that the gate is breakpoint-independent by construction and that BOTH
+operator send controls are asserted every run (a desktop-only fix fails: 9 of 27). A genuine
+per-breakpoint proof needs Playwright and was out of packet scope. **Anyone claiming
+"validated at every breakpoint" from this suite alone is overclaiming — say "breakpoint-
+independent by construction" instead.**
+
+**Mutation matrix after the fix** (each verified applied before running, reverted after):
+M1 revert issues merge → 13 RED; M2 neuter queryFn → 21 RED; M3 revert hook fallback → 3 RED;
+M4 override-blind → 6 RED; M5 drop unavailable branch → 3 RED; M6 drop placeholderData → 1 RED;
+M7 drop commitVersion from key → 1 RED; M8 canSend ignores blockingIssues → 9 RED;
+M9 setViewport no-op → **27 GREEN** (the limitation above).
+
+Suite 136 files / 1609 tests green; `tsc --noEmit`, eslint, pageshell, vocab all clean.
+
+**Left for a follow-up packet:** the operator OVERRIDE UI. `POST /api/orders/{id}/acceptance-
+gate/override` is live server-side with audit + typed refusals and has no browser surface, so
+an override can be honoured but not created. Also note `useMapperModel`'s `blockingCount`
+still reads the raw `/validation` flag and remains override-blind — a pre-existing
+inconsistency WP-18 deliberately did not take on.
