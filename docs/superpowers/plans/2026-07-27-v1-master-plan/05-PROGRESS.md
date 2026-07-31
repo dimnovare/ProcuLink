@@ -2655,3 +2655,68 @@ CI-enforced deferral is **real** — merging #75 into #70 fails with the exact m
 
 **Handoff:** #69 needs a third pass. #70/#75 need G1 (cheap, mechanism identified above) and a rebase.
 #73 green at `792938b`, BE #100 rebased at `6555d41`, #77 green at `6147a76` with both blockers closed.
+
+---
+
+## 2026-07-31 — Wave 4 handed back: what its owner left open, and where it went
+
+The Wave 4 session closed after eight adversarial passes, ~20 vacuous tests found, two packets landed,
+and **nothing merged on green CI alone**. Its parting state:
+
+| PR | State |
+|---|---|
+| FE #72, #76 | merged (`f9ab894`, `d119e91`) |
+| FE #73 · BE #100 | green `792938b` · rebased `6555d41`, contains `a7437a3` |
+| FE #77 | green `6147a76`, both blockers closed, PR body rewritten |
+| FE #69 | **refuted twice** — needs a third pass |
+| FE #70 · #75 | confirmed-with-defects — G1 + rebase |
+
+Three unowned items came back with it. All three are now dispatched as chips rather than left in a
+report.
+
+### G1 — TRAP 13's third instance is still open, one layer down
+
+The `blockBody` fix strips comments. But **`stripComments` preserves string and template literals by
+design**, because the link guards need them. So the same `const NAME` token inside a string literal,
+template literal or JSX text node still disarms `registry-moved` — **on all seven policed blocks**.
+Reproduced on the real tree: `checked 37 navigation label(s) … OK`, exit 0, where it should see 43.
+**Six chip labels silently unpoliced.**
+
+The fix is already in the repo: `maskLiterals` is exported at `sourceScan.ts:99`, is offset-preserving
+by construction, and sits two lines from `extractRaw` which uses it for exactly this reason. Anchor on
+`maskLiterals(stripComments(src))`, plus a per-block floor — a captured-but-empty body currently
+contributes zero labels and raises no offence at all.
+
+Its owner **declined to do it and said why**, which is the right call recorded the right way: it means
+moving `maskLiterals` and `readLiteral` across the same TS→ESM boundary `stripComments` just crossed,
+updating the re-export, and re-verifying three consumer guards plus the gate — on a branch #77 is
+stacked on. "Recording the mechanism precisely is worth more than a half-verified refactor of the file
+`4c7350a` already fixed once." Dispatched as its own chip, with FE #70/#75 named as blocked on it.
+
+### G4 — the product carries two failure vocabularies, and one packet aligned half of them
+
+`help/exceptions-and-stuck-orders/page.mdx:20-24` still teaches **Parse failed / Transform failed /
+Delivery failed / Rejected by supplier**, and is linked twice from the two articles #75 rewrote. But
+`healthTiles.ts:39`, `ExceptionDetail.tsx:48/50`, `BridgeTopbar.tsx:260` and `problemCopy.ts:260`
+**still render those old names**.
+
+So aligning the third article with the rewritten two would make it contradict the exceptions screen
+the user is looking at. **Do not quick-fix this.** It is TRAP 25's shape as a standing condition
+rather than a merge event: two vocabularies, no mechanical check, and the obvious repair makes it
+worse. Dispatched as its own packet, instructed to derive the inventory from `STATUS_META` rather than
+grep the words that look wrong — the technique that found five extra wrong labels last time.
+
+### G2 and G10 — two for the merge preconditions
+
+- **G2:** the stripper's move to untyped `.mjs` dropped the `SourceSyntax` union from a shared guard's
+  public type. `stripComments("x", "bogus")` now typechecks where it did not at `d119e91`. Folded into
+  the G1 chip, since it is the same file and the same boundary.
+- **G10:** #70 and #75 sit on `d119e91`, not `f9ab894`, and **WP-28 also edits `InboxView.tsx`**, where
+  #70's diff is 508 lines. That merge wants **reading**, not just CI — TRAP 23 and TRAP 25 both apply
+  to the same file at once.
+
+### Dispatched this session
+
+Seven chips total, all unowned and file-disjoint from anything in flight: WP-10 remediation, WP-11
+billing gates, WP-02 vacuous tests, WP-19+WP-24 recovery, **G1+G2 guard fix**, **G4 vocabulary
+reconciliation**, **WP-30 third pass**.
