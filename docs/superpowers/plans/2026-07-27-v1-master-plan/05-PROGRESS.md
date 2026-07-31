@@ -1107,3 +1107,47 @@ flicker the primary CTA disabled on every page load). No consumption of WP-17's 
 carries the gate-aligned answer and was already plumbed client-side; a second client for the same
 decision is one more thing that can drift. **The operator-override flow remains unbuilt on the
 frontend and wants its own packet.**
+
+---
+
+## 2026-07-31 — WP-21 · Prove revision authority (BE PR #98, OPEN)
+
+**The packet's own premise was the audit's mistake, and it stayed refuted.** WP-21 was filed as a
+P0 — "revision authority is off in production; the versioning subsystem is inert there" — from
+reading `ProcuLink.Api/appsettings.Development.json:46` and never reading the deployed environment.
+Re-verified at the start of this packet, filtered, both services:
+
+```
+railway variables --service ProcuLink       | grep -i revision  →  Connections__RevisionAuthority=true
+railway variables --service aware-amazement | grep -i revision  →  Connections__RevisionAuthority=true
+```
+
+Nothing was retired. The packet proved the subsystem works, made its state readable, and corrected
+the record.
+
+**RED first (rule R2).** Six tests failed on CI run `30628425794` before any production change —
+verbatim messages in the PR body. Two of them are worth repeating because they name the gap
+precisely:
+
+- `GET /health/ready must carry a top-level 'revisionAuthority' boolean — the deployed value of Connections:RevisionAuthority has to be readable without shelling into Railway.`
+- `readiness must expose a 'revisionAuthority' check; found: database, migrations, storage, worker`
+
+**Shipped.**
+
+| Deliverable | What landed |
+|---|---|
+| (a1) automated proof | `PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests` — real Postgres. Publish v1 (old endpoint) → pin an order → edit the live config → republish (v1 **archived**, v2 active) → dispatch through the real `DeliveryService`. Pinned goes to v1's endpoint, unpinned to the new one, and the test asserts they **differ** (R6). A companion runs it flag-off and asserts they are **identical** — so the difference is the flag and nothing else. |
+| (a2) production smoke | `docs/ops/revision-authority-production-smoke.md`. **NOT EXECUTED** — production writes were not authorized. Pre-list, disposable request bins, pass/fail table, undo. §2 is two read-only commands that answer "is it on right now" in a minute. |
+| (b) doc corrections | Both `Program.cs` registrations, `IEffectiveConnectionConfigResolver`, `EffectiveConnectionConfigResolver.FlagKey`, `SupplierConnectionService`, `STATUS.md`, the prelaunch-audit P3 (written conditionally on the flag being on — the condition is met, so it is live), plus in this plan: the FULL-VERDICT capability-table cell that still read `✗ flag off in prod`, its stale action item 9, and the ledger's "still unproven" clause. |
+| (c) readable value | `RevisionAuthorityHealthCheck` (tag `ready`, always Healthy) + a flattened top-level `revisionAuthority` boolean on `/health/ready`; and a startup announcement of the **parsed** value on every host via `StartupConfigurationValidator`, which is the Worker's only possible surface — it serves no HTTP and it is the host that runs parse/transform/deliver. |
+| (d) future hosts | `RevisionAuthorityHosts.All` + `RevisionAuthorityHostCoverageTests`: a source scan of every `Program.cs` for an `IEffectiveConnectionConfigResolver` registration, asserted equal to the roster, with the runbook required to name each entry. A third host cannot ship without someone deciding about its variable. |
+
+**The gap that remains is observational, not behavioural.** The live production run of the runbook
+is unperformed and is a founder action. Everything provable without touching production data is
+proved; nothing about the deployed behaviour is asserted here on the strength of a test alone.
+
+**What was deliberately NOT done.** `DeliveryService.TestFireAsync` still validates the LIVE
+delivery config rather than the pinned revision, so a green test-fire can vet a different channel
+than a pinned order will use (the P3 in `docs/qa/2026-06-29-prelaunch-audit-and-test-plan.md`). Now
+that the flag is confirmed ON, that P3 is live rather than conditional — it was re-labelled, not
+fixed. It wants its own packet.

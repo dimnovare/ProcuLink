@@ -192,7 +192,7 @@ Webhook ingress cannot be enabled: `Organisation.WebhookSecretEncrypted` has a d
 | Output templates page | ✓ | ✗ inert | ✓ | ✗ | ~ | ✗ |
 | Validation rules | ✓ | ✗ never evaluated | ✓ | ✗ | ✗ | ✗ |
 | Acceptance profiles | ✓ | ✓ | ✓ | ~ browser-only | ✓ | ✗ |
-| Versioning / revision pinning | ✓ | ✓ | ✓ | ~ | ✓ | ✗ flag off in prod |
+| Versioning / revision pinning | ✓ | ✓ | ✓ | ~ | ✓ | ~~✗ flag off in prod~~ **✓ flag ON in prod — REFUTED 2026-07-27, re-verified 2026-07-31 (WP-21)** |
 | Replay / impact diff | ✓ | ✓ | ✓ | ~ | ✓ | ✗ cannot re-process |
 | Retry / dead-letter | ✓ | ✓ | ✓ | ~ | ✓ real PG | ✓ |
 | Order Passport | ✓ | ✓ | ✓ | ~ no bytes/hash | ✓ | ✓ |
@@ -417,7 +417,12 @@ Ranked by customer impact × frequency × trust risk ÷ effort.
 6. Content-type/filename fix.
 7. CI runs vitest + lint.
 8. Fix `/security` EU-residency copy and `/customers` pilot cards.
-9. Decide and act on revision authority in production.
+9. ~~Decide and act on revision authority in production.~~ **DONE — there was nothing to decide.**
+   `Connections__RevisionAuthority = true` on both Railway services (`ProcuLink`, `aware-amazement`).
+   WP-21 proved the behaviour (`PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests`), made the
+   effective value readable (`GET /health/ready` → `revisionAuthority`; a startup line on every host),
+   and enforced host coverage (`RevisionAuthorityHosts` + `RevisionAuthorityHostCoverageTests`).
+   The live production observation is a founder action: `docs/ops/revision-authority-production-smoke.md`.
 
 **Next — usability, automation, output control.**
 Node reorder + structured conditionals + namespace presets + CSV dialect + typed JSON. Auto-send on clean. Artifact download + SHA-256 in the passport. Terminal delivery channel (email/download) as the onboarding default. Nav restructure and the rename pass. Dashboard/inbox number reconciliation. SSH host-key verification. Postmark inbound dedupe; atomic REST ingress claim. Focus traps. Clerk load-failure fallback (there is none — I proved the infinite spinner live).
