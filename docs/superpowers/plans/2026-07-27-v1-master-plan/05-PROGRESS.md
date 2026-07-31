@@ -2444,3 +2444,62 @@ sweeper re-reads them, or learns to skip the trigger because it "always comes ba
 by #73 and #70. #70 routes transform errors through `parseApiErrorBody` so a raw JSON body never reaches
 the user; #73's `realRunSampleOrder` throws `new Error(await res.text())` and prints it verbatim — the
 same defect #70 fixes one function over. Different functions, so git merges them silently.
+
+---
+
+## 2026-07-31 — the overlap trigger corrected: my 48-file collision was an artifact
+
+**I reported `#77 × #69` as a 48-file collision and recommended landing #69 first. Both wrong.
+#77 *contains* #69** — `merge-base --is-ancestor origin/claude/wp30-tokens origin/claude/wp31-a11y`
+→ YES. Its owner merged the token branch in before opening #77, because WP-31's changes must pass
+WP-30's `lint:tokens`. The sequencing I "recommended" was already done, and there is no rebase waiting
+in either direction.
+
+### The method has three distinct inflation modes, and I hit all three
+
+| Attempt | Method | Inflation |
+|---|---|---|
+| 1 | `diff $(merge-base main B) B`, pairwise-intersect | A **stacked** branch reports maximal overlap with its own base — the loudest possible signal for the least interesting case. |
+| 2 | `diff $(merge-base A B)` for each of A and B | Fixes stacking, but if one branch contains recent `main` and the other is behind, their common ancestor is old, so **main's own commits** count as shared. Packet-vs-main staleness reported as packet-vs-packet. |
+| 3 | diff each branch from its *true* base (newest of main + any contained sibling) | Correct in principle. My selection loop required `main` to be an ancestor of the candidate — but #69 does **not** contain main, so #77 fell back to main and `#69 × #77` stayed inflated. |
+
+The general lesson is not about git. **A pairwise-difference metric over a set of objects that can
+contain one another needs a containment pre-pass, or it reports the containment as similarity.**
+The cheap guard is `merge-base --is-ancestor` between every pair before measuring anything.
+
+### What survives — the hotspot table, which is the useful output anyway
+
+Discounting the `#77 ⊃ #69` double-count, files edited by three or more independent packets:
+
+| File | Branches |
+|---|---|
+| `workshop/OrderWorkshop.tsx` | #65 #69 #70 #71 #73 #75 |
+| `InboxView.tsx` | #69 #70 #71 #73 #75 |
+| `workshop/WorkshopStatusBar.tsx` | #65 #69 #70 #71 #75 |
+| `lib/api-client.ts` | #65 #69 #70 #73 |
+| `mapper/MapperWorkbench.tsx`, `workshop/{WorkshopLinesView,MobileTriage,sendBarLabel}`, `mapper/MapperPreviewPane.tsx`, `help/HelpArticleShell.tsx` | #69 #70 #71 #75 |
+
+`OrderWorkshop.tsx` is the file TRAP 23 already fired in. Six independent packets are editing it.
+
+### The trigger's first true positive — and it is a real claim conflict
+
+`api-client.ts` sits in four branches across two owners. Its owner read the merged content and found
+that **#73 and #70 disagree about a claim right now**: `realRunSampleOrder` (#73) throws
+`new Error(await res.text())` and prints the raw body verbatim, which is **exactly the defect #70
+fixes one function over** — #70's entire point is that a raw JSON body must never reach the user.
+Different functions in the same file, so git will merge them silently and cleanly, and the product
+will contradict itself.
+
+That is the TRAP 25 shape, surfaced by the trigger, in two branches held by the same owner who could
+not see it from inside either one.
+
+### Record the negatives too
+
+`help-articles.ts` fired and came back **clean**: #69 edits a comment listing hex values, #75 edits
+`blurb`/`keywords` — the user-facing content. Different lines, different concerns, no shared claim.
+Ninety seconds to read, definite negative.
+
+Its owner's addition to the rule is the right one: **write the negative down.** A coarse
+over-inclusive trigger whose negatives go unrecorded gets re-read by the next sweeper, or worse,
+learns a reputation for "always comes back clean" and stops being run. A trigger that only ever fired
+on true positives would have to be a detector, and we established a detector is not available here.
