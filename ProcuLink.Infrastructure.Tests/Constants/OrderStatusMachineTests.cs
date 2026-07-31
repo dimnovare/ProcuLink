@@ -789,7 +789,8 @@ public class OrderStatusMachineTests
     /// <para><b>WP-23 — the third exclusion.</b> This test's own closing message asked the next
     /// packet to "gate the endpoint and say so … with the call-site evidence" for any from-state a
     /// resolve genuinely cannot be issued from. WP-23 did exactly that for the two holes c61fe30
-    /// named, so <see cref="OrderStatusMachine.ResolveHeldFrom"/> joins DeclaredTerminal and
+    /// named and WP-23a for the two machine-owned steps (<c>parsing</c>, <c>transforming</c>), so
+    /// <see cref="OrderStatusMachine.ResolveHeldFrom"/> joins DeclaredTerminal and
     /// StatusesNoOrderIsEverIn as a reason a status is NOT in this list. It is deliberately a THIRD
     /// exclusion rather than an addition to either of those: the order genuinely IS in the status
     /// (unlike StatusesNoOrderIsEverIn) and is not finished (unlike DeclaredTerminal) — it is simply
@@ -807,9 +808,19 @@ public class OrderStatusMachineTests
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        resolvableFrom.Should().HaveCountGreaterThan(10,
-            "if the machine's status list ever shrinks to nothing this assertion must fail loudly " +
-            "rather than pass over an empty list");
+        // The bound is a VACUITY guard, not a pin on the count: it exists so a machine whose status
+        // list shrank — or whose three exclusion sets grew to swallow it — fails loudly instead of
+        // asserting over an empty list. It is therefore EXPECTED to move when an exclusion set is
+        // widened deliberately, and WP-23a is the first time that happened: adding parsing +
+        // transforming to ResolveHeldFrom took this list from 12 to exactly 10 (16 statuses − 1
+        // DeclaredTerminal − 1 StatusesNoOrderIsEverIn − 4 ResolveHeldFrom), which turned `> 10` red
+        // on a widening that is correct. Lowered to 5 rather than re-pinned at 10 so the next
+        // deliberate widening does not have to edit this line to stay honest; 5 is still far above
+        // the near-empty case this is here to catch.
+        resolvableFrom.Should().HaveCountGreaterThan(5,
+            "if the machine's status list ever shrinks to nothing — or the three exclusion sets grow " +
+            "to cover nearly all of it — this assertion must fail loudly rather than pass over an " +
+            "empty or near-empty list");
 
         var missing = new List<string>();
         foreach (var from in resolvableFrom)
@@ -841,7 +852,9 @@ public class OrderStatusMachineTests
     /// WP-23, and the guard against the pruning this packet makes tempting (TRAP 1).
     ///
     /// <para><see cref="OrderStatusMachine.ResolveHeldFrom"/> stops the two RECOMPUTE ENDPOINTS from
-    /// being issued against <c>unrouted</c> and <c>delivering</c>. It says nothing about whether the
+    /// being issued against <c>unrouted</c> and <c>delivering</c> (and, after WP-23a, <c>parsing</c>
+    /// and <c>transforming</c> — which is precisely why this test derives its rows from the set
+    /// instead of listing them). It says nothing about whether the
     /// transition is possible, and the next reader will be tempted to conclude that it does: "no
     /// writer performs unrouted → ready any more, so the edge is dead — prune it." That is the
     /// reasoning c61fe30 refused, and it is how <c>rejected_by_supplier</c> became an unintended dead
@@ -890,26 +903,38 @@ public class OrderStatusMachineTests
     /// <para><b>This asserts a DECISION, not a survey.</b> It was first written as
     /// <c>…IsExactlyTheTwoHolesTheRecomputeDestroys</c>, and an adversarial review showed that name
     /// and its justification were simply false: <c>parsing</c> is a third from-state where the
-    /// recompute destroys something, and worse than the two below rather than milder. Both
-    /// parse-persist claims require <c>Status == Parsing</c>
-    /// (<c>OrderIngestionService.cs:1167</c> / <c>:1458</c>) and return <c>Fail</c> on 0 rows BEFORE
-    /// inserting the lines (<c>:1217</c> / <c>:1469</c>), so a resolve issued mid-parse makes the
-    /// parse discard its whole result. Naming the set after a claim about the world meant the test
-    /// asserted that claim (R5) — and the claim was wrong. It now asserts what the product decided,
-    /// and <see cref="OrderStatusMachine.ResolveHeldFrom"/>'s doc carries the open item.</para>
+    /// recompute destroys something, and worse than the first two rather than milder. Naming the set
+    /// after a claim about the world meant the test asserted that claim (R5) — and the claim was
+    /// wrong. It asserts what the product decided instead, which is why widening it is an edit HERE
+    /// and not a side effect anywhere else.</para>
+    ///
+    /// <para><b>WP-23a widened it, deliberately.</b> <c>parsing</c> and <c>transforming</c> are in.
+    /// The evidence for each is on <see cref="OrderStatusMachine.ResolveHeldFrom"/>; the two facts
+    /// that decided it are that <c>parsing</c> is the window <c>AssignSupplier</c> flips an
+    /// <c>unrouted</c> order INTO (<c>OrdersController.cs:747-756</c>), so refusing <c>unrouted</c>
+    /// alone left this set's own lockout reachable one step later, and that <c>transforming</c>'s
+    /// COMPLETION write is unclaimed (<c>OrderTransformService.cs:733</c>) while
+    /// <c>TransformOrderJob.cs:120</c> enqueues delivery straight after it — the only one of the four
+    /// where the correction is not just lost but a stale document is sent. The set is still not
+    /// claimed to be exhaustive.</para>
     /// </summary>
     [Fact]
     public void ResolveHeldFrom_IsExactlyTheStatusesThisGuardRefuses()
         => OrderStatusMachine.ResolveHeldFrom.Should().BeEquivalentTo(
-            new[] { Unrouted, Delivering },
-            "these are the two from-states c61fe30 named and WP-23 closed. unrouted: the recompute " +
-            "clears the routing hold with SupplierId still null, after which AssignSupplier's atomic " +
+            new[] { Unrouted, Delivering, Parsing, Transforming },
+            "each of these four takes a control away from operators, so each must be a deliberate " +
+            "edit here with call-site evidence on ResolveHeldFrom. unrouted: the recompute clears " +
+            "the routing hold with SupplierId still null, after which AssignSupplier's atomic " +
             "`Status == Unrouted` claim answers 409 forever and no control in the product can route " +
             "the order. delivering: a row SITS in that status, so the recompute overwrites a live " +
-            "dispatch claim whose outcome write then lands on top of the correction. This is NOT the " +
-            "complete list of destructive from-states — 'parsing' is a known, evidenced third one, " +
-            "left open deliberately and recorded on ResolveHeldFrom. Adding it is a product decision " +
-            "about removing an operator control, so it must land as a deliberate edit here");
+            "dispatch claim whose outcome write then lands on top of the correction. parsing: both " +
+            "parse-persist claims require `Status == Parsing` and Fail on 0 rows BEFORE inserting " +
+            "the lines, the retry then no-ops and the job lands GREEN, and AssignSupplier flips an " +
+            "unrouted order INTO parsing — so leaving it open left the unrouted lockout reachable " +
+            "through the re-parse. transforming: the transform CLAIM is atomic but its completion " +
+            "write is not, so it lands over the correction and ships an artifact built before it. " +
+            "This is still NOT claimed to be the complete list of destructive from-states: a fifth " +
+            "arrives by naming the writer and the line, never as a refactor's side effect");
 
     /// <summary>
     /// WP-23 — <c>ResolveHoldMessage</c>'s <c>switch</c> arms are the ONE place a held status is

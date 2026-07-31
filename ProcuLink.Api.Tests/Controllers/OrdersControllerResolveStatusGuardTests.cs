@@ -51,20 +51,20 @@ public class OrdersControllerResolveStatusGuardTests
     /// <summary>
     /// Every other status the machine knows — the positive control. c61fe30 deliberately made the
     /// recompute legal from delivered / delivery_failed / rejected_by_supplier / ready_to_deliver /
-    /// delivery_held / delivery_unconfirmed / delivery_dead_letter / transforming, so a guard that
-    /// blocked any of them would undo that packet. <c>failed</c> is in here too, on purpose: it is
-    /// refused one layer down by the service's terminal guard, and this endpoint guard must not take
-    /// that case over.
+    /// delivery_held / delivery_unconfirmed / delivery_dead_letter, so a guard that blocked any of
+    /// them would undo that packet. <c>failed</c> is in here too, on purpose: it is refused one layer
+    /// down by the service's terminal guard, and this endpoint guard must not take that case over.
     ///
-    /// <para><b>Read the <c>parsing</c> row for what it is.</b> It asserts that THIS GUARD does not
-    /// refuse a parsing order — which is true, and is not the same as asserting that it should not.
-    /// It should: both parse-persist claims require <c>Status == Parsing</c>
-    /// (<c>OrderIngestionService.cs:1167</c> / <c>:1458</c>) and return <c>Fail</c> on 0 rows BEFORE
-    /// inserting the lines (<c>:1217</c> / <c>:1469</c>), so a resolve issued mid-parse makes the
-    /// parse discard its entire result. WP-23 was scoped to the two from-states c61fe30 named and
-    /// deliberately did not remove a third operator control without a product decision; the evidence
-    /// is recorded on <see cref="OrderStatusMachine.ResolveHeldFrom"/>. Adding <c>parsing</c> to that
-    /// set moves this row into <see cref="HeldStatuses"/> automatically — no edit here.</para>
+    /// <para><b>WP-23a moved two rows out of here, and that is the whole point of deriving them.</b>
+    /// <c>parsing</c> and <c>transforming</c> used to sit in this list asserting that THIS GUARD does
+    /// not refuse them — true at the time, and never the same claim as "should not". Both were
+    /// evidenced holes recorded on <see cref="OrderStatusMachine.ResolveHeldFrom"/> and left open for
+    /// a product decision about removing an operator control; WP-23a made that decision and added
+    /// them to the set, at which point these two rows became <see cref="HeldStatuses"/> rows with no
+    /// edit in this file. <c>transforming</c> also left the c61fe30 sentence above for the same
+    /// reason: an endpoint that refuses a status does not prune its map edges, and
+    /// <c>OrderStatusMachineTests.EveryResolveHeldStatus_KeepsBothRecomputeEdges</c> is what keeps
+    /// that honest.</para>
     /// </summary>
     public static TheoryData<string> NotHeldStatuses()
     {
@@ -161,6 +161,101 @@ public class OrdersControllerResolveStatusGuardTests
         orders.Verify(o => o.AcceptAiSuggestionsAsync(
             It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<double>(), It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    // ── WP-23a — the two machine-owned steps ──────────────────────────────────
+
+    /// <summary>
+    /// WP-23a — <c>parsing</c> and <c>transforming</c> are refused too, asserted as LITERALS.
+    ///
+    /// <para><b>Why literals here, when every other theory in this file derives its rows.</b> The
+    /// derived rows move with <see cref="OrderStatusMachine.ResolveHeldFrom"/> by design: whatever
+    /// the set says, they assert. That is what keeps them from rotting, and it is also why they can
+    /// never prove the set CONTAINS a status — remove <c>parsing</c> from it and
+    /// <see cref="NotHeldStatuses"/> silently grows a row asserting the opposite, green either way.
+    /// These two rows are the decision itself, pinned at the endpoint where an operator meets it.
+    /// (<c>OrderStatusMachineTests.ResolveHeldFrom_IsExactlyTheStatusesThisGuardRefuses</c> pins the
+    /// same decision one layer down, on the set's membership rather than on the 409.)</para>
+    ///
+    /// <para><b>What each one destroys.</b>
+    /// <br/><c>parsing</c> — both parse-persist claims require <c>Status == Parsing</c>
+    /// (<c>ParseStoredFileAsync</c>'s and <c>ResolvePersistedLinesAsync</c>'s;
+    /// <c>OrderIngestionService.cs:1188</c> / <c>:1479</c> on <c>main</c> @ <c>c8ae076</c>) and return
+    /// <c>Fail</c> on 0 rows BEFORE the lines are inserted (<c>:1238</c> / <c>:1490</c>). Worse than a
+    /// discarded parse: the <c>Fail</c> makes <c>ParseOrderJob</c> throw (<c>:55</c>), Hangfire
+    /// retries, the retry hits <c>ParseStoredFileAsync</c>'s re-entry guard
+    /// (<c>if (entity.Status != "parsing")</c>, <c>:843-844</c>) which returns <c>Ok</c> for an order
+    /// that has left <c>parsing</c>, and the terminal-failure guard at <c>ParseOrderJob.cs:67</c>
+    /// re-throws only for <c>failed</c> — so the job lands GREEN and nothing anywhere reports the
+    /// loss.
+    /// <br/><c>transforming</c> — the transform CLAIM is atomic
+    /// (<c>OrderTransformService.cs:361-368</c>) but its completion write is not
+    /// (<c>:733</c>, a tracked <c>Status = ready_to_deliver</c> on an entity with no concurrency
+    /// token), so it lands unconditionally over the correction — and the artifact it commits was
+    /// built from the graph loaded BEFORE the correction, with
+    /// <c>TransformOrderJob.cs:120</c> enqueueing delivery immediately after. A correction that
+    /// leaves a line needing review is overwritten the same way, so the recompute's own
+    /// <c>pending_review</c> hold does not survive either.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(OrderStatusConstants.Parsing)]
+    [InlineData(OrderStatusConstants.Transforming)]
+    public async Task Resolve_WhileAMachineOwnedStepIsRunning_Returns409_AndNeverReachesTheRecompute(string status)
+    {
+        var (ctrl, orders, orderId) = await BuildWithOrderAsync(status);
+
+        var result = await ctrl.Resolve(orderId, WithLine(), CancellationToken.None);
+
+        Assert.IsType<ConflictObjectResult>(result);
+        orders.Verify(o => o.ResolveAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
+            It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Never);
+    }
+
+    /// <summary>
+    /// The header-only shape, on the two new statuses. It is the one that makes <c>parsing</c>
+    /// reachable with nothing to resolve at all: an order is created with ZERO lines and
+    /// <c>Status = parsing</c> (<c>OrderIngestionService.cs:341</c>), so <c>{"poNumber":"X"}</c>
+    /// recomputes it to <c>ready</c> over an empty line set — after which
+    /// <c>OrdersController.Transform</c>'s <c>Lines.Count == 0</c> guard (<c>:1599</c>) refuses it
+    /// with "Order is still parsing", a sentence that is no longer true and names no way out.
+    /// </summary>
+    [Theory]
+    [InlineData(OrderStatusConstants.Parsing)]
+    [InlineData(OrderStatusConstants.Transforming)]
+    public async Task Resolve_HeaderOnlyEditWhileAMachineOwnedStepIsRunning_IsRefusedToo(string status)
+    {
+        var (ctrl, orders, orderId) = await BuildWithOrderAsync(status);
+
+        var result = await ctrl.Resolve(
+            orderId,
+            new ResolveRequest { PoNumber = "PO-CORRECTED-1" },
+            CancellationToken.None);
+
+        Assert.IsType<ConflictObjectResult>(result);
+        orders.Verify(o => o.ResolveAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
+            It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Never);
+    }
+
+    /// <summary>
+    /// The second door, on the two new statuses. <c>AcceptAiSuggestionsAsync</c>'s recompute runs even
+    /// when nothing is accepted (<c>OrderResolutionService.cs:358</c>), so leaving this door open
+    /// would leave both steps destroyable by a POST that changes nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(OrderStatusConstants.Parsing)]
+    [InlineData(OrderStatusConstants.Transforming)]
+    public async Task AcceptAiSuggestions_WhileAMachineOwnedStepIsRunning_Returns409_AndNeverReachesTheRecompute(string status)
+    {
+        var (ctrl, orders, orderId) = await BuildWithOrderAsync(status);
+
+        var result = await ctrl.AcceptAiSuggestions(orderId, 0.85, CancellationToken.None);
+
+        Assert.IsType<ConflictObjectResult>(result);
+        orders.Verify(o => o.AcceptAiSuggestionsAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<double>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     // ── The refusal an operator actually reads ────────────────────────────────

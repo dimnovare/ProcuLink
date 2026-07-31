@@ -269,11 +269,11 @@ public static class OrderStatusMachine
     /// <c>OrderStatusMachineTests.EveryResolveHeldStatus_KeepsBothRecomputeEdges</c>, which fails if
     /// anyone prunes them.</para>
     ///
-    /// <para><b>Why these two, and only these two.</b> The resolve recompute
+    /// <para><b>Why these four.</b> The resolve recompute
     /// (<c>OrderResolutionService.ResolveAsync</c> :242 and <c>AcceptAiSuggestionsAsync</c> :393)
     /// ends with an unconditional <c>Status = Lines.Any(NeedsReview) ? pending_review : ready</c>.
     /// From most from-states that is a correction landing where a correction should land. From these
-    /// two it destroys something:</para>
+    /// four it destroys something:</para>
     /// <list type="bullet">
     /// <item><c>unrouted</c> — the routing hold. An unrouted order HAS lines
     /// (<c>OrderIngestionService</c> builds the full graph and only overrides the status), so a line
@@ -287,7 +287,82 @@ public static class OrderStatusMachine
     /// dispatches strand there), so a resolve writes straight over the claim while the send may
     /// still be in flight — and the dispatch's own outcome write then lands on whatever the resolve
     /// left behind.</item>
+    /// <item><c>parsing</c> (WP-23a) — a step whose completion is CLAIM-GUARDED, so the correction
+    /// does not merely race the parse, it cancels it. Both parse-persist claims require
+    /// <c>Status == Parsing</c> — <c>ParseStoredFileAsync</c>'s and the file-less sibling in
+    /// <c>ResolvePersistedLinesAsync</c> — and, on 0 rows, return <c>Fail</c> BEFORE the lines are
+    /// inserted. (<c>OrderIngestionService.cs:1188</c> / <c>:1479</c> for the two claims and
+    /// <c>:1238</c> / <c>:1490</c> for the two <c>Fail</c>s, on <c>main</c> @ <c>c8ae076</c>. They were
+    /// <c>:1167</c>/<c>:1458</c>/<c>:1217</c>/<c>:1469</c> when this packet was written — #97 shifted
+    /// the file by 21 lines, which is why the METHOD names lead and the numbers carry a SHA.) Three
+    /// things make it worse than a discarded parse rather than milder:
+    /// <br/>(a) <b>it is silent.</b> The <c>Fail</c> makes <c>ParseOrderJob</c> throw (<c>:55</c>),
+    /// Hangfire retries, the retry hits <c>ParseStoredFileAsync</c>'s own re-entry guard
+    /// (<c>if (entity.Status != "parsing")</c>, <c>:843-844</c> on the same SHA)
+    /// which returns <c>Ok</c> for an order that has left <c>parsing</c>, and <c>ParseOrderJob</c>'s
+    /// terminal-failure re-throw (<c>:67</c>) fires only for <c>failed</c> — so the job lands GREEN.
+    /// <c>StuckOrderDetectionService</c> cannot see the order either: it is no longer in a transient
+    /// status. Nothing anywhere reports the loss.
+    /// <br/>(b) <b>on a first parse there are no lines yet.</b> The stub is created with none
+    /// (<c>OrderIngestionService.cs:341</c>), so the recompute writes <c>ready</c> over an empty line
+    /// set, and <c>OrdersController.Transform</c>'s <c>Lines.Count == 0</c> guard (<c>:1599</c>) then
+    /// refuses the order with "Order is still parsing" — a dead end whose only error message is
+    /// untrue and names no way out.
+    /// <br/>(c) <b>it re-opens the <c>unrouted</c> hole this set exists to close.</b>
+    /// <c>AssignSupplier</c>'s claim flips <c>unrouted → parsing</c> and re-enqueues the parse
+    /// (<c>OrdersController.cs:747-756</c>), so the whole re-parse is a window in which the routing
+    /// correction is destroyable: the resolve recomputes the order to ready/pending_review, the
+    /// re-parse is discarded, and <c>AssignSupplier</c>'s <c>Status == Unrouted</c> claim answers 409
+    /// forever. That is the first bullet's permanent lockout, reached one step later — so refusing
+    /// <c>unrouted</c> alone shut the door and left the window.</item>
+    /// <item><c>transforming</c> (WP-23a) — the same shape, and the only one of the four where the
+    /// corrupted result LEAVES THE BUILDING. The transform CLAIM is atomic
+    /// (<c>OrderTransformService.cs:361-368</c>, keyed on <see cref="ClaimableForTransformFrom"/>)
+    /// but its completion write is not: <c>:733</c> assigns <c>Status = ready_to_deliver</c> on the
+    /// tracked entity, and <c>PurchaseOrderEntity</c> carries no concurrency token, so the UPDATE
+    /// goes out with no status predicate and lands over the correction last-writer-wins. The
+    /// artifact committed in that same <c>SaveChanges</c> was built from the graph loaded BEFORE the
+    /// correction, and <c>TransformOrderJob.cs:120</c> enqueues delivery immediately after — so with
+    /// <c>AutoDeliver</c> on, the stale document is what the counterparty receives while the UI shows
+    /// the corrected lines. It also defeats a HOLD rather than merely losing work: a correction that
+    /// leaves a line needing review writes <c>pending_review</c>, an explicit do-not-deliver, and the
+    /// completion write overwrites that too. (The <c>OriginalValue</c> forcing at <c>:408-414</c> is
+    /// the same assumption stated from the other side: it exists so the failure path's revert to
+    /// <c>ready</c> is not diffed away as a no-op, which is only sound while nothing else writes the
+    /// status during the window.)</item>
     /// </list>
+    ///
+    /// <para><b>Why the two WP-23a statuses are the same case as <c>delivering</c>, not a weaker
+    /// one.</b> The <c>delivering</c> bullet's argument is that the status is not a moment but a
+    /// status a row SITS in, evidenced by <c>StuckDeliveryDetectionService</c> existing because
+    /// dispatches strand there. <c>StuckOrderDetectionService.TransientStatuses</c> is
+    /// <c>{parsing, transforming}</c> and exists for exactly that reason — the same argument, applied
+    /// verbatim, to the two statuses WP-23 skipped. The sweep also BOUNDS what the refusal costs: it
+    /// requeues a stalled order (a fresh parse job for <c>parsing</c>; a reset to <c>ready</c> for
+    /// <c>transforming</c>) up to <c>MaxRequeues</c> and then fails it, so "wait for that step to
+    /// finish, then try again" is a true instruction rather than an indefinite one.</para>
+    ///
+    /// <para><b>What the operator loses: nothing they can use.</b> This set removes a control, which
+    /// is why WP-23 would not widen it without a decision. Priced out, the control is empty: a first
+    /// parse has no lines to correct yet, and the whole recovery path survives the wait — after the
+    /// transform lands, a correction IS accepted from <c>ready_to_deliver</c>, the recompute moves the
+    /// order to <c>ready</c>, and <see cref="ClaimableForTransformFrom"/> admits <c>ready</c>, so
+    /// correct-then-re-send is intact. What the operator gains is that the correction they issue is
+    /// either performed or refused out loud, instead of being accepted and then discarded (parsing) or
+    /// overwritten (transforming).</para>
+    ///
+    /// <para><b>UI reachability splits the two, and not the way WP-23's note implied.</b> Verified in
+    /// the frontend repo on <c>main</c> @ <c>831fad1</c>, 2026-07-31, rather than relayed:
+    /// <c>OrderWorkshop.tsx:605</c> (<c>src/components/bridge/workshop/</c>) early-returns
+    /// <c>&lt;ParsingGate/&gt;</c> for <c>order.status === "parsing"</c> and polls every 3s, so the
+    /// parsing hole is API-reachable only — which is what made it lower-priority for WP-23.
+    /// <b>No such early return exists for <c>transforming</c>.</b> The status appears in that file
+    /// twice, both times cosmetic (the stepper stage at <c>:506</c> and a button label at
+    /// <c>:721</c>), so the workshop renders its correction panels — including the bulk
+    /// <c>/accept-ai-suggestions</c> button — while the transform runs. "Send it, then fix a line
+    /// while it is still going" is therefore an ordinary CLICK path, not a path only an API client can
+    /// take, which makes <c>transforming</c> the higher-priority of the two despite being the one
+    /// named as the weaker candidate.</para>
     ///
     /// <para><b>Deliberately NOT here: <c>failed</c>.</b> It is already refused, one layer down and
     /// for a different reason — <c>OrderResolutionService.IsFinished</c> derives from
@@ -304,38 +379,48 @@ public static class OrderStatusMachine
     /// predates this set and is not fixed here — WP-23 gated the two endpoints identically for the
     /// statuses below, and deliberately did not re-open how they report the terminal refusal.</para>
     ///
-    /// <para><b>NOT exhaustive, and saying so is the point.</b> A third from-state has the same
-    /// shape and is knowingly left open: <c>parsing</c>. Both parse-persist claims require
-    /// <c>Status == Parsing</c> (<c>OrderIngestionService.cs:1167</c> and <c>:1458</c>) and, on 0
-    /// rows, return <c>Fail</c> BEFORE the lines are inserted (<c>:1217</c> / <c>:1469</c>) — so a
-    /// resolve issued mid-parse moves the order to ready/pending_review and the parse then discards
-    /// its entire result. That is the same defect class as the two below, not a milder one. It is
-    /// excluded because WP-23 was scoped to the two holes <c>c61fe30</c> named, because refusing it
-    /// removes a control from operators, and because the shipped UI already returns a reading screen
-    /// for a parsing order (<c>OrderWorkshop.tsx:556</c>) so the path is API-reachable but not
-    /// UI-reachable — none of which makes it safe, only lower-priority. Adding it here is a one-token
-    /// change and the derived tests would cover it automatically; it wants a decision, not a
-    /// refactor. <c>transforming</c> is a weaker fourth candidate on the same argument and was not
-    /// ruled out either. This paragraph is the reason
-    /// <c>ResolveHeldFrom_IsExactlyTheStatusesThisGuardRefuses</c> asserts membership of a DECISION
-    /// and no longer claims to enumerate every destructive from-state.</para>
+    /// <para><b>Still a DECISION, not a proof of exhaustiveness.</b> WP-23 shipped
+    /// <c>{unrouted, delivering}</c> — the two holes <c>c61fe30</c> named — and recorded
+    /// <c>parsing</c> here as an evidenced third one left open on purpose, because closing it removes
+    /// a control and that is a product decision WP-23 was not given, with <c>transforming</c> named
+    /// as an un-ruled-out fourth. WP-23a is that decision, and both are in on the evidence above.
+    /// What is still NOT claimed is that this enumerates every destructive from-state: these four are
+    /// the four with call-site evidence, which is why
+    /// <c>ResolveHeldFrom_IsExactlyTheStatusesThisGuardRefuses</c> asserts membership of a decision
+    /// rather than a survey of the world. A fifth arrives the way these two did — name the writer,
+    /// name the line, say what it destroys — and never by a refactor's side effect.</para>
     ///
     /// <para>Consumed by <c>OrdersController.RefusedByResolveHoldAsync</c>, which gates BOTH
     /// recompute endpoints — <c>POST /api/orders/{id}/resolve</c> and
     /// <c>POST /api/orders/{id}/accept-ai-suggestions</c>. Gating only the first would leave both
     /// holes open through the second, which shares the writer and validates nothing.</para>
     ///
-    /// <para><b>Refused, not made impossible — and for <c>delivering</c>, narrowed rather than
-    /// closed.</b> The guard is a check-then-act read at the endpoint, and
-    /// <c>PurchaseOrderEntity</c> carries no concurrency token, so an order that enters
-    /// <c>delivering</c> between this read and <c>OrderResolutionService</c>'s
-    /// <c>SaveChangesAsync</c> is still overwritten last-writer-wins. The ordinary operator path is
-    /// shut; the race is not. Closing it needs an atomic claim on the resolve write itself, in the
-    /// shape <c>OrdersController.AssignSupplier</c> already uses. <c>unrouted</c> has no such gap —
-    /// nothing moves an order INTO the routing hold after ingest.</para>
+    /// <para><b>Refused, not made impossible — narrowed rather than closed for three of the
+    /// four.</b> The guard is a check-then-act read at the endpoint, and <c>PurchaseOrderEntity</c>
+    /// carries no concurrency token, so an order that ENTERS a held status between this read and
+    /// <c>OrderResolutionService</c>'s <c>SaveChangesAsync</c> is still overwritten
+    /// last-writer-wins. Per status, by who performs that entry write:
+    /// <list type="bullet">
+    /// <item><c>delivering</c> — <c>DeliveryService</c>'s dispatch claim. Real race.</item>
+    /// <item><c>transforming</c> — <c>OrderTransformService</c>'s transform claim, from <c>ready</c>,
+    /// which is a status this guard admits. Real race, and the widest of the three: the ordinary
+    /// "correct it, then send it" sequence is exactly what puts a resolve next to a transform
+    /// claim.</item>
+    /// <item><c>parsing</c> — reachable via a read that saw <c>pending_parse</c> and passed (ingest's
+    /// <c>ParseOrderJob</c> then claims it). Narrow, and unreachable through <c>unrouted</c>: a read
+    /// that sees the routing hold is refused before <c>AssignSupplier</c> can flip it. The stuck
+    /// sweep's requeue keeps an order IN <c>parsing</c> rather than entering it, so it adds no
+    /// window.</item>
+    /// <item><c>unrouted</c> — no gap at all; nothing moves an order INTO the routing hold after
+    /// ingest.</item>
+    /// </list>
+    /// The ordinary operator path is shut for all four; the races above are not. Closing them needs
+    /// an atomic claim on the resolve write itself, in the shape <c>OrdersController.AssignSupplier</c>
+    /// already uses — a change to the WRITER, which is why it is not smuggled in behind an endpoint
+    /// admission rule.</para>
     /// </summary>
     public static readonly IReadOnlySet<string> ResolveHeldFrom =
-        Set(Unrouted, Delivering);
+        Set(Unrouted, Delivering, Parsing, Transforming);
 
     /// <summary>
     /// The sentence an operator reads when <see cref="ResolveHeldFrom"/> refuses their correction.
@@ -356,6 +441,18 @@ public static class OrderStatusMachine
         Delivering =>
             "This order is being sent right now, so it cannot be corrected mid-send. "
           + "Wait for the send to finish, then correct it and send it again.",
+        // WP-23a. Both name the STEP in the operator's words, because neither status is a thing a
+        // user has a mental model of — "still being read" and "being turned into its outgoing
+        // document" are what they would say happened, and each sentence says what the correction
+        // would cost if it were accepted (the whole upload; the document that goes out).
+        Parsing =>
+            "This order is still being read, so there is nothing to correct yet. "
+          + "Wait until it has finished, then make your corrections — a correction saved now would "
+          + "throw away everything the uploaded file contained.",
+        Transforming =>
+            "This order is being turned into its outgoing document right now, so a correction saved "
+          + "now would be left out of the file that goes out. Wait for that step to finish, then "
+          + "correct it and send it again.",
         _ =>
             "This order cannot be corrected while the step it is in is still running. "
           + "Wait for that step to finish, then try your correction again.",
