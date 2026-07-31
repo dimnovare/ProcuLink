@@ -498,7 +498,14 @@ builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
 builder.Services.AddScoped<IConnectionBackfillService, ConnectionBackfillService>();
 // Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by
 // parse-mapping/item-codes, validation, transform, and delivery. Flag-gated by
-// Connections:RevisionAuthority (default OFF = live tables, byte-identical behaviour).
+// Connections:RevisionAuthority. The CODE default is OFF (live tables, byte-identical behaviour),
+// but that is NOT the deployed value: production sets Connections__RevisionAuthority = true on the
+// Railway "ProcuLink" service, so revision authority is ON in production. Do not infer the
+// deployed value from an appsettings file — a 2026-07-27 audit did exactly that and filed a P0
+// claiming the versioning subsystem was inert in production. Read the effective value from
+// GET /health/ready (`revisionAuthority`) or this host's startup log instead. See
+// ProcuLink.Infrastructure/Services/RevisionAuthorityHosts.cs and
+// docs/ops/revision-authority-production-smoke.md.
 builder.Services.AddScoped<IEffectiveConnectionConfigResolver,
                            ProcuLink.Infrastructure.Services.EffectiveConnectionConfigResolver>();
 // Group V2 — replay / impact testing (non-mutating; reuses the transform + acceptance engines).
@@ -733,6 +740,15 @@ builder.Services.AddHealthChecks()
     .AddCheck<ProcuLink.Api.Controllers.WorkerHeartbeatHealthCheck>(
         name: "worker",
         failureStatus: HealthStatus.Degraded,
+        tags: new[] { "ready" })
+    // WP-21 — the EFFECTIVE value of Connections:RevisionAuthority. Always Healthy (the flag being
+    // off is a configuration, not an outage); the value rides the data bag and is flattened to a
+    // top-level `revisionAuthority` boolean by HealthResponseWriter. Exists because the deployed
+    // value was previously readable nowhere, which let a 2026-07-27 audit file a P0 asserting the
+    // versioning subsystem was inert in production when it has been ON there all along.
+    .AddCheck<ProcuLink.Api.Controllers.RevisionAuthorityHealthCheck>(
+        name: "revisionAuthority",
+        failureStatus: HealthStatus.Healthy,
         tags: new[] { "ready" });
 
 // IMonitoringApi is registered scoped (factory wrapper) above for OpsHealthService.

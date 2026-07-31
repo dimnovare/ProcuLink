@@ -53,12 +53,23 @@ public static class HealthResponseWriter
         var workerHealthy = !report.Entries.TryGetValue("worker", out var worker)
             || worker.Status == HealthStatus.Healthy;
 
+        // WP-21: flatten the revision-authority check's EFFECTIVE value the same way, so the one
+        // configuration fact that decides whether ProcuLink's reproducibility claims are true can
+        // be read with `jq -e '.revisionAuthority'` instead of a Railway shell. Defaults to false
+        // when the check is absent, matching the code default — a missing check must never read as
+        // "on". See RevisionAuthorityHealthCheck for why the value is worth serving at all.
+        var revisionAuthority =
+            report.Entries.TryGetValue("revisionAuthority", out var revAuth)
+            && revAuth.Data.TryGetValue("enabled", out var enabled)
+            && enabled is true;
+
         var payload = new
         {
             status = report.Status.ToString(),
             // `ready` tracks the HTTP contract: Unhealthy → 503 (not ready), else 200.
             ready = report.Status != HealthStatus.Unhealthy,
             workerHealthy,
+            revisionAuthority,
             totalDurationMs = Math.Round(report.TotalDuration.TotalMilliseconds, 1),
             checks = report.Entries
                 .Select(e => new

@@ -307,7 +307,8 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         {
             Id = orderId, OrgId = seed.OrgId, SupplierId = seed.SupplierId,
             ConnectionRevisionId = pinTo,
-            PoNumber = poNumber, OrderDate = DateOnly.FromDateTime(now), Currency = "EUR",
+            PoNumber = poNumber, BuyerName = "WP-21 Buyer",
+            OrderDate = DateOnly.FromDateTime(now), Currency = "EUR",
             Status = OrderStatusConstants.ReadyToDeliver, CreatedAt = now, UpdatedAt = now,
         });
         db.OutboundArtifacts.Add(new OutboundArtifact

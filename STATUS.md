@@ -11,6 +11,49 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-31) — revision authority is ON in production, and now says so out loud
+
+**The correction first.** The 2026-07-27 audit filed a P0: "revision authority is off in
+production — the entire versioning/reproducibility story is inert where it matters." That finding
+is **REFUTED**. `Connections__RevisionAuthority = true` on **both** Railway services — `ProcuLink`
+(API) and `aware-amazement` (Worker) — verified 2026-07-27 and re-verified 2026-07-31. The audit
+read `ProcuLink.Api/appsettings.Development.json:46` and inferred the deployed value; it never read
+the deployed environment. **The versioning subsystem is not being retired.**
+
+**Why the mistake was possible, and what changed.** The effective value was served nowhere — no
+endpoint, no log, no doc — so it was a fact only a Railway shell could answer. WP-21 fixed that:
+
+- `GET /health/ready` now carries a top-level `revisionAuthority` boolean (flattened like
+  `workerHealthy`, so `jq -e '.revisionAuthority'` works) plus a `revisionAuthority` check naming
+  the services that must carry the variable.
+- Every host announces the PARSED value at startup via `StartupConfigurationValidator`. This is the
+  Worker's only surface — it serves no HTTP, and it is the host that runs parse/transform/deliver.
+- `RevisionAuthorityHosts.All` is the enforced roster of hosts that resolve an effective config.
+  `RevisionAuthorityHostCoverageTests` scans every `Program.cs` for an
+  `IEffectiveConnectionConfigResolver` registration and fails the build if a host is missing from
+  the roster, or if the runbook does not name it. A third host cannot ship without the variable
+  being someone's explicit decision.
+- `EffectiveConnectionConfigResolver.IsEnabled` is now the single reader of the flag;
+  `SupplierConnectionService`'s duplicate `bool.TryParse` is gone.
+
+**The proof.** `PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests` (real Postgres) publishes v1,
+pins an order to it, edits the live delivery endpoint, republishes (archiving v1 and moving the
+active pointer to v2), then dispatches through the real `DeliveryService`: the **pinned** order goes
+to v1's old endpoint, an **unpinned** order goes to the new one, and the test asserts the two
+DIFFER. Its companion runs the identical scenario with the flag off and asserts both orders land on
+the same endpoint — so the difference is produced by revision authority and nothing else.
+
+**Still open — a founder action.** The live production observation was **NOT** performed. Production
+data mutation was not authorized in that run, so instead there is a written runbook:
+[`docs/ops/revision-authority-production-smoke.md`](docs/ops/revision-authority-production-smoke.md)
+— pre-list, disposable request bins, pass/fail table, and undo. §2 alone (two read-only commands)
+answers "is the flag on right now" in under a minute.
+
+**Known adjacent gap, unchanged:** `DeliveryService.TestFireAsync` still validates the LIVE delivery
+config, not the pinned one, so a green test-fire can vet a different channel than a pinned order
+will actually use (the P3 in `docs/qa/2026-06-29-prelaunch-audit-and-test-plan.md`). Now that the
+flag is confirmed ON, that P3 is live rather than conditional.
+
 ## Snapshot (2026-07-31) — the orphan guard's comment stripper: one scanner, no duplicate
 
 **Shipped — BE [#95](https://github.com/dimnovare/ProcuLink/pull/95), merged `504d9cc`, PR run green
