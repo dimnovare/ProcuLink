@@ -329,6 +329,18 @@ probes and watching them pass:
 Interpolated headings are everywhere, so "checked against the vocab gate" means *some* copy was
 checked. Unowned as of 2026-07-31.
 
+**Widened 2026-07-31 (WP-28), and this is the larger half.** The scanner is **line-based** —
+`check-vocabulary.mjs:436` is `readFileSync(file, "utf8").split(/?
+/)` and every rule runs per
+line. So a **JSX text node that spans lines is never scanned at all**. Proof from the field:
+`MapperWorkbench`'s shipped banner copy *"Shown as dashed wires"* — a retired noun — has always been
+invisible, while the identical wording in a `title=` attribute was caught instantly.
+
+State the limit as: **`lint:vocab` covers attributes and same-line prose. It does not cover JSX text
+nodes or interpolated strings.** Green means "no violations in the parts it reads", and the parts it
+reads are a minority of rendered body copy.
+
+
 **TRAP 15 — "the number came from a harness, so it is a measurement."** A method note, not anyone's
 defect. **A measurement inherits the scope conditions of its harness, and a number with a method
 behind it reads as more authoritative than a number without one — which is exactly when the scope
@@ -389,6 +401,36 @@ whether tightening it penalises the behaviour the gate exists to encourage; if i
 better comparison (content-hash the entries) or an honest limitation note in the header — not a new
 CI failure. The remaining real gap here is only the same-count swap, and the growth property that
 *does* hold is currently unpinned by any test.
+
+**TRAP 18 — "seven mutations, all caught."** Or: the mutation was never applied and the report looks
+identical. **A mutation harness that cannot distinguish "mutation applied, test survived" from
+"mutation never applied" produces a report shaped exactly like a clean one.** Vacuity is the defect
+we hunt; this is vacuity in the *instrument*.
+
+It fired for real on 2026-07-31: this repo checks out **CRLF**, a harness's patterns were **LF**, and
+five of seven matched nothing. Every test then "passed". It was caught only because that harness was
+written to **print the pattern and exit 9 when a pattern does not match**, instead of proceeding on a
+no-op.
+
+Mechanical rules: **a mutation step must fail loudly on a non-matching pattern**, and **the
+worktree's line-ending convention is part of the pattern.** Verify the mutation landed (diff it)
+before trusting the run. Second instrument failure the same day — the other was `spawnSync` argv
+quoting, which cost six already-recorded rows.
+
+**TRAP 19 — "a packet edited another packet's guard to make itself pass."** Sometimes true and the
+most serious thing on the board; sometimes the guard's *locator* simply broke. **Separate the two
+before escalating:**
+
+- **Assertion** — what the guard proves. Relaxing this destroys the guard. Escalate.
+- **Locator** — how the test finds the subject. A label change legitimately breaks it, and a wrong
+  locator **throws** (`"desktop send button not found"`) rather than silently passing.
+
+Worked example: WP-28 (FE #72) changed `validationEveryBreakpoint.test.tsx`'s `sendControls()` helper
+from `aria-label === "Send to supplier"` to `startsWith("Send to supplier")`, because WP-28 makes the
+disabled control state its reason. Every acceptance-validation assertion is untouched. That is a
+locator repair, not a weakened guard — **but the check that settles it is reconstructing the original
+regression and confirming the guard still catches it**, which is what WP-28's refuter was tasked to
+do. Read the diff before deciding; do not skip the reconstruction because the diff looks innocent.
 
 ### TRAPS added 2026-07-30 (second pass)
 
