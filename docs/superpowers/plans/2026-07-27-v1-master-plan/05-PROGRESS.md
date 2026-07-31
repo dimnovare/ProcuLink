@@ -1753,3 +1753,70 @@ reverts with `git checkout -- <file>`. It took the mutation **and the fix** toge
 came back clean and green. Only re-reading the deps array showed it was gone. This is the failure the
 plan already warns about by name — it still happened, so it is worth restating: the harness cannot
 tell your work from its own.
+
+### 2026-07-31, later — wedge session: all three packets through the adversarial gate
+
+**Every one came back REFUTED. All three PRs are now green, MERGEABLE and non-draft.**
+
+| Packet | PR | Head-run evidence |
+|---|---|---|
+| WP-13 | FE **#65** | `30635843072` — all checks pass |
+| WP-22 | BE **#97** | `30637633696` — pass; all 6 new tests `Passed`, none skipped; Api.Tests 1995/1 |
+| WP-15 S1+S2 | FE **#71** | `30637674207` — all checks pass |
+
+#### The gate earned its keep three times, and twice on work it had already passed
+
+**WP-13.** Two blockers. `!order?.supplierId` never fires — an unassigned counterparty is
+`Guid.Empty`, a NON-EMPTY string — so the control was live on real unrouted orders. The test passed
+only because the fixture faked `supplierId: undefined`, a shape the type declares impossible. And
+`total` counted four fields while the sentence printed two, so a ten-field output-tree promotion
+announced "Saved 0 header and 0 line mappings" in green.
+
+**WP-22.** The PR's HEADLINE mechanism had zero coverage: `ProviderMessageId` defaults to null and
+both payload builders omitted it, so all five Postmark cells proved only content-hash dedupe in one
+org-wide bucket. Deleting the controller wiring is a legal compile and left the suite green. In
+production the key degenerates to `(orgId, "postmark:", sha256(attachment))`, two different emails
+with byte-identical attachments collide, and the second is answered 200 with an empty
+`CreatedOrderIds` — a silently lost purchase order.
+
+**WP-15.** The fix was one file short. `withManipulators` had zero callers, and the reason not to
+delete it was that the identical four-key literal was LIVE in `mapper/mapperModel.ts`, destroying
+`expression` and `sourceToken`. That half is worse: `sourceToken` is authorable today from the output
+mapping editor, both screens edit the same override document, and dropping it left a rule that
+survived the `inert` check while bound to nothing — delivering an empty column.
+
+### TRAPS added 2026-07-31 (second pass)
+
+**TRAP — "a test that builds the DTO proves the wiring."** It cannot. WP-22's three new dedupe cells
+construct their own `InboundEmailPayload`, so they prove the ROUTER honours a message id and say
+nothing about who populates it — the controller mutation came back GREEN *with the new cells in
+place*. Only an assertion at the seam that does the wiring closes it. **Generalises to every
+DTO-shaped test in both repos.**
+
+**TRAP — "a source-text guard proves a registration."** WP-22's own new
+`PushIngressSeamRegistrationTests` used a bare whole-file regex, so MOVING the registration below
+`builder.Build()` kept it green — while the built provider never sees it, every REST-ingress POST
+500s, and the webhook dies. Position is part of the contract. Assert the match offset, not just the
+match.
+
+**TRAP — "the local gates cover the UI."** jsdom applies no CSS. WP-13's longer label overflowed the
+status bar by 90px at 1280 and **all 42 RTL tests stayed green**; the `zero overflow at 1280 wide
+viewport` e2e caught it. Any change to a `whiteSpace: nowrap` row is invisible to the unit layer by
+construction.
+
+**PROCESS — a mutation must COMPILE to prove anything.** One WP-22 mutation removed a named argument
+with a regex and broke the syntax; a compile failure is not a test failure and would have been
+recorded as a kill that never happened. Build the mutation before pushing it.
+
+### The shape that repeated across all three packets
+
+Every blocker this round was **a mechanism that worked and a path that could not reach it, or a test
+that could not see it**:
+
+- WP-13: the promote engine worked; the button did not render (and then: the guard existed, but only
+  against a fixture the wire never sends).
+- WP-22: the dedupe worked; the key never arrived (and the tests built the key themselves).
+- WP-15: the writers worked; one of the two modules that needed them still had its own literal.
+
+That is the same defect WP-13 was written to fix, appearing three more times in the packets that fix
+it. **When a packet extracts a mechanism, mutate the CALL SITE — every call site — not the module.**
