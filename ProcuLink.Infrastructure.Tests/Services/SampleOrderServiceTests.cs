@@ -12,7 +12,7 @@ public class SampleOrderServiceTests
         var orgId = Guid.NewGuid();
         var svc = TestSampleOrderService.Create(db, out var enqueuer);
 
-        var orderId = await svc.CreateAndEnqueueAsync(orgId, "user_abc", default);
+        var orderId = (await svc.CreateAndEnqueueAsync(orgId, "user_abc", deliverToEmail: null, default)).OrderId;
 
         var samples = await db.Suppliers.Where(s => s.OrgId == orgId && s.IsSample).ToListAsync();
         Assert.Single(samples);
@@ -34,8 +34,8 @@ public class SampleOrderServiceTests
         var orgId = Guid.NewGuid();
         var svc = TestSampleOrderService.Create(db);
 
-        await svc.CreateAndEnqueueAsync(orgId, "user_abc", default);
-        await svc.CreateAndEnqueueAsync(orgId, "user_abc", default);
+        await svc.CreateAndEnqueueAsync(orgId, "user_abc", deliverToEmail: null, default);
+        await svc.CreateAndEnqueueAsync(orgId, "user_abc", deliverToEmail: null, default);
 
         var supplierCount = await db.Suppliers.CountAsync(s => s.OrgId == orgId && s.IsSample);
         Assert.Equal(1, supplierCount);
@@ -55,7 +55,7 @@ public class SampleOrderServiceTests
         var orgId = Guid.NewGuid();
         var svc = TestSampleOrderService.Create(db);
 
-        await svc.CreateAndEnqueueAsync(orgId, "user_abc", default);
+        await svc.CreateAndEnqueueAsync(orgId, "user_abc", deliverToEmail: null, default);
 
         var billableCount = await db.PurchaseOrders.CountAsync(o => o.OrgId == orgId && !o.IsSample);
         Assert.Equal(0, billableCount);
@@ -76,7 +76,7 @@ public class SampleOrderServiceTests
         var orgId = Guid.NewGuid();
         var svc = TestSampleOrderService.Create(db);
 
-        await svc.CreateAndEnqueueAsync(orgId, "user_abc", default);
+        await svc.CreateAndEnqueueAsync(orgId, "user_abc", deliverToEmail: null, default);
 
         var supplier = await db.Suppliers.SingleAsync(s => s.OrgId == orgId && s.IsSample);
 
@@ -105,13 +105,111 @@ public class SampleOrderServiceTests
         var orgId = Guid.NewGuid();
         var svc = TestSampleOrderService.Create(db);
 
-        await svc.CreateAndEnqueueAsync(orgId, "user_abc", default);
-        await svc.CreateAndEnqueueAsync(orgId, "user_abc", default);
+        await svc.CreateAndEnqueueAsync(orgId, "user_abc", deliverToEmail: null, default);
+        await svc.CreateAndEnqueueAsync(orgId, "user_abc", deliverToEmail: null, default);
 
         var catalogCount = await db.SupplierProducts.CountAsync(p => p.OrgId == orgId);
         Assert.Equal(5, catalogCount);
 
         var mappingCount = await db.ItemMappings.CountAsync(m => m.OrgId == orgId);
         Assert.Equal(2, mappingCount);
+    }
+
+    // ── WP-27: the delivery setup that closes the practice loop ───────────────
+    // Before WP-27 nothing seeded a SupplierDeliveryConfig, so every practice run ended at
+    // "no delivery is set up" — the class docstring promised a parse → transform → DELIVER
+    // loop the code did not close, and the dashboard checklist said so out loud.
+
+    [Fact]
+    public async Task CreateAndEnqueueAsync_SeedsEmailDeliveryConfig_WhenAddressSupplied()
+    {
+        await using var db = TestDb.Create();
+        var orgId = Guid.NewGuid();
+        var svc = TestSampleOrderService.Create(db);
+
+        var result = await svc.CreateAndEnqueueAsync(orgId, "user_abc", "maria@northgate.example", default);
+
+        Assert.True(result.DeliveryConfigured);
+
+        var supplier = await db.Suppliers.SingleAsync(s => s.OrgId == orgId && s.IsSample);
+        var config = await db.SupplierDeliveryConfigs
+            .SingleAsync(c => c.OrgId == orgId && c.SupplierId == supplier.Id);
+
+        // `email` is the ONLY offered protocol that needs zero cooperation from a real supplier:
+        // mail leaves from ProcuLink's own verified sender, so any address works on day one.
+        Assert.Equal("email", config.Protocol);
+        Assert.Contains("maria@northgate.example", config.ConfigJson);
+        Assert.Equal("csv", config.OutputFormat);
+        // The fixture leaves line 3 unmapped on purpose, so an auto-run would only 422 at
+        // transform — and the explicit send press is the moment the practice run exists to teach.
+        Assert.False(config.AutoDeliver);
+        // The email API takes no per-supplier credentials, and no secret may enter ConfigJson.
+        Assert.Equal(string.Empty, config.EncryptedCredentials);
+    }
+
+    [Fact]
+    public async Task CreateAndEnqueueAsync_SkipsDeliveryConfig_WhenDeploymentHasNoEmailProvider()
+    {
+        // A deployment with no email-API token cannot send at all. Seeding here would turn the
+        // honest "delivery not set up" ending into a guaranteed delivery_failed — strictly worse.
+        await using var db = TestDb.Create();
+        var orgId = Guid.NewGuid();
+        var svc = TestSampleOrderService.Create(db, emailConfigured: false);
+
+        var result = await svc.CreateAndEnqueueAsync(orgId, "user_abc", "maria@northgate.example", default);
+
+        Assert.False(result.DeliveryConfigured);
+        Assert.Empty(await db.SupplierDeliveryConfigs.Where(c => c.OrgId == orgId).ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-an-address")]
+    [InlineData("one@x.example, two@y.example")] // a list is not a single practice recipient
+    public async Task CreateAndEnqueueAsync_SkipsDeliveryConfig_WhenAddressUnusable(string? address)
+    {
+        await using var db = TestDb.Create();
+        var orgId = Guid.NewGuid();
+        var svc = TestSampleOrderService.Create(db);
+
+        var result = await svc.CreateAndEnqueueAsync(orgId, "user_abc", address, default);
+
+        Assert.False(result.DeliveryConfigured);
+        Assert.Empty(await db.SupplierDeliveryConfigs.Where(c => c.OrgId == orgId).ToListAsync());
+    }
+
+    [Fact]
+    public async Task CreateAndEnqueueAsync_RepointsExistingDeliveryConfig_RatherThanAddingASecond()
+    {
+        await using var db = TestDb.Create();
+        var orgId = Guid.NewGuid();
+        var svc = TestSampleOrderService.Create(db);
+
+        await svc.CreateAndEnqueueAsync(orgId, "user_abc", "first@example.test", default);
+        await svc.CreateAndEnqueueAsync(orgId, "user_abc", "second@example.test", default);
+
+        var configs = await db.SupplierDeliveryConfigs.Where(c => c.OrgId == orgId).ToListAsync();
+        var config = Assert.Single(configs);
+        Assert.Contains("second@example.test", config.ConfigJson);
+        Assert.DoesNotContain("first@example.test", config.ConfigJson);
+    }
+
+    [Fact]
+    public async Task CreateAndEnqueueAsync_EmailTemplatesUseSingleBracePlaceholders()
+    {
+        // EmailApiDeliveryDispatcher.BuildFromTemplate does a literal Replace of "{poNumber}" and
+        // "{fileName}". A "{{poNumber}}" template would ship braces to the supplier verbatim.
+        await using var db = TestDb.Create();
+        var orgId = Guid.NewGuid();
+        var svc = TestSampleOrderService.Create(db);
+
+        await svc.CreateAndEnqueueAsync(orgId, "user_abc", "maria@northgate.example", default);
+
+        var config = await db.SupplierDeliveryConfigs.SingleAsync(c => c.OrgId == orgId);
+        Assert.Contains("{poNumber}", config.ConfigJson);
+        Assert.Contains("{fileName}", config.ConfigJson);
+        Assert.DoesNotContain("{{", config.ConfigJson);
     }
 }

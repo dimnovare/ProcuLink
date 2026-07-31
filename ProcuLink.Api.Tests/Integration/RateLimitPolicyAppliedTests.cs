@@ -49,6 +49,11 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
     [InlineData(typeof(InvoiceController), nameof(InvoiceController.Download), "signed-url")]
     // Anonymous support form feeds an outbound email sender → "support" (5/min).
     [InlineData(typeof(SupportController), nameof(SupportController.Contact), "support")]
+    // The practice-order endpoint persists a CALLER-SUPPLIED recipient address that a
+    // subsequent send mails from ProcuLink's verified Postmark sender → "sample-order"
+    // (5/min, its own partition). It previously fell back to the 300/60s global limiter,
+    // which is far too loose for a surface that seeds outbound mail recipients.
+    [InlineData(typeof(SampleOrderController), nameof(SampleOrderController.Create), "sample-order")]
     public void Action_HasExpectedRateLimitPolicy(Type controller, string actionName, string expectedPolicy)
     {
         var method = controller.GetMethod(actionName, BindingFlags.Public | BindingFlags.Instance)
@@ -142,5 +147,44 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
 
         Assert.True(sawTooManyRequests,
             "The 'support' rate-limit policy must reject with 429 once its 5/60s window is exceeded.");
+    }
+
+    // ── Live enforcement: the "sample-order" policy actually returns 429 ──────
+    //
+    // WP-27 gave POST /api/onboarding/sample-order a caller-supplied `deliverTo`
+    // that is persisted as a delivery recipient; the user's next send then mails a
+    // CSV from ProcuLink's verified Postmark sender to that address. Bounces and
+    // complaints on caller-chosen recipients are charged to OUR sender reputation —
+    // the same amplification shape as the support form, minus the fixed inbox — so
+    // the cap is the same 5/60s, in its own partition.
+    //
+    // The attribute-presence row above is the deterministic guard; this one proves
+    // the middleware honours it. UseRateLimiter runs before UseAuthorization, so the
+    // anonymous client is rejected with 429 before the 401 it would otherwise get.
+    [Fact]
+    public async Task SampleOrder_Returns429_AfterExceedingPolicyLimit()
+    {
+        var client = _factory.CreateClient();
+
+        const int requests = 12; // comfortably above the 5/min "sample-order" cap
+        var sawTooManyRequests = false;
+
+        for (var i = 0; i < requests; i++)
+        {
+            var resp = await client.PostAsync(
+                "/api/onboarding/sample-order",
+                new StringContent(
+                    """{"deliverTo":"probe@example.com"}""",
+                    System.Text.Encoding.UTF8, "application/json"));
+
+            if (resp.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                sawTooManyRequests = true;
+                break;
+            }
+        }
+
+        Assert.True(sawTooManyRequests,
+            "The 'sample-order' rate-limit policy must reject with 429 once its 5/60s window is exceeded.");
     }
 }

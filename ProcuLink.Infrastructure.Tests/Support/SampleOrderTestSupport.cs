@@ -22,14 +22,34 @@ internal static class TestSampleOrderService
 {
     public static SampleOrderService Create(
         ProcuLinkDbContext db,
-        out FakeParseJobEnqueuer enqueuer)
+        out FakeParseJobEnqueuer enqueuer,
+        bool emailConfigured = true)
     {
         enqueuer = new FakeParseJobEnqueuer();
-        return new SampleOrderService(db, enqueuer, new InMemoryFileStorage(), new NoOpAnalytics());
+        return new SampleOrderService(
+            db, enqueuer, new InMemoryFileStorage(), new NoOpAnalytics(),
+            new FakeEmailApiClient(emailConfigured));
     }
 
-    public static SampleOrderService Create(ProcuLinkDbContext db) =>
-        Create(db, out _);
+    public static SampleOrderService Create(ProcuLinkDbContext db, bool emailConfigured = true) =>
+        Create(db, out _, emailConfigured);
+}
+
+/// <summary>
+/// Stands in for the Postmark client. Only <see cref="IsConfigured"/> matters to
+/// SampleOrderService — it gates the WP-27 delivery seeding so a deployment with no email provider
+/// keeps the honest pre-WP-27 "no delivery is set up" ending instead of a guaranteed failed send.
+/// </summary>
+internal sealed class FakeEmailApiClient : IEmailApiClient
+{
+    public FakeEmailApiClient(bool configured) => IsConfigured = configured;
+
+    public bool IsConfigured { get; }
+    public string DefaultFrom => "orders@proculink.test";
+
+    public Task<EmailApiResult> SendAsync(EmailApiMessage message, CancellationToken ct = default) =>
+        throw new InvalidOperationException(
+            "SampleOrderService must never send mail itself — delivery is driven by the user's send.");
 }
 
 internal sealed class FakeParseJobEnqueuer : IParseJobEnqueuer
@@ -102,7 +122,6 @@ internal sealed class SampleOrderTestDbContext : ProcuLinkDbContext
         modelBuilder.Ignore<DeliveryAttempt>();
         modelBuilder.Ignore<AuditEvent>();
         modelBuilder.Ignore<SupplierPoMapping>();
-        modelBuilder.Ignore<SupplierDeliveryConfig>();
         modelBuilder.Ignore<IdempotencyKey>();
         modelBuilder.Ignore<AiUsageMonthly>();
             modelBuilder.Ignore<PoPassportEvent>();
@@ -155,6 +174,16 @@ internal sealed class SampleOrderTestDbContext : ProcuLinkDbContext
         });
 
         modelBuilder.Entity<SupplierProduct>(b =>
+        {
+            b.HasKey(x => x.Id);
+            b.Ignore(x => x.Organisation);
+            b.Ignore(x => x.Supplier);
+        });
+
+        // WP-27: the sample supplier is now seeded with an `email` delivery setup so the practice
+        // order can actually reach `delivered`. Mapped standalone (navigations ignored) like the
+        // other entities above — it used to be Ignore()d, which would silently swallow the seed.
+        modelBuilder.Entity<SupplierDeliveryConfig>(b =>
         {
             b.HasKey(x => x.Id);
             b.Ignore(x => x.Organisation);

@@ -2752,7 +2752,9 @@ public sealed class OrdersController : ControllerBase
         ContactName:          e.ContactName,
         ContactEmail:         e.ContactEmail,
         ContactPhone:         e.ContactPhone,
-        SupplierSuggestions:  supplierSuggestions
+        SupplierSuggestions:  supplierSuggestions,
+        // WP-27: the review screen's "practice order" framing reads this, not a query parameter.
+        IsSample:             e.IsSample
     );
 
     // ── Supplier auto-detect: read + decision recording ───────────────────────

@@ -63,7 +63,19 @@ public record OrderDto(
     /// <para>Advisory only: the order is still <c>unrouted</c> and stays that way until a human
     /// posts to <c>assign-supplier</c>. Nothing here has changed any routing.</para>
     /// </summary>
-    IReadOnlyList<SupplierSuggestionDto>? SupplierSuggestions = null
+    IReadOnlyList<SupplierSuggestionDto>? SupplierSuggestions = null,
+    /// <summary>
+    /// True when this is the onboarding practice order created by <c>SampleOrderService</c>
+    /// (<c>PurchaseOrderEntity.IsSample</c>). The review screen keys its "practice order" framing
+    /// off THIS field.
+    /// <para>
+    /// Before WP-27 the flag existed on the row and on <see cref="PassportDto"/> but not here, so
+    /// the frontend drove the framing off a <c>?sample=1</c> query parameter instead — which meant a
+    /// bookmark, a back-button, or an inbox row click rendered a practice order as a real one. Do
+    /// not remove this field without giving the frontend another server-side signal.
+    /// </para>
+    /// </summary>
+    bool IsSample = false
 );
 
 /// <summary>

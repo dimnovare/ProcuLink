@@ -325,6 +325,18 @@ builder.Services.AddRateLimiter(options =>
     // more than a handful of tickets a minute — keep this tight.
     options.AddPolicy("support", ctx => Window(ctx, "support", permit: 5, seconds: 60));
 
+    // The practice-order endpoint persists a CALLER-SUPPLIED recipient address, and
+    // the user's next send mails a CSV to it from ProcuLink's verified Postmark
+    // sender. That is the support form's amplification shape without its one
+    // mitigation: support posts to a fixed inbox we own, so its bounces land on us
+    // by design, whereas here the recipient is chosen by the caller and every bounce
+    // or complaint is charged to our sender reputation. Same 5/60s cap, own
+    // partition so a burst here cannot consume the support budget or vice versa.
+    // NOT "upload" (60/min) — that is sized for a daily batch of POs, each costing
+    // one parse job against the caller's own org, and would permit 60 emails a
+    // minute to addresses we have never verified.
+    options.AddPolicy("sample-order", ctx => Window(ctx, "sample-order", permit: 5, seconds: 60));
+
     // Global backstop: every request (including ones with no named policy) is
     // bounded per partition. Generous so it never bites normal usage, but it
     // closes the "endpoint with no [EnableRateLimiting]" gap.
