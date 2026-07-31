@@ -279,6 +279,28 @@ re-introduce a breakpoint-conditional mount and silently undo the fix. **Re-intr
 `hidden lg:flex` gate around anything that participates in acceptance validation is the specific
 regression.** Read `d1a6b9c` before editing that file.
 
+**TRAP 11 — "`base.sha` says the PR is on top of main."** It does not. The GitHub API's
+`pulls/N.base.sha` is the head of the **base branch right now**; it says nothing about what the PR
+branch contains. `mergeable: true` is also not containment — it only means git found no textual
+conflict. The main session made exactly this error this round, read two PRs as already rebased, and
+was refuted by the only test that answers the question:
+
+```
+git merge-base --is-ancestor origin/main origin/<branch>   # true = branch contains main
+git rev-list --count origin/<branch>..origin/main          # how far behind
+```
+
+Both PRs forked at `478b809` and were four commits behind. **Never infer containment from a PR API
+field.**
+
+**TRAP 12 — "the PR's green was computed against current main."** `pull_request` runs execute
+against `refs/pull/N/merge`, computed **at event time**, and GitHub does **not** recompute it when
+the base moves afterwards. Two PRs this round were created three seconds and ninety seconds after
+`831fad1` landed — a race no one can call from the outside. This is protocol rule 6 with a mechanism
+attached: a re-run against current main is **required** before merging a PR whose base moved,
+especially one that ships a gate with a baseline (WP-30's `lint:tokens` per-file ratchet is state a
+sibling merge invalidates). Pushing the rebase is the cheap way to force the fresh run.
+
 ### TRAPS added 2026-07-30 (second pass)
 
 **TRAP 6 — "a registry href with no page behind it is a dead link."** WRONG, and it hides the real
