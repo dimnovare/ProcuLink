@@ -315,9 +315,15 @@ technique is used in at least two places (`plain-language-copy.test.ts` names it
 Where the question is "is it mounted", render it and assert on the DOM.
 
 **Third instance the same day, inside a gate — and the class now has a named remedy.**
-`check-vocabulary.mjs:482` is `new RegExp(\`\bconst\s+${name}\b\`).exec(src)`, first match wins, no
-comment stripping. A packet added the explanatory comment `// \`const FILTER_CHIPS\` in
-src/components/bridge/InboxView.tsx` and the gate re-anchored onto the comment. Measured: rename at
+`check-vocabulary.mjs:482` takes the **first** match of a bare declaration regex, with no comment
+stripping:
+
+```js
+const decl = new RegExp(`const\s+${name}`).exec(src);
+```
+
+A packet added an explanatory comment naming `const FILTER_CHIPS` above the real declaration, and
+the gate re-anchored onto the comment. Measured: rename at
 `478b809` → exit 1 `registry-moved`; identical rename on the branch → **exit 0**; delete the array
 outright → **exit 0**, label count silently 43→37. `FILTER_CHIPS` is the **only** one of six
 `NOUN_REGISTRIES` carrying a duplicate `const NAME` token, so inspection would never find it.
