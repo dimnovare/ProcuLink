@@ -126,6 +126,11 @@ public sealed class OutputTemplateEmitter
                 {
                     if (child.NodeType == OutputNodeType.Attribute) continue; // attributes are XML-only
                     if (!ShouldEmit(child, row, lineScope)) continue;         // conditional field
+                    // `emptyValue: omit` drops the PROPERTY, not just its value — the distinction a
+                    // receiver makes between "absent" and "empty string", which nothing about the
+                    // value itself can express. Decided here because only the parent can leave a
+                    // property out; WriteJsonValue has already been asked for one by then.
+                    if (OmitsWhenEmpty(child) && IsEmptyLeaf(child, row, lineScope)) continue;
                     w.WritePropertyName(child.Name);
                     WriteJsonValue(w, child, row, lineScope, lineRowFor, orderedLines);
                 }
@@ -145,9 +150,91 @@ public sealed class OutputTemplateEmitter
                 w.WriteEndArray();
                 break;
 
-            default: // Field / Attribute → a string value
-                w.WriteStringValue(MappedTransformService.ResolveRule(node.Rule ?? Empty, row, lineScope) ?? string.Empty);
+            default: // Field / Attribute → a leaf value, typed only if the node asked for it
+                WriteJsonLeaf(w, node, MappedTransformService.ResolveRule(node.Rule ?? Empty, row, lineScope) ?? string.Empty);
                 break;
+        }
+    }
+
+    /// <summary>True when this leaf declares that an empty value should drop the property.</summary>
+    private static bool OmitsWhenEmpty(OutputNode node) =>
+        node.NodeType is OutputNodeType.Field
+        && string.Equals(node.EmptyValue, "omit", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether a leaf resolves to nothing. Whitespace counts as empty: a value that is only spaces
+    /// is not information, and a receiver told to distinguish absent from empty did not mean
+    /// "absent, or two spaces".
+    /// </summary>
+    private static bool IsEmptyLeaf(OutputNode node, IReadOnlyDictionary<string, string> row, bool lineScope) =>
+        string.IsNullOrWhiteSpace(MappedTransformService.ResolveRule(node.Rule ?? Empty, row, lineScope));
+
+    /// <summary>
+    /// Write a JSON leaf as the type the node declares. No declaration — and any unrecognised one —
+    /// means a string, which is what every leaf was before this existed, so an absent
+    /// <see cref="OutputNode.ValueType"/> is byte-identical.
+    ///
+    /// <para><b>A value that does not fit its declared type throws.</b> Coercing it back to a string
+    /// would produce a document that is well-formed JSON and wrong: a receiver validating against a
+    /// schema where <c>quantity</c> is a number rejects the whole payload, and does so AFTER delivery
+    /// has been reported as successful. Failing here — where the order is still on an operator's
+    /// screen and the message can name the node and the value — is the kinder of the two failures.</para>
+    ///
+    /// <para>Numbers are parsed with <see cref="System.Globalization.CultureInfo.InvariantCulture"/>:
+    /// the value has already been through the manipulator chain, so <c>1.234,50</c> here means an
+    /// author asked for a localised STRING and then declared it a number, which is a mistake worth
+    /// reporting rather than silently reinterpreting as 1.234.</para>
+    /// </summary>
+    private static void WriteJsonLeaf(Utf8JsonWriter w, OutputNode node, string value)
+    {
+        switch ((node.ValueType ?? string.Empty).ToLowerInvariant())
+        {
+            case "number":
+                if (!decimal.TryParse(value, System.Globalization.NumberStyles.Any,
+                                      System.Globalization.CultureInfo.InvariantCulture, out var num))
+                    throw new InvalidOperationException(
+                        string.IsNullOrWhiteSpace(value)
+                            // An EMPTY numeric field is a different authoring mistake from a
+                            // non-numeric one, and it has a different fix, so it gets its own
+                            // sentence rather than "'' is not a number" — which reads like a bug in us.
+                            ? $"Output field '{node.Name}' is set to emit a number but has no value for " +
+                              "this order. Either bind it to a field that always has one, set it to be " +
+                              "left out when empty, or change its type back to text."
+                            : $"Output field '{node.Name}' is set to emit a number, but resolved to " +
+                              $"'{value}', which is not one. Change the field's type back to text, or " +
+                              "fix what it is bound to.");
+                w.WriteNumberValue(num);
+                break;
+
+            case "boolean":
+                if (!TryParseBoolean(value, out var flag))
+                    throw new InvalidOperationException(
+                        $"Output field '{node.Name}' is set to emit true/false, but resolved to '{value}'. " +
+                        "Accepted: true/false, yes/no, 1/0.");
+                w.WriteBooleanValue(flag);
+                break;
+
+            case "null":
+                w.WriteNullValue();
+                break;
+
+            default:
+                w.WriteStringValue(value);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The truthy/falsy spellings a purchase-order feed really carries. <c>bool.TryParse</c> alone
+    /// accepts only "True"/"False", so a supplier's <c>Y</c>/<c>1</c> would throw for no good reason.
+    /// </summary>
+    private static bool TryParseBoolean(string value, out bool result)
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "true" or "yes" or "y" or "1": result = true;  return true;
+            case "false" or "no" or "n" or "0": result = false; return true;
+            default: result = false; return false;
         }
     }
 
@@ -313,10 +400,25 @@ public sealed class OutputTemplateEmitter
                                ? new List<OutputNode>()
                                : RealChildren(lineItem).Where(c => c.NodeType == OutputNodeType.Field).ToList();
 
+        // The authored dialect, or the defaults that reproduce the pre-dialect bytes exactly.
+        var dialect     = template.CsvDialect;
+        var delimiter   = string.IsNullOrEmpty(dialect?.Delimiter) ? "," : dialect!.Delimiter!;
+        var quoteAlways = string.Equals(dialect?.QuotePolicy, "always", StringComparison.OrdinalIgnoreCase);
+        // Null keeps Environment.NewLine — platform-dependent, and deliberately so: it is what every
+        // existing supplier already receives, and pinning it here would change their bytes.
+        var lineEnding  = string.IsNullOrEmpty(dialect?.LineEnding) ? Environment.NewLine : dialect!.LineEnding!;
+        var writeHeader = dialect?.WriteHeaderRow ?? true;
+
+        string Field(string v) => MappedTransformService.Escape(v, delimiter, quoteAlways);
+
         var sb = new StringBuilder();
 
-        var headerNames = headerFields.Select(f => f.Name).Concat(lineFields.Select(f => f.Name));
-        sb.AppendLine(string.Join(",", headerNames.Select(MappedTransformService.Escape)));
+        if (writeHeader)
+        {
+            var headerNames = headerFields.Select(f => f.Name).Concat(lineFields.Select(f => f.Name));
+            // Append + explicit terminator rather than AppendLine, which hardcodes Environment.NewLine.
+            sb.Append(string.Join(delimiter, headerNames.Select(Field))).Append(lineEnding);
+        }
 
         var headerValues = headerFields
             .Select(f => MappedTransformService.ResolveRule(f.Rule ?? Empty, headerRow, lineScope: false) ?? string.Empty)
@@ -330,10 +432,47 @@ public sealed class OutputTemplateEmitter
             if (lineItem is not null && !ShouldEmit(lineItem, lineRow, lineScope: true)) continue;
             var lineValues = lineFields
                 .Select(f => MappedTransformService.ResolveRule(f.Rule ?? Empty, lineRow, lineScope: true) ?? string.Empty);
-            sb.AppendLine(string.Join(",", headerValues.Concat(lineValues).Select(MappedTransformService.Escape)));
+            sb.Append(string.Join(delimiter, headerValues.Concat(lineValues).Select(Field))).Append(lineEnding);
         }
 
-        return Encoding.UTF8.GetBytes(sb.ToString());
+        return CsvEncoding(dialect?.Encoding).GetBytes(sb.ToString());
+    }
+
+    /// <summary>
+    /// The output encoding for a CSV dialect. Null/blank → UTF-8 with NO byte-order mark, which is
+    /// what <c>Encoding.UTF8.GetBytes</c> produced before dialects existed (the static
+    /// <c>Encoding.UTF8</c> emits a preamble only when a writer asks for one; <c>GetBytes</c> never
+    /// does). A new <c>UTF8Encoding(false)</c> is used rather than <c>Encoding.UTF8</c> so that
+    /// staying byte-identical does not depend on that subtlety.
+    ///
+    /// <para><b>Why the explicit `false` matters even though it changes nothing today.</b>
+    /// <c>GetBytes</c> never writes a preamble whatever the flag says — only a writer that asks for
+    /// one does. So a test asserting "the emitted bytes have no BOM" cannot fail on this flag, and a
+    /// mutation flipping it to <c>true</c> survives. The flag is here for the day this path becomes a
+    /// <c>StreamWriter</c>, where <c>Encoding.UTF8</c> WOULD prepend EF BB BF and quietly break every
+    /// receiver that parses the first column by name. The invariant is asserted on the ENCODING's
+    /// preamble rather than on the output bytes, which is the only place it is observable.</para>
+    ///
+    /// <para>An unknown encoding name FAILS rather than falling back: silently shipping UTF-8 to a
+    /// receiver that asked for windows-1252 produces mojibake the receiver cannot diagnose, and a
+    /// name is only ever here because somebody typed it.</para>
+    /// </summary>
+    internal static Encoding CsvEncoding(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
+        // Legacy code pages are not registered by default on .NET Core.
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        try
+        {
+            return Encoding.GetEncoding(name);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidOperationException(
+                $"CSV dialect declares an unknown text encoding '{name}'. Use a .NET encoding name " +
+                "such as 'utf-8' or 'windows-1252'.", ex);
+        }
     }
 
     // ── Shared ─────────────────────────────────────────────────────────────────────

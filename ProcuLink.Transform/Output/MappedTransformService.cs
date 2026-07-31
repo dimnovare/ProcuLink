@@ -687,10 +687,27 @@ public sealed class MappedTransformService
     }
 
     /// <summary>RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline. Internal so the OutputNode CSV emitter escapes byte-identically.</summary>
-    internal static string Escape(string value)
+    internal static string Escape(string value) => Escape(value, ",", quoteAlways: false);
+
+    /// <summary>
+    /// CSV field escaping for an authored dialect (WP-15).
+    ///
+    /// <para><c>Escape(v, ",", quoteAlways: false)</c> is byte-identical to the one-arg overload —
+    /// which is the whole reason the overload delegates to this rather than the two drifting apart.
+    /// That identity is what keeps every existing CSV supplier's output unchanged.</para>
+    ///
+    /// <para>The delimiter is a STRING, not a char: a dialect may legitimately be a tab or a
+    /// multi-character sequence, and a caller holding one should not have to prove it is a single
+    /// character before it can escape correctly.</para>
+    /// </summary>
+    internal static string Escape(string value, string delimiter, bool quoteAlways)
     {
-        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
-            return $"\"{value.Replace("\"", "\"\"")}\"";
-        return value;
+        if (quoteAlways) return $"\"{value.Replace("\"", "\"\"")}\"";
+
+        var needsQuoting =
+            (delimiter.Length > 0 && value.Contains(delimiter, StringComparison.Ordinal))
+            || value.Contains('"') || value.Contains('\n') || value.Contains('\r');
+
+        return needsQuoting ? $"\"{value.Replace("\"", "\"\"")}\"" : value;
     }
 }
