@@ -18,7 +18,7 @@ namespace ProcuLink.Api.Services;
 /// now live in four cohesive internal sub-services constructed in the ctor below. Each public
 /// method delegates one-to-one to the matching sub-service; behaviour is unchanged.
 /// </summary>
-public sealed class OrderService : IOrderService, IStubOrderCreator
+public sealed class OrderService : IOrderService, IStubOrderCreator, IClaimedOrderCreator
 {
     private readonly OrderIngestionService  _ingestion;
     private readonly OrderQueryService      _query;
@@ -127,6 +127,20 @@ public sealed class OrderService : IOrderService, IStubOrderCreator
     Task<Result<PurchaseOrderEntity>> IStubOrderCreator.CreateUnroutedStubAsync(
         Guid organisationId, Guid orderId, Stream fileStream, string filename, string contentType, CancellationToken ct)
         => _ingestion.CreateStubAsync(organisationId, supplierId: null, fileStream, filename, contentType, ct, orderId);
+
+    // ── IClaimedOrderCreator (push-ingress claim-first; pre-generated id + sender domain) ──
+
+    Task<Result<PurchaseOrderEntity>> IClaimedOrderCreator.CreateClaimedStubAsync(
+        Guid organisationId, Guid? supplierId, Guid orderId, Stream fileStream, string filename,
+        string contentType, string? inboundSenderDomain, CancellationToken ct)
+        => _ingestion.CreateStubAsync(organisationId, supplierId, fileStream, filename, contentType, ct,
+            orderId: orderId, inboundSenderDomain: inboundSenderDomain);
+
+    Task<Result<PurchaseOrderEntity>> IClaimedOrderCreator.CreateClaimedFromParsedOrderAsync(
+        Guid organisationId, Guid? supplierId, Guid orderId, ExtractedOrder order, string source,
+        string? inboundSenderDomain, CancellationToken ct)
+        => _ingestion.CreateStubFromParsedOrderAsync(organisationId, supplierId, order, source, ct,
+            inboundSenderDomain: inboundSenderDomain, orderId: orderId);
 
     public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
         Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct,

@@ -8,6 +8,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Infrastructure.Services.Ingress;
 
 namespace ProcuLink.Infrastructure.Services.Email;
 
@@ -17,7 +18,7 @@ namespace ProcuLink.Infrastructure.Services.Email;
 /// </summary>
 /// <remarks>
 /// A message whose organisation has no supplier is HELD, not rejected: its attachments are
-/// imported via <c>IOrderService.CreateUnroutedStubAsync</c> and the parse job parks them
+/// imported via <c>IClaimedOrderCreator.CreateClaimedStubAsync</c> with a null supplier and the parse job parks them
 /// <c>unrouted</c> for <c>POST /api/orders/{id}/assign-supplier</c> — the same hold the pull
 /// channels use. The caller therefore answers 200; a false <c>InboundEmailResult.Success</c>
 /// is reserved for messages this product cannot act on: an unparseable recipient, an unknown
@@ -48,7 +49,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     /// <summary>
     /// Extensions the router accepts. Pre-filter happens here; if a registered
     /// <c>IPurchaseOrderParser</c> later rejects the file (e.g. EDI parser not
-    /// yet wired up), <c>IOrderService.CreateStubAsync</c> returns a Failure
+    /// yet wired up), <c>IClaimedOrderCreator.CreateClaimedStubAsync</c> returns a Failure
     /// result and the attachment is skipped with a warning log.
     /// </summary>
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -92,8 +93,28 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     /// </summary>
     private const string EmailBodyNlpSourceTag = "email_body_nlp";
 
+    /// <summary>
+    /// Namespace prefix stamped on the provider's message id before it is stored in
+    /// <see cref="EmailImportRecord.ImapMessageId"/>. That ledger is shared with the IMAP PULL
+    /// channel, whose values are RFC-822 <c>Message-Id</c> headers; a Postmark <c>MessageID</c> is
+    /// the provider's own GUID from a different namespace entirely. Prefixing makes it impossible
+    /// for the two to alias each other on the (OrgId, message id, content hash) unique index, and
+    /// makes a row's channel readable at a glance. The column keeps its <c>imap_message_id</c> name
+    /// — renaming it is a cosmetic migration, deliberately not bundled with a correctness fix.
+    /// </summary>
+    private const string PostmarkClaimPrefix = "postmark:";
+
+    /// <summary>
+    /// Marks a claim whose content hash covers the email BODY rather than an attachment, so a
+    /// body-NLP order and an attachment that happened to hash identically can never collide.
+    /// </summary>
+    private const string BodyClaimPrefix = "body:";
+
+    /// <summary>File-name recorded on a body-NLP claim, which has no attachment to name.</summary>
+    private const string BodyClaimFileName = "(email body)";
+
     private readonly ProcuLinkDbContext _db;
-    private readonly IOrderService _orders;
+    private readonly IClaimedOrderCreator _orders;
     private readonly IParseJobEnqueuer _enqueuer;
     private readonly IEmailBodyOrderExtractor _bodyExtractor;
     private readonly IConfiguration _config;
@@ -101,7 +122,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
 
     public InboundEmailRouter(
         ProcuLinkDbContext db,
-        IOrderService orders,
+        IClaimedOrderCreator orders,
         IParseJobEnqueuer enqueuer,
         IEmailBodyOrderExtractor bodyExtractor,
         IConfiguration config,
@@ -253,27 +274,51 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 ? "application/octet-stream"
                 : att.ContentType;
 
-            // IOrderService.CreateStubAsync uploads to R2 and creates the stub.
-            // It is the same call browser-upload and IMAP-poll use today. With no
-            // supplier we take the unrouted sibling instead: same upload, NULL
-            // supplier_id, and the parse job parks the order 'unrouted'.
-            var stubResult = supplierId is { } routedSupplierId
-                ? await _orders.CreateStubAsync(
-                    org.Id, routedSupplierId, ms, att.FileName ?? "attachment", contentType, ct,
-                    ExtractSenderDomain(payload.FromEmail))
-                : await _orders.CreateUnroutedStubAsync(
-                    org.Id, ms, att.FileName ?? "attachment", contentType, ct,
-                    ExtractSenderDomain(payload.FromEmail));
+            // ── CLAIM-FIRST dedupe ───────────────────────────────────────────
+            // Same contract as the three PULL channels (see IngressDedupe): the ledger row is
+            // committed BEFORE the order is created, and the unique index — not the existence
+            // check — is the real guard. This is what stops a Postmark retry (any non-200 is
+            // re-delivered ten times over ~10.5 hours) from turning one email into N orders and
+            // N supplier deliveries.
+            var claimKey = ClaimKeyFor(payload.ProviderMessageId);
+            var contentHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(att.Content));
 
-            if (!stubResult.IsSuccess)
+            var claim = await ClaimAsync(org.Id, claimKey, contentHash, att.FileName, ct);
+            if (claim is null)
             {
-                _logger.LogWarning(
-                    "Inbound email attachment {FileName} for org {OrgId} could not create order stub: {Error}",
-                    att.FileName, org.Id, stubResult.Error);
+                // Either already imported, or a concurrent delivery holds the claim. Both mean
+                // "nothing new to do" — never a second order.
+                _logger.LogInformation(
+                    "Inbound email attachment {FileName} for org {OrgId} already claimed (message {MessageId}); skipping duplicate.",
+                    att.FileName, org.Id, claimKey);
                 continue;
             }
 
-            var orderId = stubResult.Value!.Id;
+            var orderId = claim.OrderId;
+
+            // CreateClaimedStubAsync uploads to R2 and creates the stub under the claim's
+            // pre-generated id — a find-or-create on that primary key, so a resume after a
+            // transient failure can never produce a second order. With no supplier we pass null:
+            // same upload, NULL supplier_id, and the parse job parks the order 'unrouted'.
+            var stubResult = await _orders.CreateClaimedStubAsync(
+                org.Id, supplierId, orderId, ms, att.FileName ?? "attachment", contentType,
+                ExtractSenderDomain(payload.FromEmail), ct);
+
+            if (!stubResult.IsSuccess)
+            {
+                // Result.Fail is a PERMANENT content error (empty/unsupported): mark the claim
+                // terminal so a genuinely-bad attachment is bounded rather than retried on every
+                // re-delivery. A TRANSIENT infra failure THROWS instead and propagates, leaving
+                // the claim holding its real OrderId with no order — which the next delivery
+                // RESUMES. That asymmetry is the whole no-lost-order guarantee.
+                _logger.LogWarning(
+                    "Inbound email attachment {FileName} for org {OrgId} could not create order stub; marking claim terminal: {Error}",
+                    att.FileName, org.Id, stubResult.Error);
+                claim.OrderId = IngressDedupe.TerminalOrderId;
+                await _db.SaveChangesAsync(ct);
+                continue;
+            }
+
             await _enqueuer.EnqueueAsync(orderId, org.Id, ct);
             created.Add(orderId);
 
@@ -292,7 +337,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         // which would violate the no-data-leaves guarantee.
         //
         // A supplier is NOT required. With none resolvable the extracted order takes the unrouted
-        // sibling, exactly as the attachment path above takes CreateUnroutedStubAsync: the order is
+        // sibling, exactly as the attachment path above passes a null supplier: the order is
         // parked for a human to route rather than dropped. Do not fabricate a supplier id here —
         // the null is the signal that routing is still owed.
         if (created.Count == 0
@@ -304,27 +349,50 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 var extraction = await _bodyExtractor.ExtractAsync(payload.Body!, ct);
                 if (extraction.Success && extraction.Order is not null)
                 {
-                    var stubResult = supplierId is { } bodySupplierId
-                        ? await _orders.CreateStubFromParsedOrderAsync(
-                            org.Id, bodySupplierId, extraction.Order, EmailBodyNlpSourceTag, ct,
-                            ExtractSenderDomain(payload.FromEmail))
-                        : await _orders.CreateUnroutedStubFromParsedOrderAsync(
-                            org.Id, extraction.Order, EmailBodyNlpSourceTag, ct,
-                            ExtractSenderDomain(payload.FromEmail));
+                    // The body path creates orders too, so it needs the same claim — otherwise a
+                    // replayed body-only email produces one order per re-delivery. The hash covers
+                    // the BODY text (prefixed, so it cannot alias an attachment hash), which also
+                    // deduplicates a provider that supplies no message id at all.
+                    var bodyClaimKey = ClaimKeyFor(payload.ProviderMessageId);
+                    var bodyHash = BodyClaimPrefix + Convert.ToHexString(
+                        System.Security.Cryptography.SHA256.HashData(
+                            System.Text.Encoding.UTF8.GetBytes(payload.Body!)));
 
-                    if (stubResult.IsSuccess)
+                    var bodyClaim = await ClaimAsync(org.Id, bodyClaimKey, bodyHash, BodyClaimFileName, ct);
+                    if (bodyClaim is null)
                     {
-                        var orderId = stubResult.Value!.Id;
-                        created.Add(orderId);
+                        // Already imported, or a concurrent delivery holds the claim. Fall through
+                        // to the processed-audit row below — the message IS handled, there is just
+                        // nothing new to create.
                         _logger.LogInformation(
-                            "Inbound email created {Mode} order {OrderId} for org {OrgId} from email body NLP (confidence={Confidence:F2}).",
-                            supplierId is null ? "unrouted" : "routed", orderId, org.Id, extraction.Confidence);
+                            "Inbound email body for org {OrgId} already claimed (message {MessageId}); skipping duplicate.",
+                            org.Id, bodyClaimKey);
                     }
                     else
                     {
-                        _logger.LogWarning(
-                            "Inbound email body extraction for org {OrgId} succeeded but stub creation failed: {Error}",
-                            org.Id, stubResult.Error);
+                        var stubResult = await _orders.CreateClaimedFromParsedOrderAsync(
+                            org.Id, supplierId, bodyClaim.OrderId, extraction.Order, EmailBodyNlpSourceTag,
+                            ExtractSenderDomain(payload.FromEmail), ct);
+
+                        if (stubResult.IsSuccess)
+                        {
+                            var orderId = stubResult.Value!.Id;
+                            created.Add(orderId);
+                            _logger.LogInformation(
+                                "Inbound email created {Mode} order {OrderId} for org {OrgId} from email body NLP (confidence={Confidence:F2}).",
+                                supplierId is null ? "unrouted" : "routed", orderId, org.Id, extraction.Confidence);
+                        }
+                        else
+                        {
+                            // Permanent content failure — bound the claim so every later
+                            // re-delivery skips it instead of re-running the extractor and the
+                            // same failure.
+                            _logger.LogWarning(
+                                "Inbound email body extraction for org {OrgId} succeeded but stub creation failed; marking claim terminal: {Error}",
+                                org.Id, stubResult.Error);
+                            bodyClaim.OrderId = IngressDedupe.TerminalOrderId;
+                            await _db.SaveChangesAsync(ct);
+                        }
                     }
                 }
                 else
@@ -353,6 +421,80 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             entityId: created.Count == 1 ? created[0] : (Guid?)null);
 
         return new InboundEmailResult(true, OrgId: orgId, CreatedOrderIds: created, Error: null);
+    }
+
+    // ── Claim-first dedupe ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// The ledger key for this delivery: the provider's message id, namespaced so it cannot alias an
+    /// IMAP <c>Message-Id</c> in the shared table. A provider that supplies no id yields just the
+    /// prefix, and the content hash then carries the dedupe on its own (the same fallback the IMAP
+    /// poller uses for a server that omits the header).
+    /// </summary>
+    private static string ClaimKeyFor(string? providerMessageId) =>
+        PostmarkClaimPrefix + (providerMessageId?.Trim() ?? string.Empty);
+
+    /// <summary>
+    /// Claims (OrgId, <paramref name="claimKey"/>, <paramref name="contentHash"/>) for import,
+    /// committing the ledger row BEFORE any order exists. Returns the claim to create under, or
+    /// <c>null</c> when this content must NOT be imported again.
+    ///
+    /// <para>Three outcomes, matching <see cref="IngressDedupe"/>'s contract exactly:</para>
+    /// <list type="bullet">
+    /// <item><description>no row → insert a claim carrying a fresh pre-generated order id and
+    /// return it (CREATE). A concurrent delivery that also got here loses the unique-index race,
+    /// catches 23505 and returns null (SKIP) — it must not resume, the winner is mid-flight;</description></item>
+    /// <item><description>a row whose claim is SATISFIED (terminal sentinel, or its order already
+    /// exists) → null (SKIP): a true duplicate, including the "order committed but a later step
+    /// crashed" case;</description></item>
+    /// <item><description>a row whose order does NOT exist → return it (RESUME): a transient failure
+    /// abandoned it, so recreate under the same id. Without this branch an "any existing claim means
+    /// skip" policy would mark the message seen forever and the purchase order would be silently
+    /// LOST — worse than the duplicate the claim prevents.</description></item>
+    /// </list>
+    /// The returned entity is TRACKED by <c>_db</c>, so the caller can mark it terminal on a
+    /// permanent failure and have <c>SaveChangesAsync</c> persist it.
+    /// </summary>
+    private async Task<EmailImportRecord?> ClaimAsync(
+        Guid orgId, string claimKey, string contentHash, string? fileName, CancellationToken ct)
+    {
+        var existing = await _db.EmailImportRecords.FirstOrDefaultAsync(
+            r => r.OrgId == orgId && r.ImapMessageId == claimKey && r.AttachmentHash == contentHash, ct);
+
+        if (existing is not null)
+        {
+            return await IngressDedupe.ClaimSatisfiedAsync(_db, orgId, existing.OrderId, ct)
+                ? null      // SKIP — already imported, or deliberately bounded.
+                : existing; // RESUME — the order was never created.
+        }
+
+        var record = new EmailImportRecord
+        {
+            Id             = Guid.NewGuid(),
+            OrgId          = orgId,
+            ImapMessageId  = claimKey,
+            AttachmentHash = contentHash,
+            // Pre-generated and stored ATOMICALLY with the claim insert — there is no separate
+            // "backfill the id" step whose failure could open a window where the claim exists but
+            // points nowhere.
+            OrderId        = Guid.NewGuid(),
+            FileName       = fileName,
+            ImportedAt     = DateTime.UtcNow,
+        };
+        _db.EmailImportRecords.Add(record);
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+            return record;
+        }
+        catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
+        {
+            // A concurrent delivery of the same message won the claim. Detach so this context is
+            // usable again, and SKIP — the winner owns the order.
+            _db.Entry(record).State = EntityState.Detached;
+            return null;
+        }
     }
 
     // ── Tenant resolution ────────────────────────────────────────────────────

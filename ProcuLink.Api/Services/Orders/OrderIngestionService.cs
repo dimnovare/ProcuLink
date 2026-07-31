@@ -414,10 +414,29 @@ internal sealed class OrderIngestionService
         ExtractedOrder order,
         string source,
         CancellationToken ct,
-        string? inboundSenderDomain = null)
+        string? inboundSenderDomain = null,
+        Guid? orderId = null)
     {
         if (order is null || order.Lines is null || order.Lines.Count == 0)
             return Result<PurchaseOrderEntity>.Fail("Extracted order contains no line items.");
+
+        // Idempotency (push-ingress claim-first resume): when the caller supplies a pre-generated
+        // order id and an order already exists under it, return that order instead of creating a
+        // second one. Mirrors the same block in CreateStubAsync — it is what makes a resume after a
+        // crash a find-or-create, with the order primary key as the final concurrency backstop.
+        if (orderId is { } providedId && providedId != Guid.Empty)
+        {
+            var alreadyThere = await _db.PurchaseOrders
+                .Include(o => o.Lines)
+                .FirstOrDefaultAsync(o => o.Id == providedId && o.OrgId == organisationId, ct);
+            if (alreadyThere is not null)
+            {
+                _logger.LogInformation(
+                    "CreateStubFromParsedOrderAsync: order {OrderId} already exists for org {OrgId}; returning it (idempotent create).",
+                    providedId, organisationId);
+                return Result<PurchaseOrderEntity>.Ok(alreadyThere);
+            }
+        }
 
         // Scope to the caller's org — FindAsync would resolve by PK alone and let
         // a user in org A reference org B's supplier (cross-tenant injection).
@@ -482,8 +501,10 @@ internal sealed class OrderIngestionService
         var supplierName  = string.IsNullOrWhiteSpace(order.SupplierName) ? null : order.SupplierName.Trim();
         var paymentTerms  = string.IsNullOrWhiteSpace(order.PaymentTerms) ? null : order.PaymentTerms.Trim();
 
-        var orderId = Guid.NewGuid();
-        var now     = DateTime.UtcNow;
+        // Honour a caller-supplied primary key (push-ingress claim-first) so a recreated order lands
+        // under the SAME id the dedupe ledger already recorded; otherwise generate a fresh one.
+        var newOrderId = orderId is { } pk && pk != Guid.Empty ? pk : Guid.NewGuid();
+        var now        = DateTime.UtcNow;
 
         // Denormalise the shipTo / billTo addresses onto the flat cXML address columns (the cXML
         // writer reads the PurchaseOrderEntity directly, not the OrderParty rows). Mirrors the
@@ -522,7 +543,7 @@ internal sealed class OrderIngestionService
 
         var entity = new PurchaseOrderEntity
         {
-            Id            = orderId,
+            Id            = newOrderId,
             OrgId         = organisationId,
             SupplierId    = supplierId,
             Supplier      = supplier!,
@@ -610,7 +631,7 @@ internal sealed class OrderIngestionService
         // order that silently gets no suggestions while the UI offers them everywhere else.
         var supplierSuggestions = supplierId is null
             ? await SafeSuggestSuppliersAsync(
-                organisationId, orderId,
+                organisationId, newOrderId,
                 documentSupplierName: order.SupplierName,
                 parties:              ToSuggestionParties(order.Parties),
                 lineCodes:            order.Lines.Select(l => l.BuyerItemCode).ToList(),
@@ -620,7 +641,7 @@ internal sealed class OrderIngestionService
             : Array.Empty<SupplierSuggestion>();
 
         _db.PurchaseOrders.Add(entity);
-        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Created", new
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, newOrderId, "Created", new
         {
             source,
             lineCount       = lineEntities.Count,
@@ -632,18 +653,18 @@ internal sealed class OrderIngestionService
         }));
         if (isInvoice)
         {
-            _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "ClassifiedAsInvoice", new
+            _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, newOrderId, "ClassifiedAsInvoice", new
             {
                 note = "This document looks like an invoice, not a purchase order — flagged for review before delivery.",
                 grandTotal = order.GrandTotal,
             }));
         }
 
-        await SafeRecordSupplierSuggestionsAsync(organisationId, orderId, supplierSuggestions, ct);
+        await SafeRecordSupplierSuggestionsAsync(organisationId, newOrderId, supplierSuggestions, ct);
 
         await _db.SaveChangesAsync(ct);
 
-        await _shared.EmitPassportEventAsync(organisationId, orderId, "Upload", "Created",
+        await _shared.EmitPassportEventAsync(organisationId, newOrderId, "Upload", "Created",
             payload: new { source }, ct: ct);
 
         // ── Wave 4: fire order.created trigger ───────────────────────────────────
@@ -662,7 +683,7 @@ internal sealed class OrderIngestionService
 
         _logger.LogInformation(
             "Order {OrderId} created from extracted payload (source={Source}) for org {OrgId}: {LineCount} lines, {Unresolved} unresolved, status={Status}",
-            orderId, source, organisationId, lineEntities.Count,
+            newOrderId, source, organisationId, lineEntities.Count,
             lineEntities.Count(l => l.NeedsReview), entity.Status);
 
         return Result<PurchaseOrderEntity>.Ok(entity);

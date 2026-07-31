@@ -115,65 +115,33 @@ public class IngressControllerIdempotencyTests
         const string idempotencyKey = "zapier-task-abc-123";
         controller.HttpContext.Request.Headers["Idempotency-Key"] = idempotencyKey;
 
-        var createdOrderId = Guid.NewGuid();
-        var createdEntity = new PurchaseOrderEntity
-        {
-            Id                = createdOrderId,
-            OrgId             = orgId,
-            SupplierId        = supplierId,
-            PoNumber          = "PO-IDEMPOTENT-001",
-            OrderDate         = new DateOnly(2026, 6, 6),
-            Currency          = "EUR",
-            Status            = "pending_review",
-            CreatedAt         = DateTime.UtcNow,
-            UpdatedAt         = DateTime.UtcNow,
-            Lines             = new List<PurchaseOrderLineEntity>
-            {
-                new() { Id = Guid.NewGuid(), OrderId = createdOrderId, LineNumber = 1 },
-                new() { Id = Guid.NewGuid(), OrderId = createdOrderId, LineNumber = 2 },
-            },
-            OutboundArtifacts = new List<OutboundArtifact>(),
-        };
-
-        var createCalls = 0;
-        var orders = new Mock<IOrderService>();
-        orders
-            .Setup(s => s.CreateStubFromParsedOrderAsync(
-                orgId, supplierId, It.IsAny<ExtractedOrder>(), "ingress_api", It.IsAny<CancellationToken>(), It.IsAny<string?>()))
-            .ReturnsAsync(() =>
-            {
-                createCalls++;
-                return Result<PurchaseOrderEntity>.Ok(createdEntity);
-            });
-        // The replay path resolves the bound key, then loads the original order.
-        orders
-            .Setup(s => s.GetByIdAsync(orgId, createdOrderId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(createdEntity));
+        var (orders, claimedOrders, createCalls) = BuildOrderDoubles(orgId, supplierId);
 
         var req = MakeRequest(supplierId);
 
-        // First delivery — creates the order and binds the key.
-        var first = await controller.ReceiveOrder(Slug, req, orders.Object, CancellationToken.None);
+        // First delivery — claims the key, then creates under the claimed order id.
+        var first = await controller.ReceiveOrder(Slug, req, orders.Object, claimedOrders.Object, CancellationToken.None);
         Assert.IsType<OkObjectResult>(first);
 
         // Second (at-least-once) delivery with the SAME key — must short-circuit.
-        var second = await controller.ReceiveOrder(Slug, req, orders.Object, CancellationToken.None);
+        var second = await controller.ReceiveOrder(Slug, req, orders.Object, claimedOrders.Object, CancellationToken.None);
         Assert.IsType<OkObjectResult>(second);
 
         // The core assertion: exactly ONE order was created.
-        Assert.Equal(1, createCalls);
-        orders.Verify(
-            s => s.CreateStubFromParsedOrderAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<ExtractedOrder>(),
-                It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()),
+        Assert.Equal(1, createCalls.Value);
+        claimedOrders.Verify(
+            s => s.CreateClaimedFromParsedOrderAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid>(), It.IsAny<ExtractedOrder>(),
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.Once);
 
-        // Exactly one idempotency-key row was persisted for this org.
+        // Exactly one idempotency-key row was persisted for this org, and it points at the order
+        // that was actually created (the claim's pre-generated id).
         var keyRows = await db.IdempotencyKeys
             .Where(k => k.OrgId == orgId && k.Key == idempotencyKey)
             .ToListAsync();
         Assert.Single(keyRows);
-        Assert.Equal(createdOrderId, keyRows[0].OrderId);
+        Assert.Equal(OrderIdOf((OkObjectResult)first), keyRows[0].OrderId);
 
         // The replay response flags itself and returns the original order id.
         var secondOk = Assert.IsType<OkObjectResult>(second);
@@ -190,10 +158,38 @@ public class IngressControllerIdempotencyTests
         await using var db = NewDb();
         var (controller, orgId, supplierId) = BuildController(db);
 
-        var createdOrderId = Guid.NewGuid();
-        var createdEntity = new PurchaseOrderEntity
+        var (orders, claimedOrders, createCalls) = BuildOrderDoubles(orgId, supplierId);
+
+        var req = MakeRequest(supplierId);
+
+        var first  = await controller.ReceiveOrder(Slug, req, orders.Object, claimedOrders.Object, CancellationToken.None);
+        var second = await controller.ReceiveOrder(Slug, req, orders.Object, claimedOrders.Object, CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(first);
+        Assert.IsType<OkObjectResult>(second);
+        Assert.Equal(1, createCalls.Value);
+
+        // Exactly one derived-key row persisted.
+        var keyRows = await db.IdempotencyKeys.Where(k => k.OrgId == orgId).ToListAsync();
+        Assert.Single(keyRows);
+    }
+
+    /// <summary>
+    /// The two order seams the ingress uses after WP-22: <see cref="IClaimedOrderCreator"/> creates
+    /// under the id the idempotency claim pre-generated, and <see cref="IOrderService"/> reads it
+    /// back on a replay. The created entity's id is therefore whatever the controller supplies, so
+    /// the doubles track it rather than choosing it — and <c>GetByIdAsync</c> answers "not found"
+    /// until a create has happened, which is what makes the resume branch reachable.
+    /// </summary>
+    private static (Mock<IOrderService> Orders, Mock<IClaimedOrderCreator> Claimed, Counter Creates)
+        BuildOrderDoubles(Guid orgId, Guid supplierId)
+    {
+        var creates = new Counter();
+        Guid? createdId = null;
+
+        PurchaseOrderEntity Entity(Guid id) => new()
         {
-            Id                = createdOrderId,
+            Id                = id,
             OrgId             = orgId,
             SupplierId        = supplierId,
             PoNumber          = "PO-IDEMPOTENT-001",
@@ -202,35 +198,36 @@ public class IngressControllerIdempotencyTests
             Status            = "pending_review",
             CreatedAt         = DateTime.UtcNow,
             UpdatedAt         = DateTime.UtcNow,
-            Lines             = new List<PurchaseOrderLineEntity>(),
+            Lines             = new List<PurchaseOrderLineEntity>
+            {
+                new() { Id = Guid.NewGuid(), OrderId = id, LineNumber = 1 },
+                new() { Id = Guid.NewGuid(), OrderId = id, LineNumber = 2 },
+            },
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var createCalls = 0;
+        var claimed = new Mock<IClaimedOrderCreator>();
+        claimed
+            .Setup(s => s.CreateClaimedFromParsedOrderAsync(
+                orgId, supplierId, It.IsAny<Guid>(), It.IsAny<ExtractedOrder>(),
+                "ingress_api", It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, Guid?, Guid, ExtractedOrder, string, string?, CancellationToken>(
+                (_, _, id, _, _, _, _) => { creates.Value++; createdId = id; })
+            .ReturnsAsync(() => Result<PurchaseOrderEntity>.Ok(Entity(createdId!.Value)));
+
         var orders = new Mock<IOrderService>();
         orders
-            .Setup(s => s.CreateStubFromParsedOrderAsync(
-                orgId, supplierId, It.IsAny<ExtractedOrder>(), "ingress_api", It.IsAny<CancellationToken>(), It.IsAny<string?>()))
-            .ReturnsAsync(() =>
-            {
-                createCalls++;
-                return Result<PurchaseOrderEntity>.Ok(createdEntity);
-            });
-        orders
-            .Setup(s => s.GetByIdAsync(orgId, createdOrderId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(createdEntity));
+            .Setup(s => s.GetByIdAsync(orgId, It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid id, CancellationToken _) =>
+                createdId == id
+                    ? Result<PurchaseOrderEntity>.Ok(Entity(id))
+                    : Result<PurchaseOrderEntity>.Fail("Order not found."));
 
-        var req = MakeRequest(supplierId);
-
-        var first  = await controller.ReceiveOrder(Slug, req, orders.Object, CancellationToken.None);
-        var second = await controller.ReceiveOrder(Slug, req, orders.Object, CancellationToken.None);
-
-        Assert.IsType<OkObjectResult>(first);
-        Assert.IsType<OkObjectResult>(second);
-        Assert.Equal(1, createCalls);
-
-        // Exactly one derived-key row persisted.
-        var keyRows = await db.IdempotencyKeys.Where(k => k.OrgId == orgId).ToListAsync();
-        Assert.Single(keyRows);
+        return (orders, claimed, creates);
     }
+
+    private sealed class Counter { public int Value; }
+
+    private static Guid OrderIdOf(OkObjectResult ok) =>
+        (Guid)ok.Value!.GetType().GetProperty("Id")!.GetValue(ok.Value)!;
 }

@@ -71,6 +71,7 @@ public sealed class IngressController : ControllerBase
         string slug,
         [FromBody] IngressOrderRequest req,
         [FromServices] IOrderService orders,
+        [FromServices] IClaimedOrderCreator claimedOrders,
         CancellationToken ct)
     {
         if (!await SlugMatchesCallerAsync(slug, ct))
@@ -81,23 +82,29 @@ public sealed class IngressController : ControllerBase
 
         var orgId = _tenant.OrganisationId;
 
-        // ── Idempotency short-circuit ───────────────────────────────────────
-        // Zapier/Make.com deliver at-least-once, so the same logical order can
-        // POST here multiple times. Honour an explicit Idempotency-Key header;
-        // when absent, derive a stable key from (slug + PO number + line shape)
-        // so a verbatim retry of the same payload is also deduplicated. Within
-        // the 24 h window a replay returns the original order instead of
-        // creating (and later delivering) a duplicate.
+        // ── Idempotency: CLAIM-FIRST, not check-then-create ─────────────────
+        // Zapier/Make.com deliver at-least-once, so the same logical order can POST here multiple
+        // times — and two of those deliveries can be in flight at once. Honour an explicit
+        // Idempotency-Key header; when absent, derive a stable key from (slug + PO number + line
+        // shape) so a verbatim retry of the same payload is also deduplicated.
+        //
+        // The claim row is committed BEFORE the order is created, and the (org_id, key) primary key
+        // is the real guard — the same claim-first ordering the SFTP/S3/IMAP pull channels use (see
+        // IngressDedupe). A check-then-create pair let two concurrent requests both see "no row" and
+        // both create an order, and a crash between create and bind duplicated on the next retry.
         var idempotencyKey = ExtractIdempotencyKey(Request) ?? DeriveIdempotencyKey(slug, req);
-        var existingOrderId = await _idempotency.TryGetExistingOrderIdAsync(idempotencyKey, orgId, ct);
-        if (existingOrderId is not null)
+        var claim = await _idempotency.ClaimAsync(idempotencyKey, orgId, ct);
+
+        if (!claim.IsNew)
         {
-            var existingOrder = await orders.GetByIdAsync(orgId, existingOrderId.Value, ct);
+            // A live claim already exists: this is a replay, or we lost a concurrent race. Either
+            // way the answer is the claim's order — never a second one.
+            var existingOrder = await orders.GetByIdAsync(orgId, claim.OrderId, ct);
             if (existingOrder.IsSuccess)
             {
                 _logger.LogInformation(
                     "Idempotent ingress replay for key {Key}, org {OrgId} → existing order {OrderId}",
-                    idempotencyKey, orgId, existingOrderId.Value);
+                    idempotencyKey, orgId, claim.OrderId);
 
                 return Ok(new
                 {
@@ -108,11 +115,15 @@ public sealed class IngressController : ControllerBase
                 });
             }
 
-            // Mapped order vanished (e.g. hard-deleted) — fall through and
-            // create a fresh one, then re-bind the key below.
-            _logger.LogWarning(
-                "Idempotency key {Key} mapped to missing order {OrderId}; creating a new order",
-                idempotencyKey, existingOrderId.Value);
+            // The claim exists but its order does not. Two ways to get here, and the same action
+            // serves both: a transient failure abandoned an earlier attempt (RESUME), or the winner
+            // of a concurrent race has claimed but not yet committed (we recreate under its id).
+            // Creation is a find-or-create on that primary key, so neither can yield a second order,
+            // and a key whose order was never created is never permanently blocked.
+            _logger.LogInformation(
+                "Idempotency key {Key} for org {OrgId} claims order {OrderId} which does not exist yet; " +
+                "creating under the claimed id (resume).",
+                idempotencyKey, orgId, claim.OrderId);
         }
 
         // ── Billing gate ───────────────────────────────────────────────────
@@ -196,13 +207,13 @@ public sealed class IngressController : ControllerBase
             RawFields: BuildPushedRawFields(req)
         );
 
-        var result = await orders.CreateStubFromParsedOrderAsync(orgId, supplierId, extracted, "ingress_api", ct);
+        // Create under the CLAIMED id (find-or-create on that primary key). No BindAsync afterwards:
+        // the claim is already durable, so there is no longer a window between the order existing
+        // and the key pointing at it — which is exactly the window that used to duplicate.
+        var result = await claimedOrders.CreateClaimedFromParsedOrderAsync(
+            orgId, supplierId, claim.OrderId, extracted, "ingress_api", inboundSenderDomain: null, ct);
         if (!result.IsSuccess)
             return BadRequest(new { error = result.Error });
-
-        // Bind the idempotency key to the new order so an at-least-once retry
-        // sees the same order id and short-circuits above.
-        await _idempotency.BindAsync(idempotencyKey, orgId, result.Value!.Id, ct);
 
         return Ok(new
         {

@@ -402,7 +402,7 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
         });
 
     private static InboundEmailRouter MakeRouter(
-        ProcuLinkDbContext db, IOrderService orders, IParseJobEnqueuer enqueuer)
+        ProcuLinkDbContext db, IClaimedOrderCreator orders, IParseJobEnqueuer enqueuer)
     {
         // No TenantMapping entries: resolution goes through the org's own Slug column,
         // which is what production does.
@@ -424,7 +424,7 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
     /// entry points the router uses are implemented; the rest throw so a silent extra call fails
     /// the test rather than passing unnoticed.
     /// </summary>
-    private sealed class PersistingOrderService : IOrderService
+    private sealed class PersistingOrderService : IOrderService, IClaimedOrderCreator
     {
         private readonly DbContextOptions<ProcuLinkDbContext> _options;
         private int _routed;
@@ -451,13 +451,34 @@ public sealed class InboundEmailUnroutedPostgresTests : IAsyncLifetime
             return PersistAsync(organisationId, supplierId: null, filename, ct);
         }
 
+        // ── IClaimedOrderCreator ────────────────────────────────────────────────────────────────
+        // The router now creates under the id its dedupe claim pre-generated (WP-22). The
+        // routed/unrouted split — which is what this suite asserts on — is carried by a nullable
+        // supplier id on one method instead of two separate entry points.
+
+        public Task<Result<PurchaseOrderEntity>> CreateClaimedStubAsync(
+            Guid organisationId, Guid? supplierId, Guid orderId, Stream fileStream, string filename,
+            string contentType, string? inboundSenderDomain, CancellationToken ct)
+        {
+            if (supplierId is null) Interlocked.Increment(ref _unrouted);
+            else Interlocked.Increment(ref _routed);
+            return PersistAsync(organisationId, supplierId, filename, ct, orderId);
+        }
+
+        public Task<Result<PurchaseOrderEntity>> CreateClaimedFromParsedOrderAsync(
+            Guid organisationId, Guid? supplierId, Guid orderId, ExtractedOrder order, string source,
+            string? inboundSenderDomain, CancellationToken ct)
+            // Body-NLP path: the extractor here is a no-op, so reaching this means the router took a
+            // path it should not have.
+            => throw new NotImplementedException();
+
         private async Task<Result<PurchaseOrderEntity>> PersistAsync(
-            Guid orgId, Guid? supplierId, string filename, CancellationToken ct)
+            Guid orgId, Guid? supplierId, string filename, CancellationToken ct, Guid? orderId = null)
         {
             var now = DateTime.UtcNow;
             var order = new PurchaseOrderEntity
             {
-                Id = Guid.NewGuid(),
+                Id = orderId is { } claimed && claimed != Guid.Empty ? claimed : Guid.NewGuid(),
                 OrgId = orgId,
                 SupplierId = supplierId,
                 PoNumber = "PO-STUB",

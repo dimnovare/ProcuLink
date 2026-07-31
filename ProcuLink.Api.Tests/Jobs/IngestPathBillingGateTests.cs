@@ -51,6 +51,7 @@ public class IngestPathBillingGateTests
         Guid OrgId,
         Supplier Supplier,
         Mock<IOrderService> Orders,
+        Mock<IClaimedOrderCreator> ClaimedOrders,
         Mock<IBillingService> Billing);
 
     private static IngressHarness BuildIngress(LimitCheckResult limit)
@@ -79,18 +80,30 @@ public class IngestPathBillingGateTests
         billing.Setup(b => b.CheckOrderLimitAsync(orgId, It.IsAny<CancellationToken>()))
                .ReturnsAsync(limit);
 
+        // Every request in this file wins a FRESH claim (WP-22 claim-first dedupe), so the
+        // billing gate is always reached. A replay (IsNew: false) short-circuits above the
+        // gate on purpose — an already-accepted order must keep being returned even after
+        // the account state changes — and that path is pinned by the dedupe suite, not here.
         var idempotency = new Mock<IIdempotencyService>();
-        idempotency.Setup(i => i.TryGetExistingOrderIdAsync(
+        idempotency.Setup(i => i.ClaimAsync(
                 It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid?)null);
+            .ReturnsAsync(() => new IdempotencyClaim(IsNew: true, OrderId: Guid.NewGuid()));
+
+        var orders = new Mock<IOrderService>();
 
         // Order creation ALWAYS succeeds in this harness. That is deliberate: it makes the
         // gate the only thing under test, so a missing gate shows up as a 200 OK rather than
         // as an incidental crash further down the method.
-        var orders = new Mock<IOrderService>();
-        orders.Setup(o => o.CreateStubFromParsedOrderAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<ProcuLink.Core.Services.Ai.ExtractedOrder>(),
-                It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()))
+        //
+        // REST ingress creates through IClaimedOrderCreator, not IOrderService — the order
+        // is written under the id the claim row already committed. The "never creates an
+        // order" assertions verify against THIS mock for that reason; verifying the old
+        // IOrderService method would pass without the gate, having asserted nothing.
+        var claimedOrders = new Mock<IClaimedOrderCreator>();
+        claimedOrders.Setup(o => o.CreateClaimedFromParsedOrderAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid>(),
+                It.IsAny<ProcuLink.Core.Services.Ai.ExtractedOrder>(),
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
             {
                 Id = Guid.NewGuid(),
@@ -110,7 +123,7 @@ public class IngestPathBillingGateTests
             },
         };
 
-        return new IngressHarness(controller, orgId, supplier, orders, billing);
+        return new IngressHarness(controller, orgId, supplier, orders, claimedOrders, billing);
     }
 
     private static IngressOrderRequest OrderPayload(Guid supplierId) => new(
@@ -132,14 +145,15 @@ public class IngestPathBillingGateTests
             Allowed: false, PilotExpired: true, Plan: PlanConstants.Pilot, Limit: 20));
 
         var result = await h.Controller.ReceiveOrder(
-            "acme", OrderPayload(h.Supplier.Id), h.Orders.Object, CancellationToken.None);
+            "acme", OrderPayload(h.Supplier.Id), h.Orders.Object, h.ClaimedOrders.Object, CancellationToken.None);
 
         var status = result.Should().BeOfType<ObjectResult>().Subject;
         status.StatusCode.Should().Be(429, "REST ingress must refuse exactly like the browser upload does");
 
-        h.Orders.Verify(o => o.CreateStubFromParsedOrderAsync(
-            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<ProcuLink.Core.Services.Ai.ExtractedOrder>(),
-            It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()), Times.Never,
+        h.ClaimedOrders.Verify(o => o.CreateClaimedFromParsedOrderAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid>(),
+            It.IsAny<ProcuLink.Core.Services.Ai.ExtractedOrder>(),
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never,
             "a refused push must not create an order");
     }
 
@@ -150,7 +164,7 @@ public class IngestPathBillingGateTests
             Allowed: false, PilotExpired: true, Plan: PlanConstants.Pilot, Limit: 20));
 
         var result = await h.Controller.ReceiveOrder(
-            "acme", OrderPayload(h.Supplier.Id), h.Orders.Object, CancellationToken.None);
+            "acme", OrderPayload(h.Supplier.Id), h.Orders.Object, h.ClaimedOrders.Object, CancellationToken.None);
 
         var status = result.Should().BeOfType<ObjectResult>().Subject;
         ((string)((dynamic)status.Value!).error).Should().Be("pilot_expired");
@@ -167,7 +181,7 @@ public class IngestPathBillingGateTests
             Allowed: true, PilotExpired: false, Plan: PlanConstants.Growth, Limit: 150));
 
         var result = await h.Controller.ReceiveOrder(
-            "acme", OrderPayload(h.Supplier.Id), h.Orders.Object, CancellationToken.None);
+            "acme", OrderPayload(h.Supplier.Id), h.Orders.Object, h.ClaimedOrders.Object, CancellationToken.None);
 
         result.Should().BeOfType<OkObjectResult>("going over a paid plan's cap accrues overage, never a block");
     }

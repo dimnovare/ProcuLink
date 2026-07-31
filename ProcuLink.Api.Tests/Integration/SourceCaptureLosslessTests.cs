@@ -128,7 +128,7 @@ public sealed class SourceCaptureLosslessTests : IAsyncLifetime
             });
 
         var result = await controller.ReceiveOrder(
-            "capture-" + orgId.ToString("N"), req, orders, CancellationToken.None);
+            "capture-" + orgId.ToString("N"), req, orders, orders, CancellationToken.None);
 
         var ok = Assert.IsType<Microsoft.AspNetCore.Mvc.OkObjectResult>(result);
         var orderId = (Guid)ok.Value!.GetType().GetProperty("Id")!.GetValue(ok.Value)!;
@@ -177,7 +177,7 @@ public sealed class SourceCaptureLosslessTests : IAsyncLifetime
         return controller;
     }
 
-    private static IOrderService BuildOrderService(ProcuLinkDbContext db)
+    private static OrderService BuildOrderService(ProcuLinkDbContext db)
     {
         var fileStorage = new Mock<IFileStorageService>();
 
