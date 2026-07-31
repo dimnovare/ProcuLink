@@ -11,6 +11,33 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ---
 
+## Snapshot (2026-07-31) — the post-merge CI fix is PROVEN, and it already caught a red main
+
+Closes the open question left by the entry below, which said the fix "cannot be verified before it
+lands" and "if a main-push run ever shows `cancelled` again, this did not work". It has now been
+exercised by real merge traffic in both repos. **No main-push run has been cancelled since.**
+
+- **Backend** — fix landed `a38cb9f` (07-30 14:46). Ten post-merge runs since, **zero cancelled**.
+  The decisive case is `7ed0961` (20:09), `3878c0c` (20:10) and `d233409` (20:11): three merges
+  inside two minutes, and **all three runs completed**. Before the fix that exact pattern cancelled
+  everything but the last.
+- **Frontend** — fix landed `c319c805` (07-30 14:46). Before it, five *consecutive* cancelled
+  main-push runs inside a four-minute window: `50639e3`, `9cea6e5`, `ac27353`, `b8d5f87`,
+  `09ecfb7` (13:49–13:53). After it, four more merges through 07-31 06:10 with **zero cancelled**.
+- **It paid for itself the same afternoon.** BE [#78](https://github.com/dimnovare/ProcuLink/pull/78)
+  and BE [#75](https://github.com/dimnovare/ProcuLink/pull/75) merged in the SAME MINUTE (17:27) and
+  **both** post-merge runs FAILED (`7dd4261`, `44fa058`); FE #44 failed at the same minute
+  (`ddced4e`). Two PRs green on their own, red once both were on `main` — the semantic-conflict case
+  that a PR check structurally cannot see. **Under the old config one of those runs would have
+  cancelled the other, and a red `main` would have gone unreported.** Both repos were fixed forward;
+  BE recovered by 18:42, FE by 19:09, and **both mains are green now** (BE `8a2dbc3`, FE `7cabd4f`).
+- **Standing rule, now evidenced rather than argued:** a green PR check proves the PR's own tree, not
+  `main`. Two independently-green PRs can redden `main` together. The post-merge run is the only
+  check that ever sees the shipped tree — which is why cancelling it was expensive, and why a
+  `cancelled` conclusion must never be reported as green.
+
+---
+
 ## Snapshot (2026-07-30) — post-merge CI on `main` was being cancelled; fixed in BOTH repos
 
 - **BE [PR #86](https://github.com/dimnovare/ProcuLink/pull/86) MERGED `a38cb9f`; FE
