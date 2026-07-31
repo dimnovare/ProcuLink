@@ -2168,3 +2168,80 @@ TRAP 24 established that green CI is not evidence the diff is covered.
 
 Note: the wedge chip's session metadata still shows PR #97 as OPEN. It merged as `faba3bf`. Session
 `prState` lags; do not read it as the packet's state.
+
+## 2026-07-31 — WP-23 · The `resolve` status guard (BE PR #99, OPEN)
+
+**Part of the packet was already done, and it was done the right way.** `c61fe30` reconciled the
+resolve recompute into both status maps — 11 edges into `OrderStatusMachine.Transitions`, 13 into
+`OrderStatusTransitionObserver.AllowedTransitions` — deliberately choosing reconcile over gate,
+because the write was real and the maps were wrong. **Nothing about that was undone here.** What it
+left open, naming each one "wants an endpoint guard, which is a product decision", was the two
+from-states where the same write *destroys* something. Those two were this packet.
+
+| Hole | Consequence before this PR |
+|---|---|
+| `unrouted` | An unrouted order has lines, so a resolve — or a **header-only** one, which the endpoint accepts — recomputed it to `ready` with `SupplierId` still null. `OrdersController.AssignSupplier` claims atomically on `Status == Unrouted` (`:682`) and answers 409 otherwise, so the recompute **permanently** locked the operator out of the one action the routing hold exists for. |
+| `delivering` | A row *sits* in `delivering` (`StuckDeliveryDetectionService` exists because dispatches strand there), so a resolve wrote over a live dispatch claim whose outcome write then landed on top of the correction. |
+
+A resolve reached **14** from-states before; it now reaches **12**.
+
+**Shipped.** One canonical declaration, `OrderStatusMachine.ResolveHeldFrom = {unrouted, delivering}`,
+plus `ResolveHoldMessage(status)`. One consumer in production —
+`OrdersController.RefusedByResolveHoldAsync` — called by **both** recompute endpoints. 409 with a
+plain-language sentence; no status token, no party noun, an instruction cue. No transition edge was
+touched.
+
+**`accept-ai-suggestions` is guarded too, and that was the load-bearing call.** It shares the writer
+(`OrderResolutionService` `:242` and `:393` end with the identical recompute) and its recompute runs
+even when nothing is accepted — the file's own comment at `:358` already made that argument for the
+terminal guard. Guarding `/resolve` alone would have relocated hole 1, not closed it. Mutation **B**
+proves it: reverting only that call site turns exactly the two accept-AI rows red and nothing else.
+
+**Derivation, not enumeration.** No status name is hand-written in the new production code or in any
+theory data. Refusals derive from `ResolveHeldFrom`; the 28 positive controls derive from
+`AllStatuses` minus it. A status added to the machine tomorrow gains "must NOT be refused" rows
+automatically; a status added to the hold gains "must be refused, with its own actionable sentence"
+rows automatically.
+
+**Eight CI runs, seven of them mutations.** RED `30628462957` (9 failures, verbatim in the PR body) →
+GREEN `30629301937` → mutations **A** `30630169044`, **B** `30630324709`, **C** `30630369823`,
+**D+E** `30630471634`, **F** `30631231892`, **G** `30631245138`, **H** `30631264515`. **41 of 42 test
+cases are killed by at least one mutation.**
+
+**Two findings worth carrying forward, both stated rather than hidden.**
+
+- *Mutation C did not kill the controller theories.* Because the theory data derives from the same set
+  production reads, mutating the **set** moves the tests with it. That is the intended property and
+  simultaneously a limit on what a set-mutation can prove. Mutations that alter the **guard** (A, B, F)
+  are what prove those tests non-vacuous. Worth knowing before designing the next derived suite.
+- *The one test no mutation kills* is the pre-existing
+  `EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges`, which gained `ResolveHeldFrom` as a third
+  exclusion — what that test's own closing message asked the next packet to do. The change is
+  behaviourally inert (the edges are present either way); it is a premise correction that stops the
+  test's stated claim becoming false, and the coverage it sheds is re-asserted by the new
+  `EveryResolveHeldStatus_KeepsBothRecomputeEdges`. Mutation **H** shows the swap is real: pruning
+  c61fe30's `unrouted` edges leaves the old test green and turns the new one red.
+
+**Drift.** `OrdersController.Resolve` is at **`:554`**, not `:483`. The file has not changed since
+`c61fe30` (`git diff c61fe30 504d9cc` on it is empty), so the citation was already stale in that
+commit's message, in `OrderStatusMachine.cs:39` and in `OrderStatusMachineTests.cs:764`. The
+substance is right — `Resolve` does validate the body only, at `:559-626`. Left uncorrected: fixing
+stale citations across three files would bury this diff.
+
+**What was deliberately NOT done.**
+
+- `failed` stays where it is: refused a layer down by `OrderResolutionService.IsFinished` with a
+  **400** and a permanent-verdict sentence. This guard is a temporary verdict, so it keeps a different
+  code and a different sentence; the two sets are asserted disjoint.
+- `parsing` is **not** guarded. A resolve during parse races the parse job's own write — arguably a
+  third hole, but a different failure mode (a race, not a permanent lock-out), not one `c61fe30`
+  named, and widening the set without that argument is exactly what
+  `ResolveHeldFrom_IsExactlyTheTwoHoles…` exists to prevent. Named, not added.
+- The guard is at the **endpoint**, so a **TOCTOU window** remains between its status read and the
+  service's write: an order entering `delivering` in between is still overwritten. Closing that needs
+  an atomic claim in `OrderResolutionService` — a larger change, and it does not affect hole 1 at all.
+- **The frontend renders this 409 as raw JSON.** `project-proculink` `src/lib/api-client.ts:739`
+  unwraps the `{error}` body **only for status 400**; a 409 falls through to
+  `` throw new Error(`Resolution failed: ${t}`) `` at `:748`. The same file already handles this
+  correctly for `assign-supplier` (`:917-930`, via `ApiHttpError`). **The plain-language message is on
+  the wire; it is not yet on the screen.** Different repo, filed as a follow-up.
