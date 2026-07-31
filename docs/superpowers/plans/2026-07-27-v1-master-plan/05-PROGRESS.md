@@ -1151,3 +1151,132 @@ delivery config rather than the pinned revision, so a green test-fire can vet a 
 than a pinned order will use (the P3 in `docs/qa/2026-06-29-prelaunch-audit-and-test-plan.md`). Now
 that the flag is confirmed ON, that P3 is live rather than conditional — it was re-labelled, not
 fixed. It wants its own packet.
+
+---
+
+## 2026-07-31 — POST-WAVE ADVERSARIAL AUDIT of all sixteen merged packets
+
+Full report: `ProcuLink/docs/qa/2026-07-31-post-wave-regression-audit.md` (BE PR #105).
+Audited BE `origin/main` `504d9cc` · FE `origin/main` `478b809`, zero open PRs at start.
+Seven verifiers, one attack lens each. Mutation testing wherever the suite was safe to run
+(`Transform.Tests`, FE vitest); analytic per-test reading where `dotnet test` is hard-barred.
+Every finding in the report is labelled `ran-it` or `analytic`.
+
+**One fix shipped, in its own PR: FE #66** (CI green, run `30629717279`). See "the guards" below.
+
+### The four a customer hits today
+
+1. **WP-12 changed delivered bytes, and its designer contradicts its own gate.** The format-equality
+   gate is NEW at `d233409` — verified against parent `3878c0c`, which checked only cXML/X12 and never
+   format. `OutputStructureDesigner.tsx:147` seeds `defaultTree("json")`, `:33-36` offers a free format
+   radiogroup, `:230` previews at the TREE's format (`honorFormat` defaults false, so the preview gate
+   always matches) under the in-file label at `:222` — *"exactly what will be delivered"*. Delivery then
+   drops the tree with a `LogWarning`. `git grep outputFormat` over that file returns **zero hits**; its
+   `<OutputSourcePicker>` mount omits the one prop that carries the honest "this connection delivers X"
+   note. And any order carrying a mismatched tree **was delivering it at `3878c0c` and stopped at
+   `d233409`** — silently, no migration, no notice.
+2. **`rejected_by_supplier`: the backend opened the exit, the frontend pins it shut, and a test
+   forecloses the fix.** `OrdersController.cs:1601` reads `TransformableFrom`, which includes the status,
+   so `POST /transform` answers 202 today. `problemActions.ts` **declares itself a mirror** of
+   `OrderStatusMachine` and is not one — drifted in BOTH directions (it also admits `pending_review`,
+   which `TransformableFrom` excludes). `problemContract.test.ts:110-113`, titled *"the guard mirror
+   itself matches the backend's sets"*, goes **RED** when the mirror is corrected (mutation, `ran-it`).
+   `OrderStatusMachineTests…:713-716` calls this "the operator's one-click exit"; there is no click.
+   **Found independently by two verifiers, one analytic from the BE side and one by mutation from the
+   FE side** — genuine convergence with independent provenance.
+3. **WP-24's rejected-order primary CTA is inert.** `problemCopy.ts:372` → `?details=response`; the
+   workshop reads `?tab=`, in a `useState` initialiser. The panel is a banner already rendered at that
+   route, so "See their reply" lands on the same screen. This is verbatim WP-24's own D1 defect,
+   reintroduced. The contract walk missed it because `appRoutes.ts:66-70` strips `?` before matching —
+   **query-blind by construction** — and `problemContract.test.ts:74` holds the broken value up as its
+   example of a live destination.
+4. **WP-17 refuses orders naming a remedy that has no frontend.** `IAcceptanceGate.cs:193-194` composes
+   "…or record an override saying why it should go anyway", returned verbatim as the 409 body and as the
+   `transform_failed` errorMessage. `OrderAcceptanceGateController.cs:74-106` exists; FE grep for the
+   endpoint, `recordOverride`, `overrideReason`, `acceptanceOverride` → **0 hits**.
+   `SupplierDockProfile.tsx:440` defaults a new rule to `blockOnFail: true`.
+   **Relevant to WP-18 (#64, open):** wiring the gate into the send decision on every breakpoint makes
+   this refusal reach *more* operators, so the override UI question gets more urgent, not less.
+
+### Corrections to this plan
+
+- **"WP-12's real-Postgres jsonb proof was SKIPPED" is FALSE.** CI run `30578073101` (headSha
+  `d233409`) shows `DesignOnOrderA_Promote_OrderBRendersByteIdentically_ThroughRealPostgres`,
+  `PromotedTree_SurvivesTheJsonbRoundTrip_WithNamespacesAndPredicateIntact` and
+  `PromotedTree_ProducesAStableConfigDigestAcrossOrders` as **`Passed`** with timings. CI runs
+  `dotnet test ProcuLink.slnx` on ubuntu-latest where Docker is live, so `[DockerRequiredFact]` does not
+  skip. All five of WP-12's pre-merge defects are fixed at `d233409`; none merged unfixed.
+- **The audit's "`getDownloadUrl` has zero callers" is refuted** — `OrderPassport.tsx:338`, rendered via
+  `OrderDetailsDrawer.tsx:200`, 503 lines of tests.
+- **TRAP 6 and TRAP 7 are both CLOSED as merged** — verified by planting real orphan pages (`.tsx` and
+  `.mdx`) and a real phantom-registry page, not by reading regexes. Both went red.
+
+### The guards err toward leniency more than the TRAPS say
+
+Three new bypasses, every one run end to end against the real guard:
+
+- **FIXED (FE #66).** `sourceScan.ts` `stripComments` used `prev !== ":"`, and `prev` is the last
+  NON-WHITESPACE character — so every colon in the language exempted its line from stripping. An orphan
+  page whose only referrer was `ready: // <Link href="/…">` passed reachability **18/18**. Four live
+  instances on origin/main, none currently holding a link. Mutation-checked fix.
+- **OPEN.** A markdown link inside an **MDX code fence** is credited as navigation — the mdx branch has
+  no fence state. Latent (0 live). `check-vocabulary.mjs`'s `mdxScanner` already tracks fences; the
+  precedent exists.
+- **OPEN.** `extractRaw` runs its `re` patterns against **unmasked** text, so a path inside a string
+  literal confers reachability. The literal masking the module header advertises applies only to anchor
+  patterns.
+- **OPEN (BE).** Naming a service in a **string literal**, an attribute string or a `#region` discharges
+  the one-hop consumer obligation — `StripComments` preserves literals by design and the reference check
+  cannot tell them apart. Proven by driving the real `OrphanDetector`; the harness reproduced exactly the
+  six known `KnownWriteOnlyStores` entries as a fidelity control. **Not** introduced by `7ed0961`.
+- **The FE allowlist is not shrink-only in any enforced sense** — the three hygiene tests check reason
+  quality and route existence only. A planted orphan plus an entry whose reason was copied *in shape*
+  from the guard's own fixture passed 18/18. The BE side's `MayOnlyEverShrink` is a two-literal edit in
+  one file.
+
+### The anti-vacuous scanner's GREEN is narrower than it reads
+
+`VacuousTestPassScanner` (PR #79, `0184261`) is well built, but its only rule is "a valueless `return`
+before an assertion". Nine shapes executed against it: the canonical offender **correctly flagged**
+(control), and **eight scanned clean** while verifying nothing — `if (env) { asserts }` with no return,
+vacuous `foreach`, an assertion inside a lambda defined before the guard (`AssertionPrecedes` is purely
+positional and not scope-aware, unlike `BelongsDirectlyTo`), `Assert.True(true)` as a satisfying
+"assertion", `goto`/`break` exits, and two non-hardcoded `Task`/`ValueTask` return spellings.
+Three live `foreach` instances already in the suite (all mitigated by siblings, none currently a real
+hole). **`ProcuLink.TestSupport` is compiled into two of the three test assemblies but sits outside the
+`*.Tests` glob** — latent, zero `[Fact]` there today.
+
+Read a green run as *"no bare early return before an assertion"*, not *"every test asserts something."*
+
+### What held up under attack
+
+`delivery_unconfirmed` **cannot** be re-sent in one click — all seven historically-drifting lists
+enumerated and agreeing, and WP-19 and WP-24 added the park to **none** of them; the FE half
+(`inboxSend.ts`, `bulkSendNeedsDuplicateConfirm`) mirrors it correctly. WP-14's four named pre-merge
+defects are genuinely fixed and their tests are load-bearing (reverting `Clone` turns 5 tests RED;
+1406/1406 restored). WP-20's media-type table mutation-proven twice; its overwrite-test vacuity was fixed
+by ADDING the wiring file. WP-34 hashes the bytes actually dispatched and survives both the
+"marker-not-a-row" and "re-transform blinds both rescuers" hazards. WP-19's 4xx split is sound and
+`Retry-After` survives the whole path. WP-11 shrank the billing enum honestly. The Wave-1 retirement
+migration drops tables only and explicitly refuses the `webhook_secret_encrypted` column drop.
+`standards/catalog.ts` was not swept. The WP-25/26 inbound-mode binding constraint was respected.
+
+### CORRECTION LOG — entries 6 through 9, all mine, all caught before they shipped
+
+| Claim | Verdict | The unchecked step |
+|---|---|---|
+| "SFTP/S3 pull have no config surface, so the `live` badge is false" | **REFUTED** | `SettingsController.cs:126-180` ships GET/PUT `sftp`/`s3`, plan-gated, with a save-time SSRF pre-check. I read a month-stale QA doc; `STATUS.md:1086` already flags it as outdated. *Is the doc still true?* |
+| "WP-11 left 10 of 16 billing gates unenforced" | **REFUTED** | The enum is now 10 members — WP-11 **deleted** the five that had no enforcement point. *Did the denominator change?* |
+| "Cxml/WebhookDelivery/ErpConnectors have no gate — `HasFeatureAsync` is absent from `UpsertDeliveryConfig`" | **REFUTED** | `SuppliersController.cs:758` gates via a resolved `gated` object at `:776`. *Is `HasFeatureAsync` the only gate mechanism?* |
+| "The three poll jobs named in `EnforcedBy` do not gate" | **REFUTED** | They live in `ProcuLink.Worker/Jobs/`, not `ProcuLink.Infrastructure/`. *Did I grep the right project?* |
+
+The shape held in all four: two true facts, one unchecked step. Eight more claims were refuted the same
+way in the report's §7, including one of this plan's own. **The ratio is the finding** — twelve refuted
+against thirteen kept is what makes the thirteen worth acting on.
+
+### Method note worth keeping
+
+**The stale-build trap fired during this audit and was caught.** Restoring a mutated file from a `.bak`
+via `Move-Item` preserves the backup's OLD mtime, so MSBuild skips recompilation and the "restored" run
+reports the MUTATED result. `git status --short` showing clean is **not** sufficient — a mutation recipe
+in this repo needs an explicit `touch` after restore.
