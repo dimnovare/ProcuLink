@@ -238,17 +238,27 @@ public sealed class AcceptanceGateSingleDoorTests
         new(@"DeliverOrderJob\s*\.\s*EnqueueRedeliver\s*\(", RegexOptions.Compiled);
 
     /// <summary>
-    /// Production sources with comments removed — LINE comments first, THEN block comments.
+    /// Production sources, comment-stripped by the orphan guard's scanner.
     ///
-    /// <para>That order is the entire reason this does not reuse
-    /// <c>OrphanDetector.StripComments</c>, which does it the other way round. Applied to
-    /// <c>ProcuLink.Api/Program.cs</c> the block-comment pass first sees the <c>/*</c> sitting
-    /// inside <c>// … a future `https://*.vercel.app`</c>, scans forward for the next <c>*/</c> —
-    /// which is <c>catch { /* swallow */ }</c> hundreds of lines later — and deletes everything
-    /// between them, DI registrations included. A guard that silently cannot see two thirds of a
-    /// composition root would keep reporting "only one enqueuer" no matter what was added there.
-    /// Stripping line comments first makes that <c>/*</c> vanish along with the comment that
-    /// contains it, which is all it ever was.</para>
+    /// <para>This file used to carry its own copy of the stripper, because
+    /// <c>OrphanDetector.StripComments</c> was then two regex passes with block comments removed
+    /// FIRST — and a regex cannot tell a comment opener from the same two characters inside a
+    /// string. Applied to <c>ProcuLink.Api/Program.cs</c> it read the <c>/*</c> sitting inside
+    /// <c>// … a future `https://*.vercel.app`</c> as an OPEN block comment, closed it at the
+    /// <c>catch { /* swallow */ }</c> 681 lines below it (:421 → :1102 as the file stands today),
+    /// and deleted everything between — all but two of the composition root's service
+    /// registrations, which is most of what <see cref="BothHosts_registerTheGate"/> is looking
+    /// at.</para>
+    ///
+    /// <para>#92 replaced both passes with a single left-to-right scanner that tracks literal
+    /// state, so there is no longer a pass order to get wrong and no reason for a second copy: the
+    /// duplicate is gone, and <c>OrphanGuardTests</c> holds the one that remains with regression
+    /// tests over every literal and comment form. Reordering the passes, which is what this copy
+    /// did, only moved the hole — a <c>//</c> inside a string truncates the line instead.</para>
+    ///
+    /// <para><see cref="OrphanDetector.LoadSources"/> rather than <c>RepoScan.Run()</c>: the corpus
+    /// is all this file needs, and going through the full scan would re-run orphan detection —
+    /// every DbSet against every file — to obtain it.</para>
     /// </summary>
     private static readonly Lazy<IReadOnlyList<(string Path, string Text)>> CachedSources =
         new(ReadSources, isThreadSafe: true);
@@ -257,25 +267,14 @@ public sealed class AcceptanceGateSingleDoorTests
 
     private static IReadOnlyList<(string Path, string Text)> ReadSources()
     {
-        var root  = OrphanDetector.FindRepoRoot();
-        var files = new List<(string, string)>();
+        var root = OrphanDetector.FindRepoRoot();
 
-        foreach (var project in OrphanDetector.ProductionProjectDirectories(root))
-        {
-            var dir = Path.Combine(root, project);
-            if (!Directory.Exists(dir)) continue;
-
-            foreach (var path in Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories))
-            {
-                var relative = Normalise(Path.GetRelativePath(root, path));
-                if (relative.Contains("/obj/", StringComparison.OrdinalIgnoreCase)
-                 || relative.Contains("/bin/", StringComparison.OrdinalIgnoreCase)
-                 || relative.Contains("/Migrations/", StringComparison.Ordinal))
-                    continue;
-
-                files.Add((relative, StripComments(File.ReadAllText(path))));
-            }
-        }
+        // Paths arrive with the host separator — Windows dev, Linux CI — and every lookup in this
+        // file is written with '/'. Normalising here is what keeps Text() from throwing on one OS.
+        var files = OrphanDetector
+            .LoadSources(root, OrphanDetector.ProductionProjectDirectories(root))
+            .Select(f => (Path: Normalise(f.RelativePath), f.Text))
+            .ToList();
 
         Assert.True(files.Count > 100,
             $"only {files.Count} production sources found under {root} — the scan is broken");
@@ -284,12 +283,6 @@ public sealed class AcceptanceGateSingleDoorTests
 
     private static string Text(string relativePath) =>
         Sources().Single(f => f.Path == relativePath).Text;
-
-    private static readonly Regex LineComment  = new(@"(?<!:)//[^\r\n]*", RegexOptions.Compiled);
-    private static readonly Regex BlockComment = new(@"/\*.*?\*/", RegexOptions.Compiled | RegexOptions.Singleline);
-
-    private static string StripComments(string text) =>
-        BlockComment.Replace(LineComment.Replace(text, string.Empty), string.Empty);
 
     private static string Normalise(string relativePath) => relativePath.Replace('\\', '/');
 }
