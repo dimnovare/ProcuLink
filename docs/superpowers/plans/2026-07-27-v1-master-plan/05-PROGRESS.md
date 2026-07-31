@@ -1820,3 +1820,121 @@ that could not see it**:
 
 That is the same defect WP-13 was written to fix, appearing three more times in the packets that fix
 it. **When a packet extracts a mechanism, mutate the CALL SITE — every call site — not the module.**
+
+---
+
+## 2026-07-31 — merge sweep #2: four landed, and a clean merge that broke the build
+
+Swept both repos against the precondition adopted earlier today: **a branch may merge only if it
+contains current `main` AND has had a CI run since.** Applying it cost four extra CI cycles and
+caught one defect that every "green PR" signal said was not there.
+
+### Landed
+
+| PR | Packet | Merged as |
+|---|---|---|
+| FE #74 | WP-18 follow-up (P1) — read the gate's decision, not the override-blind flag | FE `d119e91` |
+| FE #76 | WP-32 follow-up to #67 — gate the sign-in route, anchor the deadline to navigation | FE `d119e91` |
+| BE #98 | WP-21 — prove revision authority | BE `c8ae076` |
+| BE #97 | WP-22 — one inbound document, one order (claim-first dedupe) | BE `faba3bf` |
+
+### Held, with the reason
+
+| PR | Reason |
+|---|---|
+| FE #72 WP-28 | **Red against the new main.** See TRAP 23. Owner's to fix. |
+| FE #70 WP-29 · FE #75 help copy | Green and contain main, but **re-refuting** on the owner's own gate. Owner asked that they not be swept. |
+| FE #65 WP-13 | `update-branch` returned **CONFLICTING** once #74/#76 landed. Wedge owner's to resolve. |
+| FE #73 WP-27 + BE #100 | Coupled, both held — see the rate-cap hold below. FE #73 sends `deliverTo`; landing it without BE #100 ships a request field the API ignores, i.e. a user asks for the file by email and nothing arrives. |
+| FE #69 WP-30 · FE #71 WP-15 | Behind main, refuters out. |
+| BE #99 WP-23 | Updated onto `faba3bf`; CI running. |
+| BE #116 | Conflicting, 27 behind. BE #119 is draft. #118/#121/#122 are throwaway mutation branches. |
+
+---
+
+### TRAP 23 — a clean merge is not a working merge
+
+FE #72 was **green on its own head** and `MERGEABLE`. `gh pr update-branch` merged main into it
+without a single textual conflict. The result failed immediately:
+
+```
+ReferenceError: failingAcceptanceRows is not defined
+```
+
+FE #74 **deleted** `failingAcceptanceRows` from `workshop/acceptanceGateModel.ts` — that deletion is
+the substance of the packet, since the helper counted failing rows blind to overrides. FE #72
+independently added a **new** call site at `OrderWorkshop.tsx:588`. Git saw a deletion in one file
+and an addition in another, merged both, and produced a tree where the caller outlives the callee.
+
+The pre-merge signals that said this was safe: PR checks green, `mergeable: MERGEABLE`, no conflict
+on update. All three were true. None of them means the merged code runs.
+
+**Rule:** `MERGEABLE` is a statement about *text*, exactly as `.base.sha` is a statement about the
+base branch and not about containment (TRAP 11). When two branches touch the same symbol from
+different files, only a CI run **on the merged tree** decides. Third member of that family, and the
+first to reach a broken build.
+
+### Reporting-instrument failure, self-caught
+
+My own status helper reported `PENDING:Vercel` for #72 at a moment when its unit tests and build had
+**already failed**. The reducer tested for pending checks before failing ones and returned on the
+first hit, so a pending deploy preview masked two hard failures. I nearly held the sweep on a Vercel
+preview while the real signal was red underneath it.
+
+Same shape as TRAP 18's sub-class — **the instrument reporting the state was itself the broken
+thing.** Precedence in a status reducer is not cosmetic: FAILURE must outrank PENDING, or the summary
+lies in the one direction that matters.
+
+---
+
+### HOLD — WP-27 must not merge without its rate cap
+
+BE #100 gives `POST /api/onboarding/sample-order` a caller-supplied `deliverTo`, which makes
+ProcuLink's verified Postmark sender email a file to an address the caller chooses.
+`SampleOrderController` carries `[Authorize]` and no named rate-limit policy.
+
+**Not a live incident.** `Create(CancellationToken ct)` on `main` takes no body, so the surface does
+not exist in production. It is created *by the packet*, which is exactly why the cap has to land
+**inside** it rather than after it — order alone is the whole safety property, as with the merge train.
+
+Three corrections to how this was first reported:
+
+- It is **not** unlimited today. `Program.cs:331` registers a `GlobalLimiter` at 300/60s per `sub`.
+  Under-limited, not unprotected. `RateLimitPolicyAppliedTests.StripeWebhook_HasNoNamedRateLimitPolicy`
+  asserts the Stripe webhook must carry *no* named policy, so a missing attribute is a documented
+  state in this codebase, not prima facie oversight.
+- The right policy is **`support` (5/min)**, not `upload` (60/min). `SupportController.Contact` sends
+  to our own fixed inbox, so bounces land where we control them. WP-27's recipient is caller-supplied,
+  which is precisely the input that drives complaint rates against the verified sender. It is *worse*
+  than support on the one axis the cap exists to bound.
+- `RateLimitPolicyAppliedTests.Action_HasExpectedRateLimitPolicy` is a hand-written
+  `[Theory]`/`[InlineData]` catalog, not a sweep. An attribute with no matching row is unpinned
+  wiring — in the file whose own header records that the original defect was policies *defined but
+  never applied*. The row lands in the same commit as the attribute.
+
+Accepted by the WP-27 owner; the fix is in its round.
+
+---
+
+### Next batch — proposed, unowned and unblocked
+
+Currently owned: WP-13/15/16 (wedge), WP-18/21/23 (Wave 3), WP-27–WP-32 (Wave 4), WP-23a (mid-parse).
+Blocked: WP-06/07 (on WP-12), WP-17 (on WP-07), WP-05 (on the WP-07 ruling), Wave 5+.
+
+| # | Packet | Why now | Collides with |
+|---|---|---|---|
+| 1 | **WP-10 remediation** — `/security` EU-residency copy | Logged at `05-PROGRESS:639`: FE #42 shipped **refuted** and the wrong copy is **live**. Marketing files only, tiny, and it is a truth defect on a trust page. | nothing |
+| 2 | **WP-11** — billing gate honesty | 4 wrong error codes (3 tests pin the wrong string), 10 of 16 gates unenforced, REST ingress ungated, cancel→read-only undisclosed. `CLAUDE.md` §11.5's offer⇔works rule applies to the ladder itself. | nothing in flight |
+| 3 | **WP-02** — no test may pass vacuously | Wave 0 foundation: every live-transport test is an env-gated silent `return`; `Live_ImapIngress` dead since `de4ea0e`. Touches test files only, so it is safe to run beside any product packet. | nothing |
+| 4 | **WP-19 + WP-24** — split 4xx, then recovery UI | Same user journey: a failure that names its cause, then a screen that acts on it. 401/404/429 are permanent today; `transform_failed`'s CTA links to itself. WP-24 was refuted once, so it starts from a fix round, not a build. | **WP-24 touches workshop + health deep links — sequence it after FE #72 lands.** |
+
+**WP-12 status, checked rather than inferred:** the wave table above still shows it 🟠 in flight on
+`feat/wp12-output-tree-reconciled`, and it has no open PR — which invites the inference that it
+stalled. It did not. `OutputTree` is on `origin/main` in `Core/Services/Mapping/OutputTreeFormats.cs`,
+`IPromoteMappingService.cs`, `OrderMappingOverrideReader.cs`, `PoMappingConfig.cs`, and
+`Entities/SupplierConnectionRevision.cs`. WP-12 landed; the table is stale, not the packet. Anything
+downstream (WP-06, WP-13) can be planned on it.
+
+The wave tables at lines 914–965 are the original 2026-07-27 authoring and have **not** been
+maintained — they still show WP-18 and WP-21 as ⬜ after both shipped. Read the dated sections for
+live state; treat the tables as history.
