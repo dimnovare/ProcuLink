@@ -37,8 +37,11 @@ namespace ProcuLink.Api.Tests.Integration;
 /// rewriting.</para>
 ///
 /// <para>It also WRITES the EXPLAIN (ANALYZE, BUFFERS) output for both the pre-WP-14 and the WP-14
-/// predicate to <c>docs/ops/wp14-item-mapping-explain.md</c>, so the plan is an artefact in the
-/// repo rather than a number in a PR comment nobody can re-derive.</para>
+/// predicate, so the plan is an artefact anyone can re-derive rather than a number in a PR comment.
+/// It goes to the gitignored artifacts directory (<see cref="TestReportArtifacts"/>), NOT into
+/// <c>docs/</c>: timings, buffer counts and seed ids differ every run, so writing it into the tree
+/// would leave a dirty diff after every suite run. <c>docs/ops/wp14-item-mapping-explain.md</c> is
+/// a snapshot updated by copying that file over it.</para>
 ///
 /// <para>Docker-gated like every other <c>*PostgresTests</c>.</para>
 /// </summary>
@@ -305,6 +308,11 @@ public sealed class ItemMappingBatchResolvePerfPostgresTests : IAsyncLifetime
         sb.AppendLine($"holding **{LargeSupplierCodes}**, after `ANALYZE item_mappings`. Absolute timings are");
         sb.AppendLine("machine-dependent; the PLAN SHAPE and the buffer counts are the point.");
         sb.AppendLine();
+        sb.AppendLine("The committed copy under `docs/ops/` is a SNAPSHOT. The test writes its run to");
+        sb.AppendLine("`artifacts/test-reports/` and never into the working tree — every run differs in");
+        sb.AppendLine("timings and seed ids, so writing it here would dirty the tree for no information.");
+        sb.AppendLine("Update it by copying that file over this one.");
+        sb.AppendLine();
 
         foreach (var (label, sql, supplier, code) in new[]
                  {
@@ -355,19 +363,13 @@ public sealed class ItemMappingBatchResolvePerfPostgresTests : IAsyncLifetime
         sb.AppendLine("which is DDL on a live production table and therefore the founder's call, not this");
         sb.AppendLine("change's. It is deliberately NOT included in the PR.");
 
-        var path = Path.Combine(RepoRoot(), "docs", "ops", "wp14-item-mapping-explain.md");
-        await File.WriteAllTextAsync(path, sb.ToString());
+        // NOT into docs/: every run produces different timings, buffer counts and seed GUIDs, so a
+        // report written into the working tree dirties it on every run for no information at all.
+        // docs/ops/wp14-item-mapping-explain.md is a snapshot a human copies over deliberately.
+        var path = await TestReportArtifacts.WriteAsync("wp14-item-mapping-explain.md", sb.ToString());
+        _output.WriteLine($"EXPLAIN artefact written to {path}");
         _output.WriteLine(sb.ToString());
 
         File.Exists(path).Should().BeTrue();
-    }
-
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ProcuLink.slnx")))
-            dir = dir.Parent;
-        dir.Should().NotBeNull();
-        return dir!.FullName;
     }
 }
