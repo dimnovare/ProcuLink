@@ -367,6 +367,63 @@ public class UblOrderTransformServiceTests
         sellerName.Value.Should().NotBeNullOrEmpty("an empty PartyName/Name is invalid Peppol BIS 3.0");
     }
 
+    // ── Seller name is the supplier's NAME, not its primary key ────────────────
+
+    /// <summary>
+    /// The document goes to the supplier, and it used to tell them their own name was
+    /// <c>3f2b91c4-…</c> — the row id. Every current ingest path writes the denormalized
+    /// <c>SupplierName</c>, so it is the first source.
+    /// </summary>
+    [Fact]
+    public async Task TransformAsync_UsesDenormalisedSupplierName_NotTheGuid()
+    {
+        var order = BuildOrder();
+        order.SupplierName = "REDACTED-PARTY";
+
+        var sellerName = await ReadSellerName(order);
+
+        sellerName.Should().Be("REDACTED-PARTY");
+        sellerName.Should().NotBe(order.SupplierId!.Value.ToString(),
+            "the supplier reads this field as its own name");
+        Guid.TryParse(sellerName, out _).Should().BeFalse("a GUID is a key, not a name");
+    }
+
+    /// <summary>
+    /// Second source: the loaded navigation. Reached only when the denormalized column is blank,
+    /// which is why the column is read first — it does not depend on the caller having included
+    /// the <c>Supplier</c> navigation.
+    /// </summary>
+    [Fact]
+    public async Task TransformAsync_FallsBackToLoadedSupplierNavigation()
+    {
+        var order = BuildOrder();
+        order.SupplierName = "   ";
+        order.Supplier = new Supplier { Id = order.SupplierId!.Value, Name = "Baltic Fasteners AS" };
+
+        (await ReadSellerName(order)).Should().Be("Baltic Fasteners AS");
+    }
+
+    /// <summary>
+    /// Last resort only. A routed order with no name anywhere still may not emit an empty
+    /// PartyName/Name, so the id remains the floor — but it is now the third answer, not the first.
+    /// </summary>
+    [Fact]
+    public async Task TransformAsync_RoutedOrderWithNoNameAnywhere_StillEmitsTheId()
+    {
+        var order = BuildOrder();
+        order.SupplierName = null;
+
+        (await ReadSellerName(order)).Should().Be(order.SupplierId!.Value.ToString());
+    }
+
+    private static async Task<string> ReadSellerName(PurchaseOrderEntity order)
+    {
+        var result = await new UblOrderTransformService().TransformAsync(order, OutputFormat.Ubl, CancellationToken.None);
+        var doc    = XDocument.Parse(await ReadContentAsString(result));
+        return doc.Descendants(Cac + "SellerSupplierParty").Single()
+            .Element(Cac + "Party")!.Element(Cac + "PartyName")!.Element(Cbc + "Name")!.Value;
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static async Task<string> ReadContentAsString(TransformResult result)

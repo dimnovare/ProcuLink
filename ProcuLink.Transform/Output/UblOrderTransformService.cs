@@ -87,10 +87,17 @@ public sealed class UblOrderTransformService : ITransformService
         // PartyLegalEntity is absent). Supplier name remains the supplier id (placeholder).
         var resolvedBuyer = OrderHeaderReader.ExtractBuyerName(order);
         var buyerName     = string.IsNullOrWhiteSpace(resolvedBuyer) ? "ProcuLink Buyer" : resolvedBuyer;
-        // Supplier name is the supplier id (placeholder). Coalesce an unrouted (null) supplier to
-        // the zero GUID so PartyName/Name is never empty (Peppol BIS 3.0 requires it). Byte-identical
-        // for every routed order — this only affects the read-only preview of an unrouted order.
-        var supplierName  = (order.SupplierId ?? Guid.Empty).ToString();
+        // Supplier name. This used to emit the supplier's GUID — so the party receiving the document
+        // read its own name as `3f2b91c4-…`. The entity has carried a denormalized SupplierName since
+        // the buyer-name column landed, and the loaded Supplier is the second source; the GUID stays
+        // only as the last resort, because PartyName/Name may not be empty.
+        //
+        // Order matters: SupplierName is written by every current ingest path, and reading it avoids
+        // depending on whether the Supplier navigation was included by the caller.
+        var supplierName  = FirstNonBlank(
+            order.SupplierName,
+            order.SupplierId is null ? null : order.Supplier?.Name,
+            (order.SupplierId ?? Guid.Empty).ToString());
 
         var root = new XElement(UblOrder + "Order",
             new XAttribute(XNamespace.Xmlns + "cac", Cac.NamespaceName),
@@ -233,5 +240,18 @@ public sealed class UblOrderTransformService : ITransformService
                     new XElement(Cbc + "Name", line.Description ?? string.Empty),
                     new XElement(Cac + "SellersItemIdentification",
                         new XElement(Cbc + "ID", line.SupplierItemCode ?? string.Empty)))));
+    }
+
+    /// <summary>
+    /// The first candidate that is neither null nor whitespace. The last candidate is the fallback
+    /// and is returned even if it is blank, so the caller decides what "nothing left" means.
+    /// </summary>
+    private static string FirstNonBlank(params string?[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate)) return candidate;
+        }
+        return candidates.Length == 0 ? string.Empty : candidates[^1] ?? string.Empty;
     }
 }
