@@ -3729,3 +3729,48 @@ Neither file was edited — WP-38's territory is cited, not touched.
 half-life measured in hours while packets are landing. Two of my rows moved between `git commit` and
 `git push`. That is the argument for `FE/src/lib/capability-ledger.ts` in one line: **prose re-derived by
 hand is correct at a commit, and a typed constant with a CI check is correct at a merge.**
+
+---
+
+## 2026-08-01 — session close. 44 merged, zero open PRs, both mains green.
+
+FE `024aad5` · BE `501ce1a`. Waves 0–4 complete; the plan itself is on `main`.
+
+### What is verified, and by what
+
+Do not re-audit these from scratch — the evidence exists:
+
+- **Every packet was adversarially refuted by its own session before it reached me**, and its tests
+  mutation-checked (revert the fix, the test must go red).
+- **Every merge passed three gates**: branch contains current `main`, a CI run *since* that, and
+  test-side changes beside the production files.
+- **Both mains were verified green after every merge**, not just on the PR.
+- **WP-39 is a real signed-in production pass** — `docs/qa/2026-08-01-wp-39-authenticated-production-pass.md`.
+  Upload → parse (<10 s) → review → inline mapping → transform (six formats) → send confirm all
+  work live.
+- **The handshake fix was verified in production, not just CI**: `/upload?__clerk_handshake=junk`
+  → 307 → `/sign-in`.
+
+### The one real gap — start next week here
+
+**About fifteen packets landed AFTER WP-39's production run**, including WP-36's nine screens, the
+SFTP host-key work, the SSO/Peppol claim removal and both P1 audit-trail fixes. The composed product
+has therefore not been exercised end to end by a real user since. **A second authenticated production
+pass is the highest-value next action** — same method as WP-39, which records how to obtain the
+session (the older method in the docs no longer works).
+
+### Remaining packets
+
+| Packet | State |
+|---|---|
+| **WP-33** auto-send | Next natural packet, and the highest-risk one in the plan. Founder ruling stands: **dry-run one full week before a single real order moves unattended.** Now sensible because WP-39 proved the manual path. Deserves a fresh session with full budget. |
+| WP-35 replay that re-processes · WP-37 page the founder · WP-41 a11y + visual-regression CI | not started |
+| WP-16 designer depth II | blocked on design brief **DB-2** |
+
+**Two known defects deliberately left open:** the UBL `SellerSupplierParty/PartyName/Name` GUID
+placeholder and the missing `cbc:EndpointID` (`UblOrderTransformService.cs:93`). They were kept out
+of the Peppol claim removal on purpose — fixing them under a banner we were removing would have
+confused both. They are now free-standing and small.
+
+**Founder-owned, still open:** rotate the three keys (Clerk, R2, ElevenLabs — open since 2026-07-24),
+and WP-03 check 2 (one test email with the org default cleared).
