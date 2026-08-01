@@ -3508,3 +3508,52 @@ green run is not a green *head*.
 
 It unblocks when #69 lands, because `update-branch` will finally trigger a run against a head that
 still exists.
+
+---
+
+## 2026-08-01 — TWENTY-EIGHT landed. Both repos at zero open PRs.
+
+| Merged | Packet | Result |
+|---|---|---|
+| FE #69 | WP-30 — the guards now scan what the compiler scans | FE `e28664f` |
+| FE #80 | WP-02 round 2 frontend — ext lint was never linting `tests/` | FE `6aa01a5` |
+| BE #131 | rescued — stop the WP-14 report writers dirtying the tree | BE `7aa830a` |
+| FE #77 | WP-31 — one dialog contract, a measured tap-target floor | FE `1852590` |
+
+**FE `1852590` · BE `7aa830a`. Zero open pull requests in either repository.**
+
+### Every worktree swept — nothing is stranded
+
+Both repos' worktrees were audited for unpushed work, since that risk had already bitten twice. Two
+candidates looked live and both were already on main: WP-10's local branch is the same commit as #83,
+and WP-23a's five commits are #119's pre-squash originals. The "RevisionAuthority fails in worktrees"
+chip had nothing to do either — its fix is on main via #128, and the file records it.
+
+**Caveat worth keeping for the next audit:** `git rev-list origin/main..HEAD` is a *useless* signal in
+this repo. Every PR is squash-merged, so a fully-merged branch still reports "ahead" forever. The
+signal that actually distinguishes stranded work is whether the head commit is contained by any remote
+branch.
+
+### FE #77 — three failures stacked on each other
+
+1. Its "green" was a run from 16:17 bound to a **superseded head**. Nothing had ever run against
+   `6147a76`. Same family as TRAP 11 and TRAP 23: **a true signal attached to a different object than
+   the one being merged.** `.base.sha` is not containment; `MERGEABLE` is not the merged program; a
+   green *run* is not a green *head*.
+2. It was stacked on the **unmerged** #69. Once #69 squashed into main, eleven files conflicted with
+   themselves — the branch's copy of #69 against main's copy of #69.
+3. So a merge would have fought its own history. Replayed the six a11y commits onto main instead, and
+   **dropped `e55bea0`** (the AA-contrast fix) as superseded — #69's third pass had already split
+   `ghostTierTextColor` out with the same reasoning.
+
+The `OnboardingWizard` collision this plan predicted at Wave 4 planning time did happen. It was one
+import line.
+
+### A shared-toolchain hazard, recorded because it is silent
+
+`bun install` at the **repo root** went stale when #80 added `@vitest/eslint-plugin`. Worktrees resolve
+`eslint.config.js` upward to the root, so the pre-commit lint gate broke in *every* worktree at once,
+reporting only `ERR_MODULE_NOT_FOUND`. A root install fixed all of them.
+
+**When a merged PR adds a dev dependency, every existing worktree's gate is broken until the root is
+reinstalled** — and the failure names a module, not the cause.
