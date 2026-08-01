@@ -7,6 +7,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
 
@@ -91,13 +92,14 @@ public class RevisionAuthorityDeliveryTests
 
     private static async Task AddLiveConfigAsync(
         ProcuLinkDbContext db, Seeded seeded, DeliveryEncryptionService encryption,
-        string url = "https://live.example/orders", bool autoDeliver = true)
+        string url = "https://live.example/orders", bool autoDeliver = true,
+        string? configJson = null)
     {
         db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
         {
             Id = Guid.NewGuid(), OrgId = seeded.OrgId, SupplierId = seeded.SupplierId,
             Protocol = "http", AutoDeliver = autoDeliver,
-            ConfigJson = $"{{\"url\":\"{url}\"}}",
+            ConfigJson = configJson ?? $"{{\"url\":\"{url}\"}}",
             EncryptedCredentials = encryption.Encrypt("{\"type\":\"live\"}"),
             CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         });
@@ -316,6 +318,71 @@ public class RevisionAuthorityDeliveryTests
         result.ErrorMessage.Should().Contain("delivery config");
         dispatcher.Calls.Should().Be(0);
         (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.DeliveryFailed);
+    }
+
+    // ── SSH host-key pins live on the LIVE config, never in a revision snapshot (WP-38) ──
+    //
+    // A pinned revision reproduces the DOCUMENT. Which server may receive it is a fact about the
+    // world NOW. Freezing the two together breaks the feature in BOTH directions — and this is the
+    // path production actually uses, because revision authority is ON there.
+
+    /// <summary>
+    /// The config that GOVERNS a revision-pinned dispatch is a detached object that was never added
+    /// to the DbContext. Writing a first-use fingerprint onto it would be a silent no-op: the shape
+    /// of a fix with none of the effect, leaving every revision-pinned SFTP supplier permanently
+    /// unverified while the logs claimed a key had been recorded.
+    /// </summary>
+    [Fact]
+    public async Task FlagOn_Pinned_LearnedHostKey_IsRecordedOnTheLiveConfig_NotTheDetachedSnapshot()
+    {
+        await using var db = NewDb();
+        var encryption = CreateEncryption();
+        var seeded = await SeedOrderWithArtifactAsync(db);
+        await AddLiveConfigAsync(db, seeded, encryption, url: "https://live.example/orders");
+        await SeedRevisionAsync(db, seeded,
+            protocol: "http",
+            configJson: "{\"url\":\"https://revision.example/orders\"}",
+            credentialsRef: encryption.Encrypt("{\"type\":\"revision\"}"));
+
+        var dispatcher = new CapturingDispatcher(
+            new DeliveryResult(true, null, 200, LearnedHostKeyFingerprint: "SHA256:learnedfromtheserver"));
+        var service = CreateService(db, dispatcher, encryption, flagEnabled: true);
+
+        await service.DispatchArtifactAsync(seeded.OrgId, seeded.OrderId, seeded.ArtifactId, true, default);
+
+        var live = await db.SupplierDeliveryConfigs.SingleAsync();
+        DeliveryHostKeyConfig.Read(live.ConfigJson).Should().Equal("SHA256:learnedfromtheserver");
+        live.ConfigJson.Should().Contain("live.example", "the rest of the live config must survive the write");
+    }
+
+    /// <summary>
+    /// The other direction: the pin the dispatcher is handed comes from the live config, not from
+    /// the revision's frozen copy. Otherwise an operator re-trusting a legitimately rebuilt server
+    /// could never reach orders pinned to older revisions — they would refuse forever, with a
+    /// message about a rebuild the operator had already dealt with.
+    /// </summary>
+    [Fact]
+    public async Task FlagOn_Pinned_HostKeyPin_ComesFromTheLiveConfig_NotTheRevisionSnapshot()
+    {
+        await using var db = NewDb();
+        var encryption = CreateEncryption();
+        var seeded = await SeedOrderWithArtifactAsync(db);
+        await AddLiveConfigAsync(db, seeded, encryption,
+            configJson: "{\"url\":\"https://live.example/orders\",\"hostKeyFingerprints\":[\"SHA256:currentlytrusted\"]}");
+        await SeedRevisionAsync(db, seeded,
+            protocol: "http",
+            configJson: "{\"url\":\"https://revision.example/orders\",\"hostKeyFingerprints\":[\"SHA256:frozenlongago\"]}",
+            credentialsRef: encryption.Encrypt("{\"type\":\"revision\"}"));
+
+        var dispatcher = new CapturingDispatcher(new DeliveryResult(true, null, 200));
+        var service = CreateService(db, dispatcher, encryption, flagEnabled: true);
+
+        await service.DispatchArtifactAsync(seeded.OrgId, seeded.OrderId, seeded.ArtifactId, true, default);
+
+        DeliveryHostKeyConfig.Read(dispatcher.LastConfig!.ConfigJson)
+            .Should().Equal("SHA256:currentlytrusted");
+        dispatcher.LastConfig.ConfigJson.Should().Contain("revision.example",
+            "everything EXCEPT the host-key pin must still come from the pinned revision");
     }
 
     // ── Test doubles ───────────────────────────────────────────────────────────

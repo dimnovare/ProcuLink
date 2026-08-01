@@ -36,6 +36,27 @@ public class SftpIngressConfig
     /// <summary>Whether polling is active for this config.</summary>
     public bool IsEnabled { get; set; }
 
+    /// <summary>
+    /// The SSH host-key fingerprint(s) this poller trusts, newline-separated, in OpenSSH's
+    /// <c>SHA256:…</c> form — the same string <c>ssh-keygen -lf</c> prints, so an operator can
+    /// compare it against what the supplier tells them. Null/empty means nothing is pinned yet:
+    /// the next successful poll records what the server presented (trust-on-first-use) and every
+    /// poll after that is verified against it.
+    ///
+    /// <para>
+    /// NOT a secret, and deliberately not encrypted: it is the digest of a PUBLIC key, and the whole
+    /// point is that a human can read it back. Parsed by
+    /// <c>ProcuLink.Core.Services.Security.SshHostKeyPolicy.Parse</c>; a SET rather than a value
+    /// because a supplier behind a load balancer legitimately answers with more than one host key.
+    /// </para>
+    ///
+    /// <para>
+    /// Clearing this field is the deliberate re-trust path after a supplier genuinely rebuilds their
+    /// server: the next poll pins whatever it then finds.
+    /// </para>
+    /// </summary>
+    public string? HostKeyFingerprints { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

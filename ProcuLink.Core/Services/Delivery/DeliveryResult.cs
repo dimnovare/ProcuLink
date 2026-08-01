@@ -105,6 +105,20 @@ public enum DeliveryOutcome
 /// slow us down but never speed us up. Null when no such header was sent, or on a channel that has
 /// no headers at all.
 /// </param>
+/// <param name="LearnedHostKeyFingerprint">
+/// The SSH host-key fingerprint this dispatch saw for the FIRST time, and which the caller should
+/// therefore record against the supplier so every later connection is verified against it. Null
+/// whenever there is nothing new to learn: on every channel that has no host key at all, on an SFTP
+/// connection whose fingerprint was already pinned, and — deliberately — on one that was REFUSED,
+/// because recording a refused key would re-pin the very server the refusal exists to keep out.
+///
+/// <para><b>Why the dispatcher reports rather than writes.</b> Dispatchers hold no
+/// <c>DbContext</c> and must not start holding one: the delivery path already runs inside a scoped
+/// context that <c>DeliveryService</c> owns and commits, and a second writer on that same instance
+/// is the shared-context hazard this codebase has been bitten by before. So the transport states
+/// what it observed and <c>DeliveryService</c> — which owns the config row and the transaction —
+/// decides what to persist, in the same <c>SaveChangesAsync</c> as the delivery attempt.</para>
+/// </param>
 public record DeliveryResult(
     bool Success,
     string? ErrorMessage,
@@ -112,4 +126,5 @@ public record DeliveryResult(
     string? ResponseBody = null,
     DeliveryOutcome Outcome = DeliveryOutcome.Dispatched,
     bool SupplierReasonObservable = false,
-    TimeSpan? RetryAfter = null);
+    TimeSpan? RetryAfter = null,
+    string? LearnedHostKeyFingerprint = null);

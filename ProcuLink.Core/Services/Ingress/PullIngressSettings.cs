@@ -9,7 +9,13 @@ public sealed record UpdateSftpIngressRequest(
     string Username,
     string? Password,            // null = keep saved, "" = clear, value = replace
     string RemoteDirectory,
-    Guid? DefaultSupplierId);
+    Guid? DefaultSupplierId,
+    // Trusted SSH host-key fingerprint(s), newline-separated, in OpenSSH's "SHA256:…" form. Same
+    // null = keep / "" = clear / value = replace semantics as Password — but for the OPPOSITE reason:
+    // this one is not a secret, it is returned in full by the GET, and clearing it is the deliberate
+    // re-trust after a supplier legitimately rebuilds their server. The next poll then records
+    // whatever it finds and pins to that.
+    string? HostKeyFingerprints = null);
 
 public sealed record SftpIngressResponse(
     bool Enabled,
@@ -20,7 +26,11 @@ public sealed record SftpIngressResponse(
     Guid? DefaultSupplierId,
     bool HasPassword,
     string? PasswordDisplay,     // "********" or null — never the ciphertext
-    DateTime? UpdatedAt);
+    DateTime? UpdatedAt,
+    // Returned IN FULL, deliberately: an operator asked to decide whether a changed host key is a
+    // supplier rebuild or an interception cannot decide it without seeing the value they are
+    // comparing against. Null until the first successful poll records one.
+    string? HostKeyFingerprints = null);
 
 // ── S3 / R2 pull ──────────────────────────────────────────────────────────────
 

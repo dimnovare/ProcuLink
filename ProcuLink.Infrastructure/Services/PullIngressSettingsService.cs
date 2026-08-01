@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services;
 
@@ -49,8 +50,18 @@ public sealed class PullIngressSettingsService : IPullIngressSettingsService
             _db.SftpIngressConfigs.Add(cfg);
         }
 
-        cfg.Host = Normalize(request.Host);
-        cfg.Port = request.Port <= 0 ? 22 : request.Port;
+        var newHost = Normalize(request.Host);
+        var newPort = request.Port <= 0 ? 22 : request.Port;
+
+        // A host-key pin names a SERVER. Repointing the poller at a different host or port makes the
+        // stored fingerprint describe something it no longer talks to, and leaving it would refuse
+        // the new server forever with a message about a rebuild that never happened. Cleared before
+        // the request's own explicit value is applied below, so an operator supplying both wins.
+        if (!string.Equals(cfg.Host, newHost, StringComparison.OrdinalIgnoreCase) || cfg.Port != newPort)
+            cfg.HostKeyFingerprints = null;
+
+        cfg.Host = newHost;
+        cfg.Port = newPort;
         cfg.Username = Normalize(request.Username);
         cfg.RemoteDirectory = Normalize(request.RemoteDirectory);
         cfg.DefaultSupplierId = request.DefaultSupplierId;
@@ -60,6 +71,14 @@ public sealed class PullIngressSettingsService : IPullIngressSettingsService
             cfg.EncryptedPassword = string.IsNullOrWhiteSpace(request.Password)
                 ? string.Empty
                 : _encryption.Encrypt(request.Password);
+        }
+        // null = keep whatever the last successful poll recorded (a client that has never heard of
+        // host keys must not silently un-pin the connection); "" = the operator deliberately
+        // re-trusting after a server rebuild, so the next poll pins whatever it then finds.
+        if (request.HostKeyFingerprints is not null)
+        {
+            cfg.HostKeyFingerprints = SshHostKeyPolicy.Serialise(
+                SshHostKeyPolicy.Parse(request.HostKeyFingerprints));
         }
         cfg.UpdatedAt = now;
 
@@ -118,12 +137,12 @@ public sealed class PullIngressSettingsService : IPullIngressSettingsService
     private static SftpIngressResponse ToSftpResponse(SftpIngressConfig? c)
     {
         if (c is null)
-            return new SftpIngressResponse(false, string.Empty, 22, string.Empty, string.Empty, null, false, null, null);
+            return new SftpIngressResponse(false, string.Empty, 22, string.Empty, string.Empty, null, false, null, null, null);
 
         var has = !string.IsNullOrWhiteSpace(c.EncryptedPassword);
         return new SftpIngressResponse(
             c.IsEnabled, c.Host, c.Port, c.Username, c.RemoteDirectory, c.DefaultSupplierId,
-            has, has ? Mask : null, c.UpdatedAt);
+            has, has ? Mask : null, c.UpdatedAt, c.HostKeyFingerprints);
     }
 
     private static S3IngressResponse ToS3Response(S3IngressConfig? c)

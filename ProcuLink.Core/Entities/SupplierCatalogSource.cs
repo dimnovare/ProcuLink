@@ -37,6 +37,20 @@ public class SupplierCatalogSource
     /// <summary>Exact remote FILE path (no directory/glob selection in v1). Unused for http/https.</summary>
     public string RemotePath { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The SSH host-key fingerprint(s) this sftp source trusts, newline-separated, in OpenSSH's
+    /// <c>SHA256:…</c> form. Null/empty means nothing is pinned yet: the next successful sync records
+    /// what the server presented (trust-on-first-use) and every sync after that is verified against
+    /// it. Unused for ftp/ftps (TLS certificate validation, already enforced) and http/https.
+    ///
+    /// <para>
+    /// Not a secret — it is the digest of a public key — so it is stored in cleartext and echoed back
+    /// in responses, unlike <see cref="EncryptedPassword"/>. Clearing it is the deliberate re-trust
+    /// path after a supplier rebuilds their server.
+    /// </para>
+    /// </summary>
+    public string? HostKeyFingerprints { get; set; }
+
     // ── HTTP(S) catalog pull (plan 2026-06-12 v2; null for sftp/ftp rows) ──────
 
     /// <summary>

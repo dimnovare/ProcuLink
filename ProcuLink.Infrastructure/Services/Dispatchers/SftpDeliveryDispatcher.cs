@@ -5,6 +5,7 @@ using Renci.SshNet.Common;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Dispatchers;
@@ -145,15 +146,38 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
                     // FtpsDeliveryDispatcher, which has always had one call site.
                     SftpClient? client = null;
                     ISftpUploadSession session;
+                    SshHostKeyVerifier? verifier = null;
 
                     if (fakeSession is null)
                     {
+                        // Who this server claims to be is now part of the decision. Until this
+                        // existed, flipping the server's host key between two deliveries — host,
+                        // port, username and password unchanged — produced the same Success: True,
+                        // no warning and no log line, and handed the supplier's password to the new
+                        // identity along with the purchase order.
+                        verifier = new SshHostKeyVerifier(
+                            "SFTP delivery", DeliveryHostKeyConfig.Read(config.ConfigJson));
+
                         client = new SftpClient(connectionInfo);
-                        var connectFailure = TryConnect(client);
+                        verifier.Attach(client);
+
+                        // Belt and braces: SSH.NET aborts on CanTrust=false — proven live on the
+                        // pinned 2024.2.0 — but that is a property of the library, and this is the
+                        // one place where trusting it silently would put a purchase order and the
+                        // supplier's password on an unverified server. A connect that SUCCEEDS
+                        // despite our refusal is still a refusal.
+                        var connectFailure = TryConnect(client, verifier)
+                            ?? (verifier.Rejection is null ? null : new DeliveryResult(false, verifier.Rejection.Message));
+
                         if (connectFailure is not null)
                         {
                             client.Dispose();
-                            return connectFailure;
+                            // Stamped even on failure: an authentication error AFTER a completed key
+                            // exchange means the server's identity WAS cryptographically
+                            // established, so it is a genuine first-use observation and pinning it
+                            // protects the retry. A refused key never reaches here as something to
+                            // learn — LearnedFingerprint is null for a rejection by construction.
+                            return Stamp(connectFailure, verifier);
                         }
 
                         session = new SshNetUploadSession(client);
@@ -165,14 +189,16 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
 
                     try
                     {
-                        return UploadCore(
-                            session, content, remotePath, cfg.MakeDirectories,
-                            // THE wire between the operator's saved setting and the live upload,
-                            // read from the config row the operator actually edited. Covered
-                            // end-to-end by FileDropOverwriteWiringTests — hardcoding this to true
-                            // must not be able to pass, and now cannot.
-                            OverwriteExistingFromConfig(config.ConfigJson),
-                            _logger, ct);
+                        return Stamp(
+                            UploadCore(
+                                session, content, remotePath, cfg.MakeDirectories,
+                                // THE wire between the operator's saved setting and the live upload,
+                                // read from the config row the operator actually edited. Covered
+                                // end-to-end by FileDropOverwriteWiringTests — hardcoding this to true
+                                // must not be able to pass, and now cannot.
+                                OverwriteExistingFromConfig(config.ConfigJson),
+                                _logger, ct),
+                            verifier);
                     }
                     finally
                     {
@@ -202,16 +228,36 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
     }
 
     /// <summary>
-    /// Opens the SSH connection, mapping the three connect failures an operator can actually fix to
-    /// their own sentence. Returns null on success — transport only, so it carries no part of the
-    /// upload decision.
+    /// Carries a first-use host-key observation out of the transport and onto the result, so
+    /// <c>DeliveryService</c> — which owns the config row and the transaction — can record it.
+    /// Null verifier (the test session seam) and nothing-new-to-learn both leave the result alone.
     /// </summary>
-    private static DeliveryResult? TryConnect(SftpClient client)
+    private static DeliveryResult Stamp(DeliveryResult result, SshHostKeyVerifier? verifier) =>
+        verifier?.LearnedFingerprint is { } fingerprint
+            ? result with { LearnedHostKeyFingerprint = fingerprint }
+            : result;
+
+    /// <summary>
+    /// Opens the SSH connection, mapping the connect failures an operator can actually fix to their
+    /// own sentence. Returns null on success — transport only, so it carries no part of the upload
+    /// decision.
+    /// </summary>
+    private static DeliveryResult? TryConnect(SftpClient client, SshHostKeyVerifier verifier)
     {
         try
         {
             client.Connect();
             return null;
+        }
+        catch (Exception) when (verifier.Rejection is not null)
+        {
+            // The host key is why we are here, whatever the library called the exception. SSH.NET
+            // reports a subscriber-refused key as SshConnectionException("Key exchange negotiation
+            // failed.") — verified live — which names neither the cause nor a next step and reads
+            // identically to an algorithm mismatch. Filtering on OUR OWN rejection rather than on
+            // the exception type means a library upgrade that renames or re-wraps it cannot quietly
+            // reinstate the useless message.
+            return new DeliveryResult(false, verifier.Rejection.Message);
         }
         catch (SshAuthenticationException)
         {

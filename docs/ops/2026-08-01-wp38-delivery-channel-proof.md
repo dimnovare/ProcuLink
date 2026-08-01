@@ -14,8 +14,8 @@ actually work, and what breaks first?**
 
 | Channel | Does it work? | What breaks first |
 |---|---|---|
-| **SFTP delivery** | **Yes — first live proof.** Byte-identical upload confirmed at the receiver against OpenSSH 10.3p1 | **It talks to anyone.** A changed server host key is invisible: same result, no warning, no log line |
-| **SFTP ingress (polling)** | **Yes — first live proof.** Connected and listed a real remote directory | Same host-key exposure, same code-level cause, different class |
+| **SFTP delivery** | **Yes — first live proof.** Byte-identical upload confirmed at the receiver against OpenSSH 10.3p1 | ~~**It talks to anyone.** A changed server host key is invisible: same result, no warning, no log line~~ — **fixed, see U-1** |
+| **SFTP ingress (polling)** | **Yes — first live proof.** Connected and listed a real remote directory | ~~Same host-key exposure, same code-level cause, different class~~ — **fixed, see U-1** (and catalog pull, a third consumer this run missed) |
 | **SFTP key-based auth** | **Yes — all four realistic key formats** | Nothing. This is the healthiest thing in the packet |
 | **FTPS delivery** | **Yes — first live proof.** Explicit TLS, upload confirmed at the receiver | Certificate validation is real and correct, but its **refusal was unreadable**. Fixed here |
 | **HTTP / email / ERP** | Already live-proven (2026-07-02) | `http://` is permitted on every tenant-configured channel; no test pins the ERP guard wiring |
@@ -202,9 +202,57 @@ Pinned transports: `SSH.NET 2024.2.0`, `FluentFTP 54.2.0`, `MailKit 4.17.0`
 
 Deliberately **not built** here. Each entry is what the fix would have to be.
 
-### U-1 · SFTP host-key verification — the packet's own scope · **P1**
+### U-1 · SFTP host-key verification — the packet's own scope · **P1** — **CLOSED 2026-08-01**
 
 *Proven above.* Both delivery and ingress accept any host key.
+
+> **Fixed in the WP-38 build half** (branch `wp38-sftp-host-key-verification`). Trust-on-first-use
+> plus an optional per-supplier pin, founder decision. The shape below survived contact with the
+> code, with three corrections worth recording:
+>
+> - **Three consumers, not two.** WP-40 found the third: catalog pull
+>   (`CatalogPullService.cs:56,84`) shares `ISftpClientFactory` with order polling. All three are
+>   covered.
+> - **A pin must NOT be frozen into a connection revision.** When `Connections:RevisionAuthority`
+>   is on — which is production's normal state — the delivery config that governs a dispatch is a
+>   *detached* snapshot that was never added to the `DbContext`. Writing the learned fingerprint
+>   onto it is a silent no-op, and reading the pin from it would freeze a security fact about the
+>   server into an artifact about the document. Fingerprints are read from and written to the LIVE
+>   supplier delivery config on both paths.
+> - **The save path had to be taught to preserve it.** `DeliveryConfigService.UpsertAsync` replaces
+>   `ConfigJson` wholesale, and no client sends a property it has never heard of — so without an
+>   explicit preserve, changing a timeout would un-pin the supplier.
+>
+> Storage is as predicted: `ConfigJson.hostKeyFingerprints` for delivery (non-secret, echoed by the
+> existing GET so an operator can read it), and a new `host_key_fingerprints` text column on
+> `sftp_ingress_configs` and `supplier_catalog_sources` (migration
+> `20260801131428_AddSftpHostKeyFingerprints`, nullable/additive). Clearing the value is the
+> deliberate re-trust after a genuine server rebuild; repointing a source at a different host or
+> port clears it automatically, since a pin names a server.
+>
+> §5's two open sub-cases are both answered: the stored value is a SET (load balancers), and the
+> re-accept path is "clear it".
+>
+> **Live evidence**, same recipe as §7 against `atmoz/sftp:alpine` on `127.0.0.1:2222`
+> (OpenSSH host key `SHA256:x1TQJc4tJTSXBFChMVnnOgtXbv9Nt9T+9A6dR7CzGAY`, read out of the container
+> with `ssh-keygen -lf`):
+>
+> | Live test | Result |
+> |---|---|
+> | `Live_Sftp_HostKey_RecordedOnFirstUse_MatchesSshKeygen` | **PASS** — the recorded fingerprint is byte-identical to `ssh-keygen`'s, so what an operator compares against is the string their own terminal prints |
+> | `Live_Sftp_ChangedHostKey_IsRefusedWithAnActionableMessage` | **PASS** — `Success: False`, message names both fingerprints and the next step, and does NOT contain `"Key exchange negotiation failed"` |
+> | `Live_Sftp_PinnedHostKey_StillUploads` | **PASS** |
+> | `Live_Sftp_RealUpload` (pre-existing) | **PASS** — unchanged behaviour on a first connection |
+> | `Live_SftpIngress_RealPollImportsFile` (pre-existing) | **PASS** — polling still imports |
+>
+> §5's point 2 held exactly: the library's own refusal is useless, so the message is authored in
+> `SshHostKeyPolicy.RejectionMessage` and substituted for whatever exception SSH.NET raised — the
+> catch filters on *our* rejection rather than on the exception type, so a library upgrade that
+> renames it cannot quietly reinstate the useless text.
+>
+> §5's point 5 (count production sftp configs before choosing fail-closed) is **moot** under
+> trust-on-first-use: no existing configuration stops working, because none of them is pinned yet,
+> and each pins itself on its next connection. No production data was read for this.
 
 **Shape of the fix, with the two hard parts already answered by this run:**
 

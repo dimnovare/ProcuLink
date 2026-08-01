@@ -57,6 +57,106 @@ public class PullIngressSettingsServiceTests
         after.Port.Should().Be(2222);
     }
 
+    // ── SSH host-key pin lifecycle (WP-38) ───────────────────────────────────
+
+    private static UpdateSftpIngressRequest SftpRequest(
+        string host = "sftp.example", int port = 22, string? hostKeyFingerprints = null) =>
+        new(true, host, port, "user", "s3cret", "/in", null, hostKeyFingerprints);
+
+    /// <summary>
+    /// The same reason the delivery config had to learn to preserve its pin: a client that has
+    /// never heard of host keys sends null, and null must not silently un-pin the poller.
+    /// </summary>
+    [Fact]
+    public async Task UpdateSftp_NullFingerprints_KeepsWhatThePollerRecorded()
+    {
+        await using var db = CreateDb();
+        var service = new PullIngressSettingsService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+
+        await service.UpdateSftpAsync(orgId, SftpRequest(hostKeyFingerprints: "SHA256:pinned"), default);
+        await service.UpdateSftpAsync(orgId, SftpRequest(), default);
+
+        (await db.SftpIngressConfigs.SingleAsync()).HostKeyFingerprints.Should().Be("SHA256:pinned");
+    }
+
+    [Fact]
+    public async Task UpdateSftp_EmptyFingerprints_ClearsThePin_TheReTrustPath()
+    {
+        await using var db = CreateDb();
+        var service = new PullIngressSettingsService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+
+        await service.UpdateSftpAsync(orgId, SftpRequest(hostKeyFingerprints: "SHA256:pinned"), default);
+        await service.UpdateSftpAsync(orgId, SftpRequest(hostKeyFingerprints: ""), default);
+
+        (await db.SftpIngressConfigs.SingleAsync()).HostKeyFingerprints.Should().BeNull(
+            "clearing is how an operator re-trusts a legitimately rebuilt server");
+    }
+
+    /// <summary>
+    /// A pin names a SERVER. Repointing the poller at a different host leaves a fingerprint that
+    /// describes something it no longer talks to — and every poll would then be refused with a
+    /// message about a rebuild that never happened.
+    /// </summary>
+    [Fact]
+    public async Task UpdateSftp_ChangingTheHost_DropsThePin()
+    {
+        await using var db = CreateDb();
+        var service = new PullIngressSettingsService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+
+        await service.UpdateSftpAsync(orgId, SftpRequest(hostKeyFingerprints: "SHA256:pinned"), default);
+        await service.UpdateSftpAsync(orgId, SftpRequest(host: "sftp.somewhere-else"), default);
+
+        (await db.SftpIngressConfigs.SingleAsync()).HostKeyFingerprints.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpdateSftp_ChangingThePort_DropsThePin()
+    {
+        await using var db = CreateDb();
+        var service = new PullIngressSettingsService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+
+        await service.UpdateSftpAsync(orgId, SftpRequest(hostKeyFingerprints: "SHA256:pinned"), default);
+        await service.UpdateSftpAsync(orgId, SftpRequest(port: 2222), default);
+
+        (await db.SftpIngressConfigs.SingleAsync()).HostKeyFingerprints.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpdateSftp_EditingSomethingElse_KeepsThePin()
+    {
+        // The other half of the rule: only a change of SERVER drops the pin. Re-saving the same
+        // host and port — the ordinary case — must leave it alone, or the feature un-pins itself
+        // on every settings save.
+        await using var db = CreateDb();
+        var service = new PullIngressSettingsService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+
+        await service.UpdateSftpAsync(orgId, SftpRequest(hostKeyFingerprints: "SHA256:pinned"), default);
+        await service.UpdateSftpAsync(orgId,
+            new UpdateSftpIngressRequest(true, "sftp.example", 22, "someone-else", null, "/elsewhere", null),
+            default);
+
+        (await db.SftpIngressConfigs.SingleAsync()).HostKeyFingerprints.Should().Be("SHA256:pinned");
+    }
+
+    [Fact]
+    public async Task GetSftp_ReturnsTheRecordedFingerprintInFull()
+    {
+        // Not masked like the password: an operator cannot judge a changed host key without seeing
+        // the value it is being compared against.
+        await using var db = CreateDb();
+        var service = new PullIngressSettingsService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+
+        await service.UpdateSftpAsync(orgId, SftpRequest(hostKeyFingerprints: "SHA256:pinned"), default);
+
+        (await service.GetSftpAsync(orgId, default)).HostKeyFingerprints.Should().Be("SHA256:pinned");
+    }
+
     [Fact]
     public async Task UpdateS3_EncryptsSecretKey_AndReturnsMasked()
     {

@@ -8,6 +8,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
 using ProcuLink.Transform.Catalog;
@@ -49,6 +50,24 @@ public class CatalogPullService : ICatalogPullService
     internal const string ErrHttpStatus       = "The catalog server returned an error response.";
     internal const string ErrArchiveUnreadable = "The catalog archive could not be read.";
     internal const string ErrVendorUnavailable = "No fetcher is configured for this catalog source.";
+
+    /// <summary>
+    /// The sftp server presented a different SSH host key than the one this source is pinned to.
+    ///
+    /// <para>
+    /// Fixed text with no interpolation, like every other message on this list: M4 requires that
+    /// what lands in <c>last_sync_error</c> — and therefore in Hangfire dashboards and Sentry —
+    /// carries no host, username or banner. The fingerprints themselves are not secret (they are
+    /// digests of a public key) but they are not needed to make the message actionable: it names the
+    /// cause and the one next step, and the recorded fingerprint is on the source itself for anyone
+    /// who wants to compare it.
+    /// </para>
+    /// </summary>
+    internal const string ErrHostKeyChanged =
+        "The server's SSH host key has changed since this source was first trusted, so nothing was " +
+        "downloaded. If the supplier rebuilt or replaced the server, clear the recorded host-key " +
+        "fingerprint on this catalog source to trust the new one; if they did not, treat this as an " +
+        "interception and do not reconnect.";
 
     private readonly ProcuLinkDbContext        _db;
     private readonly DeliveryEncryptionService _encryption;
@@ -124,6 +143,25 @@ public class CatalogPullService : ICatalogPullService
         try
         {
             var fetched = await FetchAndParseAsync(source, ct);
+
+            // Trust-on-first-use: record the sftp host key this sync established, so every later
+            // sync is verified against it. Staged on the tracked row here and committed by whichever
+            // SaveChanges this method reaches — the unchanged-skip write or the ok write.
+            //
+            // A pull that connects and then fails downstream (no code column, a parse error) does
+            // NOT keep it: CatalogSyncSourceJob.PersistFailureAsync calls ChangeTracker.Clear()
+            // before writing the failure status, deliberately, so a poisoned context cannot block
+            // the status flip. The fingerprint is simply re-learned on the next successful sync.
+            // Recording it through a second write here would mean writing outside that job's one
+            // failure transaction, which is not worth undoing a documented guard for.
+            if (fetched.LearnedHostKeyFingerprint is { } learnedHostKey)
+            {
+                source.HostKeyFingerprints = learnedHostKey;
+                _logger.LogInformation(
+                    "Catalog pull: recorded SSH host key {Fingerprint} for source {SourceId} on first " +
+                    "connection. Later syncs will refuse a different key.",
+                    learnedHostKey, source.Id);
+            }
 
             if (fetched.UnchangedSkip)
             {
@@ -237,10 +275,20 @@ public class CatalogPullService : ICatalogPullService
         string FileHash,
         string? FileName,
         long Bytes,
-        CatalogFileParseResult? Parse);
+        CatalogFileParseResult? Parse,
+        string? LearnedHostKeyFingerprint = null);
 
-    /// <summary>Bytes downloaded from a source plus the routing hints used to pick a parser.</summary>
-    private sealed record DownloadOutcome(MemoryStream Data, string? FileName, string? ContentType);
+    /// <summary>
+    /// Bytes downloaded from a source plus the routing hints used to pick a parser.
+    /// <paramref name="LearnedHostKeyFingerprint"/> is the sftp host key seen for the FIRST time on
+    /// this fetch — reported rather than written, so the one caller that owns a tracked row persists
+    /// it and the read-only probe does not.
+    /// </summary>
+    private sealed record DownloadOutcome(
+        MemoryStream Data,
+        string? FileName,
+        string? ContentType,
+        string? LearnedHostKeyFingerprint = null);
 
     private async Task<FetchOutcome> FetchAndParseAsync(
         SupplierCatalogSource source, CancellationToken ct, bool skipUnchangedShortCircuit = false)
@@ -304,7 +352,9 @@ public class CatalogPullService : ICatalogPullService
                 && source.LastSyncError is null
                 && source.LastSyncStatus is "ok" or "unchanged" or "running")
             {
-                return new FetchOutcome(UnchangedSkip: true, fileHash, fileName, byteCount, Parse: null);
+                return new FetchOutcome(
+                    UnchangedSkip: true, fileHash, fileName, byteCount, Parse: null,
+                    downloaded.LearnedHostKeyFingerprint);
             }
 
             // Transparent ZIP unwrap (plan 2026-07-02 D1) — AFTER the hash (skip semantics
@@ -349,7 +399,9 @@ public class CatalogPullService : ICatalogPullService
                     _      => await SupplierCatalogFileParser.ParseByFileNameAsync(parseData, parseFileName, token, overrides),
                 };
 
-                return new FetchOutcome(UnchangedSkip: false, fileHash, parseFileName, byteCount, parse);
+                return new FetchOutcome(
+                    UnchangedSkip: false, fileHash, parseFileName, byteCount, parse,
+                    downloaded.LearnedHostKeyFingerprint);
             }
         }
     }
@@ -374,17 +426,25 @@ public class CatalogPullService : ICatalogPullService
         switch (source.Protocol)
         {
             case "sftp":
+                // Who this server claims to be is part of the decision. Until this existed the pull
+                // connected to whatever answered on the configured host and port, so a rebuilt — or
+                // substituted — supplier server could feed prices and product codes straight into
+                // the catalog with nothing to notice.
+                var verifier = new SshHostKeyVerifier(
+                    "The catalog sync", SshHostKeyPolicy.Parse(source.HostKeyFingerprints));
+
                 // SSH.NET's Connect is synchronous (no CT). The factory's 30 s socket
                 // timeouts (H3) bound it; Task.Run + WaitAsync additionally honours the
                 // overall deadline so a stalling server can never pin this job past it.
                 var sftpData = await Task.Run(async () =>
                 {
                     using var session = _sftpFactory.Connect(
-                        source.Host, source.Port, source.Username ?? string.Empty, password);
+                        source.Host, source.Port, source.Username ?? string.Empty, password, verifier);
                     using var remote = session.OpenRead(source.RemotePath);
                     return await BoundedRead.CopyAsync(remote, CatalogLimits.MaxCatalogFileBytes, token);
                 }, CancellationToken.None).WaitAsync(token);
-                return new DownloadOutcome(sftpData, fileName, ContentType: null);
+                return new DownloadOutcome(
+                    sftpData, fileName, ContentType: null, verifier.LearnedFingerprint);
 
             case "ftp":
             case "ftps":
@@ -541,6 +601,12 @@ public class CatalogPullService : ICatalogPullService
         {
             CatalogFileTooLargeException tooLarge => tooLarge.Message,
             CatalogTooLargeException rowCap       => rowCap.Message,
+            // BEFORE the generic SSH branches: a refused host key surfaces from SSH.NET as
+            // SshConnectionException("Key exchange negotiation failed."), which would otherwise be
+            // sanitised to "Could not connect to the server." and send the operator hunting a
+            // network fault that does not exist. The transports raise our own exception instead, so
+            // the cause survives sanitisation.
+            SshHostKeyRejectedException                        => ErrHostKeyChanged,
             Renci.SshNet.Common.SshAuthenticationException     => ErrAuthFailed,
             FluentFTP.Exceptions.FtpAuthenticationException    => ErrAuthFailed,
             Renci.SshNet.Common.SftpPathNotFoundException      => ErrFileNotFound,

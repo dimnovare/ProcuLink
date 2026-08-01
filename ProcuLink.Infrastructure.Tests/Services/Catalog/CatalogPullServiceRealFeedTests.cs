@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Net;
 using System.Text;
 using FluentAssertions;
@@ -261,7 +261,8 @@ public class CatalogPullServiceRealFeedTests
 
     private sealed class ThrowingSftpFactory : ISftpClientFactory
     {
-        public ISftpSession Connect(string host, int port, string username, string password)
+        public ISftpSession Connect(
+            string host, int port, string username, string password, SshHostKeyVerifier verifier)
             => throw new InvalidOperationException("SFTP factory must not be invoked.");
     }
 

@@ -6,6 +6,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Ingress;
@@ -128,10 +129,31 @@ public sealed class SftpIngressService : ISftpIngressService
             "SFTP ingress: connecting to {User}@{Host}:{Port} dir={Dir} for org {OrgId}.",
             config.Username, config.Host, config.Port, config.RemoteDirectory, organisationId);
 
+        // Who this server claims to be is part of the decision. Before this, the poller connected
+        // to, listed and imported files from ANY server that answered on the configured host and
+        // port with the configured password — a rebuilt (or substituted) supplier server was
+        // indistinguishable from the original, with no warning and no log line.
+        var verifier = new SshHostKeyVerifier(
+            "SFTP polling", SshHostKeyPolicy.Parse(config.HostKeyFingerprints));
+
         ISftpSession session;
         try
         {
-            session = _sftpClientFactory.Connect(config.Host, config.Port, config.Username, password);
+            session = _sftpClientFactory.Connect(
+                config.Host, config.Port, config.Username, password, verifier);
+        }
+        catch (SshHostKeyRejectedException ex)
+        {
+            // Logged as its own case rather than folded into the generic connect failure: an
+            // operator looking at why polling stopped must be able to tell "the supplier's server
+            // identity changed" from "the network was down", because only one of them needs them to
+            // pick up the phone. Rethrown so the job fails visibly instead of reporting 0 files —
+            // silently importing nothing looks exactly like an empty directory.
+            _logger.LogError(
+                "SFTP ingress: refused to poll for org {OrgId} ({Host}:{Port}) — the server's host key " +
+                "changed. Seen {Observed}, pinned {Pinned}. {Guidance}",
+                organisationId, config.Host, config.Port, ex.Observed, string.Join(", ", ex.Pinned), ex.Message);
+            throw;
         }
         catch (Exception ex)
         {
@@ -144,6 +166,31 @@ public sealed class SftpIngressService : ISftpIngressService
 
         using (session)
         {
+            // Trust-on-first-use: record what this server presented so the NEXT poll is verified
+            // against it. Written before any file is read, so a poll that crashes mid-import still
+            // leaves the connection pinned.
+            //
+            // The config above was read AsNoTracking, so mutating THAT instance would be a write the
+            // change tracker never sees — a silent no-op with the shape of a fix. Re-read tracked,
+            // org-scoped, and save.
+            if (verifier.LearnedFingerprint is { } learned)
+            {
+                var tracked = await _db.Set<SftpIngressConfig>()
+                    .FirstOrDefaultAsync(c => c.Id == config.Id && c.OrgId == organisationId, ct);
+
+                if (tracked is not null)
+                {
+                    tracked.HostKeyFingerprints = learned;
+                    tracked.UpdatedAt = DateTime.UtcNow;
+                    await _db.SaveChangesAsync(ct);
+
+                    _logger.LogInformation(
+                        "SFTP ingress: recorded host key {Fingerprint} for org {OrgId} ({Host}:{Port}) on first " +
+                        "connection. Later polls will refuse a different key.",
+                        learned, organisationId, config.Host, config.Port);
+                }
+            }
+
             return await PollSessionAsync(organisationId, supplierId, config.RemoteDirectory, session, ct);
         }
     }

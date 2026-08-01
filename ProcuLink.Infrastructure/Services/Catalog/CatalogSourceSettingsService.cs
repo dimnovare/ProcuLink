@@ -2,6 +2,7 @@ using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Jobs;
 
 namespace ProcuLink.Infrastructure.Services.Catalog;
@@ -91,6 +92,8 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
             source.Username = null;
             source.RemotePath = string.Empty;
             source.EncryptedPassword = null;
+            // Switching off sftp leaves the pin naming a server this source no longer talks to.
+            source.HostKeyFingerprints = null;
             source.HttpMethod = "GET";
             source.AuthMethod = null;
 
@@ -109,6 +112,8 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
             source.Username = null;
             source.RemotePath = string.Empty;
             source.EncryptedPassword = null;
+            // Switching off sftp leaves the pin naming a server this source no longer talks to.
+            source.HostKeyFingerprints = null;
             source.HttpMethod = "GET"; // v2: GET only (POST-with-body out of scope).
             source.AuthMethod = NormalizeAuthMethod(request.AuthMethod);
 
@@ -125,8 +130,23 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
         else
         {
             // sftp/ftp/ftps: clear the http columns so a protocol switch leaves no stale state.
-            source.Host = request.Host.Trim();
-            source.Port = request.Port > 0 ? request.Port : (protocol == "sftp" ? 22 : 21);
+            var newHost = request.Host.Trim();
+            var newPort = request.Port > 0 ? request.Port : (protocol == "sftp" ? 22 : 21);
+
+            // A host-key pin names a SERVER. Repointing the source at a different host or port — or
+            // off sftp entirely — makes the stored fingerprint describe something this source no
+            // longer talks to, and leaving it there would refuse the new server forever with a
+            // message about a rebuild that never happened. Cleared BEFORE the request's own
+            // explicit value is applied below, so an operator supplying both still wins.
+            if (protocol != "sftp"
+                || !string.Equals(source.Host, newHost, StringComparison.OrdinalIgnoreCase)
+                || source.Port != newPort)
+            {
+                source.HostKeyFingerprints = null;
+            }
+
+            source.Host = newHost;
+            source.Port = newPort;
             source.Username = string.IsNullOrWhiteSpace(request.Username) ? null : request.Username.Trim();
             source.RemotePath = request.RemotePath.Trim();
             source.Url = null;
@@ -141,6 +161,15 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
                 source.EncryptedPassword = string.IsNullOrWhiteSpace(request.Password)
                     ? null
                     : _encryption.Encrypt(request.Password);
+            }
+
+            // Host-key pin: null = keep what the last successful sync recorded (a client that has
+            // never heard of host keys must not silently un-pin the source), "" = the operator
+            // deliberately re-trusting after a server rebuild.
+            if (request.HostKeyFingerprints is not null)
+            {
+                source.HostKeyFingerprints = SshHostKeyPolicy.Serialise(
+                    SshHostKeyPolicy.Parse(request.HostKeyFingerprints));
             }
         }
 
@@ -190,7 +219,10 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
             // are stored. The ciphertext (AuthConfigEncrypted) and any plaintext NEVER leave here.
             s.Url, s.AuthMethod, hasAuthConfig, s.HttpMethod,
             // Column mapping is NOT a secret — echoed back so the editor can show/edit it.
-            DecodeMapping(s.ColumnMappingJson));
+            DecodeMapping(s.ColumnMappingJson),
+            // Neither is a host-key fingerprint, and an operator cannot judge a changed one without
+            // seeing what it is being compared against.
+            s.HostKeyFingerprints);
     }
 
     private static IReadOnlyDictionary<string, string>? DecodeMapping(string? json)

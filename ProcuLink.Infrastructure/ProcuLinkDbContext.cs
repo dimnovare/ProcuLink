@@ -729,6 +729,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Username).HasColumnName("username");
             b.Property(x => x.EncryptedPassword).HasColumnName("encrypted_password");
             b.Property(x => x.RemotePath).HasColumnName("remote_path").IsRequired();
+            // Trusted SSH host-key fingerprint(s) for sftp sources (WP-38). Nullable cleartext text:
+            // the digest of a PUBLIC key, so unlike encrypted_password it is meant to be read back.
+            b.Property(x => x.HostKeyFingerprints).HasColumnName("host_key_fingerprints");
             // HTTP(S) pull columns (plan 2026-06-12 v2). All nullable — sftp/ftp rows leave them null.
             b.Property(x => x.Url).HasColumnName("url");
             b.Property(x => x.AuthMethod).HasColumnName("auth_method");
@@ -1003,6 +1006,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Username).HasColumnName("username").IsRequired();
             b.Property(x => x.EncryptedPassword).HasColumnName("encrypted_password").IsRequired();
             b.Property(x => x.RemoteDirectory).HasColumnName("remote_directory").IsRequired();
+            // Trusted SSH host-key fingerprint(s) (WP-38). Nullable cleartext text — the digest of a
+            // PUBLIC key, so unlike encrypted_password it is meant to be read back and compared.
+            b.Property(x => x.HostKeyFingerprints).HasColumnName("host_key_fingerprints");
             b.Property(x => x.DefaultSupplierId).HasColumnName("default_supplier_id");
             b.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(false);
             b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");

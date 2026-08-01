@@ -1350,7 +1350,8 @@ public sealed class SupplierRoutingMatrixPostgresTests
             _content = content;
         }
 
-        public ISftpSession Connect(string host, int port, string username, string password)
+        public ISftpSession Connect(
+            string host, int port, string username, string password, SshHostKeyVerifier verifier)
             => new OneFileSftpSession(_remotePath, _content);
     }
 

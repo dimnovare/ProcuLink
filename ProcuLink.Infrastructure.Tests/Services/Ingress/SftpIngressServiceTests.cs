@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -8,6 +8,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
@@ -325,6 +326,116 @@ public class SftpIngressServiceTests
             "so a retry or concurrent same-org poll cannot create a duplicate order");
     }
 
+    // ── SSH host-key verification (WP-38) ────────────────────────────────────
+    // Before this, the poller connected to, listed and imported files from ANY server that answered
+    // on the configured host and port with the configured password. Proven live against a throwaway
+    // OpenSSH 10.3p1 container whose host key was swapped mid-experiment: same result, no warning,
+    // no log line (docs/ops/2026-08-01-wp38-delivery-channel-proof.md §1).
+
+    private static readonly byte[] ServerKeyA = "sftp-ingress-host-key-A"u8.ToArray();
+    private static readonly byte[] ServerKeyB = "sftp-ingress-host-key-B"u8.ToArray();
+
+    [Fact]
+    public async Task FirstPoll_RecordsTheServersHostKey()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(db, orgId, isEnabled: true);
+
+        var fakeSftp = new HostKeyFakeSftpFactory(ServerKeyA, "/incoming/po.csv", "a,b\r\n1,2"u8.ToArray());
+        var svc = MakeService(db, new RecordingOrderService(), fakeSftp);
+
+        await svc.PollAsync(orgId, default);
+
+        var stored = await db.Set<SftpIngressConfig>().FirstAsync(c => c.OrgId == orgId);
+        stored.HostKeyFingerprints.Should().Be(
+            SshHostKeyPolicy.Fingerprint(ServerKeyA),
+            "trust-on-first-use: the very first poll must pin whatever the server presented, so every " +
+            "poll after it is verified — otherwise nothing is ever protected without an operator visit");
+    }
+
+    /// <summary>
+    /// The whole packet, on the ingress path: same host, same port, same username, same password —
+    /// a different server identity. Before this it imported the files anyway.
+    /// </summary>
+    [Fact]
+    public async Task AChangedHostKey_RefusesToPoll_AndImportsNothing()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(
+            db, orgId, isEnabled: true,
+            hostKeyFingerprints: SshHostKeyPolicy.Fingerprint(ServerKeyA));
+
+        const string remotePath = "/incoming/po-from-a-stranger.csv";
+        var fakeSftp = new HostKeyFakeSftpFactory(ServerKeyB, remotePath, "a,b\r\n1,2"u8.ToArray());
+        var orders = new RecordingOrderService();
+        var svc = MakeService(db, orders, fakeSftp);
+
+        var act = async () => await svc.PollAsync(orgId, default);
+
+        (await act.Should().ThrowAsync<SshHostKeyRejectedException>())
+            .Which.Observed.Should().Be(SshHostKeyPolicy.Fingerprint(ServerKeyB));
+
+        orders.CreateStubCalls.Should().Be(0, "no file may be imported from a server we could not identify");
+        (await db.Set<ImportedSftpFile>().CountAsync(f => f.OrgId == orgId))
+            .Should().Be(0, "and nothing may be recorded as imported either");
+    }
+
+    /// <summary>
+    /// A refusal must not pin what it refused. If it did, the second attempt would sail through and
+    /// the feature would disarm itself on first contact with the thing it exists to catch.
+    /// </summary>
+    [Fact]
+    public async Task AChangedHostKey_DoesNotRepinTheNewKey()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        var pinned = SshHostKeyPolicy.Fingerprint(ServerKeyA);
+        await SeedConfigAsync(db, orgId, isEnabled: true, hostKeyFingerprints: pinned);
+
+        var fakeSftp = new HostKeyFakeSftpFactory(ServerKeyB, "/incoming/po.csv", "a,b\r\n1,2"u8.ToArray());
+        var svc = MakeService(db, new RecordingOrderService(), fakeSftp);
+
+        try { await svc.PollAsync(orgId, default); } catch (SshHostKeyRejectedException) { /* expected */ }
+
+        var stored = await db.Set<SftpIngressConfig>().FirstAsync(c => c.OrgId == orgId);
+        stored.HostKeyFingerprints.Should().Be(pinned);
+    }
+
+    [Fact]
+    public async Task ThePinnedServer_StillPolls()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(
+            db, orgId, isEnabled: true,
+            hostKeyFingerprints: SshHostKeyPolicy.Fingerprint(ServerKeyA));
+
+        var fakeSftp = new HostKeyFakeSftpFactory(ServerKeyA, "/incoming/po.csv", "a,b\r\n1,2"u8.ToArray());
+        var svc = MakeService(db, new RecordingOrderService(), fakeSftp);
+
+        (await svc.PollAsync(orgId, default)).Should().Be(1,
+            "verification must not break the connections it is protecting");
+    }
+
+    [Fact]
+    public async Task AnyKeyFromAPinnedSetIsAccepted()
+    {
+        // A supplier behind a load balancer legitimately answers with more than one host key.
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(
+            db, orgId, isEnabled: true,
+            hostKeyFingerprints:
+                $"{SshHostKeyPolicy.Fingerprint(ServerKeyA)}\n{SshHostKeyPolicy.Fingerprint(ServerKeyB)}");
+
+        var fakeSftp = new HostKeyFakeSftpFactory(ServerKeyB, "/incoming/po.csv", "a,b\r\n1,2"u8.ToArray());
+        var svc = MakeService(db, new RecordingOrderService(), fakeSftp);
+
+        (await svc.PollAsync(orgId, default)).Should().Be(1);
+    }
+
     // ── LIVE: real SFTP poll against a real SFTP server ──────────────────────
     // Gated behind PROCULINK_LIVE_ENDPOINT_TESTS=1; connects to a real SFTP
     // server (env PROCULINK_LIVE_SFTP_*) with the PRODUCTION RenciSftpClientFactory,
@@ -430,7 +541,8 @@ public class SftpIngressServiceTests
         bool isEnabled,
         bool createDefaultSupplier = true,
         string host = "sftp.example.com",
-        bool softDeleteSupplier = false)
+        bool softDeleteSupplier = false,
+        string? hostKeyFingerprints = null)
     {
         // The password is the empty string encrypted with the all-zero 32-byte key.
         var config = new ConfigurationBuilder()
@@ -467,6 +579,7 @@ public class SftpIngressServiceTests
             RemoteDirectory = "/incoming",
             DefaultSupplierId = supplierId,
             IsEnabled = isEnabled,
+            HostKeyFingerprints = hostKeyFingerprints,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         });
@@ -489,10 +602,44 @@ public class SftpIngressServiceTests
     {
         public int ConnectCalls { get; private set; }
 
-        public ISftpSession Connect(string host, int port, string username, string password)
+        public ISftpSession Connect(
+            string host, int port, string username, string password, SshHostKeyVerifier verifier)
         {
             ConnectCalls++;
             return new EmptySftpSession();
+        }
+    }
+
+    /// <summary>
+    /// SFTP factory that behaves like a real server: it STATES AN IDENTITY before handing over a
+    /// session, and refuses when the verifier says no.
+    ///
+    /// <para>
+    /// The two lines in <see cref="Connect"/> are the same two, in the same order, that
+    /// <c>RenciSftpClientFactory</c> runs — <c>Observe</c> is the real policy code, not a
+    /// re-implementation of it, so a decision this fake gets right is a decision production gets
+    /// right. What it cannot prove is the SSH.NET subscription itself; that is what the live test at
+    /// the top of this file exists for.
+    /// </para>
+    /// </summary>
+    private sealed class HostKeyFakeSftpFactory : ISftpClientFactory
+    {
+        private readonly byte[] _hostKeyBlob;
+        private readonly string _remotePath;
+        private readonly byte[] _content;
+
+        public HostKeyFakeSftpFactory(byte[] hostKeyBlob, string remotePath, byte[] content)
+        {
+            _hostKeyBlob = hostKeyBlob;
+            _remotePath = remotePath;
+            _content = content;
+        }
+
+        public ISftpSession Connect(
+            string host, int port, string username, string password, SshHostKeyVerifier verifier)
+        {
+            if (!verifier.Observe(_hostKeyBlob)) verifier.ThrowIfRejected();
+            return new SingleFileSftpSession(_remotePath, _content);
         }
     }
 
@@ -508,7 +655,8 @@ public class SftpIngressServiceTests
             _content = content;
         }
 
-        public ISftpSession Connect(string host, int port, string username, string password)
+        public ISftpSession Connect(
+            string host, int port, string username, string password, SshHostKeyVerifier verifier)
             => new SingleFileSftpSession(_remotePath, _content);
     }
 
@@ -542,7 +690,8 @@ public class SftpIngressServiceTests
             _totalBytes = totalBytes;
         }
 
-        public ISftpSession Connect(string host, int port, string username, string password)
+        public ISftpSession Connect(
+            string host, int port, string username, string password, SshHostKeyVerifier verifier)
             => new LyingStreamSftpSession(_remotePath, _totalBytes);
     }
 

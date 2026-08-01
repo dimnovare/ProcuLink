@@ -7,6 +7,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services;
 
@@ -416,6 +417,13 @@ public sealed class DeliveryService : IDeliveryService
         // all. A dispatcher that declares nothing gets `false`, the conservative direction.
         result = result with { SupplierReasonObservable = dispatcher.CapturesSupplierResponseBody };
 
+        // Trust-on-first-use for SFTP: the dispatcher REPORTS the host key it saw for the first time
+        // (it holds no DbContext, by design), and this is the owner of the config row and of the
+        // transaction that PersistAttemptAsync commits below. Recorded here rather than only on
+        // success, because an identity established during key exchange is established whether or not
+        // the upload afterwards worked.
+        await RecordLearnedHostKeyAsync(order.OrgId, config.SupplierId, result, ct);
+
         _logger.LogInformation(
             "Delivery {OrderId}: dispatch returned success={Success} code={Code}",
             orderId, result.Success, result.ResponseCode);
@@ -682,6 +690,27 @@ public sealed class DeliveryService : IDeliveryService
                         "Order {OrderId}: delivery channel taken from pinned {Source} (protocol {Protocol}).",
                         order.Id, effective.Source, effective.DeliveryProtocol);
 
+                    var snapshotJson = string.IsNullOrWhiteSpace(effective.DeliveryConfigJson)
+                        ? "{}"
+                        : effective.DeliveryConfigJson!;
+
+                    // ── SSH host-key pin: taken from the LIVE config, never from the snapshot ──
+                    // A pinned revision reproduces the DOCUMENT — the mapping, the template, the
+                    // channel. Which server is allowed to receive it is a fact about the world
+                    // NOW, not about the revision, and the two must not be frozen together:
+                    //  • a fingerprint recorded on the live config would never reach a snapshot
+                    //    taken before it, so every revision-pinned delivery would re-learn the key
+                    //    and verify nothing — permanently trust-on-first-use on the path production
+                    //    actually uses (revision authority is ON in prod);
+                    //  • and an operator re-trusting a legitimately rebuilt server could never
+                    //    reach orders on older revisions, so those would refuse forever.
+                    // Live wins unconditionally, in both directions, so there is exactly one place
+                    // a fingerprint is read from and written to.
+                    var liveConfigJson = await _db.SupplierDeliveryConfigs
+                        .Where(x => x.OrgId == orgId && x.SupplierId == order.SupplierId)
+                        .Select(x => x.ConfigJson)
+                        .FirstOrDefaultAsync(ct);
+
                     // Detached snapshot view — NEVER added to the DbContext, only read by the
                     // dispatcher / attempt-persistence below.
                     return new SupplierDeliveryConfig
@@ -693,9 +722,8 @@ public sealed class DeliveryService : IDeliveryService
                         SupplierId           = order.SupplierId ?? Guid.Empty,
                         Protocol             = effective.DeliveryProtocol!,
                         AutoDeliver          = effective.DeliveryAutoDeliver,
-                        ConfigJson           = string.IsNullOrWhiteSpace(effective.DeliveryConfigJson)
-                                                   ? "{}"
-                                                   : effective.DeliveryConfigJson!,
+                        ConfigJson           = DeliveryHostKeyConfig.Write(
+                                                   snapshotJson, DeliveryHostKeyConfig.Read(liveConfigJson)),
                         EncryptedCredentials = effective.CredentialsRef ?? string.Empty,
                     };
                 }
@@ -743,6 +771,13 @@ public sealed class DeliveryService : IDeliveryService
             credentials,
             ct);
 
+        // The natural first-contact point: a test fire connects with no order at stake, so an
+        // operator setting a supplier up pins the host key here, before the first real purchase
+        // order ever travels. It is not the ONLY capture point — a supplier configured before this
+        // shipped and never test-fired must still become protected — which is why the order path
+        // records it too.
+        await RecordLearnedHostKeyAsync(orgId, supplierId, result, ct);
+
         _db.DeliveryAttempts.Add(new DeliveryAttempt
         {
             Id = Guid.NewGuid(),
@@ -760,6 +795,43 @@ public sealed class DeliveryService : IDeliveryService
         await _db.SaveChangesAsync(ct);
 
         return new DeliveryTestResult(result.Success, result.ErrorMessage, result.ResponseCode);
+    }
+
+    /// <summary>
+    /// Records a host-key fingerprint the transport saw for the first time, onto the tracked delivery
+    /// config, so the NEXT connection to that supplier is verified against it. No-op on every channel
+    /// that has no host key, and on an SFTP connection whose key was already pinned or was refused —
+    /// the dispatcher reports null in all three cases.
+    ///
+    /// <para>
+    /// Merged into the existing <c>ConfigJson</c> rather than written over it: the same object holds
+    /// the host, the remote path, the timeout and the operator's <c>overwriteExisting</c> setting,
+    /// and a delivery that quietly reset any of those would be a worse bug than the one being fixed.
+    /// The caller commits it in the same <c>SaveChangesAsync</c> as the delivery attempt.
+    /// </para>
+    /// </summary>
+    private async Task RecordLearnedHostKeyAsync(
+        Guid orgId, Guid supplierId, DeliveryResult result, CancellationToken ct)
+    {
+        if (result.LearnedHostKeyFingerprint is not { } fingerprint) return;
+        if (supplierId == Guid.Empty) return;
+
+        // Deliberately re-loaded rather than written onto the config that governed this dispatch:
+        // when revision authority resolves the channel from a pinned snapshot, THAT config is a
+        // detached object that was never added to the DbContext, so assigning to it would be a
+        // silent no-op — the shape of a fix with none of the effect, and on the path production
+        // actually uses. The live row is the one and only home of a host-key pin.
+        var live = await _db.SupplierDeliveryConfigs
+            .FirstOrDefaultAsync(x => x.OrgId == orgId && x.SupplierId == supplierId, ct);
+        if (live is null) return;
+
+        live.ConfigJson = DeliveryHostKeyConfig.Write(live.ConfigJson, [fingerprint]);
+        live.UpdatedAt = DateTime.UtcNow;
+
+        _logger.LogInformation(
+            "Delivery: recorded SSH host key {Fingerprint} for supplier {SupplierId} on first connection. " +
+            "Later deliveries will refuse a different key.",
+            fingerprint, supplierId);
     }
 
     private async Task<DeliveryResult> FailBeforeDispatchAsync(

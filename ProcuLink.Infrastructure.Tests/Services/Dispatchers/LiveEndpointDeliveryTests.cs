@@ -201,4 +201,130 @@ public class LiveEndpointDeliveryTests
 
         result.Success.Should().BeTrue(because: $"the real SFTP upload should succeed; error: {result.ErrorMessage}");
     }
+
+    // ── SSH host-key verification, against a real SSH server (WP-38) ──────────
+    //
+    // These are the only tests that exercise the ONE step no fake can reach: the SSH.NET
+    // HostKeyReceived subscription itself, raised by a real key exchange with a real server. The
+    // unit tests prove the decision; these prove it is consulted.
+    //
+    // Reproduce in about a minute (docs/ops/2026-08-01-wp38-delivery-channel-proof.md §7):
+    //
+    //   docker run -d --name wp38-sftp -p 2222:22 atmoz/sftp:alpine plkuser:plkpass:::upload
+    //   docker exec wp38-sftp ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+    //
+    //   PROCULINK_LIVE_ENDPOINT_TESTS=1
+    //   PROCULINK_LIVE_SFTP_HOST=127.0.0.1  PROCULINK_LIVE_SFTP_PORT=2222
+    //   PROCULINK_LIVE_SFTP_USER=plkuser    PROCULINK_LIVE_SFTP_PASS=plkpass
+    //   PROCULINK_LIVE_SFTP_DIR=/upload
+    //   PROCULINK_LIVE_SFTP_FINGERPRINT=SHA256:<the ssh-keygen value above>
+
+    private static SupplierDeliveryConfig LiveSftpConfig(string? hostKeyFingerprint)
+    {
+        var settings = new Dictionary<string, object?>
+        {
+            ["host"] = Env("PROCULINK_LIVE_SFTP_HOST"),
+            ["port"] = int.TryParse(Env("PROCULINK_LIVE_SFTP_PORT"), out var p) ? p : 22,
+            ["remotePath"] = Env("PROCULINK_LIVE_SFTP_DIR"),
+            ["makeDirectories"] = true,
+            ["timeoutSeconds"] = 30,
+        };
+        if (hostKeyFingerprint is not null)
+            settings["hostKeyFingerprints"] = new[] { hostKeyFingerprint };
+
+        return new SupplierDeliveryConfig
+        {
+            Id = Guid.NewGuid(),
+            OrgId = Guid.NewGuid(),
+            SupplierId = Guid.NewGuid(),
+            Protocol = "sftp",
+            AutoDeliver = false,
+            ConfigJson = JsonSerializer.Serialize(settings),
+            EncryptedCredentials = string.Empty,
+        };
+    }
+
+    private static string LiveSftpCreds() => JsonSerializer.Serialize(new
+    {
+        username = Env("PROCULINK_LIVE_SFTP_USER"),
+        password = Env("PROCULINK_LIVE_SFTP_PASS"),
+    });
+
+    private static readonly byte[] LivePayload =
+        Encoding.UTF8.GetBytes("<cXML><Request><OrderRequest po=\"PO-LIVE-HOSTKEY\"/></Request></cXML>");
+
+    /// <summary>
+    /// Trust-on-first-use against a real server, cross-checked against a fingerprint this code did
+    /// not compute. <c>PROCULINK_LIVE_SFTP_FINGERPRINT</c> comes from OpenSSH's own
+    /// <c>ssh-keygen -lf</c>, so agreement proves the recorded value is the string an operator will
+    /// see in their own terminal — the only thing that makes the re-trust decision verifiable.
+    /// </summary>
+    [EnvironmentGatedFact(
+        "requires a live SFTP server and its ssh-keygen fingerprint",
+        LiveTestEnvironment.EndpointOptIn,
+        "PROCULINK_LIVE_SFTP_HOST", "PROCULINK_LIVE_SFTP_USER", "PROCULINK_LIVE_SFTP_PASS",
+        "PROCULINK_LIVE_SFTP_FINGERPRINT")]
+    public async Task Live_Sftp_HostKey_RecordedOnFirstUse_MatchesSshKeygen()
+    {
+        var dispatcher = new SftpDeliveryDispatcher(NullLogger<SftpDeliveryDispatcher>.Instance, Guard());
+
+        var result = await dispatcher.DispatchAsync(
+            LivePayload, "PO-LIVE-HOSTKEY-TOFU.xml", "application/xml",
+            LiveSftpConfig(hostKeyFingerprint: null), LiveSftpCreds(), default);
+
+        result.Success.Should().BeTrue(because: $"error: {result.ErrorMessage}");
+        result.LearnedHostKeyFingerprint.Should().Be(
+            Env("PROCULINK_LIVE_SFTP_FINGERPRINT"),
+            "the recorded fingerprint must be byte-identical to what ssh-keygen prints for this server");
+    }
+
+    /// <summary>
+    /// The exact experiment the proof run performed, with the opposite outcome. Host, port, username
+    /// and password are unchanged; only the identity the connection expects differs. Before this
+    /// existed the upload succeeded and the password was handed to whoever answered.
+    /// </summary>
+    [EnvironmentGatedFact(
+        "requires a live SFTP server to be refused by",
+        LiveTestEnvironment.EndpointOptIn,
+        "PROCULINK_LIVE_SFTP_HOST", "PROCULINK_LIVE_SFTP_USER", "PROCULINK_LIVE_SFTP_PASS",
+        "PROCULINK_LIVE_SFTP_FINGERPRINT")]
+    public async Task Live_Sftp_ChangedHostKey_IsRefusedWithAnActionableMessage()
+    {
+        const string someoneElse = "SHA256:ai1X2iIAsJtHWuquGw8cQxn5DUD55PDciTIy6PfdAmw";
+        var dispatcher = new SftpDeliveryDispatcher(NullLogger<SftpDeliveryDispatcher>.Instance, Guard());
+
+        var result = await dispatcher.DispatchAsync(
+            LivePayload, "PO-LIVE-HOSTKEY-REFUSED.xml", "application/xml",
+            LiveSftpConfig(someoneElse), LiveSftpCreds(), default);
+
+        result.Success.Should().BeFalse("a server whose identity does not match the pin must not receive the order");
+
+        // The library's own refusal is "Key exchange negotiation failed." — WP-38's acceptance
+        // criterion is an ACTIONABLE message, so ours must name both fingerprints and the next step.
+        result.ErrorMessage.Should().NotBeNull();
+        result.ErrorMessage!.Should().Contain(Env("PROCULINK_LIVE_SFTP_FINGERPRINT"));
+        result.ErrorMessage.Should().Contain(someoneElse);
+        result.ErrorMessage.Should().NotContain("Key exchange negotiation failed");
+
+        result.LearnedHostKeyFingerprint.Should().BeNull(
+            "a refused key must never be recorded — that would re-pin the very server just refused");
+    }
+
+    [EnvironmentGatedFact(
+        "requires a live SFTP server with a known fingerprint",
+        LiveTestEnvironment.EndpointOptIn,
+        "PROCULINK_LIVE_SFTP_HOST", "PROCULINK_LIVE_SFTP_USER", "PROCULINK_LIVE_SFTP_PASS",
+        "PROCULINK_LIVE_SFTP_FINGERPRINT")]
+    public async Task Live_Sftp_PinnedHostKey_StillUploads()
+    {
+        var dispatcher = new SftpDeliveryDispatcher(NullLogger<SftpDeliveryDispatcher>.Instance, Guard());
+
+        var result = await dispatcher.DispatchAsync(
+            LivePayload, "PO-LIVE-HOSTKEY-PINNED.xml", "application/xml",
+            LiveSftpConfig(Env("PROCULINK_LIVE_SFTP_FINGERPRINT")), LiveSftpCreds(), default);
+
+        result.Success.Should().BeTrue(
+            because: $"verification must not break the connections it protects; error: {result.ErrorMessage}");
+        result.LearnedHostKeyFingerprint.Should().BeNull("an already-pinned key teaches nothing new");
+    }
 }

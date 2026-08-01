@@ -52,7 +52,13 @@ public sealed record UpsertCatalogSourceRequest(
     // "__noheader__"/"__encoding__" directives. null = keep stored, {} = clear. Not a secret.
     IReadOnlyDictionary<string, string>? ColumnMapping = null,
     // Logicom vendor-fetcher credentials (plan 2026-07-02 D4/6.4), write-only like AuthConfig.
-    CatalogVendorConfig? VendorConfig = null);
+    CatalogVendorConfig? VendorConfig = null,
+    // sftp only. Trusted SSH host-key fingerprint(s), newline-separated, in OpenSSH's "SHA256:…"
+    // form. null = keep whatever the last successful sync recorded, "" = clear so the next sync
+    // pins afresh (the deliberate re-trust after a supplier rebuilds their server), value = pin to
+    // exactly these. Not a secret — the digest of a public key — so unlike Password it is echoed
+    // back in full.
+    string? HostKeyFingerprints = null);
 
 /// <summary>
 /// HTTP auth secrets supplied on PUT (write-only). The exact field set used depends on
@@ -115,7 +121,11 @@ public sealed record CatalogSourceResponse(
     bool HasAuthConfig = false,
     string? HttpMethod = null,
     // Per-source column mapping — NOT a secret, echoed back so the editor can show/edit it.
-    IReadOnlyDictionary<string, string>? ColumnMapping = null);
+    IReadOnlyDictionary<string, string>? ColumnMapping = null,
+    // sftp only. The recorded SSH host-key fingerprint(s), returned IN FULL: an operator asked to
+    // decide whether a changed key is a supplier rebuild or an interception cannot decide it without
+    // seeing the value being compared against. Null until the first successful sync records one.
+    string? HostKeyFingerprints = null);
 
 /// <summary>Upsert outcome: the masked state + whether an immediate first sync was enqueued.</summary>
 public sealed record CatalogSourceUpsertResult(CatalogSourceResponse Source, bool SyncEnqueued);

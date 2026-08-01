@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Catalog;
@@ -67,7 +68,8 @@ public class CatalogPullServiceTests
         Action<SupplierCatalogSource>? mutateSource = null,
         bool deleteSupplier = false,
         Func<Stream>? sftpStreamFactory = null,
-        TimeSpan? connectDelay = null)
+        TimeSpan? connectDelay = null,
+        byte[]? sftpHostKey = null)
     {
         var db = NewDb();
         var config = Config(allowPrivate);
@@ -75,7 +77,8 @@ public class CatalogPullServiceTests
         var guard = new OutboundRequestGuard(config, NullLogger<OutboundRequestGuard>.Instance);
         var sftp = new RecordingSftpFactory(
             sftpStreamFactory ?? (() => new MemoryStream(sftpContent ?? CsvBytes)),
-            connectDelay ?? TimeSpan.Zero);
+            connectDelay ?? TimeSpan.Zero,
+            sftpHostKey);
         var sink = new RecordingCatalogSink(new SupplierCatalogService(db));
 
         var orgId = Guid.NewGuid();
@@ -126,6 +129,126 @@ public class CatalogPullServiceTests
     }
 
     private static string Sha256Hex(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
+
+    // ── SSH host-key verification (WP-38) ─────────────────────────────────────
+    // The third consumer of ISftpClientFactory, and the one the earlier audit missed: a catalog
+    // pull feeds prices and product codes straight into the supplier catalog, so a substituted
+    // server here rewrites what ProcuLink believes the supplier sells.
+
+    private static readonly byte[] CatalogServerKeyA = "catalog-host-key-A"u8.ToArray();
+    private static readonly byte[] CatalogServerKeyB = "catalog-host-key-B"u8.ToArray();
+
+    [Fact]
+    public async Task Pull_FirstConnection_RecordsTheServersHostKey()
+    {
+        var h = await BuildAsync(sftpHostKey: CatalogServerKeyA);
+
+        await h.Service.PullAsync(h.OrgId, h.SourceId, CancellationToken.None);
+
+        var source = await h.Db.SupplierCatalogSources.FirstAsync(s => s.Id == h.SourceId);
+        source.HostKeyFingerprints.Should().Be(SshHostKeyPolicy.Fingerprint(CatalogServerKeyA));
+    }
+
+    [Fact]
+    public async Task Pull_ChangedHostKey_RefusesAndImportsNothing()
+    {
+        var h = await BuildAsync(
+            sftpHostKey: CatalogServerKeyB,
+            mutateSource: s => s.HostKeyFingerprints = SshHostKeyPolicy.Fingerprint(CatalogServerKeyA));
+
+        var act = async () => await h.Service.PullAsync(h.OrgId, h.SourceId, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<CatalogSyncException>())
+            .Which.Message.Should().Be(CatalogPullService.ErrHostKeyChanged);
+
+        h.Sink.UpsertCalls.Should().Be(0, "no catalog rows may come from a server we could not identify");
+    }
+
+    /// <summary>
+    /// The sanitised message must name the HOST KEY, not the network — and this is the assertion
+    /// that would have failed before the <c>SshHostKeyRejectedException</c> branch was added ahead
+    /// of the generic SSH branches in <c>Sanitize</c>. SSH.NET reports a refused key as
+    /// <c>SshConnectionException("Key exchange negotiation failed.")</c>, which M4 maps to
+    /// <c>ErrConnectFailed</c> — sending the operator hunting a network fault that does not exist.
+    ///
+    /// <para>
+    /// Asserted on the thrown message rather than on <c>last_sync_error</c>: <c>PullAsync</c> does
+    /// not persist failures at all. <c>CatalogSyncSourceJob.PersistFailureAsync</c> does, from this
+    /// exception's message, after a deliberate <c>ChangeTracker.Clear()</c>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Pull_ChangedHostKey_ReportsTheHostKeyReason_NotAConnectFailure()
+    {
+        var h = await BuildAsync(
+            sftpHostKey: CatalogServerKeyB,
+            mutateSource: s => s.HostKeyFingerprints = SshHostKeyPolicy.Fingerprint(CatalogServerKeyA));
+
+        var act = async () => await h.Service.PullAsync(h.OrgId, h.SourceId, CancellationToken.None);
+
+        var thrown = (await act.Should().ThrowAsync<CatalogSyncException>()).Which;
+        thrown.Message.Should().Be(CatalogPullService.ErrHostKeyChanged);
+        thrown.Message.Should().NotBe(CatalogPullService.ErrConnectFailed);
+    }
+
+    [Fact]
+    public async Task Pull_ChangedHostKey_DoesNotRepinTheNewKey()
+    {
+        var pinned = SshHostKeyPolicy.Fingerprint(CatalogServerKeyA);
+        var h = await BuildAsync(
+            sftpHostKey: CatalogServerKeyB,
+            mutateSource: s => s.HostKeyFingerprints = pinned);
+
+        try { await h.Service.PullAsync(h.OrgId, h.SourceId, CancellationToken.None); }
+        catch (CatalogSyncException) { /* expected */ }
+
+        var source = await h.Db.SupplierCatalogSources.FirstAsync(s => s.Id == h.SourceId);
+        source.HostKeyFingerprints.Should().Be(pinned,
+            "recording a refused key would re-pin the very server the refusal exists to keep out");
+    }
+
+    [Fact]
+    public async Task TestFetch_ChangedHostKey_TellsTheOperatorWhatHappened()
+    {
+        var h = await BuildAsync(
+            sftpHostKey: CatalogServerKeyB,
+            mutateSource: s => s.HostKeyFingerprints = SshHostKeyPolicy.Fingerprint(CatalogServerKeyA));
+
+        var result = await h.Service.TestFetchAsync(h.OrgId, h.SupplierId, CancellationToken.None);
+
+        result.Ok.Should().BeFalse();
+        result.Error.Should().Be(CatalogPullService.ErrHostKeyChanged);
+    }
+
+    /// <summary>
+    /// <c>TestFetchAsync</c> documents itself as read-only ("the source row stays byte-identical"),
+    /// and that contract survives host-key verification: the probe VERIFIES against whatever is
+    /// pinned, but the pull — the path that already owns a tracked row and a transaction — is what
+    /// records a first-use fingerprint.
+    /// </summary>
+    [Fact]
+    public async Task TestFetch_StaysReadOnly_AndRecordsNothing()
+    {
+        var h = await BuildAsync(sftpHostKey: CatalogServerKeyA);
+
+        var result = await h.Service.TestFetchAsync(h.OrgId, h.SupplierId, CancellationToken.None);
+
+        result.Ok.Should().BeTrue();
+        var source = await h.Db.SupplierCatalogSources.FirstAsync(s => s.Id == h.SourceId);
+        source.HostKeyFingerprints.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Pull_ThePinnedServer_StillSyncs()
+    {
+        var h = await BuildAsync(
+            sftpHostKey: CatalogServerKeyA,
+            mutateSource: s => s.HostKeyFingerprints = SshHostKeyPolicy.Fingerprint(CatalogServerKeyA));
+
+        var result = await h.Service.PullAsync(h.OrgId, h.SourceId, CancellationToken.None);
+
+        result.Status.Should().Be("ok", "verification must not break the connections it is protecting");
+    }
 
     // ── happy path ────────────────────────────────────────────────────────────
 
@@ -423,20 +546,32 @@ public class CatalogPullServiceTests
     {
         private readonly Func<Stream> _streamFactory;
         private readonly TimeSpan _connectDelay;
+        private readonly byte[]? _hostKeyBlob;
 
         public int ConnectCalls { get; private set; }
 
-        public RecordingSftpFactory(Func<Stream> streamFactory, TimeSpan connectDelay)
+        public RecordingSftpFactory(
+            Func<Stream> streamFactory, TimeSpan connectDelay, byte[]? hostKeyBlob = null)
         {
             _streamFactory = streamFactory;
             _connectDelay = connectDelay;
+            _hostKeyBlob = hostKeyBlob;
         }
 
-        public ISftpSession Connect(string host, int port, string username, string password)
+        public ISftpSession Connect(
+            string host, int port, string username, string password, SshHostKeyVerifier verifier)
         {
             ConnectCalls++;
             if (_connectDelay > TimeSpan.Zero)
                 Thread.Sleep(_connectDelay); // simulates a stalling server (sync, like SSH.NET)
+
+            // A server that STATES AN IDENTITY, when the test asks for one. These two lines are the
+            // same two RenciSftpClientFactory runs, in the same order, and Observe is the real policy
+            // code rather than a re-implementation of it. A null blob is the pre-WP-38 fixture shape,
+            // so every test written before this stays exactly as it was.
+            if (_hostKeyBlob is not null && !verifier.Observe(_hostKeyBlob))
+                verifier.ThrowIfRejected();
+
             return new FakeSession(_streamFactory);
         }
 

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services;
 
@@ -76,7 +77,12 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
 
         existing.Protocol = protocol;
         existing.AutoDeliver = request.AutoDeliver;
-        existing.ConfigJson = request.ConfigJson;
+        // Whole-object replace, EXCEPT the recorded SSH host-key fingerprints: no client sends a
+        // property it has never heard of, so a plain assignment would un-pin the supplier every time
+        // an operator changed the timeout. Sending the property explicitly — including as an empty
+        // array — still wins, and is the deliberate re-trust path after a genuine server rebuild.
+        existing.ConfigJson = DeliveryHostKeyConfig.PreserveRecordedFingerprints(
+            request.ConfigJson, existing.ConfigJson);
         existing.OutputFormat = NormalizeOutputFormat(request.OutputFormat);
         existing.UpdatedAt = now;
 

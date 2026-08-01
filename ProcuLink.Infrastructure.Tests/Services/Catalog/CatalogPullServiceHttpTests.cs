@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -365,7 +365,8 @@ public class CatalogPullServiceHttpTests
 
     private sealed class ThrowingSftpFactory : ISftpClientFactory
     {
-        public ISftpSession Connect(string host, int port, string username, string password)
+        public ISftpSession Connect(
+            string host, int port, string username, string password, SshHostKeyVerifier verifier)
             => throw new InvalidOperationException("SFTP factory must not be invoked in http tests.");
     }
 

@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -319,7 +319,8 @@ public sealed class SftpIngressClaimFirstPostgresTests : IAsyncLifetime
         private readonly string _remotePath;
         private readonly byte[] _content;
         public OneFileSftpFactory(string remotePath, byte[] content) { _remotePath = remotePath; _content = content; }
-        public ISftpSession Connect(string host, int port, string username, string password)
+        public ISftpSession Connect(
+            string host, int port, string username, string password, SshHostKeyVerifier verifier)
             => new OneFileSftpSession(_remotePath, _content);
     }
 
