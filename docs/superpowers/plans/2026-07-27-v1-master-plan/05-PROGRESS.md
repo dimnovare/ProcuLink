@@ -3443,3 +3443,68 @@ an always-on report upload; Playwright counts `skipped` as passing, so 31 of 111
 - **Local Docker contention is not a diff failure.** A full local run failed 14 tests, every one
   inside `InitializeAsync()` at `NpgsqlDatabaseCreator.Exists`, with **32 `postgres:16` containers
   live** from sibling sessions. CI on clean infra: 4999 tests, 4985 passed, 14 skipped, 0 failed.
+
+---
+
+## 2026-08-01 — twenty-six landed; Wave 4 handed over; two PRs left
+
+| Merged | Packet | Result |
+|---|---|---|
+| FE #83 | WP-10 — the residency retraction swept one page and missed six | FE `d34af29` |
+| BE #129 | WP-19 backend — the failure's cause and its wait, readable by a client | BE `5b6d874` |
+| FE #80 | WP-02 round 2 frontend — ext lint was never linting `tests/` | FE `6aa01a5` |
+| BE #131 | **rescued** — stop the WP-14 report writers dirtying the working tree | BE `7aa830a` |
+
+The Wave 4 session handed its remaining PRs over in full. Its state table was already stale — #73,
+#100, #70 and #75 had landed overnight, G1 shipped as #81 and G4 as #79 — so what actually transferred
+was **#69 and #77**.
+
+### BE #131 — work that existed only on an unpushed local branch
+
+The WP-14 chip committed `3b7cec6` in its worktree and never pushed. Two Api integration tests wrote
+their generated report into `docs/ops/`, so every suite run left the tree dirty with fresh seed GUIDs
+and EXPLAIN timings. Recovered, rebased, landed.
+
+This is the second time in a day that the same risk surfaced: a collision audit found **six of seven**
+concurrent sessions had zero pushed commits. **A session's worktree is not storage.** Anything worth
+keeping should be pushed to a branch the moment it is committed.
+
+Also confirmed done-by-another-route: the "RevisionAuthorityHostCoverageTests fails in worktrees" chip
+had nothing to do — its fix is already on main, and the file says so: *"Another session found and
+fixed this first, with a synthetic-tree regression."*
+
+### FE #69 — three failures, none of them the packet's fault
+
+The token sweep had been rebased onto a main that moved twenty-odd times underneath it.
+
+1. **Budget breach.** `privacy/page.tsx` hit 18/17 — #83 added a raw `color: "#1E6D29"` Link. The
+   ratchet is **shrink-only**, so raising the baseline would break its own rule; converted all eight
+   occurrences in that file to `var(--brand-green-deep)` instead.
+2. **Two stale exemptions.** WP-29 added click-through `href`s to the stat row, changing the lines the
+   exemptions anchor on. The staleness check caught it — exactly its purpose.
+3. **The one worth keeping.** The refreshed anchors *still* did not match, because
+   `textColorScan.ts:216` truncates each hit to `.trim().slice(0, 120)`. **An exemption whose
+   `contains` exceeds 120 characters can never match — silently — and presents as an unexempted
+   violation.** Both stat-row lines cross 120 once the `href` is on them.
+
+Before touching any colour I checked the consumer rather than the property name: `s.color` is rendered
+as `background:` on an 8×8 dot and on the proportion bar, never as a glyph. Changing it would have
+desynchronised the legend from the bar it labels. The scanner's `color:`-means-text heuristic is
+right most of the time and wrong here, which is why the exemption mechanism exists.
+
+A concurrent push fixed the same two anchors independently, with shorter anchors and a reason
+recording the re-verification — took theirs.
+
+### FE #77 — why "green" was not green
+
+`gh pr checks` showed **two** checks, both Vercel. The three real jobs — build, unit, e2e — appeared
+to have never run. They had: one `pull_request` run at 16:17, all three green. **Against a head the
+branch no longer has.**
+
+So the PR carries a green run bound to a superseded commit, and nothing has ever been run against
+`6147a76`. Same family as TRAP 11 and TRAP 23: **a true signal attached to a different object than
+the one being merged.** `.base.sha` is not containment; `MERGEABLE` is not the merged program; and a
+green run is not a green *head*.
+
+It unblocks when #69 lands, because `update-branch` will finally trigger a run against a head that
+still exists.
