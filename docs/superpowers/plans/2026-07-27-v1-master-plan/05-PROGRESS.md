@@ -3213,3 +3213,146 @@ the registry entry went rather than the reader coming back.
 That is now four guards in one night, each written by one packet and each catching a **different,
 later** packet: the self-retiring deferral, ONE COPY / THREE CONSUMERS, the chip table bound to the
 rendered list, and the route-param registry. None of them caught its own author.
+
+---
+
+## 2026-08-01 — WP-30 third pass: TRAP 26 closed, and a new way for a guard to go dark
+
+FE #69 landed after a **third** pass. Round 2 was refuted on five blocking findings, and the split
+that mattered was: the tests were sound (15/15 mutations reproduced, 14/14 contrast figures to 4dp,
+zero wrong-direction codemod moves across 52 sites) and **the acceptance criteria were false**. Those
+are different failures. Round 3 kept the tests and rewrote the AC.
+
+### TRAP 26, closed, and verified by the scanner that emits
+
+The fix is three-layered, in increasing order of durability: `tailwind.config.ts` excludes tests
+(measured — removes **exactly one** emitted rule, 1088 → 1087, the emerald ring and nothing else); the
+fixture **assembles** its literal so the mistake is not one config edit away; and
+`scripts/check-emitted-css.mjs` asks the real compiler what it emits, wired into CI.
+
+The verification is the part worth copying. The defect was reproduced in the real build first —
+`.next/static/css/d13993a82d7b9159.css` shipping
+`.focus-visible\:ring-\[\#28C55E\]{--tw-ring-color:rgb(40 197 94/…)}` — and then confirmed gone by
+**reading the built stylesheets**, not by re-running the guard. Re-running the guard could never have
+shown either state, because the guard is not the scanner that emits.
+
+The new gate matches **decimal as well as hex**, and that is load-bearing rather than thorough:
+Tailwind compiles the class to `rgb(40 197 94 / …)`, so the hex survives only in the escaped
+selector. Rename the class and a hex-only grep sees nothing while the banned declaration still ships.
+The same hole existed one rule down — `RETIRED_RE` was hex-only, so `rgb(40,197,94)` walked past the
+retired-colour rule, which is exactly the defect the `color-fn` rule beside it exists to close.
+
+### The new shape: an anchor longer than the report goes dark, silently
+
+Round 3's exemption lists are matched by **line content, not line number**, so an exemption whose site
+has changed goes stale and turns the suite red instead of forgiving whatever replaced it.
+
+It was tested for real within the hour. WP-27 (#73) landed mid-flight, touching 24 of the same files,
+and reworded two `BridgeDashboard` stat rows — added an `href`, added a `queued` entry. Both
+exemptions went stale and the suite went red, exactly as intended. Re-verified before re-anchoring:
+those `color` fields are still consumed only as `background:` on a dot, a bar segment and a legend
+square.
+
+But the same event exposed a hole in the mechanism, and this is the reusable part:
+
+> An exemption anchor is matched against the **truncated** report line (120 chars). #73 pushed both
+> rows past that. An over-long anchor **can never match a hit** — so it silently stops forgiving its
+> site, while the stale check, which reads the whole file, still reports it as fine. The failure then
+> reads as a brand-new violation and sends the reader after a phantom.
+
+Same family as TRAP 26 and as everything else this packet was refuted for: **a check that looks green
+while doing nothing**, because two parts of it disagree about what they are reading. `REPORT_LINE_CHARS`
+is now exported and named as load-bearing, the anchors are shortened to distinctive fragments (which
+survives cosmetic reflow anyway), and `assertAnchorsFitTheReport()` runs in both blocks —
+mutation-checked by restoring the 137-character anchor.
+
+**That is a fifth guard catching a later packet.** The self-retiring deferral, ONE COPY / THREE
+CONSUMERS, the chip table bound to the rendered list, the route-param registry — and now the
+content-anchored exemption. Still none of them caught its own author.
+
+**A sixth, an hour later.** WP-10 (#83) landed on main and added one more link to
+`(marketing)/privacy/page.tsx` in exactly the style the file's seven existing links use —
+`color: "#1E6D29"` — taking the file 17 → 18 and failing `lint:tokens`. #83 landed legitimately:
+the gate is not on main yet, so main is green and only the merged tree is red.
+
+CI on that merge commit failed on exactly two steps — `Design-token gate` and the vitest case that
+runs it — so this was not a local-only artefact; the branch was red on GitHub until it was fixed.
+
+The interesting part is the fix that was NOT taken. Bumping the row to 18 would have made CI green in
+one character. **A per-file count that rises whenever something trips it is not a ratchet, it is a
+log.** All eight spellings went to `var(--brand-green-deep)` — same value, same render, and the file
+stops being seven-of-one-and-one-of-the-other — and the row was re-cut 17 → **10**.
+
+### A shared branch makes a rebase a hostile act
+
+Worth writing down because it nearly went the other way. This session rebased `claude/wp30-tokens`
+onto main and went to force-push. **`--force-with-lease` refused it** — `! [rejected] (stale info)` —
+because ANOTHER session had meanwhile pushed `Merge branch 'main' into claude/wp30-tokens` to the
+same branch, pulling in #83.
+
+A plain `--force` would have silently deleted that merge commit. The lease is what turned a
+destructive operation into a question. The resolution was to abandon the local rebase entirely
+(`git branch -f wp30-local-rebase` as a safety ref first), `reset --hard` onto the remote tip, and
+**cherry-pick only the one new commit** on top — which pushes as a fast-forward and destroys nothing.
+
+> On a branch more than one agent can push to, prefer integrating onto THEIR tip over replaying your
+> history over it. `--force-with-lease` is not optional there, and a rejected lease is information,
+> not an obstacle to route around.
+
+### One vacuous test, found in round 3's own work
+
+The decimal case used `text-[#28C55E]` and asserted the report contained `40 197 94` — but the report
+prints a ±60-character **context window** around each hit, so the decimal sat inside the window of the
+*hex* hit. Deleting the decimal branch from `retiredRegex()` entirely left all seven cases green. It
+now names the colour in the fixture's `theme.extend.colors`, so the selector is `.text-retired-probe`
+and the only trace of the banned value in the compiled CSS is the declaration, in decimal.
+
+Note the shape: the assertion was reading the **diagnostic output** rather than the **matched value**.
+A report designed to be readable had made the test unfalsifiable.
+
+### A mutation-procedure defect, recorded so it is not re-derived
+
+A `node -e` string replace written with `\n` **silently no-op'd** against this repo's CRLF files, and
+the run then looked like "the mutant survived" — indistinguishable from "the test is vacuous". It sent
+one investigation down the wrong path before being caught.
+
+**Rule: a mutation is only evidence if the edit is confirmed to have landed.** Either assert the
+replacement changed the file (`if (s === before) process.exit(3)`) or observe a behaviour change that
+could only follow from it. Every mutation recorded in this round was confirmed that way after the
+false reading.
+
+Second, smaller one: the emitted-CSS cases each spawn the Tailwind compiler (1.5–4.5s), and vitest's
+5s default turned that into flake — a first mutation run reported five failures where **one** was real
+and four were timeouts wearing an assertion's clothes. A timeout that reads as a failed assertion
+makes a mutation check unreadable, and a mutation check is the one tool that says whether any of the
+rest is load-bearing.
+
+### The AC clause that was wrong, and why the shape recurs
+
+Round 2 deferred its un-audited remainder to *"the 798 ledgered violations"*. The ledger is
+`src/app/**` only **and it counts raw hex, not contrast** — two different debts treated as one. It
+could not absolve `src/components/**`, which has never had a row in it, and could not absolve anything
+of a contrast failure even inside src/app. A full audit of `src/components/**` returned a table of
+**27** sub-4.5:1 text pairs against the nine the refutation had named — including the pair round 2
+claimed to have swept — and working through them surfaced roughly fifteen more that the first pass
+had not reached, so the honest figure is "the nine were a floor, not a count".
+
+`check-tokens.mjs`'s "WHAT THIS GATE DOES NOT DO" header — which a refuter called the best thing in
+the diff — gained two items in its own voice: a ledger is only an alibi for the files it lists and the
+kind of debt it counts, and a source-text gate is not an emission check.
+
+Two systemic causes, not 27 bugs: `--brand-green` and `--amber` are each the **non-text member** of
+their family being used in `color:` and `fill=`. `PoMappingEditor` is the one to remember — it
+declared `const BLUE = "#2E8E3A"` alongside `BLUE_DEEP`/`BLUE_SOFT`, all three **byte-identical
+duplicates of the `GREEN` trio four lines below**. `color: BLUE` reads as obviously fine in review,
+which is precisely why it survived every earlier sweep. A constant that lies about its own value is
+the defect; fixing only the contrast would have left the trap armed.
+
+### Scope stated rather than implied
+
+The green regression rule covers `src/components/**` plus `src/mdx-components.tsx` — the region
+audited — and **not** `src/app/**`, where a probe found unmeasured green text sites. It is a ratchet:
+the swept region cannot regress, the unswept region is named out loud. Also left open and said so:
+`WireTopology`'s `isHealthy >= 80` vs `healthColor < 90` mismatch, which put amber copy on the green
+pill for health 80–89 — contrast fixed, thresholds not, because collapsing them changes what
+"healthy" means on screen and also reaches `BridgeDashboard.healthColor`.
