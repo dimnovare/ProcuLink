@@ -38,6 +38,23 @@ public class DeliveryAttempt
     /// </summary>
     public string? ResponseBody { get; set; }
     /// <summary>
+    /// The wait the SUPPLIER asked for on this attempt (their <c>Retry-After</c>), in whole
+    /// seconds. Null when they asked for none — which is the common case, and must never be read as
+    /// "wait zero": it means nobody named a wait, so nothing may show the operator a countdown.
+    ///
+    /// <para>Bounded to <see cref="Core.Services.Delivery.RetryAfterHeader.MaxHonoured"/>, the same
+    /// ceiling the scheduler applies. The stored number is a PROMISE — a client shows it as "trying
+    /// again in N" — so it has to be the wait the queue will actually keep, not the one a
+    /// counterparty asked for. A supplier requesting 24h gets re-driven by the stranded-delivery
+    /// sweep long before that elapses, so publishing 24h would be a countdown to nothing.</para>
+    ///
+    /// <para>Before this column the value was read off the wire, spent once computing a Hangfire
+    /// delay, and dropped: the product obeyed a wait it could not name. Nullable, so legacy rows
+    /// stay null rather than claiming a wait nobody observed.</para>
+    /// </summary>
+    public int? RetryAfterSeconds { get; set; }
+
+    /// <summary>
     /// ACK round-trip: UTC timestamp at which the supplier acknowledged receipt
     /// (HTTP 2xx / successful dispatch). Null until the delivery is confirmed.
     /// </summary>

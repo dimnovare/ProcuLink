@@ -111,6 +111,19 @@ public sealed class OpsController : ControllerBase
             r.LastAttemptAt, r.CreatedAt, r.UpdatedAt)));
     }
 
+    /// <summary>
+    /// The statuses <see cref="RequeueDelivery"/> admits, as the refusal sentence lists them —
+    /// <c>'delivery_dead_letter' or 'delivery_failed'</c>. Read off
+    /// <see cref="OrderStatusMachine.RequeueableFrom"/> rather than retyped, so a status added to
+    /// the set is a status the operator is told about. Ordered explicitly: a HashSet's enumeration
+    /// order is not part of its contract, and a refusal whose wording shuffles between requests
+    /// reads like two different rules.
+    /// </summary>
+    private static string DescribeAdmittedStatuses() =>
+        string.Join(" or ", OrderStatusMachine.RequeueableFrom
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .Select(s => $"'{s}'"));
+
     // ── POST /api/ops/orders/{id}/requeue-delivery ────────────────────────────
 
     /// <summary>
@@ -135,10 +148,14 @@ public sealed class OpsController : ControllerBase
 
         var order = getResult.Value!;
 
-        if (order.Status is not (OrderStatusConstants.DeliveryDeadLetter or OrderStatusConstants.DeliveryFailed))
+        // ONE authority for which statuses this escalation admits — OrderStatusMachine, like every
+        // other gate on the delivery path. This used to be a hand-written literal pair, with the
+        // SAME two statuses spelled out a second time in the refusal below; the message is now built
+        // from the set, so what the endpoint names and what it admits cannot drift apart.
+        if (!OrderStatusMachine.RequeueableFrom.Contains(order.Status))
             return BadRequest(new
             {
-                error = $"Order must be in '{OrderStatusConstants.DeliveryDeadLetter}' or '{OrderStatusConstants.DeliveryFailed}' status to requeue delivery (current: '{order.Status}')."
+                error = $"Order must be in {DescribeAdmittedStatuses()} status to requeue delivery (current: '{order.Status}')."
             });
 
         var artifact = order.OutboundArtifacts

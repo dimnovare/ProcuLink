@@ -889,6 +889,11 @@ public sealed class DeliveryService : IDeliveryService
 
         var status = result.Success ? DeliveryAttempt.StatusSuccess : DeliveryAttempt.StatusFailed;
 
+        // The wait the supplier asked for, recorded on the attempt that observed it. Read off the
+        // wire by RetryAfterHeader, it used to be spent ONCE computing a Hangfire delay and then
+        // dropped — so the product obeyed a pause it could not name to the operator.
+        var retryAfterSeconds = BoundedRetryAfterSeconds(result.RetryAfter);
+
         if (existingAttempt is not null)
         {
             // A3 finalize path: flip the in-flight 'dispatching' row (opened + committed before the
@@ -901,6 +906,7 @@ public sealed class DeliveryService : IDeliveryService
             existingAttempt.ErrorMessage = failureMessage;
             existingAttempt.RejectionReason = isSupplierRejection ? result.ErrorMessage : null;
             existingAttempt.ResponseBody = TruncateResponseBody(result.ResponseBody);
+            existingAttempt.RetryAfterSeconds = retryAfterSeconds;
             existingAttempt.AcknowledgedAt = result.Success ? now : null;
             existingAttempt.ArtifactSha256 = dispatchedPayloadSha256 ?? existingAttempt.ArtifactSha256;
         }
@@ -929,6 +935,15 @@ public sealed class DeliveryService : IDeliveryService
                 RejectionReason = isSupplierRejection ? result.ErrorMessage : null,
                 // Rejection capture: persist the supplier's raw NACK body verbatim (bounded).
                 ResponseBody = TruncateResponseBody(result.ResponseBody),
+                // …and the wait they asked for alongside it (null when they asked for none).
+                // ALWAYS null on this branch today, and provably so: the fresh-row path is reached
+                // only from FailBeforeDispatchAsync, which builds `new DeliveryResult(false, error)`
+                // for a failure that happened BEFORE any send — no counterparty, so no Retry-After.
+                // Written from the same variable as the finalize branch anyway, so a future
+                // pre-dispatch failure that DOES learn a wait carries it without anyone remembering
+                // to add the line. No test can catch this assignment's removal; that is a property
+                // of the call graph, not a gap in the tests.
+                RetryAfterSeconds = retryAfterSeconds,
                 // ACK round-trip: stamp the confirmation time on a successful dispatch.
                 AcknowledgedAt = result.Success ? now : null,
                 // Provenance: which connection revision/config produced the artifact this attempt
@@ -1116,6 +1131,24 @@ public sealed class DeliveryService : IDeliveryService
         return body.Length <= DeliveryAttempt.MaxResponseBodyLength
             ? body
             : body[..DeliveryAttempt.MaxResponseBodyLength];
+    }
+
+    /// <summary>
+    /// The supplier's requested wait as whole seconds for
+    /// <see cref="DeliveryAttempt.RetryAfterSeconds"/>, or null when they asked for none.
+    ///
+    /// <para>Clamped to <see cref="RetryAfterHeader.MaxHonoured"/> — the SAME ceiling
+    /// <c>DeliveryReliabilityOptions.NextRetryDelay</c> applies when it schedules the retry. The
+    /// stored value is what a client shows the operator ("trying again in N"), so it must be the
+    /// wait the queue will actually keep; persisting a 24h ask the stranded-delivery sweep will
+    /// override in 3h would publish a countdown to nothing.</para>
+    /// </summary>
+    private static int? BoundedRetryAfterSeconds(TimeSpan? retryAfter)
+    {
+        if (retryAfter is not { } wait || wait <= TimeSpan.Zero) return null;
+
+        var bounded = wait > RetryAfterHeader.MaxHonoured ? RetryAfterHeader.MaxHonoured : wait;
+        return (int)Math.Round(bounded.TotalSeconds, MidpointRounding.AwayFromZero);
     }
 
     private static string GetDestination(SupplierDeliveryConfig config)

@@ -465,6 +465,37 @@ public class OpsControllerTests
         result.Should().BeOfType<BadRequestObjectResult>();
     }
 
+    /// <summary>
+    /// The refusal a REAL operator hits, and the one this guard existed to give: a business
+    /// rejection is not requeueable — re-sending bytes the supplier read and refused is the one
+    /// thing that certainly does not help. The set moved into <c>OrderStatusMachine</c>; the
+    /// admitted statuses and the sentence must both survive the move, because the sentence is the
+    /// only place the endpoint tells the operator which statuses DO work.
+    /// </summary>
+    [Fact]
+    public async Task RequeueDelivery_RejectedBySupplier_Refuses_AndNamesTheStatusesThatWouldWork()
+    {
+        await using var db = NewDb();
+        var (ctrl, _, orders, _, orgId) = Build(db);
+
+        var order = OrderWithArtifact(orgId, OrderStatusConstants.RejectedBySupplier);
+        orders.Setup(o => o.GetByIdAsync(orgId, order.Id, It.IsAny<CancellationToken>()))
+              .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(order));
+
+        var result = await ctrl.RequeueDelivery(order.Id, CancellationToken.None);
+
+        var bad = result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        var message = System.Text.Json.JsonSerializer.Serialize(bad.Value);
+
+        foreach (var admitted in OrderStatusMachine.RequeueableFrom)
+            message.Should().Contain(admitted,
+                "a refusal that does not say which statuses DO work leaves the operator guessing at " +
+                "the one control that can rescue a dead-lettered order");
+
+        message.Should().Contain(OrderStatusConstants.RejectedBySupplier,
+            "and it must name the status the order is actually in");
+    }
+
     [Fact]
     public async Task RequeueDelivery_NoArtifact_ReturnsBadRequest()
     {

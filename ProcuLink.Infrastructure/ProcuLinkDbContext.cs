@@ -880,6 +880,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.RejectionReason).HasColumnName("rejection_reason");
             // Rejection capture (full NACK body) + ACK round-trip timestamp (Group O reliability).
             b.Property(x => x.ResponseBody).HasColumnName("response_body");
+            // WP-19 recovery — the supplier's own Retry-After, bounded (nullable; legacy rows null).
+            b.Property(x => x.RetryAfterSeconds).HasColumnName("retry_after_seconds");
             b.Property(x => x.AcknowledgedAt).HasColumnName("acknowledged_at").HasColumnType("timestamptz");
             // Provenance (launch batch 3) — REAL persisted nullable columns (see outbound_artifacts note).
             b.Property(x => x.ConnectionRevisionId).HasColumnName("connection_revision_id");

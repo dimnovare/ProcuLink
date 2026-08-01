@@ -335,6 +335,89 @@ public class DeliveryServiceRejectionTests
             "the two jobs read a different answer than the status decision did");
     }
 
+    // ── WP-19 recovery: the wait the supplier asked for, persisted ────────────
+    //
+    // Retry-After was read off the wire, carried on DeliveryResult, spent ONCE computing a Hangfire
+    // delay — and then dropped. It reached no column, no DTO and no JSON, so the product could tell
+    // an operator "we'll keep trying" but never "for the next 4 minutes". The number the queue is
+    // already obeying is now recorded on the attempt that observed it.
+
+    [Fact]
+    public async Task DispatchArtifactAsync_RateLimitWithRetryAfter_PersistsTheWaitInWholeSeconds()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(
+                false, "HTTP 429: supplier endpoint returned an error.", 429,
+                RetryAfter: TimeSpan.FromSeconds(90))),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.RetryAfterSeconds.Should().Be(90,
+            "the supplier told us how long to wait and the queue is already obeying it — a client " +
+            "that can only say 'we'll keep trying' is withholding the one number the operator wants");
+    }
+
+    [Fact]
+    public async Task DispatchArtifactAsync_NoRetryAfter_LeavesTheWaitNull()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(false, "Gateway timeout", 503)),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.RetryAfterSeconds.Should().BeNull(
+            "null means the supplier asked for no particular wait — inventing a default here would " +
+            "show the operator a countdown nobody committed to");
+    }
+
+    [Fact]
+    public async Task DispatchArtifactAsync_RetryAfterBeyondTheCeiling_IsClampedToWhatTheQueueWillActuallyWait()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        // A supplier asking for 24 hours. RetryAfterHeader.MaxHonoured bounds what the scheduler
+        // will honour, so persisting the raw ask would publish a wait the queue has no intention of
+        // keeping — the stranded-delivery sweep re-drives the order long before it elapses.
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(
+                false, "HTTP 429: supplier endpoint returned an error.", 429,
+                RetryAfter: TimeSpan.FromHours(24))),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var attempt = await db.DeliveryAttempts.SingleAsync();
+        attempt.RetryAfterSeconds.Should().Be((int)RetryAfterHeader.MaxHonoured.TotalSeconds,
+            "the stored number is a PROMISE to the operator, so it must be the wait the scheduler " +
+            "will actually keep, not the one the supplier asked for");
+    }
+
     [Fact]
     public async Task DispatchArtifactAsync_5xxResponse_SetsDeliveryFailedAndLeavesRejectionReasonNull()
     {

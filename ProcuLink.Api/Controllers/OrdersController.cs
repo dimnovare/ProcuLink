@@ -10,6 +10,7 @@ using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
@@ -470,6 +471,8 @@ public sealed class OrdersController : ControllerBase
 
         var entity = result.Value!;
         string? errorMessage = null;
+        string? failureCause = null;
+        int?    retryAfterSeconds = null;
 
         // delivery_unconfirmed included: a parked order must surface its explanation ("we sent this
         // but never learned whether it arrived — send again or mark delivered"), or the operator
@@ -512,31 +515,57 @@ public sealed class OrdersController : ControllerBase
                 catch { /* malformed payload — ignore */ }
             }
 
+            // ONE newest-attempt read, shared by every consumer below. It REPLACES the two
+            // conditional single-column lookups this ladder used to run (one for the
+            // failed/dead-letter/park trio, one for rejected_by_supplier), so a delivery-failure
+            // order costs at most ONE delivery-attempt query here — the same ceiling as before,
+            // now paid once rather than per branch. Skipped entirely for the non-delivery failure
+            // statuses (failed / transform_failed), which have no attempt to read.
+            var newestAttempt = entity.Status is "delivery_failed" or "delivery_dead_letter"
+                                              or "rejected_by_supplier"
+                                              or OrderStatusConstants.DeliveryUnconfirmed
+                ? await _db.DeliveryAttempts
+                    .AsNoTracking()
+                    .Where(a => a.OrderId == id && a.OrgId == _tenant.OrganisationId)
+                    .OrderByDescending(a => a.AttemptedAt)
+                    .Select(a => new
+                    {
+                        a.Status,
+                        a.ErrorMessage,
+                        a.RejectionReason,
+                        a.ResponseBody,
+                        a.ResponseCode,
+                        a.RetryAfterSeconds,
+                    })
+                    .FirstOrDefaultAsync(ct)
+                : null;
+
             // The branch that actually carries the park sentence: ParkUnconfirmedAsync writes it to
             // attempt.ErrorMessage. For a parked order this is the ONLY path that can reach it —
             // hence the skip above rather than a mere ordering preference.
             if (errorMessage is null && entity.Status is "delivery_failed" or "delivery_dead_letter"
                                                       or OrderStatusConstants.DeliveryUnconfirmed)
             {
-                errorMessage = await _db.DeliveryAttempts
-                    .AsNoTracking()
-                    .Where(a => a.OrderId == id && a.OrgId == _tenant.OrganisationId)
-                    .OrderByDescending(a => a.AttemptedAt)
-                    .Select(a => a.ErrorMessage)
-                    .FirstOrDefaultAsync(ct);
+                errorMessage = newestAttempt?.ErrorMessage;
             }
 
             if (errorMessage is null && entity.Status == "rejected_by_supplier")
             {
-                errorMessage = await _db.DeliveryAttempts
-                    .AsNoTracking()
-                    .Where(a => a.OrderId == id && a.OrgId == _tenant.OrganisationId)
-                    .OrderByDescending(a => a.AttemptedAt)
-                    .Select(a =>
-                        a.RejectionReason ??
-                        a.ResponseBody ??
-                        a.ErrorMessage)
-                    .FirstOrDefaultAsync(ct);
+                errorMessage = newestAttempt?.RejectionReason
+                            ?? newestAttempt?.ResponseBody
+                            ?? newestAttempt?.ErrorMessage;
+            }
+
+            // …and the same verdict as something a client can BRANCH on. Derived from the stored
+            // columns by the same table that classified the response live, so the sentence above and
+            // the slug here can never describe two different failures. Only a FAILED attempt carries
+            // a cause: a park ('unconfirmed') is an unknown outcome, not a supplier verdict, and
+            // asking the table about it would answer "unreachable" for a response nobody observed.
+            if (newestAttempt is { Status: DeliveryAttempt.StatusFailed })
+            {
+                failureCause = SupplierResponseClassification.CauseFor(
+                    newestAttempt.ResponseCode, newestAttempt.RejectionReason, newestAttempt.ResponseBody);
+                retryAfterSeconds = newestAttempt.RetryAfterSeconds;
             }
         }
 
@@ -549,7 +578,7 @@ public sealed class OrdersController : ControllerBase
         // they mean anything, and a routed order pays nothing for the lookup.
         var suggestions = await LoadSupplierSuggestionsAsync(entity, ct);
 
-        return Ok(MapToDto(entity, errorMessage, calibrations, suggestions));
+        return Ok(MapToDto(entity, errorMessage, calibrations, suggestions, failureCause, retryAfterSeconds));
     }
 
     /// <summary>
@@ -2684,7 +2713,12 @@ public sealed class OrdersController : ControllerBase
         PurchaseOrderEntity e,
         string? errorMessage = null,
         IReadOnlyDictionary<int, ProcuLink.Core.Services.CalibrationResult>? calibrations = null,
-        IReadOnlyList<SupplierSuggestionDto>? supplierSuggestions = null) => new(
+        IReadOnlyList<SupplierSuggestionDto>? supplierSuggestions = null,
+        // WP-19 recovery — the delivery failure as something a client can branch on. Resolved by
+        // Get() alongside errorMessage; every other MapToDto call site is a non-delivery response
+        // (create / resolve / assign-supplier) where there is no attempt to read and null is right.
+        string? failureCause = null,
+        int? retryAfterSeconds = null) => new(
         Id:            e.Id,
         PoNumber:      e.PoNumber,
         // Phase-0 routing: SupplierId is nullable on the entity; an unrouted order has none yet.
@@ -2722,6 +2756,8 @@ public sealed class OrdersController : ControllerBase
             .ToList(),
         BuyerName:    ExtractBuyerName(e),
         ErrorMessage: errorMessage,
+        FailureCause:      failureCause,
+        RetryAfterSeconds: retryAfterSeconds,
         // Phase 4 header enrichment. DocumentSupplierName is the extracted (as-printed)
         // supplier name — distinct from the resolved SupplierName (e.Supplier.Name) above.
         SubTotal:             e.SubTotal,

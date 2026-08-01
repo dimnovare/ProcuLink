@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Threading.RateLimiting;
 using Hangfire;
 using Hangfire.PostgreSql;
@@ -276,6 +277,11 @@ builder.Services.AddRateLimiter(options =>
         ?? ctx.Connection.RemoteIpAddress?.ToString()
         ?? "anonymous";
 
+    // Fallback wait advertised when the lease carries no RetryAfter metadata.
+    // Every window declared below is 60 seconds, so a caller told to wait this
+    // long is never told to come back before the window can possibly have rolled.
+    const int DefaultRetryAfterSeconds = 60;
+
     static RateLimitPartition<string> Window(HttpContext ctx, string prefix, int permit, int seconds) =>
         WindowFor(ctx, prefix, PartitionKey(ctx), permit, seconds);
 
@@ -345,11 +351,34 @@ builder.Services.AddRateLimiter(options =>
 
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
+    // A 429 from this limiter is TRANSIENT — the partition refills on a fixed
+    // window — but the rejection said only "retry shortly", which a client cannot
+    // act on. Every caller therefore had to guess: the upload workbench hard-codes
+    // [15s, 35s, 61s] because 61s is the longest window here, and every other
+    // surface treated the 429 as permanent and simply stopped.
+    //
+    // The limiter already knows the answer. FixedWindowRateLimiter publishes the
+    // time until the window rolls as RetryAfter lease metadata; we send it as the
+    // standard header AND in the body. The body copy stays byte-identical because
+    // UploadWorkbench.getLimitCode sniffs it to tell a speed throttle apart from a
+    // plan cap — changing the words there would silently relabel a throttle as
+    // "Plan limit reached".
     options.OnRejected = async (context, ct) =>
     {
+        var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var window)
+            ? (int)Math.Ceiling(window.TotalSeconds)
+            : DefaultRetryAfterSeconds;
+        // Never advertise an instant retry: a 0 invites the tight loop the limiter exists to stop.
+        retryAfter = Math.Max(1, retryAfter);
+
+        context.HttpContext.Response.Headers.RetryAfter = retryAfter.ToString(CultureInfo.InvariantCulture);
         context.HttpContext.Response.ContentType = "application/json";
         await context.HttpContext.Response.WriteAsJsonAsync(
-            new { error = "Rate limit exceeded. Please slow down and retry shortly." }, ct);
+            new
+            {
+                error = "Rate limit exceeded. Please slow down and retry shortly.",
+                retryAfterSeconds = retryAfter,
+            }, ct);
     };
 });
 
@@ -456,6 +485,15 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(allOrigins)   // EXACT origins only — no wildcard subdomains
               .AllowAnyHeader()
               .AllowAnyMethod()
+              // AllowAnyHeader governs the REQUEST headers a browser may send. It says
+              // nothing about which RESPONSE headers script may read: that is the
+              // exposed list, and without it a cross-origin fetch sees only the CORS-
+              // safelisted ones. Retry-After is not safelisted, so the frontend — a
+              // different origin from this API in every deployed environment — could
+              // not read the wait on a 429 even once we started sending it. The 429
+              // body carries retryAfterSeconds too, so a client that cannot read
+              // headers still gets the number.
+              .WithExposedHeaders("Retry-After")
               .AllowCredentials());
 });
 

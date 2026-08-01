@@ -18,6 +18,25 @@ public record OrderDto(
     string?    BuyerName = null,
     /// <summary>Human-readable error from the newest *Failed audit event; null for non-failed orders.</summary>
     string?    ErrorMessage = null,
+    // ── WP-19 recovery: the same failure, machine-readable ──
+    /// <summary>
+    /// WHY the delivery failed, as a stable <c>SupplierFailureCause</c> slug
+    /// ("supplier_auth_rejected", "supplier_rate_limited", "supplier_business_rejection", …) taken
+    /// from the newest delivery attempt. Null unless the order is in a delivery-failure status.
+    ///
+    /// <para>This is the field a client keys a cause-specific recovery control off — "update the
+    /// credentials" vs "correct the address" vs "wait out the rate limit". <see cref="ErrorMessage"/>
+    /// is the same verdict as prose, for a human to read; parsing it to decide which control to show
+    /// would mirror the backend's classification table in another language and go stale the first
+    /// time the copy improves.</para>
+    /// </summary>
+    string?    FailureCause = null,
+    /// <summary>
+    /// The wait the supplier asked for on that same attempt (their <c>Retry-After</c>), in whole
+    /// seconds, bounded to what the retry queue will actually honour. Null unless the order is in a
+    /// delivery-failure status AND the supplier named a wait — never read a null as zero.
+    /// </summary>
+    int?       RetryAfterSeconds = null,
     // ── Phase 4 enrichment (nullable; only the LLM PDF/email paths populate these) ──
     /// <summary>Order subtotal as extracted from the source document; null when not captured.</summary>
     decimal?   SubTotal = null,

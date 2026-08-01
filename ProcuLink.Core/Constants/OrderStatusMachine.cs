@@ -564,6 +564,36 @@ public static class OrderStatusMachine
         Set(DeliveryFailed);
 
     /// <summary>
+    /// <c>OpsController.RequeueDelivery</c>'s admission guard — the operator escalation that rescues
+    /// an order the automatic queue has given up on, resetting the attempt cap and dispatching PAST
+    /// the dead-letter. Named for the same reason as <see cref="RetryableFrom"/>: it was the last
+    /// gate on the delivery path still written as a hand-written status literal
+    /// (<c>is not (DeliveryDeadLetter or DeliveryFailed)</c>) while every sibling read a named set,
+    /// and the user-facing 400 listed the same two statuses a SECOND time in a string. Two copies of
+    /// one rule is how the five claim lists drifted apart four times, always silently.
+    ///
+    /// <list type="bullet">
+    /// <item><c>delivery_dead_letter</c> — the whole point: the retry budget is spent and
+    /// <c>/api/orders/{id}/retry-delivery</c> deliberately refuses this status, so this endpoint is
+    /// the ONLY way back.</item>
+    /// <item><c>delivery_failed</c> — the same escalation reached before the cap ran out, e.g. to
+    /// dispatch immediately rather than wait out the backoff.</item>
+    /// </list>
+    ///
+    /// <para><b>Deliberately NOT a subset of any claim set</b>, unlike <see cref="RetryableFrom"/>
+    /// and <see cref="RedeliverableFrom"/>. <c>delivery_dead_letter</c> is in no claim set at all,
+    /// and does not need to be: the endpoint REWRITES the order to the claimable
+    /// <c>delivery_failed</c> before enqueuing, precisely so the 52c6431 shape (an endpoint that
+    /// admits a status the claim then refuses, reporting success having sent nothing) cannot
+    /// occur.</para>
+    ///
+    /// <para>The endpoint's refusal message is built FROM this set, so the statuses it names cannot
+    /// drift from the statuses it admits.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> RequeueableFrom =
+        Set(DeliveryDeadLetter, DeliveryFailed);
+
+    /// <summary>
     /// <c>OrderTransformService</c>'s atomic transform claim — the statuses it flips to
     /// <c>transforming</c>. Written TWICE at that call site (a relational <c>ExecuteUpdateAsync</c>
     /// predicate and its EF-InMemory emulation), which is the same two-copies-of-one-rule shape

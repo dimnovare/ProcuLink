@@ -170,6 +170,26 @@ public class OrderStatusMachineTests
             .BeEquivalentTo(new[] { DeliveryFailed, ReadyToDeliver, DeliveryUnconfirmed });
 
     /// <summary>
+    /// <c>OpsController.RequeueDelivery</c>'s admission guard, pinned EXACTLY — the last gate on the
+    /// delivery path that was still a hand-written status literal rather than a named set.
+    ///
+    /// <para>Exact, not a superset, for the same reason as
+    /// <see cref="RedeliverableFrom_IsExactlyTheThreeOperatorSendableStatuses"/>: a status added
+    /// here becomes rescuable past the dead-letter cap with the attempt budget reset, which is the
+    /// most powerful control in the product. Widening it must be a deliberate edit.</para>
+    ///
+    /// <para><b>Deliberately NOT a subset of any claim set.</b> <c>delivery_dead_letter</c> is in no
+    /// claim set at all, and does not need to be: the endpoint REWRITES the order to the claimable
+    /// <c>delivery_failed</c> before it enqueues (<c>OpsController.cs</c>, "claimable, send-ready
+    /// idle state"). Asserting the 52c6431 subset invariant here would therefore be asserting a rule
+    /// this path does not follow.</para>
+    /// </summary>
+    [Fact]
+    public void RequeueableFrom_IsExactlyTheTwoStatusesAnOperatorMayRescue()
+        => OrderStatusMachine.RequeueableFrom.Should()
+            .BeEquivalentTo(new[] { DeliveryDeadLetter, DeliveryFailed });
+
+    /// <summary>
     /// Edges the observer calls "expected" that the machine deliberately does NOT allow.
     ///
     /// <para>The two maps are both supersets of the real flows, but for opposite reasons, so
