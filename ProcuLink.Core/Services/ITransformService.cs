@@ -56,4 +56,26 @@ public record TransformResult(
     Stream Content,
     string ContentType,
     string FileExtension
-);
+)
+{
+    /// <summary>
+    /// Build the result with the envelope <see cref="Delivery.DeliveryMediaTypes"/> declares for
+    /// this format. Every BUILT-IN transform goes through here, so for those the content type and
+    /// extension a document is STORED with and the ones it is DELIVERED with come from the same
+    /// single row — they used to be independent literals per transform and drifted (cXML stored as
+    /// <c>.cxml</c>, delivered as <c>.dat</c>).
+    /// <para>
+    /// It is NOT true of every path, and this is deliberately not claimed. A Scriban output template
+    /// declares its OWN content type, which the template transform returns here while delivery
+    /// re-derives its own from the artifact's persisted format token — two independent answers that
+    /// can disagree for a template whose declared type does not match its format. Pre-existing, out
+    /// of scope for the packet that introduced this method, and recorded so the next reader does not
+    /// take "one row" for a guarantee that holds everywhere.
+    /// </para>
+    /// </summary>
+    public static TransformResult For(OutputFormat format, Stream content)
+    {
+        var media = Delivery.DeliveryMediaTypes.For(format);
+        return new TransformResult(content, media.ContentType, media.FileExtension);
+    }
+}

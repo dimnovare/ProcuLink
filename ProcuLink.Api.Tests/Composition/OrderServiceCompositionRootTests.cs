@@ -228,6 +228,52 @@ public class OrderServiceCompositionRootTests
             + string.Join(", ", dead));
     }
 
+    // ── WP-17: the acceptance gate must reach the transform sub-service ───────
+
+    /// <summary>
+    /// The same class of bug, on the enforcement path this time. <see cref="OrderService"/>
+    /// hand-constructs <c>OrderTransformService</c> too, and a gate it forgot to forward would be a
+    /// SECURITY-shaped failure rather than a missing feature: every order would transform, no error,
+    /// no log line, and the only symptom would be POs the supplier refuses arriving at the supplier.
+    /// </summary>
+    [Fact]
+    public void TheAcceptanceGate_reachesTheTransformService()
+    {
+        using var sp = BuildContainer(s =>
+        {
+            s.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
+            s.AddScoped<IAcceptanceGate, AcceptanceGate>();
+        });
+        using var scope = sp.CreateScope();
+
+        var transform = PrivateField(scope.ServiceProvider.GetRequiredService<IOrderService>(), "_transform");
+        Assert.NotNull(transform);
+
+        var gate = PrivateField(transform!, "_acceptanceGate");
+        Assert.NotNull(gate);
+        Assert.IsType<AcceptanceGate>(gate);
+    }
+
+    /// <summary>
+    /// And when the container has NO gate registered — the Worker's state before WP-17 — the order
+    /// service builds a real one rather than degrading to "no enforcement". A nullable gate would
+    /// have made a forgotten registration indistinguishable from a deliberate opt-out.
+    /// </summary>
+    [Fact]
+    public void WithNoGateRegistered_theTransformServiceStillGetsARealOne()
+    {
+        using var sp = BuildContainer();      // deliberately does NOT register IAcceptanceGate
+        using var scope = sp.CreateScope();
+
+        Assert.Null(scope.ServiceProvider.GetService<IAcceptanceGate>());
+
+        var transform = PrivateField(scope.ServiceProvider.GetRequiredService<IOrderService>(), "_transform");
+        var gate = PrivateField(transform!, "_acceptanceGate");
+
+        Assert.NotNull(gate);
+        Assert.IsType<AcceptanceGate>(gate);
+    }
+
     private static object? PrivateField(object instance, string name) =>
         instance.GetType()
             .GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)

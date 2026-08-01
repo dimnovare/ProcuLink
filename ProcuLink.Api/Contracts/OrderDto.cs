@@ -18,6 +18,25 @@ public record OrderDto(
     string?    BuyerName = null,
     /// <summary>Human-readable error from the newest *Failed audit event; null for non-failed orders.</summary>
     string?    ErrorMessage = null,
+    // ── WP-19 recovery: the same failure, machine-readable ──
+    /// <summary>
+    /// WHY the delivery failed, as a stable <c>SupplierFailureCause</c> slug
+    /// ("supplier_auth_rejected", "supplier_rate_limited", "supplier_business_rejection", …) taken
+    /// from the newest delivery attempt. Null unless the order is in a delivery-failure status.
+    ///
+    /// <para>This is the field a client keys a cause-specific recovery control off — "update the
+    /// credentials" vs "correct the address" vs "wait out the rate limit". <see cref="ErrorMessage"/>
+    /// is the same verdict as prose, for a human to read; parsing it to decide which control to show
+    /// would mirror the backend's classification table in another language and go stale the first
+    /// time the copy improves.</para>
+    /// </summary>
+    string?    FailureCause = null,
+    /// <summary>
+    /// The wait the supplier asked for on that same attempt (their <c>Retry-After</c>), in whole
+    /// seconds, bounded to what the retry queue will actually honour. Null unless the order is in a
+    /// delivery-failure status AND the supplier named a wait — never read a null as zero.
+    /// </summary>
+    int?       RetryAfterSeconds = null,
     // ── Phase 4 enrichment (nullable; only the LLM PDF/email paths populate these) ──
     /// <summary>Order subtotal as extracted from the source document; null when not captured.</summary>
     decimal?   SubTotal = null,
@@ -63,7 +82,19 @@ public record OrderDto(
     /// <para>Advisory only: the order is still <c>unrouted</c> and stays that way until a human
     /// posts to <c>assign-supplier</c>. Nothing here has changed any routing.</para>
     /// </summary>
-    IReadOnlyList<SupplierSuggestionDto>? SupplierSuggestions = null
+    IReadOnlyList<SupplierSuggestionDto>? SupplierSuggestions = null,
+    /// <summary>
+    /// True when this is the onboarding practice order created by <c>SampleOrderService</c>
+    /// (<c>PurchaseOrderEntity.IsSample</c>). The review screen keys its "practice order" framing
+    /// off THIS field.
+    /// <para>
+    /// Before WP-27 the flag existed on the row and on <see cref="PassportDto"/> but not here, so
+    /// the frontend drove the framing off a <c>?sample=1</c> query parameter instead — which meant a
+    /// bookmark, a back-button, or an inbox row click rendered a practice order as a real one. Do
+    /// not remove this field without giving the frontend another server-side signal.
+    /// </para>
+    /// </summary>
+    bool IsSample = false
 );
 
 /// <summary>

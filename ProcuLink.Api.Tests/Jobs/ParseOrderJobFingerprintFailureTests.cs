@@ -64,12 +64,39 @@ public class ParseOrderJobFingerprintFailureTests
         var orderId = Guid.NewGuid();
         await using var db = NewDb();
 
-        var (job, _) = NewJob(db, orgId, orderId, new DbUpdateConcurrencyException(
-            "Database operation expected to affect 1 row(s), but actually affected 0 row(s)."));
+        var failure = new DbUpdateConcurrencyException(
+            "Database operation expected to affect 1 row(s), but actually affected 0 row(s).");
+        var (job, log) = NewJob(db, orgId, orderId, failure);
+
+        var act = async () => await job.ExecuteAsync(orderId, orgId, CancellationToken.None);
 
         // No throw = Hangfire marks the job Succeeded, which is correct: the parse committed and the
         // order is resolved. A red job here would be a lie about the order's actual state.
-        await job.ExecuteAsync(orderId, orgId, CancellationToken.None);
+        await act.Should().NotThrowAsync(
+            "a failed LEARN must not fail the PARSE — throwing would mark a correctly parsed, routed, "
+            + "deliverable order as a failed job and burn the Hangfire retries on a no-op re-entry");
+
+        // The precondition, pinned: this test only says anything about fingerprint failure if the
+        // recorder actually threw. Without this, a ParseOrderJob that stopped calling
+        // RecordParseSuccessAsync entirely would still go green here.
+        log.Entries.Should().Contain(e => ReferenceEquals(e.Exception, failure),
+            "the injected fingerprint failure has to reach the job's catch for this to be the F2 scenario");
+
+        // "Reported successful" is the job's OWN report of the outcome, not merely the absence of an
+        // exception: it reached the completion line and announced the parsed status. Both failure
+        // paths — a Fail Result and the terminal-status guard — log at Error immediately before they
+        // throw, so an Error entry here would mean the job reported the parse as failed.
+        log.Entries.Should().Contain(
+            e => e.Level == LogLevel.Information
+              && e.Message.Contains("completed")
+              && e.Message.Contains(orderId.ToString())
+              && e.Message.Contains(OrderStatusConstants.Ready),
+            $"the job must report the order as parsed to '{OrderStatusConstants.Ready}', which is the "
+            + "status the fingerprint failure must not have disturbed");
+
+        log.Entries.Should().NotContain(e => e.Level >= LogLevel.Error,
+            "an Error entry is the job reporting a failed parse — the only failure here was the "
+            + "non-fatal fingerprint recorder, which logs at Warning");
     }
 
     [Fact]

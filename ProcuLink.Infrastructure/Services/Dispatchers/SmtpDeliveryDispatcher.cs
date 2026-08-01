@@ -40,6 +40,13 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
     // most likely lands a duplicate email.
     public ResendSafety ResendSafety => ResendSafety.Unsafe;
 
+    // No HTTP status codes exist on this channel at all — every DeliveryResult it returns carries a
+    // null ResponseCode, so the classification never reaches its 400 branch and there is no supplier
+    // reason to capture. Declared explicitly rather than inherited: the whole point of the capability
+    // is that a dispatcher states what it can see, and "nothing, because there is nothing to see" is
+    // an answer, not an omission.
+    public bool CapturesSupplierResponseBody => false;
+
     public SmtpDeliveryDispatcher(ILogger<SmtpDeliveryDispatcher> logger, OutboundRequestGuard guard)
     {
         _logger = logger;
@@ -115,21 +122,9 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
             ? SecureSocketOptions.SslOnConnect
             : SecureSocketOptions.StartTlsWhenAvailable;
 
-        // Build message
-        var message = new MimeMessage();
-        message.From.Add(MailboxAddress.Parse(cfg.FromAddress));
-        foreach (var addr in recipients)
-            message.To.Add(MailboxAddress.Parse(addr));
-        message.Subject = subject;
-        // A3 idempotency: a deterministic Message-ID (stable across a crash-recovery re-send of the
-        // same artifact) lets a receiving MTA de-duplicate. Best-effort — legacy channel, retired
-        // on the cloud host.
-        if (!string.IsNullOrWhiteSpace(idempotencyKey))
-            message.MessageId = $"{idempotencyKey}@proculink.eu";
-
-        var builder = new BodyBuilder { TextBody = body };
-        builder.Attachments.Add(attachmentName, content, ContentType.Parse(contentType));
-        message.Body = builder.ToMessageBody();
+        var message = BuildMessage(
+            cfg.FromAddress, recipients, subject, body,
+            attachmentName, content, contentType, idempotencyKey);
 
         // Dispatch with timeout
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -194,6 +189,42 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The exact message this dispatcher hands to the SMTP client — extracted so the ONE thing that
+    /// carries the document's media type onto the wire (<c>ContentType.Parse(contentType)</c> on the
+    /// attachment) is reachable without an SMTP server. It was not: nothing asserted the attachment
+    /// type at all, so replacing that expression with <c>application/octet-stream</c> — every cXML,
+    /// UBL and X12 attachment mis-typed for the supplier's mail rules — left the suite green.
+    /// Behaviour is byte-identical to the inline version it replaces.
+    /// </summary>
+    internal static MimeMessage BuildMessage(
+        string fromAddress,
+        IEnumerable<string> recipients,
+        string subject,
+        string bodyText,
+        string attachmentName,
+        byte[] content,
+        string contentType,
+        string? idempotencyKey)
+    {
+        var message = new MimeMessage();
+        message.From.Add(MailboxAddress.Parse(fromAddress));
+        foreach (var addr in recipients)
+            message.To.Add(MailboxAddress.Parse(addr));
+        message.Subject = subject;
+        // A3 idempotency: a deterministic Message-ID (stable across a crash-recovery re-send of the
+        // same artifact) lets a receiving MTA de-duplicate. Best-effort — legacy channel, retired
+        // on the cloud host.
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            message.MessageId = $"{idempotencyKey}@proculink.eu";
+
+        var builder = new BodyBuilder { TextBody = bodyText };
+        builder.Attachments.Add(attachmentName, content, ContentType.Parse(contentType));
+        message.Body = builder.ToMessageBody();
+
+        return message;
+    }
 
     /// <summary>
     /// Parses <c>toAddresses</c> which may be a JSON array of strings, a JSON

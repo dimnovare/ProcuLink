@@ -238,6 +238,14 @@ public class MapperEnrichmentControllerTests
         result.Should().BeOfType<NotFoundResult>();
     }
 
+    /// <summary>
+    /// Severity drives the amber "review" badge; the GATE drives "Blocking". Those used to be the
+    /// same computation (<c>failed &amp;&amp; severity == "error"</c>) — which is how a failing
+    /// mandatory invariant, always error severity, came back claiming to block a delivery the server
+    /// performs anyway. The blocking set is therefore stubbed alongside the rows, because that is
+    /// what the endpoint really consults; the behavioural proof against the REAL evaluator
+    /// (invariants included) is <c>ValidationBlockingMatchesTheGateTests</c>.
+    /// </summary>
     [Fact]
     public async Task Validation_MapsSeverityToStatusAndBlocking()
     {
@@ -262,6 +270,15 @@ public class MapperEnrichmentControllerTests
         acceptance
             .Setup(s => s.ValidateOrderAsync(orgId, orderId, It.IsAny<CancellationToken>(), It.IsAny<ProcuLink.Core.Services.OutputFormat?>()))
             .ReturnsAsync(rows);
+        // The gate refuses on the supplier rule and on nothing else — the warning is advice, and a
+        // row the gate does not name never gets a blocking badge no matter what its severity says.
+        acceptance
+            .Setup(s => s.GetBlockingFailuresAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new ProcuLink.Core.Services.AcceptanceBlocker(
+                    "required.supplierItemCode", 2, "Supplier code is required"),
+            });
 
         var ctrl = BuildController(db, orgId, acceptance.Object,
             Mock.Of<IPoMappingService>(), Mock.Of<IFieldMappingSuggester>(),

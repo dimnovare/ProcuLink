@@ -14,6 +14,7 @@ using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Dispatchers;
 using ProcuLink.Infrastructure.Services.Security;
+using ProcuLink.TestSupport;
 using ProcuLink.Worker.Jobs;
 using Xunit;
 
@@ -25,18 +26,26 @@ namespace ProcuLink.Api.Tests.Jobs;
 /// searching unseen messages, extracting a CSV attachment, and importing it.
 /// Caller seeds an unseen CSV email into the mailbox first.
 ///
-/// Gated behind PROCULINK_LIVE_ENDPOINT_TESTS=1; skipped in the normal suite.
+/// Gated behind PROCULINK_LIVE_ENDPOINT_TESTS=1 plus the mailbox credentials; xUnit reports an
+/// explicit skip naming what to set when they are absent.
 ///   dotnet test ProcuLink.Api.Tests --filter "FullyQualifiedName~Live_ImapIngress"
+///
+/// This test previously opened with a bare `if (…) return;`, which the runner records as PASSED.
+/// It was broken by de4ea0e (it seeded no Supplier, so the poll took the unrouted branch and hit
+/// an unstubbed mock) and reported green for two and a half weeks; c359071 repaired the defect but
+/// left the reporting contract intact. The declared skip below is what makes a green run mean
+/// something.
 /// </summary>
 [Trait("Category", "LiveEndpoint")]
 public class LiveImapIngressTests
 {
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires a live IMAP mailbox to poll, plus the SMTP relay that seeds it",
+        LiveTestEnvironment.EndpointOptIn,
+        "PROCULINK_LIVE_IMAP_HOST", "PROCULINK_LIVE_IMAP_USER", "PROCULINK_LIVE_IMAP_PASS")]
     public async Task Live_ImapIngress_RealPollImportsCsvAttachment()
     {
-        if (Environment.GetEnvironmentVariable("PROCULINK_LIVE_ENDPOINT_TESTS") != "1") return;
-        var host = Environment.GetEnvironmentVariable("PROCULINK_LIVE_IMAP_HOST") ?? "";
-        if (string.IsNullOrEmpty(host)) return;
+        var host = Environment.GetEnvironmentVariable("PROCULINK_LIVE_IMAP_HOST")!;
 
         await using var db = new ProcuLinkDbContext(
             new DbContextOptionsBuilder<ProcuLinkDbContext>()

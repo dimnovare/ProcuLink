@@ -25,8 +25,12 @@ namespace ProcuLink.Api.Tests.Services;
 /// <list type="bullet">
 ///   <item><b>Snapshot semantics</b> — the internal helpers (<c>BuildLineEntitiesAsync</c> with a
 ///   snapshot, <c>ResolveSnapshotPoMapping</c>, <c>ResolveFromSnapshot</c>) are unit-tested
-///   directly (InternalsVisibleTo) so the exact-match / trimmed-Ordinal / unresolved→review
-///   contract mirrors <c>ItemMappingService.ResolveManyAsync</c> precisely.</item>
+///   directly (InternalsVisibleTo). For item codes the tests pin the DECISION a buyer experiences —
+///   which supplier code a given input returns, and whether a replay reaches the same row the live
+///   run did — always by comparing against <c>ItemMappingService.ResolveManyAsync</c>'s ACTUAL
+///   output rather than a restated literal. They name no comparer: a test written against the
+///   mechanism goes stale the moment the mechanism moves, which is exactly what happened to the
+///   test these replace.</item>
 ///   <item><b>Wiring proof</b> — <c>ParseStoredFileAsync</c> is driven end-to-flush and the LIVE
 ///   services (<c>IPoMappingService.GetAsync</c>, <c>IItemMappingService.ResolveManyAsync</c>) are
 ///   verified NEVER consulted for a pinned order with usable snapshots — and consulted exactly as
@@ -176,24 +180,223 @@ public class RevisionAuthorityParseTests
         Assert.Equal("LIVE-1", Assert.Single(entities).SupplierItemCode);
     }
 
-    [Fact]
-    public void ResolveFromSnapshot_MirrorsResolveManySemantics_TrimmedOrdinalKeys()
+    /// <summary>
+    /// Seeds the LIVE item_mappings table with the given rows, one minute apart in the order given,
+    /// so the live resolver's "most recently updated" tie-break is well-defined rather than
+    /// depending on insertion order.
+    /// </summary>
+    private static async Task<(ItemMappingService Live, Guid OrgId, Guid SupplierId)> SeedLiveMappingsAsync(
+        ProcuLinkDbContext db, params (string BuyerCode, string SupplierCode)[] rows)
     {
-        // Trimmed keying, Ordinal case-sensitivity, total over the non-blank input set,
-        // last duplicate snapshot row wins — exactly ItemMappingService.ResolveManyAsync.
-        var snapshot = new[]
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var stamp      = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        foreach (var (buyerCode, supplierCode) in rows)
         {
-            new EffectiveRevisionItemMapping("B-1", "REV-OLD"),
-            new EffectiveRevisionItemMapping("B-1", "REV-NEW"),   // duplicate — last wins
-            new EffectiveRevisionItemMapping("b-2", "REV-LOWER"), // case differs from requested "B-2" — no match
-        };
-        var lines = Lines("  B-1  ", "B-2", "", "   ");
+            db.ItemMappings.Add(new ItemMapping
+            {
+                Id               = Guid.NewGuid(),
+                OrgId            = orgId,
+                SupplierId       = supplierId,
+                BuyerItemCode    = buyerCode,
+                SupplierItemCode = supplierCode,
+                Source           = "manual",
+                Confidence       = 1f,
+                CreatedAt        = stamp,
+                UpdatedAt        = stamp,
+            });
+            stamp = stamp.AddMinutes(1);
+        }
 
-        var map = OrderIngestionService.ResolveFromSnapshot(snapshot, lines);
+        await db.SaveChangesAsync();
+        return (new ItemMappingService(db), orgId, supplierId);
+    }
 
-        Assert.Equal(2, map.Count);            // blanks excluded; keys trimmed
-        Assert.Equal("REV-NEW", map["B-1"]);
-        Assert.Null(map["B-2"]);               // present (total) but unresolved → review downstream
+    // ── Snapshot resolution: the DECISION, not the mechanism ────────────────────
+    //
+    // These replace a single test called `ResolveFromSnapshot_MirrorsResolveManySemantics_
+    // TrimmedCaseInsensitiveKeys`, whose name and body both encoded a MECHANISM — which comparer
+    // keys the returned dictionary. D1 changed that mechanism deliberately (folding the keys made
+    // one line receive another product's supplier code), so the test failed and its name had gone
+    // stale silently. A test written against the mechanism has to be rewritten every time the
+    // mechanism moves, which is the two-comparers-over-one-column defect biting inside its own fix.
+    //
+    // What matters to a buyer is the DECISION: for a given input code, which supplier code comes
+    // back — and does a replay reach the same one the live run did. Each test below pins one such
+    // decision, and every one of them is asserted against the live resolver's ACTUAL output rather
+    // than a restated literal, so neither path can drift no matter which comparer either uses
+    // internally. None of them mentions a comparer.
+
+    /// <summary>
+    /// Seeds the LIVE table AND builds the equivalent revision snapshot from the same rows, so the
+    /// two paths are given identical inputs by construction rather than by two hand-kept literals.
+    /// Rows are stamped one minute apart in the order given, so the live resolver's "most recently
+    /// updated" tie-break is well-defined instead of depending on insertion order.
+    /// </summary>
+    private static async Task<(ItemMappingService Live, Guid OrgId, Guid SupplierId, EffectiveRevisionItemMapping[] Snapshot)>
+        SeedBothPathsAsync(ProcuLinkDbContext db, params (string BuyerCode, string SupplierCode)[] rows)
+    {
+        var orgId      = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var stamp      = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        foreach (var (buyerCode, supplierCode) in rows)
+        {
+            db.ItemMappings.Add(new ItemMapping
+            {
+                Id               = Guid.NewGuid(),
+                OrgId            = orgId,
+                SupplierId       = supplierId,
+                BuyerItemCode    = buyerCode,
+                SupplierItemCode = supplierCode,
+                Source           = "manual",
+                Confidence       = 1f,
+                CreatedAt        = stamp,
+                UpdatedAt        = stamp,
+            });
+            stamp = stamp.AddMinutes(1);
+        }
+
+        await db.SaveChangesAsync();
+
+        var snapshot = rows
+            .Select(r => new EffectiveRevisionItemMapping(r.BuyerCode, r.SupplierCode))
+            .ToArray();
+
+        return (new ItemMappingService(db), orgId, supplierId, snapshot);
+    }
+
+    /// <summary>Resolves the same input codes through both paths and returns the two answers.</summary>
+    private static async Task<(IReadOnlyDictionary<string, string?> Snapshot, IReadOnlyDictionary<string, string?> Live)>
+        ResolveBothWaysAsync(
+            ItemMappingService live, Guid orgId, Guid supplierId,
+            EffectiveRevisionItemMapping[] snapshot, params string[] inputCodes)
+    {
+        var lines = Lines(inputCodes);
+        return (
+            OrderIngestionService.ResolveFromSnapshot(snapshot, lines),
+            await live.ResolveManyAsync(orgId, supplierId, lines.Select(l => l.BuyerItemCode), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task TwoInputsDifferingOnlyInCase_EachGetTheirOwnSupplierCode_OnBothPaths()
+    {
+        // D1's whole point. An org may treat "B-1" and "b-1" as different products — the unique
+        // index on buyer_item_code is case-SENSITIVE on Postgres's default collation, so both rows
+        // are legal and this is a real production state. Collapsing the two inputs to one answer
+        // ships the WRONG ITEM on the second line, confidently and with no review flag.
+        await using var db = NewDb();
+        var (live, orgId, supplierId, snapshot) = await SeedBothPathsAsync(db,
+            ("B-1", "SUP-UPPER"),
+            ("b-1", "SUP-LOWER"));
+
+        var (fromSnapshot, fromLive) = await ResolveBothWaysAsync(
+            live, orgId, supplierId, snapshot, "B-1", "b-1");
+
+        // Two inputs → two DISTINCT answers, on both paths.
+        Assert.Equal(2, fromLive.Count);
+        Assert.Equal(2, fromSnapshot.Count);
+        Assert.NotEqual(fromLive["B-1"], fromLive["b-1"]);
+
+        // …and the two paths agree on which answer belongs to which input.
+        Assert.Equal(fromLive["B-1"], fromSnapshot["B-1"]);
+        Assert.Equal(fromLive["b-1"], fromSnapshot["b-1"]);
+
+        // Non-vacuity: pin the answers, so two matching nulls cannot satisfy the above.
+        Assert.Equal("SUP-UPPER", fromSnapshot["B-1"]);
+        Assert.Equal("SUP-LOWER", fromSnapshot["b-1"]);
+    }
+
+    [Theory]
+    [InlineData("WIDGET-1")]   // exact
+    [InlineData("widget-1")]   // all lower
+    [InlineData("Widget-1")]   // title
+    [InlineData("wIdGeT-1")]   // mixed
+    [InlineData("  WIDGET-1 ")]// padded
+    [InlineData("NOT-STORED")] // unknown → both must return nothing
+    public async Task OneInput_ResolvesToTheSameSupplierCode_LiveAndFromSnapshot(string input)
+    {
+        // D3. A replay renders through ResolveFromSnapshot; if it reached a different row than the
+        // live run did, it is not a replay. Whatever the case rule is, both paths must apply it
+        // identically — including to an input that resolves to nothing.
+        await using var db = NewDb();
+        var (live, orgId, supplierId, snapshot) = await SeedBothPathsAsync(db, ("WIDGET-1", "SUP-9"));
+
+        var (fromSnapshot, fromLive) = await ResolveBothWaysAsync(
+            live, orgId, supplierId, snapshot, input);
+
+        var key = input.Trim();
+        Assert.Equal(fromLive[key], fromSnapshot[key]);
+    }
+
+    [Fact]
+    public async Task TheTieBreakAmongCaseVariantTwins_PicksTheSameRow_OnBothPaths()
+    {
+        // When one input matches SEVERAL stored rows, both paths must choose the same one, or a
+        // replay of a delivered order silently substitutes a different supplier code. The rows are
+        // ordered so a naive "last one wins" and the live resolver's choice DISAGREE — otherwise
+        // this passes for the wrong reason.
+        await using var db = NewDb();
+        var (live, orgId, supplierId, snapshot) = await SeedBothPathsAsync(db,
+            ("B-1", "SUP-UPPER"),   // the exact-case row, written FIRST (so "last wins" would miss it)
+            ("b-1", "SUP-LOWER"));
+
+        var (fromSnapshot, fromLive) = await ResolveBothWaysAsync(
+            live, orgId, supplierId, snapshot, "B-1");
+
+        Assert.Equal(fromLive["B-1"], fromSnapshot["B-1"]);
+        Assert.Equal("SUP-UPPER", fromSnapshot["B-1"]);
+    }
+
+    [Fact]
+    public async Task EveryNonBlankInputGetsAnAnswer_AndBlanksAreSkipped_OnBothPaths()
+    {
+        // The totality half of the contract: callers treat the result as total over the non-blank
+        // inputs, so a missing key would throw instead of sending the line to review. An input
+        // nobody supplied must NOT appear — inventing an alias for it is how one line's answer
+        // reaches another line.
+        await using var db = NewDb();
+        var (live, orgId, supplierId, snapshot) = await SeedBothPathsAsync(db,
+            ("B-1", "SUP-1"),
+            ("b-2", "SUP-2"));
+
+        var (fromSnapshot, fromLive) = await ResolveBothWaysAsync(
+            live, orgId, supplierId, snapshot, "  B-1  ", "B-2", "B-9", "", "   ");
+
+        // Whole-answer comparison: same keys, same values, both paths.
+        Assert.Equal(
+            fromLive.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList(),
+            fromSnapshot.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList());
+
+        Assert.Equal(3, fromSnapshot.Count);                  // blanks skipped, padding trimmed
+        Assert.Equal("SUP-1", fromSnapshot["B-1"]);
+        Assert.Equal("SUP-2", fromSnapshot["B-2"]);           // matching still ignores case
+        Assert.Null(fromSnapshot["B-9"]);                     // unknown → present-but-null → review
+        Assert.False(fromSnapshot.ContainsKey("b-2"),
+            "no line asked about 'b-2'; answering a question nobody posed is how one line's answer "
+            + "reaches another line");
+    }
+
+    [Fact]
+    public async Task ASnapshotCarryingOneSpellingTwice_TakesTheLastRow()
+    {
+        // Snapshot-ONLY, and deliberately not compared against the live path: a snapshot is a copied
+        // LIST and can hold the same spelling twice, which the live table cannot (the unique index
+        // forbids it). There is nothing to mirror, so this pins only that the choice is DEFINED —
+        // an undefined one would make a replay's output depend on row order.
+        await using var db = NewDb();
+        var (_, _, _, _) = await SeedBothPathsAsync(db, ("B-7", "IRRELEVANT"));
+
+        var duplicated = OrderIngestionService.ResolveFromSnapshot(
+            new[]
+            {
+                new EffectiveRevisionItemMapping("B-7", "REV-OLD"),
+                new EffectiveRevisionItemMapping("B-7", "REV-NEW"),
+            },
+            Lines("B-7"));
+
+        Assert.Equal("REV-NEW", duplicated["B-7"]);
     }
 
     // ── Snapshot semantics: parse mapping ──────────────────────────────────────

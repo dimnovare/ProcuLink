@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Core.Entities;
+using ProcuLink.TestSupport;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
@@ -459,13 +460,14 @@ public class S3IngressServiceTests
     // AmazonS3ClientFactory, lists + downloads a real PO file, and imports it.
     // Proves Cloudflare R2 ingest works end-to-end through the new ServiceUrl
     // column — the gap previously documented in docs/live-endpoint-test-fires.md.
-    [Fact]
+    [EnvironmentGatedFact(
+        "requires a live S3/R2 bucket holding a PO object to poll",
+        LiveTestEnvironment.EndpointOptIn,
+        "PROCULINK_LIVE_S3_BUCKET", "PROCULINK_LIVE_S3_ACCESS_KEY", "PROCULINK_LIVE_S3_SECRET")]
     [Trait("Category", "LiveEndpoint")]
     public async Task Live_S3Ingress_RealPollImportsFile()
     {
-        if (Environment.GetEnvironmentVariable("PROCULINK_LIVE_ENDPOINT_TESTS") != "1") return;
-        var bucket = Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_BUCKET") ?? "";
-        if (string.IsNullOrEmpty(bucket)) return;
+        var bucket = Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_BUCKET")!;
 
         await using var db = CreateDb();
         var orgId = Guid.NewGuid();
@@ -802,8 +804,6 @@ public class S3IngressServiceTests
             modelBuilder.Ignore<SftpIngressConfig>();
             modelBuilder.Ignore<ImportedSftpFile>();
             modelBuilder.Ignore<Buyer>();
-            modelBuilder.Ignore<ValidationRule>();
-            modelBuilder.Ignore<OutputTemplate>();
             modelBuilder.Ignore<InvoiceEntity>();
             modelBuilder.Ignore<InvoiceLineEntity>();
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();

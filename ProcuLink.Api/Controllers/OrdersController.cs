@@ -10,6 +10,7 @@ using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
@@ -50,6 +51,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IEffectiveConnectionConfigResolver? _effectiveConfig;
     private readonly IConfidenceCalibrationService? _calibration;
     private readonly ICxmlCredentialResolver?      _cxmlResolver;
+    private readonly IAcceptanceGate               _acceptanceGate;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -87,7 +89,8 @@ public sealed class OrdersController : ControllerBase
         IPoMappingService?           poMappings = null,
         IEffectiveConnectionConfigResolver? effectiveConfig = null,
         IConfidenceCalibrationService? calibration = null,
-        ICxmlCredentialResolver?       cxmlResolver = null)
+        ICxmlCredentialResolver?       cxmlResolver = null,
+        IAcceptanceGate?               acceptanceGate = null)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -127,6 +130,131 @@ public sealed class OrdersController : ControllerBase
         // constructions / unregistered hosts) every suggestion reports its RAW confidence as the
         // calibrated value with IsCalibrated=false, so behaviour is byte-identical to pre-V9.
         _calibration      = calibration;
+        // WP-17 — the server-side acceptance gate, consulted by the MANUAL SEND endpoints below
+        // (redeliver / retry-delivery). Optional in the ctor only so the ~35 positional test
+        // constructions of this class stay valid; the field is NEVER null, because an enforcement
+        // dependency that defaults to "off" is precisely the failure this work package exists to
+        // close. The concrete gate needs nothing this controller does not already hold — the same
+        // DbContext and the same ISupplierAcceptanceService — so the fallback is the real thing,
+        // not a permissive stub.
+        _acceptanceGate   = acceptanceGate ?? new AcceptanceGate(db, acceptance);
+    }
+
+    // ── WP-17 — the acceptance gate on the MANUAL SEND endpoints ──────────────
+
+    /// <summary>
+    /// Refuses a human-initiated send of an ALREADY-TRANSFORMED order when the supplier's blocking
+    /// acceptance rules say no, or returns null to let the send proceed.
+    ///
+    /// <para><b>Why the transform gate was not enough.</b> <c>Organisation.AutoDeliver</c> defaults
+    /// to FALSE, so a live order comes to rest in <c>ready_to_deliver</c> holding its artifact and
+    /// waits for a person. That person clicks "Send selected" in the inbox, which calls
+    /// <c>POST /api/orders/{id}/redeliver</c> once per row — never the transform. Gating only the
+    /// transform therefore left the busiest send path in the product wide open, including for orders
+    /// transformed long before the rule they now break was written.</para>
+    ///
+    /// <para><b>409, not 400.</b> The request is well-formed and the order is in a valid state; what
+    /// refuses it is a rule about the order's content. The body keeps the existing
+    /// <c>{ error }</c> shape every other refusal on these endpoints uses, so the inbox's bulk-send
+    /// already surfaces the sentence next to the PO with no client change, and adds the individual
+    /// blockers for a UI that wants to list them.</para>
+    ///
+    /// <para>A null decision means the gate had nothing to say about this id — which, after the
+    /// caller has already resolved the order for this org, can only be a race with a deletion. The
+    /// send proceeds and dispatch is org-scoped anyway, so nothing escapes.</para>
+    /// </summary>
+    private async Task<IActionResult?> RefusedBySupplierRulesAsync(
+        Guid orgId, Guid orderId, string stage, CancellationToken ct)
+    {
+        var decision = await _acceptanceGate.EvaluateAsync(orgId, orderId, ct);
+        if (decision is not { Blocked: true })
+            return null;
+
+        var reason = string.IsNullOrWhiteSpace(decision.Reason)
+            ? "This order wasn't sent because it doesn't meet what the supplier accepts."
+            : decision.Reason!;
+
+        _db.AuditEvents.Add(ProcuLink.Api.Services.OrderServiceShared.BuildAuditEvent(
+            orgId, orderId, AcceptanceGateAudit.BlockedAction, new
+            {
+                blockers = decision.Blockers
+                    .Select(b => new { code = b.Code, line = b.LineNumber, message = b.Message })
+                    .ToList(),
+                stage,
+            }));
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogWarning(
+            "Order {OrderId} (org {OrgId}): manual send via '{Stage}' refused — {Count} blocking supplier acceptance rule(s).",
+            orderId, orgId, stage, decision.Blockers.Count);
+
+        return Conflict(new
+        {
+            error    = reason,
+            blockers = decision.Blockers
+                .Select(b => new { code = b.Code, line = b.LineNumber, message = b.Message })
+                .ToList(),
+        });
+    }
+
+    // ── WP-23 — the resolve status guard ─────────────────────────────────────
+
+    /// <summary>
+    /// Refuses an operator-issued correction when the order sits in a status the status recompute
+    /// would DESTROY something from, or returns null to let it proceed.
+    ///
+    /// <para><b>What this is not.</b> It is not a transition rule. c61fe30 settled that question
+    /// deliberately, adding <c>unrouted → ready|pending_review</c> and
+    /// <c>delivering → ready|pending_review</c> to both status maps because the write was real and
+    /// the maps were wrong — and NAMED these two from-states as wanting an endpoint guard, "which is
+    /// a product decision". This is that decision, and the two concepts stay apart:
+    /// <see cref="OrderStatusMachine.Transitions"/> answers "may an order in X ever reach Y?"; this
+    /// answers "may a PERSON issue a correction while the order is in X?". Refusing here does not
+    /// make the transition impossible, so the edges must not be pruned on the strength of it —
+    /// <c>OrderStatusMachineTests.EveryResolveHeldStatus_KeepsBothRecomputeEdges</c> fails if anyone
+    /// tries.</para>
+    ///
+    /// <para><b>Why both recompute endpoints call it.</b>
+    /// <c>OrderResolutionService.ResolveAsync</c> (:242) and <c>AcceptAiSuggestionsAsync</c> (:393)
+    /// end with the identical unconditional
+    /// <c>Status = Lines.Any(NeedsReview) ? pending_review : ready</c>. The hole is the WRITE, not
+    /// the URL — and the accept-AI recompute runs even when nothing is accepted (its own comment at
+    /// :358: "zero suggestions over zero lines still writes 'ready'"), so gating only
+    /// <c>/resolve</c> would leave an <c>unrouted</c> order one unauthenticated-by-status POST away
+    /// from being permanently unassignable. One helper, two call sites, one canonical set.</para>
+    ///
+    /// <para><b>409, not 400.</b> The request is well-formed; what refuses it is the order's current
+    /// state, and that state changes — "wait, then retry" is a true instruction here, which is what
+    /// 409 means and 400 does not. It also keeps this refusal distinct from the terminal one a layer
+    /// down (<c>OrderResolutionService.IsFinished</c> → 400 for <c>failed</c>), whose verdict is
+    /// permanent. The two sets are asserted disjoint so the two answers cannot merge.</para>
+    ///
+    /// <para>Org-scoped, and an unknown/cross-tenant id returns null rather than a 409: answering
+    /// 409 for a row this org cannot see would confirm it exists. Those fall through to the normal
+    /// not-found path.</para>
+    /// </summary>
+    private async Task<IActionResult?> RefusedByResolveHoldAsync(Guid orderId, CancellationToken ct)
+    {
+        var status = await _db.PurchaseOrders.AsNoTracking()
+            .Where(o => o.Id == orderId && o.OrgId == _tenant.OrganisationId)
+            .Select(o => o.Status)
+            .FirstOrDefaultAsync(ct);
+
+        // Derived from the canonical set, never a literal — the same discipline the five
+        // delivery-claim lists were centralised under after drifting apart four times.
+        if (status is null || !OrderStatusMachine.ResolveHeldFrom.Contains(status))
+            return null;
+
+        _logger.LogInformation(
+            "Order {OrderId} (org {OrgId}): correction refused — the order is in '{Status}', which the " +
+            "status recompute would overwrite destructively.",
+            orderId, _tenant.OrganisationId, status);
+
+        return Conflict(new
+        {
+            error  = OrderStatusMachine.ResolveHoldMessage(status),
+            status,
+        });
     }
 
     // ── POST /api/orders/upload ───────────────────────────────────────────────
@@ -343,6 +471,8 @@ public sealed class OrdersController : ControllerBase
 
         var entity = result.Value!;
         string? errorMessage = null;
+        string? failureCause = null;
+        int?    retryAfterSeconds = null;
 
         // delivery_unconfirmed included: a parked order must surface its explanation ("we sent this
         // but never learned whether it arrived — send again or mark delivered"), or the operator
@@ -385,31 +515,57 @@ public sealed class OrdersController : ControllerBase
                 catch { /* malformed payload — ignore */ }
             }
 
+            // ONE newest-attempt read, shared by every consumer below. It REPLACES the two
+            // conditional single-column lookups this ladder used to run (one for the
+            // failed/dead-letter/park trio, one for rejected_by_supplier), so a delivery-failure
+            // order costs at most ONE delivery-attempt query here — the same ceiling as before,
+            // now paid once rather than per branch. Skipped entirely for the non-delivery failure
+            // statuses (failed / transform_failed), which have no attempt to read.
+            var newestAttempt = entity.Status is "delivery_failed" or "delivery_dead_letter"
+                                              or "rejected_by_supplier"
+                                              or OrderStatusConstants.DeliveryUnconfirmed
+                ? await _db.DeliveryAttempts
+                    .AsNoTracking()
+                    .Where(a => a.OrderId == id && a.OrgId == _tenant.OrganisationId)
+                    .OrderByDescending(a => a.AttemptedAt)
+                    .Select(a => new
+                    {
+                        a.Status,
+                        a.ErrorMessage,
+                        a.RejectionReason,
+                        a.ResponseBody,
+                        a.ResponseCode,
+                        a.RetryAfterSeconds,
+                    })
+                    .FirstOrDefaultAsync(ct)
+                : null;
+
             // The branch that actually carries the park sentence: ParkUnconfirmedAsync writes it to
             // attempt.ErrorMessage. For a parked order this is the ONLY path that can reach it —
             // hence the skip above rather than a mere ordering preference.
             if (errorMessage is null && entity.Status is "delivery_failed" or "delivery_dead_letter"
                                                       or OrderStatusConstants.DeliveryUnconfirmed)
             {
-                errorMessage = await _db.DeliveryAttempts
-                    .AsNoTracking()
-                    .Where(a => a.OrderId == id && a.OrgId == _tenant.OrganisationId)
-                    .OrderByDescending(a => a.AttemptedAt)
-                    .Select(a => a.ErrorMessage)
-                    .FirstOrDefaultAsync(ct);
+                errorMessage = newestAttempt?.ErrorMessage;
             }
 
             if (errorMessage is null && entity.Status == "rejected_by_supplier")
             {
-                errorMessage = await _db.DeliveryAttempts
-                    .AsNoTracking()
-                    .Where(a => a.OrderId == id && a.OrgId == _tenant.OrganisationId)
-                    .OrderByDescending(a => a.AttemptedAt)
-                    .Select(a =>
-                        a.RejectionReason ??
-                        a.ResponseBody ??
-                        a.ErrorMessage)
-                    .FirstOrDefaultAsync(ct);
+                errorMessage = newestAttempt?.RejectionReason
+                            ?? newestAttempt?.ResponseBody
+                            ?? newestAttempt?.ErrorMessage;
+            }
+
+            // …and the same verdict as something a client can BRANCH on. Derived from the stored
+            // columns by the same table that classified the response live, so the sentence above and
+            // the slug here can never describe two different failures. Only a FAILED attempt carries
+            // a cause: a park ('unconfirmed') is an unknown outcome, not a supplier verdict, and
+            // asking the table about it would answer "unreachable" for a response nobody observed.
+            if (newestAttempt is { Status: DeliveryAttempt.StatusFailed })
+            {
+                failureCause = SupplierResponseClassification.CauseFor(
+                    newestAttempt.ResponseCode, newestAttempt.RejectionReason, newestAttempt.ResponseBody);
+                retryAfterSeconds = newestAttempt.RetryAfterSeconds;
             }
         }
 
@@ -422,7 +578,7 @@ public sealed class OrdersController : ControllerBase
         // they mean anything, and a routed order pays nothing for the lookup.
         var suggestions = await LoadSupplierSuggestionsAsync(entity, ct);
 
-        return Ok(MapToDto(entity, errorMessage, calibrations, suggestions));
+        return Ok(MapToDto(entity, errorMessage, calibrations, suggestions, failureCause, retryAfterSeconds));
     }
 
     /// <summary>
@@ -484,11 +640,19 @@ public sealed class OrdersController : ControllerBase
     [ProducesResponseType(typeof(OrderDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Resolve(
         Guid id,
         [FromBody] ResolveRequest request,
         CancellationToken ct)
     {
+        // WP-23 — before the body, because the answer does not depend on it. A header-only resolve
+        // is the shape that made 'unrouted' a real hole rather than a theoretical one: this endpoint
+        // accepts a body with no line resolutions at all, so {"poNumber":"X"} was enough to recompute
+        // an order out of the routing hold with SupplierId still null.
+        if (await RefusedByResolveHoldAsync(id, ct) is { } held)
+            return held;
+
         // A resolve must do something: either resolve at least one line OR correct a
         // header field (order date / buyer / currency / PO number / supplier name).
         // Header-only edits are valid.
@@ -892,39 +1056,46 @@ public sealed class OrdersController : ControllerBase
                 order.Supplier = supplier;
         }
 
+        // ── The format this preview is FOR ────────────────────────────────────────
+        // Resolved BEFORE the tree modes because a structured tree only DRIVES the document when it
+        // renders THIS format — the same gate OrderTransformService.TreeDrivesTheDocument applies at
+        // delivery (the bytes come from tree.Format, but artifact.Format, the delivered content type
+        // and the file name all come from the connection's). Without mirroring it here the workshop
+        // rendered a promoted JSON layout while delivery correctly shipped the connection's CSV
+        // document: preview ≠ delivered bytes, the one thing this endpoint promises not to do.
+        //
+        // PARSE only. The unknown-format 400 stays in the field-by-field mode below, so a tree or
+        // template preview with an odd `format` behaves exactly as it did before (null = no opinion,
+        // and the tree still renders).
+        var effectiveConfig = _effectiveConfig is null
+            ? EffectiveConnectionConfig.Live
+            : await _effectiveConfig.ResolveAsync(_tenant.OrganisationId, order.ConnectionRevisionId, ct);
+
+        var previewFormat = ParsePreviewFormat(format);
+        if (!honorFormat
+            && effectiveConfig.IsRevision
+            && Enum.TryParse<OutputFormat>(effectiveConfig.OutputFormat, ignoreCase: true, out var pinnedPreviewFormat)
+            && MappedTransformService.SupportsOverrideFormat(pinnedPreviewFormat))
+            previewFormat = pinnedPreviewFormat;
+
         // ── Mode 0: STRUCTURED OUTPUT TREE (Phase B — HIGHEST precedence) ─────────
         // When the effective override carries an OutputNode tree, render the whole document from it via
         // the SAME emitter the delivery path uses (same value machinery, source tokens, and catalog), so
         // the preview equals the delivered bytes. Errors surface as { ok:false, error } at HTTP 200.
-        if (effectiveOverride?.OutputTree is not null)
-        {
-            try
-            {
-                var treeTokens = ProcuLink.Transform.Output.SourceTokenSerialization
-                    .FromTokensJson(order.SourceCapture?.TokensJson);
-                var treeCatalog = await ProcuLink.Api.Services.OrderServiceShared.BuildCatalogLookupAsync(
-                    _db, _tenant.OrganisationId, order.SupplierId ?? Guid.Empty, ct);
-                var treeResult = new OutputTemplateEmitter().Emit(
-                    effectiveOverride.OutputTree, order, effectiveOverride, treeTokens, treeCatalog);
-                using var treeReader = new StreamReader(treeResult.Content);
-                var treeContent = await treeReader.ReadToEndAsync(ct);
-                return Ok(new
-                {
-                    format      = effectiveOverride.OutputTree.Format.ToString(),
-                    contentType = treeResult.ContentType,
-                    content     = treeContent,
-                });
-            }
-            catch (TransformValidationException ex)
-            {
-                return Ok(new { ok = false, error = ex.Message }); // unresolved order — show inline
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Order {OrderId}: OutputTree preview failed.", id);
-                return Ok(new { ok = false, error = $"Output preview failed: {ex.Message}" });
-            }
-        }
+        //
+        // WS-12 exception, mirrored from OrderTransformService and asked of the SAME shared predicate:
+        // a tree the emitter cannot render (cXML/X12 carry only the connection's sender/receiver
+        // identity; UBL/Peppol/X12-850/EDIFACT carry nothing) is NOT handed to the emitter. Doing so
+        // produced an { ok:false } error for an order that delivers perfectly well, so it falls through
+        // to the field-by-field path below exactly as delivery does.
+        //
+        // The format gate mirrors delivery exactly (see `previewFormat` above): a layout designed for
+        // another format falls through to the field-by-field path here, because that is what delivery
+        // does with it. An unparseable `format` means "no opinion" and does not drop the layout.
+        if (effectiveOverride?.OutputTree is { } perOrderTree
+            && OrderMappingOverrideReader.CanRenderTree(perOrderTree)
+            && (previewFormat is null || perOrderTree.Format == previewFormat))
+            return await RenderTreePreviewAsync(perOrderTree, order, effectiveOverride, id, ct);
 
         // ── Mode 1: WHOLE-DOCUMENT TEMPLATE (takes precedence) ────────────────────
         // When the effective override carries a usable template, render it. A compile/render error is
@@ -948,10 +1119,6 @@ public sealed class OrdersController : ControllerBase
         // Read-parity (launch batch 7 follow-up): resolve the pinned revision's bundle ONCE through
         // the SAME resolver the transform uses. Live bundle when the flag is off / the order is
         // unpinned / the pin is orphaned / no resolver — byte-identical to the pre-read-parity path.
-        var effectiveConfig = _effectiveConfig is null
-            ? EffectiveConnectionConfig.Live
-            : await _effectiveConfig.ResolveAsync(_tenant.OrganisationId, order.ConnectionRevisionId, ct);
-
         // Config fallback — parity with OrderTransformService when neither the draft nor the stored
         // override carries a USABLE output mapping:
         //   • PINNED (flag on): the pinned revision's output snapshot drives delivery, and the live
@@ -965,6 +1132,20 @@ public sealed class OrdersController : ControllerBase
                 ? TryBuildPinnedRevisionOverride(effectiveConfig, effectiveOverride, id)
                 : await TryBuildSupplierPromotedOverrideAsync(order.SupplierId ?? Guid.Empty, effectiveOverride, ct);
 
+        // ── Mode 0b: a PROMOTED / PINNED structured tree (WP-12) ──────────────────
+        // The fallback above can carry a tree as well as a flat mapping, and when it does the tree is
+        // what delivery renders — so the preview must render it too, through the SAME emitter. Without
+        // this the workshop showed the FIXED document (or 400'd for want of a body) while delivery
+        // shipped the designed layout: the exact preview ≠ delivered bytes this endpoint promises not
+        // to do. A cXML/X12 tree is excluded for the same WS-12 reason as Mode 0.
+        // The per-order tree ALWAYS wins (it reached here only by being unrenderable, where the fixed
+        // transformer owns the document) — so a promoted tree is never adopted over one.
+        if (effectiveOverride?.OutputTree is null
+            && configFallback?.OutputTree is { } fallbackTree
+            && OrderMappingOverrideReader.CanRenderTree(fallbackTree)
+            && (previewFormat is null || fallbackTree.Format == previewFormat))
+            return await RenderTreePreviewAsync(fallbackTree, order, configFallback, id, ct);
+
         // This path needs an override. Preserve the original contract: a request without a body (and
         // with no stored template/override AND no revision/supplier-promoted output mapping) still
         // requires a body for the field-mapping preview.
@@ -974,16 +1155,7 @@ public sealed class OrdersController : ControllerBase
         var fieldOverride = configFallback ?? effectiveOverride ?? request!;
 
         // Preview supports every entity-based output format an override can influence.
-        var fmt = (format?.Trim().ToLowerInvariant()) switch
-        {
-            "csv"  => OutputFormat.Csv,
-            "json" => OutputFormat.Json,
-            "xml"  => OutputFormat.Xml,
-            "cxml" => OutputFormat.CXml,
-            "ubl"  => OutputFormat.Ubl,
-            "x12"  => OutputFormat.X12,
-            _      => (OutputFormat?)null,
-        };
+        var fmt = ParsePreviewFormat(format);
         if (fmt is null || !MappedTransformService.SupportsOverrideFormat(fmt.Value))
             return BadRequest(new { error = "Override preview supports csv, json, xml, cxml, ubl, and x12." });
 
@@ -1123,6 +1295,65 @@ public sealed class OrdersController : ControllerBase
         }
     }
 
+
+    /// <summary>
+    /// The one place the <c>format</c> query string is turned into an <see cref="OutputFormat"/>.
+    /// Null = unrecognised, which the tree modes read as "no opinion" and the field-by-field mode
+    /// turns into a 400 (exactly as before). Spelled once so the tree gate and the field-by-field
+    /// path can never disagree about what the caller asked for.
+    /// </summary>
+    private static OutputFormat? ParsePreviewFormat(string? format) => (format?.Trim().ToLowerInvariant()) switch
+    {
+        "csv"  => OutputFormat.Csv,
+        "json" => OutputFormat.Json,
+        "xml"  => OutputFormat.Xml,
+        "cxml" => OutputFormat.CXml,
+        "ubl"  => OutputFormat.Ubl,
+        "x12"  => OutputFormat.X12,
+        _      => null,
+    };
+
+    /// <summary>
+    /// Renders an <see cref="OutputNodeTemplate"/> through the SAME emitter, source tokens and catalog
+    /// the delivery path uses, so the preview equals the delivered bytes. ONE implementation for both
+    /// tree sources — the order's own override and the promoted / pinned fallback — because two copies
+    /// is exactly how the two drifted apart. Errors surface as <c>{ ok:false, error }</c> at HTTP 200
+    /// so the editor shows them inline; never a 400/500.
+    /// </summary>
+    private async Task<IActionResult> RenderTreePreviewAsync(
+        OutputNodeTemplate tree,
+        PurchaseOrderEntity order,
+        OrderMappingOverride @override,
+        Guid orderId,
+        CancellationToken ct)
+    {
+        try
+        {
+            var treeTokens = ProcuLink.Transform.Output.SourceTokenSerialization
+                .FromTokensJson(order.SourceCapture?.TokensJson);
+            var treeCatalog = await ProcuLink.Api.Services.OrderServiceShared.BuildCatalogLookupAsync(
+                _db, _tenant.OrganisationId, order.SupplierId ?? Guid.Empty, ct);
+            var treeResult = new OutputTemplateEmitter().Emit(tree, order, @override, treeTokens, treeCatalog);
+            using var treeReader = new StreamReader(treeResult.Content);
+            var treeContent = await treeReader.ReadToEndAsync(ct);
+            return Ok(new
+            {
+                format      = tree.Format.ToString(),
+                contentType = treeResult.ContentType,
+                content     = treeContent,
+            });
+        }
+        catch (TransformValidationException ex)
+        {
+            return Ok(new { ok = false, error = ex.Message }); // unresolved order — show inline
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Order {OrderId}: OutputTree preview failed.", orderId);
+            return Ok(new { ok = false, error = $"Output preview failed: {ex.Message}" });
+        }
+    }
+
     /// <summary>
     /// Preview-side twin of <c>OrderTransformService.TryReadSupplierPromotedOutputAsync</c> (launch
     /// batch 4A): reads the supplier's reusable <see cref="PoMappingConfig"/> and wraps a USABLE
@@ -1139,13 +1370,19 @@ public sealed class OrdersController : ControllerBase
         try
         {
             var supplierConfig = await _poMappings.GetAsync(_tenant.OrganisationId, supplierId, ct);
-            if (!OrderMappingOverrideReader.HasUsablePromotedOutput(supplierConfig))
+
+            // WP-12: the promoted structured TREE is carried too. Delivery renders it, so a preview
+            // that only ever knew about the flat mapping showed a document the supplier never receives.
+            var hasFlat = OrderMappingOverrideReader.HasUsablePromotedOutput(supplierConfig);
+            var hasTree = OrderMappingOverrideReader.HasUsablePromotedOutputTree(supplierConfig);
+            if (!hasFlat && !hasTree)
                 return null;
 
             var synthetic = new OrderMappingOverride
             {
                 CustomFields = effectiveOverride?.CustomFields ?? new List<CustomField>(),
-                Output       = supplierConfig!.Output,
+                Output       = hasFlat ? supplierConfig!.Output     : null,
+                OutputTree   = hasTree ? supplierConfig!.OutputTree : null,
             };
 
             return ValidateOverrideManipulators(synthetic) is null ? synthetic : null;
@@ -1173,8 +1410,12 @@ public sealed class OrdersController : ControllerBase
     private OrderMappingOverride? TryBuildPinnedRevisionOverride(
         EffectiveConnectionConfig effective, OrderMappingOverride? effectiveOverride, Guid orderId)
     {
+        // WP-12: both halves of the pinned bundle — the flat snapshot in output_mapping_json AND the
+        // structured tree inside input_mapping_json — exactly as the transform reads them.
         var synthetic = ReplayService.BuildRevisionOverride(
-            effectiveOverride, ReplayService.DeserializeOutputConfig(effective.OutputMappingJson));
+            effectiveOverride,
+            ReplayService.DeserializeOutputConfig(effective.OutputMappingJson),
+            ReplayService.DeserializeSnapshotTree(effective.InputMappingJson));
         if (synthetic is null)
             return null;
 
@@ -1347,10 +1588,11 @@ public sealed class OrdersController : ControllerBase
     /// Returns immediately with { status: "transforming" }.
     /// Poll GET /api/orders/{id}/status until status changes.
     /// All lines must have NeedsReview = false — returns 422 otherwise.
-    /// Only a 'ready' order — or one whose last transform FAILED — can start a transform (atomic
-    /// ready|transform_failed → transforming claim); an in-flight order returns 202, any other state
-    /// returns 409. Accepting <c>transform_failed</c> is what makes this endpoint the recovery door
-    /// after a broken template/mapping is fixed.
+    /// Only an order in <see cref="OrderStatusMachine.TransformableFrom"/> can start a transform —
+    /// 'ready', one whose last transform FAILED, or one the supplier REJECTED; an in-flight order
+    /// returns 202, any other state returns 409. Accepting <c>transform_failed</c> and
+    /// <c>rejected_by_supplier</c> is what makes this endpoint the recovery door after a broken
+    /// template/mapping is fixed, and after a supplier refusal is corrected.
     /// </summary>
     [HttpPost("{id:guid}/transform")]
     [EnableRateLimiting("transform")]
@@ -1433,8 +1675,18 @@ public sealed class OrdersController : ControllerBase
         // (OrderMappingOverrideService's MV-1 reset only fires for post-artifact states, and a failed
         // transform produced no artifact), so if this claim stayed keyed on 'ready' alone the order
         // would answer 409 forever — permanently stuck, which is strictly worse than the silent
-        // strand transform_failed exists to expose. Kept in lockstep with the transform claim in
-        // OrderTransformService.
+        // strand transform_failed exists to expose.
+        //
+        // rejected_by_supplier joins it for the same reason (WP-19): a genuine business rejection is
+        // cured by a CORRECTED document, and this endpoint is how one gets produced. Before that the
+        // status had no exit at all.
+        //
+        // The status list is OrderStatusMachine.TransformableFrom, NOT a literal. This claim's own
+        // comment used to say "kept in lockstep with the transform claim in OrderTransformService" —
+        // which is the sentence a second hand-written copy of a rule writes just before it drifts,
+        // and is how five delivery-claim lists drifted apart four times. The two are now one
+        // declaration with the endpoint's deliberate delta (it excludes 'transforming' so a second
+        // click answers 202 instead of racing) asserted in OrderStatusMachineTests.
         //
         // CancellationToken.None (NOT the request ct) on purpose: there is no await between
         // this committed claim and the synchronous Enqueue below, so a client disconnect can
@@ -1443,10 +1695,10 @@ public sealed class OrdersController : ControllerBase
         // without enqueuing — stranding the order in 'transforming' with no job. Making the
         // claim uninterruptible means it either fully happens (→ we enqueue) or never started
         // (→ the order keeps its prior status); the rare strand window is closed.
+        var transformableStatuses = OrderStatusMachine.TransformableFrom.ToArray();
         var claimed = await _db.PurchaseOrders
             .Where(o => o.Id == id && o.OrgId == _tenant.OrganisationId
-                     && (o.Status == OrderStatusConstants.Ready
-                      || o.Status == OrderStatusConstants.TransformFailed))
+                     && transformableStatuses.Contains(o.Status))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(o => o.Status, OrderStatusConstants.Transforming)
                 .SetProperty(o => o.UpdatedAt, DateTime.UtcNow), CancellationToken.None);
@@ -1464,8 +1716,8 @@ public sealed class OrdersController : ControllerBase
             return Conflict(new
             {
                 error = $"Order is not ready to transform (status '{currentStatus}'). " +
-                        "Only a 'ready' order (or one whose last transform failed) can start a transform; " +
-                        "re-resolve its lines to return it to 'ready'."
+                        "A transform can start from a ready order, one whose last transform failed, " +
+                        "or one the supplier rejected; re-resolve its lines to return it to 'ready'."
             });
         }
 
@@ -1578,12 +1830,20 @@ public sealed class OrdersController : ControllerBase
     [EnableRateLimiting("ai")]
     [ProducesResponseType(typeof(AcceptAiSuggestionsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> AcceptAiSuggestions(
         Guid id,
         [FromQuery] double minConfidence = 0.85,
         CancellationToken ct = default)
     {
+        // WP-23 — the same guard as /resolve, because this is the same writer reached by a different
+        // door: AcceptAiSuggestionsAsync (:393) ends with the identical status recompute, and it runs
+        // even when nothing is accepted. Guarding /resolve alone would leave both named holes open
+        // here, where the endpoint has never validated anything at all.
+        if (await RefusedByResolveHoldAsync(id, ct) is { } held)
+            return held;
+
         var result = await _orders.AcceptAiSuggestionsAsync(
             _tenant.OrganisationId, id, minConfidence, ct);
 
@@ -1816,6 +2076,7 @@ public sealed class OrdersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Redeliver(Guid id, CancellationToken ct)
     {
         var orgId     = _tenant.OrganisationId;
@@ -1844,6 +2105,13 @@ public sealed class OrdersController : ControllerBase
 
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before redelivering." });
+
+        // WP-17 — this is the inbox's bulk "Send selected" and the parked order's "Send again": a
+        // person deciding, now, to put this document in front of the supplier. The artifact may have
+        // been produced before the rule that now refuses it existed, so the transform-time answer is
+        // not this decision's answer. Checked BEFORE the enqueue, so a refusal sends nothing.
+        if (await RefusedBySupplierRulesAsync(orgId, id, "redeliver", ct) is { } refusal)
+            return refusal;
 
         // B2 (lost-order): DO NOT pre-flip to 'delivering'. The order stays in its claimable status
         // so the enqueued job's atomic claim succeeds; a FRESH 'delivering' row is REJECTED by the
@@ -1889,7 +2157,13 @@ public sealed class OrdersController : ControllerBase
 
         var order = getResult.Value!;
 
-        if (order.Status != OrderStatusConstants.DeliveryUnconfirmed)
+        // Both this gate and the TOCTOU re-check below derive from the SAME named set rather than
+        // repeating a status literal: OrderStatusMachine.ManuallyDeliverableFrom is the canonical
+        // "an operator may settle this as delivered" rule, and it is what
+        // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter reads to prove that
+        // every X -> delivered edge in the two transition maps has a writer. Two hand-written copies
+        // of one rule is the drift class that bit the delivery-claim gates four times.
+        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(order.Status))
             return BadRequest(new
             {
                 error = $"Only an order whose delivery is unconfirmed can be marked delivered "
@@ -1912,7 +2186,7 @@ public sealed class OrdersController : ControllerBase
         // no concurrency token, so re-checking the TRACKED row here is what stops this endpoint from
         // silently overwriting an in-flight send back to 'delivered' — the order moved under us, so
         // the operator's assertion (made against the stale snapshot) no longer applies.
-        if (tracked.Status != OrderStatusConstants.DeliveryUnconfirmed)
+        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(tracked.Status))
             return BadRequest(new
             {
                 error = $"Only an order whose delivery is unconfirmed can be marked delivered "
@@ -1977,8 +2251,8 @@ public sealed class OrdersController : ControllerBase
         // parked this order) stays open forever, even though the operator just confirmed the
         // supplier received it. Called AFTER the save above commits: reconcile reads the order's
         // CURRENT status back from the tracked row, so it must see 'delivered', not the
-        // 'delivery_unconfirmed' this write just replaced. Mirrors WebhookIngressController's
-        // SafeReconcileExceptionsAsync for the same delivered transition arriving via callback.
+        // 'delivery_unconfirmed' this write just replaced. Same contract as
+        // OrderServiceShared.SafeReconcileExceptionsAsync for the same delivered transition.
         await SafeReconcileExceptionsAsync(orgId, id, ct);
 
         _logger.LogInformation(
@@ -1995,7 +2269,7 @@ public sealed class OrdersController : ControllerBase
     /// reconcile error must not turn the operator's SUCCESSFUL confirmation into a 500 — the
     /// operator did the one correct thing (confirmed with the supplier), and an observability-surface
     /// fault must not be allowed to contradict that. Same contract as
-    /// WebhookIngressController's private helper of the same name / OrderServiceShared.SafeReconcileExceptionsAsync.
+    /// OrderServiceShared.SafeReconcileExceptionsAsync.
     /// </summary>
     private async Task SafeReconcileExceptionsAsync(Guid orgId, Guid orderId, CancellationToken ct)
     {
@@ -2024,6 +2298,7 @@ public sealed class OrdersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> RetryDelivery(Guid id, CancellationToken ct)
     {
         var orgId     = _tenant.OrganisationId;
@@ -2059,6 +2334,13 @@ public sealed class OrdersController : ControllerBase
 
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before retrying delivery." });
+
+        // WP-17 — "Retry now" is the same human decision as Redeliver, one status along, so it gets
+        // the same answer. (The AUTOMATIC backoff queue this endpoint seeds is deliberately NOT
+        // gated: it continues a dispatch that already started and may already have reached the
+        // supplier — see IAcceptanceGate.)
+        if (await RefusedBySupplierRulesAsync(orgId, id, "retry-delivery", ct) is { } refusal)
+            return refusal;
 
         // B2 (lost-order): DO NOT pre-flip to 'delivering'. RetryDeliveryAsync's atomic claim only
         // accepts OrderStatusMachine.ClaimableForRetryFrom or a STALE 'delivering' (UpdatedAt older
@@ -2431,7 +2713,12 @@ public sealed class OrdersController : ControllerBase
         PurchaseOrderEntity e,
         string? errorMessage = null,
         IReadOnlyDictionary<int, ProcuLink.Core.Services.CalibrationResult>? calibrations = null,
-        IReadOnlyList<SupplierSuggestionDto>? supplierSuggestions = null) => new(
+        IReadOnlyList<SupplierSuggestionDto>? supplierSuggestions = null,
+        // WP-19 recovery — the delivery failure as something a client can branch on. Resolved by
+        // Get() alongside errorMessage; every other MapToDto call site is a non-delivery response
+        // (create / resolve / assign-supplier) where there is no attempt to read and null is right.
+        string? failureCause = null,
+        int? retryAfterSeconds = null) => new(
         Id:            e.Id,
         PoNumber:      e.PoNumber,
         // Phase-0 routing: SupplierId is nullable on the entity; an unrouted order has none yet.
@@ -2469,6 +2756,8 @@ public sealed class OrdersController : ControllerBase
             .ToList(),
         BuyerName:    ExtractBuyerName(e),
         ErrorMessage: errorMessage,
+        FailureCause:      failureCause,
+        RetryAfterSeconds: retryAfterSeconds,
         // Phase 4 header enrichment. DocumentSupplierName is the extracted (as-printed)
         // supplier name — distinct from the resolved SupplierName (e.Supplier.Name) above.
         SubTotal:             e.SubTotal,
@@ -2499,7 +2788,9 @@ public sealed class OrdersController : ControllerBase
         ContactName:          e.ContactName,
         ContactEmail:         e.ContactEmail,
         ContactPhone:         e.ContactPhone,
-        SupplierSuggestions:  supplierSuggestions
+        SupplierSuggestions:  supplierSuggestions,
+        // WP-27: the review screen's "practice order" framing reads this, not a query parameter.
+        IsSample:             e.IsSample
     );
 
     // ── Supplier auto-detect: read + decision recording ───────────────────────

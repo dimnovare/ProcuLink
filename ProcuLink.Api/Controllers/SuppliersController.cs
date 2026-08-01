@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -406,17 +406,31 @@ public class SuppliersController : ControllerBase
     [HttpPut("{supplierId:guid}/mappings/{mappingId:guid}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> UpdateMapping(
         Guid supplierId,
         Guid mappingId,
         [FromBody] UpdateMappingRequest request,
         CancellationToken ct)
     {
-        var orgId   = _tenant.OrganisationId;
+        var orgId = _tenant.OrganisationId;
+
+        // UpdateByIdAsync returns null for BOTH "no such mapping" and "the new code is already
+        // mapped under another spelling". They are different answers to the operator, so the two
+        // cases are separated here rather than both surfacing as a bare 404.
+        var exists = await _db.ItemMappings
+            .AsNoTracking()
+            .AnyAsync(m => m.Id == mappingId && m.OrgId == orgId, ct);
+
         var mapping = await _mappingService.UpdateByIdAsync(
             orgId, mappingId,
             request.BuyerItemCode, request.SupplierItemCode,
             MappingSource.Manual, ct);
+
+        if (mapping is null && exists)
+            return Conflict(
+                $"'{request.BuyerItemCode.Trim()}' is already mapped for this supplier "
+                + "(item codes ignore capitalisation). Edit that mapping instead.");
 
         if (mapping is null) return NotFound();
 
@@ -436,6 +450,7 @@ public class SuppliersController : ControllerBase
     [HttpPost("{supplierId:guid}/mappings/import")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> ImportMappings(
         Guid supplierId,
         IFormFile file,
@@ -444,6 +459,20 @@ public class SuppliersController : ControllerBase
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
 
         var orgId   = _tenant.OrganisationId;
+
+        // Bulk mapping import is sold from Operations up; it was declared in the gate table
+        // and enforced nowhere, so a Pilot org could bulk-load mappings one tier below the
+        // plan that advertises it. Editing mappings ONE AT A TIME stays open on every plan —
+        // the differentiator is the bulk lever, not the ability to map at all.
+        if (!await _billing.HasFeatureAsync(orgId, BillingFeature.BulkMapping, ct))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = BillingGateErrors.RequiresPlan("bulk_mapping_import", BillingFeature.BulkMapping),
+                upgradeUrl = "/settings",
+            });
+        }
+
         var created = 0;
         var updated = 0;
 
@@ -463,20 +492,23 @@ public class SuppliersController : ControllerBase
             var supplierCode = parts[1].Trim().Trim('"');
             if (string.IsNullOrEmpty(buyerCode) || string.IsNullOrEmpty(supplierCode)) continue;
 
-            var existing = await _db.ItemMappings
-                .Where(m => m.OrgId == orgId && m.SupplierId == supplierId && m.BuyerItemCode == buyerCode)
-                .FirstOrDefaultAsync(ct);
+            // The created/updated counters must use the SAME case rule the write itself uses.
+            // With an ordinal `==` precheck here, importing "b-1" while "B-1" was already mapped
+            // reported "created: 1" while the service correctly updated the existing row — an
+            // honest write with a lying receipt. `lower()` here matches ItemCodeComparison.Key.
+            var folded = buyerCode.ToLower();
+            var existed = await _db.ItemMappings
+                .AsNoTracking()
+                .AnyAsync(m => m.OrgId == orgId
+                            && m.SupplierId == supplierId
+                            && (m.BuyerItemCode == buyerCode || m.BuyerItemCode.ToLower() == folded), ct);
 
-            if (existing is null)
-            {
-                await _mappingService.CreateAsync(orgId, supplierId, buyerCode, supplierCode, MappingSource.Imported, ct);
-                created++;
-            }
-            else
-            {
-                await _mappingService.UpdateByIdAsync(orgId, existing.Id, buyerCode, supplierCode, MappingSource.Imported, ct);
-                updated++;
-            }
+            // CreateAsync applies the shared rule itself (updates an existing case-variant row
+            // rather than inserting a twin), so ONE call covers both branches.
+            await _mappingService.CreateAsync(
+                orgId, supplierId, buyerCode, supplierCode, MappingSource.Imported, ct);
+
+            if (existed) updated++; else created++;
         }
 
         return Ok(new { created, updated });
@@ -497,14 +529,75 @@ public class SuppliersController : ControllerBase
 
     // ── PUT /api/suppliers/{id}/po-mapping ────────────────────────────────────
 
+    /// <summary>
+    /// Saves the supplier's PO mapping. The body is the mapping EDITOR's view of the config — the
+    /// frontend type declares only <c>hasHeaderRecord / separator / header / lines</c> — so members it
+    /// does not know about are PRESERVED rather than rebuilt away (see
+    /// <see cref="PreserveUnsentMembers"/>). Before that, one ordinary save from the mapping editor
+    /// silently deleted the output layout a promote had just stored.
+    /// </summary>
     [HttpPut("{id:guid}/po-mapping")]
     public async Task<IActionResult> UpsertPoMapping(Guid id, [FromBody] PoMappingConfig config, CancellationToken ct)
     {
         var orgId = _tenant.OrganisationId;
         var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id && s.DeletedAt == null).FirstOrDefaultAsync(ct);
         if (supplier is null) return NotFound();
-        var saved = await _poMappingService.UpsertAsync(orgId, id, config, ct);
+        var merged = await PreserveUnsentMembers(orgId, id, config, ct);
+        var saved = await _poMappingService.UpsertAsync(orgId, id, merged, ct);
         return Ok(saved);
+    }
+
+    /// <summary>
+    /// Carries forward the promoted OUTPUT members (<see cref="PoMappingConfig.Output"/> and
+    /// <see cref="PoMappingConfig.OutputTree"/>) when the incoming body does not carry them.
+    ///
+    /// <para>Same defect class as the delivery-config whitelist fixed in FE #43: a partial body that
+    /// is bound into a full record and written wholesale DELETES every member the sender had never
+    /// heard of. The frontend's <c>PoMappingConfig</c> TypeScript type carries four members; the
+    /// server record carries six. Every save from the mapping editor — and every apply-template —
+    /// therefore wiped the supplier's promoted output.</para>
+    ///
+    /// <para>A body that DOES carry a value still replaces it, so the layout stays editable. Clearing
+    /// one is an explicit act: <c>DELETE {id}/po-mapping/output-tree</c>. Model binding cannot tell
+    /// "absent" from "null", and between the two readings the safe default is the one that never
+    /// destroys work the operator cannot recover.</para>
+    /// </summary>
+    private async Task<PoMappingConfig> PreserveUnsentMembers(
+        Guid orgId, Guid supplierId, PoMappingConfig incoming, CancellationToken ct)
+    {
+        if (incoming.Output is not null && incoming.OutputTree is not null) return incoming;
+
+        var existing = await _poMappingService.GetAsync(orgId, supplierId, ct);
+        if (existing is null) return incoming;
+
+        return incoming with
+        {
+            Output     = incoming.Output     ?? existing.Output,
+            OutputTree = incoming.OutputTree ?? existing.OutputTree,
+        };
+    }
+
+    // ── DELETE /api/suppliers/{id}/po-mapping/output-tree ─────────────────────
+
+    /// <summary>
+    /// UN-PROMOTE the supplier's saved output layout, leaving the rest of the mapping intact. The
+    /// inverse of "Save this layout for the supplier", and the recovery door for a layout that cannot
+    /// deliver this supplier's format. Idempotent: 204 whether or not a layout was stored.
+    /// </summary>
+    [HttpDelete("{id:guid}/po-mapping/output-tree")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ClearPromotedOutputTree(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        var supplier = await _db.Suppliers.Where(s => s.OrgId == orgId && s.Id == id && s.DeletedAt == null).FirstOrDefaultAsync(ct);
+        if (supplier is null) return NotFound();
+
+        var existing = await _poMappingService.GetAsync(orgId, id, ct);
+        if (existing?.OutputTree is not null)
+            await _poMappingService.UpsertAsync(orgId, id, existing with { OutputTree = null }, ct);
+
+        return NoContent();
     }
 
     // ── DELETE /api/suppliers/{id}/po-mapping ─────────────────────────────────
@@ -561,7 +654,11 @@ public class SuppliersController : ControllerBase
         if (template is null)
             return NotFound(new { error = $"Unknown starter template '{request.TemplateId}'." });
 
-        var saved = await _poMappingService.UpsertAsync(orgId, id, template.Config, ct);
+        // A starter template describes the INBOUND mapping only — it has no opinion about the
+        // supplier's output layout — so applying one must not delete a promoted output the same way a
+        // partial editor save must not (see PreserveUnsentMembers).
+        var merged = await PreserveUnsentMembers(orgId, id, template.Config, ct);
+        var saved = await _poMappingService.UpsertAsync(orgId, id, merged, ct);
         return Ok(saved);
     }
 
@@ -665,6 +762,21 @@ public class SuppliersController : ControllerBase
     {
         var orgId = _tenant.OrganisationId;
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
+
+        // ── Plan gates on the CHANNEL and the OUTPUT FORMAT (WP-11) ──────────
+        // This one endpoint writes both SupplierDeliveryConfig.Protocol and .OutputFormat,
+        // so it is where three separately-sold capabilities are actually chosen. All three
+        // were declared in the gate table and enforced NOWHERE, which meant a Pilot org
+        // could configure a webhook and an Enterprise-only ERP connector.
+        if (await DeliveryCapabilityGate.FirstUnmetAsync(
+                _billing, orgId, request.Protocol, request.OutputFormat, ct) is { } gated)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = BillingGateErrors.RequiresPlan(gated.Capability, gated.Feature),
+                upgradeUrl = "/settings",
+            });
+        }
 
         try
         {
@@ -985,7 +1097,11 @@ public class SuppliersController : ControllerBase
         // Billing gate on enablement (pull reuses the SFTP-ingestion feature tier).
         if (request.IsEnabled && !await _billing.HasFeatureAsync(orgId, BillingFeature.SftpIngestion, ct))
             return StatusCode(StatusCodes.Status403Forbidden,
-                new { error = "catalog_sync_requires_integration", upgradeUrl = "/settings" });
+                new
+                {
+                    error = BillingGateErrors.RequiresPlan("catalog_sync", BillingFeature.SftpIngestion),
+                    upgradeUrl = "/settings"
+                });
 
         // Save-time SSRF pre-check — fail fast in the UI instead of at the first poll.
         // The pull pipeline re-validates immediately before EVERY connect regardless.

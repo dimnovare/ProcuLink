@@ -31,6 +31,7 @@ public sealed class OpsController : ControllerBase
     private readonly IBackgroundJobClient    _jobs;
     private readonly ProcuLinkDbContext      _db;
     private readonly ILogger<OpsController>  _logger;
+    private readonly IAcceptanceGate         _acceptanceGate;
 
     public OpsController(
         IOpsHealthService      health,
@@ -38,7 +39,8 @@ public sealed class OpsController : ControllerBase
         IOrderService          orders,
         IBackgroundJobClient   jobs,
         ProcuLinkDbContext     db,
-        ILogger<OpsController> logger)
+        ILogger<OpsController> logger,
+        IAcceptanceGate?       acceptanceGate = null)
     {
         _health = health;
         _tenant = tenant;
@@ -46,6 +48,13 @@ public sealed class OpsController : ControllerBase
         _jobs   = jobs;
         _db     = db;
         _logger = logger;
+        // WP-17 — the acceptance gate for the operator escalation below. Optional in the ctor only
+        // so the existing positional test constructions stay valid; the field is never null, and the
+        // fallback builds the REAL gate from the DbContext this controller already holds. An
+        // enforcement dependency that quietly defaults to "off" is the failure being closed here.
+        _acceptanceGate = acceptanceGate
+            ?? new ProcuLink.Api.Services.AcceptanceGate(
+                   db, new ProcuLink.Api.Services.SupplierAcceptanceService(db));
     }
 
     // ── GET /api/ops/health ───────────────────────────────────────────────────
@@ -102,6 +111,19 @@ public sealed class OpsController : ControllerBase
             r.LastAttemptAt, r.CreatedAt, r.UpdatedAt)));
     }
 
+    /// <summary>
+    /// The statuses <see cref="RequeueDelivery"/> admits, as the refusal sentence lists them —
+    /// <c>'delivery_dead_letter' or 'delivery_failed'</c>. Read off
+    /// <see cref="OrderStatusMachine.RequeueableFrom"/> rather than retyped, so a status added to
+    /// the set is a status the operator is told about. Ordered explicitly: a HashSet's enumeration
+    /// order is not part of its contract, and a refusal whose wording shuffles between requests
+    /// reads like two different rules.
+    /// </summary>
+    private static string DescribeAdmittedStatuses() =>
+        string.Join(" or ", OrderStatusMachine.RequeueableFrom
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .Select(s => $"'{s}'"));
+
     // ── POST /api/ops/orders/{id}/requeue-delivery ────────────────────────────
 
     /// <summary>
@@ -116,6 +138,7 @@ public sealed class OpsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> RequeueDelivery(Guid id, CancellationToken ct)
     {
         var orgId     = _tenant.OrganisationId;
@@ -125,10 +148,14 @@ public sealed class OpsController : ControllerBase
 
         var order = getResult.Value!;
 
-        if (order.Status is not (OrderStatusConstants.DeliveryDeadLetter or OrderStatusConstants.DeliveryFailed))
+        // ONE authority for which statuses this escalation admits — OrderStatusMachine, like every
+        // other gate on the delivery path. This used to be a hand-written literal pair, with the
+        // SAME two statuses spelled out a second time in the refusal below; the message is now built
+        // from the set, so what the endpoint names and what it admits cannot drift apart.
+        if (!OrderStatusMachine.RequeueableFrom.Contains(order.Status))
             return BadRequest(new
             {
-                error = $"Order must be in '{OrderStatusConstants.DeliveryDeadLetter}' or '{OrderStatusConstants.DeliveryFailed}' status to requeue delivery (current: '{order.Status}')."
+                error = $"Order must be in {DescribeAdmittedStatuses()} status to requeue delivery (current: '{order.Status}')."
             });
 
         var artifact = order.OutboundArtifacts
@@ -137,6 +164,44 @@ public sealed class OpsController : ControllerBase
 
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before requeuing delivery." });
+
+        // ── WP-17 — the acceptance gate ────────────────────────────────────────
+        // An operator escalation is still a human deciding to send this document to the supplier, so
+        // the supplier's blocking rules apply. It is checked HERE, before anything is written: the
+        // block below supersedes the attempt cap and rewrites the order's status in one SaveChanges,
+        // and a refusal arriving after that would leave the cap reset and the status rewritten for a
+        // send that never happens. The way past a genuine refusal is the recorded override
+        // (POST /api/orders/{id}/acceptance-gate/override), which is auditable — unlike an ops
+        // endpoint that quietly ignored the rules.
+        var decision = await _acceptanceGate.EvaluateAsync(orgId, id, ct);
+        if (decision is { Blocked: true })
+        {
+            var refusal = string.IsNullOrWhiteSpace(decision.Reason)
+                ? "This order wasn't sent because it doesn't meet what the supplier accepts."
+                : decision.Reason!;
+
+            _db.AuditEvents.Add(ProcuLink.Api.Services.OrderServiceShared.BuildAuditEvent(
+                orgId, id, AcceptanceGateAudit.BlockedAction, new
+                {
+                    blockers = decision.Blockers
+                        .Select(b => new { code = b.Code, line = b.LineNumber, message = b.Message })
+                        .ToList(),
+                    stage = "ops-requeue",
+                }));
+            await _db.SaveChangesAsync(ct);
+
+            _logger.LogWarning(
+                "Ops requeue-delivery refused for order {OrderId} (org {OrgId}): {Count} blocking supplier acceptance rule(s).",
+                id, orgId, decision.Blockers.Count);
+
+            return Conflict(new
+            {
+                error    = refusal,
+                blockers = decision.Blockers
+                    .Select(b => new { code = b.Code, line = b.LineNumber, message = b.Message })
+                    .ToList(),
+            });
+        }
 
         // B2 (lost-order): DO NOT pre-flip to 'delivering'. DeliverOrderJob's atomic claim
         // (DispatchArtifactAsync — the one authority on which statuses are claimable) REJECTS a

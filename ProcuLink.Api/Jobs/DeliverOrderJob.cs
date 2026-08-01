@@ -13,7 +13,10 @@ namespace ProcuLink.Api.Jobs;
 /// On a transient delivery failure (5xx / network / thrown storage error — <c>DispatchArtifactAsync</c>
 /// always returns a failed result without throwing) this job hands the order to the automatic
 /// retry queue (<see cref="RetryDeliveryJob"/>) with the first exponential-backoff delay.
-/// A 4xx supplier rejection is terminal and is left for operator review.
+/// A genuine BUSINESS rejection — the supplier read the document and refused it — is terminal and
+/// left for operator review; a 4xx that refuses the REQUEST (bad credentials, moved endpoint, rate
+/// limit) is an ordinary failure and keeps the queue running. See
+/// <see cref="SupplierResponseClassification"/>.
 /// </para>
 /// </summary>
 public class DeliverOrderJob
@@ -134,10 +137,17 @@ public class DeliverOrderJob
             orderId,
             result.ErrorMessage);
 
-        // A 4xx is an explicit supplier rejection — retrying the same payload won't help, so it
-        // is left for operator review (status 'rejected_by_supplier'). Only transient failures
-        // (5xx / network, no 4xx code) enter the automatic backoff queue.
-        if (result.ResponseCode is >= 400 and <= 499)
+        // A BUSINESS rejection — the supplier read the document and refused it (422, or a 400
+        // carrying their reason) — cannot be helped by re-sending the same bytes. It stops here and
+        // waits for a CORRECTED document, which the operator drives (resolve / re-transform).
+        //
+        // Everything else keeps the backoff queue running, including the 4xx codes that refuse the
+        // REQUEST rather than the order. This gate read `result.ResponseCode is >= 400 and <= 499`
+        // until WP-19: an expired API key, a moved endpoint or a rate limit abandoned an order that
+        // a key rotation would have delivered — in a status (rejected_by_supplier) that had no exit
+        // either. The predicate is shared with DeliveryService's status decision and
+        // RetryDeliveryJob's identical gate, so the three cannot disagree.
+        if (SupplierResponseClassification.SuppressesAutomaticRetry(result))
             return;
 
         var maxAttempts = _reliability.MaxAttempts > 0 ? _reliability.MaxAttempts : RetryDeliveryJob.MaxAttempts;
@@ -150,7 +160,10 @@ public class DeliverOrderJob
             return;
         }
 
-        var delay = _reliability.BackoffFor(attemptsMade);
+        // Jittered, and never sooner than a Retry-After the supplier sent. A batch that fails
+        // together — one rate limit, one rotated credential — must not come back together; see
+        // DeliveryReliabilityOptions.NextRetryDelay.
+        var delay = _reliability.NextRetryDelay(attemptsMade, result.RetryAfter, Random.Shared.NextDouble());
         RetryDeliveryJob.ScheduleRetry(_jobs, orderId, organisationId, delay);
         _logger.LogInformation(
             "DeliverOrderJob: scheduled automatic retry #{Next} for order {OrderId} in {Delay}.",

@@ -8,7 +8,7 @@ namespace ProcuLink.Core.Services.Email;
 /// order stub per supported attachment.
 /// </summary>
 /// <remarks>
-/// The router mirrors the behaviour of <see cref="IOrderService.CreateStubAsync"/>
+/// The router mirrors the behaviour of <see cref="IClaimedOrderCreator.CreateClaimedStubAsync"/>
 /// + <c>ParseOrderJob.Enqueue</c> used by both <c>OrdersController.Upload</c>
 /// (browser upload) and <c>EmailPollingJob</c> (IMAP poll). It is the third
 /// ingress channel on the same pipeline — only the ingress is new.
@@ -50,12 +50,20 @@ public interface IInboundEmailRouter
 /// field. Webhook adapters should prefer the provider's text body and strip HTML
 /// tags from the HTML body when only that is available.
 /// </param>
+/// <param name="ProviderMessageId">
+/// The mail provider's own stable identifier for this message (Postmark's <c>MessageID</c>).
+/// It is the dedupe key for the PUSH channel: a provider retries a non-200 many times over hours
+/// — Postmark ten times over ~10.5 — and every retry carries this same id, so it is what tells a
+/// re-delivery apart from a genuinely new message. Null/blank when a provider does not supply one;
+/// the per-attachment content hash then carries the dedupe on its own.
+/// </param>
 public sealed record InboundEmailPayload(
     string FromEmail,
     string ToEmail,
     string Subject,
     IReadOnlyList<InboundAttachment> Attachments,
-    string? Body = null);
+    string? Body = null,
+    string? ProviderMessageId = null);
 
 /// <summary>A single decoded attachment from an inbound email.</summary>
 /// <param name="FileName">Original file name as supplied by the sender.</param>

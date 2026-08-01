@@ -102,6 +102,8 @@ public static class StartupConfigurationValidator
                 componentName, key);
         }
 
+        AnnounceRevisionAuthority(configuration, logger, componentName);
+
         // Production hardening: a PRESENT Delivery:EncryptionKey must still not be the
         // all-zero placeholder (or otherwise invalid). Absence is covered by the
         // missing-key check; this covers a present-but-insecure value, so prod can never
@@ -196,6 +198,40 @@ public static class StartupConfigurationValidator
                 "{Component} startup ({Env}): required configuration key '{Key}' is not set. This will fail-fast in Production.",
                 componentName, environmentName, key);
         }
+    }
+
+    /// <summary>
+    /// WP-21 — announce the EFFECTIVE value of <c>Connections:RevisionAuthority</c> at startup, on
+    /// every host, in every environment.
+    ///
+    /// <para><b>Why here.</b> Both <c>Program.cs</c> files already call
+    /// <see cref="Validate"/> before <c>Run()</c>, so riding this seam guarantees a new host cannot
+    /// gain the announcement by accident and lose it by omission — and the Worker
+    /// (<c>aware-amazement</c>) serves no HTTP at all, so a log line is the ONLY surface on which
+    /// its value can be observed.</para>
+    ///
+    /// <para><b>Why the PARSED value.</b> "The key is present" was never the question. On
+    /// 2026-07-27 an audit read a raw <c>appsettings.Development.json</c> and concluded production
+    /// was off; the deployed value is <c>true</c> on both Railway services. Only a line stating the
+    /// value that the resolver will actually act on ends that argument. Never logs the raw string —
+    /// <see cref="EffectiveConnectionConfigResolver.IsEnabled"/> is the one reader, so the log and
+    /// the behaviour cannot disagree.</para>
+    /// </summary>
+    private static void AnnounceRevisionAuthority(
+        IConfiguration configuration, ILogger logger, string componentName)
+    {
+        var enabled = EffectiveConnectionConfigResolver.IsEnabled(configuration);
+
+        logger.LogInformation(
+            "{Component} startup: revision authority enabled={Enabled} (key '{Key}', env var '{EnvVar}'). "
+            + "{Consequence}",
+            componentName,
+            enabled,
+            EffectiveConnectionConfigResolver.FlagKey,
+            EffectiveConnectionConfigResolver.EnvironmentVariableName,
+            enabled
+                ? "A pinned order is processed under the published revision it was ingested with."
+                : "Every order is processed against the live mutable tables; a config edit changes how already-ingested orders are processed.");
     }
 
     /// <summary>

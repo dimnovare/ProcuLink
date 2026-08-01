@@ -14,8 +14,31 @@ namespace ProcuLink.Infrastructure.Services;
 /// </summary>
 public sealed class EffectiveConnectionConfigResolver : IEffectiveConnectionConfigResolver
 {
-    /// <summary>Feature-flag configuration key. Absent/false (the default) = live tables drive everything.</summary>
+    /// <summary>
+    /// Feature-flag configuration key. Absent/false is the CODE default (live tables drive
+    /// everything) — but it is NOT the deployed value: production sets
+    /// <c>Connections__RevisionAuthority = true</c> on both Railway services, so revision authority
+    /// is ON where it matters. See <see cref="RevisionAuthorityHosts"/> and
+    /// <c>docs/ops/revision-authority-production-smoke.md</c>. Read the effective value from
+    /// <c>GET /health/ready</c> (<c>revisionAuthority</c>) or the host's startup log — never infer
+    /// it from an appsettings file, which is how the 2026-07-27 audit produced a false P0.
+    /// </summary>
     public const string FlagKey = "Connections:RevisionAuthority";
+
+    /// <summary>
+    /// The environment-variable spelling of <see cref="FlagKey"/> (ASP.NET's <c>__</c> section
+    /// separator) — what a deployer actually types into Railway.
+    /// </summary>
+    public const string EnvironmentVariableName = "Connections__RevisionAuthority";
+
+    /// <summary>
+    /// THE single reader of the flag. Raw read + <c>bool.TryParse</c> (no Binder dependency);
+    /// anything but "true"/"True"/"TRUE" — including "1", "yes", blank, or the key being absent —
+    /// leaves the flag OFF. Every consumer must call this rather than re-parsing: two consumers of
+    /// the same order disagreeing about the flag would route it two ways in the same instant.
+    /// </summary>
+    public static bool IsEnabled(IConfiguration? configuration) =>
+        bool.TryParse(configuration?[FlagKey], out var on) && on;
 
     private readonly ProcuLinkDbContext _db;
     private readonly bool _enabled;
@@ -27,9 +50,7 @@ public sealed class EffectiveConnectionConfigResolver : IEffectiveConnectionConf
         ILogger<EffectiveConnectionConfigResolver>? logger = null)
     {
         _db = db;
-        // Raw read + TryParse (no Binder dependency); anything but "true" — including the key
-        // being absent, the safe production default — leaves the flag OFF.
-        _enabled = bool.TryParse(configuration[FlagKey], out var on) && on;
+        _enabled = IsEnabled(configuration);
         _logger = logger;
     }
 

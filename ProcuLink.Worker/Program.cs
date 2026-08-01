@@ -172,6 +172,7 @@ builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 // Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
 builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
+builder.Services.AddScoped<IClaimedOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
 // Durable AI-suggestion decision history — an optional OrderService dependency; register it
 // so the resolve/accept paths persist history when driven from the Worker too.
 builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
@@ -198,12 +199,26 @@ builder.Services.AddSingleton(sp =>
 });
 // Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by the
 // Worker's parse (ParseOrderJob → OrderService), transform (TransformOrderJob), and delivery
-// jobs. Flag-gated by Connections:RevisionAuthority (default OFF = live tables, byte-identical).
+// jobs. Flag-gated by Connections:RevisionAuthority. The CODE default is OFF (live tables,
+// byte-identical), but that is NOT the deployed value: production sets
+// Connections__RevisionAuthority = true on the Railway "aware-amazement" service, so revision
+// authority is ON for the host that actually runs parse/transform/deliver. This process serves no
+// HTTP, so its effective value is announced in the startup log (StartupConfigurationValidator)
+// rather than on a health endpoint. See ProcuLink.Infrastructure/Services/RevisionAuthorityHosts.cs
+// and docs/ops/revision-authority-production-smoke.md.
 builder.Services.AddScoped<IEffectiveConnectionConfigResolver, EffectiveConnectionConfigResolver>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 // cXML network credentials resolver — consumed by the Worker's TransformOrderJob (OrderService →
 // OrderTransformService) so cXML generated on the Worker carries the supplier's real identities.
 builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
+// WP-17 — the server-side acceptance gate, and the acceptance evaluator it reads. THE WORKER is
+// where TransformOrderJob runs, so this is the host that actually enforces the supplier's blocking
+// rules; before this work package neither type was registered here at all. OrderService also
+// constructs a real gate when DI hands it none, so a future omission degrades to "still enforced"
+// rather than "silently open" — but the registration is the intended path and
+// AcceptanceGateHostRegistrationTests pins both hosts.
+builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
+builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 
@@ -320,16 +335,11 @@ if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
 else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
 
-// ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
-// Mirrors API/Program.cs lines 270-272. Currently used only by API controllers,
-// but registered here too so future background jobs in this dep graph
-// (e.g. retry queue, ACK round-trip) can resolve them without a second DI fix.
-// IDistributedCache for HmacWebhookVerifier nonce replay store.
-// MemoryDistributedCache is single-instance; swap for Redis when horizontal scaling is needed:
-//   builder.Services.AddStackExchangeRedisCache(o => o.Configuration = config["Redis:ConnectionString"]);
-builder.Services.AddDistributedMemoryCache();
+// ── Phase 6: smart format auto-detect ─────────────────────────────────────
+// Mirrors API/Program.cs. Currently used only by API controllers, but registered
+// here too so future background jobs in this dep graph can resolve it without a
+// second DI fix.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier, ProcuLink.Infrastructure.Services.Webhooks.HmacWebhookVerifier>();
 
 builder.Services.AddScoped<EmailPollingJob>();
 builder.Services.AddScoped<EmailPollOrgJob>();

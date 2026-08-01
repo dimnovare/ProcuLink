@@ -142,7 +142,10 @@ public sealed class MappedTransformService
         }
 
         var bytes = Encoding.UTF8.GetBytes(sb.ToString());
-        return new TransformResult(new MemoryStream(bytes), "text/csv", ".csv");
+        // Envelope from the one table (DeliveryMediaTypes), like every other transform. This
+        // service is a LIVE path — OrderTransformService routes per-order, per-revision and
+        // per-supplier mapping overrides through it — and it used to declare its own literals.
+        return TransformResult.For(OutputFormat.Csv, new MemoryStream(bytes));
     }
 
     // ── JSON ───────────────────────────────────────────────────────────────────
@@ -181,7 +184,8 @@ public sealed class MappedTransformService
 
         var json  = JsonSerializer.Serialize(payload, JsonOptions);
         var bytes = Encoding.UTF8.GetBytes(json);
-        return new TransformResult(new MemoryStream(bytes), "application/json", ".json");
+        // Envelope from the one table (DeliveryMediaTypes) — see the CSV branch above.
+        return TransformResult.For(OutputFormat.Json, new MemoryStream(bytes));
     }
 
     // ── Value resolution (mirrors PoMappingEngine.ResolveField semantics) ────────
@@ -275,6 +279,12 @@ public sealed class MappedTransformService
     /// overrides that do not reference them are unaffected (the fixed transforms never read
     /// this bag). Adding a key to the row bag cannot change fixed-transform output.
     ///
+    /// <para>WP-14 widened this from 10 keys to the full business header (33). The declared set and
+    /// the reasons for every EXCLUDED entity column live in <see cref="CanonicalRowFields"/>, and a
+    /// reflection test fails if a column ever again has neither a key nor a written exclusion. Row
+    /// keys are spelled exactly like the entity property they surface — the completeness test
+    /// depends on that identity.</para>
+    ///
     /// <para>F-1 Seam A (bind ANY source field): when <paramref name="sourceTokens"/> is non-null,
     /// every header-scope token (<c>Group != "line"</c>, OR a line-scope token whose addressed ordinal
     /// matches no line) is appended under the reserved key <c>"src::"+token.Id</c> with its VERBATIM
@@ -333,6 +343,35 @@ public sealed class MappedTransformService
             ["RequestedDeliveryDate"]  = order.RequestedDeliveryDate.HasValue
                                              ? order.RequestedDeliveryDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
                                              : string.Empty,
+
+            // ── WP-14: the rest of the business header. Every one of these is a populated column
+            // that no custom output could reach. Ship-to is not optional on a physical purchase
+            // order, so this was the difference between "configurable" and "usable" for suppliers
+            // who require a delivery address, a contact, Incoterms or the buyer's tax id.
+            // All render as "" when null — never the literal "null".
+            ["BuyerOrderRef"]    = order.BuyerOrderRef    ?? string.Empty,
+            ["BuyerTaxId"]       = order.BuyerTaxId       ?? string.Empty,
+            ["ContactName"]      = order.ContactName      ?? string.Empty,
+            ["ContactEmail"]     = order.ContactEmail     ?? string.Empty,
+            ["ContactPhone"]     = order.ContactPhone     ?? string.Empty,
+            ["Incoterms"]        = order.Incoterms        ?? string.Empty,
+            ["ShippingMethod"]   = order.ShippingMethod   ?? string.Empty,
+            ["ShipToName"]       = order.ShipToName       ?? string.Empty,
+            ["ShipToDeliverTo"]  = order.ShipToDeliverTo  ?? string.Empty,
+            ["ShipToStreet"]     = order.ShipToStreet     ?? string.Empty,
+            ["ShipToCity"]       = order.ShipToCity       ?? string.Empty,
+            ["ShipToPostalCode"] = order.ShipToPostalCode ?? string.Empty,
+            ["ShipToCountry"]    = order.ShipToCountry    ?? string.Empty,
+            ["ShipToEmail"]      = order.ShipToEmail      ?? string.Empty,
+            ["ShipToPhone"]      = order.ShipToPhone      ?? string.Empty,
+            ["BillToName"]       = order.BillToName       ?? string.Empty,
+            ["BillToDeliverTo"]  = order.BillToDeliverTo  ?? string.Empty,
+            ["BillToStreet"]     = order.BillToStreet     ?? string.Empty,
+            ["BillToCity"]       = order.BillToCity       ?? string.Empty,
+            ["BillToPostalCode"] = order.BillToPostalCode ?? string.Empty,
+            ["BillToCountry"]    = order.BillToCountry    ?? string.Empty,
+            ["BillToEmail"]      = order.BillToEmail      ?? string.Empty,
+            ["BillToPhone"]      = order.BillToPhone      ?? string.Empty,
         };
 
         foreach (var cf in @override.CustomFields)
@@ -411,6 +450,33 @@ public sealed class MappedTransformService
                                       ? line.DeliveryDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
                                       : string.Empty;
 
+        // ── WP-14: the rest of the business line ────────────────────────────────────────────
+        // Written through SetIfNotUserAuthored, NOT with a plain indexer. A line bag starts from the
+        // header bag, so a HEADER-scoped custom field has already written its key by this point.
+        // Reserving 9 new built-in names with a plain `row[key] =` would silently overwrite the value
+        // a customer authored — e.g. anyone whose header custom field is called "ContractNumber"
+        // would suddenly ship the line's contract number instead of theirs, with no error and no
+        // migration. A newly reserved name must yield to a name the user already owns.
+        //
+        // The 11 keys ABOVE deliberately keep the plain-indexer (clobbering) behaviour: they were
+        // already built-in before WP-14, so live documents depend on the line value winning there.
+        // Changing that would not be additive. The asymmetry is the deliberate cost of not
+        // rewriting anyone's output — see the two paired tests in WidenedOutputRowTests.
+        var userAuthoredKeys = HeaderCustomFieldKeys(@override);
+
+        SetIfNotUserAuthored(row, userAuthoredKeys, "TaxAmount",
+            line.TaxAmount.HasValue ? line.TaxAmount.Value.ToString(CultureInfo.InvariantCulture) : string.Empty);
+        SetIfNotUserAuthored(row, userAuthoredKeys, "DiscountPercent",
+            line.DiscountPercent.HasValue ? line.DiscountPercent.Value.ToString(CultureInfo.InvariantCulture) : string.Empty);
+        SetIfNotUserAuthored(row, userAuthoredKeys, "NetAmount",
+            line.NetAmount.HasValue ? line.NetAmount.Value.ToString(CultureInfo.InvariantCulture) : string.Empty);
+        SetIfNotUserAuthored(row, userAuthoredKeys, "ManufacturerPartNumber", line.ManufacturerPartNumber ?? string.Empty);
+        SetIfNotUserAuthored(row, userAuthoredKeys, "ManufacturerName",       line.ManufacturerName       ?? string.Empty);
+        SetIfNotUserAuthored(row, userAuthoredKeys, "CustomerPartNumber",     line.CustomerPartNumber     ?? string.Empty);
+        SetIfNotUserAuthored(row, userAuthoredKeys, "Unspsc",                 line.Unspsc                 ?? string.Empty);
+        SetIfNotUserAuthored(row, userAuthoredKeys, "Recipient",              line.Recipient              ?? string.Empty);
+        SetIfNotUserAuthored(row, userAuthoredKeys, "ContractNumber",         line.ContractNumber         ?? string.Empty);
+
         foreach (var cf in @override.CustomFields)
         {
             if (!string.Equals(cf.Scope, "line", StringComparison.OrdinalIgnoreCase)) continue;
@@ -448,6 +514,38 @@ public sealed class MappedTransformService
         }
 
         return row;
+    }
+
+    /// <summary>
+    /// The keys a HEADER-scoped custom field already owns in this row bag. Compared with
+    /// <see cref="StringComparer.Ordinal"/> because the row dictionary itself is ordinal — a key
+    /// that differs only in case is a different key to every reader of the bag, so treating it as
+    /// the same one here would suppress a built-in value for no reason.
+    /// </summary>
+    private static HashSet<string> HeaderCustomFieldKeys(OrderMappingOverride @override)
+    {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var cf in @override.CustomFields)
+        {
+            if (!string.Equals(cf.Scope, "header", StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.IsNullOrEmpty(cf.Key)) continue;
+            keys.Add(cf.Key);
+        }
+        return keys;
+    }
+
+    /// <summary>
+    /// Writes a NEWLY reserved built-in key, unless the customer already authored a header-scoped
+    /// custom field under that name. Reserving a name must never rewrite a document someone is
+    /// already receiving — the user's field keeps the key and the built-in value is dropped for
+    /// this order. (A line-scoped custom field with the same key is applied later and wins outright,
+    /// which is the pre-existing precedence and is unchanged.)
+    /// </summary>
+    private static void SetIfNotUserAuthored(
+        IDictionary<string, string> row, HashSet<string> userAuthoredKeys, string key, string value)
+    {
+        if (userAuthoredKeys.Contains(key)) return;
+        row[key] = value;
     }
 
     /// <summary>
@@ -589,10 +687,27 @@ public sealed class MappedTransformService
     }
 
     /// <summary>RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline. Internal so the OutputNode CSV emitter escapes byte-identically.</summary>
-    internal static string Escape(string value)
+    internal static string Escape(string value) => Escape(value, ",", quoteAlways: false);
+
+    /// <summary>
+    /// CSV field escaping for an authored dialect (WP-15).
+    ///
+    /// <para><c>Escape(v, ",", quoteAlways: false)</c> is byte-identical to the one-arg overload —
+    /// which is the whole reason the overload delegates to this rather than the two drifting apart.
+    /// That identity is what keeps every existing CSV supplier's output unchanged.</para>
+    ///
+    /// <para>The delimiter is a STRING, not a char: a dialect may legitimately be a tab or a
+    /// multi-character sequence, and a caller holding one should not have to prove it is a single
+    /// character before it can escape correctly.</para>
+    /// </summary>
+    internal static string Escape(string value, string delimiter, bool quoteAlways)
     {
-        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
-            return $"\"{value.Replace("\"", "\"\"")}\"";
-        return value;
+        if (quoteAlways) return $"\"{value.Replace("\"", "\"\"")}\"";
+
+        var needsQuoting =
+            (delimiter.Length > 0 && value.Contains(delimiter, StringComparison.Ordinal))
+            || value.Contains('"') || value.Contains('\n') || value.Contains('\r');
+
+        return needsQuoting ? $"\"{value.Replace("\"", "\"\"")}\"" : value;
     }
 }

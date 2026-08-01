@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Threading.RateLimiting;
 using Hangfire;
 using Hangfire.PostgreSql;
@@ -251,12 +252,10 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 // Named per-user fixed-window policies for expensive / cost-bearing / abusable
 // endpoints, PLUS a global fallback limiter so every endpoint has a backstop.
 //
-// Partition key for MOST policies: Clerk `sub` claim first (so an authenticated
-// user is limited as themselves regardless of source IP), then the remote IP
-// for unauthenticated-ish callers (ApiKey ingress), then a shared "anonymous"
-// bucket as the last resort. Helper below keeps this consistent across policies.
-// The "webhook" policy is the exception: it partitions by the TENANT slug on the
-// route, so one tenant's HMAC-webhook flood can't exhaust another tenant's quota.
+// Partition key: Clerk `sub` claim first (so an authenticated user is limited as
+// themselves regardless of source IP), then the remote IP for unauthenticated-ish
+// callers (ApiKey ingress), then a shared "anonymous" bucket as the last resort.
+// Helper below keeps this consistent across policies.
 //
 // Controllers opt into a named policy with [EnableRateLimiting("<name>")];
 // the global limiter applies to everything not otherwise rejected.
@@ -272,12 +271,16 @@ builder.Services.AddRateLimiter(options =>
     // the window is shared. See docs/audit/2026-06-12-scale-gated-constraints.md.
     //
     // sub → IP → "anonymous": authenticated callers are limited per-user; the
-    // unauthenticated ApiKey-ingress surface is limited per source IP. (The webhook
-    // surface overrides this to partition per tenant slug — see the "webhook" policy.)
+    // unauthenticated ApiKey-ingress surface is limited per source IP.
     static string PartitionKey(HttpContext ctx) =>
         ctx.User.FindFirst("sub")?.Value
         ?? ctx.Connection.RemoteIpAddress?.ToString()
         ?? "anonymous";
+
+    // Fallback wait advertised when the lease carries no RetryAfter metadata.
+    // Every window declared below is 60 seconds, so a caller told to wait this
+    // long is never told to come back before the window can possibly have rolled.
+    const int DefaultRetryAfterSeconds = 60;
 
     static RateLimitPartition<string> Window(HttpContext ctx, string prefix, int permit, int seconds) =>
         WindowFor(ctx, prefix, PartitionKey(ctx), permit, seconds);
@@ -323,26 +326,22 @@ builder.Services.AddRateLimiter(options =>
     // URL; cap so the surface can't be used to bulk-mint download links.
     options.AddPolicy("signed-url", ctx => Window(ctx, "signed-url", permit: 60, seconds: 60));
 
-    // Webhook receivers are unauthenticated (HMAC-only) and chatty, so the ceiling
-    // is generous. The PARTITION KEY is the tenant slug carried in the route
-    // (/api/webhook-ingress/{slug}/...), NOT the source IP: many suppliers push
-    // callbacks for one org from a shared egress IP, and an IP-keyed bucket lets a
-    // single noisy tenant exhaust the window for EVERY other tenant. Keying on the
-    // slug isolates each org's quota. Fall back to IP / "anonymous" only when no
-    // slug is on the route (a malformed request that won't match the controller
-    // anyway) so the surface is never left unbounded.
-    static string WebhookKey(HttpContext ctx) =>
-        ctx.Request.RouteValues.TryGetValue("slug", out var slug)
-            && slug?.ToString() is { Length: > 0 } s
-                ? $"slug:{s}"
-                : ctx.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
-
-    options.AddPolicy("webhook", ctx => WindowFor(ctx, "webhook", WebhookKey(ctx), permit: 120, seconds: 60));
-
     // The anonymous support contact form feeds an outbound email sender, so it
     // is a spam/amplification + SMTP-cost vector. Nobody legitimately files
     // more than a handful of tickets a minute — keep this tight.
     options.AddPolicy("support", ctx => Window(ctx, "support", permit: 5, seconds: 60));
+
+    // The practice-order endpoint persists a CALLER-SUPPLIED recipient address, and
+    // the user's next send mails a CSV to it from ProcuLink's verified Postmark
+    // sender. That is the support form's amplification shape without its one
+    // mitigation: support posts to a fixed inbox we own, so its bounces land on us
+    // by design, whereas here the recipient is chosen by the caller and every bounce
+    // or complaint is charged to our sender reputation. Same 5/60s cap, own
+    // partition so a burst here cannot consume the support budget or vice versa.
+    // NOT "upload" (60/min) — that is sized for a daily batch of POs, each costing
+    // one parse job against the caller's own org, and would permit 60 emails a
+    // minute to addresses we have never verified.
+    options.AddPolicy("sample-order", ctx => Window(ctx, "sample-order", permit: 5, seconds: 60));
 
     // Global backstop: every request (including ones with no named policy) is
     // bounded per partition. Generous so it never bites normal usage, but it
@@ -352,11 +351,34 @@ builder.Services.AddRateLimiter(options =>
 
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
+    // A 429 from this limiter is TRANSIENT — the partition refills on a fixed
+    // window — but the rejection said only "retry shortly", which a client cannot
+    // act on. Every caller therefore had to guess: the upload workbench hard-codes
+    // [15s, 35s, 61s] because 61s is the longest window here, and every other
+    // surface treated the 429 as permanent and simply stopped.
+    //
+    // The limiter already knows the answer. FixedWindowRateLimiter publishes the
+    // time until the window rolls as RetryAfter lease metadata; we send it as the
+    // standard header AND in the body. The body copy stays byte-identical because
+    // UploadWorkbench.getLimitCode sniffs it to tell a speed throttle apart from a
+    // plan cap — changing the words there would silently relabel a throttle as
+    // "Plan limit reached".
     options.OnRejected = async (context, ct) =>
     {
+        var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var window)
+            ? (int)Math.Ceiling(window.TotalSeconds)
+            : DefaultRetryAfterSeconds;
+        // Never advertise an instant retry: a 0 invites the tight loop the limiter exists to stop.
+        retryAfter = Math.Max(1, retryAfter);
+
+        context.HttpContext.Response.Headers.RetryAfter = retryAfter.ToString(CultureInfo.InvariantCulture);
         context.HttpContext.Response.ContentType = "application/json";
         await context.HttpContext.Response.WriteAsJsonAsync(
-            new { error = "Rate limit exceeded. Please slow down and retry shortly." }, ct);
+            new
+            {
+                error = "Rate limit exceeded. Please slow down and retry shortly.",
+                retryAfterSeconds = retryAfter,
+            }, ct);
     };
 });
 
@@ -463,6 +485,15 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(allOrigins)   // EXACT origins only — no wildcard subdomains
               .AllowAnyHeader()
               .AllowAnyMethod()
+              // AllowAnyHeader governs the REQUEST headers a browser may send. It says
+              // nothing about which RESPONSE headers script may read: that is the
+              // exposed list, and without it a cross-origin fetch sees only the CORS-
+              // safelisted ones. Retry-After is not safelisted, so the frontend — a
+              // different origin from this API in every deployed environment — could
+              // not read the wait on a 429 even once we started sending it. The 429
+              // body carries retryAfterSeconds too, so a client that cannot read
+              // headers still gets the number.
+              .WithExposedHeaders("Retry-After")
               .AllowCredentials());
 });
 
@@ -504,6 +535,10 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IPromoteMappingServic
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
+// WP-17 — the server-side acceptance gate. Registered in BOTH hosts (see Worker/Program.cs): the
+// Worker is where TransformOrderJob actually runs, so a gate registered only here would be
+// enforcement living in the API process and nowhere the transform happens.
+builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
 // Group V4 — unified validation: reusable rule definitions + binding-aware read API + boot backfill.
 builder.Services.AddScoped<IRuleDefinitionService, RuleDefinitionService>();
 builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfillService>();
@@ -513,7 +548,14 @@ builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
 builder.Services.AddScoped<IConnectionBackfillService, ConnectionBackfillService>();
 // Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by
 // parse-mapping/item-codes, validation, transform, and delivery. Flag-gated by
-// Connections:RevisionAuthority (default OFF = live tables, byte-identical behaviour).
+// Connections:RevisionAuthority. The CODE default is OFF (live tables, byte-identical behaviour),
+// but that is NOT the deployed value: production sets Connections__RevisionAuthority = true on the
+// Railway "ProcuLink" service, so revision authority is ON in production. Do not infer the
+// deployed value from an appsettings file — a 2026-07-27 audit did exactly that and filed a P0
+// claiming the versioning subsystem was inert in production. Read the effective value from
+// GET /health/ready (`revisionAuthority`) or this host's startup log instead. See
+// ProcuLink.Infrastructure/Services/RevisionAuthorityHosts.cs and
+// docs/ops/revision-authority-production-smoke.md.
 builder.Services.AddScoped<IEffectiveConnectionConfigResolver,
                            ProcuLink.Infrastructure.Services.EffectiveConnectionConfigResolver>();
 // Group V2 — replay / impact testing (non-mutating; reuses the transform + acceptance engines).
@@ -521,6 +563,7 @@ builder.Services.AddScoped<IReplayService, ReplayService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 // Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
 builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
+builder.Services.AddScoped<IClaimedOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
 builder.Services.AddScoped<IPassportService, PassportService>();
 builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
@@ -609,8 +652,6 @@ builder.Services.AddScoped<IBuyerService, BuyerService>();
 // ── Wave 4: API keys + integration subscriptions ──────────────────────────
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService>();
-builder.Services.AddScoped<IValidationRuleService, ValidationRuleService>();
-builder.Services.AddScoped<IOutputTemplateService, OutputTemplateService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddSingleton<OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
@@ -706,20 +747,7 @@ builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.Des
 // GDPR per-order erasure (admin-triggered): deletes the R2 blobs + every order-tied DB row.
 builder.Services.AddScoped<IDataErasureService, ProcuLink.Infrastructure.Services.DataErasureService>();
 
-// ── Phase 6: smart format auto-detect + HMAC webhook receive ──────────────
-// IDistributedCache for HmacWebhookVerifier nonce replay store.
-// MemoryDistributedCache is single-instance (correct for one API replica). Set
-// Redis:ConnectionString to make HMAC-nonce replay protection cross-instance for
-// horizontal scaling — no other code change needed (closes P2-3 / W4 at the swap point).
-var hmacNonceRedis = builder.Configuration["Redis:ConnectionString"];
-if (!string.IsNullOrWhiteSpace(hmacNonceRedis))
-{
-    builder.Services.AddStackExchangeRedisCache(o => o.Configuration = hmacNonceRedis);
-}
-else
-{
-    builder.Services.AddDistributedMemoryCache();
-}
+// ── Phase 6: smart format auto-detect ─────────────────────────────────────
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISupplierSuggestionService, ProcuLink.Infrastructure.Services.Detection.SupplierSuggestionService>();
@@ -728,7 +756,6 @@ builder.Services.AddSingleton<ProcuLink.Core.Services.Detection.ISourceColumnExt
 // SourceMap engine tokenizer: extracts every addressable value from a source file (CSV + XML concrete;
 // other formats return an empty list). Singleton — stateless, reused across requests.
 builder.Services.AddSingleton<ProcuLink.Transform.Tokenizing.ISourceTokenizer, ProcuLink.Transform.Tokenizing.SourceTokenizer>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Webhooks.IHmacWebhookVerifier, ProcuLink.Infrastructure.Services.Webhooks.HmacWebhookVerifier>();
 
 // ── Health checks (G5) — liveness vs readiness ────────────────────────────
 // Liveness (/health) is a fast, dependency-free 200 served by HealthController
@@ -764,6 +791,15 @@ builder.Services.AddHealthChecks()
     .AddCheck<ProcuLink.Api.Controllers.WorkerHeartbeatHealthCheck>(
         name: "worker",
         failureStatus: HealthStatus.Degraded,
+        tags: new[] { "ready" })
+    // WP-21 — the EFFECTIVE value of Connections:RevisionAuthority. Always Healthy (the flag being
+    // off is a configuration, not an outage); the value rides the data bag and is flattened to a
+    // top-level `revisionAuthority` boolean by HealthResponseWriter. Exists because the deployed
+    // value was previously readable nowhere, which let a 2026-07-27 audit file a P0 asserting the
+    // versioning subsystem was inert in production when it has been ON there all along.
+    .AddCheck<ProcuLink.Api.Controllers.RevisionAuthorityHealthCheck>(
+        name: "revisionAuthority",
+        failureStatus: HealthStatus.Healthy,
         tags: new[] { "ready" });
 
 // IMonitoringApi is registered scoped (factory wrapper) above for OpsHealthService.
@@ -915,18 +951,26 @@ app.MapControllers();
 
 // Liveness (/health) is served by HealthController (fast, dependency-free 200) so
 // Railway's container probe is never blocked by a slow dependency. Readiness
-// (/health/ready) runs ONLY the "ready"-tagged dependency checks (DB + storage +
-// migration flag + worker heartbeat) and reports the aggregate status so
-// monitoring can see degraded state without taking the process down.
+// (/health/ready) runs ONLY the "ready"-tagged checks — DB, storage, migration flag,
+// worker heartbeat, and the revision-authority flag's effective value (WP-21) — and
+// reports the aggregate status so monitoring can see degraded state without taking
+// the process down.
 //
 // HTTP status: Healthy/Degraded → 200, Unhealthy → 503 (the default
 // MapHealthChecks status-code map). A stale Worker is Degraded → 200, but the JSON
 // body carries workerHealthy:false so the external uptime workflow alerts on it.
+// The revisionAuthority check is ALWAYS Healthy — the flag's value is information,
+// never a reason to evict the process — so it reaches monitoring purely through the
+// body.
 //
 // BODY: a structured JSON payload (instead of the default plain "Healthy" string)
-// with per-check status/description/duration + a flattened workerHealthy flag the
-// uptime workflow + dashboards can read. ResponseWriter is the only customisation —
-// it NEVER includes secrets (each check's Data bag is counts/ages/booleans only).
+// with per-check status/description/duration + TWO flattened booleans the uptime
+// workflow + dashboards read: workerHealthy and revisionAuthority. Both are asserted
+// by .github/workflows/uptime.yml, which fails the run on either being false.
+// ResponseWriter is the only customisation — it NEVER includes secrets (each check's
+// Data bag is counts/ages/booleans/config KEY names only, never a config VALUE; the
+// revisionAuthority bag's key set is pinned by RevisionAuthorityReadinessSurfaceTests
+// so a future field cannot quietly widen it on this anonymous endpoint).
 app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),

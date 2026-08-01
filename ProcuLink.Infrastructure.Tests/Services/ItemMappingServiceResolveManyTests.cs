@@ -158,6 +158,13 @@ public class ItemMappingServiceResolveManyTests
         var codes = new[] { "A", "B", "C" };
         var batch = await svc.ResolveManyAsync(orgId, supplierId, codes, CancellationToken.None);
 
+        // The sweep below is only evidence if it actually swept. A batch that answered fewer codes
+        // than were asked leaves the loop comparing batch to single on a shorter set — or on none at
+        // all — and the run reports green having found no disagreement it ever looked for.
+        batch.Should().HaveCount(3,
+            "all three codes must reach the comparison — the two mapped ones and the unmapped 'C', "
+            + "whose agreed answer is null; a batch holding fewer silently drops one from the check");
+
         foreach (var code in codes)
         {
             var single = await svc.ResolveAsync(orgId, supplierId, code, CancellationToken.None);

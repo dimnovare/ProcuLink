@@ -46,9 +46,11 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         _replay      = replay;
         _conformance = conformance;
         // Same flag the resolver gates delivery routing on — when OFF, the live config governs
-        // delivery directly, so there is nothing to route into a versioned revision.
-        _revisionAuthority =
-            bool.TryParse(configuration?[EffectiveConnectionConfigResolver.FlagKey], out var on) && on;
+        // delivery directly, so there is nothing to route into a versioned revision. Read through
+        // the resolver's own IsEnabled so "same flag" is literally true: a second hand-rolled parse
+        // that disagreed (say, treating "1" as on) would republish revisions the resolver then
+        // ignored. ON in production on both Railway services — see RevisionAuthorityHosts.
+        _revisionAuthority = EffectiveConnectionConfigResolver.IsEnabled(configuration);
     }
 
     public async Task<IReadOnlyList<SupplierConnection>> ListAsync(Guid orgId, CancellationToken ct) =>

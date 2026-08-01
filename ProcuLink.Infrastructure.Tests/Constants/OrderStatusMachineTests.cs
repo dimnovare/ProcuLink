@@ -1,3 +1,4 @@
+using System.Reflection;
 using FluentAssertions;
 using ProcuLink.Core.Constants;
 using ProcuLink.Infrastructure.Services;
@@ -48,15 +49,16 @@ public class OrderStatusMachineTests
     // to prevent. See ReleaseBillingHeldOrdersAsync.
     [InlineData(DeliveryHeld, DeliveryUnconfirmed)]
     [InlineData(DeliveryDeadLetter, Delivering)] // ops requeue rescue
-    [InlineData(DeliveryDeadLetter, DeliveryFailed)] // requeued dead-letter fails again / late failure webhook (aligns with the observer map)
+    [InlineData(DeliveryDeadLetter, DeliveryFailed)] // requeued dead-letter fails again (aligns with the observer map)
     [InlineData(DeliveryDeadLetter, Ready)]      // MV-1 sibling: mapping edit after dead-letter
-    // Supplier status webhook: a late positive ACK from every dispatched state. All four are
-    // documented as intended in OrderStatusTransitionObserver and gated by WebhookReportableFrom.
-    [InlineData(ReadyToDeliver, Delivered)]      // ACK races our own 'delivering' write
-    [InlineData(DeliveryFailed, Delivered)]      // late positive ACK after a failed attempt
-    [InlineData(DeliveryDeadLetter, Delivered)]  // late positive ACK after dead-lettering
-    [InlineData(DeliveryHeld, Delivered)]        // ACK for an order sent before the billing hold
-    [InlineData(Delivered, DeliveryFailed)]      // webhook late-failure edge
+    // The four "late positive ACK" edges that used to sit here — ready_to_deliver / delivery_failed /
+    // delivery_dead_letter / delivery_held → delivered — are GONE with the inbound supplier-status
+    // webhook (WP-09). They are now asserted IMPOSSIBLE, below and in
+    // EveryInboundDeliveredEdge_HasAProductionWriter.
+    // delivered → delivery_failed survives WITHOUT the webhook: DeliveryService's pre-claim failure
+    // paths (FailMissingConfigAsync / FailBeforeDispatchAsync) write delivery_failed with no
+    // from-status check, racing the enqueue-time guards in Redeliver / RequeueDelivery.
+    [InlineData(Delivered, DeliveryFailed)]
     [InlineData(Ready, RejectedBySupplier)]      // mark-rejected (from any non-terminal)
     [InlineData(Delivering, RejectedBySupplier)]
     // Routing (Phase 0): an order can be parked unrouted while it awaits a supplier, then
@@ -66,6 +68,45 @@ public class OrderStatusMachineTests
     [InlineData(Unrouted, Parsing)]              // assign-supplier re-enqueues parse
     [InlineData(Unrouted, PendingParse)]
     [InlineData(Unrouted, RejectedBySupplier)]   // operator discards an unrouted order
+    // WP-19: rejected_by_supplier is NOT a dead end. A genuine business rejection is cured by
+    // correcting the order and sending a corrected document, and both halves of that already have
+    // production writers:
+    //   • resolve   — OrderResolutionService.ResolveAsync recomputes pending_review|ready with NO
+    //                 from-status guard, so fixing the line the supplier named moves the order out.
+    //   • transform — OrderTransformService's claim accepts rejected_by_supplier (ClaimableForTransformFrom),
+    //                 exactly as it accepts transform_failed: the recovery door after the operator
+    //                 has fixed whatever the supplier refused.
+    [InlineData(RejectedBySupplier, Ready)]
+    [InlineData(RejectedBySupplier, PendingReview)]
+    [InlineData(RejectedBySupplier, Transforming)]
+    // ── The resolve recompute, for the OTHER from-states WP-19 left behind ────────────────────
+    // Same writer as the two rejected_by_supplier rows above: OrderResolutionService.ResolveAsync
+    // (:242) and AcceptAiSuggestionsAsync (:393) end with
+    // `Status = Lines.Any(NeedsReview) ? pending_review : ready`, with no from-status guard on the
+    // service and none on either endpoint (OrdersController.Resolve :483 validates the request body
+    // only). The one guard is IsFinished = DeclaredTerminal = {failed}. WP-19 reconciled the writer
+    // for one from-state because that status was a dead end; the writer reaches every OTHER
+    // non-terminal status identically, and those edges were live in production while both maps
+    // called them impossible.
+    //
+    // → ready follows from the write. → pending_review is the half that reads impossible from a
+    // post-review status and is not: the connection-level price-variance guard re-runs on EVERY
+    // resolve (OrderResolutionService.cs:206-239) and re-sets line.NeedsReview when a unit price
+    // diverges from the catalog, and a partial resolve leaves un-named lines flagged.
+    //
+    // Enumerated here for readability; EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges is
+    // the assertion that cannot rot, because it DERIVES the from-state list from AllStatuses.
+    [InlineData(Unrouted, PendingReview)]           // an unrouted order has lines; resolve recomputes
+    [InlineData(Unrouted, Ready)]                   // ...even a header-only one — see the Unrouted row's follow-up
+    [InlineData(Transforming, PendingReview)]
+    [InlineData(ReadyToDeliver, PendingReview)]
+    [InlineData(DeliveryHeld, PendingReview)]       // a billing hold pauses delivery, not correction
+    [InlineData(Delivering, PendingReview)]         // a row SITS in 'delivering'; the endpoint has no guard
+    [InlineData(Delivering, Ready)]
+    [InlineData(Delivered, PendingReview)]          // price-variance guard re-flags a line on a delivered order
+    [InlineData(DeliveryFailed, PendingReview)]     // the observer listed this all along; the machine did not
+    [InlineData(DeliveryUnconfirmed, PendingReview)]
+    [InlineData(DeliveryDeadLetter, PendingReview)]
     public void IsAllowed_RealTransitions_AreAllowed(string from, string to)
         => OrderStatusMachine.IsAllowed(from, to).Should().BeTrue($"{from} -> {to} is a real flow");
 
@@ -73,23 +114,35 @@ public class OrderStatusMachineTests
     // Genuinely-impossible moves must be rejected (this is the value the machine adds).
     [InlineData(Delivered, Parsing)]
     [InlineData(Failed, Delivering)]
-    [InlineData(RejectedBySupplier, Ready)]
+    // rejected_by_supplier → delivering stays impossible even after WP-19 gave the status an exit:
+    // the exit is a CORRECTION loop (resolve / re-transform), never a re-send of the same bytes.
+    // No delivery claim set admits rejected_by_supplier, so nothing can dispatch it in place.
+    [InlineData(RejectedBySupplier, Delivering)]
     [InlineData(Delivered, Transforming)]
     [InlineData(Parsing, Delivered)]
-    [InlineData(RejectedBySupplier, Delivered)]  // terminal for webhooks: no silent un-rejection
+    [InlineData(RejectedBySupplier, Delivered)]  // no silent un-rejection: nothing writes it
+    // WP-09: the retired inbound supplier-status webhook was the ONLY writer of these four. An
+    // operator settlement (OrdersController.MarkDelivered) admits delivery_unconfirmed alone, and
+    // DeliveryService writes 'delivered' only after its claim has moved the row to 'delivering'.
+    [InlineData(ReadyToDeliver, Delivered)]
+    [InlineData(DeliveryFailed, Delivered)]
+    [InlineData(DeliveryDeadLetter, Delivered)]
+    [InlineData(DeliveryHeld, Delivered)]
     public void IsAllowed_ImpossibleTransitions_AreRejected(string from, string to)
         => OrderStatusMachine.IsAllowed(from, to).Should().BeFalse($"{from} -> {to} must never happen");
 
     [Theory]
     [InlineData(Failed)]
-    [InlineData(RejectedBySupplier)]
     public void IsTerminal_TrueForTerminalStates(string status)
         => OrderStatusMachine.IsTerminal(status).Should().BeTrue();
 
     [Theory]
-    [InlineData(Delivered)]            // a webhook can still flip it to delivery_failed
+    [InlineData(Delivered)]            // a pre-claim delivery failure can still flip it to delivery_failed
     [InlineData(DeliveryDeadLetter)]   // an ops requeue can still rescue it
     [InlineData(Ready)]
+    // WP-19: a genuine business rejection is a correction loop, not an ending. The operator fixes
+    // what the supplier named and re-sends; resolve and the transform claim are the two doors.
+    [InlineData(RejectedBySupplier)]
     // transform_failed is a FAILURE state but NOT a terminal one: unlike 'failed' (a bad source file,
     // where recovery means a NEW order row), the order itself is fine — its template/mapping is broken.
     // Fixing that and re-transforming is the intended cure, so it must have a way out.
@@ -117,6 +170,26 @@ public class OrderStatusMachineTests
             .BeEquivalentTo(new[] { DeliveryFailed, ReadyToDeliver, DeliveryUnconfirmed });
 
     /// <summary>
+    /// <c>OpsController.RequeueDelivery</c>'s admission guard, pinned EXACTLY — the last gate on the
+    /// delivery path that was still a hand-written status literal rather than a named set.
+    ///
+    /// <para>Exact, not a superset, for the same reason as
+    /// <see cref="RedeliverableFrom_IsExactlyTheThreeOperatorSendableStatuses"/>: a status added
+    /// here becomes rescuable past the dead-letter cap with the attempt budget reset, which is the
+    /// most powerful control in the product. Widening it must be a deliberate edit.</para>
+    ///
+    /// <para><b>Deliberately NOT a subset of any claim set.</b> <c>delivery_dead_letter</c> is in no
+    /// claim set at all, and does not need to be: the endpoint REWRITES the order to the claimable
+    /// <c>delivery_failed</c> before it enqueues (<c>OpsController.cs</c>, "claimable, send-ready
+    /// idle state"). Asserting the 52c6431 subset invariant here would therefore be asserting a rule
+    /// this path does not follow.</para>
+    /// </summary>
+    [Fact]
+    public void RequeueableFrom_IsExactlyTheTwoStatusesAnOperatorMayRescue()
+        => OrderStatusMachine.RequeueableFrom.Should()
+            .BeEquivalentTo(new[] { DeliveryDeadLetter, DeliveryFailed });
+
+    /// <summary>
     /// Edges the observer calls "expected" that the machine deliberately does NOT allow.
     ///
     /// <para>The two maps are both supersets of the real flows, but for opposite reasons, so
@@ -141,6 +214,22 @@ public class OrderStatusMachineTests
         // 'failed' really is terminal, as the machine says.
         Edge(Failed, PendingParse),
         Edge(Failed, Parsing),
+
+        // These two needed a SECOND argument, and until the WP-19 follow-up they did not have one.
+        // Re-parse and transform are not the only writers that can move an order out of 'failed':
+        // RESOLVE is, and it had no from-status guard. OrderResolutionService recomputed
+        // pending_review|ready from the lines on THREE paths (ResolveAsync, AcceptAiSuggestionsAsync)
+        // and wrote rejected_by_supplier on a fourth (MarkRejectedAsync) — and a failed source file
+        // leaves no lines, so every recompute landed on 'ready'. That is the same writer whose
+        // existence forced Edge(RejectedBySupplier, PendingReview) and Edge(RejectedBySupplier, Ready)
+        // OUT of this list and into the machine, so leaving these two in on a re-parse-and-transform
+        // argument was the same fact reaching opposite conclusions two entries apart.
+        //
+        // Resolved in the direction the product already takes everywhere else: 'failed' means the
+        // SOURCE FILE could not be read, recovery is a new order row, and the three writers now
+        // refuse a status in OrderStatusMachine.DeclaredTerminal (OrderResolutionService.IsFinished,
+        // pinned by OrderServiceTerminalOrderGuardTests). So these edges have no production writer —
+        // now for a reason that covers every writer, not just two of them.
         Edge(Failed, PendingReview),
         Edge(Failed, Ready),
 
@@ -162,38 +251,29 @@ public class OrderStatusMachineTests
         // post-artifact order to 'ready' first (the MV-1 edges the machine already allows).
         Edge(ReadyToDeliver, Transforming),
         Edge(DeliveryFailed, Transforming),
-        Edge(DeliveryFailed, PendingReview),
+        // Edge(DeliveryFailed, PendingReview) used to sit here, exempted on the grounds that "no
+        // call site" performed it. That was wrong, and wrong in the way this file keeps finding:
+        // the resolve recompute has no from-status guard, so it reaches delivery_failed exactly as
+        // it reached rejected_by_supplier. The observer had it right and the machine did not, which
+        // is the same verdict WP-19 reached one entry further down. Reconciled into the machine —
+        // this exemption is deleted, not moved.
 
-        // Nothing moves an order OUT of 'rejected_by_supplier' under its own power: the ops
-        // requeue guards on dead_letter|delivery_failed (OpsController.cs:126) and dispatch/retry
-        // guard on ready_to_deliver|delivery_failed|stale-delivering.
-        Edge(RejectedBySupplier, PendingReview),
-        Edge(RejectedBySupplier, Ready),
-        Edge(RejectedBySupplier, Transforming),
+        // Nothing DISPATCHES an order out of 'rejected_by_supplier': the ops requeue guards on
+        // dead_letter|delivery_failed (OpsController.cs:126) and every delivery claim set
+        // (ClaimableForDispatchFrom / ClaimableForAutomaticDispatchFrom / ClaimableForRetryFrom)
+        // excludes it. The exit WP-19 gave the status is a correction loop — resolve and
+        // re-transform — never a re-send of the bytes the supplier already refused, so this one
+        // edge stays observer-only while → pending_review / ready / transforming were reconciled
+        // into the machine.
         Edge(RejectedBySupplier, Delivering),
 
-        // The webhook's four "reachable only through a gap" exemptions are GONE, as this list's
-        // author predicted they would be ("the from-status guard is being built on
-        // fix/webhook-status-from-guard; when it lands, these go stale"). They were exempt because
-        // WebhookIngressController.Status loaded the order by id with NO from-status predicate and
-        // wrote 'delivered' to anything not already delivered. It now gates terminal callbacks on
-        // WebhookReportableFrom PLUS dispatch evidence, so:
-        //   * ready_to_deliver / delivery_failed / delivery_dead_letter -> delivered are real,
-        //     guarded flows (a late ACK for an order that WAS dispatched), and the machine now
-        //     blesses them outright — no exemption left to hold;
-        //   * rejected_by_supplier -> delivered has no writer at all now: the webhook refuses it
-        //     (rejected_by_supplier is excluded from WebhookReportableFrom) and no dispatch can
-        //     produce it (the delivery claim never admits a rejected order), so the OBSERVER dropped
-        //     it too — nothing to exempt.
-        //
-        // rejected_by_supplier -> delivery_failed SURVIVES, and is now the only webhook-adjacent
-        // entry left. It is NOT webhook-reachable (a "rejected" callback writes rejected_by_supplier),
-        // but it is still reachable WITHOUT the webhook: DeliveryService's pre-claim failure paths
-        // (FailMissingConfigAsync / FailBeforeDispatchAsync) write delivery_failed with no status
-        // check, racing the enqueue-time guards in OrdersController.Redeliver /
-        // OpsController.RequeueDelivery. Rare, but real — and the OBSERVER LISTS it as expected, so it
-        // stays silent when it fires. That silence is precisely WHY this exemption exists: the
-        // assertion below flags observer-listed edges the machine calls impossible, and this is one.
+        // rejected_by_supplier -> delivery_failed is reachable through DeliveryService's pre-claim
+        // failure paths (FailMissingConfigAsync / FailBeforeDispatchAsync), which write
+        // delivery_failed with no status check, racing the enqueue-time guards in
+        // OrdersController.Redeliver / OpsController.RequeueDelivery. Rare, but real — and the
+        // OBSERVER LISTS it as expected, so it stays silent when it fires. That silence is precisely
+        // WHY this exemption exists: the assertion below flags observer-listed edges the machine
+        // calls impossible, and this is one.
         Edge(RejectedBySupplier, DeliveryFailed),
     };
 
@@ -251,60 +331,74 @@ public class OrderStatusMachineTests
             "which would silently re-open the drift it was hiding. Delete the listed entries.");
     }
 
+    /// <summary>
+    /// EVERY edge that ends in <c>delivered</c>, in BOTH maps, must have a production writer.
+    ///
+    /// <para><b>Why this test exists.</b> The two-sided invariant above compares the maps to EACH
+    /// OTHER, so it is structurally blind to an edge both maps agree on that nothing performs — and
+    /// WP-09 created four of them at once. The retired inbound webhook was the writer for
+    /// <c>ready_to_deliver → delivered</c>, <c>delivery_held → delivered</c>,
+    /// <c>delivery_failed → delivered</c> and <c>delivery_dead_letter → delivered</c>; when it went,
+    /// the edges stayed in both maps with comments still citing "supplier status webhooks" and "a
+    /// late supplier ACK". The observer would then have stayed SILENT on four transitions nothing
+    /// can perform — the exact drift its own "both maps or neither" comment warns about, in the one
+    /// direction the sibling test cannot see.</para>
+    ///
+    /// <para><b>Why <c>delivered</c> specifically is testable.</b> Its writers are enumerable and
+    /// each one is gated by a NAMED set rather than a literal, so this assertion reads the same
+    /// declarations production reads instead of keeping a third hand-copied list:</para>
+    /// <list type="bullet">
+    ///   <item><c>DeliveryService.PersistAttemptAsync</c> — the automatic writer. It is only ever
+    ///     reached AFTER the dispatch/retry claim, and the claim resyncs the tracked entity's
+    ///     <c>Status</c> AND its <c>OriginalValue</c> to <c>delivering</c> (both the relational and
+    ///     the InMemory branch) precisely so the observer diffs <c>delivering → delivered</c>. Its
+    ///     pre-claim siblings (<c>FailMissingConfigAsync</c> / <c>FailBeforeDispatchAsync</c>) pass
+    ///     a FAILED result, so they can only write <c>delivery_failed</c> /
+    ///     <c>rejected_by_supplier</c>, never <c>delivered</c>.</item>
+    ///   <item><c>OrdersController.MarkDelivered</c> — the manual writer, gated (twice) on
+    ///     <see cref="OrderStatusMachine.ManuallyDeliverableFrom"/>.</item>
+    /// </list>
+    ///
+    /// <para><b>The general case is NOT tested, and deliberately so.</b> "Every edge in both maps
+    /// has a writer" cannot be asserted in general: a status write is an arbitrary assignment
+    /// anywhere in the solution, tracked or via <c>ExecuteUpdateAsync</c>, and reflection cannot see
+    /// method bodies. A source scan for <c>Status =</c> would find the writes but not the from-state
+    /// each one is reachable in, which is the whole question. So the invariant is enforced where the
+    /// writers ARE named — and adding a status to a named gate is the moment to extend this test to
+    /// it.</para>
+    /// </summary>
     [Fact]
-    public void WebhookReportableFrom_IsExactlyTheStatesThatCanFollowADispatch()
+    public void EveryInboundDeliveredEdge_HasAProductionWriter()
     {
-        // Membership means "an order in this state MAY have been dispatched" -- NOT "was". The set
-        // is only HALF of the webhook guard: two of its members (ready_to_deliver, delivery_held)
-        // are also reachable with no dispatch at all, so WebhookIngressController additionally
-        // requires dispatch EVIDENCE -- not merely a DeliveryAttempt row (four pre-dispatch gates
-        // write one having sent nothing) but a marker only the dispatch sequence writes:
-        // IdempotencyKey or ArtifactSha256. rejected_by_supplier is deliberately absent (a supplier
-        // that rejected must not silently flip the order to delivered).
-        //
-        // delivery_unconfirmed (2026-07-23) is the one member whose membership is sound on its own:
-        // its only writer is DeliveryService.ParkUnconfirmedAsync, which finalises a re-adopted row
-        // that keeps its pre-send IdempotencyKey -- every real park carries a marker. Admitted so
-        // the supplier's own callback can resolve a park (positive arrival evidence, the one thing
-        // the park lacks); pinned by WebhookIngressControllerTests' ParkedOrder tests and
-        // WebhookStatusClaimPostgresTests.Status_ParkedOrder_IsClaimed_AndTheSlaWindowCloses.
-        OrderStatusMachine.WebhookReportableFrom.Should()
-            .BeEquivalentTo(new[]
-            {
-                ReadyToDeliver, Delivering, Delivered,
-                DeliveryFailed, DeliveryDeadLetter, DeliveryHeld,
-                DeliveryUnconfirmed,
-            });
-    }
+        // delivering: DeliveryService's claim leaves every claimed row here before the outcome
+        // write. ManuallyDeliverableFrom: the operator settlement endpoint's own gate.
+        var writable = new HashSet<string>(OrderStatusMachine.ManuallyDeliverableFrom, StringComparer.Ordinal)
+        {
+            Delivering,
+        };
 
-    [Fact]
-    public void WebhookReportableFrom_ExcludesEveryPreTransformState()
-    {
-        // The bug this guards: a callback could force 'delivered' onto an order still in the
-        // parse/review pipeline -- marked shipped, never sent. Pinned explicitly so a future
-        // widening of the set has to argue with this test.
-        //
-        // NAME: pre-TRANSFORM, not pre-dispatch. The set is NOT free of pre-dispatch states --
-        // ready_to_deliver is where every transformed order rests BEFORE it is ever sent, and
-        // delivery_held is reachable via the pre-send billing gate. Asserting "excludes every
-        // pre-dispatch state" would be false, and believing it is what produced the bug this
-        // branch had to fix: the status check alone let a callback mark a never-dispatched order
-        // delivered. The dispatch-evidence half of the guard is pinned by WebhookIngressControllerTests
-        // .Status_TerminalCallbackForReportableStatusWithNoDeliveryAttempt_Returns409_AndDoesNotMutate
-        // (no row at all) and .Status_TerminalCallbackForOrderWhoseOnlyAttemptFailedBeforeDispatch_
-        // Returns409 (a row exists, but nothing was sent -- a row is not a send), with the marker
-        // premise itself pinned by
-        // DeliveryProvenanceTests.PreDispatchFailuresWriteNoDispatchMarker.
-        foreach (var preTransform in new[]
-                 {
-                     PendingParse, Parsing, Unrouted, PendingReview, Ready,
-                     Transforming, TransformFailed, Failed,
-                 })
-            OrderStatusMachine.WebhookReportableFrom.Should().NotContain(preTransform);
+        var machineInbound = OrderStatusMachine.Transitions
+            .Where(kv => kv.Value.Contains(Delivered))
+            .Select(kv => kv.Key)
+            .ToHashSet(StringComparer.Ordinal);
 
-        // Terminal, not pre-transform -- excluded for its own reason (no silent un-rejection),
-        // so it is asserted separately rather than bundled into the list above.
-        OrderStatusMachine.WebhookReportableFrom.Should().NotContain(RejectedBySupplier);
+        var observerInbound = OrderStatusTransitionObserver.AllowedTransitions
+            .Where(kv => kv.Value.Contains(Delivered))
+            .Select(kv => kv.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+        machineInbound.Should().BeEquivalentTo(writable,
+            "OrderStatusMachine.Transitions may list an X -> delivered edge only where production can " +
+            "actually write 'delivered' from X: DeliveryService's post-claim outcome write (always from " +
+            "'delivering'), or OrdersController.MarkDelivered (gated on ManuallyDeliverableFrom). An extra " +
+            "from-state blesses a move nothing performs; a missing one would make IsAllowed reject a real " +
+            "flow. If a new writer is genuinely added, widen its NAMED gate — not this list");
+
+        observerInbound.Should().BeEquivalentTo(writable,
+            "OrderStatusTransitionObserver.AllowedTransitions may treat an X -> delivered edge as expected " +
+            "only where production can actually write 'delivered' from X. The observer is generous by " +
+            "design, but generosity toward an IMPOSSIBLE edge buys nothing and costs the warning that would " +
+            "otherwise fire the day something starts performing it");
     }
 
     // ── The canonical delivery-claim sets (#36) ──────────────────────────────────────────────
@@ -442,18 +536,571 @@ public class OrderStatusMachineTests
             "OpsController.RequeueDelivery rewrites the order to delivery_failed before enqueuing " +
             "DeliverOrderJob");
 
+    // ── The dead-end invariant (WP-19) ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The invariant, as a PURE function over a map, so the guard below can be proven to catch
+    /// something rather than merely asserted to hold today.
+    /// </summary>
+    /// <returns>Every status that has no way out and was never declared finished.</returns>
+    /// <remarks>
+    /// Enumerates KEYS <b>and</b> TARGETS. Keys alone was the hole: a status reachable only as a
+    /// target has no row, so <c>NextStatuses</c> returns the empty set and <c>IsTerminal</c> returns
+    /// true for it — a dead end by every definition the product uses — and a key-only scan never
+    /// looks at it. That is not an exotic shape; it is what a new status looks like the first time
+    /// someone writes the edge INTO it and forgets to give it a row, which is the same omission that
+    /// made <c>rejected_by_supplier</c> a dead end, arriving through the one door the guard did not
+    /// watch. Pinned by <see cref="DeadEndInvariant_CatchesAStatusThatExistsOnlyAsATransitionTarget"/>.
+    /// </remarks>
+    private static IReadOnlyList<string> DeadEnds(
+        IReadOnlyDictionary<string, IReadOnlySet<string>> transitions,
+        IReadOnlySet<string> declaredTerminal)
+    {
+        var everyStatus = transitions.Keys
+            .Concat(transitions.Values.SelectMany(targets => targets))
+            .ToHashSet(StringComparer.Ordinal);
+
+        return everyStatus
+            .Where(status => !declaredTerminal.Contains(status))
+            .Where(status => !transitions.TryGetValue(status, out var next) || next.Count == 0)
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Every <c>OrderStatusConstants</c> string, by REFLECTION.
+    ///
+    /// <para>The completeness check used to compare against a 16-name array typed out by hand, which
+    /// is a second copy of a fact that lives in the code — so a 17th constant would have been absent
+    /// from the machine AND absent from the list that was supposed to notice, and both halves would
+    /// have stayed green. Reading the constants themselves removes the copy.</para>
+    ///
+    /// <para>Deliberately <c>const string</c> fields only: <c>FailureBucket</c> is a
+    /// <c>static readonly</c> SET of statuses, not a status, and would otherwise be swept in.</para>
+    /// </summary>
+    private static IReadOnlyList<string> DeclaredStatusConstants(Type constantsType)
+        => constantsType
+            .GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+            .Where(f => f is { IsLiteral: true, IsInitOnly: false } && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// <b>The regression guard for the whole defect class.</b> No status may have an empty edge set
+    /// unless the product DECLARES the order finished there.
+    ///
+    /// <para><b>The defect it exists for.</b> <c>rejected_by_supplier</c> had no outgoing edges, was
+    /// absent from <see cref="OrderStatusMachine.RedeliverableFrom"/>, and was where
+    /// <c>DeliveryService</c> routed every 400–499. An expired API key (401), a moved endpoint (404)
+    /// or a rate limit (429) therefore parked a perfectly deliverable PO in a state that NO control
+    /// in the product could move — the operator's only recourse was a database edit. Every
+    /// individual fact looked defensible in review; the hole was only visible by asking the question
+    /// this test asks.</para>
+    ///
+    /// <para><b>Why <see cref="OrderStatusMachine.DeclaredTerminal"/> and not
+    /// <c>IsTerminal</c>.</b> <c>IsTerminal</c> DERIVES terminality from an empty edge set, so
+    /// asserting "every terminal status has no exits" is a tautology and asserting "every
+    /// non-terminal status has exits" is vacuous — the invariant only bites against a set that is
+    /// declared independently of the map. Adding a status to <c>DeclaredTerminal</c> to silence this
+    /// test is therefore a visible product decision ("an order that reaches this is over"), which is
+    /// exactly the review this defect escaped.</para>
+    ///
+    /// <para><b>Scope, honestly.</b> This proves a status has an EDGE, not that a human can reach
+    /// it. An edge with no production writer is a different defect, caught by
+    /// <see cref="EveryInboundDeliveredEdge_HasAProductionWriter"/> and by
+    /// <see cref="Machine_Transitions_AreASupersetOf_ObserverAllowedTransitions"/>; the writers for
+    /// the edges this test unblocked are named in
+    /// <see cref="RejectedBySupplier_ExitsThroughACorrectionLoop_NotARedelivery"/>. Two weak
+    /// guarantees over the same map are what make the pair strong: an edge no one writes fails one,
+    /// a status with no edge fails the other.</para>
+    /// </summary>
+    [Fact]
+    public void NoNonTerminalStatus_IsADeadEnd()
+        => DeadEnds(OrderStatusMachine.Transitions, OrderStatusMachine.DeclaredTerminal)
+            .Should().BeEmpty(
+                "a status with no outgoing transitions that the product does NOT declare finished is " +
+                "an order the operator cannot move: not redeliverable, not retryable, not resolvable, " +
+                "fixable only by editing the database. If the listed status really is an ending, say " +
+                "so in OrderStatusMachine.DeclaredTerminal and justify it there; otherwise give it the " +
+                "exit the product owes it");
+
+    /// <summary>
+    /// Proof that the guard above BITES. A test that has only ever been green is indistinguishable
+    /// from a test that cannot fail — and this one is guarding a defect that survived review by
+    /// looking reasonable, so "it passes" is not the evidence that matters. The same
+    /// <see cref="DeadEnds"/> function is run against a synthetic map carrying exactly the defect,
+    /// and must report it.
+    /// </summary>
+    [Fact]
+    public void DeadEndInvariant_CatchesASyntheticEmptyEdgeStatus()
+    {
+        var synthetic = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+        {
+            [Ready]              = new HashSet<string>(StringComparer.Ordinal) { Transforming },
+            [Transforming]       = new HashSet<string>(StringComparer.Ordinal) { ReadyToDeliver },
+            // ready_to_deliver needs a row of its own now that the invariant enumerates TARGETS as
+            // well as keys — without one it would be a second (accidental) dead end and this test
+            // would stop isolating the one it is about.
+            [ReadyToDeliver]     = new HashSet<string>(StringComparer.Ordinal) { Ready },
+            // The defect, reproduced: a failure state with nowhere to go that nobody declared final.
+            [RejectedBySupplier] = new HashSet<string>(StringComparer.Ordinal),
+            // A declared ending in the same map, so the assertion below shows the guard
+            // DISTINGUISHES the two rather than flagging every empty set it sees.
+            [Failed]             = new HashSet<string>(StringComparer.Ordinal),
+        };
+
+        DeadEnds(synthetic, OrderStatusMachine.DeclaredTerminal)
+            .Should().Equal(new[] { RejectedBySupplier });
+    }
+
+    /// <summary>
+    /// The hole the guard above still had: it only ever looked at the map's KEYS.
+    ///
+    /// <para>A status that appears only as a TARGET is never examined — and yet
+    /// <see cref="OrderStatusMachine.NextStatuses"/> returns the empty set for it and
+    /// <see cref="OrderStatusMachine.IsTerminal"/> returns <c>true</c>, so it is a real dead end by
+    /// every definition the product uses. An order routed there has no way out and the invariant
+    /// stays green. That is not a hypothetical shape: it is what happens the first time someone adds
+    /// a status by writing the edge INTO it and forgetting to give it a row of its own — the exact
+    /// omission that made <c>rejected_by_supplier</c> a dead end, arriving through the one door the
+    /// guard does not watch.</para>
+    ///
+    /// <para>Reproduced with a target that has no key, so the assertion below fails on the
+    /// key-only implementation and passes once the invariant enumerates targets too.</para>
+    /// </summary>
+    [Fact]
+    public void DeadEndInvariant_CatchesAStatusThatExistsOnlyAsATransitionTarget()
+    {
+        const string quarantined = "quarantined";
+
+        var synthetic = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+        {
+            // 'quarantined' is reachable — and has no row, so nothing can move an order out of it.
+            [Ready]        = new HashSet<string>(StringComparer.Ordinal) { Transforming, quarantined },
+            [Transforming] = new HashSet<string>(StringComparer.Ordinal) { ReadyToDeliver },
+            [ReadyToDeliver] = new HashSet<string>(StringComparer.Ordinal) { Ready },
+            // A declared ending, so the assertion shows the guard still DISTINGUISHES the two.
+            [Failed]       = new HashSet<string>(StringComparer.Ordinal),
+        };
+
+        DeadEnds(synthetic, OrderStatusMachine.DeclaredTerminal)
+            .Should().Equal(new[] { quarantined },
+                "a status reachable only as a target has no outgoing edges at all — NextStatuses " +
+                "returns the empty set and IsTerminal returns true — so it is a dead end the " +
+                "product never declared, and examining only the map's keys cannot see it");
+    }
+
+    /// <summary>
+    /// <see cref="OrderStatusMachine.DeclaredTerminal"/> is a product decision, pinned exactly so
+    /// widening it is a deliberate edit and not a convenient way to quiet the invariant above.
+    /// </summary>
+    [Fact]
+    public void DeclaredTerminal_IsExactlyFailed()
+        => OrderStatusMachine.DeclaredTerminal.Should().BeEquivalentTo(new[] { Failed },
+            "'failed' is a bad SOURCE FILE — it cannot be fixed in place, and recovery is a new " +
+            "order row (ParseOrderJob refuses to re-drive it; OrdersController.Transform answers " +
+            "'Upload a corrected file'). Nothing else in the pipeline is finished in that sense");
+
+    /// <summary>
+    /// The writers behind rejected_by_supplier's exit, named — because an edge with no writer is
+    /// not an exit, it is the SAME defect wearing the invariant's clothes.
+    ///
+    /// <para>The exit is a CORRECTION loop, deliberately: a genuine business rejection means the
+    /// supplier read the document and refused it, so the cure is a corrected document, never a
+    /// re-send of the same bytes. Both doors are existing product surface:</para>
+    /// <list type="bullet">
+    ///   <item><c>OrderResolutionService.ResolveAsync</c> — recomputes <c>pending_review|ready</c>
+    ///     with NO from-status guard, so correcting the line or header the supplier named already
+    ///     moves a rejected order out. (This edge was live in production the whole time; the map
+    ///     called the status terminal anyway, which is how the dead end read as intentional.)</item>
+    ///   <item><c>OrderTransformService</c>'s claim — accepts
+    ///     <see cref="OrderStatusMachine.ClaimableForTransformFrom"/>, which now includes
+    ///     rejected_by_supplier for the same reason it includes transform_failed: it holds no
+    ///     shippable artifact and re-transforming is the intended cure.</item>
+    /// </list>
+    /// <para>And the door that stays SHUT: no delivery claim set admits rejected_by_supplier, so
+    /// nothing re-sends the refused artifact in place.</para>
+    /// </summary>
+    [Fact]
+    public void RejectedBySupplier_ExitsThroughACorrectionLoop_NotARedelivery()
+    {
+        OrderStatusMachine.NextStatuses(RejectedBySupplier).Should().BeEquivalentTo(
+            new[] { PendingReview, Ready, Transforming },
+            "these three are exactly the correction-loop edges, and each has a named production " +
+            "writer: resolve recomputes pending_review|ready, and the transform claim admits the status");
+
+        OrderStatusMachine.ClaimableForTransformFrom.Should().Contain(RejectedBySupplier,
+            "'Transform again' is the operator's one-click exit — the transform_failed precedent, " +
+            "for the same reason: the order holds no artifact anyone may ship, and re-transforming " +
+            "with the corrected mapping is the cure");
+
+        foreach (var claim in new[]
+                 {
+                     OrderStatusMachine.ClaimableForDispatchFrom,
+                     OrderStatusMachine.ClaimableForAutomaticDispatchFrom,
+                     OrderStatusMachine.ClaimableForRetryFrom,
+                     OrderStatusMachine.RedeliverableFrom,
+                     OrderStatusMachine.RetryableFrom,
+                 })
+            claim.Should().NotContain(RejectedBySupplier,
+                "the supplier read these bytes and refused them — re-sending them unchanged is the " +
+                "one thing that certainly does not help, and it would hand the supplier a duplicate " +
+                "of a document they already answered");
+    }
+
+    // ── The resolve recompute, generalised (the WP-19 follow-up) ──────────────────────────────
+
+    /// <summary>
+    /// Statuses no order is ever IN, and which a resolve therefore cannot be issued from.
+    ///
+    /// <para><c>pending_parse</c> is the entity's C# default
+    /// (<c>PurchaseOrderEntity.Status = "pending_parse"</c>) and nothing else — every one of the
+    /// four construction sites overrides it before the row is saved
+    /// (<c>OrderIngestionService.cs:216</c> writes pending_review|ready, <c>:350</c> writes
+    /// parsing, <c>:523</c> writes unrouted|pending_review|ready, <c>SampleOrderService.cs:123</c>
+    /// writes parsing), and no writer anywhere assigns it afterwards — the stuck-order requeue
+    /// deliberately re-writes <c>parsing</c> instead, and says why
+    /// (<c>StuckOrderDetectionService.cs:90-101</c>: resetting to pending_parse made the
+    /// re-enqueued job skip the parse and strand the order). Ask the code rather than trusting
+    /// this list:</para>
+    /// <code>grep -rn 'Status *= *"pending_parse"\|Status[ ,]*OrderStatusConstants\.PendingParse' --include=*.cs</code>
+    ///
+    /// <para>This rests on exactly the same fact as
+    /// <c>Edge(PendingParse, PendingReview)</c> / <c>Edge(PendingParse, Ready)</c> in
+    /// <see cref="KnownObserverOnlyEdges"/> — one fact, two consumers, so a writer appearing
+    /// tomorrow invalidates both together rather than one of them quietly.</para>
+    /// </summary>
+    private static readonly IReadOnlySet<string> StatusesNoOrderIsEverIn =
+        new HashSet<string>(StringComparer.Ordinal) { PendingParse };
+
+    /// <summary>
+    /// The generalisation of the two <c>rejected_by_supplier</c> rows WP-19 added, and the guard
+    /// that stops this from being re-discovered one from-state at a time.
+    ///
+    /// <para><b>The defect.</b> <c>OrderResolutionService.ResolveAsync</c> (:242) and
+    /// <c>AcceptAiSuggestionsAsync</c> (:393) both end with
+    /// <c>Status = Lines.Any(NeedsReview) ? pending_review : ready</c>. Neither carries a
+    /// from-status guard; neither endpoint adds one (<c>OrdersController.Resolve</c> :483 validates
+    /// the request BODY, <c>AcceptAiSuggestions</c> :1737 validates nothing). The only guard is
+    /// <c>IsFinished</c> = <see cref="OrderStatusMachine.DeclaredTerminal"/>. So the from-states a
+    /// resolve can be issued from are every status except <c>failed</c> and the never-written
+    /// <see cref="StatusesNoOrderIsEverIn"/> — and both maps owed each of them TWO edges. WP-19
+    /// reconciled the pair for <c>rejected_by_supplier</c> alone, because that status was a dead
+    /// end and the edges were the way out; the writer is identical for the rest, which stayed
+    /// marked impossible while performing in production. The observer's cost is concrete: it
+    /// logged "Unexpected order status transition" on ordinary operator actions, the false positive
+    /// its own doc says trains operators to ignore it.</para>
+    ///
+    /// <para><b>Why it asserts over BOTH maps.</b>
+    /// <see cref="Machine_Transitions_AreASupersetOf_ObserverAllowedTransitions"/> is
+    /// one-directional by design (observer ⊆ machine), so a MACHINE edge absent from the observer
+    /// is invisible to it — which is how <c>ready_to_deliver → ready</c> and
+    /// <c>delivery_dead_letter → ready</c> stayed missing from the observer even though the machine
+    /// allowed them and <c>OrderMappingOverrideService.IsPastReady</c> (:111) performs both as
+    /// tracked MV-1 writes. Checking the two maps against the CALL SITE, rather than against each
+    /// other, is what sees that direction.</para>
+    ///
+    /// <para><b>Derived, not transcribed</b> — the from-state list comes from
+    /// <see cref="OrderStatusMachine.AllStatuses"/>, so a status added tomorrow is covered without
+    /// anyone editing this test. That is the difference between fixing eleven edges and closing the
+    /// class; the [InlineData] rows above are the readable enumeration of the same fact.</para>
+    ///
+    /// <para><b>WP-23 — the third exclusion.</b> This test's own closing message asked the next
+    /// packet to "gate the endpoint and say so … with the call-site evidence" for any from-state a
+    /// resolve genuinely cannot be issued from. WP-23 did exactly that for the two holes c61fe30
+    /// named and WP-23a for the two machine-owned steps (<c>parsing</c>, <c>transforming</c>), so
+    /// <see cref="OrderStatusMachine.ResolveHeldFrom"/> joins DeclaredTerminal and
+    /// StatusesNoOrderIsEverIn as a reason a status is NOT in this list. It is deliberately a THIRD
+    /// exclusion rather than an addition to either of those: the order genuinely IS in the status
+    /// (unlike StatusesNoOrderIsEverIn) and is not finished (unlike DeclaredTerminal) — it is simply
+    /// refused this one operation, at the endpoint, for now. <b>The edges themselves are NOT
+    /// pruned</b>, and <see cref="EveryResolveHeldStatus_KeepsBothRecomputeEdges"/> asserts the same
+    /// two edges for exactly the excluded statuses, so this narrowing costs zero coverage.</para>
+    /// </summary>
+    [Fact]
+    public void EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges()
+    {
+        var resolvableFrom = OrderStatusMachine.AllStatuses
+            .Except(OrderStatusMachine.DeclaredTerminal, StringComparer.Ordinal)
+            .Except(StatusesNoOrderIsEverIn, StringComparer.Ordinal)
+            .Except(OrderStatusMachine.ResolveHeldFrom, StringComparer.Ordinal)
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+
+        // The bound is a VACUITY guard, not a pin on the count: it exists so a machine whose status
+        // list shrank — or whose three exclusion sets grew to swallow it — fails loudly instead of
+        // asserting over an empty list. It is therefore EXPECTED to move when an exclusion set is
+        // widened deliberately, and WP-23a is the first time that happened: adding parsing +
+        // transforming to ResolveHeldFrom took this list from 12 to exactly 10 (16 statuses − 1
+        // DeclaredTerminal − 1 StatusesNoOrderIsEverIn − 4 ResolveHeldFrom), which turned `> 10` red
+        // on a widening that is correct. Lowered to 5 rather than re-pinned at 10 so the next
+        // deliberate widening does not have to edit this line to stay honest; 5 is still far above
+        // the near-empty case this is here to catch.
+        resolvableFrom.Should().HaveCountGreaterThan(5,
+            "if the machine's status list ever shrinks to nothing — or the three exclusion sets grow " +
+            "to cover nearly all of it — this assertion must fail loudly rather than pass over an " +
+            "empty or near-empty list");
+
+        var missing = new List<string>();
+        foreach (var from in resolvableFrom)
+        foreach (var to in new[] { PendingReview, Ready })
+        {
+            // A self-transition is not an edge: the recompute writing the status the order is
+            // already in is a no-op the observer treats as expected and the machine need not list.
+            if (string.Equals(from, to, StringComparison.Ordinal)) continue;
+
+            if (!OrderStatusMachine.IsAllowed(from, to))
+                missing.Add($"machine: {Edge(from, to)}");
+            if (!OrderStatusTransitionObserver.IsExpected(from, to))
+                missing.Add($"observer: {Edge(from, to)}");
+        }
+
+        missing.Should().BeEmpty(
+            "a resolve can be issued from every one of these statuses — the recompute in " +
+            "OrderResolutionService.ResolveAsync/AcceptAiSuggestionsAsync has no from-status guard " +
+            "and neither endpoint adds one — so both maps must list pending_review AND ready as " +
+            "successors. A missing MACHINE edge makes IsAllowed reject a live production write; a " +
+            "missing OBSERVER edge makes the log-only observer WARN on a legitimate operator " +
+            "action, which is the false positive that teaches operators to ignore it. If a resolve " +
+            "genuinely cannot be issued from one of these, gate the endpoint and say so in " +
+            "ResolveHeldFrom (or StatusesNoOrderIsEverIn, or DeclaredTerminal) with the call-site " +
+            "evidence — do not leave the map contradicting the writer");
+    }
+
+    /// <summary>
+    /// WP-23, and the guard against the pruning this packet makes tempting (TRAP 1).
+    ///
+    /// <para><see cref="OrderStatusMachine.ResolveHeldFrom"/> stops the two RECOMPUTE ENDPOINTS from
+    /// being issued against <c>unrouted</c> and <c>delivering</c> (and, after WP-23a, <c>parsing</c>
+    /// and <c>transforming</c> — which is precisely why this test derives its rows from the set
+    /// instead of listing them). It says nothing about whether the
+    /// transition is possible, and the next reader will be tempted to conclude that it does: "no
+    /// writer performs unrouted → ready any more, so the edge is dead — prune it." That is the
+    /// reasoning c61fe30 refused, and it is how <c>rejected_by_supplier</c> became an unintended dead
+    /// end in the first place. An edge is removed on evidence about WRITERS, never on the existence
+    /// of a guard on one caller: the machine is documented as a superset of what the code performs,
+    /// so a legal-but-unperformed edge is correct by construction, and the guard is an endpoint
+    /// admission rule that a future writer (or a lifted hold) is free to make live again.</para>
+    ///
+    /// <para>Asserted over BOTH maps and over the DERIVED set, so widening the hold tomorrow pulls
+    /// the new status into this protection automatically. Deliberately overlaps
+    /// <see cref="EveryStatusAResolveCanBeIssuedFrom_HasBothRecomputeEdges"/>'s former range: adding
+    /// the ResolveHeldFrom exclusion there must not quietly drop these edges from coverage.</para>
+    /// </summary>
+    [Fact]
+    public void EveryResolveHeldStatus_KeepsBothRecomputeEdges()
+    {
+        OrderStatusMachine.ResolveHeldFrom.Should().NotBeEmpty(
+            "an empty hold would make this assertion pass over nothing");
+
+        var missing = new List<string>();
+        foreach (var from in OrderStatusMachine.ResolveHeldFrom)
+        foreach (var to in new[] { PendingReview, Ready })
+        {
+            if (string.Equals(from, to, StringComparison.Ordinal)) continue;
+
+            if (!OrderStatusMachine.IsAllowed(from, to))
+                missing.Add($"machine: {Edge(from, to)}");
+            if (!OrderStatusTransitionObserver.IsExpected(from, to))
+                missing.Add($"observer: {Edge(from, to)}");
+        }
+
+        missing.Should().BeEmpty(
+            "c61fe30 added these edges to both status maps deliberately, because the write was real " +
+            "and the maps were wrong. WP-23's endpoint guard changes who may ISSUE the write; it " +
+            "does not make the transition impossible, and pruning the edges on the strength of a " +
+            "guard is the circular reasoning DeclaredTerminal exists to break");
+    }
+
+    /// <summary>
+    /// WP-23 — the hold is exactly the statuses this guard refuses, and no more. Exact rather than a
+    /// superset for the same reason as
+    /// <see cref="RedeliverableFrom_IsExactlyTheThreeOperatorSendableStatuses"/>: every status added
+    /// here takes a control away from operators, so widening must be a deliberate edit with a
+    /// product argument, never a side effect of a refactor.
+    ///
+    /// <para><b>This asserts a DECISION, not a survey.</b> It was first written as
+    /// <c>…IsExactlyTheTwoHolesTheRecomputeDestroys</c>, and an adversarial review showed that name
+    /// and its justification were simply false: <c>parsing</c> is a third from-state where the
+    /// recompute destroys something, and worse than the first two rather than milder. Naming the set
+    /// after a claim about the world meant the test asserted that claim (R5) — and the claim was
+    /// wrong. It asserts what the product decided instead, which is why widening it is an edit HERE
+    /// and not a side effect anywhere else.</para>
+    ///
+    /// <para><b>WP-23a widened it, deliberately.</b> <c>parsing</c> and <c>transforming</c> are in.
+    /// The evidence for each is on <see cref="OrderStatusMachine.ResolveHeldFrom"/>; the two facts
+    /// that decided it are that <c>parsing</c> is the window <c>AssignSupplier</c> flips an
+    /// <c>unrouted</c> order INTO (<c>OrdersController.cs:747-756</c>), so refusing <c>unrouted</c>
+    /// alone left this set's own lockout reachable one step later, and that <c>transforming</c>'s
+    /// COMPLETION write is unclaimed (<c>OrderTransformService.cs:733</c>) while
+    /// <c>TransformOrderJob.cs:120</c> enqueues delivery straight after it — the only one of the four
+    /// where the correction is not just lost but a stale document is sent. The set is still not
+    /// claimed to be exhaustive.</para>
+    /// </summary>
+    [Fact]
+    public void ResolveHeldFrom_IsExactlyTheStatusesThisGuardRefuses()
+        => OrderStatusMachine.ResolveHeldFrom.Should().BeEquivalentTo(
+            new[] { Unrouted, Delivering, Parsing, Transforming },
+            "each of these four takes a control away from operators, so each must be a deliberate " +
+            "edit here with call-site evidence on ResolveHeldFrom. unrouted: the recompute clears " +
+            "the routing hold with SupplierId still null, after which AssignSupplier's atomic " +
+            "`Status == Unrouted` claim answers 409 forever and no control in the product can route " +
+            "the order. delivering: a row SITS in that status, so the recompute overwrites a live " +
+            "dispatch claim whose outcome write then lands on top of the correction. parsing: both " +
+            "parse-persist claims require `Status == Parsing` and Fail on 0 rows BEFORE inserting " +
+            "the lines, the retry then no-ops and the job lands GREEN, and AssignSupplier flips an " +
+            "unrouted order INTO parsing — so leaving it open left the unrouted lockout reachable " +
+            "through the re-parse. transforming: the transform CLAIM is atomic but its completion " +
+            "write is not, so it lands over the correction and ships an artifact built before it. " +
+            "This is still NOT claimed to be the complete list of destructive from-states: a fifth " +
+            "arrives by naming the writer and the line, never as a refactor's side effect");
+
+    /// <summary>
+    /// WP-23 — <c>ResolveHoldMessage</c>'s <c>switch</c> arms are the ONE place a held status is
+    /// spelled out a second time, so they are the one place the set can silently drift from its
+    /// consumer. A status removed from <see cref="OrderStatusMachine.ResolveHeldFrom"/> whose arm is
+    /// left behind fails nothing on its own: the arm is simply never reached, and the next reader
+    /// finds a sentence implying a refusal the product no longer performs.
+    ///
+    /// <para>So the complement is asserted: every status the guard does NOT refuse must fall through
+    /// to the generic arm. Derived from <see cref="OrderStatusMachine.AllStatuses"/>, so this needs
+    /// no maintenance when a status is added on either side.</para>
+    /// </summary>
+    [Fact]
+    public void ResolveHoldMessage_HasNoArmForAStatusTheGuardDoesNotRefuse()
+    {
+        var fallback = OrderStatusMachine.ResolveHoldMessage("a-status-the-machine-has-never-heard-of");
+
+        var stray = OrderStatusMachine.AllStatuses
+            .Except(OrderStatusMachine.ResolveHeldFrom, StringComparer.Ordinal)
+            .Where(s => !string.Equals(OrderStatusMachine.ResolveHoldMessage(s), fallback, StringComparison.Ordinal))
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+
+        stray.Should().BeEmpty(
+            "a bespoke refusal sentence for a status the guard admits is unreachable code that reads " +
+            "like a rule — the second hand-written enumeration of the held set, and the exact drift " +
+            "the five delivery-claim literals were centralised to prevent");
+    }
+
+    /// <summary>
+    /// WP-23 — the two refusals on the resolve path stay separate concepts.
+    ///
+    /// <para><see cref="OrderStatusMachine.DeclaredTerminal"/> is a permanent verdict about the ORDER
+    /// ("its source file could not be read; there is nothing here to correct"), enforced in
+    /// <c>OrderResolutionService.IsFinished</c> and answered with a 400.
+    /// <see cref="OrderStatusMachine.ResolveHeldFrom"/> is a temporary verdict about the MOMENT ("do
+    /// X first, then correct it"), enforced at the endpoint and answered with a 409. Merging them
+    /// would give one of the two cases the other's status code and the other's sentence — and it is
+    /// the sentence that decides whether the operator's next action is right.</para>
+    /// </summary>
+    [Fact]
+    public void ResolveHeldFrom_AndDeclaredTerminal_AreDisjoint()
+        => OrderStatusMachine.ResolveHeldFrom
+            .Intersect(OrderStatusMachine.DeclaredTerminal, StringComparer.Ordinal)
+            .Should().BeEmpty(
+                "a status in both sets would be refused twice with two different codes and two " +
+                "different sentences, and which one an operator sees would depend on call order");
+
+    /// <summary>
+    /// The transform claim set, pinned. It is written TWICE in OrderTransformService (a relational
+    /// <c>ExecuteUpdateAsync</c> predicate and its EF-InMemory emulation) — the same
+    /// two-copies-of-one-rule shape that made the five delivery-claim lists drift apart four times,
+    /// each time silently.
+    /// </summary>
+    [Fact]
+    public void ClaimableForTransformFrom_IsExactlyTheFourReTransformableStatuses()
+        => OrderStatusMachine.ClaimableForTransformFrom.Should().BeEquivalentTo(
+            new[] { Ready, Transforming, TransformFailed, RejectedBySupplier },
+            "ready is the normal entry; transforming lets a crashed attempt re-run; transform_failed " +
+            "and rejected_by_supplier are the two recovery doors — both hold no shippable artifact, " +
+            "so re-transforming can neither duplicate a send nor ship stale content. Any status past " +
+            "transform (ready_to_deliver and beyond) must stay OUT: claiming one would upload a " +
+            "duplicate artifact and re-enqueue delivery, double-sending the PO");
+
+    /// <summary>
+    /// The transform leg's own 52c6431 guard, and the SIXTH copy of this rule that WP-19 found:
+    /// <c>OrdersController.Transform</c> carried its own <c>ready|transform_failed</c> literal under
+    /// a comment reading "kept in lockstep with the transform claim in OrderTransformService" — the
+    /// sentence a second hand-written copy writes just before it drifts. The endpoint commits
+    /// <c>transforming</c> and enqueues; the service then re-claims. A status the endpoint admits
+    /// but the service claim refuses leaves the order in <c>transforming</c> with no artifact, and a
+    /// job that logged a benign "already in flight or done" skip.
+    /// </summary>
+    [Fact]
+    public void TransformableFrom_IsSubsetOf_ClaimableForTransformFrom()
+        => OrderStatusMachine.TransformableFrom.Should().BeSubsetOf(
+            OrderStatusMachine.ClaimableForTransformFrom,
+            "every status the transform ENDPOINT claims must be one the transform SERVICE can " +
+            "re-claim, or the 202 is a lie and the order strands mid-transform");
+
+    /// <summary>
+    /// …and the delta is exactly <c>transforming</c>, which is a product decision: the SERVICE
+    /// admits it so a Hangfire retry can re-run a crashed attempt, while the ENDPOINT answers a
+    /// second click with 202 "already in progress" rather than racing a competing job.
+    /// </summary>
+    [Fact]
+    public void TransformEndpointAndServiceClaims_DifferExactlyBy_Transforming()
+        => OrderStatusMachine.ClaimableForTransformFrom
+            .Except(OrderStatusMachine.TransformableFrom)
+            .Should().BeEquivalentTo(new[] { Transforming },
+                "'transforming' is the ONE status only the service claim may take (crash re-run); " +
+                "widening or narrowing this delta changes whether a double-click can race a job");
+
+    /// <summary>
+    /// Completeness: every <c>OrderStatusConstants</c> string is a node in the machine, so a future
+    /// status cannot be silently absent from transition reasoning.
+    ///
+    /// <para><b>Derived, not transcribed.</b> This used to compare against a hand-typed 16-name
+    /// array — a second copy of the constants, and therefore a backstop that could only ever notice
+    /// statuses someone had already remembered to add to it. A 17th constant would slip past the
+    /// machine and past its own completeness check at the same time, which is precisely the case the
+    /// check exists for. Both sides now come from the code.</para>
+    /// </summary>
     [Fact]
     public void Machine_KnowsEveryDeclaredStatusConstant()
     {
-        // Completeness: every OrderStatusConstants string is a node in the machine,
-        // so a future status can't be silently absent from transition reasoning.
-        var declared = new[]
-        {
-            PendingParse, Parsing, PendingReview, Ready, Transforming, ReadyToDeliver,
-            Delivering, Delivered, DeliveryFailed, TransformFailed, RejectedBySupplier,
-            DeliveryDeadLetter, Failed, Unrouted, DeliveryHeld, DeliveryUnconfirmed,
-        };
-        foreach (var s in declared)
-            OrderStatusMachine.Transitions.Keys.Should().Contain(s);
+        var declared = DeclaredStatusConstants(typeof(OrderStatusConstants));
+
+        declared.Should().HaveCountGreaterThan(10,
+            "if reflection ever stops finding the constants this assertion must fail loudly rather " +
+            "than pass over an empty list");
+
+        OrderStatusMachine.Transitions.Keys.Should().Contain(declared,
+            "a declared status with no row in the machine has no transitions at all — NextStatuses " +
+            "returns the empty set and IsTerminal returns true for it, so it is a dead end nobody " +
+            "chose. Give it a row (and an exit), or declare it terminal on purpose");
+    }
+
+    /// <summary>
+    /// Proof that the reflection above WOULD see a new status — the same discipline
+    /// <see cref="DeadEndInvariant_CatchesASyntheticEmptyEdgeStatus"/> applies to the dead-end
+    /// guard. A hand-typed list looked identical to this one on a green run; the difference only
+    /// shows when a constant is added, so the test manufactures that moment instead of waiting for
+    /// it.
+    /// </summary>
+    [Fact]
+    public void ReflectionOverStatusConstants_SeesAStatusNobodyRememberedToList()
+    {
+        var found = DeclaredStatusConstants(typeof(SyntheticStatusConstants));
+
+        found.Should().Contain("quarantined",
+            "the whole point of deriving the list is that a constant added tomorrow is discovered " +
+            "without anyone editing this test");
+        found.Should().Contain(new[] { "ready", "failed" });
+        found.Should().NotContain("not_a_status",
+            "static readonly fields are not status constants — only const strings are");
+    }
+
+    /// <summary>A stand-in for a future <c>OrderStatusConstants</c>, carrying one status nobody listed.</summary>
+    private static class SyntheticStatusConstants
+    {
+        public const string Ready = "ready";
+        public const string Failed = "failed";
+        public const string Quarantined = "quarantined";
+
+        // Shaped like FailureBucket: public, static, NOT a const — must not be mistaken for a status.
+        public static readonly string NotAStatus = "not_a_status";
     }
 }

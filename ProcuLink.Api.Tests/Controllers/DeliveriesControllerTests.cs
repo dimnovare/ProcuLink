@@ -5,6 +5,7 @@ using Moq;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure;
 using Xunit;
 
@@ -185,6 +186,101 @@ public class DeliveriesControllerTests
         dto.ErrorMessage.Should().Be("Connection refused");
     }
 
+    // ── Test 5: the attempt history names its cause and its wait ──────────────
+
+    /// <summary>
+    /// WP-19 recovery. The history screen used to show a status code and a sentence; a client
+    /// wanting to offer the right recovery per attempt had to parse the sentence. The cause is
+    /// derived from the STORED columns via the same table the live classification used, so the
+    /// history and the order screen cannot disagree about the same attempt.
+    /// </summary>
+    [Fact]
+    public async Task GetDeliveryAttempts_FailedAttempts_CarryTheirCauseAndTheSuppliersRequestedWait()
+    {
+        var (controller, orgId, db) = BuildController();
+        var orderId = Guid.NewGuid();
+
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id                = Guid.NewGuid(),
+            OrgId             = orgId,
+            OrderId           = orderId,
+            AttemptNumber     = 1,
+            Channel           = "http",
+            Destination       = "https://supplier.example.com/orders",
+            Status            = DeliveryAttempt.StatusFailed,
+            AttemptedAt       = new DateTime(2026, 7, 30, 10, 0, 0, DateTimeKind.Utc),
+            ResponseCode      = 429,
+            RetryAfterSeconds = 120,
+        });
+
+        // A genuine business rejection: the supplier read the document and refused it. Its recovery
+        // is "correct and re-transform", which is a DIFFERENT control from the rate limit above —
+        // the whole reason the cause has to cross the wire as a slug and not as prose.
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id              = Guid.NewGuid(),
+            OrgId           = orgId,
+            OrderId         = orderId,
+            AttemptNumber   = 2,
+            Channel         = "http",
+            Destination     = "https://supplier.example.com/orders",
+            Status          = DeliveryAttempt.StatusFailed,
+            AttemptedAt     = new DateTime(2026, 7, 30, 10, 5, 0, DateTimeKind.Utc),
+            ResponseCode    = 422,
+            RejectionReason = "Supplier rejected: unknown buyer code",
+            ResponseBody    = "{\"error\":\"unknown buyer code BC-9\"}",
+        });
+        await db.SaveChangesAsync();
+
+        var result = await controller.GetDeliveryAttempts(orderId, CancellationToken.None);
+
+        var ok   = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dtos = ok.Value.Should().BeAssignableTo<IEnumerable<DeliveryAttemptDto>>().Subject.ToList();
+
+        dtos[0].AttemptNumber.Should().Be(2);
+        dtos[0].FailureCause.Should().Be(SupplierFailureCause.BusinessRejection);
+        dtos[0].RetryAfterSeconds.Should().BeNull("the supplier asked for no wait — they refused the document");
+
+        dtos[1].AttemptNumber.Should().Be(1);
+        dtos[1].FailureCause.Should().Be(SupplierFailureCause.RateLimited);
+        dtos[1].RetryAfterSeconds.Should().Be(120);
+    }
+
+    /// <summary>
+    /// A delivery that WORKED has no failure cause. Emitting one would put a recovery control on a
+    /// successful attempt — and <c>CauseFor</c> would happily answer "unreachable" for a 200,
+    /// because it is only ever asked about failures.
+    /// </summary>
+    [Fact]
+    public async Task GetDeliveryAttempts_SuccessfulAttempt_HasNoFailureCause()
+    {
+        var (controller, orgId, db) = BuildController();
+        var orderId = Guid.NewGuid();
+
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id             = Guid.NewGuid(),
+            OrgId          = orgId,
+            OrderId        = orderId,
+            AttemptNumber  = 1,
+            Channel        = "http",
+            Destination    = "https://supplier.example.com/orders",
+            Status         = DeliveryAttempt.StatusSuccess,
+            AttemptedAt    = DateTime.UtcNow,
+            ResponseCode   = 200,
+            AcknowledgedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var result = await controller.GetDeliveryAttempts(orderId, CancellationToken.None);
+
+        var ok  = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto = ok.Value.Should().BeAssignableTo<IEnumerable<DeliveryAttemptDto>>().Subject.Single();
+
+        dto.FailureCause.Should().BeNull("a delivery the supplier accepted did not fail for any reason");
+    }
+
     // ── Minimal in-memory DbContext ───────────────────────────────────────────
 
     /// <summary>
@@ -222,8 +318,6 @@ public class DeliveriesControllerTests
             modelBuilder.Ignore<S3IngressConfig>();
             modelBuilder.Ignore<ImportedS3Object>();
             modelBuilder.Ignore<Buyer>();
-            modelBuilder.Ignore<ValidationRule>();
-            modelBuilder.Ignore<OutputTemplate>();
             modelBuilder.Ignore<InvoiceEntity>();
             modelBuilder.Ignore<InvoiceLineEntity>();
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();

@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -128,7 +128,7 @@ public sealed class SourceCaptureLosslessTests : IAsyncLifetime
             });
 
         var result = await controller.ReceiveOrder(
-            "capture-" + orgId.ToString("N"), req, orders, CancellationToken.None);
+            "capture-" + orgId.ToString("N"), req, orders, orders, CancellationToken.None);
 
         var ok = Assert.IsType<Microsoft.AspNetCore.Mvc.OkObjectResult>(result);
         var orderId = (Guid)ok.Value!.GetType().GetProperty("Id")!.GetValue(ok.Value)!;
@@ -169,6 +169,7 @@ public sealed class SourceCaptureLosslessTests : IAsyncLifetime
             db,
             new ProcuLink.Infrastructure.Services.IdempotencyService(db),
             tenant,
+            TestDoubles.PermissiveBilling.Service(),
             NullLogger<ProcuLink.Api.Controllers.IngressController>.Instance)
         {
             ControllerContext = new Microsoft.AspNetCore.Mvc.ControllerContext { HttpContext = httpContext },
@@ -176,7 +177,7 @@ public sealed class SourceCaptureLosslessTests : IAsyncLifetime
         return controller;
     }
 
-    private static IOrderService BuildOrderService(ProcuLinkDbContext db)
+    private static OrderService BuildOrderService(ProcuLinkDbContext db)
     {
         var fileStorage = new Mock<IFileStorageService>();
 

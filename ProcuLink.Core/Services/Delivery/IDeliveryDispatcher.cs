@@ -27,6 +27,30 @@ public interface IDeliveryDispatcher
     ResendSafety ResendSafety => ResendSafety.Unsafe;
 
     /// <summary>
+    /// Whether this dispatcher can put the counterparty's own refusal text into
+    /// <see cref="DeliveryResult.ResponseBody"/> — i.e. whether a BLANK body is evidence of
+    /// "they said nothing" or merely of "we never looked".
+    ///
+    /// <para><b>Why this is a capability and not a protocol list.</b>
+    /// <c>SupplierResponseClassification</c> splits a 400 on whether the supplier explained
+    /// themselves: with a reason it is a business rejection and the queue stops; bare it is an
+    /// unexplained refusal that keeps being re-sent to the real endpoint up to the cap. That rule is
+    /// only sound if a blank body MEANS something. It did not on <c>erp_erply</c>, <c>erp_directo</c>
+    /// and <c>email</c>: both connectors read the body, folded it into a summary string and threw the
+    /// original away, so every 400 on the canonical email path and on the two Unsafe ERP channels
+    /// classified bare no matter what the supplier said. A hard-coded protocol list would have fixed
+    /// those three and left the fourth dispatcher — the one that does not exist yet — to inherit the
+    /// same wrong answer in silence.</para>
+    ///
+    /// <para>Defaults to <c>false</c>: a channel that has not thought about this is treated as unable
+    /// to see the reason, which routes its unexplained 4xx to a human instead of re-firing it.
+    /// Production dispatchers must still declare it explicitly —
+    /// <c>DispatcherResponseCaptureTests</c> enforces that, exactly as
+    /// <c>DispatcherResendSafetyTests</c> does for <see cref="ResendSafety"/>.</para>
+    /// </summary>
+    bool CapturesSupplierResponseBody => false;
+
+    /// <summary>
     /// Dispatches the artifact payload to the configured destination.
     /// Must not throw — return DeliveryResult(false, message) on failure.
     /// </summary>

@@ -1,4 +1,8 @@
+using System.Net.Mail;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Catalog;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
@@ -13,6 +17,16 @@ namespace ProcuLink.Infrastructure.Services;
 /// onboarding-status milestone (see <c>OnboardingController</c> — samples teach, never certify).
 /// The supplier is pre-wired with a small catalog and mappings for fixture lines 1–2 only, leaving
 /// line 3 as the user's one deliberate manual resolution rep (see the pinned-code comment below).
+///
+/// <para>
+/// WP-27: the loop above is only "full" if the sample supplier can actually RECEIVE something.
+/// Before WP-27 nothing seeded a <see cref="SupplierDeliveryConfig"/>, so every practice run ended
+/// at "no delivery is set up" and the docstring promised a loop the code did not close. When the
+/// caller supplies an address (normally the signed-in user's own) and this deployment has an email
+/// provider, the sample supplier is now seeded with an <c>email</c> delivery setup — the one
+/// offered channel that needs ZERO cooperation from a real supplier, because mail leaves from
+/// ProcuLink's own verified sender (see <c>DeliveryProtocolConstants.Email</c>).
+/// </para>
 /// </summary>
 public sealed class SampleOrderService : ISampleOrderService
 {
@@ -56,24 +70,34 @@ public sealed class SampleOrderService : ISampleOrderService
         (FixtureLine2BuyerCode, Line2SupplierCode),
     };
 
+    /// <summary>Output the practice order is delivered in — the format a coordinator can open.</summary>
+    private const string SampleOutputFormat = "csv";
+
     private readonly ProcuLinkDbContext _db;
     private readonly IParseJobEnqueuer  _enqueuer;
     private readonly IFileStorageService _files;
     private readonly IAnalyticsService  _analytics;
+    private readonly IEmailApiClient    _email;
 
     public SampleOrderService(
         ProcuLinkDbContext db,
         IParseJobEnqueuer enqueuer,
         IFileStorageService files,
-        IAnalyticsService analytics)
+        IAnalyticsService analytics,
+        IEmailApiClient email)
     {
         _db        = db;
         _enqueuer  = enqueuer;
         _files     = files;
         _analytics = analytics;
+        _email     = email;
     }
 
-    public async Task<Guid> CreateAndEnqueueAsync(Guid organisationId, string? createdByUserId, CancellationToken ct)
+    public async Task<SampleOrderResult> CreateAndEnqueueAsync(
+        Guid organisationId,
+        string? createdByUserId,
+        string? deliverToEmail,
+        CancellationToken ct)
     {
         var now = DateTime.UtcNow;
 
@@ -107,6 +131,12 @@ public sealed class SampleOrderService : ISampleOrderService
         // 1b. Seed the sample supplier's catalog + the 2-of-3 item mappings (idempotent,
         //     existence-checked per row — safe to re-run on every call / Hangfire retry).
         await SeedSampleSupplierDataAsync(organisationId, supplier.Id, now, ct);
+
+        // 1c. Seed the delivery setup that CLOSES the loop (WP-27). Skipped — leaving the
+        //     pre-WP-27 "no delivery is set up" ending intact — when the caller gave us no usable
+        //     address or this deployment has no email provider. Never promise a send we cannot make.
+        var deliveryConfigured =
+            await SeedSampleDeliveryConfigAsync(organisationId, supplier.Id, deliverToEmail, now, ct);
 
         // 2. Load the embedded CSV fixture from ProcuLink.Api.dll (loaded into the same AppDomain at runtime).
         var fixtureBytes = await ReadFixtureBytesAsync(ct);
@@ -147,13 +177,123 @@ public sealed class SampleOrderService : ISampleOrderService
             eventName:      "sample_order_started",
             properties:     new Dictionary<string, object?>
             {
-                ["order_id"]    = order.Id,
-                ["supplier_id"] = supplier.Id,
-                ["po_number"]   = FixturePoNumber,
+                ["order_id"]            = order.Id,
+                ["supplier_id"]         = supplier.Id,
+                ["po_number"]           = FixturePoNumber,
+                ["delivery_configured"] = deliveryConfigured,
             },
             ct: ct);
 
-        return order.Id;
+        return new SampleOrderResult(order.Id, deliveryConfigured);
+    }
+
+    /// <summary>
+    /// Idempotently seeds an <c>email</c> delivery setup on the sample supplier so pressing "send"
+    /// on the practice order really reaches <c>delivered</c>.
+    ///
+    /// <para>
+    /// <b>Why email.</b> It is the only offered protocol whose far end needs nothing installed,
+    /// configured, or agreed: mail is sent FROM ProcuLink's provider-verified sender and the
+    /// recipient is whatever address the user typed — normally their own
+    /// (<c>DeliveryProtocolConstants.Email</c>). HTTP/SFTP/FTPS/ERP all need another company's
+    /// endpoint and credentials, which is precisely why first run used to dead-end here.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>AutoDeliver is false on purpose.</b> The fixture deliberately leaves line 3 unmapped, so
+    /// an auto-run would only 422 at transform; and the explicit "send" press is the moment the
+    /// practice run exists to teach. The user's own action drives transform → deliver.
+    /// </para>
+    ///
+    /// <para>
+    /// No credentials are written: the email API dispatcher takes none per supplier
+    /// (<c>EmailApiDeliveryDispatcher</c>), so <see cref="SupplierDeliveryConfig.EncryptedCredentials"/>
+    /// stays empty and the cleartext-<c>ConfigJson</c> invariant is respected — the recipient
+    /// address is connection metadata, not a secret.
+    /// </para>
+    /// </summary>
+    /// <returns>True when the sample supplier now has a delivery setup.</returns>
+    private async Task<bool> SeedSampleDeliveryConfigAsync(
+        Guid organisationId, Guid supplierId, string? deliverToEmail, DateTime now, CancellationToken ct)
+    {
+        var recipient = NormaliseEmail(deliverToEmail);
+        if (recipient is null) return false;
+
+        // A deployment with no email-API token cannot send at all — EmailApiDeliveryDispatcher
+        // would answer "Email delivery is not configured on this deployment". Seeding here would
+        // turn today's honest "delivery not set up" ending into a delivery_failed, which is worse.
+        if (!_email.IsConfigured) return false;
+
+        var configJson = JsonSerializer.Serialize(new
+        {
+            toAddresses     = recipient,
+            // Placeholders are SINGLE-brace — EmailApiDeliveryDispatcher.BuildFromTemplate
+            // replaces "{poNumber}" and "{fileName}" literally. "{{…}}" would ship verbatim.
+            subjectTemplate = "Purchase order {poNumber} — ProcuLink practice order",
+            bodyTemplate    =
+                "This is the ProcuLink practice order.\n\n" +
+                "Attached ({fileName}) is the supplier-ready file exactly as a real supplier would " +
+                "receive it — same builder, same item codes, same layout.\n\n" +
+                "Nothing was sent to a real supplier.",
+        });
+
+        var existing = await _db.SupplierDeliveryConfigs
+            .FirstOrDefaultAsync(c => c.OrgId == organisationId && c.SupplierId == supplierId, ct);
+
+        if (existing is null)
+        {
+            _db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+            {
+                Id                   = Guid.NewGuid(),
+                OrgId                = organisationId,
+                SupplierId           = supplierId,
+                Protocol             = DeliveryProtocolConstants.Email,
+                AutoDeliver          = false,
+                ConfigJson           = configJson,
+                EncryptedCredentials = string.Empty,
+                OutputFormat         = SampleOutputFormat,
+                CreatedAt            = now,
+                UpdatedAt            = now,
+            });
+            return true;
+        }
+
+        // Re-run (the user started the practice order again, possibly with a different address):
+        // point it at the new address rather than inserting a second config for the same supplier.
+        existing.Protocol             = DeliveryProtocolConstants.Email;
+        existing.AutoDeliver          = false;
+        existing.ConfigJson           = configJson;
+        existing.EncryptedCredentials = string.Empty;
+        existing.OutputFormat         = SampleOutputFormat;
+        existing.UpdatedAt            = now;
+        return true;
+    }
+
+    /// <summary>
+    /// Trims and validates one recipient address. Returns null for null/blank/unparseable input —
+    /// the caller then skips the seeding rather than writing a config that can only fail at send.
+    /// </summary>
+    private static string? NormaliseEmail(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var trimmed = raw.Trim();
+        // One address only. A comma-separated list is a real feature of the email protocol, but the
+        // practice order is a single-recipient teaching run and accepting a list here would let an
+        // unvalidated blob through this guard.
+        if (trimmed.Contains(',') || trimmed.Contains(';')) return null;
+        try
+        {
+            var parsed = new MailAddress(trimmed);
+            return parsed.Address;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -167,10 +307,15 @@ public sealed class SampleOrderService : ISampleOrderService
     private async Task SeedSampleSupplierDataAsync(
         Guid organisationId, Guid supplierId, DateTime now, CancellationToken ct)
     {
-        var existingCatalogCodes = await _db.SupplierProducts
+        // The idempotency probe uses the SHARED item-code rule, not a plain List.Contains (which is
+        // Ordinal). Re-seeding an org whose catalog already holds "WIDGET-1" must not add a second
+        // "widget-1" row: the unique index is case-sensitive so the insert succeeds, and the
+        // case-insensitive catalog lookup then has two candidates for one code.
+        var existingCatalogCodes = (await _db.SupplierProducts
             .Where(p => p.OrgId == organisationId && p.SupplierId == supplierId)
             .Select(p => p.Code)
-            .ToListAsync(ct);
+            .ToListAsync(ct))
+            .ToHashSet(ItemCodeComparison.Comparer);
 
         foreach (var (code, name, unit, price) in SampleCatalog)
         {
@@ -193,10 +338,12 @@ public sealed class SampleOrderService : ISampleOrderService
             });
         }
 
-        var existingMappedBuyerCodes = await _db.ItemMappings
+        // Same shared rule for the learned mappings — see the catalog probe above.
+        var existingMappedBuyerCodes = (await _db.ItemMappings
             .Where(m => m.OrgId == organisationId && m.SupplierId == supplierId)
             .Select(m => m.BuyerItemCode)
-            .ToListAsync(ct);
+            .ToListAsync(ct))
+            .ToHashSet(ItemCodeComparison.Comparer);
 
         foreach (var (buyerCode, supplierCode) in SampleMappings)
         {

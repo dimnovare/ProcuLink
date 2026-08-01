@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Erp;
 
 namespace ProcuLink.Infrastructure.Services.Erp;
@@ -66,9 +67,14 @@ public sealed class DirectoConnector : IErpConnector
             var body = await response.Content.ReadAsStringAsync(requestCt);
             var code = (int)response.StatusCode;
 
+            // Verbatim body as well as the operator summary — see the sibling comment in
+            // ErplyConnector: the classification's 400 split reads the original, not the summary.
             return response.IsSuccessStatusCode
                 ? new ErpDeliveryResult(true, null, code)
-                : new ErpDeliveryResult(false, BuildFailureMessage(code, body), code);
+                : new ErpDeliveryResult(
+                    false, BuildFailureMessage(code, body), code,
+                    ResponseBody: string.IsNullOrWhiteSpace(body) ? null : body,
+                    RetryAfter: RetryAfterHeader.Read(response.Headers, DateTimeOffset.UtcNow));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

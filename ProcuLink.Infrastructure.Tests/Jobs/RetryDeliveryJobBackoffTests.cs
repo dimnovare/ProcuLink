@@ -44,10 +44,15 @@ public class RetryDeliveryJobBackoffTests
         jobs.Captured.Should().HaveCount(1);
         var state = jobs.Captured.Single().State;
         state.Should().BeOfType<ScheduledState>();
-        // After 1 failed attempt the next backoff is BackoffMinutes[0] == 30 min.
+        // After 1 failed attempt the next backoff is BackoffMinutes[0] == 30 min, plus up to
+        // RetryJitterPercent (20%) on top — the band, not a point, because a fixed offset is what
+        // re-fires a whole failed batch as one burst. Asserted as [step, step + jitter] so the test
+        // still pins that the step is 30 and that jitter is upward-only.
         ((ScheduledState)state).EnqueueAt.Should()
-            .BeCloseTo(before.AddMinutes(30), TimeSpan.FromMinutes(1))
-            .And.BeOnOrAfter(before.AddMinutes(30).AddSeconds(-1));
+            .BeOnOrAfter(before.AddMinutes(30).AddSeconds(-1),
+                "jitter is upward-only — a retry must never fire before the scheduled step")
+            .And.BeOnOrBefore(before.AddMinutes(36).AddSeconds(1),
+                "and never beyond the declared 20% band above it");
         _ = after;
     }
 
@@ -71,8 +76,10 @@ public class RetryDeliveryJobBackoffTests
         await job.ExecuteAsync(orderId, orgId, default);
 
         jobs.Captured.Should().HaveCount(1);
+        // Second step (60 min) + up to 20% jitter — see the band comment on the first-step test.
         ((ScheduledState)jobs.Captured.Single().State).EnqueueAt
-            .Should().BeCloseTo(before.AddMinutes(60), TimeSpan.FromMinutes(1));
+            .Should().BeOnOrAfter(before.AddMinutes(60).AddSeconds(-1))
+            .And.BeOnOrBefore(before.AddMinutes(72).AddSeconds(1));
     }
 
     [Fact]
@@ -94,6 +101,209 @@ public class RetryDeliveryJobBackoffTests
         await job.ExecuteAsync(orderId, orgId, default);
 
         jobs.Captured.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// WP-19, the retry half of the split. The queue used to stop on ANY 4xx, so an expired API key
+    /// or a moved endpoint abandoned an order that a key rotation would have delivered — and the
+    /// status it was abandoned in (<c>rejected_by_supplier</c>) had no exit either. A transport
+    /// refusal is now an ordinary failure: keep the backoff running so the order reaches a delivery
+    /// or an honest dead-letter, both of which an operator can act on.
+    ///
+    /// <para>This is one half of the difference assertion. Its partner is
+    /// <c>DeliveryServiceRejectionTests.DispatchArtifactAsync_TransportRefusal_…</c>, which pins the
+    /// STATUS written for the same code. Reverting either call site to
+    /// <c>responseCode is &gt;= 400 and &lt;= 499</c> turns one of the two red.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(401)]
+    [InlineData(403)]
+    [InlineData(404)]
+    [InlineData(408)]
+    [InlineData(429)]
+    public async Task ExecuteAsync_TransportRefusal_StillSchedulesTheNextBackoffStep(int code)
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, $"HTTP {code}", code));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().HaveCount(1,
+            $"HTTP {code} is the supplier's system refusing the REQUEST, not a judgement on the " +
+            "order — the backoff queue is exactly what carries it to a delivery or a dead-letter");
+        jobs.Captured.Single().State.Should().BeOfType<ScheduledState>();
+    }
+
+    /// <summary>
+    /// The reserved half, and the reason the split cannot collapse back to a range check: a bare 400
+    /// is indistinguishable from a bad URL or a malformed header, so it keeps retrying…
+    ///
+    /// <para><c>SupplierReasonObservable</c> is what makes "bare" a fact rather than an assumption —
+    /// the channel read the response and found nothing. Its absence means the opposite (see the
+    /// sibling test below), which is why it is set explicitly here.</para>
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_BareBadRequest_FromAChannelThatCouldHaveHeard_StillSchedules()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "HTTP 400", 400, SupplierReasonObservable: true));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().HaveCount(1);
+    }
+
+    /// <summary>
+    /// …and the SAME bare 400 from a channel that could not read the body does NOT keep retrying:
+    /// "the supplier said nothing" was never established, so the queue must not spend real requests
+    /// on the assumption. This is the state erp_erply, erp_directo and email were in for the whole
+    /// of WP-19; the guard now belongs to the class, not to those three.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_BareBadRequest_FromAChannelThatCouldNotHear_DoesNotSchedule()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(false, "HTTP 400", 400));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().BeEmpty(
+            "the retry gate and the status decision are one decision — this must agree with " +
+            "DeliveryServiceRejectionTests' verdict for the same shape, or the order is retried " +
+            "into a status the delivery claim refuses");
+    }
+
+    /// <summary>…while the SAME 400 carrying the supplier's reason is a business rejection and stops.</summary>
+    [Fact]
+    public async Task ExecuteAsync_BadRequestCarryingASupplierReason_DoesNotSchedule()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(
+                    false, "HTTP 400", 400, ResponseBody: "{\"error\":\"unknown buyer code BC-9\"}"));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        jobs.Captured.Should().BeEmpty(
+            "the supplier read the document and said what is wrong with it — re-sending the same " +
+            "bytes cannot help, and the delivery claim refuses the resulting status anyway");
+    }
+
+    /// <summary>
+    /// A bulk of orders that fail together must NOT come back together.
+    ///
+    /// <para><b>The defect.</b> <see cref="DeliveryReliabilityOptions.BackoffMinutes"/> is a FIXED
+    /// schedule — 30 → 60 → 120 — with no jitter anywhere in the repository. So N orders for one
+    /// supplier that fail in the same minute (a rate limit, a credential rotation, a brief outage:
+    /// every cause that fails a batch fails all of it) are all scheduled at the same offset, and the
+    /// whole batch re-fires as one synchronised burst — three times, at three fixed offsets. The
+    /// only thing standing between the supplier and N simultaneous deliveries is the Worker's
+    /// <c>WorkerCount = 10</c>, which is a concurrency limit, not a rate limit. This is the one
+    /// failure mode here that grows with order volume rather than staying per-order.</para>
+    ///
+    /// <para>Asserted as SPREAD rather than as any particular delay, so the test states the property
+    /// that matters (the burst is broken up) and not an implementation of it.</para>
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_ABulkFailingTogether_IsSpreadAcrossAWindow_NotOneBurst()
+    {
+        const int bulk = 24;
+        var scheduled = new List<DateTime>();
+
+        for (var i = 0; i < bulk; i++)
+        {
+            var orgId = Guid.NewGuid();
+            var orderId = Guid.NewGuid();
+
+            var delivery = new Mock<IDeliveryService>();
+            // The same transient failure for every order in the bulk — one supplier, one outage.
+            delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(new DeliveryResult(false, "HTTP 503", 503));
+            delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(1);
+
+            var jobs = new CapturingJobClient();
+            var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+            await job.ExecuteAsync(orderId, orgId, default);
+
+            scheduled.Add(((ScheduledState)jobs.Captured.Single().State).EnqueueAt);
+        }
+
+        var spread = scheduled.Max() - scheduled.Min();
+
+        spread.Should().BeGreaterThan(TimeSpan.FromMinutes(1),
+            $"{bulk} orders that failed together were all scheduled within {spread.TotalSeconds:F1}s " +
+            "of each other, so they re-fire at the supplier as a single synchronised burst — and " +
+            "then twice more, at the next two fixed offsets. A jittered backoff spreads the retry " +
+            "across a window instead of re-creating the thundering herd that caused the failure");
+    }
+
+    /// <summary>
+    /// A rate-limited supplier that tells us WHEN to come back is obeyed. Nothing in this repository
+    /// read <c>Retry-After</c> before WP-19's follow-up — a 429 was retried on our own fixed schedule
+    /// regardless of what the endpoint asked for, which is how a rate limit turns into three more
+    /// rate limits.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_SupplierAskedUsToWaitLonger_HonoursIt()
+    {
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        var delivery = new Mock<IDeliveryService>();
+        delivery.Setup(d => d.RetryDeliveryAsync(orgId, orderId, 3, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DeliveryResult(
+                    false, "HTTP 429", 429, SupplierReasonObservable: true,
+                    RetryAfter: TimeSpan.FromMinutes(90)));
+        delivery.Setup(d => d.CountDeliveryAttemptsAsync(orgId, orderId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+        var jobs = new CapturingJobClient();
+        var job = new RetryDeliveryJob(delivery.Object, jobs, NullLogger<RetryDeliveryJob>.Instance, Options);
+
+        var before = DateTime.UtcNow;
+        await job.ExecuteAsync(orderId, orgId, default);
+
+        ((ScheduledState)jobs.Captured.Single().State).EnqueueAt
+            .Should().BeOnOrAfter(before.AddMinutes(90).AddSeconds(-1),
+                "the endpoint asked for 90 minutes; coming back after our own 30-minute step would " +
+                "be a third rate-limited request we were explicitly told not to make");
     }
 
     [Fact]

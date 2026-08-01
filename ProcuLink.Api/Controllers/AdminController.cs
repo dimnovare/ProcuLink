@@ -38,19 +38,22 @@ public sealed class AdminController : ControllerBase
     private readonly IConfiguration           _config;
     private readonly ILogger<AdminController>  _logger;
     private readonly IDataErasureService      _erasure;
+    private readonly IItemMappingService      _itemMappings;
 
     public AdminController(
         ProcuLinkDbContext       db,
         IBillingService          billing,
         IConfiguration           config,
         ILogger<AdminController>  logger,
-        IDataErasureService      erasure)
+        IDataErasureService      erasure,
+        IItemMappingService      itemMappings)
     {
-        _db      = db;
-        _billing = billing;
-        _config  = config;
-        _logger  = logger;
-        _erasure = erasure;
+        _db           = db;
+        _billing      = billing;
+        _config       = config;
+        _logger       = logger;
+        _erasure      = erasure;
+        _itemMappings = itemMappings;
     }
 
     // In production _billing always resolves to StripeBillingService. The cast
@@ -104,6 +107,55 @@ public sealed class AdminController : ControllerBase
 
     private static string? Truncate(string? s, int max) =>
         s is { Length: > 0 } && s.Length > max ? s[..max] + "…" : s;
+
+    // ── GET /api/admin/item-mapping-twins ─────────────────────────────────
+    /// <summary>
+    /// Learned item mappings whose buyer codes differ only in CASE — rows written before every
+    /// write path shared one case rule (<c>ItemCodeComparison</c>).
+    ///
+    /// <para><b>Read-only, and deliberately so.</b> It reports what production already holds and
+    /// does not merge or delete anything. Which spelling survives a merge is a decision about a
+    /// customer's item codes; it needs the founder, not a background job. Nothing is broken while
+    /// the decision is pending: since WP-14 the resolver picks between twins deterministically
+    /// (exact-case wins, then most recently updated, then id), and every write path now refuses to
+    /// create a new one — so this list can only shrink.</para>
+    ///
+    /// <para>Grouped by <c>(org_id, supplier_id, lower(buyer_item_code))</c> having count &gt; 1.
+    /// Cross-org like the rest of this controller.</para>
+    /// </summary>
+    [HttpGet("item-mapping-twins")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetItemMappingTwins(CancellationToken ct)
+    {
+        var orgIds = await _db.Organisations
+            .AsNoTracking()
+            .Select(o => o.Id)
+            .ToListAsync(ct);
+
+        var rows = new List<object>();
+        foreach (var orgId in orgIds)
+        {
+            foreach (var twin in await _itemMappings.FindCaseVariantTwinsAsync(orgId, ct))
+            {
+                rows.Add(new
+                {
+                    organisationId = orgId,
+                    supplierId     = twin.SupplierId,
+                    foldedCode     = twin.FoldedCode,
+                    rowCount       = twin.RowCount,
+                    spellings      = twin.Spellings,
+                });
+            }
+        }
+
+        return Ok(new
+        {
+            totalGroups = rows.Count,
+            note = "Read-only. Merging or deleting a twin changes a customer's item codes and is a "
+                 + "founder decision; nothing here does it for you.",
+            groups = rows,
+        });
+    }
 
     // ── GET /api/admin/overview ───────────────────────────────────────────
     [HttpGet("overview")]

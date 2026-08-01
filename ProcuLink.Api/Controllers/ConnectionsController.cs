@@ -1,7 +1,8 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 
@@ -21,13 +22,75 @@ public sealed class ConnectionsController : ControllerBase
     private readonly ISupplierConnectionService _service;
     private readonly IReplayService             _replay;
     private readonly ICurrentTenantService      _tenant;
+    private readonly IBillingService            _billing;
 
     public ConnectionsController(
-        ISupplierConnectionService service, IReplayService replay, ICurrentTenantService tenant)
+        ISupplierConnectionService service, IReplayService replay, ICurrentTenantService tenant,
+        IBillingService billing)
     {
         _service = service;
         _replay  = replay;
         _tenant  = tenant;
+        _billing = billing;
+    }
+
+    /// <summary>
+    /// 403 when the draft bundle selects a delivery channel or output format the org's plan does
+    /// not include, else null.
+    ///
+    /// <para>A revision is what a PINNED order actually delivers through, so this path reaches
+    /// the same behaviour as the live delivery-config row. Gating only that row would have left
+    /// the whole thing bypassable: save a draft with <c>DeliveryProtocol = "http"</c>, publish,
+    /// and a Pilot org delivers by webhook. Both paths share
+    /// <see cref="DeliveryCapabilityGate.RequiredFeature"/> so they cannot drift.</para>
+    /// </summary>
+    private async Task<IActionResult?> GateBundleAsync(ConnectionRevisionBundleDto? bundle, CancellationToken ct)
+    {
+        if (bundle is null) return null;
+
+        var gated = await DeliveryCapabilityGate.FirstUnmetAsync(
+            _billing, OrgId, bundle.DeliveryProtocol, bundle.OutputFormat, ct);
+        if (gated is null) return null;
+
+        return StatusCode(StatusCodes.Status403Forbidden, new
+        {
+            error = BillingGateErrors.RequiresPlan(gated.Value.Capability, gated.Value.Feature),
+            upgradeUrl = "/settings",
+        });
+    }
+
+    /// <summary>
+    /// The gate for ACTIVATING an already-stored revision — publish and rollback — as opposed to
+    /// authoring one.
+    ///
+    /// <para><b>Why authoring-time gating is not enough.</b> <see cref="GateBundleAsync"/> runs when
+    /// a draft is written, and nothing revokes a stored revision when an org changes plan. Rollback
+    /// clones a previously-published, now archived bundle — <c>DeliveryProtocol</c> and
+    /// <c>OutputFormat</c> verbatim — into a NEW published revision and moves the connection's
+    /// active pointer to it. So an org that held Enterprise, published an <c>erp_erply</c> revision,
+    /// moved to a stock channel and then dropped to Growth could press Rollback and be delivering
+    /// over ERP again: a capability handed back on request through the one door of three that did
+    /// not ask. Publish has the same shape for a draft authored before a downgrade.</para>
+    ///
+    /// <para>A missing revision returns null rather than a 403 so the service's own
+    /// <c>NotFound</c>/<c>Conflict</c> answer still wins — a gate must not tell a caller whether a
+    /// revision they cannot see exists.</para>
+    /// </summary>
+    private async Task<IActionResult?> GateStoredRevisionAsync(
+        Guid connectionId, Guid revisionId, CancellationToken ct)
+    {
+        var revision = await _service.GetRevisionAsync(OrgId, connectionId, revisionId, ct);
+        if (revision is null) return null;
+
+        var gated = await DeliveryCapabilityGate.FirstUnmetAsync(
+            _billing, OrgId, revision.DeliveryProtocol, revision.OutputFormat, ct);
+        if (gated is null) return null;
+
+        return StatusCode(StatusCodes.Status403Forbidden, new
+        {
+            error = BillingGateErrors.RequiresPlan(gated.Value.Capability, gated.Value.Feature),
+            upgradeUrl = "/settings",
+        });
     }
 
     private Guid OrgId => _tenant.OrganisationId;
@@ -97,6 +160,8 @@ public sealed class ConnectionsController : ControllerBase
         Guid connectionId, [FromBody] CreateConnectionRevisionRequest? request, CancellationToken ct)
     {
         request ??= new CreateConnectionRevisionRequest();
+        if (await GateBundleAsync(request.Bundle, ct) is { } denied) return denied;
+
         var input = request.Bundle is null ? null : ToInput(request.Bundle);
         var draft = await _service.CreateDraftAsync(
             OrgId, connectionId, input, request.CloneFromActive, CurrentUser, ct);
@@ -110,6 +175,8 @@ public sealed class ConnectionsController : ControllerBase
     public async Task<IActionResult> UpdateDraft(
         Guid connectionId, Guid revisionId, [FromBody] UpdateConnectionRevisionRequest request, CancellationToken ct)
     {
+        if (await GateBundleAsync(request.Bundle, ct) is { } denied) return denied;
+
         var result = await _service.UpdateDraftAsync(OrgId, connectionId, revisionId, ToInput(request.Bundle), ct);
         return result switch
         {
@@ -145,8 +212,11 @@ public sealed class ConnectionsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Publish(Guid connectionId, Guid revisionId, CancellationToken ct)
     {
+        if (await GateStoredRevisionAsync(connectionId, revisionId, ct) is { } gate) return gate;
+
         var result = await _service.PublishAsync(OrgId, connectionId, revisionId, CurrentUser, ct);
         return result switch
         {
@@ -167,8 +237,11 @@ public sealed class ConnectionsController : ControllerBase
     [ProducesResponseType(typeof(ConnectionRevisionDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Rollback(Guid connectionId, Guid revisionId, CancellationToken ct)
     {
+        if (await GateStoredRevisionAsync(connectionId, revisionId, ct) is { } gate) return gate;
+
         var result = await _service.RollbackAsync(OrgId, connectionId, revisionId, CurrentUser, ct);
         return result.Status switch
         {

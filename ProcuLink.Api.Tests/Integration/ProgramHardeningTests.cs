@@ -153,7 +153,8 @@ public sealed class ProgramHardeningTests : IClassFixture<HardeningTestFactory>
     [InlineData("transform")]
     [InlineData("ai")]
     [InlineData("signed-url")]
-    [InlineData("webhook")]
+    // "webhook" retired with inbound webhook ingress (Wave 1, WP-09) — it was the only
+    // consumer of that policy, so keeping it registered would be dead config.
     [InlineData("support")]
     public void RateLimiter_NamedPolicy_IsRegistered(string policyName)
     {

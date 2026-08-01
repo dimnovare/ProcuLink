@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
@@ -161,15 +161,17 @@ public class ApiKeyAuthHandlerTenantUnificationTests
         // 2) Drive the controller off the SAME context via the shared resolver.
         var tenant     = new CurrentTenantService(new HttpContextAccessor { HttpContext = ctx });
         var idempotency = new IdempotencyService(db);
-        var controller = new IngressController(db, idempotency, tenant, NullLogger<IngressController>.Instance)
+        var controller = new IngressController(db, idempotency, tenant, TestDoubles.PermissiveBilling.Service(), NullLogger<IngressController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = ctx },
         };
 
-        var createdOrderId = Guid.NewGuid();
-        var createdEntity  = new PurchaseOrderEntity
+        // WP-22: the controller claims the Idempotency-Key FIRST and creates under the order id the
+        // claim pre-generated, so the created entity's id is whatever the controller supplies — not
+        // one the test picks.
+        PurchaseOrderEntity Entity(Guid id) => new()
         {
-            Id                = createdOrderId,
+            Id                = id,
             OrgId             = orgId,
             SupplierId        = supplierId,
             PoNumber          = "PO-UNIFIED-001",
@@ -180,18 +182,24 @@ public class ApiKeyAuthHandlerTenantUnificationTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        // The controller MUST call CreateStub with the resolved INTERNAL org id.
-        Guid? observedOrgId = null;
+        // The controller MUST create with the resolved INTERNAL org id.
+        Guid? observedOrgId    = null;
+        Guid? claimedOrderId   = null;
+        var claimedOrders = new Mock<IClaimedOrderCreator>();
+        claimedOrders
+            .Setup(s => s.CreateClaimedFromParsedOrderAsync(
+                It.IsAny<Guid>(), supplierId, It.IsAny<Guid>(), It.IsAny<ExtractedOrder>(),
+                "ingress_api", It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, Guid?, Guid, ExtractedOrder, string, string?, CancellationToken>(
+                (o, _, id, _, _, _, _) => { observedOrgId = o; claimedOrderId = id; })
+            .ReturnsAsync(() => Result<PurchaseOrderEntity>.Ok(Entity(claimedOrderId!.Value)));
+
         var orders = new Mock<IOrderService>();
         orders
-            .Setup(s => s.CreateStubFromParsedOrderAsync(
-                It.IsAny<Guid>(), supplierId, It.IsAny<ExtractedOrder>(),
-                "ingress_api", It.IsAny<CancellationToken>(), It.IsAny<string?>()))
-            .Callback<Guid, Guid, ExtractedOrder, string, CancellationToken, string?>((o, _, _, _, _, _) => observedOrgId = o)
-            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(createdEntity));
-        orders
-            .Setup(s => s.GetByIdAsync(orgId, createdOrderId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(createdEntity));
+            .Setup(s => s.GetByIdAsync(orgId, It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => claimedOrderId is null
+                ? Result<PurchaseOrderEntity>.Fail("Order not found.")
+                : Result<PurchaseOrderEntity>.Ok(Entity(claimedOrderId.Value)));
 
         var req = new IngressOrderRequest(
             OrderNumber: "PO-UNIFIED-001",
@@ -209,17 +217,17 @@ public class ApiKeyAuthHandlerTenantUnificationTests
 
         // First POST creates the order under the correct internal org.
         Assert.IsType<OkObjectResult>(
-            await controller.ReceiveOrder(Slug, req, orders.Object, CancellationToken.None));
+            await controller.ReceiveOrder(Slug, req, orders.Object, claimedOrders.Object, CancellationToken.None));
         Assert.Equal(orgId, observedOrgId);
 
         // Idempotency still holds through the unified path: a verbatim retry
         // short-circuits and creates no second order.
-        var second = await controller.ReceiveOrder(Slug, req, orders.Object, CancellationToken.None);
+        var second = await controller.ReceiveOrder(Slug, req, orders.Object, claimedOrders.Object, CancellationToken.None);
         Assert.IsType<OkObjectResult>(second);
-        orders.Verify(
-            s => s.CreateStubFromParsedOrderAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<ExtractedOrder>(),
-                It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()),
+        claimedOrders.Verify(
+            s => s.CreateClaimedFromParsedOrderAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid>(), It.IsAny<ExtractedOrder>(),
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.Once);
 
         var keyRows = await db.IdempotencyKeys.Where(k => k.OrgId == orgId).ToListAsync();
@@ -257,7 +265,7 @@ public class ApiKeyAuthHandlerTenantUnificationTests
 
         var tenant      = new CurrentTenantService(new HttpContextAccessor { HttpContext = ctx });
         var idempotency = new IdempotencyService(db);
-        var controller  = new IngressController(db, idempotency, tenant, NullLogger<IngressController>.Instance)
+        var controller  = new IngressController(db, idempotency, tenant, TestDoubles.PermissiveBilling.Service(), NullLogger<IngressController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = ctx },
         };

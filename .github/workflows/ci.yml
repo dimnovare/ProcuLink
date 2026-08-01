@@ -6,9 +6,35 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel redundant PR runs. NEVER cancel a post-merge run on main.
+#
+# The old form was `group: ci-${{ github.ref }}` + `cancel-in-progress: true`. Every
+# merge to main shares the ref `refs/heads/main`, so each merge cancelled the
+# PREVIOUS commit's post-merge run. On 2026-07-30 five voided main runs were
+# observed across this repo and the frontend in one afternoon — BE #83 cancelled
+# ~25s in when BE #76 landed, BE #79 the same when BE #85 landed, plus FE #54's
+# Playwright job and FE #53 / FE #43 killed at 29s and 14s. A `cancelled` conclusion
+# is not a pass and not a failure: it is no information, and it silently removed the
+# only check that runs against the tree that actually shipped.
+#
+# Setting `cancel-in-progress: false` alone does NOT fix it. Per the workflow-syntax
+# docs: "any existing `pending` job or workflow in the same concurrency group will be
+# canceled and the new queued job or workflow will take its place." During a merge
+# train that still loses every run but the first in-progress and the last queued. So
+# the GROUP has to differ per commit.
+#
+#   pull_request → group by ref, so a new push to a PR cancels its own older run.
+#                  That cancelling is the point: the older run tests a tree nobody
+#                  will merge.
+#   push (main)  → group by SHA. Unique per commit, so no merge can cancel another
+#                  commit's verification, and runs proceed in parallel rather than
+#                  queueing behind each other.
+#
+# `cancel-in-progress` is still set from an expression rather than dropped, so the
+# PR path keeps its old behaviour exactly.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-and-test:
@@ -48,8 +74,59 @@ jobs:
             --logger "console;verbosity=normal" \
             --logger "trx;LogFileName=test-results.trx"
 
-      - name: Upload test results on failure
-        if: failure()
+      # A skip nobody reads is the next silent pass.
+      #
+      # `console;verbosity=normal` prints "Skipped: 7" and stops there — not which tests,
+      # and not why. That is the same reporting hole WP-02 exists to close, one level up:
+      # Live_ImapIngress reported Passed for two and a half weeks, and the fix (a declared
+      # [EnvironmentGatedFact] skip) only helps if the skip is legible. A typo'd variable
+      # name in a gating attribute would otherwise skip that test forever, in silence.
+      #
+      # So: name every skipped test and its reason in the job summary, and FAIL on a skip
+      # with no reason at all — "Skipped" with an empty message is indistinguishable from
+      # a test that quietly stopped existing.
+      - name: Skip census — name every skipped test and its reason
+        if: always()
+        run: |
+          pip install --quiet defusedxml
+          python3 - <<'PY'
+          import glob, os, sys
+          from defusedxml import ElementTree as ET
+
+          NS = '{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}'
+          files = glob.glob('**/TestResults/*.trx', recursive=True)
+          if not files:
+              print('::error::No .trx produced — the skip census cannot read the run, so it must not report a pass.')
+              sys.exit(1)
+
+          skipped, reasonless = [], []
+          for path in files:
+              for result in ET.parse(path).getroot().iter(f'{NS}UnitTestResult'):
+                  if result.get('outcome') not in ('NotExecuted', 'Skipped'):
+                      continue
+                  name = result.get('testName', '(unnamed)')
+                  message = result.findtext(f'{NS}Output/{NS}ErrorInfo/{NS}Message', default='').strip()
+                  skipped.append((name, message))
+                  if not message:
+                      reasonless.append(name)
+
+          skipped.sort()
+          print(f'{len(skipped)} skipped test(s) in this run:\n')
+          for name, message in skipped:
+              print(f'  SKIPPED  {name}\n           {message or "(NO REASON GIVEN)"}\n')
+
+          summary = ['## Skipped tests', '', f'{len(skipped)} skipped in this run.', '']
+          summary += [f'- `{n}` — {m or "**no reason given**"}' for n, m in skipped]
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as fh:
+              fh.write('\n'.join(summary) + '\n')
+
+          for name in reasonless:
+              print(f'::error::{name} is skipped with no reason. A skip must name what to set or fix.')
+          sys.exit(1 if reasonless else 0)
+          PY
+
+      - name: Upload test results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dotnet-test-results

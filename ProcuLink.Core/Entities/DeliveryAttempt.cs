@@ -38,6 +38,23 @@ public class DeliveryAttempt
     /// </summary>
     public string? ResponseBody { get; set; }
     /// <summary>
+    /// The wait the SUPPLIER asked for on this attempt (their <c>Retry-After</c>), in whole
+    /// seconds. Null when they asked for none — which is the common case, and must never be read as
+    /// "wait zero": it means nobody named a wait, so nothing may show the operator a countdown.
+    ///
+    /// <para>Bounded to <see cref="Core.Services.Delivery.RetryAfterHeader.MaxHonoured"/>, the same
+    /// ceiling the scheduler applies. The stored number is a PROMISE — a client shows it as "trying
+    /// again in N" — so it has to be the wait the queue will actually keep, not the one a
+    /// counterparty asked for. A supplier requesting 24h gets re-driven by the stranded-delivery
+    /// sweep long before that elapses, so publishing 24h would be a countdown to nothing.</para>
+    ///
+    /// <para>Before this column the value was read off the wire, spent once computing a Hangfire
+    /// delay, and dropped: the product obeyed a wait it could not name. Nullable, so legacy rows
+    /// stay null rather than claiming a wait nobody observed.</para>
+    /// </summary>
+    public int? RetryAfterSeconds { get; set; }
+
+    /// <summary>
     /// ACK round-trip: UTC timestamp at which the supplier acknowledged receipt
     /// (HTTP 2xx / successful dispatch). Null until the delivery is confirmed.
     /// </summary>
@@ -126,15 +143,10 @@ public class DeliveryAttempt
     /// resets the budget by stamping <see cref="CapSupersededAt"/>, never by deleting rows.
     /// Keep this an <c>Expression</c> — EF inlines a LambdaExpression passed to
     /// <c>DbSet.Where</c>, including inside correlated subqueries, while a <c>.Compile()</c>d
-    /// delegate does not translate (see WebhookIngressController.HasDispatchMarker's warning).
+    /// delegate does not translate.
     ///
-    /// <para>Two DELIBERATE non-unifications — same table, different questions; each is pinned
-    /// by an assert-the-difference test, not just this comment:</para>
-    /// <para>• NOT the webhook dispatch-evidence predicate
-    /// (<c>WebhookIngressController.HasDispatchMarker</c>). Evidence asks "was a send ever
-    /// BEGUN for this order, ever" — epoch-agnostic, so it must IGNORE
-    /// <see cref="CapSupersededAt"/>. Folding the two reopens the never-dispatched erasure
-    /// hole under a new name: a requeued-then-reported order would read as never sent.</para>
+    /// <para>One DELIBERATE non-unification — same table, different question, pinned by an
+    /// assert-the-difference test, not just this comment:</para>
     /// <para>• NOT attempt NUMBERING (the <c>AttemptNumber</c> counts in DeliveryService).
     /// Numbering counts attempts EVER — ascending across requeues (see
     /// <see cref="AttemptNumber"/>) — so it keeps only the <see cref="StatusDispatching"/>

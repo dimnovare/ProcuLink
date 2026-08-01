@@ -88,15 +88,15 @@ public sealed class SampleOrderSeedingPostgresTests : IAsyncLifetime
         // supplier insert before the catalog/mapping rows that reference it.
         await using (var db = new ProcuLinkDbContext(_options!))
         {
-            var svc = new SampleOrderService(db, new NoOpParseJobEnqueuer(), storage, new FakeAnalyticsService());
-            await svc.CreateAndEnqueueAsync(orgId, "user_pg", CancellationToken.None);
+            var svc = new SampleOrderService(db, new NoOpParseJobEnqueuer(), storage, new FakeAnalyticsService(), new StubEmailApiClient(configured: true));
+            await svc.CreateAndEnqueueAsync(orgId, "user_pg", "buyer@practice.test", CancellationToken.None);
         }
 
         // Run 2 — fresh context: idempotency must come from the DATABASE state.
         await using (var db = new ProcuLinkDbContext(_options!))
         {
-            var svc = new SampleOrderService(db, new NoOpParseJobEnqueuer(), storage, new FakeAnalyticsService());
-            await svc.CreateAndEnqueueAsync(orgId, "user_pg", CancellationToken.None);
+            var svc = new SampleOrderService(db, new NoOpParseJobEnqueuer(), storage, new FakeAnalyticsService(), new StubEmailApiClient(configured: true));
+            await svc.CreateAndEnqueueAsync(orgId, "user_pg", "buyer@practice.test", CancellationToken.None);
         }
 
         // Round-trip verification on a third fresh context.
@@ -130,6 +130,22 @@ public sealed class SampleOrderSeedingPostgresTests : IAsyncLifetime
             // Two runs → two sample orders (orders are per-run), but no seed duplicates.
             var orderCount = await verify.PurchaseOrders.CountAsync(o => o.OrgId == orgId && o.IsSample);
             Assert.Equal(2, orderCount);
+
+            // WP-27: the delivery setup that lets the practice order actually reach `delivered`.
+            // Two runs must UPDATE one row, not insert a second — a duplicate config for one
+            // supplier is exactly the sort of thing InMemory would let through and Postgres would
+            // then serve non-deterministically to ResolveEffectiveDeliveryConfigAsync.
+            var configs = await verify.SupplierDeliveryConfigs
+                .Where(c => c.OrgId == orgId && c.SupplierId == supplier.Id)
+                .ToListAsync();
+            var config = Assert.Single(configs);
+            Assert.Equal("email", config.Protocol);
+            Assert.False(config.AutoDeliver);
+            Assert.Equal("csv", config.OutputFormat);
+            Assert.Contains("buyer@practice.test", config.ConfigJson);
+            // The email API takes no per-supplier credentials — nothing to encrypt, and nothing
+            // secret may be written into the cleartext ConfigJson.
+            Assert.Equal(string.Empty, config.EncryptedCredentials);
         }
     }
 
@@ -137,5 +153,17 @@ public sealed class SampleOrderSeedingPostgresTests : IAsyncLifetime
     {
         public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct) =>
             Task.CompletedTask;
+    }
+
+    /// <summary>Only <see cref="IsConfigured"/> is consulted by SampleOrderService.</summary>
+    private sealed class StubEmailApiClient : IEmailApiClient
+    {
+        public StubEmailApiClient(bool configured) => IsConfigured = configured;
+
+        public bool IsConfigured { get; }
+        public string DefaultFrom => "orders@proculink.test";
+
+        public Task<EmailApiResult> SendAsync(EmailApiMessage message, CancellationToken ct = default) =>
+            throw new InvalidOperationException("SampleOrderService must not send mail itself.");
     }
 }

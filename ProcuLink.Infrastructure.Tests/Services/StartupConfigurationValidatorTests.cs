@@ -1,3 +1,4 @@
+using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -75,12 +76,32 @@ public class StartupConfigurationValidatorTests
     [Fact]
     public void Validate_Production_ValidKey_DoesNotThrow()
     {
-        StartupConfigurationValidator.Validate(
-            BuildConfig(ValidKey), NullLogger.Instance, "Production",
+        var config = BuildConfig(ValidKey);
+        var logger = new RecordingLogger();
+
+        var act = () => StartupConfigurationValidator.Validate(
+            config, logger, "Production",
             StartupConfigurationValidator.ApiRequiredKeys,
             StartupConfigurationValidator.OptionalKeys,
             "ProcuLink.Api");
-        // reaching here = no throw = pass
+
+        // "Does not throw" IS the claim, so state it. "Reaching here = pass" reported Passed
+        // for any reason at all — including Validate being emptied of every check above — and
+        // it stops holding the moment the call is wrapped or made async.
+        act.Should().NotThrow(
+            "a real 32-byte key is exactly what Production asks for; rejecting it would ground "
+            + "every deploy that did the right thing");
+
+        // The other half of "did not throw": it did not throw because it PASSED, not because it
+        // never looked. Validate always announces the effective revision-authority value, and the
+        // announcement must agree with the single reader of the flag.
+        var announcement = $"revision authority enabled={EffectiveConnectionConfigResolver.IsEnabled(config)}";
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Information && e.Message.Contains(announcement));
+
+        // A clean Production config logs nothing at Error — that level is reserved for the
+        // SSRF kill-switch, which is off here.
+        Assert.DoesNotContain(logger.Entries, e => e.Level >= LogLevel.Error);
     }
 
     [Fact]
@@ -88,11 +109,32 @@ public class StartupConfigurationValidatorTests
     {
         // Dev keeps its "just works without secrets" ergonomics — the all-zero
         // rejection only fires in Production.
-        StartupConfigurationValidator.Validate(
-            BuildConfig(AllZeroKey), NullLogger.Instance, "Development",
+        var config = BuildConfig(AllZeroKey);
+        var logger = new RecordingLogger();
+
+        // The key really is the insecure one; it is the ENVIRONMENT that spares it, not the key
+        // being acceptable. Without this the test would still pass if the all-zero detection were
+        // deleted outright, which is the P0 this file exists to prevent.
+        Assert.NotNull(StartupConfigurationValidator.ValidateEncryptionKey(AllZeroKey));
+
+        var act = () => StartupConfigurationValidator.Validate(
+            config, logger, "Development",
             StartupConfigurationValidator.ApiRequiredKeys,
             StartupConfigurationValidator.OptionalKeys,
             "ProcuLink.Api");
+
+        act.Should().NotThrow(
+            "a local dev host must still start on the placeholder key — hard-failing here would "
+            + "force every developer to mint secrets before running the app");
+
+        // Validate ran to completion rather than bailing early: the announcement is emitted on
+        // every host in every environment, and its value matches the one reader of the flag.
+        var announcement = $"revision authority enabled={EffectiveConnectionConfigResolver.IsEnabled(config)}";
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Information && e.Message.Contains(announcement));
+
+        // Development warns about unset optional keys, but nothing here is Error-worthy.
+        Assert.DoesNotContain(logger.Entries, e => e.Level >= LogLevel.Error);
     }
 
     // ── M5 (SEC-1): AllowPrivateNetworkTargets loud startup warning ──────────

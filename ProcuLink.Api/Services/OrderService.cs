@@ -18,7 +18,7 @@ namespace ProcuLink.Api.Services;
 /// now live in four cohesive internal sub-services constructed in the ctor below. Each public
 /// method delegates one-to-one to the matching sub-service; behaviour is unchanged.
 /// </summary>
-public sealed class OrderService : IOrderService, IStubOrderCreator
+public sealed class OrderService : IOrderService, IStubOrderCreator, IClaimedOrderCreator
 {
     private readonly OrderIngestionService  _ingestion;
     private readonly OrderQueryService      _query;
@@ -45,7 +45,8 @@ public sealed class OrderService : IOrderService, IStubOrderCreator
         ICxmlCredentialResolver?       cxmlResolver = null,
         IProductCodeSearch?            productCodeSearch = null,
         IAiUsageTracker?               aiUsage = null,
-        ISupplierSuggestionService?    supplierSuggestions = null)
+        ISupplierSuggestionService?    supplierSuggestions = null,
+        IAcceptanceGate?               acceptanceGate = null)
     {
         // Shared helpers (best-effort exception reconcile, passport events, audit-event
         // builder, extraction-review flagging) used by more than one sub-service.
@@ -82,7 +83,21 @@ public sealed class OrderService : IOrderService, IStubOrderCreator
 
         _resolution = new OrderResolutionService(db, mappings, logger, shared, decisions);
 
-        _transform = new OrderTransformService(db, fileStorage, transformers, logger, poMappingService, shared, effectiveConfig, cxmlResolver);
+        // WP-17 — the server-side acceptance gate. Built here when DI supplies none, exactly like
+        // `decisions` and `tokenizer` above, and for a stronger reason: a null gate would be an
+        // enforcement switch that silently turns OFF in any host that forgets the registration, and
+        // the Worker — which runs TransformOrderJob, the only transform entry point — did not even
+        // register ISupplierAcceptanceService before this work package. Defaulting to a REAL gate
+        // means the guarantee cannot be lost by a wiring omission; both Program.cs files now
+        // register it as well, and OrderServiceCompositionRootTests asserts it arrives.
+        var gate = acceptanceGate
+            ?? new AcceptanceGate(db, new SupplierAcceptanceService(db, effectiveConfig));
+
+        _transform = new OrderTransformService(
+            db, fileStorage, transformers, logger, poMappingService, shared,
+            acceptanceGate:  gate,
+            effectiveConfig: effectiveConfig,
+            cxmlResolver:    cxmlResolver);
     }
 
     // ── Ingestion ─────────────────────────────────────────────────────────────
@@ -112,6 +127,20 @@ public sealed class OrderService : IOrderService, IStubOrderCreator
     Task<Result<PurchaseOrderEntity>> IStubOrderCreator.CreateUnroutedStubAsync(
         Guid organisationId, Guid orderId, Stream fileStream, string filename, string contentType, CancellationToken ct)
         => _ingestion.CreateStubAsync(organisationId, supplierId: null, fileStream, filename, contentType, ct, orderId);
+
+    // ── IClaimedOrderCreator (push-ingress claim-first; pre-generated id + sender domain) ──
+
+    Task<Result<PurchaseOrderEntity>> IClaimedOrderCreator.CreateClaimedStubAsync(
+        Guid organisationId, Guid? supplierId, Guid orderId, Stream fileStream, string filename,
+        string contentType, string? inboundSenderDomain, CancellationToken ct)
+        => _ingestion.CreateStubAsync(organisationId, supplierId, fileStream, filename, contentType, ct,
+            orderId: orderId, inboundSenderDomain: inboundSenderDomain);
+
+    Task<Result<PurchaseOrderEntity>> IClaimedOrderCreator.CreateClaimedFromParsedOrderAsync(
+        Guid organisationId, Guid? supplierId, Guid orderId, ExtractedOrder order, string source,
+        string? inboundSenderDomain, CancellationToken ct)
+        => _ingestion.CreateStubFromParsedOrderAsync(organisationId, supplierId, order, source, ct,
+            inboundSenderDomain: inboundSenderDomain, orderId: orderId);
 
     public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
         Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct,

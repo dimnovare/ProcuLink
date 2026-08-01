@@ -136,7 +136,11 @@ public sealed class InboundEmailController : ControllerBase
             ToEmail: toAddress!,
             Subject: body.Subject ?? string.Empty,
             Attachments: attachments,
-            Body: ResolveBody(body));
+            Body: ResolveBody(body),
+            // Postmark's own MessageID is stable across its retry schedule (ten attempts over
+            // ~10.5 hours), which is exactly what makes it the dedupe key for this channel: a
+            // re-delivery of the message that already produced an order carries the same value.
+            ProviderMessageId: body.MessageID);
 
         // ── 4. Delegate to router ────────────────────────────────────────────
         var result = await _router.RouteAsync(payload, ct);

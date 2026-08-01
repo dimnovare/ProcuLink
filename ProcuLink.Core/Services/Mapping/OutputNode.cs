@@ -84,6 +84,31 @@ public record OutputNode
     /// </summary>
     public string? IncludeWhen { get; init; }
 
+    /// <summary>
+    /// JSON only (WP-15): emit this leaf as a typed value rather than a string.
+    ///
+    /// <para><c>number</c> / <c>boolean</c> / <c>null</c>; anything else, and null itself, means
+    /// <b>string</b> — which is what every leaf has always been, so an absent value is byte-identical.
+    /// Ignored by CSV and XML, which have no types to express: everything there is text on the wire,
+    /// and pretending otherwise would be a lie the receiver cannot act on.</para>
+    ///
+    /// <para><b>A value that does not fit the declared type FAILS the transform.</b> It does not fall
+    /// back to a string. A receiver validating against a schema that says <c>quantity</c> is a number
+    /// rejects the whole document on <c>"10 pcs"</c>, and rejects it AFTER we have said "delivered" —
+    /// so failing at transform time, where an operator can still see the order, is the kinder of the
+    /// two failures.</para>
+    /// </summary>
+    public string? ValueType { get; init; }
+
+    /// <summary>
+    /// JSON only (WP-15): what to do when this leaf resolves to nothing.
+    ///
+    /// <para><c>omit</c> drops the property from its object entirely — which is what a receiver that
+    /// distinguishes "absent" from "empty string" needs, and which no amount of value formatting can
+    /// express. Null (the default) writes the empty value, exactly as before.</para>
+    /// </summary>
+    public string? EmptyValue { get; init; }
+
     // ── Convenience factories (keep call sites + the converter readable) ──────────
 
     public static OutputNode Obj(string name, params OutputNode[] children) =>
@@ -121,6 +146,56 @@ public record OutputNodeTemplate
 
     /// <summary>Per-connection EDI/cXML identity as DATA (WS-12). Null → the format's default identity.</summary>
     public EnvelopeConfig? Envelope { get; init; }
+
+    /// <summary>
+    /// Per-supplier CSV dialect (WP-15). Null — and every null member inside it — means "exactly the
+    /// bytes this emitter produced before the dialect existed". Ignored by JSON/XML.
+    /// </summary>
+    public CsvDialect? CsvDialect { get; init; }
+}
+
+/// <summary>
+/// The CSV wire details a receiving system cares about, expressed as data so one supplier can be
+/// given semicolons and CRLF without a code change.
+///
+/// <para><b>Every member is nullable and every null means "as before".</b> That is not tidiness — the
+/// promotion path carries a designed tree from one order onto a supplier and proves it by BYTE
+/// PARITY, so a non-null default anywhere in here would change the bytes of every existing CSV
+/// supplier the moment this shipped. Founder ruling 2026-07-31: existing layouts keep what they
+/// have, and only layouts created after this default to CRLF — which the designer writes into the
+/// tree, rather than the emitter assuming it.</para>
+/// </summary>
+public sealed record CsvDialect
+{
+    /// <summary>Field separator. Null → <c>,</c>. A tab is written as a literal tab character.</summary>
+    public string? Delimiter { get; init; }
+
+    /// <summary>
+    /// <c>minimal</c> (null/default) quotes only values containing the delimiter, a quote or a
+    /// newline — RFC 4180's rule and today's behaviour. <c>always</c> quotes every field, which some
+    /// ERP importers require in order to treat every column as text.
+    /// </summary>
+    public string? QuotePolicy { get; init; }
+
+    /// <summary>
+    /// Row terminator: LF or CRLF, written as the literal escape (<c>"\n"</c> / <c>"\r\n"</c>).
+    ///
+    /// <para>Null means <c>Environment.NewLine</c>, which is what the emitter has always used — and
+    /// which is <b>platform-dependent</b>: LF on the Railway container, CRLF on a Windows dev box, so
+    /// the same tree has never produced identical bytes in both places. Preserved deliberately rather
+    /// than fixed here, because changing it is what would break byte parity for every existing
+    /// supplier. New layouts pin it explicitly and stop inheriting the ambiguity.</para>
+    /// </summary>
+    public string? LineEnding { get; init; }
+
+    /// <summary>
+    /// Output text encoding by name (e.g. <c>windows-1252</c>). Null → UTF-8 with no BOM. A receiver
+    /// on a legacy code page reads <c>ö</c> as mojibake from UTF-8 bytes, and cannot say so.
+    /// </summary>
+    public string? Encoding { get; init; }
+
+    /// <summary>Null/true writes the header row. False omits it, for feeds that expect data only.</summary>
+    public bool? WriteHeaderRow { get; init; }
 }
 
 /// <summary>

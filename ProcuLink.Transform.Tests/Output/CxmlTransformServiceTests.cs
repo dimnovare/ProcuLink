@@ -68,7 +68,11 @@ public class CxmlTransformServiceTests
         var result = await svc.TransformAsync(order, OutputFormat.CXml, CancellationToken.None);
 
         result.ContentType.Should().Be("application/xml");
-        result.FileExtension.Should().Be(".cxml");
+        // WP-20: .xml, not .cxml. cXML IS an XML document; ".cxml" is registered nowhere and is
+        // rejected by receivers that filter on extension. There is now ONE source of truth for
+        // this (DeliveryMediaTypes) and the transform reads from it, so the stored artifact and
+        // the delivered file can no longer disagree about what the document is called.
+        result.FileExtension.Should().Be(".xml");
 
         result.Content.Position = 0;
         using var reader = new StreamReader(result.Content);

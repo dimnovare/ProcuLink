@@ -1054,7 +1054,7 @@ public class InboundEmailRouterTests
 
     private static InboundEmailRouter MakeRouter(
         ProcuLinkDbContext db,
-        IOrderService orders,
+        IClaimedOrderCreator orders,
         IParseJobEnqueuer enqueuer,
         string slug,
         Guid orgId,
@@ -1213,8 +1213,28 @@ public class InboundEmailRouterTests
         orders.SenderDomains.Should().ContainSingle().Which.Should().BeNull();
     }
 
-    private sealed class FakeOrderService : IOrderService
+    private sealed class FakeOrderService : IOrderService, IClaimedOrderCreator
     {
+        // ── IClaimedOrderCreator ────────────────────────────────────────────────────────────────
+        // The router creates under the id its WP-22 dedupe claim pre-generated, and carries the
+        // routed/unrouted decision as a nullable supplier id on one method rather than two entry
+        // points. These forward to the existing recorders so every assertion in this suite — which
+        // path ran, with what sender domain — keeps its meaning unchanged.
+
+        public Task<Result<PurchaseOrderEntity>> CreateClaimedStubAsync(
+            Guid organisationId, Guid? supplierId, Guid orderId, Stream fileStream, string filename,
+            string contentType, string? inboundSenderDomain, CancellationToken ct)
+            => supplierId is { } routed
+                ? CreateStubAsync(organisationId, routed, fileStream, filename, contentType, ct, inboundSenderDomain)
+                : CreateUnroutedStubAsync(organisationId, fileStream, filename, contentType, ct, inboundSenderDomain);
+
+        public Task<Result<PurchaseOrderEntity>> CreateClaimedFromParsedOrderAsync(
+            Guid organisationId, Guid? supplierId, Guid orderId, ExtractedOrder order, string source,
+            string? inboundSenderDomain, CancellationToken ct)
+            => supplierId is { } routed
+                ? CreateStubFromParsedOrderAsync(organisationId, routed, order, source, ct, inboundSenderDomain)
+                : CreateUnroutedStubFromParsedOrderAsync(organisationId, order, source, ct, inboundSenderDomain);
+
         /// <summary>Every stub creation, routed and unrouted alike (unrouted records Guid.Empty).</summary>
         public List<(Guid OrgId, Guid SupplierId, string FileName, string ContentType, long Size)> CalledWith { get; } = new();
         /// <summary>Only the routed calls — <c>CreateStubAsync</c> with a real supplier.</summary>
@@ -1430,8 +1450,6 @@ public class InboundEmailRouterTests
             modelBuilder.Ignore<S3IngressConfig>();
             modelBuilder.Ignore<ImportedS3Object>();
             modelBuilder.Ignore<Buyer>();
-            modelBuilder.Ignore<ValidationRule>();
-            modelBuilder.Ignore<OutputTemplate>();
             modelBuilder.Ignore<InvoiceEntity>();
             modelBuilder.Ignore<InvoiceLineEntity>();
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();

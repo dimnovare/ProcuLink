@@ -9,8 +9,16 @@ namespace ProcuLink.Core.Services.Delivery;
 public enum ResendSafety
 {
     /// <summary>
-    /// Re-sending cannot duplicate: the channel is inherently idempotent (SFTP/FTPS write a
-    /// deterministic filename and overwrite). Re-drive freely.
+    /// Re-sending cannot duplicate: the channel writes to a path that is a deterministic function of
+    /// the order (SFTP/FTPS), so a re-send targets its own file and never opens a second one.
+    ///
+    /// <para>
+    /// It does NOT say the re-send succeeds. When the operator has turned <c>overwriteExisting</c>
+    /// off for that supplier, a re-send whose predecessor already wrote REFUSES — no duplicate, but
+    /// no repair either, and the order would be reported failed while the supplier may already hold
+    /// the document. <c>DeliveryService</c> therefore parks that specific combination (file-drop
+    /// channel + overwrite off + crash-recovery re-drive) for a human instead of re-driving it.
+    /// </para>
     /// </summary>
     Safe,
 

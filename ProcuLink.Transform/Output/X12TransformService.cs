@@ -208,10 +208,7 @@ public sealed class X12TransformService : ITransformService
         var bytes  = Encoding.UTF8.GetBytes(sb.ToString());
         var stream = new MemoryStream(bytes);
 
-        return Task.FromResult(new TransformResult(
-            Content:       stream,
-            ContentType:   "application/edi-x12",
-            FileExtension: ".x12"));
+        return Task.FromResult(TransformResult.For(OutputFormat.X12, stream));
     }
 
     // ── N1 address loop ─────────────────────────────────────────────────────────

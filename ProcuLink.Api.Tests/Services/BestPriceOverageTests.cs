@@ -110,20 +110,23 @@ public class BestPriceOverageTests
     [Fact]
     public void NoVolume_MakesALowerTierCostMoreThanAnyHigherCoveringTier()
     {
+        const int step = 25;
         var ladder = PlanConstants.SelfServeLadder;
         var topIncluded = ladder[^1].Included;
+        var comparisons = 0;
 
         for (var ti = 0; ti < ladder.Count; ti++)
         {
             var tier = ladder[ti];
             // Sample the whole range, plus the exact tier boundaries (worst case).
-            for (var used = 0; used <= topIncluded; used += 25)
+            for (var used = 0; used <= topIncluded; used += step)
             {
                 var effective = EffectiveMonthlyEur(tier.Plan, used);
 
                 // Compare ONLY against strictly-higher tiers that also cover this volume.
                 foreach (var higher in ladder.Skip(ti + 1).Where(h => h.Included >= used))
                 {
+                    comparisons++;
                     effective.Should().BeLessThanOrEqualTo(
                         higher.FlatEur,
                         "{0} at {1} orders (€{2}) must never cost more than upgrading to {3} (flat €{4}, covers {1})",
@@ -131,6 +134,25 @@ public class BestPriceOverageTests
                 }
             }
         }
+
+        // The innermost sequence is BOTH skipped and filtered, so it is legitimately empty for
+        // the top tier and for volumes no higher tier covers — which means "nothing failed" is
+        // not evidence that a single pair was ever priced. Re-derive the count from the other
+        // end of the same relation: each tier is the HIGHER half of a comparison against every
+        // one of the tiers below it, at every sampled volume it covers.
+        var expectedComparisons = ladder
+            .Select((upper, upperIndex) => upperIndex * (Math.Min(upper.Included, topIncluded) / step + 1))
+            .Sum();
+
+        expectedComparisons.Should().BeGreaterThan(0,
+            "a ladder with fewer than two priced tiers has no upgrade to compare against: the " +
+            "expected total would collapse to 0, match an empty sweep, and prove nothing");
+        comparisons.Should().Be(expectedComparisons,
+            "the upgrade-incentive invariant must have been priced on EVERY (lower tier, higher " +
+            "covering tier, sampled volume) triple — {0} of them for this ladder. Without this, a " +
+            "sweep that compared nothing at all still reports Passed, and the inversion this test " +
+            "exists to catch would go unnoticed on a real-money price list",
+            expectedComparisons);
     }
 
     /// <summary>
@@ -143,6 +165,8 @@ public class BestPriceOverageTests
     public void AtEveryTierBoundary_LowerTierNeverExceedsThatTiersFlatPrice()
     {
         var ladder = PlanConstants.SelfServeLadder;
+        var boundaryVolumesPriced = 0;
+        var comparisons = 0;
 
         for (var bi = 0; bi < ladder.Count; bi++)
         {
@@ -150,9 +174,11 @@ public class BestPriceOverageTests
             foreach (var used in new[] { boundaryTier.Included - 1, boundaryTier.Included })
             {
                 if (used < 0) continue;
+                boundaryVolumesPriced++;
                 // Every tier strictly BELOW the boundary tier must come in at/under its flat.
                 foreach (var lower in ladder.Take(bi))
                 {
+                    comparisons++;
                     var effective = EffectiveMonthlyEur(lower.Plan, used);
                     effective.Should().BeLessThanOrEqualTo(
                         boundaryTier.FlatEur,
@@ -161,6 +187,29 @@ public class BestPriceOverageTests
                 }
             }
         }
+
+        // Two of the three loops above can legitimately yield nothing — the `used < 0` guard
+        // drops a whole boundary volume, and Take(bi) is empty for the cheapest tier BY
+        // CONSTRUCTION — so neither the boundaries nor the comparisons are self-evidencing.
+        // Count what actually happened and re-derive both totals from the ladder itself.
+        static int VolumesFor(int included) => new[] { included - 1, included }.Count(v => v >= 0);
+
+        var expectedBoundaryVolumes = ladder.Sum(entry => VolumesFor(entry.Included));
+        var expectedComparisons     = ladder.Select((entry, index) => index * VolumesFor(entry.Included)).Sum();
+
+        expectedComparisons.Should().BeGreaterThan(0,
+            "with fewer than two priced tiers there is no cheaper tier to hold under a boundary: " +
+            "the expected total would collapse to 0 and match a sweep that compared nothing");
+        boundaryVolumesPriced.Should().Be(expectedBoundaryVolumes,
+            "every tier's inclusion — and the order just below it — must have survived the " +
+            "`used < 0` guard and been priced ({0} volumes for this ladder); a guard that skipped " +
+            "them all would leave the worst-case volumes unchecked and still report Passed",
+            expectedBoundaryVolumes);
+        comparisons.Should().Be(expectedComparisons,
+            "every (boundary volume, cheaper tier) pair must have been compared — {0} of them for " +
+            "this ladder — so a green run means the boundary prices were actually held, not that " +
+            "the inner loop had nothing to iterate",
+            expectedComparisons);
     }
 
     // ── THE SPECIFIC INVERSIONS NAMED IN THE TASK ARE REMOVED ─────────────

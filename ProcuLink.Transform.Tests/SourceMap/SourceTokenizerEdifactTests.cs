@@ -236,9 +236,13 @@ public class SourceTokenizerEdifactTests
 
         var tokens = await Tokenizer.TokenizeAsync(bytes, ".edi");
 
-        // May produce tokens (treated as one giant segment with no known delimiters)
-        // OR return empty — either is acceptable; crucially it must NOT throw.
-        // We just assert no exception was thrown (implicit — if we get here, it passed).
+        // Prose with no segment terminator collapses into a single "segment" whose only
+        // part is the tag, so there is no element to emit. Empty is the contract the name
+        // states, and it is the contract that matters: a garbage .edi file must offer the
+        // mapper nothing to drag, not a pile of tokens whose ids are made of the prose.
+        // (Not throwing is necessary but not sufficient — the tokenizer's catch-all returns
+        // empty too, and a silently-empty result is exactly what downstream falls through on.)
+        tokens.Should().BeEmpty();
     }
 
     [Fact]
