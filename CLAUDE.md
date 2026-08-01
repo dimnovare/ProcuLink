@@ -210,6 +210,24 @@ NEXT_PUBLIC_SENTRY_DSN=
 - Railway: https://railway.app · Vercel: https://vercel.com · Stripe: https://stripe.com
 
 ## Token/context discipline
+- **Every session and chip starts in caveman mode and stays in it.** Invoke the `caveman` skill
+  first, before anything else — terse prose, no articles/filler/hedging, fragments fine.
+  **Prose only:** code, commit messages, PR bodies and user-facing copy stay written normally, as do
+  security warnings, confirmations before irreversible actions, and multi-step sequences where
+  fragment order could be misread. File:line evidence, exact error strings and command output are
+  never abbreviated.
+  *Why:* sessions here run long and in parallel, and one that exhausts its context mid-packet leaves
+  a branch nobody else can safely pick up.
+- Batch independent tool calls into one message. Delegate fan-out reads to subagents — as many in
+  parallel as the work genuinely splits into — so they return a conclusion, not a file dump.
+- Read only the part of a file you need. Whole-file reads are how a session dies at 40% of the task.
+- Read `docs/superpowers/plans/2026-07-27-v1-master-plan/05-PROGRESS.md` before re-investigating
+  anything: it carries the correction log and the numbered traps, and most dead ends are already paid
+  for once.
+- Push anything worth keeping the moment it is committed — a session's worktree is not storage.
+- Before dispatching a chip, check the **open PR set**, not just `main`. A prerequisite may be
+  written, reviewed and green yet invisible from `main` (TRAP 27). Give each chip a file-disjoint
+  scope and name the files that belong to another chip.
 - Start with `git status --short` and `git diff --stat`.
 - Do not run full `git diff` unless asked.
 - Do not read all markdown documentation automatically; read only task-relevant files.
