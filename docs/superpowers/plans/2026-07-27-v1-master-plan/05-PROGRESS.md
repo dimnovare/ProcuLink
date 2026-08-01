@@ -3356,3 +3356,90 @@ the swept region cannot regress, the unswept region is named out loud. Also left
 `WireTopology`'s `isHealthy >= 80` vs `healthColor < 90` mismatch, which put amber copy on the green
 pill for health 80–89 — contrast fixed, thresholds not, because collapsing them changes what
 "healthy" means on screen and also reaches `BridgeDashboard.healthColor`.
+## 2026-08-01 — WP-02 round 2: the guard enforced one rule, not five
+
+**BE `#128` MERGED (`429ee7f`, post-merge CI green). FE `#80` open.** WP-02 moves from
+🟢-with-a-caveat to closed on the backend.
+
+`#79` was right about the headline: `Live_ImapIngress` is repaired and every live-transport test
+is a declared skip. What its refutation found — *"the anti-vacuous scanner's GREEN is narrower
+than it reads"* — was the actual packet. `VacuousTestPassScanner` enforced **one** rule, so its
+green meant "no bare early return precedes an assertion" while every reader took it to mean
+"every test asserts something".
+
+Now five: `early-exit-before-assert`, `no-assertion-at-all`, `every-assertion-is-conditional`,
+`tautological-assertion`, `swallowed-assertion-failure`. **37 vacuous tests fixed** — 27 backend,
+10 frontend.
+
+### Two shapes nobody had named
+
+- **A deconstructing `foreach (var (a, b) in xs)` is `ForEachVariableStatementSyntax`**, a
+  different Roslyn node from the plain form with identical meaning. Matching only the plain one
+  let two allowlist sweeps in `ItemCodeComparerGuardTests` scan clean — and those allowlists are
+  *designed to shrink to empty*, which is exactly the state in which they stop asserting.
+- **Helper methods were never scanned.** Moving a `try` one call deeper walked past the swallow
+  rule. A helper's assertions are the test's assertions.
+
+### The allowed side needed mutation-proving as much as the caught side
+
+A guard people learn to wave through stops being a guard. Two real tests were flagged by an early
+draft and are **correct**: `f(x).Should().Be(f(x))` is a **determinism** check — textually
+identical to a tautology, semantically its opposite (`ApiKeyHasherTests`,
+`DeliveryServiceIdempotencyTests`). Likewise `var cases = new[] { … }` one statement above a loop
+is the table-driven spelling this repo actually uses. Both now have allowed fixtures, and both
+fixtures were proved by mutating the exemption and watching them go red.
+
+**16 mutations, 19 guard tests red, all restored green.** Plus four production mutations —
+dropping a `ShippingAddressKeys` entry, the Worker host, `delivery_unconfirmed`, PostHog's
+api-key guard — each turning its fixed test red. **None would have failed before the fix.**
+
+### FE: the gate that gated nothing
+
+`package.json` ran `next lint` with **no `--dir`**, so it linted `src` only. Any Playwright rule
+added to `eslint.config.js` would have reported nothing forever while the check stayed green —
+WP-01's shape exactly. And there was no `expect-expect` rule to be inert in the first place:
+`eslint-plugin-vitest`, `-jest` and `-playwright` were all absent from `package.json`.
+
+18 Playwright tests asserted only the **absence** of something on a page never checked to have
+rendered — a 500, a branded 404 or a `/sign-in` bounce produces no CSP violation and contains no
+mock-residue literal, so both suites called those routes clean.
+
+### The new rules immediately caught newly-merged code
+
+Rebasing FE #80 across seven PRs merged the same day, the guard found **one** real offender in
+them — `first-run-to-delivered.spec.ts` (WP-27 `#73`) dismissing the consent banner with
+`.click().catch(() => {})` — and one helper needing declaration (`bothScopes`, WP-10 `#83`, which
+does assert twice). **Fifth instance of the pattern**: a guard written by one packet catching a
+different, later packet, never its own author.
+
+### Skips are legible now
+
+BE CI printed `Skipped: 14` and nothing else — not which, not why. A typo'd variable name in a
+gating attribute would skip its test forever, silently; that is `Live_ImapIngress` one level up.
+A census step now names every skipped test and its reason in the job summary and **fails only on
+a skip with no reason**. First live run: 14 skipped, 0 reasonless, and the first name in the
+report is `Live_ImapIngress_RealPollImportsCsvAttachment`. FE gained list/json/html reporters and
+an always-on report upload; Playwright counts `skipped` as passing, so 31 of 111 were invisible.
+
+### Two collisions, resolved by NOT taking the fix
+
+- I fixed the absolute-`.claude` path bug in `RevisionAuthorityHostCoverageTests`, then found
+  `claude/beautiful-torvalds-04a9a5` had fixed it first with a synthetic-tree regression test mine
+  lacked. **Reverted mine**; left a comment naming that branch at the call site. As of `a4e78f6`
+  main still has the bug — that branch is worth merging.
+- The `docs/ops/wp14-*.md` test-writes-a-checked-in-file finding was independently fixed in
+  `#130` while this packet ran.
+
+### Process notes worth keeping
+
+- **`Copy-Item` restore defeats the rebuild.** It carries the *backup's* timestamp, so MSBuild
+  prints `Build succeeded` and compiles nothing — I ran the mutated DLL and got 7 phantom
+  failures. `Build succeeded` is not evidence a compile happened. `git checkout -- <file>` writes
+  a fresh timestamp; a file copy does not.
+- **`git stash` on a clean tree stashes nothing, and `git stash pop` then pops a stranger's.**
+  Reaching for a stash baseline applied a six-week-old WIP from the shared stack (stashes are
+  per-repo, not per-worktree). Nothing was lost — a failed pop keeps the entry — but use
+  `git checkout <sha> -- <path>` or a throwaway worktree for baselines, never bare `stash`.
+- **Local Docker contention is not a diff failure.** A full local run failed 14 tests, every one
+  inside `InitializeAsync()` at `NpgsqlDatabaseCreator.Exists`, with **32 `postgres:16` containers
+  live** from sibling sessions. CI on clean infra: 4999 tests, 4985 passed, 14 skipped, 0 failed.
