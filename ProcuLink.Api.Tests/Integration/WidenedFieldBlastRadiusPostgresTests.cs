@@ -26,8 +26,14 @@ namespace ProcuLink.Api.Tests.Integration;
 /// <para><b>The artefact.</b> <c>docs/ops/wp14-widened-field-blast-radius.sql</c> is a READ-ONLY
 /// query the founder runs against production (or a read replica) before merging. This test executes
 /// THAT FILE — not a copy of it — against a seeded local Postgres, so the script that ships is the
-/// script that was proven to work, and writes the result to a report file. A test with its own
-/// inline SQL would prove a sibling of the artefact, which is worth nothing.</para>
+/// script that was proven to work. A test with its own inline SQL would prove a sibling of the
+/// artefact, which is worth nothing.</para>
+///
+/// <para><b>The report.</b> The run writes its report to the gitignored artifacts directory
+/// (<see cref="TestReportArtifacts"/>) and COMPARES it against the committed
+/// <c>docs/ops/wp14-blast-radius-local-run.md</c> — it does not overwrite it. The seed ids are
+/// therefore fixed rather than fresh per run, so the report is byte-stable and the committed copy
+/// is a claim that stays checkable instead of a file every test run rewrites with new GUIDs.</para>
 ///
 /// <para><b>Non-vacuity.</b> The seed contains both POSITIVES (a canonicalField rule, a Fallback
 /// manipulator param, a Scriban expression, a per-order override, a published revision) and
@@ -41,6 +47,16 @@ namespace ProcuLink.Api.Tests.Integration;
 [Collection("postgres-container")]
 public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
 {
+    /// <summary>The committed report this run is checked against, and the name it is written under.</summary>
+    private const string ReportFileName = "wp14-blast-radius-local-run.md";
+
+    // Fixed, not fresh: they appear in the report, and a report with new GUIDs every run cannot be
+    // compared to anything. Each test method gets its own container, so these cannot collide.
+    private static readonly Guid OrgId     = new("b1a57000-0000-4d14-8a00-000000000001");
+    private static readonly Guid SupplierA = new("b1a57000-0000-4d14-8a00-00000000000a");
+    private static readonly Guid SupplierB = new("b1a57000-0000-4d14-8a00-00000000000b");
+    private static readonly Guid SupplierC = new("b1a57000-0000-4d14-8a00-00000000000c");
+
     private readonly ITestOutputHelper _output;
     private PostgreSqlContainer? _pg;
     private DbContextOptions<ProcuLinkDbContext>? _options;
@@ -83,17 +99,11 @@ public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
 
     // ── Locating the shipped artefact ────────────────────────────────────────
 
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ProcuLink.slnx")))
-            dir = dir.Parent;
-        dir.Should().NotBeNull("the test executes the shipped .sql file, so it must find the repo root");
-        return dir!.FullName;
-    }
-
     private static string ScriptPath() =>
-        Path.Combine(RepoRoot(), "docs", "ops", "wp14-widened-field-blast-radius.sql");
+        Path.Combine(TestReportArtifacts.RepoRoot(), "docs", "ops", "wp14-widened-field-blast-radius.sql");
+
+    private static string CommittedReportPath() =>
+        Path.Combine(TestReportArtifacts.RepoRoot(), "docs", "ops", ReportFileName);
 
     /// <summary>
     /// The 32 names WP-14 added, derived from the declared field lists rather than retyped, so the
@@ -168,18 +178,18 @@ public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
     [DockerRequiredFact]
     public async Task TheQuery_FindsEveryAffectedConfig_AndNothingElse()
     {
-        var orgId      = Guid.NewGuid();
-        var supplierA  = Guid.NewGuid();   // POSITIVE — canonicalField rule on a new name
-        var supplierB  = Guid.NewGuid();   // POSITIVE — Fallback manipulator param + Scriban
-        var supplierC  = Guid.NewGuid();   // NEGATIVE — only pre-WP-14 names
-        var now        = DateTime.UtcNow;
+        var orgId      = OrgId;
+        var supplierA  = SupplierA;   // POSITIVE — canonicalField rule on a new name
+        var supplierB  = SupplierB;   // POSITIVE — Fallback manipulator param + Scriban
+        var supplierC  = SupplierC;   // NEGATIVE — only pre-WP-14 names
+        var now        = new DateTime(2026, 7, 14, 0, 0, 0, DateTimeKind.Utc);
 
         await using (var db = new ProcuLinkDbContext(_options!))
         {
             db.Organisations.Add(new Organisation
             {
-                Id = orgId, Name = "Blast Radius Co", ClerkOrgId = $"org_{Guid.NewGuid():N}",
-                Slug = $"blast-{Guid.NewGuid():N}"[..20], CreatedAt = now,
+                Id = orgId, Name = "Blast Radius Co", ClerkOrgId = "org_wp14blastradiusfixture",
+                Slug = "blast-radius-fixture", CreatedAt = now,
             });
             foreach (var (id, name) in new[] { (supplierA, "A"), (supplierB, "B"), (supplierC, "C") })
             {
@@ -222,8 +232,8 @@ public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
         var rows = await RunScriptAsync();
 
         var report = BuildReport(rows);
-        var reportPath = Path.Combine(RepoRoot(), "docs", "ops", "wp14-blast-radius-local-run.md");
-        await File.WriteAllTextAsync(reportPath, report);
+        var reportPath = await TestReportArtifacts.WriteAsync(ReportFileName, report);
+        _output.WriteLine($"report written to {reportPath}");
         _output.WriteLine(report);
 
         // POSITIVES found …
@@ -241,6 +251,14 @@ public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
         rows.Should().NotContain(r => r.ScopeId == supplierC.ToString(),
             "a config naming only pre-WP-14 fields is unaffected and must not be reported — a scan "
             + "that flags everything tells the founder nothing");
+
+        // Last, because the assertions above are the subject and this one is the paperwork: the
+        // committed copy is what a reader sees without running anything, so it has to stay TRUE.
+        // Compared, never overwritten — a test that rewrote it would make it agree with itself by
+        // construction and leave the working tree dirty after every run.
+        Normalised(await File.ReadAllTextAsync(CommittedReportPath())).Should().Be(Normalised(report),
+            "docs/ops/{0} must still describe what the shipped script returns; if this run is the "
+            + "correct new answer, copy {1} over it", ReportFileName, reportPath);
     }
 
     [DockerRequiredFact]
@@ -259,6 +277,10 @@ public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
 
     private sealed record Hit(
         string SourceTable, Guid RowId, Guid OrgId, string? ScopeId, string ReferencedField, string Shape);
+
+    /// <summary>Line endings differ between the checkout and the run; the CONTENT is the claim.</summary>
+    private static string Normalised(string text) =>
+        text.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n');
 
     private async Task<List<Hit>> RunScriptAsync()
     {
@@ -289,11 +311,15 @@ public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
         var sb = new StringBuilder();
         sb.AppendLine("# WP-14 blast radius — LOCAL TEST DATA");
         sb.AppendLine();
-        sb.AppendLine("Generated by `WidenedFieldBlastRadiusPostgresTests` by executing");
-        sb.AppendLine("`docs/ops/wp14-widened-field-blast-radius.sql` against a seeded local");
-        sb.AppendLine("postgres:16. **This is local fixture data, NOT production.** The same script");
-        sb.AppendLine("must be run against a production read replica before merge — that number is");
-        sb.AppendLine("the founder's to obtain, and this file cannot stand in for it.");
+        sb.AppendLine("Produced by executing `docs/ops/wp14-widened-field-blast-radius.sql` against a");
+        sb.AppendLine("seeded local postgres:16. **This is local fixture data, NOT production.** The");
+        sb.AppendLine("same script must be run against a production read replica before merge — that");
+        sb.AppendLine("number is the founder's to obtain, and this file cannot stand in for it.");
+        sb.AppendLine();
+        sb.AppendLine("This file is a COMMITTED SNAPSHOT, not a test output.");
+        sb.AppendLine("`WidenedFieldBlastRadiusPostgresTests` compares its run against this text and");
+        sb.AppendLine("fails on a mismatch; it never rewrites it. To update, copy the report the run");
+        sb.AppendLine("leaves in `artifacts/test-reports/` over this file.");
         sb.AppendLine();
         sb.AppendLine($"Rows found in the local fixture: **{rows.Count}**");
         sb.AppendLine();

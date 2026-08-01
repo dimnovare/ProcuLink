@@ -5,6 +5,11 @@ one organisation, a supplier holding **250** codes and a second
 holding **5000**, after `ANALYZE item_mappings`. Absolute timings are
 machine-dependent; the PLAN SHAPE and the buffer counts are the point.
 
+The committed copy under `docs/ops/` is a SNAPSHOT. The test writes its run to
+`artifacts/test-reports/` and never into the working tree — every run differs in
+timings and seed ids, so writing it here would dirty the tree for no information.
+Update it by copying that file over this one.
+
 ## pre-WP-14 predicate (exact match only), small supplier
 
 ```
