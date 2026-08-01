@@ -125,7 +125,7 @@ public sealed class PassportService : IPassportService
             .AsNoTracking()
             .Where(r => r.OrgId == organisationId && r.OrderId == orderId)
             .OrderBy(r => r.LineNumber)
-            .Select(r => new PassportValidationResult(r.LineNumber, r.Severity, r.Code, r.Message))
+            .Select(r => new PassportValidationResult(r.LineNumber, r.Severity, r.Status, r.Code, r.Message))
             .ToListAsync(ct);
 
         if (validationResults.Count == 0)

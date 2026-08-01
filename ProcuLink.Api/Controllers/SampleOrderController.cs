@@ -49,6 +49,12 @@ public class SampleOrderController : ControllerBase
             // The caller MUST NOT promise a delivery this deployment cannot make: false when no
             // usable address was supplied or no email provider is configured here.
             deliveryConfigured = result.DeliveryConfigured,
+            // …and MUST NOT promise a STOP that will not happen. `deliveryConfigured: false` used
+            // to be read as "nothing will be sent", but it only ever meant "I did not set up the
+            // practice mailbox". When this supplier already carries a delivery target that this run
+            // could not replace, the state is `existing_target` and pressing send WILL dispatch
+            // through it (WP-39 §4.5). One of ProcuLink.Core.Constants.PracticeDeliveryState.
+            practiceDelivery = result.PracticeDelivery,
         });
     }
 

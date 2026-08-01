@@ -96,6 +96,20 @@ public record PassportSupplierProfile(
 public record PassportValidationResult(
     int?    LineNumber,
     string  Severity,   // info | warning | error
+    /// <summary>
+    /// pass | fail — the OUTCOME of the check, and the only field that carries it.
+    ///
+    /// <para>Severity is not a substitute. <see cref="ProcuLink.Api.Services.InvariantValidator"/>
+    /// deliberately emits a row for every check it performed, passing ones included, so a
+    /// rule-less order cannot show a vacuous green "Passed" — and it stamps those rows with the
+    /// severity the rule would carry IF it failed. A passing invariant at severity "error" is
+    /// therefore normal and expected.</para>
+    ///
+    /// <para>This field was missing from the DTO until WP-39 §4.1. Because it was, a clean
+    /// delivered order's audit trail read "3 validation issues": severity was the only signal
+    /// left, and every consumer that reached for it was wrong.</para>
+    /// </summary>
+    string  Status,
     string  Code,
     string  Message
 );

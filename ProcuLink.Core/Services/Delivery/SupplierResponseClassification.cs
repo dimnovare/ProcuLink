@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ProcuLink.Core.Constants;
 
 namespace ProcuLink.Core.Services.Delivery;
@@ -384,23 +385,128 @@ public static class SupplierResponseClassification
         var hint = Classify(responseCode, supplierReason, supplierReasonObservable).OperatorHint;
         if (hint is null) return dispatcherMessage;
 
-        var reason = SummarizeSupplierReason(supplierReason);
-        return reason is null ? hint : $"{hint} The supplier's endpoint said: {reason}";
+        var summary = SummarizeResponseBody(supplierReason);
+        if (summary.Text is null) return hint;
+
+        return summary.Quotable
+            ? $"{hint} The supplier's endpoint said: {summary.Text}"
+            : $"{hint} {summary.Text}";
     }
 
     /// <summary>
-    /// One line, bounded. The full body is persisted verbatim on
-    /// <c>DeliveryAttempt.ResponseBody</c>; this is only the readable tail of a sentence.
+    /// What, if anything, may be said about a remote endpoint's response body.
     /// </summary>
-    private static string? SummarizeSupplierReason(string? supplierReason)
+    /// <param name="Quotable">
+    /// TRUE when <see cref="Text"/> is the supplier's OWN words and may be quoted after
+    /// "said:". FALSE when it is our sentence describing what they sent instead of words.
+    /// </param>
+    /// <param name="Text">Null when the body was empty and there is nothing to say at all.</param>
+    public readonly record struct SupplierReasonSummary(bool Quotable, string? Text);
+
+    /// <summary>
+    /// The ONE place that decides how a remote endpoint's response body may appear in copy a
+    /// person reads. Both passthroughs go through it — <see cref="DescribeFailure(int?, string?, bool, string?)"/>
+    /// and the HTTP dispatcher's own failure sentence — because fixing one and leaving the other
+    /// is how a body reaches the operator anyway: DescribeFailure returns the dispatcher's message
+    /// UNCHANGED for every response code this table has no hint for.
+    ///
+    /// <para>WP-39 §4.4 found a webhook.site error page pasted into an operator's failure message
+    /// and cut off mid-tag. The 200-character cap had fired correctly; nothing had asked whether
+    /// the bytes were a message in the first place.</para>
+    ///
+    /// <para>The rule is the frontend's, already settled in <c>parseApiErrorBody</c>: extract a
+    /// message you can identify, or say what arrived — never fall back to pasting the raw body in
+    /// front of a person. The full body is persisted verbatim on
+    /// <c>DeliveryAttempt.ResponseBody</c> either way, so nothing is lost for a dispute; this only
+    /// governs the sentence.</para>
+    /// </summary>
+    public static SupplierReasonSummary SummarizeResponseBody(string? body)
     {
-        if (string.IsNullOrWhiteSpace(supplierReason)) return null;
+        if (string.IsNullOrWhiteSpace(body)) return new(false, null);
 
-        var oneLine = supplierReason.Replace('\r', ' ').Replace('\n', ' ').Trim();
-        if (oneLine.Length == 0) return null;
+        var oneLine = body.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (oneLine.Length == 0) return new(false, null);
 
-        return oneLine.Length > MaxSupplierReasonLength
-            ? oneLine[..MaxSupplierReasonLength]
-            : oneLine;
+        // Markup. A tag where a sentence was expected is a machine's answer, not a supplier's.
+        if (oneLine[0] == '<')
+            return new(false, LooksLikeHtml(oneLine)
+                ? "Their endpoint returned an HTML error page, not a message."
+                : "Their endpoint returned an XML response with no readable message in it.");
+
+        // JSON. Mine it for the field a human would have written, and say so when there is none —
+        // a raw object pasted into a sentence is the same defect wearing different brackets.
+        if (oneLine[0] is '{' or '[')
+        {
+            var mined = MessageFromJson(oneLine);
+            return mined is null
+                ? new(false, "Their endpoint returned a JSON error with no message in it.")
+                : new(true, Cap(mined));
+        }
+
+        return new(true, Cap(oneLine));
+    }
+
+    private static string Cap(string s) =>
+        s.Length > MaxSupplierReasonLength ? s[..MaxSupplierReasonLength] : s;
+
+    private static bool LooksLikeHtml(string oneLine)
+    {
+        // The production case opened with an HTML comment, so the first tag is not enough.
+        var head = oneLine.Length > 512 ? oneLine[..512] : oneLine;
+        return head.Contains("<html", StringComparison.OrdinalIgnoreCase)
+            || head.Contains("<!doctype html", StringComparison.OrdinalIgnoreCase)
+            || head.Contains("<body", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The first non-empty string under a name a person would have put a sentence in. Nested
+    /// objects are searched too — a supplier that answers <c>{"error":{"message":"…"}}</c> has
+    /// still told us something.
+    /// </summary>
+    private static string? MessageFromJson(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return FindMessage(doc.RootElement, depth: 0);
+        }
+        catch (JsonException)
+        {
+            // Opened like JSON and is not. Nothing here is identifiable, so nothing is quoted.
+            return null;
+        }
+    }
+
+    private static readonly string[] MessageFieldNames = ["message", "error_description", "detail", "error", "title", "reason"];
+
+    private static string? FindMessage(JsonElement element, int depth)
+    {
+        if (depth > 3) return null;
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                if (FindMessage(item, depth + 1) is { } fromItem) return fromItem;
+            return null;
+        }
+
+        if (element.ValueKind != JsonValueKind.Object) return null;
+
+        foreach (var name in MessageFieldNames)
+        {
+            if (!element.TryGetProperty(name, out var value)) continue;
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                var text = value.GetString();
+                if (!string.IsNullOrWhiteSpace(text)) return text.Trim();
+            }
+            else if (value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+            {
+                if (FindMessage(value, depth + 1) is { } nested) return nested;
+            }
+        }
+
+        return null;
     }
 }

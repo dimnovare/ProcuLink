@@ -1,17 +1,29 @@
+using ProcuLink.Core.Constants;
+
 namespace ProcuLink.Core.Services;
 
 /// <summary>
 /// Outcome of creating an onboarding practice order.
 /// </summary>
 /// <param name="OrderId">The new sample order's id.</param>
-/// <param name="DeliveryConfigured">
-/// True when the sample supplier now has a delivery setup, so pressing "send" on the practice order
-/// really reaches <c>delivered</c>. False when the caller supplied no address, supplied an invalid
-/// one, or this deployment has no email provider configured — in which case the practice order
-/// still parses and transforms but stops at "no delivery is set up", exactly as it did before
-/// WP-27. Callers surface this so the UI never promises a delivery the deployment cannot make.
+/// <param name="PracticeDelivery">
+/// What pressing "send" on this practice order will actually do — one of
+/// <see cref="PracticeDeliveryState"/>. Callers surface it so the review screen never promises a
+/// delivery the deployment cannot make, and never promises a STOP that will not happen (WP-39 §4.5).
 /// </param>
-public readonly record struct SampleOrderResult(Guid OrderId, bool DeliveryConfigured);
+public readonly record struct SampleOrderResult(Guid OrderId, string PracticeDelivery)
+{
+    /// <summary>
+    /// True only when the practice mailbox was set up, so the finished file is emailed to the
+    /// operator and nothing reaches a real supplier.
+    ///
+    /// <para>Kept because it is wire contract — the API still returns <c>deliveryConfigured</c> and
+    /// pre-WP-39 clients still read it — but DERIVED, so it cannot drift from the state again. It
+    /// used to be the whole answer, and it silently meant "the seeder wrote a config just now"
+    /// rather than "this supplier has a delivery target", which is the gap §4.5 fell through.</para>
+    /// </summary>
+    public bool DeliveryConfigured => PracticeDelivery == PracticeDeliveryState.EmailedToYou;
+}
 
 /// <summary>
 /// Creates a sample purchase order from the embedded onboarding fixture and enqueues parsing.

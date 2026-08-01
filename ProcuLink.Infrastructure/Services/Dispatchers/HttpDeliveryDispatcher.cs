@@ -175,20 +175,27 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
     private static string? NullIfBlank(string? body) =>
         string.IsNullOrWhiteSpace(body) ? null : body;
 
+    /// <summary>
+    /// The sentence an operator reads when the response code is one
+    /// <see cref="SupplierResponseClassification"/> has no named hint for — DescribeFailure
+    /// returns this message unchanged in that case, so it is a real operator-facing surface and
+    /// not merely a log line.
+    ///
+    /// <para>It used to slice its own 120 characters off the raw body, which is how a web
+    /// server's HTML error page reached a person cut off mid-tag (WP-39 §4.4). The decision about
+    /// what a remote body may say now lives in exactly one place, shared with the other
+    /// passthrough. The full body still travels verbatim on <c>DeliveryResult.ResponseBody</c>.</para>
+    /// </summary>
     private static string BuildFailureMessage(int code, string body)
     {
-        if (string.IsNullOrWhiteSpace(body))
-            return $"HTTP {code}: supplier endpoint returned an error.";
+        var opening = $"HTTP {code}: supplier endpoint returned an error.";
+        var summary = SupplierResponseClassification.SummarizeResponseBody(body);
 
-        var summary = body
-            .Replace('\r', ' ')
-            .Replace('\n', ' ')
-            .Trim();
+        if (summary.Text is null) return opening;
 
-        if (summary.Length > 120)
-            summary = summary[..120];
-
-        return $"HTTP {code}: supplier endpoint returned an error. Response summary: {summary}";
+        return summary.Quotable
+            ? $"{opening} Response summary: {summary.Text}"
+            : $"{opening} {summary.Text}";
     }
 
     // ── Private config POCO ───────────────────────────────────────────────────

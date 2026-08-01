@@ -135,7 +135,7 @@ public sealed class SampleOrderService : ISampleOrderService
         // 1c. Seed the delivery setup that CLOSES the loop (WP-27). Skipped — leaving the
         //     pre-WP-27 "no delivery is set up" ending intact — when the caller gave us no usable
         //     address or this deployment has no email provider. Never promise a send we cannot make.
-        var deliveryConfigured =
+        var practiceDelivery =
             await SeedSampleDeliveryConfigAsync(organisationId, supplier.Id, deliverToEmail, now, ct);
 
         // 2. Load the embedded CSV fixture from ProcuLink.Api.dll (loaded into the same AppDomain at runtime).
@@ -180,11 +180,12 @@ public sealed class SampleOrderService : ISampleOrderService
                 ["order_id"]            = order.Id,
                 ["supplier_id"]         = supplier.Id,
                 ["po_number"]           = FixturePoNumber,
-                ["delivery_configured"] = deliveryConfigured,
+                ["delivery_configured"] = practiceDelivery == PracticeDeliveryState.EmailedToYou,
+                ["practice_delivery"]   = practiceDelivery,
             },
             ct: ct);
 
-        return new SampleOrderResult(order.Id, deliveryConfigured);
+        return new SampleOrderResult(order.Id, practiceDelivery);
     }
 
     /// <summary>
@@ -212,17 +213,30 @@ public sealed class SampleOrderService : ISampleOrderService
     /// address is connection metadata, not a secret.
     /// </para>
     /// </summary>
-    /// <returns>True when the sample supplier now has a delivery setup.</returns>
-    private async Task<bool> SeedSampleDeliveryConfigAsync(
+    /// <returns>
+    /// One of <see cref="PracticeDeliveryState"/> — what pressing "send" will actually do.
+    /// </returns>
+    private async Task<string> SeedSampleDeliveryConfigAsync(
         Guid organisationId, Guid supplierId, string? deliverToEmail, DateTime now, CancellationToken ct)
     {
+        // Read FIRST, before either guard. Both used to return early without ever looking, so the
+        // answer was "did I write one just now" while every consumer read it as "does this supplier
+        // have a delivery target". Those are the same answer except in one case, and that case —
+        // a config already sitting there that this run cannot replace — is WP-39 §4.5: the screen
+        // said the run would stop at "no delivery is set up", and pressing send POSTed to it.
+        var existing = await _db.SupplierDeliveryConfigs
+            .FirstOrDefaultAsync(c => c.OrgId == organisationId && c.SupplierId == supplierId, ct);
+
+        string CannotSeed() =>
+            existing is null ? PracticeDeliveryState.NotSetUp : PracticeDeliveryState.ExistingTarget;
+
         var recipient = NormaliseEmail(deliverToEmail);
-        if (recipient is null) return false;
+        if (recipient is null) return CannotSeed();
 
         // A deployment with no email-API token cannot send at all — EmailApiDeliveryDispatcher
         // would answer "Email delivery is not configured on this deployment". Seeding here would
         // turn today's honest "delivery not set up" ending into a delivery_failed, which is worse.
-        if (!_email.IsConfigured) return false;
+        if (!_email.IsConfigured) return CannotSeed();
 
         var configJson = JsonSerializer.Serialize(new
         {
@@ -236,9 +250,6 @@ public sealed class SampleOrderService : ISampleOrderService
                 "receive it — same builder, same item codes, same layout.\n\n" +
                 "Nothing was sent to a real supplier.",
         });
-
-        var existing = await _db.SupplierDeliveryConfigs
-            .FirstOrDefaultAsync(c => c.OrgId == organisationId && c.SupplierId == supplierId, ct);
 
         if (existing is null)
         {
@@ -255,7 +266,7 @@ public sealed class SampleOrderService : ISampleOrderService
                 CreatedAt            = now,
                 UpdatedAt            = now,
             });
-            return true;
+            return PracticeDeliveryState.EmailedToYou;
         }
 
         // Re-run (the user started the practice order again, possibly with a different address):
@@ -266,7 +277,7 @@ public sealed class SampleOrderService : ISampleOrderService
         existing.EncryptedCredentials = string.Empty;
         existing.OutputFormat         = SampleOutputFormat;
         existing.UpdatedAt            = now;
-        return true;
+        return PracticeDeliveryState.EmailedToYou;
     }
 
     /// <summary>
