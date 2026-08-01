@@ -1,4 +1,5 @@
 using System.Net.Security;
+using System.Security.Authentication;
 using System.Text.Json;
 using FluentFTP;
 using FluentFTP.Exceptions;
@@ -210,6 +211,17 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         {
             return new DeliveryResult(false, "FTPS connection timed out.");
         }
+        catch (AuthenticationException ex)
+        {
+            // The TLS handshake itself failed. Overwhelmingly this is our own ValidateCertificate
+            // callback refusing the server's certificate, and until this catch existed that landed in
+            // the catch-all below — so an operator whose supplier runs a self-signed or misissued
+            // certificate was told only "FTPS delivery failed before the upload could complete."
+            // while the real cause sat in a log they cannot read. Proven live against a throwaway
+            // pure-ftpd holding a self-signed certificate; see docs/ops/2026-08-01-wp38-delivery-channel-proof.md.
+            _logger.LogWarning(ex, "FTPS delivery could not complete the TLS handshake.");
+            return new DeliveryResult(false, DescribeTlsHandshakeFailure(allowInvalidCertificate));
+        }
         catch (JsonException ex)
         {
             _logger.LogWarning(ex, "FTPS delivery config or credentials JSON malformed.");
@@ -221,6 +233,24 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
             return new DeliveryResult(false, "FTPS delivery failed before the upload could complete.");
         }
     }
+
+    /// <summary>
+    /// The operator-facing sentence for a failed TLS handshake. Branches on the supplier's own
+    /// setting because the two situations need opposite next steps: with the override OFF the fix is
+    /// almost always "get a trusted certificate, or consciously accept this one", while with it
+    /// already ON the certificate cannot be the cause, so pointing at it would send the operator
+    /// somewhere there is nothing to find.
+    /// </summary>
+    internal static string DescribeTlsHandshakeFailure(bool allowInvalidCertificate) =>
+        allowInvalidCertificate
+            ? "FTPS delivery failed: the secure connection to the server could not be established. " +
+              "\"Allow invalid certificate\" is already on for this supplier, so the certificate is not " +
+              "the cause — ask the supplier which TLS versions and ciphers their server accepts."
+            : "FTPS delivery failed: the server's security certificate was not trusted. It is either " +
+              "self-signed, expired, or issued to a different host name than the one configured. Ask the " +
+              "supplier for a certificate signed by a public certificate authority for this host — or, if " +
+              "you have confirmed the server's identity another way, turn on \"Allow invalid certificate\" " +
+              "for this supplier.";
 
     /// <summary>
     /// The upload itself, once connected: the overwrite decision, the transfer, and the mapping of
