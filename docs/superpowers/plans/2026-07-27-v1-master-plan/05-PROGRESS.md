@@ -3557,3 +3557,175 @@ reporting only `ERR_MODULE_NOT_FOUND`. A root install fixed all of them.
 
 **When a merged PR adds a dev dependency, every existing worktree's gate is broken until the root is
 reinstalled** — and the failure names a module, not the cause.
+
+---
+
+## 2026-08-01 — WP-40: the capability ledger re-derived from code
+
+`04-CAPABILITY-TRUTH-LEDGER.md` was written on 2026-07-27 against BE `63b89b5` / FE `e5da230`. Twenty-eight
+PRs landed after it. Re-derived against BE `7aa830a` and FE `1852590` by reading code, not the old ledger
+and not commit messages. Nine parallel verifiers, one section each, every one instructed to answer
+**NOT VERIFIABLE** rather than infer. Rows that could not be evidenced were **deleted, not softened**.
+
+### The plan's own claims about the ledger were three of the wrong entries
+
+1. **`FE/src/lib/capability-ledger.ts` does not exist.** The plan names it as WP-40's target implementation
+   and describes it in the present tense. Zero hits for `capability-ledger` / `capabilityLedger` /
+   `CapabilityLedger` in the frontend repo, and no CI check of that shape under another name. **The ledger
+   is still prose, so it is still rotting.** The re-derivation fixes the content; it does not fix the
+   mechanism.
+2. **The "build throws on a typo'd id" precedent is true by a different mechanism than claimed.** It is a
+   *runtime-during-prerender* throw at `format-catalog.ts:45`, reached because `parseStatus()` runs at
+   module-init scope inside a literal imported by two prerendered pages — one Server Component
+   (`formats/page.tsx:10`) and one Client Component that still prerenders (`(home)/page.tsx`, `"use client"`
+   at `:1`) — caught by `bun run build` (FE `ci.yml:74`). **`tsc --noEmit` does not catch it**:
+   `parseStatus(catalogId: string)` takes a bare `string`, so a typo is type-legal. **No test pins the
+   throw** — delete it, return a default, nothing goes red — although `bun run test` trips it incidentally,
+   because `gatedCapabilityClaims.test.ts:6` imports the module. It also covers `IMPORT_FORMATS` only;
+   `OUTPUT_FORMATS` is seven hardcoded literals, which is precisely where the Peppol over-claim below
+   survived.
+3. **Frontend `CLAUDE.md` §11.5 names the wrong guard.** `CLAUDE.md:475-477` says the tier rule is
+   "guarded by `BillingFeatureGateCoverageTests`". That class is a hand-typed
+   `Dictionary<BillingFeature, string>` of free text (`BillingFeatureGateCoverageTests.cs:55-68`) whose only
+   assertions are `ContainKey` and a count — **delete the `HasFeatureAsync` call from `AuditController.cs:49`
+   and every one of its tests stays green.** The real guard is `BillingGateEnforcementIsRealTests` +
+   `BillingGateIlScanner`, which reads compiled IL (`MethodBody.GetILAsByteArray()` at
+   `BillingGateIlScanner.cs:249`) and carries a negative control at `:147-155`. The IL scanner's own doc
+   comment says this. **The rule is enforced; the sentence describing how is false.** Correcting §11.5 is a
+   one-line frontend change — not taken here, this chip is file-disjoint to the ledger.
+
+### Claims deleted outright
+
+- **`parse-xml-generic`** — never a capability. `OrderParserFactory.cs:54-69` sniffs IDoc → UBL → cXML and
+  throws on any other root. No copy claims it; the row invited someone to.
+- **`parse-peppol-bis` as a separate row** — merged into `parse-ubl`. Both tests that name it assert
+  *identical* behaviour to plain UBL.
+- **`out-email` liveProven `✓`** — `FINAL-REPORT.md:66` says outbound Postmark is blocked pending account
+  approval, with a cross-domain send returning 412. Inbound Postmark being live is a different capability.
+- **"14,713-row catalog proven"** — the number's only occurrence in the repo is a prose comment above a
+  **two-item** fixture (`CatalogFormatAndMappingTests.cs:305`). The real scale test uses 250 and 5,000.
+- **"7 of 207 sites Id-only" / "1 of 87 endpoints tested"** — not re-measured, and the denominator is stale:
+  162 route attributes across 37 controllers today. Carrying a number nobody re-derived is the failure this
+  document exists to stop.
+- **"provenance shown in FE"** (AI suggestions) — the only component rendering `.provenance` is imported
+  solely by its own test. The calibration overlay is dead the same way, so users see **raw** model
+  confidence.
+- **"acceptance profiles are browser-only"** — refuted. `AcceptanceGate.EvaluateAsync` blocks server-side at
+  `OrderTransformService.cs:484-500`, and both hosts register it.
+
+### Rows that got stronger, with the evidence
+
+- **`emit-custom-tree` is reusable across orders** (WP-12). `SupplierPromotedOutputTreeTransformTests.cs:170`
+  designs on order A, promotes, seeds order B with no override, asserts byte equality.
+- **`reusable-input-mapping` has a UI caller** (WP-13). `WorkshopStatusBar.tsx:337-345`.
+- **`order-passport` carries a hash.** `PassportDto.cs:154`, `:183`; `ProveWhatWasSentTests.cs:148` plus a
+  tamper twin.
+- **The 27-cell routing matrix runs on CI.** `[DockerRequiredTheory]` is a *declared* skip that does not
+  skip on `ubuntu-latest`; CI run `30695203087` shows the per-cell `Passed` lines. Count pinned at `:277-279`.
+- **Billing is 9 of 10 enforced, IL-verified**, across API controllers *and* Worker poll jobs.
+
+### Open unknown #6 answered, and the answer costs a marketing claim
+
+**Does UBL output satisfy Peppol BIS 3? There is no proof, and two mandatory-field violations are visible in
+the emitter.** `find -name "*.sch"` returns zero files; `PeppolBisValidator` rejects any non-`<Invoice>` root;
+`UblProfileChecker.cs:55-58` asserts only that the conformance ids are **non-empty**, never that they equal
+the Peppol values. Meanwhile `UblOrderTransformService.cs:93` writes a **GUID** into
+`SellerSupplierParty/PartyName/Name` (its own comment calls it a placeholder) and no `cbc:EndpointID` is
+emitted for either party. `format-catalog.ts:98` hardcodes this as `status: "live"` while
+`standards/catalog.ts:107` says `partial`. **The two frontend files contradict each other and the hardcoded
+one wins on the marketing page.**
+
+### The one genuine unenforced tier claim
+
+**`BillingFeature.Sso` refuses nothing.** Its only production reference is a pure `PlanHasFeature` table
+lookup (`StripeBillingService.cs:191`) surfaced as `BillingStatus.SsoAvailable`. Its exemption in the IL
+scanner is granted on the grounds that "the flag drives the Settings availability/upsell only" — and
+**`ssoAvailable` has zero consumers in the frontend.** There is no Settings SSO tab. `plans.ts:308` and
+`/security` both sell it. Founder call: wire the surface, or stop selling the bullet.
+
+### TRAP 28 — a frozen fixture and a truth guard can require opposite actions
+
+`changelog/page.tsx:41` advertises IMAP as "**Integration+ plans**". IMAP has gated at **Growth** since the
+channels were decoupled. Two CI guards disagree about the fix: `changelog-append-only.test.ts:45-94` freezes
+that line byte-for-byte, and `gatedCapabilityClaims.test.ts:213` exists to catch exactly this over-claim —
+except its regex is `\b(integration|distributor|enterprise) plan\b`, which **"Integration+ plans" does not
+match** (the `+` breaks it and the noun is plural). So the claim is live, the freeze forbids editing it, and
+the catcher is blind to it.
+
+**The resolution is a new dated changelog entry correcting the tier, never an edit** — plus widening the
+regex to `plans?` and `\+?`. Generalised: *when an append-only guard and a truth guard cover the same line,
+the truth guard must be satisfied by an append, and the append-only guard's job is to make sure you notice.*
+A guard that freezes a claim is only safe if a second guard can still see the claim.
+
+### The refutation pass found 12 defects in my own first cut, and the shape is worth keeping
+
+Two adversarial refuters — one per repo — were pointed at the finished ledger and told that finding
+nothing would be a failure. Of roughly 200 citations, **~85% held verbatim**. What broke:
+
+- **9 flat-wrong line numbers.** Four of them were inside the "Refuted — do not re-open" table, whose whole
+  purpose is to stop someone re-investigating. A wrong line there *forces* the re-derivation it forbids.
+- **3 refuted claims of fact.** "Two statically prerendered Server Components" (one is `"use client"`);
+  "the only component rendering `.provenance`" (there are two, both dead); "three confidence buckets no
+  code implements" (three-bucket ladders exist at 90/75 and 0.85/0.60 — the real defect is that the help
+  article's 85/70 matches **neither**, and `MappingEditor.tsx:500` ships a third number).
+- **~14 range drifts**, and the pattern in them is diagnostic: **the start line was right in every single
+  case and the end line was wrong in fourteen.** Ends were being estimated, not read. `dialog-a11y` was
+  cited as `:91-380` when `:380` is a bare `),` inside an argument list.
+- **2 self-contradictions inside one table cell.** `parse-cxml` said "6 real fixtures" and then named seven
+  documents. A row that refutes itself is the worst possible defect in a document whose premise is that
+  every claim is backed by a citation that says what the claim says.
+- **1 undercount that hid a PII finding.** The real-fixture census missed five real distributor catalog
+  fixtures — 14 vs the true 20 — one of which (`cxml-index-soap.xml`) carries a real customer name and a
+  real local filesystem path.
+
+**The rule this earns: a citation is two assertions, and only one of them was being checked.** "This fact
+is true" and "it is at this line" fail independently. The first survived nine times where the second did
+not. A verification pass that reads the file to confirm the fact, then writes the line number from
+memory of where it was looking, produces exactly this distribution — high fact accuracy, drifting anchors,
+ends worse than starts. **For a document whose entire value is that its anchors resolve, the anchor needs
+its own read.**
+
+Related and cheaper: **prefix every `ci.yml` citation with the repo.** Four of five instances in the first
+cut were bare, and two `ci.yml` files exist with different line numbers. A reader checks the wrong file and
+concludes the ledger is wrong about something it is right about.
+
+### Scope, stated rather than implied
+
+Two files touched: `04-CAPABILITY-TRUTH-LEDGER.md` and this entry. Three sibling chips were in flight —
+WP-39 (`docs/qa/**`), WP-38 (backend delivery/SFTP), WP-36 (frontend failure surfaces). Their territory is
+**cited, never edited**, in three places: the SFTP host-key gap, the residency ground-truth doc's
+`SelfHostedOcr` row, and the live-channel unknowns. WP-38's branch `wp38/sftp-host-key-proof` holds two
+commits not on `main` and they touch FTPS certificate messaging only — **its proof doc is not evidence for
+the ledger until it merges**, and the ledger says so rather than borrowing it.
+
+This chip branched off `docs/v1-master-plan` rather than `main`, because at dispatch time the entire plan
+directory lived only on that branch. **#133 merged at 10:21Z while this ran** — as a merge commit, not a
+squash, so the plan branch is an ancestor of `main` and the rebase was a fast no-conflict replay.
+
+### A sibling landed mid-flight and refuted one of my rows — which is the system working
+
+Between the re-derivation and the rebase, WP-38's proof half merged (BE #136 `fb4561b`, #137 `d4ad090`).
+Three consequences, all folded in:
+
+1. **REFUTED:** I wrote that FTPS certificate validation was untested wiring and that "deleting the wiring
+   at `:145-148` leaves the suite green." #136 added `FtpsCertificateRejectionTests.cs` — **four ungated
+   `[Fact]`s driving a real TLS handshake** against an in-process stub. Its header says it exists precisely
+   because a unit test on `ShouldAcceptCertificate` cannot see the wiring. The claim was true when written
+   and false four hours later.
+2. **STRENGTHENED:** the SFTP host-key finding stopped being an inference. I had it resting on SSH.NET's
+   documented default, labelled *vendor*. WP-38 ran two host-key sets against a real OpenSSH container and
+   flipped the server between them with every other credential held identical: *"same result, no warning,
+   no log line."* Proven on ProcuLink's own code path.
+3. **NEW:** U-3 — no delivery channel requires TLS; `http://` is permitted everywhere, so a Directo config
+   can ship the PO and its credentials as a cleartext form body.
+
+Also a **conflict recorded rather than resolved**: WP-38's summary row calls HTTP/email/ERP "already
+live-proven (2026-07-02)" while the fable5 FINAL-REPORT says outbound Postmark is blocked and logs a 412.
+The 412 is specific and reproducible; the summary row sits in a packet scoped to SFTP/FTPS whose own §4
+calls the other channels a read-only assessment. The ledger keeps ✗ **and says both documents disagree**.
+Neither file was edited — WP-38's territory is cited, not touched.
+
+**The lesson is about ledger cadence, not about WP-38.** A document that pins claims to `file:line` has a
+half-life measured in hours while packets are landing. Two of my rows moved between `git commit` and
+`git push`. That is the argument for `FE/src/lib/capability-ledger.ts` in one line: **prose re-derived by
+hand is correct at a commit, and a typed constant with a CI check is correct at a merge.**
