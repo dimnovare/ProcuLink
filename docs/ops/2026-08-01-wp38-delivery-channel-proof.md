@@ -312,18 +312,50 @@ deployment.
   refuse correctly and describe the refusal uselessly — `"Key exchange negotiation failed."` and, until
   this branch, `"FTPS delivery failed before the upload could complete."` Budget for message work in
   the build half.
+- **Two live tests stopped being theoretical.** `Live_Sftp_RealUpload` and
+  `Live_SftpIngress_RealPollImportsFile` have skipped in every CI run since they were written, for
+  want of a server. A container makes both runnable in about a minute (§7). That is the loop the U-1
+  fix should be built in.
 
 ---
 
 ## 7 · Reproducing this
 
-The harness was a throwaway console project outside the repo, in the pattern
-`docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md:192-219` established. It is not
-committed; the recipe is, so the run is repeatable.
+### The functional half needs no harness — the repo already has the tests
+
+`LiveEndpointDeliveryTests.Live_Sftp_RealUpload` and
+`SftpIngressServiceTests.Live_SftpIngress_RealPollImportsFile` already exist, gated behind
+`PROCULINK_LIVE_ENDPOINT_TESTS=1`, and CI names both in its skip census every run. Point them at the
+throwaway container and they pass — **both were run this way for this document**:
 
 ```bash
 docker run -d --name wp38-sftp -p 2222:22 atmoz/sftp:alpine plkuser:plkpass:::upload
 ```
+
+```
+PROCULINK_LIVE_ENDPOINT_TESTS=1
+PROCULINK_LIVE_SFTP_HOST=127.0.0.1   PROCULINK_LIVE_SFTP_PORT=2222
+PROCULINK_LIVE_SFTP_USER=plkuser     PROCULINK_LIVE_SFTP_PASS=plkpass
+PROCULINK_LIVE_SFTP_DIR=/upload
+```
+
+```bash
+dotnet test ProcuLink.Infrastructure.Tests --filter "Category=LiveEndpoint"
+```
+
+Both passed: `Live_Sftp_RealUpload` in 855 ms, `Live_SftpIngress_RealPollImportsFile` in 1 s, with the
+uploaded bytes read back out of the container. Those tests have been skipping since they were written
+for want of a server; a container makes them runnable on any machine in about a minute. **Anyone
+building the U-1 fix should start here.**
+
+They do not, however, prove anything about *host keys* — they use one server identity and never
+compare it to a stored value. That half needed the harness below.
+
+### The host-key half
+
+A throwaway console project outside the repo, in the pattern
+`docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md:192-219` established. It is not
+committed; the recipe is, so the run is repeatable.
 
 ```bash
 docker run -d --name wp38-ftps -p 2121:21 -p 30000-30009:30000-30009 -e PUBLICHOST=127.0.0.1 -e FTP_USER_NAME=plkuser -e FTP_USER_PASS=plkpass -e FTP_USER_HOME=/home/plkuser -e ADDED_FLAGS=--tls=1 stilliard/pure-ftpd:hardened
