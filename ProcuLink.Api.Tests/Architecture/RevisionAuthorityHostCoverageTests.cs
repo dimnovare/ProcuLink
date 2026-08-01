@@ -140,6 +140,63 @@ public class RevisionAuthorityHostCoverageTests
         }
     }
 
+    /// <summary>
+    /// The scan's own worktree-safety, proven without needing a real worktree: a synthetic tree
+    /// whose ROOT sits under <c>.claude/worktrees/</c>, which is exactly where
+    /// <c>&lt;repo&gt;/.claude/worktrees/&lt;name&gt;</c> puts a checkout. With the exclusions
+    /// matched against the ABSOLUTE path this found zero files, and the two source-scanning tests
+    /// above failed on a clean <c>origin/main</c> — the guard was unusable in the workspace
+    /// CLAUDE.md tells every parallel session to work in, which is how a real guard gets deleted
+    /// rather than fixed.
+    ///
+    /// <para>It equally pins what the fix must NOT have relaxed. Widening the corpus is not the
+    /// safe direction here: build output would let a stale generated file answer for a host, a test
+    /// naming the resolver would enrol <c>ProcuLink.Api.Tests</c> as a deployed host, and a NESTED
+    /// worktree would let another session's in-progress code decide whether this branch's host list
+    /// is complete. So the expected set is asserted exactly, not merely as non-empty.</para>
+    /// </summary>
+    [Fact]
+    public void TheScan_FindsSourcesWhenTheCheckoutItselfSitsUnderDotClaudeWorktrees()
+    {
+        var sandbox = Path.Combine(Path.GetTempPath(), $"plk-revauth-{Guid.NewGuid():N}");
+        var root = Path.Combine(sandbox, ".claude", "worktrees", "sibling-session");
+
+        try
+        {
+            WriteSyntheticSource(root, "ProcuLink.Api/Program.cs");
+            WriteSyntheticSource(root, "ProcuLink.Worker/Program.cs");
+            WriteSyntheticSource(root, "ProcuLink.Api/bin/Debug/net8.0/Generated.cs");
+            WriteSyntheticSource(root, "ProcuLink.Api/obj/Debug/net8.0/Generated.cs");
+            WriteSyntheticSource(root, "ProcuLink.Api.Tests/SomethingTests.cs");
+            WriteSyntheticSource(root, ".claude/worktrees/other-session/ProcuLink.Api/Program.cs");
+
+            var found = ProductionSourceFiles(root)
+                .Select(f => RelativeTo(root, f.Path))
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToList();
+
+            found.Should().Equal(
+                new[] { "ProcuLink.Api/Program.cs", "ProcuLink.Worker/Program.cs" },
+                "a checkout that itself sits under .claude/worktrees must still see its OWN "
+                + "production sources — and must still see nothing from build output, from the test "
+                + "projects, or from a sibling session's nested worktree");
+        }
+        finally
+        {
+            if (Directory.Exists(sandbox))
+            {
+                Directory.Delete(sandbox, recursive: true);
+            }
+        }
+    }
+
+    private static void WriteSyntheticSource(string root, string relativePath)
+    {
+        var full = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, "// synthetic source — content is irrelevant, only the path is\n");
+    }
+
     private sealed record SourceFile(string Project, string Path);
 
     /// <summary>
@@ -148,28 +205,48 @@ public class RevisionAuthorityHostCoverageTests
     /// test naming the resolver is not a host resolving a config with it, which is precisely how a
     /// real host would hide from a naive scan.
     ///
-    /// <para><b>KNOWN BUG, deliberately NOT fixed here — see branch
-    /// <c>claude/beautiful-torvalds-04a9a5</c>.</b> The exclusion below matches the ABSOLUTE path,
-    /// and a worktree root under <c>.claude/worktrees/…</c> makes every path in the repository
-    /// contain <c>.claude</c> — so the whole corpus is excluded and both callers go red in any
-    /// worktree run. Another session found and fixed this first, with a synthetic-tree regression
-    /// test this file does not have; duplicating the fix here would only conflict with it.
-    /// The relative-path form is what <c>VacuousTestPassScanner.ExcludedSegments</c> documents.</para>
+    /// <para><b>Exclusions match the path RELATIVE to the repo root, never the absolute path.</b>
+    /// They used to match absolutely, and CLAUDE.md's own instruction to do parallel work in
+    /// isolated worktrees puts the checkout at
+    /// <c>&lt;repo&gt;/.claude/worktrees/&lt;name&gt;</c> — where every absolute path under the root
+    /// contains <c>/.claude/</c>, so the <c>.claude</c> rule excluded the ENTIRE repository and the
+    /// scan found nothing. Both callers treat an empty result as a failure (correctly), so the
+    /// guard did not go false-green; it went unusable in the workspace the project documents. The
+    /// two sibling source scans already match relatively —
+    /// <see cref="RetiredSubsystemsStayRetiredTests"/> and <c>OrphanDetector.IsExcluded</c>, which
+    /// <see cref="AcceptanceGateSingleDoorTests"/> goes through — and
+    /// <c>VacuousTestPassScanner.ExcludedSegments</c> documents this exact trap. Pinned by
+    /// <see cref="TheScan_FindsSourcesWhenTheCheckoutItselfSitsUnderDotClaudeWorktrees"/>.</para>
     /// </summary>
     private static IEnumerable<SourceFile> ProductionSourceFiles(string root) =>
         Directory
             .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
-                     && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
-                     && !p.Contains($"{Path.DirectorySeparatorChar}.claude{Path.DirectorySeparatorChar}"))
-            .Select(p => new SourceFile(ProjectOf(root, p), p))
+            .Select(path => (Path: path, Relative: RelativeTo(root, path)))
+            .Where(f => !IsExcluded(f.Relative))
+            .Select(f => new SourceFile(ProjectOf(f.Relative), f.Path))
             .Where(f => f.Project.Length > 0 && !f.Project.EndsWith("Tests", StringComparison.Ordinal));
 
+    /// <summary>Repo-root-relative and forward-slashed — the one form every rule below matches.</summary>
+    private static string RelativeTo(string root, string path) =>
+        Path.GetRelativePath(root, path).Replace('\\', '/');
+
+    /// <summary>
+    /// Build output, and the full repo copies parallel sessions keep under <c>.claude/worktrees/</c>
+    /// — reading those would mix another session's in-progress code into the answer. The nested
+    /// form is kept as well as the leading one so a worktree inside a worktree stays excluded.
+    /// </summary>
+    private static bool IsExcluded(string relative) =>
+        relative.StartsWith("obj/", StringComparison.Ordinal)
+        || relative.StartsWith("bin/", StringComparison.Ordinal)
+        || relative.StartsWith(".claude/", StringComparison.Ordinal)
+        || relative.Contains("/obj/", StringComparison.Ordinal)
+        || relative.Contains("/bin/", StringComparison.Ordinal)
+        || relative.Contains("/.claude/", StringComparison.Ordinal);
+
     /// <summary>The top-level project directory a file belongs to, relative to the repo root.</summary>
-    private static string ProjectOf(string root, string path)
+    private static string ProjectOf(string relative)
     {
-        var relative = Path.GetRelativePath(root, path);
-        var first = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0];
+        var first = relative.Split('/')[0];
         return first.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ? "" : first;
     }
 
