@@ -911,6 +911,24 @@ a PR. Nothing more.
 connectors, EDIFACT output, PunchOut, IMAP hardening, RLS, and any new top-level noun.
 
 
+> ## ⚠️ THE WAVE TABLES BELOW ARE THE 2026-07-27 AUTHORING. THEY ARE NOT MAINTAINED.
+>
+> They are kept as a historical record of what the audit found. **They do not describe current
+> state and have not since 2026-07-30.** Several rows say ⬜ for packets that have since shipped,
+> and the Wave 4 heading still reads "All ⬜ not started" when Wave 4 is complete.
+>
+> **Current state, verified against both `main`s on 2026-08-01:**
+>
+> - **Waves 0–4 are COMPLETE.** WP-01…WP-32 have all landed, with two exceptions:
+>   **WP-03 check 2** (is `unrouted` reachable on prod — one test email, founder-owned) and
+>   **WP-16** Designer depth II (blocked on design brief **DB-2**).
+> - **Waves 5–6 are untouched.** WP-33, 35, 37, 41 have zero commits anywhere. WP-34, WP-38, WP-39
+>   and WP-40 have shipped.
+> - 45 packets merged on 2026-08-01 alone.
+>
+> **To read live state, scroll to the dated entries at the end of this file — they are appended
+> newest-last and they are the truth.** Start with the session-close entry.
+
 ## Wave 0 — Ground truth & guardrails
 
 | WP | Title | Status | Branch | Notes |
