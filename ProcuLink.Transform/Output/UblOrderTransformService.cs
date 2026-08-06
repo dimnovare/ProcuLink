@@ -23,7 +23,7 @@ namespace ProcuLink.Transform.Output;
 ///   &lt;cbc:IssueDate&gt;{yyyy-MM-dd}&lt;/cbc:IssueDate&gt;
 ///   &lt;cbc:DocumentCurrencyCode&gt;{currency}&lt;/cbc:DocumentCurrencyCode&gt;
 ///   &lt;cac:BuyerCustomerParty&gt;&lt;cac:Party&gt;&lt;cac:PartyName&gt;&lt;cbc:Name&gt;{buyer}&lt;/cbc:Name&gt;&lt;/cac:PartyName&gt;&lt;/cac:Party&gt;&lt;/cac:BuyerCustomerParty&gt;
-///   &lt;cac:SellerSupplierParty&gt;&lt;cac:Party&gt;&lt;cac:PartyName&gt;&lt;cbc:Name&gt;{supplier}&lt;/cbc:Name&gt;&lt;/cac:PartyName&gt;&lt;/cac:Party&gt;&lt;/cac:SellerSupplierParty&gt;
+///   &lt;cac:SellerSupplierParty&gt;&lt;cac:Party&gt;[&lt;cbc:EndpointID schemeID="0088"&gt;{gln}&lt;/cbc:EndpointID&gt;]&lt;cac:PartyName&gt;&lt;cbc:Name&gt;{supplier}&lt;/cbc:Name&gt;&lt;/cac:PartyName&gt;&lt;/cac:Party&gt;&lt;/cac:SellerSupplierParty&gt;
 ///   &lt;cac:OrderLine&gt;
 ///     &lt;cac:LineItem&gt;
 ///       &lt;cbc:ID&gt;{n}&lt;/cbc:ID&gt;
@@ -41,7 +41,14 @@ namespace ProcuLink.Transform.Output;
 ///
 /// The buyer party name is the canonical buyer name (<see cref="OrderHeaderReader.ExtractBuyerName"/>),
 /// falling back to the legacy "ProcuLink Buyer" placeholder when the order carries none; the supplier
-/// party name is still emitted as the supplier id (real supplier metadata is a future pass).
+/// party name resolves denormalized column → loaded navigation → supplier id (see the resolution
+/// comment on <c>supplierName</c> below).
+///
+/// <para><b>Electronic address.</b> <c>SellerSupplierParty</c> additionally carries a null-gated
+/// <c>cbc:EndpointID</c>, emitted only when the supplier's <c>EdiCode</c> is provably a GS1 GLN —
+/// see <see cref="BuildEndpointId"/> for why nothing else qualifies. The buyer party carries none:
+/// no stored buyer identifier has a derivable EAS scheme. Suppliers with no usable identifier emit
+/// no element at all and stay byte-identical to the pre-feature output.</para>
 ///
 /// <para><b>Address + contact.</b> When the order carries address data the document additionally
 /// emits a <c>cac:PostalAddress</c> + <c>cac:Contact</c> inside <c>BuyerCustomerParty/Party</c> (fed
