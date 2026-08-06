@@ -50,6 +50,12 @@ jobs:
     #            stalled 2.6-3.4 MINUTES outside the step timeline, in the same window GitHub was
     #            also returning "not acquired by Runner of type hosted" and failing `Set up job`.
     #
+    # That stall has a name. githubstatus.com logged "Incident with Actions", impact critical, from
+    # 2026-08-06 15:22:49 UTC — twenty-one minutes before the first run this killed — reporting
+    # throttled workflow triggers and "runners are stuck retrying unavailable jobs". So the runs
+    # were not slow, they were waiting on a provider incident, and a cap this tight reports that
+    # incident as a failing pull request. Incidents recur; the cap should survive the next one.
+    #
     # That stall, not the suite, is what killed green work. Run 31117088351 attempt 1 (PR #157)
     # finished all thirteen steps green in 12m39s — Test itself took 11m00s — and was cancelled
     # anyway at a 16m12s job clock. Runs 31118298579 and 31118266459 died the same way at 12m38s
