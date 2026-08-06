@@ -40,7 +40,16 @@ jobs:
   build-and-test:
     name: Build + test (213 baseline)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Successful runs on main measured 2026-08-06: 12m33s, 12m38s, 12m43s, 12m49s, 13m06s, 13m27s.
+    # Against a 15-minute cap that is 1.5-2.5 minutes of headroom on a suite that grows with every
+    # packet, and it has already cancelled green work twice in one day — PRs #156 and #157 were
+    # killed at 17m21s and 16m12s with every step passing and no failing test. A cap that close to
+    # the runtime does not catch a hung job, it catches a busy runner, and it reads as a red PR.
+    #
+    # 25 is roughly double the current runtime: enough room for the suite to keep growing, still
+    # short enough that a genuinely stuck job is killed rather than burning an hour of runner time.
+    # If runs approach this again, the answer is to look at what got slower, not to raise it again.
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
