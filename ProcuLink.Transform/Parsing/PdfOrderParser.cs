@@ -35,12 +35,18 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
         @"\bcurrency\s*[:#-]?\s*(?<value>[A-Z]{3})\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // The numeric groups accept REPEATED separators — "1.234,56", not just "1234,56".
+    // They used to be `-?\d+(?:[.,]\d+)?`, a single separator only, so a grouped European
+    // price failed to match the line at all and the ENTIRE ORDER LINE was dropped on the
+    // floor: no value, no error, no review flag, nothing for anyone to notice.
+    private const string NumericToken = @"-?\d+(?:[.,]\d+)*";
+
     private static readonly Regex LineWithPriceRegex = new(
-        @"^\s*(?<line>\d+)\s+(?<code>[A-Z0-9][A-Z0-9._/-]*)\s+(?<desc>.+?)\s+(?<qty>-?\d+(?:[.,]\d+)?)\s+(?<unit>[A-Za-z]{1,12})\s+(?<price>-?\d+(?:[.,]\d+)?)\s*$",
+        $@"^\s*(?<line>\d+)\s+(?<code>[A-Z0-9][A-Z0-9._/-]*)\s+(?<desc>.+?)\s+(?<qty>{NumericToken})\s+(?<unit>[A-Za-z]{{1,12}})\s+(?<price>{NumericToken})\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex LineWithoutPriceRegex = new(
-        @"^\s*(?<line>\d+)\s+(?<code>[A-Z0-9][A-Z0-9._/-]*)\s+(?<desc>.+?)\s+(?<qty>-?\d+(?:[.,]\d+)?)\s+(?<unit>[A-Za-z]{1,12})\s*$",
+        $@"^\s*(?<line>\d+)\s+(?<code>[A-Z0-9][A-Z0-9._/-]*)\s+(?<desc>.+?)\s+(?<qty>{NumericToken})\s+(?<unit>[A-Za-z]{{1,12}})\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public bool CanParse(string fileExtension) =>
@@ -82,7 +88,10 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
 
     private static IReadOnlyList<ParsedOrderLine> ParseLines(IEnumerable<string> lines)
     {
-        var parsedLines = new List<ParsedOrderLine>();
+        // Match every line FIRST, then read the numbers. A printed PDF declares no locale
+        // anywhere, so the only evidence available is the document's own numbers — and that
+        // evidence only exists once every line has been matched.
+        var matches = new List<Match>();
 
         foreach (var line in lines)
         {
@@ -93,14 +102,28 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
             if (!match.Success)
                 match = LineWithoutPriceRegex.Match(line);
 
-            if (!match.Success)
-                continue;
+            if (match.Success)
+                matches.Add(match);
+        }
 
+        var qtyTokens   = matches.Select(m => m.Groups["qty"].Value).ToList();
+        var priceTokens = matches.Where(m => m.Groups["price"].Success)
+                                 .Select(m => m.Groups["price"].Value).ToList();
+        var document    = NumberParsing.InferDecimalConvention(qtyTokens.Concat(priceTokens));
+        var qtyConvention = NumberParsing.FirstKnown(
+            NumberParsing.InferDecimalConvention(qtyTokens), document);
+        var priceConvention = NumberParsing.FirstKnown(
+            NumberParsing.InferDecimalConvention(priceTokens), document);
+
+        var parsedLines = new List<ParsedOrderLine>(matches.Count);
+
+        foreach (var match in matches)
+        {
             var lineNumber = int.Parse(match.Groups["line"].Value, CultureInfo.InvariantCulture);
-            var (quantityVal, qtyAmbiguous) = ParseDecimal(match.Groups["qty"].Value);
+            var (quantityVal, qtyAmbiguous) = ParseDecimal(match.Groups["qty"].Value, qtyConvention);
             var quantity = quantityVal ?? 0m;
             var (unitPrice, priceAmbiguous) = match.Groups["price"].Success
-                ? ParseDecimal(match.Groups["price"].Value)
+                ? ParseDecimal(match.Groups["price"].Value, priceConvention)
                 : (null, false);
 
             parsedLines.Add(new ParsedOrderLine(
@@ -156,16 +179,17 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
 
     /// <summary>
     /// Parse a numeric token from the deterministic PDF text fallback via the shared
-    /// locale-aware reader. The regex column extractor captures point-decimal numbers
-    /// ("12.50") and bare EU comma-decimals ("73,22"), so <c>european: false</c> reads both
-    /// correctly while flagging genuinely-ambiguous tokens for human review. Returns
-    /// <c>(value, ambiguous)</c>; the caller flags the line for review when the token could
-    /// not be read unambiguously rather than emitting a silently-wrong number. This replaces
-    /// the old "swap ',' for '.' only when no '.' present" reader that never flagged the
-    /// silent-corruption class.
+    /// locale-aware reader, under the <paramref name="convention"/> inferred from the whole
+    /// document. Returns <c>(value, ambiguous)</c>; the caller flags the line for review when
+    /// the token could not be read unambiguously rather than emitting a silently-wrong number.
+    ///
+    /// <para>This used to pass a hard-coded <c>european: false</c>. A PDF is free text printed
+    /// by a human and carries no locale signal whatsoever, so asserting one was a guess: a
+    /// German PO printing "1.000" (one thousand) resolved to 1.0 — a thousandfold under-read —
+    /// and reported itself as unambiguous, so nothing was flagged.</para>
     /// </summary>
-    private static (decimal? Value, bool Ambiguous) ParseDecimal(string? value) =>
-        NumberParsing.TryParseFlexibleDecimal(value, european: false);
+    private static (decimal? Value, bool Ambiguous) ParseDecimal(string? value, DecimalConvention convention) =>
+        NumberParsing.TryParseFlexibleDecimal(value, convention);
 
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
