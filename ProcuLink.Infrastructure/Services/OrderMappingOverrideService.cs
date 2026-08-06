@@ -101,6 +101,14 @@ public sealed class OrderMappingOverrideService : IOrderMappingOverrideService
     /// <c>delivery_held</c> came to be absent from it while six siblings were present: the chain had
     /// no way to be asked "is every status accounted for?". Read that set's doc, not this method,
     /// before changing what a mapping edit invalidates.</para>
+    ///
+    /// <para><b>Two statuses are handled by refusal instead, and this method never sees them.</b>
+    /// <c>delivering</c> and <c>transforming</c> are refused at the only caller
+    /// (<c>OrdersController.PutMappingOverride</c>) via
+    /// <see cref="OrderStatusMachine.MappingEditRefusedFrom"/>, because in both the pre-edit artifact
+    /// still goes out and a reset cannot stop it — for <c>transforming</c> specifically, the
+    /// transform's own completion write is untokened and lands over the reset. Do not "restore" them
+    /// here: a reset that cannot land reads as protection and is not.</para>
     /// </summary>
     private static bool IsPastReady(string status) =>
         OrderStatusMachine.MappingEditInvalidatesArtifactFrom.Contains(status);
