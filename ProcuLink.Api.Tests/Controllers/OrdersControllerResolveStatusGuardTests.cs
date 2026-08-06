@@ -8,6 +8,7 @@ using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using Xunit;
 
@@ -34,6 +35,16 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// status added to the machine tomorrow gets a "must NOT be refused" row for free; a status added to
 /// the held set gets a "must be refused, with its own actionable sentence" row for free. Neither can
 /// silently escape the guard, which is the failure mode a hand-written list has every time.</para>
+///
+/// <para><b>MV-2 added the third endpoint.</b> <c>PUT /api/orders/{id}/mapping-override</c> was the
+/// last door onto an in-flight order with no from-status gate, and it did the same damage by a
+/// different mechanism: the edit was ACCEPTED and stored, then discarded, while a document built
+/// before it went to the counterparty and the automatic retry shipped that same document again. It
+/// is gated on <see cref="OrderStatusMachine.MappingEditRefusedFrom"/> — a strict subset of the set
+/// above, because this endpoint's writer is <c>OrderMappingOverrideService.UpsertAsync</c> rather
+/// than the status recompute — and answered from the same
+/// <see cref="OrderStatusMachine.ResolveHoldMessage"/> table, so there is one set of operator
+/// sentences across all three endpoints rather than three copies of two of them.</para>
 /// </summary>
 public class OrdersControllerResolveStatusGuardTests
 {
@@ -340,7 +351,7 @@ public class OrdersControllerResolveStatusGuardTests
         var status  = OrderStatusMachine.ResolveHeldFrom.OrderBy(s => s, StringComparer.Ordinal).First();
         var orderId = Guid.NewGuid();
 
-        var (ctrl, orders, _) = Build(out var db, out _);
+        var (ctrl, orders, _, _) = Build(out var db, out _);
         db.PurchaseOrders.Add(NewOrder(orderId, Guid.NewGuid(), status)); // a DIFFERENT org
         await db.SaveChangesAsync();
 
@@ -350,6 +361,184 @@ public class OrdersControllerResolveStatusGuardTests
         orders.Verify(o => o.ResolveAsync(
             It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
             It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Once);
+    }
+
+    // ── MV-2 — PUT /api/orders/{id}/mapping-override ──────────────────────────
+    //
+    // The THIRD door onto the same order, and the last one with no from-status gate. MV-1 named
+    // 'delivering' as a live gap it could not close with a status reset: the edit was accepted,
+    // stored, and discarded while the artifact already handed to the dispatcher went out — after
+    // which the automatic retry (or the stuck-delivery sweep, with no human in the loop) shipped
+    // that same pre-edit artifact again. 'transforming' was worse-disguised: it WAS in
+    // MappingEditInvalidatesArtifactFrom, so the edit appeared to reset the order, but
+    // OrderTransformService's completion write is a tracked Status = ready_to_deliver with no
+    // status predicate and no concurrency token, so it lands over that reset every time — and the
+    // artifact it commits was built from the graph loaded BEFORE the edit.
+    //
+    // These rows derive from OrderStatusMachine.MappingEditRefusedFrom for the same reason every
+    // other theory here derives from ResolveHeldFrom: a status added to the set tomorrow gets its
+    // "must be refused" row for free, and one removed cannot silently keep passing.
+
+    /// <summary>Every status a mapping override must be REFUSED from.</summary>
+    public static TheoryData<string> MappingEditRefusedStatuses()
+    {
+        var data = new TheoryData<string>();
+        foreach (var s in OrderStatusMachine.MappingEditRefusedFrom.OrderBy(s => s, StringComparer.Ordinal))
+            data.Add(s);
+        return data;
+    }
+
+    /// <summary>
+    /// Every other status — the positive control, and the half that keeps this gate STRICT. MV-2
+    /// deliberately refused a subset of <see cref="OrderStatusMachine.ResolveHeldFrom"/>: 'parsing'
+    /// and 'unrouted' are refused by the recompute endpoints and must NOT be refused here, because
+    /// this endpoint's writer cannot do the harm that put them in that set (the parse does not write
+    /// canonical_json, and this endpoint writes no status on an unrouted order). Widening the gate
+    /// to match its sibling would remove two operator controls, and these rows are what fails when
+    /// someone does it for symmetry.
+    /// </summary>
+    public static TheoryData<string> MappingEditNotRefusedStatuses()
+    {
+        var data = new TheoryData<string>();
+        foreach (var s in OrderStatusMachine.AllStatuses
+                     .Except(OrderStatusMachine.MappingEditRefusedFrom, StringComparer.Ordinal)
+                     .OrderBy(s => s, StringComparer.Ordinal))
+            data.Add(s);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(MappingEditRefusedStatuses))]
+    public async Task PutMappingOverride_FromARefusedStatus_Returns409_AndNeverReachesTheWriter(string status)
+    {
+        var (ctrl, _, overrides, orderId) = await BuildWithOrderAndOverridesAsync(status);
+
+        var result = await ctrl.PutMappingOverride(orderId, WithCorrection(), CancellationToken.None);
+
+        Assert.IsType<ConflictObjectResult>(result);
+        overrides.Verify(o => o.UpsertAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<OrderMappingOverride>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>
+    /// The deliverable this packet was written for, stated as the operator sees it: a mapping
+    /// correction saved while the order is being SENT is refused, with a sentence they can act on —
+    /// not accepted, stored, and dropped on the floor while the pre-edit document reaches the
+    /// counterparty. Asserted as a LITERAL for the reason
+    /// <c>Resolve_WhileAMachineOwnedStepIsRunning_...</c> gives: the derived rows above assert
+    /// whatever the set says and so can never prove it CONTAINS 'delivering' — remove it and
+    /// <see cref="MappingEditNotRefusedStatuses"/> silently grows a row asserting the opposite.
+    /// </summary>
+    [Fact]
+    public async Task PutMappingOverride_SavedWhileTheOrderIsBeingSent_IsRefusedWithAnActionableSentence()
+    {
+        var (ctrl, _, overrides, orderId) =
+            await BuildWithOrderAndOverridesAsync(OrderStatusConstants.Delivering);
+
+        var conflict = Assert.IsType<ConflictObjectResult>(
+            await ctrl.PutMappingOverride(orderId, WithCorrection(), CancellationToken.None));
+
+        // The correction never reached the store, so there is nothing to be silently discarded.
+        overrides.Verify(o => o.UpsertAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<OrderMappingOverride>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+
+        var message = ErrorOf(conflict);
+        Assert.Equal(OrderStatusMachine.ResolveHoldMessage(OrderStatusConstants.Delivering), message);
+        Assert.NotEqual(OrderStatusMachine.ResolveHoldMessage("a-status-the-machine-has-never-heard-of"), message);
+
+        // Actionable, and about their next move rather than about the server's opinion.
+        Assert.True(
+            Regex.IsMatch(message, @"\b(then|first|wait|try again)\b", RegexOptions.IgnoreCase),
+            $"the refusal does not tell the operator what to do next: {message}");
+        foreach (var token in OrderStatusMachine.AllStatuses)
+            Assert.False(
+                Regex.IsMatch(message, $@"\b{Regex.Escape(token)}\b", RegexOptions.IgnoreCase),
+                $"the refusal echoes the raw status token '{token}': {message}");
+    }
+
+    /// <summary>
+    /// The transform half of the same decision, pinned as a literal for the same reason. Its
+    /// sentence — "a correction saved now would be left out of the file that goes out" — is exactly
+    /// what the untokened completion write does, so the operator is told the truth rather than a
+    /// generic busy-signal.
+    /// </summary>
+    [Fact]
+    public async Task PutMappingOverride_SavedWhileTheOutgoingDocumentIsBeingBuilt_IsRefused()
+    {
+        var (ctrl, _, overrides, orderId) =
+            await BuildWithOrderAndOverridesAsync(OrderStatusConstants.Transforming);
+
+        var conflict = Assert.IsType<ConflictObjectResult>(
+            await ctrl.PutMappingOverride(orderId, WithCorrection(), CancellationToken.None));
+
+        overrides.Verify(o => o.UpsertAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<OrderMappingOverride>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Equal(
+            OrderStatusMachine.ResolveHoldMessage(OrderStatusConstants.Transforming),
+            ErrorOf(conflict));
+    }
+
+    [Theory]
+    [MemberData(nameof(MappingEditNotRefusedStatuses))]
+    public async Task PutMappingOverride_FromEveryOtherStatus_IsNotRefusedByThisGuard(string status)
+    {
+        var (ctrl, _, overrides, orderId) = await BuildWithOrderAndOverridesAsync(status);
+
+        var result = await ctrl.PutMappingOverride(orderId, WithCorrection(), CancellationToken.None);
+
+        Assert.IsNotType<ConflictObjectResult>(result);
+        overrides.Verify(o => o.UpsertAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<OrderMappingOverride>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>
+    /// The guard runs BEFORE the body is validated, because the answer does not depend on it — the
+    /// same placement, and the same reason, as the guard on <c>/resolve</c>. A malformed override on
+    /// a sending order must read as "wait, then correct it", not as "your JSON is wrong": the second
+    /// invites the operator to fix the body and retry, which is not the problem.
+    /// </summary>
+    [Fact]
+    public async Task PutMappingOverride_FromARefusedStatus_IsRefusedBeforeTheBodyIsValidated()
+    {
+        var (ctrl, _, overrides, orderId) =
+            await BuildWithOrderAndOverridesAsync(OrderStatusConstants.Delivering);
+
+        // A body that WOULD earn a 400: '::' is the reserved source-token namespace separator.
+        var bad = new OrderMappingOverride
+        {
+            CustomFields = new() { new CustomField { Key = "src::spoofed", Label = "x", Scope = "header" } },
+        };
+
+        Assert.IsType<ConflictObjectResult>(
+            await ctrl.PutMappingOverride(orderId, bad, CancellationToken.None));
+        overrides.Verify(o => o.UpsertAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<OrderMappingOverride>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>
+    /// Org-scoped like every other read in this controller: another tenant's sending order must not
+    /// answer 409, because that would confirm the row exists. It falls through to the normal
+    /// not-found path instead (<c>UpsertAsync</c> is reached and answers false → 404).
+    /// </summary>
+    [Fact]
+    public async Task PutMappingOverride_ARefusedOrderInAnotherOrg_IsNotRefusedByThisGuard()
+    {
+        var orderId = Guid.NewGuid();
+        var (ctrl, _, overrides, _) = Build(out var db, out _);
+        db.PurchaseOrders.Add(NewOrder(orderId, Guid.NewGuid(), OrderStatusConstants.Delivering));
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.PutMappingOverride(orderId, WithCorrection(), CancellationToken.None);
+
+        Assert.IsNotType<ConflictObjectResult>(result);
+        overrides.Verify(o => o.UpsertAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<OrderMappingOverride>(),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── Harness ───────────────────────────────────────────────────────────────
@@ -384,19 +573,48 @@ public class OrdersControllerResolveStatusGuardTests
         LineResolutions = new() { new Contracts.LineResolution { LineNumber = 1, SupplierItemCode = "SUP-1" } },
     };
 
+    /// <summary>A real correction — the thing that must not be accepted and then discarded.</summary>
+    private static OrderMappingOverride WithCorrection() => new()
+    {
+        CustomFields = new()
+        {
+            new CustomField
+            {
+                Key   = "corrected-item-code",
+                Label = "Corrected item code",
+                Scope = "header",
+                Value = "SUP-CORRECTED-1",
+            },
+        },
+    };
+
     private static async Task<(OrdersController Ctrl, Mock<IOrderService> Orders, Guid OrderId)>
         BuildWithOrderAsync(string status)
     {
+        var (ctrl, orders, _, orderId) = await BuildWithOrderAndOverridesAsync(status);
+        return (ctrl, orders, orderId);
+    }
+
+    /// <summary>
+    /// The same harness, also handing back the mapping-override mock — the MV-2 rows assert on
+    /// whether <c>UpsertAsync</c> was reached, which is the only thing that distinguishes "refused"
+    /// from "accepted and then silently discarded".
+    /// </summary>
+    private static async Task<(OrdersController Ctrl, Mock<IOrderService> Orders,
+                               Mock<IOrderMappingOverrideService> Overrides, Guid OrderId)>
+        BuildWithOrderAndOverridesAsync(string status)
+    {
         var orderId = Guid.NewGuid();
-        var (ctrl, orders, _) = Build(out var db, out var orgId);
+        var (ctrl, orders, overrides, orgId) = Build(out var db, out _);
 
         db.PurchaseOrders.Add(NewOrder(orderId, orgId, status));
         await db.SaveChangesAsync();
 
-        return (ctrl, orders, orderId);
+        return (ctrl, orders, overrides, orderId);
     }
 
-    private static (OrdersController Ctrl, Mock<IOrderService> Orders, Guid OrgId)
+    private static (OrdersController Ctrl, Mock<IOrderService> Orders,
+                    Mock<IOrderMappingOverrideService> Overrides, Guid OrgId)
         Build(out ProcuLinkDbContext db, out Guid organisationId)
     {
         var orgId  = Guid.NewGuid();
@@ -416,6 +634,18 @@ public class OrdersControllerResolveStatusGuardTests
                 It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<double>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<int>.Ok(0));
 
+        // Same discipline for the override writer: it answers SUCCESS, so any result other than 409
+        // means the guard let the write through — which is what the positive controls must observe.
+        var overrides = new Mock<IOrderMappingOverrideService>();
+        overrides
+            .Setup(s => s.UpsertAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<OrderMappingOverride>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        overrides
+            .Setup(s => s.GetAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderMappingOverride());
+
         db = NewDb();
         organisationId = orgId;
 
@@ -429,12 +659,12 @@ public class OrdersControllerResolveStatusGuardTests
             new Mock<IIdempotencyService>().Object,
             new Mock<IOrderExceptionService>().Object,
             new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
+            overrides.Object,
             new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
             new Mock<IFileStorageService>().Object,
             new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
             Array.Empty<ProcuLink.Core.Services.ITransformService>());
 
-        return (ctrl, orders, orgId);
+        return (ctrl, orders, overrides, orgId);
     }
 }

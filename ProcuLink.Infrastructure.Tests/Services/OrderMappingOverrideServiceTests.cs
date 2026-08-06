@@ -213,19 +213,33 @@ public class OrderMappingOverrideServiceTests
     private static async Task<string> StatusOf(ProcuLinkDbContext db, Guid orderId) =>
         await db.PurchaseOrders.AsNoTracking().Where(o => o.Id == orderId).Select(o => o.Status).FirstAsync();
 
+    /// <summary>
+    /// Every status the machine says a mapping edit invalidates — read from the set itself, not
+    /// transcribed. These rows used to be six <c>InlineData</c> literals, and a hand-written copy of
+    /// a set is what this whole area was centralised to stop: MV-2 removed <c>transforming</c> from
+    /// the set (its reset was provably overwritten by <c>OrderTransformService</c>'s untokened
+    /// completion write, and the edit is refused at the endpoint instead) and the stale literal here
+    /// was the only thing that noticed. Derived, it moves with the decision; the decision's OWN
+    /// membership is pinned one layer down by
+    /// <c>OrderStatusMachineTests.EveryStatus_IsClassifiedForTheMappingEditReset</c>.
+    /// </summary>
+    public static TheoryData<string> InvalidatingStatuses()
+    {
+        var data = new TheoryData<string>();
+        foreach (var s in ProcuLink.Core.Constants.OrderStatusMachine.MappingEditInvalidatesArtifactFrom
+                     .OrderBy(s => s, StringComparer.Ordinal))
+            data.Add(s);
+        return data;
+    }
+
+    [Fact]
+    public void InvalidatingStatuses_IsNotEmpty()
+        => ProcuLink.Core.Constants.OrderStatusMachine.MappingEditInvalidatesArtifactFrom
+            .Should().HaveCountGreaterThan(3,
+                "a gutted set would make the theory below sweep nothing and still report success");
+
     [Theory]
-    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.ReadyToDeliver)]
-    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.Transforming)]
-    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.Delivered)]
-    // MV-1 sibling: a delivery_failed order is re-dispatchable (RedeliverableFrom) and a
-    // dead-lettered order is rescue-requeueable — both ship the LATEST STORED artifact without
-    // re-transforming, so a mapping edit after either state must also reset to 'ready'.
-    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.DeliveryFailed)]
-    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.DeliveryDeadLetter)]
-    // A parked order is redeliverable and Send again ships the STORED artifact without
-    // re-transforming, so a mapping edit must invalidate it — the same MV-1 sibling reasoning
-    // that covers delivery_failed and delivery_dead_letter.
-    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.DeliveryUnconfirmed)]
+    [MemberData(nameof(InvalidatingStatuses))]
     public async Task UpsertAsync_ChangedOverride_PastReady_ResetsStatusToReady(string startStatus)
     {
         await using var db = NewDb();
@@ -235,6 +249,36 @@ public class OrderMappingOverrideServiceTests
         await svc.UpsertAsync(orgId, orderId, SampleOverride(), CancellationToken.None);
 
         (await StatusOf(db, orderId)).Should().Be(ProcuLink.Core.Constants.OrderStatusConstants.Ready);
+    }
+
+    /// <summary>
+    /// MV-2 — the mirror. A status the ENDPOINT refuses must not also be reset here, and this is the
+    /// assertion that makes "refusal supersedes reset" real rather than a comment.
+    ///
+    /// <para>It matters because the endpoint guard is check-then-act on an entity with no
+    /// concurrency token, so an order that ENTERS <c>delivering</c> or <c>transforming</c> between
+    /// the guard's read and this <c>SaveChangesAsync</c> still gets here. In that race a reset is at
+    /// best inert and at worst harmful: for <c>delivering</c> it would land over a live dispatch
+    /// claim last-writer-wins, and for <c>transforming</c> the transform's own completion write
+    /// overwrites it regardless. Leaving the status alone is the correct answer to both.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.Delivering)]
+    [InlineData(ProcuLink.Core.Constants.OrderStatusConstants.Transforming)]
+    public async Task UpsertAsync_ChangedOverride_InAStatusTheEndpointRefuses_LeavesStatusAlone(string startStatus)
+    {
+        ProcuLink.Core.Constants.OrderStatusMachine.MappingEditRefusedFrom.Should().Contain(startStatus,
+            "this row asserts the service's half of a refusal that the endpoint must actually make");
+
+        await using var db = NewDb();
+        var (orgId, orderId) = await SeedOrderWithStatusAsync(db, startStatus);
+        var svc = new OrderMappingOverrideService(db);
+
+        await svc.UpsertAsync(orgId, orderId, SampleOverride(), CancellationToken.None);
+
+        (await StatusOf(db, orderId)).Should().Be(startStatus,
+            "a reset here cannot un-send bytes already handed to the dispatcher, and cannot outlive " +
+            "the transform's untokened completion write — it would only overwrite a live claim");
     }
 
     [Fact]

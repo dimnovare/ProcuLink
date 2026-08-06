@@ -423,7 +423,8 @@ public static class OrderStatusMachine
         Set(Unrouted, Delivering, Parsing, Transforming);
 
     /// <summary>
-    /// The sentence an operator reads when <see cref="ResolveHeldFrom"/> refuses their correction.
+    /// The sentence an operator reads when <see cref="ResolveHeldFrom"/> — or its subset
+    /// <see cref="MappingEditRefusedFrom"/> — refuses their correction.
     ///
     /// <para>Every one names what to DO — a status-code echo ("Order must be in one of these
     /// statuses: …") tells an operator what the server thinks and nothing about their next move.
@@ -432,6 +433,13 @@ public static class OrderStatusMachine
     /// <c>OrdersControllerResolveStatusGuardTests</c>, which derives its rows from
     /// <see cref="ResolveHeldFrom"/> — so a status added to that set tomorrow fails the suite until
     /// it is given its own sentence here, rather than silently shipping the fallback.</para>
+    ///
+    /// <para><b>One table, three endpoints — not three copies.</b> MV-2 gated
+    /// <c>PUT /api/orders/{id}/mapping-override</c> on <see cref="MappingEditRefusedFrom"/> and
+    /// reused these sentences rather than minting a parallel set: both statuses it refuses already
+    /// have one here, and both already end in "correct it and send it again", which is literally
+    /// what a mapping override is. A second table would drift from this one the way the five
+    /// delivery-claim lists drifted four times.</para>
     /// </summary>
     public static string ResolveHoldMessage(string status) => status switch
     {
@@ -653,20 +661,20 @@ public static class OrderStatusMachine
     /// directions. It omits <c>delivery_held</c> — the status this set was fixed for — because the
     /// release REWRITES a held order to <c>ready_to_deliver</c> before enqueuing, so the claim never
     /// sees <c>delivery_held</c> at all (exactly the shape <see cref="RequeueableFrom"/> documents
-    /// for <c>delivery_dead_letter</c>). It also omits <c>transforming</c> and <c>delivered</c>,
-    /// which are in no claim set and belong here for reasons the claim sets do not encode. A
-    /// derivation that needs three hand-written corrections is an enumeration with extra steps, and
-    /// a less legible one.
+    /// for <c>delivery_dead_letter</c>). It also omits <c>delivered</c>, which is in no claim set
+    /// and belongs here for a reason the claim sets do not encode. A derivation that needs
+    /// hand-written corrections is an enumeration with extra steps, and a less legible one.
     /// <br/>What replaces the derivation is a TOTALITY guard rather than a cleverer expression:
     /// <c>OrderStatusMachineTests.EveryStatus_IsClassifiedForTheMappingEditReset</c> partitions
-    /// <see cref="AllStatuses"/> into this set, a named residual, and the artifact-free remainder,
-    /// so a status added tomorrow fails the build until someone decides which it is. The union
-    /// invariant (every status in any delivery claim set is in this set) is asserted too — it is the
-    /// half a derivation CAN prove soundly, so it is kept as a check rather than as the definition.</para>
+    /// <see cref="AllStatuses"/> into this set, <see cref="MappingEditRefusedFrom"/>, a named
+    /// residual, and the artifact-free remainder, so a status added tomorrow fails the build until
+    /// someone decides which it is. The union invariant (every status in any delivery claim set is
+    /// in this set) is asserted too — it is the half a derivation CAN prove soundly, so it is kept
+    /// as a check rather than as the definition.</para>
     ///
     /// <list type="bullet">
-    /// <item><c>ready_to_deliver</c> / <c>transforming</c> / <c>delivered</c> — the original MV-1
-    /// trio: the artifact exists (or is being written) and the next Send would redeliver it.</item>
+    /// <item><c>ready_to_deliver</c> / <c>delivered</c> — the artifact exists and the next Send
+    /// would redeliver it.</item>
     /// <item><c>delivery_failed</c> / <c>delivery_dead_letter</c> / <c>delivery_unconfirmed</c> —
     /// post-artifact and re-dispatchable/rescuable. Retry/Redeliver, the ops requeue, and "Send
     /// again" on a park all ship the LATEST STORED artifact without re-transforming.</item>
@@ -687,23 +695,91 @@ public static class OrderStatusMachine
     /// re-transform via <see cref="ClaimableForTransformFrom"/>), and both already invalidate the old
     /// artifact. Resetting here would be dead weight, not a fix.</para>
     ///
-    /// <para><b>Deliberately NOT here: <c>delivering</c> — and this one IS a live gap, named rather
-    /// than closed.</b> A mapping edit is accepted in <c>delivering</c> (<c>PutMappingOverride</c>
-    /// carries no status gate, unlike <c>/resolve</c> and <c>/accept-ai-suggestions</c>, which are
-    /// refused from this status by <see cref="ResolveHeldFrom"/>), and the pre-edit bytes can still
-    /// go out. But a reset cannot cure it: by the time the row is <c>delivering</c> the artifact has
-    /// been downloaded and handed to the dispatcher, so writing <c>ready</c> un-sends nothing — and
-    /// it would write over a live dispatch claim last-writer-wins, which is precisely the harm the
-    /// <c>delivering</c> bullet of <see cref="ResolveHeldFrom"/> documents. Worse, the claim's own
-    /// outcome write lands afterwards and can leave the order in <c>delivery_failed</c>, whose retry
-    /// then ships the SAME stale artifact again. The cure is an endpoint refusal on
-    /// <c>PUT /api/orders/{id}/mapping-override</c>, matching the other two recompute endpoints —
-    /// a product decision about removing a control, not something to smuggle in behind a status
-    /// set. Pinned as a known residual by the totality guard so it cannot fade into an oversight.</para>
+    /// <para><b>Not here because the edit never arrives: <c>delivering</c> and
+    /// <c>transforming</c>.</b> Both are refused at the endpoint by
+    /// <see cref="MappingEditRefusedFrom"/>, which carries that decision and its per-status
+    /// evidence. <c>delivering</c> was MV-1's named residual — an accepted edit whose pre-edit bytes
+    /// still went out — and a reset was never the cure for it. <c>transforming</c> WAS in this set
+    /// (part of the original MV-1 trio), and its reset provably could not land:
+    /// <c>OrderTransformService</c>'s completion write is a tracked
+    /// <c>Status = ready_to_deliver</c> with no status predicate and no concurrency token, so it
+    /// overwrites the reset last-writer-wins on every successful transform. A reset that cannot land
+    /// is not protection; leaving it here claimed one.</para>
     /// </summary>
     public static readonly IReadOnlySet<string> MappingEditInvalidatesArtifactFrom =
-        Set(ReadyToDeliver, Transforming, Delivered,
+        Set(ReadyToDeliver, Delivered,
             DeliveryHeld, DeliveryFailed, DeliveryDeadLetter, DeliveryUnconfirmed);
+
+    /// <summary>
+    /// MV-2 — the statuses <c>PUT /api/orders/{id}/mapping-override</c> REFUSES an edit from,
+    /// because the edit would be accepted, stored, and then silently discarded while a document
+    /// built before it goes out. Consumed by <c>OrdersController.PutMappingOverride</c> through the
+    /// same <c>RefusedByStatusHoldAsync</c> helper the two recompute endpoints use, and answered
+    /// with <see cref="ResolveHoldMessage"/> — the operator-facing sentences already written for
+    /// these statuses, not a second copy of them. Both existing sentences say "correct it, then send
+    /// it again", which is exactly what a mapping override is, so the reuse is literal rather than
+    /// approximate.
+    ///
+    /// <para><b>A subset of <see cref="ResolveHeldFrom"/>, and deliberately a strict one.</b> That
+    /// set was evidenced against a DIFFERENT writer — the unconditional status recompute shared by
+    /// <c>/resolve</c> and <c>/accept-ai-suggestions</c>. This endpoint's writer is
+    /// <c>OrderMappingOverrideService.UpsertAsync</c>: a <c>canonical_json</c> merge plus a
+    /// conditional status reset. Reusing all four of <c>ResolveHeldFrom</c> would be transcription,
+    /// not a decision, and this file's own rule for that set is "name the writer, name the line, say
+    /// what it destroys — never by a refactor's side effect". So the two statuses below carry that
+    /// evidence and the other two do not:
+    /// <list type="bullet">
+    /// <item><c>delivering</c> — MV-1's named residual. The artifact has already been downloaded and
+    /// handed to the dispatcher, so the edit changes nothing about what is being sent, and a reset
+    /// cannot cure it (writing <c>ready</c> un-sends nothing and lands over a live dispatch claim
+    /// last-writer-wins, the harm the <c>delivering</c> bullet of <see cref="ResolveHeldFrom"/>
+    /// documents). The in-flight send then lands <c>delivered</c> or <c>delivery_failed</c>, and
+    /// from the latter the AUTOMATIC retry — or <c>StuckDeliveryDetectionService</c>, which re-drives
+    /// stale <c>delivering</c> rows on a timer with no human in the loop — resolves the SAME stored
+    /// pre-edit artifact and ships it again. <c>DeliveryService.RetryDeliveryAsync</c> admits
+    /// <c>delivering</c> explicitly in its advisory gate, so that path is open by design.</item>
+    /// <item><c>transforming</c> — the reset this set replaces was provably defeated.
+    /// <c>OrderTransformService</c> claims atomically and then resyncs the tracked entity's CURRENT
+    /// and ORIGINAL values to <c>transforming</c>, but its completion write is a tracked
+    /// <c>Status = ready_to_deliver</c> with no status predicate and no concurrency token — so it
+    /// lands unconditionally over an edit's <c>ready</c>, and the artifact it commits was built from
+    /// the graph loaded BEFORE the edit, with <c>TransformOrderJob</c> enqueueing delivery
+    /// immediately after. Identical to the <c>transforming</c> bullet
+    /// <c>OrdersControllerResolveStatusGuardTests</c> already cites for <c>/resolve</c>, which is
+    /// why leaving the third door open would be the drift WP-23 closed for the first two.</item>
+    /// </list></para>
+    ///
+    /// <para><b>Deliberately NOT here: <c>parsing</c> and <c>unrouted</c>.</b> <c>ResolveHeldFrom</c>
+    /// refuses both, for harm this endpoint's writer cannot do. The parse does NOT write
+    /// <c>canonical_json</c> — <c>OrderIngestionService</c> states that as a load-bearing invariant
+    /// ("the typed columns are the single source of truth for this order's header") and the only
+    /// other production writer of an EXISTING row's <c>canonical_json</c> is
+    /// <c>OrderResolutionService</c>'s header merge, which is itself gated by that set. So an
+    /// override saved during <c>parsing</c> is not clobbered by the parse, and it invalidates no
+    /// artifact because none exists. And unlike the recompute, this endpoint never writes a status
+    /// on an <c>unrouted</c> order (<c>unrouted</c> is not in
+    /// <see cref="MappingEditInvalidatesArtifactFrom"/>), so it cannot recompute the order out of
+    /// the routing hold — the precise harm that put <c>unrouted</c> in <c>ResolveHeldFrom</c>.
+    /// A fifth status arrives the way these two did, with a writer and a line, and never as a
+    /// symmetry argument.</para>
+    ///
+    /// <para><b>Refused, not made impossible.</b> Like the resolve guard, this is a check-then-act
+    /// read at the endpoint and <c>PurchaseOrderEntity</c> carries no concurrency token, so an order
+    /// that ENTERS one of these statuses between the read and <c>UpsertAsync</c>'s
+    /// <c>SaveChangesAsync</c> is still accepted. Closing that needs an atomic claim on the override
+    /// write itself, a change to the WRITER. The ordinary operator path is shut, which is what
+    /// removes the reachable harm.</para>
+    ///
+    /// <para><b>What the operator loses, priced.</b> A refusal costs waiting, never a dead end:
+    /// a transform is seconds, a send is minutes, and neither status can strand an order past them —
+    /// <c>StuckOrderDetectionService</c> recovers a stalled <c>transforming</c> row to <c>ready</c>
+    /// on its own timer (never to terminal <c>failed</c>), and <c>StuckDeliveryDetectionService</c>
+    /// moves a stalled <c>delivering</c> row on to a retry or the dead-letter. From every one of
+    /// those landing statuses the edit is accepted again, and from all but <c>ready</c> it also
+    /// resets the artifact via <see cref="MappingEditInvalidatesArtifactFrom"/>.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> MappingEditRefusedFrom =
+        Set(Delivering, Transforming);
 
     /// <summary>
     /// <c>OrdersController.MarkDelivered</c>'s admission guard — the ONLY statuses from which a

@@ -1109,22 +1109,26 @@ public class OrderStatusMachineTests
     // OrderStatusMachine.MappingEditInvalidatesArtifactFrom.
 
     /// <summary>
-    /// Statuses that CAN hold a dispatchable artifact and are still deliberately NOT reset. Recorded
-    /// here — with the reason — rather than left to look like an oversight, and pinned to exactly
-    /// this membership so adding a second one takes a deliberate edit and an argument.
+    /// Statuses that CAN hold a dispatchable artifact, ACCEPT a mapping edit, and are still
+    /// deliberately NOT reset — i.e. a known open stale-artifact path. Recorded here, with the
+    /// reason, rather than left to look like an oversight.
     ///
-    /// <para><c>delivering</c> is the only member, and it is a genuine open gap rather than a clean
-    /// exclusion. A mapping edit IS accepted in this status (<c>PutMappingOverride</c> carries no
-    /// status gate, unlike <c>/resolve</c> and <c>/accept-ai-suggestions</c>, which
-    /// <see cref="OrderStatusMachine.ResolveHeldFrom"/> refuses from it) and the pre-edit bytes can
-    /// still reach the supplier. But a reset is not the cure: the artifact has already been
-    /// downloaded and handed to the dispatcher, so writing <c>ready</c> un-sends nothing, and it
-    /// would land over a live dispatch claim last-writer-wins — the exact harm the <c>delivering</c>
-    /// bullet of <c>ResolveHeldFrom</c> documents. The cure is an endpoint refusal, which is a
-    /// product decision about removing a control, not a status-set edit.</para>
+    /// <para><b>EMPTY, and pinned empty.</b> <c>delivering</c> was the sole member: MV-1 named it
+    /// rather than closing it, because a reset is not the cure there (the artifact has already been
+    /// handed to the dispatcher, so writing <c>ready</c> un-sends nothing and lands over a live
+    /// dispatch claim last-writer-wins) and an endpoint refusal is a product decision MV-1 was not
+    /// given. MV-2 made that decision: <c>delivering</c> moved to
+    /// <see cref="OrderStatusMachine.MappingEditRefusedFrom"/>, where the edit is refused with 409
+    /// before it can be stored and discarded. It is no longer a residual because the gap is closed,
+    /// not because anyone stopped counting it.</para>
+    ///
+    /// <para>The bucket stays because its job was never "hold <c>delivering</c>" — it was to make a
+    /// deliberately-unfixed stale-artifact path cost an edit here and an argument in the doc above.
+    /// A new member is the <c>delivery_held</c> bug being accepted rather than fixed, and
+    /// <c>MappingEditKnownResidual_IsEmpty</c> is what forces that to be said out loud.</para>
     /// </summary>
     private static readonly IReadOnlySet<string> MappingEditKnownResidual =
-        new HashSet<string>(StringComparer.Ordinal) { Delivering };
+        new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>
     /// Statuses that hold NO artifact anyone can ship in place, so a mapping edit has nothing to
@@ -1148,18 +1152,27 @@ public class OrderStatusMachineTests
                 "a re-transform via ClaimableForTransformFrom) already produce a fresh document",
         };
 
-    /// <summary>Statuses in none of the three buckets — the thing that must always be empty.</summary>
+    /// <summary>Statuses in none of the four buckets — the thing that must always be empty.</summary>
     private static IReadOnlyCollection<string> UnclassifiedForMappingEdit(IEnumerable<string> statuses) =>
         statuses
-            .Where(s => !OrderStatusMachine.MappingEditInvalidatesArtifactFrom.Contains(s)
+            .Where(s => !OrderStatusMachine.MappingEditRefusedFrom.Contains(s)
+                     && !OrderStatusMachine.MappingEditInvalidatesArtifactFrom.Contains(s)
                      && !MappingEditKnownResidual.Contains(s)
                      && !MappingEditArtifactFree.ContainsKey(s))
             .ToList();
 
     /// <summary>
-    /// THE guard. Every status the machine knows is classified for the mapping-edit reset: reset,
-    /// known residual, or provably artifact-free. A status that is none of those is one nobody has
-    /// decided about — which is exactly what <c>delivery_held</c> was.
+    /// THE guard. Every status the machine knows is classified for the mapping-edit reset: refused
+    /// at the endpoint, reset, known residual, or provably artifact-free. A status that is none of
+    /// those is one nobody has decided about — which is exactly what <c>delivery_held</c> was.
+    ///
+    /// <para>MV-2 added the first bucket. The four answer ONE question — "what happens to a mapping
+    /// edit made in this status?" — and refusal supersedes the rest: an edit that never reaches
+    /// <c>UpsertAsync</c> has no artifact to invalidate, which is why a refused status must NOT also
+    /// sit in the reset set. That is not pedantry about set membership: <c>transforming</c> sat in
+    /// both meanings at once (refused nowhere, reset here, reset provably overwritten by
+    /// <c>OrderTransformService</c>'s untokened completion write) and the reset read as protection
+    /// while providing none.</para>
     /// </summary>
     [Fact]
     public void EveryStatus_IsClassifiedForTheMappingEditReset()
@@ -1173,20 +1186,29 @@ public class OrderStatusMachineTests
             "the sweep must examine every real status — a shrunken list means the guard stopped looking");
 
         UnclassifiedForMappingEdit(all).Should().BeEmpty(
-            "every status must be decided: either a mapping edit invalidates its artifact " +
-            "(MappingEditInvalidatesArtifactFrom), or it is a named residual, or it provably holds " +
-            "no artifact anyone can ship in place. An unclassified status is the delivery_held bug");
+            "every status must be decided: either the edit is refused at the endpoint " +
+            "(MappingEditRefusedFrom), or it invalidates the artifact " +
+            "(MappingEditInvalidatesArtifactFrom), or it is a named residual, or the status provably " +
+            "holds no artifact anyone can ship in place. An unclassified status is the delivery_held bug");
 
         // Partition, not merely cover: a status in two buckets means two contradictory decisions.
+        OrderStatusMachine.MappingEditRefusedFrom
+            .Should().NotIntersectWith(OrderStatusMachine.MappingEditInvalidatesArtifactFrom,
+                "a refused edit never reaches UpsertAsync, so it has nothing to reset — claiming both " +
+                "is how 'transforming' kept a reset that OrderTransformService's completion write " +
+                "silently overwrote")
+            .And.NotIntersectWith(MappingEditKnownResidual)
+            .And.NotIntersectWith(MappingEditArtifactFree.Keys);
         OrderStatusMachine.MappingEditInvalidatesArtifactFrom
             .Should().NotIntersectWith(MappingEditKnownResidual)
             .And.NotIntersectWith(MappingEditArtifactFree.Keys);
         MappingEditKnownResidual.Should().NotIntersectWith(MappingEditArtifactFree.Keys);
 
-        (OrderStatusMachine.MappingEditInvalidatesArtifactFrom.Count
+        (OrderStatusMachine.MappingEditRefusedFrom.Count
+         + OrderStatusMachine.MappingEditInvalidatesArtifactFrom.Count
          + MappingEditKnownResidual.Count
          + MappingEditArtifactFree.Count)
-            .Should().Be(all.Count, "the three buckets must tile the machine exactly, with no status counted twice");
+            .Should().Be(all.Count, "the four buckets must tile the machine exactly, with no status counted twice");
     }
 
     /// <summary>
@@ -1241,12 +1263,72 @@ public class OrderStatusMachineTests
     }
 
     /// <summary>
-    /// The residual is exactly <c>delivering</c>. Adding a second member silences a real
-    /// stale-artifact path, so it must cost an edit here and an argument in the doc above.
+    /// The residual is EMPTY. MV-2 closed its only member by refusing the edit at the endpoint, so
+    /// every status that can hold a shippable artifact now either refuses the edit or invalidates
+    /// the artifact. Any member added here is a real stale-artifact path being accepted rather than
+    /// fixed, and it must cost an edit here and an argument in the doc above.
     /// </summary>
     [Fact]
-    public void MappingEditKnownResidual_IsExactlyDelivering()
-        => MappingEditKnownResidual.Should().BeEquivalentTo(new[] { Delivering });
+    public void MappingEditKnownResidual_IsEmpty()
+        => MappingEditKnownResidual.Should().BeEmpty(
+            "a known residual is a live path on which a correction is stored and then discarded " +
+            "while a pre-edit document goes out — the delivery_held bug, accepted rather than fixed");
+
+    /// <summary>
+    /// MV-2 — the refusal set is a SUBSET of <see cref="OrderStatusMachine.ResolveHeldFrom"/>, and a
+    /// STRICT one. Both directions matter and neither is decorative.
+    ///
+    /// <para><b>Subset.</b> A status this endpoint refuses is one where an in-flight machine step
+    /// owns the order, and every such status is already refused by the two recompute endpoints. A
+    /// member here that <c>ResolveHeldFrom</c> does not carry would mean the mapping editor is
+    /// stricter than the resolver about the same order in the same moment — two answers to one
+    /// question, which is the drift WP-23 centralised these sets to prevent.</para>
+    ///
+    /// <para><b>Strict.</b> <c>ResolveHeldFrom</c> was evidenced against the status RECOMPUTE, a
+    /// different writer. Widening this set to match it would be transcription — <c>parsing</c> and
+    /// <c>unrouted</c> have no call-site evidence for THIS writer (the parse does not write
+    /// <c>canonical_json</c>, and this endpoint writes no status on an <c>unrouted</c> order), and
+    /// this file's rule for the sibling set is "name the writer, name the line, say what it
+    /// destroys". Pinning strictness is what stops a later "make them consistent" refactor from
+    /// removing two operator controls nobody argued for.</para>
+    /// </summary>
+    [Fact]
+    public void MappingEditRefusedFrom_IsAStrictSubsetOfResolveHeldFrom()
+    {
+        OrderStatusMachine.MappingEditRefusedFrom.Should().NotBeEmpty(
+            "an empty refusal set would make every assertion about it vacuous — and would reopen " +
+            "the delivering gap");
+
+        OrderStatusMachine.MappingEditRefusedFrom.Should().BeSubsetOf(
+            OrderStatusMachine.ResolveHeldFrom,
+            "a mapping edit may not be refused from a status where the far more destructive status " +
+            "recompute is still allowed");
+
+        OrderStatusMachine.ResolveHeldFrom.Should().NotBeSubsetOf(
+            OrderStatusMachine.MappingEditRefusedFrom,
+            "the two sets answer questions about DIFFERENT writers; equality would mean one of them " +
+            "was transcribed rather than evidenced");
+    }
+
+    /// <summary>
+    /// Every refused status has its own operator sentence, reached through the SAME
+    /// <see cref="OrderStatusMachine.ResolveHoldMessage"/> table the recompute endpoints use rather
+    /// than a second copy. The subset invariant above is what makes that reuse total, but a subset
+    /// relation alone does not prove the sentence is specific — the fallback would satisfy it.
+    /// </summary>
+    [Fact]
+    public void EveryMappingEditRefusal_HasItsOwnSentence_FromTheSharedTable()
+    {
+        var fallback = OrderStatusMachine.ResolveHoldMessage("a-status-the-machine-has-never-heard-of");
+
+        foreach (var status in OrderStatusMachine.MappingEditRefusedFrom)
+            OrderStatusMachine.ResolveHoldMessage(status).Should().NotBe(fallback,
+                $"'{status}' ships the generic fallback instead of a sentence about its own case");
+
+        OrderStatusMachine.MappingEditRefusedFrom
+            .Select(OrderStatusMachine.ResolveHoldMessage)
+            .Should().OnlyHaveUniqueItems("two refusals reading identically tells the operator nothing");
+    }
 
     /// <summary>A stand-in for a future <c>OrderStatusConstants</c>, carrying one status nobody listed.</summary>
     private static class SyntheticStatusConstants
