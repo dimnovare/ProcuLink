@@ -162,7 +162,9 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             config.UpdatedAt,
             config.OutputFormat,
             CxmlCredentials: BuildCxmlResponse(config),
-            AutoTransform: config.AutoTransform);
+            AutoTransform: config.AutoTransform,
+            InsecureTransportWarning: DeliveryConfigTransport.DescribeInsecureTransport(
+                config.Protocol, config.ConfigJson));
     }
 
     /// <summary>
@@ -244,21 +246,7 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
     /// </summary>
     private static void ValidateTransportSecurity(string protocol, string configJson)
     {
-        if (!UrlBasedProtocols.Contains(protocol)) return;
-
-        using var doc = JsonDocument.Parse(configJson);
-        if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
-
-        string? url = null;
-        foreach (var property in doc.RootElement.EnumerateObject())
-        {
-            if (!property.NameEquals("url")
-                && !string.Equals(property.Name, "url", StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (property.Value.ValueKind == JsonValueKind.String)
-                url = property.Value.GetString();
-            break;
-        }
+        var url = DeliveryConfigTransport.ExtractUrl(protocol, configJson);
 
         // No url key at all is left as-is: that config cannot deliver anything, and failing it here
         // would be a separate behaviour change from the one this guard is for.

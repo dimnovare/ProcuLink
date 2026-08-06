@@ -237,6 +237,90 @@ public class DeliveryConfigTransportSecurityTests
             .Should().Be("http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd");
     }
 
+    // ── Configs saved BEFORE enforcement existed ─────────────────────────────
+
+    /// <summary>
+    /// Refusing at save protects nothing already stored. An org that saved an http:// endpoint
+    /// before this shipped keeps delivering — silently breaking those orders would trade a
+    /// security weakness for an outage — but the config is flagged on every read so the editor
+    /// can say so, rather than leaving the operator exposed and uninformed.
+    /// </summary>
+    [Theory]
+    [InlineData("{\"url\":\"http://erp.supplier.com/xmlcore\"}")]
+    [InlineData("{\"URL\":\"http://erp.supplier.com/xmlcore\"}")]
+    public async Task GetAsync_AConfigSavedBeforeEnforcement_IsFlaggedInsecure(string configJson)
+    {
+        await using var db = CreateDb();
+        var service = CreateService(db);
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        // Written straight to the row: this is what an org that configured delivery before
+        // enforcement existed actually has, and UpsertAsync can no longer produce it.
+        db.SupplierDeliveryConfigs.Add(new ProcuLink.Core.Entities.SupplierDeliveryConfig
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
+            Protocol = DeliveryProtocolConstants.ErpDirecto, ConfigJson = configJson,
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var fetched = await service.GetAsync(orgId, supplierId, default);
+
+        fetched!.InsecureTransportWarning.Should().NotBeNullOrWhiteSpace();
+        fetched.InsecureTransportWarning.Should().Contain("https://");
+    }
+
+    [Theory]
+    [InlineData("{\"url\":\"https://supplier.example/orders\"}")]
+    [InlineData("{\"url\":\"http://127.0.0.1:9000/orders\"}")]
+    [InlineData("{\"host\":\"files.supplier.example\"}")]
+    public async Task GetAsync_ASecureOrLoopbackConfig_CarriesNoWarning(string configJson)
+    {
+        await using var db = CreateDb();
+        var service = CreateService(db);
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.SupplierDeliveryConfigs.Add(new ProcuLink.Core.Entities.SupplierDeliveryConfig
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
+            Protocol = DeliveryProtocolConstants.Http, ConfigJson = configJson,
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        (await service.GetAsync(orgId, supplierId, default))!
+            .InsecureTransportWarning.Should().BeNull();
+    }
+
+    /// <summary>
+    /// The warning is rendered in the editor and logged. A stored userinfo URL must be flagged,
+    /// but the flag must not carry the password back out into either place.
+    /// </summary>
+    [Fact]
+    public async Task GetAsync_AStoredUserinfoUrl_IsFlaggedWithoutEchoingTheSecret()
+    {
+        await using var db = CreateDb();
+        var service = CreateService(db);
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        db.SupplierDeliveryConfigs.Add(new ProcuLink.Core.Entities.SupplierDeliveryConfig
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
+            Protocol = DeliveryProtocolConstants.Http,
+            ConfigJson = "{\"url\":\"https://apiuser:hunter2@supplier.example/orders\"}",
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var fetched = await service.GetAsync(orgId, supplierId, default);
+
+        fetched!.InsecureTransportWarning.Should().NotBeNullOrWhiteSpace();
+        fetched.InsecureTransportWarning.Should().NotContain("hunter2");
+    }
+
     // ── The url-bearing protocol set is declared once ────────────────────────
 
     /// <summary>

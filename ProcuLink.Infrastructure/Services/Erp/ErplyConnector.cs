@@ -39,6 +39,17 @@ public sealed class ErplyConnector : IErpConnector
             if (!Uri.TryCreate(cfg.Url, UriKind.Absolute, out var endpoint))
                 return new ErpDeliveryResult(false, "Erply connector endpoint URL is invalid.");
 
+            // A config saved before TLS enforcement keeps delivering rather than stranding the
+            // order, but never silently. The URL is not logged whole — it may carry credentials.
+            if (DeliveryConfigTransport.DescribeInsecureTransport(
+                    request.Config.Protocol, request.Config.ConfigJson) is { } insecure)
+            {
+                _logger.LogWarning(
+                    "Erply delivery for supplier {SupplierId} uses a transport that no longer "
+                    + "passes policy (scheme '{Scheme}', host '{Host}'). {Warning}",
+                    request.Config.SupplierId, endpoint.Scheme, endpoint.Host, insecure);
+            }
+
             var message = new HttpRequestMessage(HttpMethod.Post, endpoint)
             {
                 Content = new ByteArrayContent(request.Content)

@@ -202,6 +202,10 @@ public class OutboundUrlPolicyTests
     [Fact]
     public void EverySecureScheme_IsAllowedToARealHost()
     {
+        // Anti-vacuity floor: every assertion below sits inside the loop, so an emptied
+        // SecureSchemes would make this pass having verified nothing.
+        OutboundUrlPolicy.SecureSchemes.Should().HaveCount(1);
+
         foreach (var scheme in OutboundUrlPolicy.SecureSchemes)
             OutboundUrlPolicy.Inspect($"{scheme}://supplier.example/orders").Allowed
                 .Should().BeTrue($"'{scheme}' is declared secure");
@@ -210,6 +214,10 @@ public class OutboundUrlPolicyTests
     [Fact]
     public void EveryLoopbackOnlyScheme_IsRefusedToARealHostAndAllowedOnLoopback()
     {
+        // Anti-vacuity floor — see the sibling test. An emptied LoopbackOnlySchemes would
+        // otherwise "prove" that cleartext is refused by never checking a scheme at all.
+        OutboundUrlPolicy.LoopbackOnlySchemes.Should().HaveCount(1);
+
         foreach (var scheme in OutboundUrlPolicy.LoopbackOnlySchemes)
         {
             OutboundUrlPolicy.Inspect($"{scheme}://supplier.example/orders").Allowed
