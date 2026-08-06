@@ -161,10 +161,37 @@ Check 1 result: **`Connections__RevisionAuthority = true` on BOTH Railway servic
 ## WP-16 · Designer depth II — `L` — risk: medium
 **Why:** conditionals are raw Scriban predicates typed into a text box; namespaces are hand-typed prefixes and URIs with no presets; the tree path **skips `OutputFieldValidator`**, losing the checks every fixed transform runs; `designerFormat()` (`OutputStructureDesigner.tsx:44-51`) silently rewrites a cXML/UBL/X12 tree to generic `xml` on save.
 **Files:** same as WP-15, plus `BE/ProcuLink.Transform/Output/OutputTemplateEmitter`, `OutputFieldValidator`
-**Do:** structured conditional builder emitting the same `IncludeWhen` predicate ("include when *[field]* *[is / is not / is empty]* *[value]*", with a raw-expression escape); namespace preset dropdown (UBL 2.1 / cXML 1.2 / Peppol BIS 3 / custom); route the tree path through `OutputFieldValidator`; make the format rewrite explicit and consented instead of silent.
+**Do:** structured conditional builder emitting the same `IncludeWhen` predicate ("include when *[field]* *[is / is not / is empty]* *[value]*", with a raw-expression escape); namespace preset dropdown (UBL 2.1 / ~~cXML 1.2 / Peppol BIS 3~~ / custom); route the tree path through `OutputFieldValidator`; make the format rewrite explicit and consented instead of silent.
 **AC:** a non-developer builds a conditional section and a namespaced XML doc without typing an expression or a URI; a tree that would emit an invalid document fails loudly at design time, not at delivery.
 **Tests:** predicate round-trip (structured ↔ raw); namespace preset emission; a validator test proving the tree path now rejects what the fixed path rejects; a format-preservation test.
 **Deps:** WP-15. **Skills:** `frontend-design`, `ui-ux-pro-max`, design brief **DB-2**.
+
+> **CORRECTION 2026-08-06 — the cXML 1.2 and Peppol BIS 3 presets are struck. WP-16 shipped
+> deliberately without them (FE #100), and adding either one now fails the build.**
+> `FE/src/components/bridge/outputNamespacePresets.ts` ships exactly three presets — `none` /
+> `ubl21` / `custom` — and its header states the reasons, which are not stylistic: **cXML is
+> DTD-based and has no namespaces at all**, so a "cXML namespace preset" would teach a coordinator
+> something false about the format they are trying to satisfy; and **Peppol BIS 3 is the UBL
+> namespaces plus three mandatory element values** (`UBLVersionID`, `CustomizationID`, `ProfileID`),
+> so a preset seeding only the namespaces would produce *"a document that looks like Peppol and is
+> rejected by the network"*.
+>
+> **BE #155 / FE #109** then took ProcuLink to emitting **no Peppol identifier at all**:
+> `cbc:CustomizationID` and `cbc:ProfileID` are removed from
+> `BE/ProcuLink.Transform/Output/UblOrderTransformService.cs`, because a receiving access point routes
+> and validates on exactly those two elements and nothing in either repo can back a BIS conformance
+> claim. Both are `minOccurs="0"` in the OASIS UBL 2.1 Order-2 schema, so omitting them keeps the
+> document schema-valid UBL. See the CORRECTION block against open unknown #6 in
+> `04-CAPABILITY-TRUTH-LEDGER.md`, and the merge-state note at the 2026-08-06 correction in
+> `05-PROGRESS.md` (FE #109 is on `main`; BE #155 was open when this was written).
+>
+> The refusal is pinned by two frontend tests —
+> `FE/src/components/bridge/outputNamespacePresets.test.ts` (*"names neither Peppol nor cXML anywhere
+> — not in an id, a label, or a description"*) and
+> `FE/src/components/bridge/OutputStructureDesigner.wp16.test.tsx` (*"offers neither a Peppol nor a
+> cXML preset"*) — and agreed by `DESIGN-DB-2-output-designer.md:645-647` in this directory. Both
+> formats are produced by their own dedicated transforms, configured on the supplier's Delivery tab;
+> that is what the designer panel points at instead. **This clause is not live work.**
 
 ---
 

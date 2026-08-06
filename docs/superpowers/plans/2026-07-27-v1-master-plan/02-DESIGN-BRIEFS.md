@@ -61,7 +61,24 @@ Seven surfaces need design work, not just implementation. Each brief below is wr
 1. **Reuse.** Today a design applies to one order and is gone on the next. There must be an unmistakable "this is now how we build every order for this supplier" moment, and a way to see *which* supplier a design governs. This is the single most important interaction on the screen.
 2. **Reordering.** Nodes cannot be moved. Column order and element order can only be changed by deleting and re-adding. Needs drag *and* keyboard.
 3. **Conditionals.** Currently a raw Scriban predicate typed into a text box. Needs a structured builder: *include this when [field] [is / is not / is empty / is greater than] [value]* — with a raw-expression escape for the 5% case.
-4. **XML namespaces.** Currently hand-typed prefixes and URIs. Needs presets (UBL 2.1, cXML 1.2, Peppol BIS 3, custom) and an explanation of what a namespace is *in one sentence a coordinator understands*.
+4. **XML namespaces.** Currently hand-typed prefixes and URIs. Needs presets (UBL 2.1, ~~cXML 1.2, Peppol BIS 3,~~ custom) and an explanation of what a namespace is *in one sentence a coordinator understands*.
+
+   > **CORRECTION 2026-08-06 — the cXML 1.2 and Peppol BIS 3 presets are struck. The design that
+   > shipped (DB-2 §9.3, FE #100) deliberately refuses both, and adding either now fails the build.**
+   > `FE/src/components/bridge/outputNamespacePresets.ts` ships exactly `none` / `ubl21` / `custom`:
+   > **cXML is DTD-based and has no namespaces at all**, so the preset would teach a coordinator
+   > something false; **Peppol BIS 3 is the UBL namespaces plus three mandatory element values**, so
+   > seeding only the namespaces would produce *"a document that looks like Peppol and is rejected by
+   > the network"*. **BE #155 / FE #109** then removed every Peppol identifier from the emitted
+   > document — `cbc:CustomizationID` and `cbc:ProfileID` are gone from
+   > `BE/ProcuLink.Transform/Output/UblOrderTransformService.cs`, because a receiving access point
+   > routes and validates on them and nothing in either repo can back a BIS conformance claim (see the
+   > CORRECTION against open unknown #6 in `04-CAPABILITY-TRUTH-LEDGER.md`, and the merge-state note
+   > at the 2026-08-06 correction in `05-PROGRESS.md`). Pinned by
+   > `outputNamespacePresets.test.ts` (*"names neither Peppol nor cXML anywhere"*) and
+   > `OutputStructureDesigner.wp16.test.tsx` (*"offers neither a Peppol nor a cXML preset"*), and
+   > answered in full at `DESIGN-DB-2-output-designer.md:645-647`. **Not live work.**
+
 5. **CSV dialect.** Delimiter, quoting, encoding, line ending are hardcoded today. Needs a panel. Line ending especially — it is currently whatever OS the server runs on, which is a real interop bug.
 6. **Transforms per field.** Eight transforms exist in the codebase (trim, replace, date format, concatenate, fallback, split, multiply, divide) and none are reachable from the designer. Design how a coordinator adds "join these two fields with a dash" without leaving the tree.
 7. **Typed values.** Every JSON leaf currently emits as a string. `"quantity": "10"` should be able to be `"quantity": 10`.
