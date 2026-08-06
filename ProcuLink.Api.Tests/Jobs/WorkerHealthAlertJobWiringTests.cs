@@ -162,6 +162,30 @@ public sealed class WorkerHealthAlertJobWiringTests
             $"registration /{pattern}/ is at offset {match.Index}, AFTER builder.Build() at {build.Index}.");
     }
 
+    /// <summary>
+    /// The Hangfire-backed source takes an OPTIONAL <c>JobStorage</c>. Whether <c>AddHangfire</c>
+    /// puts that type in the container is a packaging detail of Hangfire, and if this component
+    /// cannot be constructed the probe cannot be constructed either — which takes the ENTIRE alert
+    /// sweep down, all five conditions, on a Worker that still starts and looks healthy. So the
+    /// registration shape is asserted, not assumed.
+    /// </summary>
+    [Fact]
+    public void RecurringJobSource_resolvesWithNoJobStorageInTheContainer()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IRecurringJobLastExecutionSource, HangfireRecurringJobLastExecutionSource>();
+
+        using var provider = services.BuildServiceProvider();
+
+        var source = provider.GetRequiredService<IRecurringJobLastExecutionSource>();
+        source.Should().BeOfType<HangfireRecurringJobLastExecutionSource>();
+
+        // And the contract holds with no scheduler storage available: unknown, never a throw and
+        // never a fabricated timestamp that would read as a fresh poll.
+        source.GetLastExecutionUtc("sftp-polling").Should().BeNull();
+    }
+
     [Fact]
     public void Worker_stillSchedulesTheAlertSweep()
     {
