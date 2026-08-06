@@ -128,6 +128,10 @@ public class OutboundUrlPolicyTests
     {
         var verdict = OutboundUrlPolicy.Inspect("https://admin:hunter2@supplier.example/orders");
 
+        // Assert the refusal first: without this, disabling the userinfo check entirely would
+        // leave Message null and the two NotContain assertions would still pass vacuously.
+        verdict.Allowed.Should().BeFalse();
+        verdict.Message.Should().NotBeNullOrWhiteSpace();
         verdict.Message.Should().NotContain("hunter2");
         verdict.Message.Should().NotContain("admin");
     }
