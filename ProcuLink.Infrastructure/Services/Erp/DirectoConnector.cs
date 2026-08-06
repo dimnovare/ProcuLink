@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Erp;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Erp;
 
@@ -116,6 +117,11 @@ public sealed class DirectoConnector : IErpConnector
 
     private static string BuildFailureMessage(int code, string body)
     {
+        // The guarded transport refuses redirects (a 307 would replay this form body — which
+        // carries `user` and `password` — to a host nobody configured). Name that, and the fix.
+        if (OutboundRedirectPolicy.IsRedirect(code))
+            return $"Directo {OutboundRedirectPolicy.DescribeRefusal(code)}";
+
         if (string.IsNullOrWhiteSpace(body))
             return $"Directo HTTP {code}: ERP endpoint returned an error.";
 

@@ -159,7 +159,23 @@ public sealed class HttpAuthApplier
             return (null, "OAuth token request failed before a response was received.");
         }
 
-        var bodyStr = await resp.Content.ReadAsStringAsync(ct);
+        if (OutboundRedirectPolicy.IsRedirect((int)resp.StatusCode))
+            return (null, OutboundRedirectPolicy.DescribeTokenEndpointRefusal((int)resp.StatusCode));
+
+        string bodyStr;
+        try
+        {
+            bodyStr = await resp.Content.ReadAsStringAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A token endpoint that streams more than the transport's response cap allows (or that
+            // dies mid-body) must become the same SAFE, enumerated failure as any other token
+            // problem — never an exception escaping from inside auth application.
+            _logger.LogWarning(ex, "OAuth token response could not be read.");
+            return (null, "OAuth token response could not be read.");
+        }
+
         if (!resp.IsSuccessStatusCode)
             return (null, $"OAuth token request failed: HTTP {(int)resp.StatusCode}.");
 
