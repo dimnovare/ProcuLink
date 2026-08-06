@@ -60,12 +60,20 @@ jobs:
     # 25 absorbs a ~3-minute stall on a suite that has already touched 14.17 minutes on its own,
     # and still kills a genuinely hung job long before it burns an hour of runner time.
     #
-    # The suite is NOT near its floor and this setting is not a reason to stop looking: the Test
-    # step is 10m39s of a 12m08s step span, and 538s of that is 56 Postgres classes each starting
-    # their OWN postgres:16 container for 25.2s of actual test work. They already share the
-    # `postgres-container` collection, so those 56 starts are serialised end to end and sit on the
-    # critical path. Give that collection an ICollectionFixture holding one container and the Test
-    # step drops by minutes. If runs approach 25, start there — do not raise this again.
+    # The suite was also nowhere near its floor, which is why this is a cap change and not an
+    # excuse. The trx said Test was 10m39s of a 12m08s step span, and 538s of that was 56 Postgres
+    # classes each starting their OWN postgres:16 container for 25.2s of real test work — they
+    # shared the `postgres-container` collection, so those 56 starts ran end to end on the critical
+    # path. #168 gives that collection an ICollectionFixture holding one container: run 31127050382
+    # measured Test at 157s and the whole job at 4m20s, with the Api.Tests count unchanged at
+    # 2232/1 skipped and Σ test durations UP (312.3s → 339.1s). Faster because the container starts
+    # are gone, not because anything stopped running.
+    #
+    # 25 is deliberately not re-tightened to track that. A cap's job is to kill a hung job, not to
+    # sit just above the runtime — sitting just above the runtime is the bug being fixed here. It
+    # also has to hold whichever of these two PRs lands first, and if the container fix is ever
+    # reverted the suite is back at 12.5 minutes. If runs ever approach 25, read the trx artifact
+    # this workflow already uploads and find what got slower. Do not raise this again.
     timeout-minutes: 25
 
     steps:
