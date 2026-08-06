@@ -555,8 +555,23 @@ public class StripeBillingServicePricingTests
         var ent   = Org(PlanConstants.Enterprise, AccountStatusConstants.Active);
         db.Organisations.AddRange(pilot, ent);
         await db.SaveChangesAsync();
+
+        // Enterprise's seed is derived from the ladder rather than written down. It used to be a
+        // literal 100_000, on the reasonable-sounding theory that a huge number tests the guard
+        // harder. It cannot: Enterprise's included volume is int.MaxValue (PlanConstants.Limits),
+        // so no seed can put it over its own cap, and BestPriceOverageOrders separately returns 0
+        // for Enterprise before it looks at volume at all. Every value above the published ladder
+        // exercises exactly the same path — 100_000 bought no assertion strength, and it cost 144
+        // seconds, 93% of ProcuLink.Api.Tests once the shared-container change stopped the
+        // Postgres startup from hiding it.
+        //
+        // One order past the largest self-serve tier is the volume that carries the meaning: it
+        // would bill overage on every plan a customer can actually buy, and Enterprise still owes
+        // zero. Derived from PlanConstants so raising the Distributor tier moves it automatically.
+        var overEverySelfServeCap = PlanConstants.GetOrderLimit(PlanConstants.Distributor) + 1;
+
         await SeedOrdersThisMonthAsync(db, pilot.Id, 100);
-        await SeedOrdersThisMonthAsync(db, ent.Id, 100_000);
+        await SeedOrdersThisMonthAsync(db, ent.Id, overEverySelfServeCap);
 
         var svc = MakeService(db);
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
