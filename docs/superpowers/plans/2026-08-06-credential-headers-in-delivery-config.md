@@ -1101,12 +1101,13 @@ Create `ProcuLink.Api.Tests/Services/ConnectionRevisionCredentialHeaderTests.cs`
 /// The cleartext invariant at the connection-revision write path — the second way a delivery
 /// endpoint's configuration is chosen, and the one a pinned order actually delivers through.
 ///
-/// <para><b>Flat, with no grandfathering, unlike the live delivery-config path.</b> This input is
-/// caller-supplied, exactly as the transport rule's is, and the paths that carry an ALREADY-LIVE
-/// bundle — clone-from-active, rollback, republish-from-live, publish, the V1 backfill — never reach
-/// <c>ApplyScalars</c>. Republish-from-live is the one the delivery-config editor triggers, so the
-/// ordinary operator flow keeps working after a grandfathered live save. Nothing pre-existing is
-/// stranded by refusing here, and those paths are pinned below.</para>
+/// <para><b>CREATE refuses flat; UPDATE grandfathers, like the live delivery-config path.</b> A
+/// create has no stored predecessor, so "refuse what the caller introduces" needs no comparison. An
+/// update does: the paths that carry an ALREADY-LIVE bundle — clone-from-active, rollback,
+/// republish-from-live, publish, the V1 backfill — never reach <c>ApplyScalars</c>, so a draft can
+/// legitimately hold a header that predates enforcement, and the mapper echoes the whole bundle back
+/// on every mapping save. Refusing that echo would 400 every autosave for exactly the customers
+/// grandfathering exists to protect.</para>
 /// </summary>
 public class ConnectionRevisionCredentialHeaderTests
 {
@@ -1301,16 +1302,16 @@ And beside `ValidateTransportSecurity`:
     /// <see cref="DeliveryConfigTransport.FindCredentialHeaders"/>. A second hand-rolled name check
     /// here would be a second security rule free to drift from the first.</para>
     ///
-    /// <para><b>Flat, with no grandfathering</b> — unlike the live path, which grandfathers an
-    /// identical stored pair because the delivery editor has no headers field to remove one with.
-    /// This is caller-supplied input, and the clone-from-active, rollback, republish-from-live and
-    /// publish paths never reach <c>ApplyScalars</c>, so nothing already live is stranded.
-    /// Republish-from-live is what the delivery-config editor triggers, so the ordinary operator
-    /// flow keeps working.</para>
+    /// <para><b>The CREATE leg passes no stored blob and so refuses flat; the UPDATE leg passes the
+    /// draft's own currently-stored config and so grandfathers an identical pair</b> — the same rule
+    /// the live delivery-config path runs, for the same reason. Neither the delivery editor nor the
+    /// mapper has a headers field, and both round-trip the stored blob on every save, so refusing an
+    /// identical echo locks an operator out of unrelated edits with no way to clear the fault.
+    /// Adding a header, or rotating one's value, is refused on both legs.</para>
     /// </summary>
-    private static void ValidateCredentialHeaders(string? configJson)
+    private static void ValidateCredentialHeaders(string? configJson, string? storedConfigJson)
     {
-        var offending = DeliveryConfigTransport.FindCredentialHeaders(configJson);
+        var offending = DeliveryConfigTransport.FindCredentialHeaders(configJson, storedConfigJson);
         if (offending.Count > 0)
             throw new CredentialHeaderInConfigException(offending);
     }
@@ -1771,11 +1772,13 @@ Replace the `ConfigJson` doc comment with:
     /// <c>DeliveryConfigTransport.FindCredentialHeaders</c>.</para>
     ///
     /// <para>Two deliberate limits. Enforcement is on WRITE only: a config saved before it existed
-    /// keeps delivering, because refusing at dispatch would strand orders. And the live path
-    /// grandfathers a header whose name and value are already stored, because the delivery editor
-    /// has no headers field and round-trips the stored map on every save — refusing that echo would
-    /// lock an operator out of every unrelated edit with no way to remove the header. Adding one, or
-    /// rotating its value, is refused. Both cases are surfaced by
+    /// keeps delivering, because refusing at dispatch would strand orders. And every write that has
+    /// a stored predecessor — the live delivery-config save, and a revision UPDATE — grandfathers a
+    /// header whose name and value are already stored, because neither the delivery editor nor the
+    /// mapper has a headers field and both round-trip the stored blob on every save; refusing that
+    /// echo would lock an operator out of every unrelated edit with no way to remove the header.
+    /// Adding one, or rotating its value, is refused, as is any credential header on a revision
+    /// CREATE, which has no predecessor to compare against. Both cases are surfaced by
     /// <c>DeliveryConfigResponse.InsecureTransportWarning</c> and by a dispatch-time log that names
     /// the header and never its value.</para>
     /// </summary>
