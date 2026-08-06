@@ -1093,6 +1093,161 @@ public class OrderStatusMachineTests
             "static readonly fields are not status constants — only const strings are");
     }
 
+    // ── MV-1: the mapping-edit staleness reset ──────────────────────────────────────────────────
+    //
+    // OrderMappingOverrideService.UpsertAsync resets an order to 'ready' — forcing a re-transform
+    // before the next send — when the order already holds an artifact some path could ship as-is.
+    // The membership list lived in that service as a hand-written `is … or …` chain, and
+    // 'delivery_held' was missing from it while six siblings were present, so a correction typed
+    // during a billing hold was accepted, discarded, and the pre-edit document went to the supplier
+    // when billing was restored.
+    //
+    // A chain cannot be asked "is every status accounted for?", which is the only question that
+    // would have caught it. These tests ask it: every status in the machine must land in exactly one
+    // of the three buckets below, so a status added tomorrow fails the build until someone decides
+    // which it is. Deriving the set instead was considered and rejected — see the doc on
+    // OrderStatusMachine.MappingEditInvalidatesArtifactFrom.
+
+    /// <summary>
+    /// Statuses that CAN hold a dispatchable artifact and are still deliberately NOT reset. Recorded
+    /// here — with the reason — rather than left to look like an oversight, and pinned to exactly
+    /// this membership so adding a second one takes a deliberate edit and an argument.
+    ///
+    /// <para><c>delivering</c> is the only member, and it is a genuine open gap rather than a clean
+    /// exclusion. A mapping edit IS accepted in this status (<c>PutMappingOverride</c> carries no
+    /// status gate, unlike <c>/resolve</c> and <c>/accept-ai-suggestions</c>, which
+    /// <see cref="OrderStatusMachine.ResolveHeldFrom"/> refuses from it) and the pre-edit bytes can
+    /// still reach the supplier. But a reset is not the cure: the artifact has already been
+    /// downloaded and handed to the dispatcher, so writing <c>ready</c> un-sends nothing, and it
+    /// would land over a live dispatch claim last-writer-wins — the exact harm the <c>delivering</c>
+    /// bullet of <c>ResolveHeldFrom</c> documents. The cure is an endpoint refusal, which is a
+    /// product decision about removing a control, not a status-set edit.</para>
+    /// </summary>
+    private static readonly IReadOnlySet<string> MappingEditKnownResidual =
+        new HashSet<string>(StringComparer.Ordinal) { Delivering };
+
+    /// <summary>
+    /// Statuses that hold NO artifact anyone can ship in place, so a mapping edit has nothing to
+    /// invalidate. Each entry carries the fact that makes it true — not "it feels upstream".
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> MappingEditArtifactFree =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [PendingParse]   = "before parse — the order has no lines, let alone an artifact",
+            [Parsing]        = "the parse has not produced a canonical order yet",
+            [Unrouted]       = "parked awaiting a supplier; nothing has been transformed",
+            [PendingReview]  = "pre-transform review; an artifact is only built after 'ready'",
+            [Ready]          = "the reset TARGET — the next send re-transforms from here",
+            [Failed]         = "a bad source file; recovery is a new order row, and no artifact exists",
+            [TransformFailed] = "the transform produced no artifact (OrderTransformService fails before upload)",
+            // The one that needs the most care: it DOES hold an artifact, and it is still artifact-free
+            // for this question because no path can ship that artifact IN PLACE.
+            [RejectedBySupplier] =
+                "no delivery claim set admits it — not dispatch, not retry, not the ops requeue, not " +
+                "Redeliver — so the refused artifact cannot be re-shipped. Its only exits (resolve, or " +
+                "a re-transform via ClaimableForTransformFrom) already produce a fresh document",
+        };
+
+    /// <summary>Statuses in none of the three buckets — the thing that must always be empty.</summary>
+    private static IReadOnlyCollection<string> UnclassifiedForMappingEdit(IEnumerable<string> statuses) =>
+        statuses
+            .Where(s => !OrderStatusMachine.MappingEditInvalidatesArtifactFrom.Contains(s)
+                     && !MappingEditKnownResidual.Contains(s)
+                     && !MappingEditArtifactFree.ContainsKey(s))
+            .ToList();
+
+    /// <summary>
+    /// THE guard. Every status the machine knows is classified for the mapping-edit reset: reset,
+    /// known residual, or provably artifact-free. A status that is none of those is one nobody has
+    /// decided about — which is exactly what <c>delivery_held</c> was.
+    /// </summary>
+    [Fact]
+    public void EveryStatus_IsClassifiedForTheMappingEditReset()
+    {
+        var all = OrderStatusMachine.AllStatuses;
+
+        // Anti-vacuity: an empty (or gutted) status list must FAIL here rather than sweep nothing
+        // and report success. The buckets are asserted to partition it, so if `all` were empty every
+        // assertion below would pass over no work at all.
+        all.Should().HaveCountGreaterThan(10,
+            "the sweep must examine every real status — a shrunken list means the guard stopped looking");
+
+        UnclassifiedForMappingEdit(all).Should().BeEmpty(
+            "every status must be decided: either a mapping edit invalidates its artifact " +
+            "(MappingEditInvalidatesArtifactFrom), or it is a named residual, or it provably holds " +
+            "no artifact anyone can ship in place. An unclassified status is the delivery_held bug");
+
+        // Partition, not merely cover: a status in two buckets means two contradictory decisions.
+        OrderStatusMachine.MappingEditInvalidatesArtifactFrom
+            .Should().NotIntersectWith(MappingEditKnownResidual)
+            .And.NotIntersectWith(MappingEditArtifactFree.Keys);
+        MappingEditKnownResidual.Should().NotIntersectWith(MappingEditArtifactFree.Keys);
+
+        (OrderStatusMachine.MappingEditInvalidatesArtifactFrom.Count
+         + MappingEditKnownResidual.Count
+         + MappingEditArtifactFree.Count)
+            .Should().Be(all.Count, "the three buckets must tile the machine exactly, with no status counted twice");
+    }
+
+    /// <summary>
+    /// Proof the guard above is not vacuous: fed a status list containing one nobody classified, it
+    /// reports it. A green partition on today's statuses looks identical whether the check works or
+    /// not — the difference only shows the day a status is added, so this manufactures that day.
+    /// </summary>
+    [Fact]
+    public void MappingEditClassification_CatchesAStatusNobodyDecidedAbout()
+        => UnclassifiedForMappingEdit(OrderStatusMachine.AllStatuses.Append("quarantined"))
+            .Should().ContainSingle().Which.Should().Be("quarantined",
+                "a status added tomorrow must fail this suite until someone says whether a mapping " +
+                "edit invalidates its artifact");
+
+    /// <summary>
+    /// The half a DERIVATION can prove soundly, kept as a check rather than promoted to the
+    /// definition: every status a delivery path can claim or admit holds a shippable artifact, so
+    /// every one of them must be reset by a mapping edit. It is a necessary condition and not a
+    /// sufficient one — it does NOT contain <c>delivery_held</c> (the release rewrites the order to
+    /// <c>ready_to_deliver</c> before enqueuing, so no claim set ever names the held status), which
+    /// is precisely why the reset set is enumerated and guarded for totality instead of derived from
+    /// these.
+    /// </summary>
+    [Fact]
+    public void MappingEditReset_CoversEveryStatusADeliveryPathCanClaimOrAdmit()
+    {
+        var claimable = new[]
+            {
+                OrderStatusMachine.ClaimableForDispatchFrom,
+                OrderStatusMachine.ClaimableForAutomaticDispatchFrom,
+                OrderStatusMachine.ClaimableForRetryFrom,
+                OrderStatusMachine.RedeliverableFrom,
+                OrderStatusMachine.RetryableFrom,
+                OrderStatusMachine.RequeueableFrom,
+                OrderStatusMachine.HoldableForBillingFrom,
+            }
+            .SelectMany(s => s)
+            .ToHashSet(StringComparer.Ordinal);
+
+        claimable.Should().HaveCountGreaterThan(3,
+            "if the claim sets ever read empty this must fail rather than assert over nothing");
+
+        OrderStatusMachine.MappingEditInvalidatesArtifactFrom.Should().Contain(claimable,
+            "a status a delivery path can claim ships the STORED artifact without re-transforming, " +
+            "so a mapping edit made in it must invalidate that artifact first");
+
+        OrderStatusMachine.MappingEditInvalidatesArtifactFrom.Should().Contain(DeliveryHeld)
+            .And.NotBeSubsetOf(claimable,
+                "delivery_held is the counter-example that makes the derivation unsafe: it is in NO " +
+                "claim set (ReleaseBillingHeldOrdersAsync rewrites it to ready_to_deliver first) and " +
+                "it must still be reset");
+    }
+
+    /// <summary>
+    /// The residual is exactly <c>delivering</c>. Adding a second member silences a real
+    /// stale-artifact path, so it must cost an edit here and an argument in the doc above.
+    /// </summary>
+    [Fact]
+    public void MappingEditKnownResidual_IsExactlyDelivering()
+        => MappingEditKnownResidual.Should().BeEquivalentTo(new[] { Delivering });
+
     /// <summary>A stand-in for a future <c>OrderStatusConstants</c>, carrying one status nobody listed.</summary>
     private static class SyntheticStatusConstants
     {
