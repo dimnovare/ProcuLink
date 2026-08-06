@@ -229,7 +229,9 @@ builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 
 // ── Wave 4 reliability/observability: worker-health alert sweep + retention ──
 // The recurring jobs are scheduled in Worker.cs; these are their DI deps.
-// Alert sink is Sentry-backed and a safe no-op when Sentry DSN is unset.
+// Alerts fan out to Sentry AND email; each is a no-op when unconfigured, and each reports that it
+// delivered nothing rather than claiming success. StartupConfigurationValidator refuses to boot
+// this host in Production with no working destination at all.
 builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
 // WP-37 "page the founder" — the whole alerting graph: the recurring sweep, the probe behind its
 // three extra conditions, the tunables, and the transports the alerts route to. It lives in
