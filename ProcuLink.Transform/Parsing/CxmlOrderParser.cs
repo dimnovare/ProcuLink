@@ -91,7 +91,7 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
             throw new CxmlParseException("Required attribute orderID is missing on <OrderRequestHeader>.");
 
         var orderDateStr = headerEl.Attribute("orderDate")?.Value;
-        var orderDate    = ParseDate(orderDateStr);
+        var (orderDate, orderDateAmbiguous) = ParseDate(orderDateStr);
 
         // ── Currency from Total/Money ──────────────────────────────────────
         var totalMoneyEl = GetDescendant(headerEl, "Total")
@@ -194,7 +194,11 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
             OrderDate: orderDate,
             BuyerName: NullIfEmpty(buyerName),
             Currency:  NullIfEmpty(currency?.ToUpperInvariant()),
-            Lines:     lines);
+            Lines:     lines,
+            // Only reachable via the non-conformant leniency path below — a conformant
+            // ISO 8601 orderDate can never be ambiguous.
+            NeedsReview:  orderDateAmbiguous,
+            ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", orderDateStr));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -214,17 +218,19 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
         parent.Descendants().Where(e =>
             string.Equals(e.Name.LocalName, localName, StringComparison.OrdinalIgnoreCase));
 
-    private static DateTime? ParseDate(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        string[] formats = { "yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-ddTHH:mm:ss", "M/d/yyyy" };
-        if (DateTime.TryParseExact(value.Trim(), formats, CultureInfo.InvariantCulture,
-                DateTimeStyles.None, out var dt))
-            return dt;
-        if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt))
-            return dt;
-        return null;
-    }
+    /// <summary>
+    /// Parse a cXML date via the shared locale-aware reader. <c>orderDate</c> is ISO 8601 by
+    /// the cXML 1.2 DTD, so a CONFORMANT document resolves unambiguously. The hand-rolled
+    /// format array this replaced mishandled non-conformant senders in two ways: it omitted
+    /// <c>d.M.yyyy</c>, so a German "12.06.2026" fell through to <c>DateTime.TryParse</c> and
+    /// came back as <b>6 December</b> — a silent six-month error, and the OPPOSITE of what
+    /// the same input yielded in CSV/XLSX/PDF; and it listed <c>dd/MM/yyyy</c> before
+    /// <c>MM/dd/yyyy</c>, committing to day-first on any ≤12/≤12 date with nothing recording
+    /// that a choice had been made. Returns <c>(value, ambiguous)</c>; the caller flags the
+    /// order when ambiguous.
+    /// </summary>
+    private static (DateTime? Value, bool Ambiguous) ParseDate(string? value) =>
+        DateParsing.TryParseHeaderDate(value);
 
     /// <summary>
     /// Parse a cXML numeric value via the shared locale-aware reader. cXML 1.2 is an

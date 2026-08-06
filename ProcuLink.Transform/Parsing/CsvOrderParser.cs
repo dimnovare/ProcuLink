@@ -120,7 +120,8 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
         var poNumber   = rows.Select(r => r.PoNumber  ).FirstOrDefault(v => !string.IsNullOrEmpty(v));
         var buyerName  = rows.Select(r => r.BuyerName ).FirstOrDefault(v => !string.IsNullOrEmpty(v));
         var currency   = rows.Select(r => r.Currency  ).FirstOrDefault(v => !string.IsNullOrEmpty(v));
-        var orderDate  = ParseDate(rows.Select(r => r.OrderDate).FirstOrDefault(v => !string.IsNullOrEmpty(v)));
+        var orderDateRaw = rows.Select(r => r.OrderDate).FirstOrDefault(v => !string.IsNullOrEmpty(v));
+        var (orderDate, orderDateAmbiguous) = DateParsing.TryParseHeaderDate(orderDateRaw);
 
         // Decide the decimal convention from the WHOLE FILE before reading any single cell.
         // "1.000" is one thousand in Germany and one in the UK — no cell can answer that
@@ -163,19 +164,12 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
             autoLineNum++;
         }
 
-        return new ParsedOrder(poNumber, orderDate, buyerName, currency, lines);
-    }
-
-    private static DateTime? ParseDate(string? value)
-    {
-        if (string.IsNullOrEmpty(value)) return null;
-
-        string[] formats = { "yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-ddTHH:mm:ss", "M/d/yyyy", "d.M.yyyy" };
-        if (DateTime.TryParseExact(value, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-            return dt;
-        if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt))
-            return dt;
-        return null;
+        return new ParsedOrder(poNumber, orderDate, buyerName, currency, lines,
+            // A CSV declares nothing about its date ordering, so "03/04/2026" is a genuine
+            // coin-flip. The day-first reading is emitted, but the order is flagged so a
+            // human confirms it rather than the guess shipping silently.
+            NeedsReview:  orderDateAmbiguous,
+            ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", orderDateRaw));
     }
 
     private static string? NullIfEmpty(string? value) =>

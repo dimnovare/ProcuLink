@@ -49,7 +49,7 @@ public sealed class XlsxOrderParser : IPurchaseOrderParser
             orderDateStr ??= GetColumnValue(rows[i], headerMap, "OrderDate");
         }
 
-        var orderDate = ParseDate(orderDateStr);
+        var (orderDate, orderDateAmbiguous) = DateParsing.TryParseHeaderDate(orderDateStr);
 
         // Parse data rows
         var dataRows = rows.Skip(1).Where(r => !r.IsEmpty()).ToList();
@@ -110,7 +110,12 @@ public sealed class XlsxOrderParser : IPurchaseOrderParser
             autoLineNum++;
         }
 
-        return Task.FromResult(new ParsedOrder(poNumber, orderDate, buyerName, currency, lines));
+        return Task.FromResult(new ParsedOrder(poNumber, orderDate, buyerName, currency, lines,
+            // A text-typed date cell declares no ordering: "03/04/2026" is a genuine coin-flip.
+            // (A date-TYPED cell never reaches here — ClosedXML hands those back already
+            // resolved, so this only flags the string path that carries the defect.)
+            NeedsReview:  orderDateAmbiguous,
+            ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", orderDateStr)));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -206,15 +211,4 @@ public sealed class XlsxOrderParser : IPurchaseOrderParser
         }
     }
 
-    private static DateTime? ParseDate(string? value)
-    {
-        if (string.IsNullOrEmpty(value)) return null;
-
-        string[] formats = { "yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-ddTHH:mm:ss", "M/d/yyyy", "d.M.yyyy" };
-        if (DateTime.TryParseExact(value, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-            return dt;
-        if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt))
-            return dt;
-        return null;
-    }
 }
