@@ -10,6 +10,7 @@ using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services.StarterTemplates;
 using ProcuLink.Core.Canonical;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Detection;
@@ -1039,16 +1040,19 @@ public class SuppliersController : ControllerBase
         }
 
         // ── URL-based branches — auth never in the URL ─────────────────────────────
+        // The TLS half of the verdict is deferred until AFTER the SSRF guard below, so an
+        // unreachable internal host still answers "host_not_allowed": telling an operator to use
+        // https for 169.254.169.254 would be true and useless, and the SSRF tests assert exactly
+        // that code, so letting a TLS message win there would also stop them proving SSRF works.
+        var urlPolicy = OutboundUrlVerdict.Allow();
         if (isUrlBased)
         {
             if (string.IsNullOrWhiteSpace(request.Url))
                 return BadRequest(new { error = "URL is required for http, https, and vendor connectors." });
-            if (!Uri.TryCreate(request.Url.Trim(), UriKind.Absolute, out var url)
-                || (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))
-                return BadRequest(new { error = "URL must be an absolute http or https URL." });
-            // SECURITY: credentials must never live in the URL (they would leak to logs/Sentry/db).
-            if (!string.IsNullOrEmpty(url.UserInfo))
-                return BadRequest(new { error = "credentials_in_url_not_allowed" });
+
+            urlPolicy = OutboundUrlPolicy.Inspect(request.Url, "Catalog feed URL");
+            if (!urlPolicy.Allowed && urlPolicy.ErrorCode != OutboundUrlPolicy.ErrorInsecureTransport)
+                return BadRequest(new { error = urlPolicy.ErrorCode, message = urlPolicy.Message });
 
             if (isHttp)
             {
@@ -1059,6 +1063,17 @@ public class SuppliersController : ControllerBase
                 var httpMethod = request.HttpMethod?.Trim().ToUpperInvariant();
                 if (httpMethod is not (null or "" or "GET"))
                     return BadRequest(new { error = "Only the GET http method is supported." });
+
+                // The OAuth2 client-credentials exchange POSTs the client id AND client secret to
+                // tokenUrl, so a cleartext tokenUrl leaks the secret itself — not merely the
+                // catalog it protects. It was never inspected at save, only at fetch time, and
+                // then only by the SSRF guard.
+                if (request.AuthConfig?.TokenUrl is { Length: > 0 } tokenUrl)
+                {
+                    var tokenPolicy = OutboundUrlPolicy.Inspect(tokenUrl, "OAuth token URL");
+                    if (!tokenPolicy.Allowed)
+                        return BadRequest(new { error = tokenPolicy.ErrorCode, message = tokenPolicy.Message });
+                }
             }
             else if (protocol == "logicom")
             {
@@ -1118,6 +1133,11 @@ public class SuppliersController : ControllerBase
             if (!guardResult.Allowed)
                 return BadRequest(new { error = "host_not_allowed" });
         }
+
+        // Deferred from above: shape, scheme and userinfo were already accepted, and the host is
+        // reachable, so the only verdict that can still be pending is the TLS one.
+        if (!urlPolicy.Allowed)
+            return BadRequest(new { error = urlPolicy.ErrorCode, message = urlPolicy.Message });
 
         var result = await settings.UpsertAsync(orgId, id, request, ct);
         return Ok(new { source = result.Source, syncEnqueued = result.SyncEnqueued });

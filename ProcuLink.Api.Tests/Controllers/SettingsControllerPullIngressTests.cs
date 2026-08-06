@@ -7,6 +7,7 @@ using Moq;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
@@ -414,5 +415,63 @@ public class SettingsControllerPullIngressTests
         var body = ((OkObjectResult)result).Value.Should().BeOfType<SftpIngressResponse>().Subject;
         body.Host.Should().BeEmpty("the current org has no config; the other org's row must not leak");
         body.Enabled.Should().BeFalse();
+    }
+
+    // ── S3 ingress transport security (TLS) ───────────────────────────────────
+
+    /// <summary>
+    /// A custom ServiceUrl points the S3 client at a tenant-chosen endpoint (R2, MinIO, or any
+    /// S3-compatible server). Over plain http the SigV4-signed request and every object fetched
+    /// through it — the purchase order files themselves — cross the network in the clear.
+    /// </summary>
+    [Fact]
+    public async Task UpdateS3_CleartextServiceUrl_Returns400_RequiresTls()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpdateS3(
+            S3(defaultSupplierId: h.Supplier.Id, serviceUrl: "http://s3.supplier.example"),
+            CancellationToken.None);
+
+        var bad = result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        ((string)((dynamic)bad.Value!).error).Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
+    }
+
+    [Fact]
+    public async Task UpdateS3_HttpsServiceUrl_IsAccepted()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpdateS3(
+            S3(defaultSupplierId: h.Supplier.Id, serviceUrl: "https://s3.supplier.example"),
+            CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+    }
+
+    /// <summary>A local MinIO on loopback is the normal way to develop against S3 ingress.</summary>
+    [Fact]
+    public async Task UpdateS3_LoopbackServiceUrl_IsAcceptedForLocalDevelopment()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpdateS3(
+            S3(defaultSupplierId: h.Supplier.Id, serviceUrl: "http://127.0.0.1:9000"),
+            CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+    }
+
+    /// <summary>The standard AWS endpoint (no ServiceUrl) is https by construction — unchanged.</summary>
+    [Fact]
+    public async Task UpdateS3_NoServiceUrl_IsUnaffected()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpdateS3(
+            S3(defaultSupplierId: h.Supplier.Id, serviceUrl: null),
+            CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
     }
 }

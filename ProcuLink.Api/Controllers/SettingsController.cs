@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
@@ -220,6 +221,13 @@ public sealed class SettingsController : ControllerBase
                 var urlGuard = await _guard.ValidateAsync(request.ServiceUrl, ct);
                 if (!urlGuard.Allowed)
                     return BadRequest(new { error = "host_not_allowed" });
+
+                // TLS after the SSRF verdict, so an unreachable internal endpoint still answers
+                // host_not_allowed. Over plain http the SigV4-signed request and every purchase
+                // order file fetched through it cross the network in the clear.
+                var urlPolicy = OutboundUrlPolicy.Inspect(request.ServiceUrl, "S3 endpoint URL");
+                if (!urlPolicy.Allowed)
+                    return BadRequest(new { error = urlPolicy.ErrorCode, message = urlPolicy.Message });
             }
         }
 
