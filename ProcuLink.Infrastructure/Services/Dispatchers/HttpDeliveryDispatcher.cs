@@ -193,6 +193,12 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
     /// </summary>
     private static string BuildFailureMessage(int code, string body)
     {
+        // The guarded transport refuses redirects: the target is never re-run through the SSRF
+        // guard, and .NET replays the body (307/308) and any custom credential header (all 3xx) to
+        // it. Tell the operator that, rather than reporting an opaque error status.
+        if (OutboundRedirectPolicy.IsRedirect(code))
+            return OutboundRedirectPolicy.DescribeRefusal(code);
+
         var opening = $"HTTP {code}: supplier endpoint returned an error.";
         var summary = SupplierResponseClassification.SummarizeResponseBody(body);
 
