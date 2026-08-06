@@ -43,11 +43,11 @@ public sealed class SupplierSuggestionPostgresFixture(PostgresContainerFixture p
             Timeout = 10,
         };
 
-        // Two verified facts, not a diagnosis: `docker inspect` shows Testcontainers publishing the
-        // port on IPv4 only ("0.0.0.0:55267->5432/tcp", no "[::]" mapping), and on this Windows host
-        // Dns.GetHostAddresses("localhost") returns ::1 first. Pinning the loopback literal removes
-        // one variable from a connection that has no reason to depend on resolver order. Applied
-        // only when the host already IS loopback, so a remote DOCKER_HOST keeps working.
+        // Kept as a no-op guard. PostgresContainerFixture already pins the loopback literal on the
+        // one shared container, for the reason this class first discovered: `docker inspect` shows
+        // Testcontainers publishing the port on IPv4 only ("0.0.0.0:55267->5432/tcp", no "[::]"
+        // mapping), and on this Windows host Dns.GetHostAddresses("localhost") returns ::1 first.
+        // Applied only when the host already IS loopback, so a remote DOCKER_HOST keeps working.
         if (string.Equals(csb.Host, "localhost", StringComparison.OrdinalIgnoreCase))
             csb.Host = "127.0.0.1";
 
@@ -55,9 +55,10 @@ public sealed class SupplierSuggestionPostgresFixture(PostgresContainerFixture p
 
         await WaitUntilAcceptingTcpAsync();
 
-        // Runs the real AddSupplierAutoDetect migration — the new table, the four supplier identity
-        // columns, the two sender-domain columns, the (org_id, code) index and the partial unique
-        // index all have to actually apply for anything below to run at all.
+        // The real AddSupplierAutoDetect migration still has to have applied — the new table, the
+        // four supplier identity columns, the two sender-domain columns, the (org_id, code) index
+        // and the partial unique index all have to exist for anything below to run at all. It runs
+        // once, against the fixture's template database, and this database is a clone of it.
     }
 
     /// <summary>

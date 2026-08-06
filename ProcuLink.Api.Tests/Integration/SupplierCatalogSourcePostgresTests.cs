@@ -32,6 +32,8 @@ public sealed class SupplierCatalogSourcePostgresTests(PostgresContainerFixture 
             Pooling = false,
         }.ConnectionString;
 
+        // The schema — including AddSupplierCatalogSources, which everything below needs — arrives
+        // with the database: the fixture migrates a template once and this is a clone of it.
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(connectionString)
             .Options;
