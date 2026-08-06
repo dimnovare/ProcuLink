@@ -140,8 +140,8 @@ public class UblInvoiceParserTests
         // THE DEFECT, VERBATIM: both a blank <IssueDate> and an unparseable one returned
         // DateOnly.FromDateTime(DateTime.UtcNow) — so an invoice with a corrupt date was
         // indistinguishable from one genuinely issued today.
+        // Both cases now fail loudly, so neither can return ANY date — today's least of all.
         var parser = new UblInvoiceParser();
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         await using var blank = ToStream(WithIssueDate(""));
         var blankFailure = await Assert.ThrowsAsync<InvoiceParseException>(
@@ -155,7 +155,6 @@ public class UblInvoiceParserTests
         garbageFailure.Message.Should().Contain("IssueDate");
         garbageFailure.Message.Should().Contain("not-a-date",
             "the operator needs the token that could not be read, not just the element");
-        _ = today; // referenced to document what must NOT be returned
     }
 
     [Fact]

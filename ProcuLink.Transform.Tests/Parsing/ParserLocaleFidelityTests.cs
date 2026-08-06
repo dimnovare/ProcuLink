@@ -132,6 +132,13 @@ public class ParserLocaleFidelityTests
             .ParseAsync(ToStream(Csv(delimiter, quantity: "2", unitPrice: "1.000")),
                         CancellationToken.None);
 
+        // Unconditional first, so the branch below cannot pass by never running: the row must
+        // really have been read, and its unambiguous quantity must be right under every
+        // delimiter. Only the price is the undecidable value under test.
+        order.Lines.Should().ContainSingle();
+        order.Lines[0].Quantity.Should().Be(2m,
+            "an unambiguous quantity parses identically under every delimiter");
+
         if (delimiter == ";")
         {
             order.Lines[0].UnitPrice.Should().Be(1000m,
