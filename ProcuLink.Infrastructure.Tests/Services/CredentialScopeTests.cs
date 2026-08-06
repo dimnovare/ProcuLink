@@ -47,17 +47,6 @@ public class CredentialScopeTests
         a.ToAssociatedData().Should().NotEqual(b.ToAssociatedData());
     }
 
-    // The space separators exist so no two distinct tuples can collide by concatenation.
-    // Without them, purpose "ab" + scope "cd" and purpose "abc" + scope "d" would agree.
-    [Fact]
-    public void ToAssociatedData_SeparatorsPreventConcatenationCollisions()
-    {
-        var a = new CredentialScope(OrgA, "ab", SupX);
-        var b = new CredentialScope(OrgA, "abc", SupX);
-
-        a.ToAssociatedData().Should().NotEqual(b.ToAssociatedData());
-    }
-
     [Fact]
     public void ToAssociatedData_StartsWithTheDomainSeparator()
     {
@@ -85,7 +74,7 @@ public class CredentialScopeTests
     }
 
     [Fact]
-    public void ToAssociatedData_PurposeContainingNul_Throws()
+    public void ToAssociatedData_PurposeContainingSpace_Throws()
     {
         var scope = new CredentialScope(OrgA, "bad purpose", Guid.Empty);
 

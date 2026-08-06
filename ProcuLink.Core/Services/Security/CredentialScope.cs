@@ -31,8 +31,12 @@ public readonly record struct CredentialScope(Guid OrgId, string Purpose, Guid S
 
     /// <summary>
     /// The associated-data bytes: <c>domain SP orgId SP purpose SP scopeId</c>, SP being a space.
-    /// Guids are written as 32 fixed-length hex characters ("N"), and the space separators keep the
-    /// concatenation unambiguous, so no two distinct tuples can produce the same bytes.
+    /// Guids are written as 32 fixed-length hex characters ("N"), and Purpose is the only
+    /// variable-length field, so the field boundaries are unambiguous and no two distinct tuples can
+    /// produce the same bytes. The space separators are defence in depth: they keep the AAD readable
+    /// in a log, and they become load-bearing the moment a future credential kind uses a
+    /// variable-length scope identifier instead of a Guid. The Purpose guard below is what keeps
+    /// that promise true.
     /// </summary>
     public byte[] ToAssociatedData()
     {

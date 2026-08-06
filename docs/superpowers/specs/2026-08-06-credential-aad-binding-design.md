@@ -113,10 +113,11 @@ AAD = "proculink.cred.v2" ␠ orgId (32 hex) ␠ purpose (UTF-8) ␠ scopeId (32
 ```
 
 `purpose` is a compile-time constant naming the credential kind. `scopeId` identifies the owning
-record, or `Guid.Empty` for organisation-level singletons. The space separators keep the
-concatenation unambiguous — no field can contain a space, since the purposes are dotted lowercase
-and "N"-format Guids are hex only — so no two distinct tuples can produce the same byte string.
-This binds
+record, or `Guid.Empty` for organisation-level singletons. Guids are encoded as 32 fixed-length
+hex characters ("N"), and Purpose is the only variable-length field, so the field boundaries are
+unambiguous and no two distinct tuples can produce the same byte string. The space separators are
+defence in depth: they keep the AAD readable in a log, and they become load-bearing the moment a
+future credential kind uses a variable-length scope identifier instead of a Guid. This binds
 strictly more than tenant and supplier: a supplier's delivery credentials cannot be substituted for
 that same supplier's cXML shared secret.
 

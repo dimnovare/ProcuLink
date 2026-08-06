@@ -99,17 +99,6 @@ public class CredentialScopeTests
         a.ToAssociatedData().Should().NotEqual(b.ToAssociatedData());
     }
 
-    // The space separators exist so no two distinct tuples can collide by concatenation.
-    // Without them, purpose "ab" + scope "cd" and purpose "abc" + scope "d" would agree.
-    [Fact]
-    public void ToAssociatedData_SeparatorsPreventConcatenationCollisions()
-    {
-        var a = new CredentialScope(OrgA, "ab", SupX);
-        var b = new CredentialScope(OrgA, "abc", SupX);
-
-        a.ToAssociatedData().Should().NotEqual(b.ToAssociatedData());
-    }
-
     [Fact]
     public void ToAssociatedData_StartsWithTheDomainSeparator()
     {
@@ -137,7 +126,7 @@ public class CredentialScopeTests
     }
 
     [Fact]
-    public void ToAssociatedData_PurposeContainingNul_Throws()
+    public void ToAssociatedData_PurposeContainingSpace_Throws()
     {
         var scope = new CredentialScope(OrgA, "bad purpose", Guid.Empty);
 
@@ -253,8 +242,12 @@ public readonly record struct CredentialScope(Guid OrgId, string Purpose, Guid S
 
     /// <summary>
     /// The associated-data bytes: <c>domain SP orgId SP purpose SP scopeId</c>, SP being a space.
-    /// Guids are written as 32 fixed-length hex characters ("N"), and the space separators keep the
-    /// concatenation unambiguous, so no two distinct tuples can produce the same bytes.
+    /// Guids are written as 32 fixed-length hex characters ("N"), and Purpose is the only
+    /// variable-length field, so the field boundaries are unambiguous and no two distinct tuples can
+    /// produce the same bytes. The space separators are defence in depth: they keep the AAD readable
+    /// in a log, and they become load-bearing the moment a future credential kind uses a
+    /// variable-length scope identifier instead of a Guid. The Purpose guard below is what keeps
+    /// that promise true.
     /// </summary>
     public byte[] ToAssociatedData()
     {
@@ -337,21 +330,20 @@ public sealed class CredentialUnbindableException : Exception
 
 Run: `dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~CredentialScopeTests"`
 
-Expected: PASS, 10 tests.
+Expected: PASS, 9 tests.
 
-- [ ] **Step 5: Mutation-check the separator guard**
+- [ ] **Step 5: Mutation-check the domain-separator guard**
 
 Edit `CredentialScope.ToAssociatedData` and remove the space separators, so the interpolation reads
 `$"{DomainSeparator}{OrgId:N}{Purpose}{ScopeId:N}"`.
 
 Run: `dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~CredentialScopeTests"`
 
-Expected: `ToAssociatedData_SeparatorsPreventConcatenationCollisions` and
-`ToAssociatedData_StartsWithTheDomainSeparator` FAIL.
+Expected: `ToAssociatedData_StartsWithTheDomainSeparator` FAIL. Only this test is sensitive to the separator guard because the field boundaries are unambiguous due to the fixed-width Guid encoding.
 
 Restore the separators **by editing the file back** to the Step 3 version. Do not use `git checkout`.
 
-Run the tests again. Expected: PASS, 10 tests.
+Run the tests again. Expected: PASS, 9 tests.
 
 - [ ] **Step 6: Commit**
 
