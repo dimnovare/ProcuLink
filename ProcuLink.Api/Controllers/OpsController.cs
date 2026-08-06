@@ -158,9 +158,9 @@ public sealed class OpsController : ControllerBase
                 error = $"Order must be in {DescribeAdmittedStatuses()} status to requeue delivery (current: '{order.Status}')."
             });
 
-        var artifact = order.OutboundArtifacts
-            .OrderByDescending(a => a.CreatedAt)
-            .FirstOrDefault();
+        // WP-35: newest DELIVERABLE, not newest. A re-processed preview is the newest artifact by
+        // construction and must never be what an escalation puts in front of the supplier.
+        var artifact = OutboundArtifactSelection.NewestDeliverable(order.OutboundArtifacts);
 
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before requeuing delivery." });

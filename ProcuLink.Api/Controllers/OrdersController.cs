@@ -2099,9 +2099,9 @@ public sealed class OrdersController : ControllerBase
                       + $"(current: '{order.Status}')."
             });
 
-        var artifact = order.OutboundArtifacts
-            .OrderByDescending(a => a.CreatedAt)
-            .FirstOrDefault();
+        // WP-35: newest DELIVERABLE, not newest. A re-processed preview is the newest artifact by
+        // construction; "Send again" must still mean the output this order actually produced.
+        var artifact = OutboundArtifactSelection.NewestDeliverable(order.OutboundArtifacts);
 
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before redelivering." });
@@ -2328,9 +2328,8 @@ public sealed class OrdersController : ControllerBase
                       + $"(current: '{order.Status}')."
             });
 
-        var artifact = order.OutboundArtifacts
-            .OrderByDescending(a => a.CreatedAt)
-            .FirstOrDefault();
+        // WP-35: newest DELIVERABLE, not newest — same reason as Redeliver above.
+        var artifact = OutboundArtifactSelection.NewestDeliverable(order.OutboundArtifacts);
 
         if (artifact is null)
             return BadRequest(new { error = "No outbound artifact found. Transform the order before retrying delivery." });

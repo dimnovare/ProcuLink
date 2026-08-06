@@ -279,6 +279,46 @@ public sealed class ConnectionsController : ControllerBase
         return result is null ? NotFound() : Ok(result);
     }
 
+    /// <summary>
+    /// WP-35 — ACT on a replay result: re-process ONE historical order under this revision and keep
+    /// the output. The re-processed artifact is APPENDED; every artifact the order already held
+    /// stays exactly as it was, because the old one is the evidence of what was actually sent.
+    ///
+    /// <para><b>This does not deliver.</b> Producing the output an operator asked to see is not a
+    /// decision to send it — delivery stays a separate, explicit action, and the artifact is stored
+    /// outside the deliverable namespace so no send path (redeliver, retry, ops requeue, the
+    /// stranded sweep) can pick it up. The order's status and pin are untouched.</para>
+    ///
+    /// <para>Idempotent: repeating the call — a double submit, or a background retry — returns the
+    /// same artifact rather than appending a second copy.</para>
+    /// </summary>
+    [HttpPost("{connectionId:guid}/revisions/{revisionId:guid}/reprocess")]
+    [ProducesResponseType(typeof(ReprocessResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> Reprocess(
+        Guid connectionId, Guid revisionId, [FromBody] ReprocessRequest? request, CancellationToken ct)
+    {
+        if (request is null || request.OrderId == Guid.Empty)
+            return BadRequest(new { error = "orderId is required." });
+
+        var outcome = await _replay.ReprocessAsync(
+            OrgId, connectionId, revisionId, request.OrderId, CurrentUser, ct);
+
+        return outcome.Status switch
+        {
+            ReprocessStatus.RevisionNotFound => NotFound(),
+            ReprocessStatus.OrderNotFound    => NotFound(),
+            // The request was well-formed and the order real; this revision simply cannot produce a
+            // document for it. 422 keeps that distinguishable from "no such order".
+            ReprocessStatus.RenderFailed => UnprocessableEntity(new { error = outcome.Error }),
+            ReprocessStatus.StorageUnavailable => StatusCode(
+                StatusCodes.Status503ServiceUnavailable, new { error = outcome.Error }),
+            _ => Ok(outcome.Response),
+        };
+    }
+
     // ── mappers ──────────────────────────────────────────────────────────────
     private static ConnectionRevisionSummaryDto ToRevisionSummary(SupplierConnectionRevision r) => new(
         r.Id, r.VersionNo, r.Status, r.EffectiveFrom, r.EffectiveTo, r.PublishedAt, r.CreatedAt);
