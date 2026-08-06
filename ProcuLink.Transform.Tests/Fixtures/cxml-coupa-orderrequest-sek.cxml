@@ -1,19 +1,19 @@
 <!DOCTYPE cXML SYSTEM "http://xml.cxml.org/schemas/cXML/1.2.014/cXML.dtd"[]>
-<cXML xml:lang="en-US" payloadID="REDACTED" timestamp="2026-06-14T01:42:54-04:00">
+<cXML xml:lang="en-US" payloadID="1781415773.152400@buyer.example.com" timestamp="2026-06-14T01:42:54-04:00">
   <Header>
     <From>
       <Credential domain="Networkid">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>TestBuyer_SE</Identity>
       </Credential>
     </From>
     <To>
       <Credential domain="Networkid">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>TestSupplier_SE</Identity>
       </Credential>
     </To>
     <Sender>
       <Credential domain="Networkid">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>TestBuyer_SE</Identity>
         <SharedSecret>REDACTED</SharedSecret>
       </Credential>
       <UserAgent>Coupa Procurement 1.0</UserAgent>
@@ -27,30 +27,30 @@
         </Total>
         <ShipTo>
           <Address isoCountryCode="SE" addressID="SWZ">
-            <Name xml:lang="en">REDACTED</Name>
+            <Name xml:lang="en">Test Buyer Sweden AB</Name>
             <PostalAddress name="default">
-              <DeliverTo>REDACTED</DeliverTo>
-              <Street>REDACTED</Street>
+              <DeliverTo>Test Användare</DeliverTo>
+              <Street>Testgatan 14</Street>
               <City>Stockholm</City>
               <State>Stockholm</State>
-              <PostalCode>REDACTED</PostalCode>
+              <PostalCode>111 11</PostalCode>
               <Country isoCountryCode="SE">Sweden</Country>
             </PostalAddress>
-            <Email name="default">REDACTED</Email>
+            <Email name="default">test.user@example.com</Email>
           </Address>
         </ShipTo>
         <BillTo>
           <Address isoCountryCode="SE" addressID="57463">
-            <Name xml:lang="en">REDACTED</Name>
+            <Name xml:lang="en">Test Buyer Sweden AB</Name>
             <PostalAddress name="default">
-              <DeliverTo>REDACTED</DeliverTo>
-              <Street>REDACTED</Street>
+              <DeliverTo>Test Användare</DeliverTo>
+              <Street>Testvägen 56</Street>
               <City>Stockholm</City>
               <State></State>
-              <PostalCode>REDACTED</PostalCode>
+              <PostalCode>105 55</PostalCode>
               <Country isoCountryCode="SE">Sweden</Country>
             </PostalAddress>
-            <Email name="default">REDACTED</Email>
+            <Email name="default">test.user@example.com</Email>
           </Address>
         </BillTo>
         <Shipping>
@@ -59,10 +59,10 @@
         </Shipping>
         <PaymentTerm payInNumberOfDays="30" />
         <Contact role="endUser">
-          <Name xml:lang="en">REDACTED</Name>
-          <Email name="default">REDACTED</Email>
+          <Name xml:lang="en">Test Användare</Name>
+          <Email name="default">test.user@example.com</Email>
         </Contact>
-        <Extrinsic name="REDACTED" />
+        <Extrinsic name="buyers_india_gst_registration" />
       </OrderRequestHeader>
       <ItemOut quantity="1" lineNumber="1">
         <ItemID>
@@ -95,5 +95,5 @@
       </ItemOut>
     </OrderRequest>
   </Request>
-  <EDICustomerID>00000000-0000-0000-0000-000000000000</EDICustomerID>
+  <EDICustomerID>00000000-0000-4000-8000-000000000000</EDICustomerID>
 </cXML>
