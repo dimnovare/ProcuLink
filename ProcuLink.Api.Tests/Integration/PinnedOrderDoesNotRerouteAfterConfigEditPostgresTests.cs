@@ -10,7 +10,6 @@ using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Conformance;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -55,14 +54,14 @@ namespace ProcuLink.Api.Tests.Integration;
 /// IDENTICAL.</para>
 /// </summary>
 [Collection("postgres-container")]
-public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsyncLifetime
+public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
     private const string OldUrl     = "https://supplier.test/v1-endpoint";
     private const string NewUrl     = "https://supplier.test/v2-endpoint";
     private const string OldUrlJson = $$"""{"url":"{{OldUrl}}","method":"POST"}""";
     private const string NewUrlJson = $$"""{"url":"{{NewUrl}}","method":"POST"}""";
 
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
 
     public async Task InitializeAsync()
@@ -70,16 +69,9 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_revauth_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_revauth");
 
-        await _pg.StartAsync();
-
-        var connectionString = new NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var connectionString = new NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
@@ -87,15 +79,11 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(connectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     // ── (a1) THE PROOF ────────────────────────────────────────────────────────

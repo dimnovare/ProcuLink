@@ -373,57 +373,38 @@ public sealed class DockerRequiredTheoryAttribute : TheoryAttribute
 }
 
 [Collection("postgres-container")]
-public sealed class EndToEndPipelineTests : IAsyncLifetime
+public sealed class EndToEndPipelineTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private E2EPipelineFactory? _factory;
 
     public async Task InitializeAsync()
     {
         // When Docker is unreachable the single test is skipped by the attribute;
-        // do not attempt to start a container.
+        // do not ask the shared container for a database.
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_e2e_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        // The schema arrives WITH the database: PostgresContainerFixture migrates a template
+        // once and clones it. That still satisfies the reason this class migrated by hand —
+        // Program.cs kicks off a fire-and-forget MigrateAsync the moment the host starts (the
+        // first time factory.Services is touched), PostgreSQL enum `CREATE TYPE` is not
+        // protected by EF's migration history advisory lock, so two concurrent MigrateAsync
+        // calls race and one dies with 23505 on pg_type. The schema exists before the host is
+        // ever built, so the background MigrateAsync finds nothing to apply (no concurrent DDL).
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_e2e");
 
-        await _pg.StartAsync();
-
-        // Disable connection pooling for the whole run. Program.cs runs a
-        // fire-and-forget MigrateAsync on ApplicationStarted; with pooling on,
-        // that background connection is multiplexed onto the same pooled physical
-        // connection the test scopes use, and the interleaving corrupts the Npgsql
-        // protocol ("BindComplete while expecting ReadyForQueryMessage"). With
-        // Pooling=false every DbContext gets its own dedicated connection that is
-        // opened/closed per use, so the background task can never share — and thus
-        // never corrupt — a connection with the test. Test-only; production config
-        // is untouched.
-        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        // Disable connection pooling for the whole run. With pooling on, that background
+        // migration connection is multiplexed onto the same pooled physical connection the test
+        // scopes use, and the interleaving corrupts the Npgsql protocol ("BindComplete while
+        // expecting ReadyForQueryMessage"). With Pooling=false every DbContext gets its own
+        // dedicated connection that is opened/closed per use, so the background task can never
+        // share — and thus never corrupt — a connection with the test. Test-only; production
+        // config is untouched.
+        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
-
-        // Apply the full migration set to the fresh container DB *before* the
-        // WebApplicationFactory host is ever started. Program.cs kicks off the
-        // fire-and-forget MigrateAsync the moment the host starts (the first time
-        // factory.Services is touched). PostgreSQL enum `CREATE TYPE` is not
-        // protected by EF's migration history advisory lock, so two concurrent
-        // MigrateAsync calls race and one dies with 23505 on pg_type. We avoid the
-        // race entirely: migrate via a standalone context here, so by the time the
-        // host starts the schema already exists and the background MigrateAsync
-        // finds nothing to apply (no concurrent DDL).
-        var options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
-            .UseNpgsql(connectionString)
-            .Options;
-        await using (var migrateDb = new ProcuLinkDbContext(options))
-        {
-            await migrateDb.Database.MigrateAsync();
-        }
 
         _factory = new E2EPipelineFactory(connectionString);
     }
@@ -431,8 +412,7 @@ public sealed class EndToEndPipelineTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         _factory?.Dispose();
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     // ════════════════════════════════════════════════════════════════════════

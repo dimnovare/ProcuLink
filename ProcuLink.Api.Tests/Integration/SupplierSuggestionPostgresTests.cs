@@ -12,7 +12,6 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Detection;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services.Detection;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -27,24 +26,18 @@ namespace ProcuLink.Api.Tests.Integration;
 /// <c>postgres-container</c> collection so it still does not run alongside the other container
 /// classes.</para>
 /// </summary>
-public sealed class SupplierSuggestionPostgresFixture : IAsyncLifetime
+public sealed class SupplierSuggestionPostgresFixture(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     public string? ConnectionString { get; private set; }
 
     public async Task InitializeAsync()
     {
         if (DockerProbe.UnavailableReason is not null) return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_supplier_detect_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
-        await _pg.StartAsync();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_supplier_detect");
 
-        var csb = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var csb = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
             Timeout = 10,
@@ -65,8 +58,6 @@ public sealed class SupplierSuggestionPostgresFixture : IAsyncLifetime
         // Runs the real AddSupplierAutoDetect migration — the new table, the four supplier identity
         // columns, the two sender-domain columns, the (org_id, code) index and the partial unique
         // index all have to actually apply for anything below to run at all.
-        await using var migrateDb = new ProcuLinkDbContext(Options());
-        await migrateDb.Database.MigrateAsync();
     }
 
     /// <summary>
@@ -111,7 +102,7 @@ public sealed class SupplierSuggestionPostgresFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null) await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     public DbContextOptions<ProcuLinkDbContext> Options() =>

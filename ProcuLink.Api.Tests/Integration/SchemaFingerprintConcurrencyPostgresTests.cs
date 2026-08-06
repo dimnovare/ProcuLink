@@ -4,7 +4,6 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services.Detection;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -21,11 +20,11 @@ namespace ProcuLink.Api.Tests.Integration;
 /// Docker-gated; skips where Docker is absent.
 /// </summary>
 [Collection("postgres-container")]
-public sealed class SchemaFingerprintConcurrencyPostgresTests : IAsyncLifetime
+public sealed class SchemaFingerprintConcurrencyPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
     private static readonly string[] LayoutAHeaders = { "po_number", "supplier_code", "sku", "qty", "price" };
 
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
     private Guid _orgId;
 
@@ -34,16 +33,9 @@ public sealed class SchemaFingerprintConcurrencyPostgresTests : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_fp_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_fp");
 
-        await _pg.StartAsync();
-
-        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
@@ -51,15 +43,11 @@ public sealed class SchemaFingerprintConcurrencyPostgresTests : IAsyncLifetime
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(connectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     private static SchemaFingerprintService NewService(ProcuLinkDbContext db) =>

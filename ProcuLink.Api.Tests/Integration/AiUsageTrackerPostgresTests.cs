@@ -2,7 +2,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -16,9 +15,9 @@ namespace ProcuLink.Api.Tests.Integration;
 /// Hangfire job. Docker-gated; skips where Docker is absent.
 /// </summary>
 [Collection("postgres-container")]
-public sealed class AiUsageTrackerPostgresTests : IAsyncLifetime
+public sealed class AiUsageTrackerPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
 
     public async Task InitializeAsync()
@@ -26,16 +25,9 @@ public sealed class AiUsageTrackerPostgresTests : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_aiusage_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_aiusage");
 
-        await _pg.StartAsync();
-
-        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
@@ -43,15 +35,11 @@ public sealed class AiUsageTrackerPostgresTests : IAsyncLifetime
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(connectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     private static IConfiguration EmptyConfig() =>

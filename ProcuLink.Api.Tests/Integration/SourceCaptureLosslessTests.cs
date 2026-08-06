@@ -13,7 +13,6 @@ using ProcuLink.Infrastructure.Services.Detection;
 using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
 using ProcuLink.Transform.Tokenizing;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -31,9 +30,9 @@ namespace ProcuLink.Api.Tests.Integration;
 /// Docker-gated; skips cleanly where Docker is absent.
 /// </summary>
 [Collection("postgres-container")]
-public sealed class SourceCaptureLosslessTests : IAsyncLifetime
+public sealed class SourceCaptureLosslessTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
 
     public async Task InitializeAsync()
@@ -41,30 +40,19 @@ public sealed class SourceCaptureLosslessTests : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_capture_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_capture");
 
-        await _pg.StartAsync();
-
-        var cs = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var cs = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
 
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>().UseNpgsql(cs).Options;
-
-        await using var migrate = new ProcuLinkDbContext(_options);
-        await migrate.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     // A 3-column header + 2 data rows = 9 source cells.

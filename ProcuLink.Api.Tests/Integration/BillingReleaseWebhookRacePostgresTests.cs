@@ -10,7 +10,6 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -59,9 +58,9 @@ namespace ProcuLink.Api.Tests.Integration;
 /// <c>ExecuteUpdateAsync</c>, neither of which InMemory executes.</para>
 /// </summary>
 [Collection("postgres-container")]
-public sealed class BillingReleaseWebhookRacePostgresTests : IAsyncLifetime
+public sealed class BillingReleaseWebhookRacePostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
 
     public async Task InitializeAsync()
@@ -69,27 +68,16 @@ public sealed class BillingReleaseWebhookRacePostgresTests : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_relrace_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
-
-        await _pg.StartAsync();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_relrace");
 
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
-            .UseNpgsql(_pg.GetConnectionString())
+            .UseNpgsql(_databaseConnectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     private ProcuLinkDbContext NewContext() => new(_options!);
@@ -189,7 +177,7 @@ public sealed class BillingReleaseWebhookRacePostgresTests : IAsyncLifetime
         });
 
         var racingOptions = new DbContextOptionsBuilder<ProcuLinkDbContext>()
-            .UseNpgsql(_pg!.GetConnectionString())
+            .UseNpgsql(_databaseConnectionString)
             .AddInterceptors(interceptor)
             .Options;
 

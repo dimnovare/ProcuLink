@@ -5,7 +5,6 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -22,9 +21,9 @@ namespace ProcuLink.Api.Tests.Integration;
 /// Docker-gated; skips where Docker is absent.
 /// </summary>
 [Collection("postgres-container")]
-public sealed class DeliverySlaConcurrencyPostgresTests : IAsyncLifetime
+public sealed class DeliverySlaConcurrencyPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
 
     public async Task InitializeAsync()
@@ -32,19 +31,12 @@ public sealed class DeliverySlaConcurrencyPostgresTests : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_sla_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
-
-        await _pg.StartAsync();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_sla");
 
         // Pooling=false so each concurrent context opens its OWN physical connection — the claim race
         // is only real when two sweeps hold two connections (a pooled single connection would
         // serialise them and hide the bug the atomic claim must defend against).
-        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
@@ -52,15 +44,11 @@ public sealed class DeliverySlaConcurrencyPostgresTests : IAsyncLifetime
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(connectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     private ProcuLinkDbContext NewContext() => new(_options!);
