@@ -387,7 +387,17 @@ public sealed class ReplayReprocessPostgresTests : IClassFixture<ReplayReprocess
 
     // ── (4) refusals ──────────────────────────────────────────────────────────
 
-    /// <summary>An order belonging to another org is not re-processable, and writes nothing.</summary>
+    /// <summary>
+    /// A caller from another org gets nothing and writes nothing.
+    ///
+    /// <para>The assertion is deliberately about the OUTCOME, not about which of the three
+    /// org-scoped lookups refused first. An earlier version asserted
+    /// <see cref="ReprocessStatus.RevisionNotFound"/> exactly, and a mutation removing
+    /// <c>OrgId</c> from the revision query survived it — the connection check refused instead, so
+    /// the test was pinning one line while appearing to pin the property. Scoped this way, the test
+    /// stays green while any single scope defends the order, and goes red only when tenant
+    /// isolation is actually gone, which is the thing worth pinning.</para>
+    /// </summary>
     [DockerRequiredFact]
     public async Task Reprocess_ForAnOrderInAnotherOrg_RefusesAndWritesNothing()
     {
@@ -398,11 +408,13 @@ public sealed class ReplayReprocessPostgresTests : IClassFixture<ReplayReprocess
         {
             var outcome = await NewReplay(db, storage).ReprocessAsync(
                 Guid.NewGuid(), seed.ConnectionId, seed.DraftRevisionId, seed.OrderId, "attacker", default);
-            Assert.Equal(ReprocessStatus.RevisionNotFound, outcome.Status);
+            Assert.NotEqual(ReprocessStatus.Ok, outcome.Status);
+            Assert.Null(outcome.Response);
         }
 
         await using var verify = NewContext();
         Assert.Equal(1, await verify.OutboundArtifacts.CountAsync(a => a.OrderId == seed.OrderId));
+        Assert.Equal(OriginalBytes, await storage.ReadAsync(seed.OriginalFileKey));
     }
 
     /// <summary>
