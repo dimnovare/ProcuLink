@@ -109,12 +109,14 @@ silently degrading to an unauthenticated send.
 ### Associated data
 
 ```
-AAD = "proculink.cred.v2" ‖ 0x00 ‖ orgId (16 bytes) ‖ 0x00 ‖ purpose (UTF-8) ‖ 0x00 ‖ scopeId (16 bytes)
+AAD = "proculink.cred.v2" ␠ orgId (32 hex) ␠ purpose (UTF-8) ␠ scopeId (32 hex)
 ```
 
 `purpose` is a compile-time constant naming the credential kind. `scopeId` identifies the owning
-record, or `Guid.Empty` for organisation-level singletons. The `0x00` separators keep the
-concatenation unambiguous so no two distinct tuples can produce the same byte string. This binds
+record, or `Guid.Empty` for organisation-level singletons. The space separators keep the
+concatenation unambiguous — no field can contain a space, since the purposes are dotted lowercase
+and "N"-format Guids are hex only — so no two distinct tuples can produce the same byte string.
+This binds
 strictly more than tenant and supplier: a supplier's delivery credentials cannot be substituted for
 that same supplier's cXML shared secret.
 
