@@ -23,7 +23,14 @@ namespace ProcuLink.Api.Tests.Services;
 /// bundle — clone-from-active, rollback, republish-from-live, publish, the V1 backfill — never reach
 /// <c>ApplyScalars</c>. Republish-from-live is the one the delivery-config editor triggers, so the
 /// ordinary operator flow keeps working after a grandfathered live save. Nothing pre-existing is
-/// stranded by refusing here, and those paths are pinned below.</para>
+/// stranded by refusing here, because it is exactly that bypass of <c>ApplyScalars</c> that makes a
+/// flat refusal safe — and the bypass is pinned by <c>ConnectionRevisionTransportSecurityTests</c>,
+/// not by this file: clone-from-active at <c>ConnectionRevisionTransportSecurityTests.cs:352</c>,
+/// rollback at <c>:372</c>, republish-from-live at <c>:392</c>, and publish at <c>:419</c>. Each of
+/// those four tests asserts its path still succeeds while carrying a cleartext URL, so routing any
+/// of them through <c>ApplyScalars</c> would trip the transport guard and turn that suite red. Only
+/// publish is re-verified below, for the credential-header case specifically — not to re-pin the
+/// bypass itself, which is already covered above.</para>
 /// </summary>
 public class ConnectionRevisionCredentialHeaderTests
 {

@@ -133,12 +133,17 @@ public sealed class ConnectionRevisionCredentialHeaderControllerTests
             CancellationToken.None);
 
         var (error, message) = Assert400(result);
-        // Deviation from the brief: it compared against the literal "credential_header_in_delivery_config"
-        // rather than the exception's own Code constant. A hard-coded literal here is exactly the kind
-        // of duplication that lets a code string drift silently — see ConnectionRevisionTransportSecurityControllerTests,
-        // which compares against OutboundUrlPolicy.ErrorInsecureTransport / ClientSuppliedCredentialsRefException.Code
-        // instead of a literal, for the same reason.
+        // error is compared against the exception's own Code constant, not a literal — a hard-coded
+        // literal here would duplicate the source of truth (see
+        // ConnectionRevisionTransportSecurityControllerTests, which compares against
+        // OutboundUrlPolicy.ErrorInsecureTransport / ClientSuppliedCredentialsRefException.Code for
+        // the same reason).
         error.Should().Be(CredentialHeaderInConfigException.Code);
+        // But this string IS the wire contract for POST/PUT .../revisions — an external consumer
+        // parses it — so at least one assertion in the suite has to pin the literal value itself:
+        // comparing the const to itself above would let a rename silently change the API with
+        // nothing here to catch it.
+        CredentialHeaderInConfigException.Code.Should().Be("credential_header_in_delivery_config");
         message.Should().Contain("'Authorization'");
         h.Db.SupplierConnectionRevisions.Should().BeEmpty();
     }
