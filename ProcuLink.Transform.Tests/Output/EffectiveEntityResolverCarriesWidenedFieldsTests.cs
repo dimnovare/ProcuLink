@@ -112,6 +112,34 @@ public class EffectiveEntityResolverCarriesWidenedFieldsTests
             string.Join(", ", dropped));
     }
 
+    /// <summary>
+    /// The same trap, one level down: the clone rebuilds the <c>Supplier</c> navigation by hand
+    /// too. The UBL emitter reads <c>Supplier.EdiCode</c> to decide whether it can emit a
+    /// <c>cbc:EndpointID</c>, and the preview and conformance endpoints render from this clone
+    /// while the delivery path renders from the tracked entity. A dropped <c>EdiCode</c> would
+    /// therefore show the operator a document with no electronic address while the one actually
+    /// delivered carried one — the preview lying about the shipment.
+    /// </summary>
+    [Fact]
+    public void Clone_CarriesTheSupplierIdentityFieldsTheEmitterReads()
+    {
+        var source = PopulatedOrder();
+        source.Supplier = new Supplier
+        {
+            Id      = Guid.NewGuid(),
+            OrgId   = Guid.NewGuid(),
+            Name    = "REDACTED-PARTY",
+            Code    = "NORD",
+            EdiCode = "7300010000001",
+        };
+
+        var clone = EffectiveEntityResolver.Resolve(source, new OrderMappingOverride());
+
+        clone.Supplier.Should().NotBeNull();
+        clone.Supplier!.EdiCode.Should().Be("7300010000001",
+            "the UBL cbc:EndpointID is derived from this field, so preview must see what delivery sees");
+    }
+
     [Fact]
     public void Clone_CarriesEveryBindableLineField()
     {

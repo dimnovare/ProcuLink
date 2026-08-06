@@ -323,6 +323,12 @@ public static class EffectiveEntityResolver
                 OrgId = src.Supplier.OrgId,
                 Name  = src.Supplier.Name,
                 Code  = src.Supplier.Code,
+
+                // The UBL emitter derives cbc:EndpointID from this. Preview and conformance render
+                // from the clone while delivery renders from the tracked entity, so dropping it here
+                // would show the operator a document with no electronic address while the one
+                // actually sent carried one.
+                EdiCode = src.Supplier.EdiCode,
             };
         }
 

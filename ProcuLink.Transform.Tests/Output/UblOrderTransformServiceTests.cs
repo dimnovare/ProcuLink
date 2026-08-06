@@ -424,6 +424,246 @@ public class UblOrderTransformServiceTests
             .Element(Cac + "Party")!.Element(Cac + "PartyName")!.Element(Cbc + "Name")!.Value;
     }
 
+    // ── Party electronic address (cbc:EndpointID) ─────────────────────────────
+    //
+    // The ONLY supported source is Supplier.EdiCode, and only when it is provably a GS1
+    // Global Location Number. schemeID is an EAS / ISO 6523 code, not free text, and GLN is
+    // the one identifier whose scheme can be asserted from the value alone. A VAT number's
+    // EAS code is country-dependent and no country is stored next to it, so VAT and the
+    // registration number are deliberately refused rather than guessed at.
+
+    /// <summary>
+    /// A GS1 Global Location Number: 13 digits whose last digit is the GS1 modulo-10 check
+    /// digit. Constructed and check-digit-verified for this suite; it identifies no real
+    /// company. Weighted right-to-left (check digit ×1, then ×3, ×1, …) the digits sum to 20,
+    /// which is ≡ 0 (mod 10) — the definition of a valid GS1 check digit.
+    /// </summary>
+    private const string ValidGln      = "7300010000001";
+    private const string GlnSchemeId   = "0088";
+
+    private static PurchaseOrderEntity BuildOrderWithSupplier(
+        string? ediCode            = null,
+        string? vatNumber          = null,
+        string? registrationNumber = null)
+    {
+        var order = BuildOrder();
+        order.SupplierName = "REDACTED-PARTY";
+        order.Supplier = new Supplier
+        {
+            Id                 = order.SupplierId!.Value,
+            Name               = "REDACTED-PARTY",
+            EdiCode            = ediCode,
+            VatNumber          = vatNumber,
+            RegistrationNumber = registrationNumber,
+        };
+        return order;
+    }
+
+    private static async Task<(XDocument Doc, string Xml)> Render(PurchaseOrderEntity order)
+    {
+        var result = await new UblOrderTransformService().TransformAsync(order, OutputFormat.Ubl, CancellationToken.None);
+        var xml    = await ReadContentAsString(result);
+        return (XDocument.Parse(xml), xml);
+    }
+
+    private static XElement SellerParty(XDocument doc) =>
+        doc.Descendants(Cac + "SellerSupplierParty").Single().Element(Cac + "Party")!;
+
+    [Fact]
+    public async Task TransformAsync_SupplierEdiCodeIsGln_EmitsEndpointIdWithGs1Scheme()
+    {
+        var (doc, _) = await Render(BuildOrderWithSupplier(ediCode: ValidGln));
+
+        var endpoint = SellerParty(doc).Element(Cbc + "EndpointID");
+        endpoint.Should().NotBeNull("a check-digit-valid GLN is the one identifier whose EAS scheme is unambiguous");
+        endpoint!.Value.Should().Be(ValidGln);
+        endpoint.Attribute("schemeID").Should().NotBeNull("schemeID carries the EAS code and is what makes the value routable");
+        endpoint.Attribute("schemeID")!.Value.Should().Be(GlnSchemeId, "EAS / ISO 6523 ICD 0088 is the GS1 GLN scheme");
+    }
+
+    [Fact]
+    public async Task TransformAsync_GlnIsSurroundedByWhitespace_IsTrimmedNotRejected()
+    {
+        var (doc, _) = await Render(BuildOrderWithSupplier(ediCode: $"  {ValidGln}\t"));
+
+        SellerParty(doc).Element(Cbc + "EndpointID")!.Value.Should().Be(ValidGln);
+    }
+
+    /// <summary>
+    /// The Peppol participant form writes the scheme into the value ("0088:7300010000001").
+    /// The scheme is then stated by the operator rather than guessed by us, so it is honoured —
+    /// but only for 0088, and only when the payload is still a check-digit-valid GLN.
+    /// </summary>
+    [Fact]
+    public async Task TransformAsync_PeppolParticipantForm_IsUnwrappedToTheBareGln()
+    {
+        var (doc, _) = await Render(BuildOrderWithSupplier(ediCode: $"{GlnSchemeId}:{ValidGln}"));
+
+        var endpoint = SellerParty(doc).Element(Cbc + "EndpointID")!;
+        endpoint.Value.Should().Be(ValidGln, "the scheme belongs in schemeID, not doubled into the value");
+        endpoint.Attribute("schemeID")!.Value.Should().Be(GlnSchemeId);
+    }
+
+    /// <summary>
+    /// THE OMISSION LOCK. Every supplier on the live production org today has all four identity
+    /// columns null. Such an order must produce a document with NO cbc:EndpointID at all — not an
+    /// empty element, not a placeholder, not a GUID. An absent endpoint is an honest gap; a
+    /// fabricated one routes to the wrong party while claiming to be identified.
+    /// </summary>
+    [Fact]
+    public async Task TransformAsync_SupplierWithNoIdentifiers_EmitsNoEndpointIdAnywhere()
+    {
+        var (doc, xml) = await Render(BuildOrderWithSupplier());
+
+        doc.Descendants().Where(e => e.Name.LocalName == "EndpointID").Should().BeEmpty(
+            "an unidentified party must carry no electronic address at all");
+        xml.Should().NotContain("EndpointID",
+            "not even as an empty element — a blank endpoint is a claim we cannot support");
+    }
+
+    /// <summary>
+    /// A VAT number's EAS code is country-dependent and no country is stored beside it, and the
+    /// registration number has the same problem. Neither may stand in for an endpoint, however
+    /// tempting the presence of a value is.
+    /// </summary>
+    [Fact]
+    public async Task TransformAsync_SupplierHasVatAndRegistrationButNoGln_EmitsNoEndpointId()
+    {
+        var (doc, xml) = await Render(BuildOrderWithSupplier(
+            vatNumber: "EE100594103", registrationNumber: "10059410"));
+
+        SellerParty(doc).Element(Cbc + "EndpointID").Should().BeNull(
+            "a VAT number cannot be assigned an EAS scheme from stored data, so it is refused");
+        xml.Should().NotContain("EndpointID");
+    }
+
+    [Theory]
+    // 13 digits but the check digit is wrong — this exact value is the repo's own Peppol
+    // options fixture, and it is NOT a valid GLN.
+    [InlineData("1234567890123")]
+    [InlineData("730001000000")]        // 12 digits
+    [InlineData("73000100000012")]      // 14 digits
+    [InlineData("EE100594103")]         // VAT-shaped
+    [InlineData("730001000000X")]       // 13 chars, not all digits
+    [InlineData("7300 0100 00001")]     // spaced — reformatting it would be guessing
+    [InlineData("9930:DE123456789")]    // Peppol form, non-GLN scheme
+    [InlineData("0088:1234567890123")]  // Peppol form, right scheme, bad payload
+    [InlineData("0037:12345678")]       // Peppol form, Finnish OVT scheme
+    [InlineData("0088:")]               // Peppol form, empty payload
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public async Task TransformAsync_EdiCodeIsNotProvablyAGln_EmitsNoEndpointId(string? ediCode)
+    {
+        var (doc, xml) = await Render(BuildOrderWithSupplier(ediCode: ediCode));
+
+        SellerParty(doc).Element(Cbc + "EndpointID").Should().BeNull();
+        xml.Should().NotContain("EndpointID");
+    }
+
+    /// <summary>
+    /// The nastiest shape, and the one a length-and-checksum test alone does NOT catch: a payload
+    /// that really is a check-digit-valid 13-digit number, registered under a scheme that is not
+    /// GLN. Finnish OVT (0037) and Norwegian organisation numbers (9908) are both plausible
+    /// contents of this field. Unwrapping the prefix and relabelling the payload 0088 would emit a
+    /// document whose endpoint is attributed to the wrong scheme — routable, and routed wrong.
+    /// The prefix is honoured only when the operator stated 0088.
+    /// </summary>
+    [Theory]
+    [InlineData("0037:7300010000001")]
+    [InlineData("9908:7300010000001")]
+    public async Task TransformAsync_ValidGlnPayloadUnderANonGlnScheme_IsRefused(string ediCode)
+    {
+        var (doc, _) = await Render(BuildOrderWithSupplier(ediCode: ediCode));
+
+        SellerParty(doc).Element(Cbc + "EndpointID").Should().BeNull(
+            "the payload passes the GS1 check digit, but the operator registered it under another "
+            + "scheme — relabelling it 0088 would be asserting a registration the supplier does not have");
+    }
+
+    /// <summary>
+    /// Proves the check digit is genuinely computed rather than the value merely being
+    /// length-checked. Under GS1 modulo-10 (weights 1 and 3) no single-digit change can ever
+    /// preserve the checksum, so every mutation of a valid GLN must be refused.
+    /// </summary>
+    [Theory]
+    [InlineData("6300010000001")]  // first digit
+    [InlineData("7400010000001")]  // second digit
+    [InlineData("7300010000091")]  // eleventh digit
+    [InlineData("7300010000002")]  // check digit itself
+    public async Task TransformAsync_SingleDigitMutationOfAValidGln_IsRefused(string mutated)
+    {
+        mutated.Should().HaveLength(13).And.NotBe(ValidGln);
+
+        var (doc, _) = await Render(BuildOrderWithSupplier(ediCode: mutated));
+
+        SellerParty(doc).Element(Cbc + "EndpointID").Should().BeNull(
+            "a mutated GLN fails the GS1 check digit, and a wrong endpoint is worse than none");
+    }
+
+    /// <summary>
+    /// UBL 2.1 PartyType is an ordered xsd:sequence — cbc:EndpointID sits at position 5, ahead of
+    /// cac:PartyIdentification (7), cac:PartyName (8), cac:PostalAddress (10) and cac:Contact (14).
+    /// Emitting it after PartyName would be schema-invalid.
+    /// </summary>
+    [Fact]
+    public async Task TransformAsync_EndpointId_PrecedesPartyNameInTheSequence()
+    {
+        var (doc, _) = await Render(BuildOrderWithSupplier(ediCode: ValidGln));
+
+        var childNames = SellerParty(doc).Elements().Select(e => e.Name.LocalName).ToList();
+
+        childNames.IndexOf("EndpointID").Should().Be(0);
+        childNames.IndexOf("EndpointID").Should().BeLessThan(childNames.IndexOf("PartyName"));
+    }
+
+    /// <summary>
+    /// The buyer side gets NOTHING, deliberately. The only stored buyer identifier is
+    /// <c>BuyerTaxId</c> — free text lifted off the document by the LLM extractor, with no country
+    /// and no scheme code stored beside it, so no EAS code can be derived for it. The Buyer entity
+    /// and the Organisation carry no commerce identifier at all.
+    /// </summary>
+    [Fact]
+    public async Task TransformAsync_BuyerTaxIdPresent_StillEmitsNoBuyerEndpointId()
+    {
+        var order = BuildOrderWithSupplier(ediCode: ValidGln);
+        order.BuyerName  = "Acme Buyer AS";
+        order.BuyerTaxId = "EE100123456";
+
+        var (doc, _) = await Render(order);
+
+        var buyerParty = doc.Descendants(Cac + "BuyerCustomerParty").Single().Element(Cac + "Party")!;
+        buyerParty.Element(Cbc + "EndpointID").Should().BeNull(
+            "a tax id has no derivable EAS scheme, so the buyer endpoint stays an honest gap");
+
+        // …and the supplier's endpoint is unaffected by the buyer having an identifier.
+        SellerParty(doc).Element(Cbc + "EndpointID")!.Value.Should().Be(ValidGln);
+    }
+
+    [Fact]
+    public async Task TransformAsync_SupplierNavigationNotLoaded_EmitsNoEndpointId()
+    {
+        var order = BuildOrder();       // SupplierId set, Supplier navigation null
+        order.SupplierName = "REDACTED-PARTY";
+
+        var (doc, xml) = await Render(order);
+
+        SellerParty(doc).Element(Cbc + "EndpointID").Should().BeNull();
+        xml.Should().NotContain("EndpointID");
+    }
+
+    [Fact]
+    public async Task TransformAsync_UnroutedOrderWithNullSupplierId_EmitsNoEndpointId()
+    {
+        var order = BuildOrderWithSupplier(ediCode: ValidGln);
+        order.SupplierId = null;
+
+        var (doc, _) = await Render(order);
+
+        SellerParty(doc).Element(Cbc + "EndpointID").Should().BeNull(
+            "an unrouted order has no supplier to be identified as");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static async Task<string> ReadContentAsString(TransformResult result)

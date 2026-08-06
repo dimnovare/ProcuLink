@@ -23,7 +23,7 @@ namespace ProcuLink.Transform.Output;
 ///   &lt;cbc:IssueDate&gt;{yyyy-MM-dd}&lt;/cbc:IssueDate&gt;
 ///   &lt;cbc:DocumentCurrencyCode&gt;{currency}&lt;/cbc:DocumentCurrencyCode&gt;
 ///   &lt;cac:BuyerCustomerParty&gt;&lt;cac:Party&gt;&lt;cac:PartyName&gt;&lt;cbc:Name&gt;{buyer}&lt;/cbc:Name&gt;&lt;/cac:PartyName&gt;&lt;/cac:Party&gt;&lt;/cac:BuyerCustomerParty&gt;
-///   &lt;cac:SellerSupplierParty&gt;&lt;cac:Party&gt;&lt;cac:PartyName&gt;&lt;cbc:Name&gt;{supplier}&lt;/cbc:Name&gt;&lt;/cac:PartyName&gt;&lt;/cac:Party&gt;&lt;/cac:SellerSupplierParty&gt;
+///   &lt;cac:SellerSupplierParty&gt;&lt;cac:Party&gt;[&lt;cbc:EndpointID schemeID="0088"&gt;{gln}&lt;/cbc:EndpointID&gt;]&lt;cac:PartyName&gt;&lt;cbc:Name&gt;{supplier}&lt;/cbc:Name&gt;&lt;/cac:PartyName&gt;&lt;/cac:Party&gt;&lt;/cac:SellerSupplierParty&gt;
 ///   &lt;cac:OrderLine&gt;
 ///     &lt;cac:LineItem&gt;
 ///       &lt;cbc:ID&gt;{n}&lt;/cbc:ID&gt;
@@ -41,7 +41,14 @@ namespace ProcuLink.Transform.Output;
 ///
 /// The buyer party name is the canonical buyer name (<see cref="OrderHeaderReader.ExtractBuyerName"/>),
 /// falling back to the legacy "ProcuLink Buyer" placeholder when the order carries none; the supplier
-/// party name is still emitted as the supplier id (real supplier metadata is a future pass).
+/// party name resolves denormalized column → loaded navigation → supplier id (see the resolution
+/// comment on <c>supplierName</c> below).
+///
+/// <para><b>Electronic address.</b> <c>SellerSupplierParty</c> additionally carries a null-gated
+/// <c>cbc:EndpointID</c>, emitted only when the supplier's <c>EdiCode</c> is provably a GS1 GLN —
+/// see <see cref="BuildEndpointId"/> for why nothing else qualifies. The buyer party carries none:
+/// no stored buyer identifier has a derivable EAS scheme. Suppliers with no usable identifier emit
+/// no element at all and stay byte-identical to the pre-feature output.</para>
 ///
 /// <para><b>Address + contact.</b> When the order carries address data the document additionally
 /// emits a <c>cac:PostalAddress</c> + <c>cac:Contact</c> inside <c>BuyerCustomerParty/Party</c> (fed
@@ -121,9 +128,13 @@ public sealed class UblOrderTransformService : ITransformService
                         order.BillToPostalCode, order.BillToCountry),
                     BuildContact(order))),
 
-            // ── SellerSupplierParty (placeholder) ────────────────────────────
+            // ── SellerSupplierParty ──────────────────────────────────────────
+            // A null-gated cbc:EndpointID leads the party, because UBL PartyType is an ordered
+            // xsd:sequence and EndpointID precedes PartyName in it. It is emitted only when the
+            // supplier's EdiCode is provably a GLN; otherwise the element is absent entirely.
             new XElement(Cac + "SellerSupplierParty",
                 new XElement(Cac + "Party",
+                    BuildEndpointId(order.SupplierId is null ? null : order.Supplier?.EdiCode),
                     new XElement(Cac + "PartyName",
                         new XElement(Cbc + "Name", supplierName))))
         );
@@ -206,6 +217,88 @@ public sealed class UblOrderTransformService : ITransformService
             new XElement(Cac + "DeliveryParty",
                 new XElement(Cac + "PartyName",
                     new XElement(Cbc + "Name", o.ShipToName))));
+    }
+
+    // ── Party electronic address (cbc:EndpointID) ─────────────────────────────
+
+    /// <summary>
+    /// EAS / ISO 6523 ICD 0088 — the GS1 Global Location Number scheme.
+    /// </summary>
+    private const string GlnSchemeId = "0088";
+
+    private const int GlnLength = 13;
+
+    /// <summary>
+    /// Builds the party's <c>cbc:EndpointID</c>, or null when no identifier can be stated
+    /// truthfully (→ dropped by the parent <c>cac:Party</c>, so the element is absent rather than
+    /// empty).
+    ///
+    /// <para><b>Why so little is accepted.</b> <c>schemeID</c> is an EAS / ISO 6523 code, not free
+    /// text, and it is what a receiver routes on. A GLN is the one identifier whose scheme can be
+    /// asserted from the value alone: 13 digits carrying a GS1 modulo-10 check digit are a GLN, and
+    /// a GLN is always scheme 0088. A VAT number's EAS code is country-dependent, and nothing
+    /// stored beside the number says which country issued it — so VAT numbers, registration
+    /// numbers and unrecognised EDI codes are refused rather than labelled with a guessed scheme.
+    /// An absent endpoint is a known gap; a wrong one routes the document to the wrong party or
+    /// fails the receiver's validation while claiming to be identified.</para>
+    /// </summary>
+    private static XElement? BuildEndpointId(string? ediCode)
+    {
+        var gln = ExtractGln(ediCode);
+        if (gln is null) return null;
+
+        return new XElement(Cbc + "EndpointID",
+            new XAttribute("schemeID", GlnSchemeId),
+            gln);
+    }
+
+    /// <summary>
+    /// The GLN inside an <c>EdiCode</c>, or null when the value is not provably one. Accepts the
+    /// bare number and the Peppol participant form <c>0088:7300010000001</c> — in the prefixed form
+    /// the operator has stated the scheme, so honouring it is not a guess, but only <c>0088</c> is
+    /// honoured and the payload must still pass the check digit. Any other prefix is refused: this
+    /// field also holds ILNs, Peppol ids under other schemes and scheme-specific party codes, and
+    /// none of those can be mapped to an EAS code from stored data.
+    /// </summary>
+    private static string? ExtractGln(string? ediCode)
+    {
+        if (string.IsNullOrWhiteSpace(ediCode)) return null;
+
+        var value = ediCode.Trim();
+
+        var separator = value.IndexOf(':');
+        if (separator >= 0)
+        {
+            if (!string.Equals(value[..separator], GlnSchemeId, StringComparison.Ordinal))
+                return null;
+            value = value[(separator + 1)..].Trim();
+        }
+
+        return HasValidGs1CheckDigit(value) ? value : null;
+    }
+
+    /// <summary>
+    /// GS1 modulo-10, the check-digit rule shared by GLN and GTIN-13. Counting positions from the
+    /// RIGHT with the check digit at position 1, even positions are weighted 3 and odd positions 1;
+    /// the value is valid when the weighted sum is divisible by 10. No single-digit error can
+    /// survive it, because a change of d alters the sum by d or 3d and neither is ≡ 0 (mod 10) for
+    /// 0 &lt; |d| &lt; 10.
+    /// </summary>
+    private static bool HasValidGs1CheckDigit(string value)
+    {
+        if (value.Length != GlnLength) return false;
+
+        var sum = 0;
+        for (var i = 0; i < GlnLength; i++)
+        {
+            var digit = value[i] - '0';
+            if (digit is < 0 or > 9) return false;
+
+            var positionFromRight = GlnLength - i;
+            sum += digit * (positionFromRight % 2 == 0 ? 3 : 1);
+        }
+
+        return sum % 10 == 0;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
