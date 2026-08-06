@@ -43,13 +43,6 @@ public sealed class PostgresContainerFixture : IAsyncLifetime
     /// <summary>Points at <see cref="MaintenanceDatabase"/>; the <c>Database</c> is swapped per caller.</summary>
     private string? _hostConnectionString;
 
-    /// <summary>
-    /// Non-null exactly when the container could not be started because Docker is unreachable.
-    /// Test classes must check <c>DockerProbe.UnavailableReason</c> before asking for a database,
-    /// the same way they did when they owned their own container.
-    /// </summary>
-    public string? UnavailableReason => DockerProbe.UnavailableReason;
-
     public async Task InitializeAsync()
     {
         // Docker unreachable: every test in the collection is statically skipped by
