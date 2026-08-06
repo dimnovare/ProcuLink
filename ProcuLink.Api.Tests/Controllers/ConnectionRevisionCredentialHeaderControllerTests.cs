@@ -182,4 +182,39 @@ public sealed class ConnectionRevisionCredentialHeaderControllerTests
 
         result.Should().BeOfType<OkObjectResult>();
     }
+
+    // ── Read path tells the operator about a revision that predates enforcement ─
+
+    /// <summary>
+    /// A pre-existing revision keeps delivering, so the revision editor has to be able to say why.
+    /// Mirrors DeliveryConfigResponse.InsecureTransportWarning deliberately, so both editors report
+    /// the same blob the same way.
+    /// </summary>
+    [Fact]
+    public async Task GetRevision_ALegacyCredentialHeader_IsReportedWithoutTheToken()
+    {
+        var h = Build();
+        var revisionId = SeedLegacyDraft(h, WithToken);
+
+        var result = await h.Controller.GetRevision(h.Connection.Id, revisionId, CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ConnectionRevisionDto>().Subject;
+        dto.InsecureTransportWarning.Should().NotBeNullOrWhiteSpace();
+        dto.InsecureTransportWarning.Should().Contain("'Authorization'");
+        dto.InsecureTransportWarning.Should().NotContain(Token);
+    }
+
+    [Fact]
+    public async Task GetRevision_ACleanRevision_HasNoWarning()
+    {
+        var h = Build();
+        var revisionId = SeedLegacyDraft(h, Clean);
+
+        var result = await h.Controller.GetRevision(h.Connection.Id, revisionId, CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ConnectionRevisionDto>().Subject;
+        dto.InsecureTransportWarning.Should().BeNull();
+    }
 }

@@ -255,4 +255,66 @@ public class DeliveryConfigCredentialHeaderTests
         (await db.SupplierDeliveryConfigs.AsNoTracking().ToListAsync())
             .Should().NotContain(c => c.ConfigJson.Contains(Token));
     }
+
+    // ── The read surface ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// How an operator whose config predates enforcement finds out. The frontend already renders
+    /// this field, so reusing it rather than adding a sibling is what puts the instruction in front
+    /// of them at all.
+    /// </summary>
+    [Fact]
+    public async Task GetAsync_ALegacyCredentialHeader_IsReportedWithoutTheToken()
+    {
+        await using var db = CreateDb();
+        var service = CreateService(db);
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        await SeedLegacyConfigAsync(db, orgId, supplierId, WithToken);
+
+        var fetched = await service.GetAsync(orgId, supplierId, default);
+
+        fetched!.InsecureTransportWarning.Should().NotBeNullOrWhiteSpace();
+        fetched.InsecureTransportWarning.Should().Contain("'Authorization'");
+        fetched.InsecureTransportWarning.Should().NotContain(Token);
+    }
+
+    [Fact]
+    public async Task GetAsync_ACleanConfig_HasNoWarning()
+    {
+        await using var db = CreateDb();
+        var service = CreateService(db);
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        await SaveAsync(service, orgId, supplierId, Clean);
+
+        (await service.GetAsync(orgId, supplierId, default))!
+            .InsecureTransportWarning.Should().BeNull();
+    }
+
+    /// <summary>
+    /// A config that is BOTH cleartext and credential-bearing reports both faults, because fixing
+    /// one does not fix the other and an operator told only about the URL would leave the token in
+    /// place.
+    /// </summary>
+    [Fact]
+    public async Task GetAsync_BothFaults_AreBothReported()
+    {
+        await using var db = CreateDb();
+        var service = CreateService(db);
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        // $$$ / {{{...}}}: $$ / {{...}} does not compile here (CS9007) — the literal "}}" closing
+        // the headers object and then the outer object immediately follows the interpolation's own
+        // closing "}}", producing a same-length brace run the 2-brace delimiter cannot disambiguate.
+        // Same fix as WithToken above.
+        await SeedLegacyConfigAsync(db, orgId, supplierId,
+            $$$"""{"url":"http://supplier.example/orders","headers":{"Authorization":"Bearer {{{Token}}}"}}""");
+
+        var warning = (await service.GetAsync(orgId, supplierId, default))!.InsecureTransportWarning;
+
+        warning.Should().Contain("https://", "the transport fault must still be reported");
+        warning.Should().Contain("'Authorization'", "the credential-header fault must be reported too");
+        warning.Should().NotContain(Token);
+    }
 }

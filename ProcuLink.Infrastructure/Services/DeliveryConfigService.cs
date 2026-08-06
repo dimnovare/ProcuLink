@@ -179,7 +179,7 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             config.OutputFormat,
             CxmlCredentials: BuildCxmlResponse(config),
             AutoTransform: config.AutoTransform,
-            InsecureTransportWarning: DeliveryConfigTransport.DescribeInsecureTransport(
+            InsecureTransportWarning: DeliveryConfigTransport.DescribeConfigWarnings(
                 config.Protocol, config.ConfigJson));
     }
 

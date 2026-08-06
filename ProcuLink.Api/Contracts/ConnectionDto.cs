@@ -30,13 +30,14 @@ public record ConnectionRevisionDto(
     IReadOnlyList<ConnectionItemMappingDto> ItemMappings,
     // Launch batch 3 — test evidence (null on never-tested / legacy revisions).
     bool? TestPassed = null, DateTime? TestedAt = null, string? TestResultJson = null,
-    // Set when this revision's SAVED delivery endpoint is one the transport policy now refuses — a
-    // revision written before TLS enforcement reached this path. Delivery continues (refusing a
-    // stored bundle mid-flight would turn a security weakness into an outage), so this is how the
-    // operator finds out. Null when fine. Never contains the URL: a stored userinfo URL is exactly
-    // the case where echoing it would copy the password into the editor. Mirrors
-    // DeliveryConfigResponse.InsecureTransportWarning so both editors report the same blob the
-    // same way.
+    // Set when this revision's SAVED config carries a fault the write path now refuses: an endpoint
+    // the transport policy rejects (written before TLS enforcement reached this path), a credential
+    // sitting in the extra-headers map, or both. Delivery continues — refusing a stored bundle
+    // mid-flight would turn a security weakness into an outage — so this is how the operator finds
+    // out. Null when fine. Never contains the URL or a header value: those are precisely the strings
+    // that would copy the secret into the editor. Mirrors
+    // DeliveryConfigResponse.InsecureTransportWarning so both editors report the same blob the same
+    // way.
     string? InsecureTransportWarning = null);
 
 /// <summary>

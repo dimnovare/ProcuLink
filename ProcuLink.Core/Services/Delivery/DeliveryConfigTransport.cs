@@ -222,6 +222,28 @@ public static class DeliveryConfigTransport
         return names.Count == 0 ? null : BuildCredentialHeaderMessage(names);
     }
 
+    // ── Combined read-path warning ────────────────────────────────────────────
+
+    /// <summary>
+    /// Everything wrong with a stored delivery config that an operator needs to know and cannot see:
+    /// a transport the policy now refuses, a credential sitting in the extra-headers map, or both.
+    ///
+    /// <para>One composer, so the delivery-config editor and the revision editor cannot report the
+    /// same blob differently. Both faults travel because fixing one does not fix the other — an
+    /// operator told only about the URL would leave the token in place. Never quotes a URL or a
+    /// header value: those are precisely the strings that would copy the secret onto the screen.</para>
+    /// </summary>
+    public static string? DescribeConfigWarnings(string? protocol, string? configJson)
+    {
+        var transport = DescribeInsecureTransport(protocol, configJson);
+        var headers = DescribeCredentialHeaders(configJson);
+
+        if (transport is null) return headers;
+        if (headers is null) return transport;
+
+        return $"{transport} {headers}";
+    }
+
     /// <summary>
     /// The one wording, shared by the refusal and the read-path warning so they cannot drift. It
     /// names the destination concretely — the connector manifest really does carry

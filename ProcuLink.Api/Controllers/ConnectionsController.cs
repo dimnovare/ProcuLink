@@ -395,9 +395,10 @@ public sealed class ConnectionsController : ControllerBase
             m.BuyerItemCode, m.SupplierItemCode, m.Confidence, m.Source)).ToList(),
         r.TestPassed, r.TestedAt, r.TestResultJson,
         // A revision written before enforcement reached this path keeps delivering, so the editor
-        // has to be able to show that its endpoint is one the policy now refuses. Same extraction
-        // and same policy as the save path and the dispatch-time log, so the three cannot disagree.
-        DeliveryConfigTransport.DescribeInsecureTransport(r.DeliveryProtocol, r.DeliveryConfigJson));
+        // has to be able to show BOTH faults it can now carry: an endpoint the transport policy
+        // refuses, and a credential sitting in the extra-headers map. Same composer as the
+        // delivery-config editor, so the two cannot report the same blob differently.
+        DeliveryConfigTransport.DescribeConfigWarnings(r.DeliveryProtocol, r.DeliveryConfigJson));
 
     private static ConnectionRevisionDraftInput ToInput(ConnectionRevisionBundleDto b) => new(
         b.InputMappingJson, b.OutputMappingJson, b.OutputFormat,
