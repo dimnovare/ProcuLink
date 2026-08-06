@@ -651,7 +651,16 @@ if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
     builder.Services.AddSingleton<IDocumentOcrService, RapidOcrDocumentOcrService>();
 else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
-builder.Services.AddScoped<IPoMappingService, PoMappingService>();
+// IPoMappingService resolves to the INVALIDATING decorator, never the bare PoMappingService. All five
+// supplier-mapping writers go through this interface, so wrapping it here is what makes "a supplier
+// mapping save can never leave a stale artifact shippable" total rather than per-endpoint. The inner
+// implementation is registered as a concrete type so only the decorator can reach it.
+builder.Services.AddScoped<PoMappingService>();
+builder.Services.AddScoped<IPoMappingService>(sp => new ArtifactInvalidatingPoMappingService(
+    sp.GetRequiredService<PoMappingService>(),
+    sp.GetRequiredService<ProcuLinkDbContext>(),
+    sp.GetRequiredService<IEffectiveConnectionConfigResolver>(),
+    sp.GetRequiredService<ILogger<ArtifactInvalidatingPoMappingService>>()));
 builder.Services.AddScoped<IBuyerService, BuyerService>();
 // ── Wave 4: API keys + integration subscriptions ──────────────────────────
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();

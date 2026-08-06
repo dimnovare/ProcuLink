@@ -782,6 +782,56 @@ public static class OrderStatusMachine
         Set(Delivering, Transforming);
 
     /// <summary>
+    /// The same rule for a SUPPLIER-level mapping save
+    /// (<c>PUT /api/suppliers/{id}/po-mapping</c>, apply-template, the two DELETEs, and
+    /// <c>POST /api/orders/{id}/mapping-override/promote</c>). Those endpoints persist a
+    /// <c>PoMappingConfig</c> whose <c>Output</c>/<c>OutputTree</c> half the transform consumes for an
+    /// order with no per-order output seam, and none of them writes <c>PurchaseOrders</c> — so without
+    /// this the pre-edit artifact is what Redeliver / RetryDelivery / the ops requeue / the stranded
+    /// sweep subsequently ships, exactly as in
+    /// <see cref="MappingEditInvalidatesArtifactFrom"/> but for many orders at once.
+    ///
+    /// <para><b>It is that set minus <c>delivered</c>, and the subtraction is the whole product
+    /// decision.</b> A per-order mapping edit is a statement about THAT order's document, so
+    /// resurrecting it is proportionate. A supplier-level save is a statement about the SUPPLIER —
+    /// <c>PromoteMappingService.BuildPromotedMessage</c> tells the operator so in as many words
+    /// ("Future uploads from this supplier reuse it"). Carrying <c>delivered</c> here would mean one
+    /// typo fix in a supplier's output layout silently flips every order that supplier ever completed
+    /// back to <c>ready</c>, where it reappears as pending work. A completed order re-enters this
+    /// class only through Redeliver, which is a deliberate act on ONE order — and a per-order mapping
+    /// edit before that Redeliver is already covered by the set above.</para>
+    ///
+    /// <para>The difference is pinned to exactly <c>{delivered}</c> by
+    /// <c>OrderStatusMachineTests.SupplierMappingEditReset_DiffersFromThePerOrderResetByExactlyDelivered</c>,
+    /// so widening either set without deciding about the other fails the build. The same totality
+    /// guard that partitions <see cref="AllStatuses"/> for the per-order set covers this one.</para>
+    ///
+    /// <para><b>The two <see cref="MappingEditRefusedFrom"/> statuses are residuals here, and unlike
+    /// the per-order path there is no cure to offer.</b> That endpoint answers 409 for
+    /// <c>delivering</c> and <c>transforming</c> because it edits ONE order and the operator can act
+    /// on the refusal. A supplier-level save cannot be refused because one of that supplier's orders
+    /// happens to be mid-transform — that would make the primary configuration surface unavailable
+    /// for reasons the operator did not cause and cannot see. A reset is no better: for
+    /// <c>delivering</c> the artifact is already with the dispatcher, and for <c>transforming</c> the
+    /// completion write is untokened (it resyncs the tracked row to <c>transforming</c>, so
+    /// <c>entity.Status = ready_to_deliver</c> lands with no status predicate) and silently
+    /// overwrites anything written underneath it. So an order that was mid-transform at the moment of
+    /// the save keeps an artifact built from the pre-edit config. The window is one transform long
+    /// and the real cure is a status predicate or concurrency token on THAT writer, which is neither
+    /// this packet's change nor something to fake with a reset that cannot land.</para>
+    ///
+    /// <para><b>Membership is necessary, not sufficient.</b> A status in this set only makes an order
+    /// a CANDIDATE. <c>ArtifactInvalidatingPoMappingService</c> then drops the orders the live
+    /// supplier mapping provably cannot reach — the ones pinned to a published revision (whose
+    /// transform never reads the live table) and the ones carrying a per-order output seam that
+    /// outranks it — and does nothing at all when the save left the <c>Output</c>/<c>OutputTree</c>
+    /// half unchanged.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> SupplierMappingEditInvalidatesArtifactFrom =
+        Set(ReadyToDeliver,
+            DeliveryHeld, DeliveryFailed, DeliveryDeadLetter, DeliveryUnconfirmed);
+
+    /// <summary>
     /// <c>OrdersController.MarkDelivered</c>'s admission guard — the ONLY statuses from which a
     /// human may settle an order as <c>delivered</c> without sending it. Named for the same reason
     /// as <see cref="RetryableFrom"/>: the endpoint gates on it TWICE (once against the detached
