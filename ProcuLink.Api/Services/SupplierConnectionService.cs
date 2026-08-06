@@ -175,7 +175,12 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         // Immutability: only draft/test revisions may be edited; publish is the freeze line.
         if (rev.Status is not ("draft" or "test")) return false;
 
-        ApplyScalars(rev, input);
+        // Captured BEFORE ApplyScalars, which assigns rev.DeliveryConfigJson = input.DeliveryConfigJson.
+        // Reading it afterwards would compare the incoming blob against itself and grandfather
+        // everything, including a credential header the caller just introduced.
+        var storedConfigJson = rev.DeliveryConfigJson;
+
+        ApplyScalars(rev, input, storedConfigJson);
 
         // Content changed: stamp the content-update time and VOID any prior test evidence —
         // the evidence-gated publish requires a test run AFTER the last content update.
@@ -743,16 +748,27 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
     /// <see cref="DeliveryConfigTransport.FindCredentialHeaders"/>. A second hand-rolled name check
     /// here would be a second security rule free to drift from the first.</para>
     ///
-    /// <para><b>Flat, with no grandfathering</b> — unlike the live path, which grandfathers an
-    /// identical stored pair because the delivery editor has no headers field to remove one with.
-    /// This is caller-supplied input, and the clone-from-active, rollback, republish-from-live and
-    /// publish paths never reach <c>ApplyScalars</c>, so nothing already live is stranded.
-    /// Republish-from-live is what the delivery-config editor triggers, so the ordinary operator
-    /// flow keeps working.</para>
+    /// <para><b>Grandfathered on UPDATE, flat on CREATE.</b> <paramref name="storedConfigJson"/> is
+    /// the row's CURRENTLY-STORED blob, so an identical <c>(name, value)</c> pair already persisted
+    /// is not treated as a write of a secret; adding a header, or rotating the value of one, is
+    /// still refused. <c>UpdateDraftAsync</c> passes the draft's own stored blob; <c>ApplyInput</c>
+    /// (create) passes nothing and so grandfathers nothing — a create has no stored predecessor, and
+    /// an identical header on some OTHER revision must not license one here.</para>
+    ///
+    /// <para><b>Why the update leg cannot be flat.</b> A draft acquires a credential header without
+    /// ever passing through <c>ApplyScalars</c> — clone-from-active, republish-from-live, rollback
+    /// and the V1 backfill all copy a bundle in wholesale, and all four are allowed by design. The
+    /// frontend then creates its editable draft with <c>cloneFromActive: true</c>, and because the
+    /// PUT replaces the WHOLE bundle, every mapping save echoes the delivery config straight back
+    /// (deliberately: without it a mapping save would wipe the draft's delivery channel). A flat
+    /// refusal here would therefore 400 every mapping autosave for exactly the pre-enforcement
+    /// customers this rule must not strand, with no headers field anywhere in the UI to clear the
+    /// fault with. Same unmanaged-key round-trip that shaped the live delivery-config path; the
+    /// principle is unchanged — refuse what the caller INTRODUCES, not what they merely echo back.</para>
     /// </summary>
-    private static void ValidateCredentialHeaders(string? configJson)
+    private static void ValidateCredentialHeaders(string? configJson, string? storedConfigJson)
     {
-        var offending = DeliveryConfigTransport.FindCredentialHeaders(configJson);
+        var offending = DeliveryConfigTransport.FindCredentialHeaders(configJson, storedConfigJson);
         if (offending.Count > 0)
             throw new CredentialHeaderInConfigException(offending);
     }
@@ -775,13 +791,17 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
     // Scalar-only assignment (used by both create and update); item mappings are handled
     // separately so the UPDATE path can mutate the TRACKED collection rather than reassign it
     // (reassigning while old children are marked Deleted trips an InMemory concurrency error).
-    private static void ApplyScalars(SupplierConnectionRevision rev, ConnectionRevisionDraftInput input)
+    // storedConfigJson is the row's CURRENTLY-STORED delivery blob, or null when there is no
+    // predecessor. It grandfathers an unchanged credential header on UPDATE only — see
+    // ValidateCredentialHeaders. The create leg leaves it at the default and so refuses flat.
+    private static void ApplyScalars(
+        SupplierConnectionRevision rev, ConnectionRevisionDraftInput input, string? storedConfigJson = null)
     {
         // Before ANY assignment: this is the only place a caller-supplied delivery endpoint or
         // credential blob enters a revision, and a half-applied bundle behind a refusal would be
         // worse than the refusal.
         ValidateTransportSecurity(input.DeliveryProtocol, input.DeliveryConfigJson);
-        ValidateCredentialHeaders(input.DeliveryConfigJson);
+        ValidateCredentialHeaders(input.DeliveryConfigJson, storedConfigJson);
         ValidateNoClientSuppliedCredentials(input.CredentialsRef);
 
         rev.InputMappingJson    = input.InputMappingJson;

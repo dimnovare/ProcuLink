@@ -31,6 +31,10 @@ public sealed class ConnectionRevisionCredentialHeaderControllerTests
     // compile here (CS9007 — two literal closing braces follow the interpolated token).
     private static readonly string WithToken =
         $$$"""{"url":"https://supplier.example/orders","headers":{"Authorization":"Bearer {{{Token}}}"}}""";
+    // Cleartext endpoint AND a credential header — the composition case. Same brace handling as
+    // WithToken above.
+    private static readonly string BothFaults =
+        $$$"""{"url":"http://supplier.example/orders","headers":{"Authorization":"Bearer {{{Token}}}"}}""";
     private const string Clean =
         """{"url":"https://supplier.example/orders","headers":{"X-Correlation-Id":"abc"}}""";
 
@@ -216,5 +220,33 @@ public sealed class ConnectionRevisionCredentialHeaderControllerTests
         var dto = result.Should().BeOfType<OkObjectResult>().Subject
             .Value.Should().BeOfType<ConnectionRevisionDto>().Subject;
         dto.InsecureTransportWarning.Should().BeNull();
+    }
+
+    /// <summary>
+    /// A revision carrying BOTH faults reports both, because fixing one does not fix the other and
+    /// an operator told only about the URL would leave the token in place.
+    ///
+    /// <para>Mirrors the service-layer
+    /// <c>DeliveryConfigCredentialHeaderTests.GetAsync_BothFaults_AreBothReported</c>. Composition is
+    /// the whole reason reusing one DTO field is safe, and this build site
+    /// (<c>ConnectionsController.ToRevisionDto</c>) calls the same composer with nothing asserting it
+    /// actually composed — a version that returned only the first non-null fault would have passed
+    /// every other test in this file.</para>
+    /// </summary>
+    [Fact]
+    public async Task GetRevision_BothFaults_AreBothReported()
+    {
+        var h = Build();
+        var revisionId = SeedLegacyDraft(h, BothFaults);
+
+        var result = await h.Controller.GetRevision(h.Connection.Id, revisionId, CancellationToken.None);
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ConnectionRevisionDto>().Subject;
+        dto.InsecureTransportWarning.Should().Contain("https://",
+            "the transport fault must still be reported");
+        dto.InsecureTransportWarning.Should().Contain("'Authorization'",
+            "the credential-header fault must be reported too");
+        dto.InsecureTransportWarning.Should().NotContain(Token);
     }
 }

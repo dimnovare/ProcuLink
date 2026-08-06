@@ -18,19 +18,25 @@ namespace ProcuLink.Api.Tests.Services;
 /// The cleartext invariant at the connection-revision write path — the second way a delivery
 /// endpoint's configuration is chosen, and the one a pinned order actually delivers through.
 ///
-/// <para><b>Flat, with no grandfathering, unlike the live delivery-config path.</b> This input is
-/// caller-supplied, exactly as the transport rule's is, and the paths that carry an ALREADY-LIVE
-/// bundle — clone-from-active, rollback, republish-from-live, publish, the V1 backfill — never reach
-/// <c>ApplyScalars</c>. Republish-from-live is the one the delivery-config editor triggers, so the
-/// ordinary operator flow keeps working after a grandfathered live save. Nothing pre-existing is
-/// stranded by refusing here, because it is exactly that bypass of <c>ApplyScalars</c> that makes a
-/// flat refusal safe — and the bypass is pinned by <c>ConnectionRevisionTransportSecurityTests</c>,
-/// not by this file: clone-from-active at <c>ConnectionRevisionTransportSecurityTests.cs:352</c>,
-/// rollback at <c>:372</c>, republish-from-live at <c>:392</c>, and publish at <c>:419</c>. Each of
-/// those four tests asserts its path still succeeds while carrying a cleartext URL, so routing any
-/// of them through <c>ApplyScalars</c> would trip the transport guard and turn that suite red. Only
-/// publish is re-verified below, for the credential-header case specifically — not to re-pin the
-/// bypass itself, which is already covered above.</para>
+/// <para><b>UPDATE grandfathers an identical stored pair; CREATE refuses flat.</b> An earlier
+/// version of this rule refused flat on both legs, on the reasoning that revision input is
+/// caller-supplied and the paths carrying an ALREADY-LIVE bundle bypass <c>ApplyScalars</c>. That
+/// reasoning covers the create leg and does NOT cover the update leg. Those bypasses —
+/// clone-from-active, rollback, republish-from-live and the V1 backfill — are exactly how a draft
+/// ACQUIRES a credential header; the frontend then opens an editable draft with
+/// <c>cloneFromActive: true</c> and, because the PUT replaces the whole bundle, echoes the delivery
+/// config back on every mapping autosave (deliberately — otherwise a mapping save would wipe the
+/// draft's delivery channel). Flat on update therefore 400s every mapping autosave for precisely
+/// the pre-enforcement customers the rule must not strand, with no headers field in the UI to clear
+/// the fault. The update leg now compares against the draft's own stored blob: an unchanged echo
+/// saves, an added header refuses, a rotated value refuses.</para>
+///
+/// <para><b>What this file pins vs. what the sibling suite pins.</b>
+/// <c>ConnectionRevisionTransportSecurityTests</c> pins that clone-from-active (<c>:352</c>),
+/// rollback (<c>:372</c>), republish-from-live (<c>:392</c>) and publish (<c>:419</c>) bypass
+/// <c>ApplyScalars</c> at all — each carries a cleartext URL through and still succeeds. That
+/// proves the bypass, not that THIS rule leaves those paths alone, so each is re-verified below
+/// with a credential-bearing bundle, together with the V1 backfill.</para>
 /// </summary>
 public class ConnectionRevisionCredentialHeaderTests
 {
@@ -41,6 +47,16 @@ public class ConnectionRevisionCredentialHeaderTests
     // unambiguously longer — same fix as ProcuLink.Infrastructure.Tests/Services/DeliveryConfigCredentialHeaderTests.cs:28-29.
     private static readonly string WithToken =
         $$$"""{"url":"https://supplier.example/orders","headers":{"Authorization":"Bearer {{{Token}}}"}}""";
+    private const string RotatedToken = "r0tat3d";
+    /// <summary>Same header NAME as <see cref="WithToken"/>, different value — a token rotation.</summary>
+    private static readonly string WithRotatedToken =
+        $$$"""{"url":"https://supplier.example/orders","headers":{"Authorization":"Bearer {{{RotatedToken}}}"}}""";
+    /// <summary>One credential header, stored before enforcement.</summary>
+    private const string WithApiKey =
+        """{"url":"https://supplier.example/orders","headers":{"X-Api-Key":"k3y"}}""";
+    /// <summary><see cref="WithApiKey"/> echoed back unchanged, plus a SECOND credential header.</summary>
+    private static readonly string WithApiKeyPlusToken =
+        $$$"""{"url":"https://supplier.example/orders","headers":{"X-Api-Key":"k3y","Authorization":"Bearer {{{Token}}}"}}""";
     private const string Clean =
         """{"url":"https://supplier.example/orders","headers":{"X-Correlation-Id":"abc"}}""";
 
@@ -64,10 +80,13 @@ public class ConnectionRevisionCredentialHeaderTests
                 })
                 .Build());
 
+    // inputMappingJson is parameterised so an "ordinary mapping edit" can be told apart from a
+    // no-op save: the echo-allowance test must prove a real edit lands, not merely that nothing threw.
     private static ConnectionRevisionDraftInput Bundle(
-        string? configJson, string protocol = DeliveryProtocolConstants.Http) =>
+        string? configJson, string protocol = DeliveryProtocolConstants.Http,
+        string? inputMappingJson = "{}") =>
         new(
-            InputMappingJson: "{}",
+            InputMappingJson: inputMappingJson,
             OutputMappingJson: null,
             OutputFormat: "xml",
             DeliveryProtocol: protocol,
@@ -153,6 +172,10 @@ public class ConnectionRevisionCredentialHeaderTests
         thrown.And.PolicyMessage.Should().NotContain(Token);
     }
 
+    /// <summary>
+    /// The stored draft carries NO credential header, so there is nothing to grandfather and the
+    /// caller is introducing one. Refused, and the stored blob is left exactly as it was.
+    /// </summary>
     [Fact]
     public async Task UpdateDraft_WithACredentialHeader_IsRefusedAndLeavesTheStoredConfigUntouched()
     {
@@ -171,7 +194,121 @@ public class ConnectionRevisionCredentialHeaderTests
         reread.DeliveryConfigJson.Should().NotContain(Token);
     }
 
+    /// <summary>
+    /// Rotation is a WRITE of a new secret, not an echo, so the grandfather does not cover it — and
+    /// this is the moment the refusal is meant to bite, with a message saying where the value goes
+    /// instead. Same header name, different value.
+    /// </summary>
+    [Fact]
+    public async Task UpdateDraft_RotatingAStoredCredentialHeadersValue_IsRefused()
+    {
+        await using var db = MakeDb();
+        var svc = MakeSvc(db);
+        var (orgId, _, conn) = await SeedAsync(db, svc);
+        var rev = await SeedLegacyRevisionAsync(db, conn, "draft", WithToken);
+
+        var act = () => svc.UpdateDraftAsync(
+            orgId, conn.Id, rev.Id, Bundle(WithRotatedToken), CancellationToken.None);
+
+        // Refusal first: without it the "rotated value was not persisted" check below would pass
+        // while proving nothing.
+        (await act.Should().ThrowAsync<CredentialHeaderInConfigException>())
+            .And.HeaderNames.Should().Equal("Authorization");
+
+        var reread = await db.SupplierConnectionRevisions.AsNoTracking().SingleAsync(r => r.Id == rev.Id);
+        reread.DeliveryConfigJson.Should().NotContain(RotatedToken);
+    }
+
+    /// <summary>
+    /// Grandfathering one header must not license a second. The caller echoes the stored
+    /// <c>X-Api-Key</c> back unchanged — allowed on its own — and ADDS an <c>Authorization</c> that
+    /// was never stored. Only the added name is refused, so the refusal names what the caller
+    /// actually introduced.
+    /// </summary>
+    [Fact]
+    public async Task UpdateDraft_AddingASecondCredentialHeaderBesideAGrandfatheredOne_IsRefused()
+    {
+        await using var db = MakeDb();
+        var svc = MakeSvc(db);
+        var (orgId, _, conn) = await SeedAsync(db, svc);
+        var rev = await SeedLegacyRevisionAsync(db, conn, "draft", WithApiKey);
+
+        var act = () => svc.UpdateDraftAsync(
+            orgId, conn.Id, rev.Id, Bundle(WithApiKeyPlusToken), CancellationToken.None);
+
+        // new[] { … } rather than a params element: the params overload of Equal would swallow the
+        // reason string as a second EXPECTED header name.
+        (await act.Should().ThrowAsync<CredentialHeaderInConfigException>())
+            .And.HeaderNames.Should().Equal(
+                new[] { "Authorization" },
+                "the echoed X-Api-Key is grandfathered; only the header the caller introduced is refused");
+
+        var reread = await db.SupplierConnectionRevisions.AsNoTracking().SingleAsync(r => r.Id == rev.Id);
+        reread.DeliveryConfigJson.Should().Be(WithApiKey);
+        reread.DeliveryConfigJson.Should().NotContain(Token);
+    }
+
+    /// <summary>
+    /// CREATE keeps its flat refusal even when the identical header is already stored on ANOTHER
+    /// revision of the same connection. A create has no stored predecessor of its own, so there is
+    /// nothing it is echoing back — grandfathering it would let any caller launder a credential
+    /// header into a brand-new revision by pointing at an old one.
+    /// </summary>
+    [Fact]
+    public async Task CreateDraft_IsStillFlat_EvenWhenAnIdenticalHeaderExistsOnAnotherRevision()
+    {
+        await using var db = MakeDb();
+        var svc = MakeSvc(db);
+        var (orgId, _, conn) = await SeedAsync(db, svc);
+        var existing = await SeedLegacyRevisionAsync(
+            db, conn, "published", WithToken, publishedAt: DateTime.UtcNow.AddDays(-2));
+        conn.ActiveRevisionId = existing.Id;
+        await db.SaveChangesAsync();
+
+        var act = () => svc.CreateDraftAsync(
+            orgId, conn.Id, Bundle(WithToken), cloneFromActive: false, "user", CancellationToken.None);
+
+        (await act.Should().ThrowAsync<CredentialHeaderInConfigException>())
+            .And.HeaderNames.Should().Equal("Authorization");
+        (await db.SupplierConnectionRevisions.CountAsync())
+            .Should().Be(1, "only the seeded revision may exist");
+    }
+
     // ── Allowances ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// <b>The regression test for the mapper-autosave outage.</b> A draft that already carries a
+    /// credential header — acquired through clone-from-active, republish-from-live, rollback or the
+    /// V1 backfill, all of which bypass <c>ApplyScalars</c> — has its whole bundle echoed back by
+    /// every mapping save (<c>useMapperModel.ts:471</c>,
+    /// <c>deliveryConfigJson: rev?.deliveryConfigJson ?? null</c>). A flat refusal on this leg would
+    /// 400 each one of those saves, during ordinary work, for exactly the pre-enforcement customers
+    /// grandfathering exists to protect — with no headers field anywhere in the UI to clear the
+    /// fault with.
+    ///
+    /// <para>The mapping edit is asserted to have LANDED, not merely to have not thrown: a version
+    /// that accepted the call and silently dropped the update would otherwise pass.</para>
+    /// </summary>
+    [Fact]
+    public async Task UpdateDraft_EchoingAnIdenticalStoredCredentialHeader_Saves()
+    {
+        await using var db = MakeDb();
+        var svc = MakeSvc(db);
+        var (orgId, _, conn) = await SeedAsync(db, svc);
+        var rev = await SeedLegacyRevisionAsync(db, conn, "draft", WithToken);
+
+        const string editedMapping = """{"Header":{"PoNumber":"po_number"}}""";
+        var saved = await svc.UpdateDraftAsync(
+            orgId, conn.Id, rev.Id,
+            Bundle(WithToken, inputMappingJson: editedMapping),
+            CancellationToken.None);
+
+        saved.Should().BeTrue("an unchanged echo of a stored header is not a write of a secret");
+
+        var reread = await db.SupplierConnectionRevisions.AsNoTracking().SingleAsync(r => r.Id == rev.Id);
+        reread.InputMappingJson.Should().Be(editedMapping, "the operator's mapping edit must land");
+        reread.DeliveryConfigJson.Should().Be(WithToken, "the echoed delivery bundle is preserved");
+    }
 
     [Fact]
     public async Task CreateDraft_WithOrdinaryHeaders_Succeeds()
@@ -231,5 +368,120 @@ public class ConnectionRevisionCredentialHeaderTests
         outcome.Should().Be(ConnectionPublishOutcome.Published,
             "publish activates a stored bundle; it is not a write of a new endpoint, and refusing it "
             + "would block every mapping-only revision for a supplier whose config predates the rule");
+    }
+
+    // ── The other bypass paths, against THIS rule ─────────────────────────────
+    //
+    // ConnectionRevisionTransportSecurityTests proves these four bypass ApplyScalars, using
+    // cleartext URLs. That is a different rule: it shows the transport guard is not reached, not
+    // that the credential-header guard leaves these paths alone. Each is therefore re-run here with
+    // a credential-bearing bundle. Each also asserts the header SURVIVED the copy, so a path that
+    // "succeeded" by silently dropping the delivery config could not pass.
+
+    [Fact]
+    public async Task CreateDraft_CloneFromActive_StillClonesABundleCarryingACredentialHeader()
+    {
+        await using var db = MakeDb();
+        var svc = MakeSvc(db);
+        var (orgId, _, conn) = await SeedAsync(db, svc);
+        var legacy = await SeedLegacyRevisionAsync(
+            db, conn, "published", WithToken, publishedAt: DateTime.UtcNow.AddDays(-2));
+        conn.ActiveRevisionId = legacy.Id;
+        await db.SaveChangesAsync();
+
+        var clone = await svc.CreateDraftAsync(
+            orgId, conn.Id, input: null, cloneFromActive: true, "user", CancellationToken.None);
+
+        clone.Should().NotBeNull();
+        clone!.DeliveryConfigJson.Should().Be(
+            WithToken,
+            "an operator editing a mapping must not be blocked by a header that is already live — "
+            + "and this is the path that gives the draft the header its mapping saves then echo back");
+    }
+
+    [Fact]
+    public async Task Rollback_StillRestoresABundleCarryingACredentialHeader()
+    {
+        await using var db = MakeDb();
+        var svc = MakeSvc(db);
+        var (orgId, _, conn) = await SeedAsync(db, svc);
+        var archived = await SeedLegacyRevisionAsync(
+            db, conn, "archived", WithToken, publishedAt: DateTime.UtcNow.AddDays(-2));
+        var live = await SeedLegacyRevisionAsync(
+            db, conn, "published", Clean, versionNo: 2, publishedAt: DateTime.UtcNow.AddDays(-1));
+        conn.ActiveRevisionId = live.Id;
+        await db.SaveChangesAsync();
+
+        var outcome = await svc.RollbackAsync(orgId, conn.Id, archived.Id, "user", CancellationToken.None);
+
+        outcome.Status.Should().Be(ConnectionRollbackStatus.Completed,
+            "rolling back to a version that was live before is the flow that must not be stranded");
+        outcome.NewRevision!.DeliveryConfigJson.Should().Be(WithToken);
+    }
+
+    [Fact]
+    public async Task RepublishLiveDelivery_StillSnapshotsALiveConfigCarryingACredentialHeader()
+    {
+        await using var db = MakeDb();
+        var svc = MakeSvc(db, revisionAuthority: true);
+        var (orgId, supplierId, conn) = await SeedAsync(db, svc);
+        var active = await SeedLegacyRevisionAsync(
+            db, conn, "published", Clean, publishedAt: DateTime.UtcNow.AddDays(-1));
+        conn.ActiveRevisionId = active.Id;
+        db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            SupplierId = supplierId,
+            Protocol   = DeliveryProtocolConstants.Http,
+            ConfigJson = WithToken,
+            CreatedAt  = DateTime.UtcNow.AddDays(-5),
+            UpdatedAt  = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var outcome = await svc.RepublishLiveDeliveryAsync(orgId, supplierId, "api", CancellationToken.None);
+
+        outcome.Status.Should().Be(DeliveryRepublishStatus.Republished,
+            "this is the path the delivery-config editor triggers after a grandfathered live save; "
+            + "refusing it would leave the pinned revision pointing at a different config than live");
+        // DeliveryRepublishOutcome carries only the new version number, so the snapshot is read back.
+        var republished = await db.SupplierConnectionRevisions.AsNoTracking()
+            .SingleAsync(r => r.ConnectionId == conn.Id && r.VersionNo == outcome.NewVersionNo);
+        republished.DeliveryConfigJson.Should().Be(WithToken);
+    }
+
+    /// <summary>
+    /// The V1 backfill mirrors the live row into a published rev-1. It has a reachable seam —
+    /// <c>ConnectionBackfillService.BackfillAllAsync</c>, the same one
+    /// <c>ConnectionBackfillServiceTests</c> drives — so it is covered rather than skipped. A
+    /// delivery config alone makes a supplier a backfill candidate, and the supplier must have no
+    /// connection yet, so this seeds its own org/supplier instead of reusing <c>SeedAsync</c>.
+    /// </summary>
+    [Fact]
+    public async Task V1Backfill_StillSnapshotsALiveConfigCarryingACredentialHeader()
+    {
+        await using var db = MakeDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "Acme OÜ", CreatedAt = now });
+        db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            SupplierId = supplierId,
+            Protocol   = DeliveryProtocolConstants.Http,
+            ConfigJson = WithToken,
+            CreatedAt  = now,
+            UpdatedAt  = now,
+        });
+        await db.SaveChangesAsync();
+
+        var created = await new ConnectionBackfillService(db).BackfillAllAsync(CancellationToken.None);
+
+        created.Should().Be(1, "a config that predates enforcement must still be backfillable");
+        var rev = await db.SupplierConnectionRevisions.AsNoTracking().SingleAsync();
+        rev.DeliveryConfigJson.Should().Be(WithToken, "the backfill mirrors the live row verbatim");
     }
 }

@@ -31,8 +31,11 @@ and copied wherever that blob travels, including connection-revision snapshots.
 
 The correct route already exists and is a few lines above in the same method: the dispatcher applies
 auth from the **decrypted** credential payload via `_auth.ApplyAsync(request, creds, client,
-requestCt)`, which supports bearer, basic, apikey and oauth2. The operator has somewhere right to
-put it. Nothing tells them so, and nothing stops them putting it in the wrong place.
+requestCt)`, which supports `apikey`, `bearer`, `basic` and `oauth2_client_credentials`
+(`HttpAuthApplier.cs:59,75,84,95` — the last one is *not* named `oauth2`, and naming a type the
+system does not accept is the same defect that was caught in the operator-facing refusal message).
+The operator has somewhere right to put it. Nothing tells them so, and nothing stops them putting it
+in the wrong place.
 
 This was found and deliberately deferred by PR #157, which named it as its own packet. This is that
 packet.
@@ -180,7 +183,7 @@ A false negative leaves a secret in cleartext that the operator chose to name ob
 positive hard-blocks a legitimate save with no UI workaround. Given §2, the list is deliberately
 precise rather than aggressive.
 
-### 3.4 Grandfathering (live delivery-config path only)
+### 3.4 Grandfathering (every UPDATE of an existing row — never a CREATE)
 
 `FindCredentialHeaders(incoming, stored)` refuses an offending header **unless the identical
 `(name, value)` pair is already present in `stored`.**
@@ -200,6 +203,39 @@ precise rather than aggressive.
 This is the same old-vs-new shape `UpsertAsync` already uses for
 `DeliveryHostKeyConfig.PreserveRecordedFingerprints`, in the same method.
 
+#### The revision UPDATE leg needs it for the same reason, and for a second caller
+
+An earlier draft of this design scoped grandfathering to the live delivery-config path and gave
+`ApplyScalars` a flat refusal on both its legs. That was wrong, and the analysis that produced it
+looked only at the delivery editor. `ApplyScalars` is reached from **two** callers —
+`UpdateDraftAsync` (`SupplierConnectionService.cs:183`) and `ApplyInput` ← `CreateDraftAsync`
+(`:835`) — and the update leg has exactly the unmanaged-key round-trip §2 describes:
+
+1. A draft legitimately **acquires** a credential header without ever passing `ApplyScalars` —
+   clone-from-active (`:150`), rollback (`:364`), republish-from-live (`:488`), and the V1 backfill
+   (`ConnectionBackfillService.cs:165`). All four are allowed by design (§4).
+2. Editing a connection in the frontend creates that draft by cloning the live one:
+   `createConnectionDraft(connectionId, { cloneFromActive: true })`
+   (`src/components/connections/useConnectionRevisions.ts:138`).
+3. The PUT replaces the whole bundle, so **every mapping save echoes the delivery config back**:
+   `deliveryConfigJson: rev?.deliveryConfigJson ?? null`
+   (`src/components/bridge/mapper/useMapperModel.ts:471`). That is deliberate — the comment at
+   `:461-463` records that without it "saving a mapping would silently wipe the draft's delivery
+   channel + item codes."
+
+A flat refusal on the update leg therefore 400s **every mapping autosave** for exactly the
+pre-enforcement customers grandfathering exists to protect, during ordinary work, with no way to
+clear the fault — there is no headers field anywhere in the UI. That is the outage §2 refuses to
+ship, arriving through a second door.
+
+So the update leg passes the draft's own currently-stored `DeliveryConfigJson` as `stored`, read
+**before** `ApplyScalars` overwrites it. The create leg stays flat: a create has no stored
+predecessor, so "refuse what the caller introduces" is unchanged there, and an identical header
+sitting on some *other* revision grandfathers nothing.
+
+This is the spec's own principle, applied where it was missed: **refuse what the caller
+introduces, not what they merely echo back.**
+
 ---
 
 ## 4. Write paths
@@ -207,8 +243,8 @@ This is the same old-vs-new shape `UpsertAsync` already uses for
 | Path | Reaches | Behaviour | Rationale |
 |---|---|---|---|
 | Live delivery-config upsert | `DeliveryConfigService.UpsertAsync` | refuse **added or changed** | no UI to remove the header (§2) |
-| Revision create (with bundle) | `ApplyScalars` | **refuse** | caller-supplied, mirrors #157 |
-| Revision update | `ApplyScalars` | **refuse** | caller-supplied, mirrors #157 |
+| Revision create (with bundle) | `ApplyScalars` (via `ApplyInput`) | **refuse flat** | caller-supplied, no stored predecessor |
+| Revision update | `ApplyScalars` (via `UpdateDraftAsync`) | refuse **added or changed**, against the draft's own stored blob | the mapper echoes the whole bundle on every autosave (§3.4) |
 | Clone-from-active | internal copy | allowed, warned | #157: refusing turns a weakness into an outage |
 | Rollback | internal copy | allowed, warned | restoring a version that was live before |
 | Republish-from-live | internal copy | allowed, warned | **the path the delivery-config editor triggers** |
@@ -216,9 +252,16 @@ This is the same old-vs-new shape `UpsertAsync` already uses for
 | V1 backfill | internal copy | allowed, warned | mirrors the live row |
 
 Republish-from-live never passes through `ApplyScalars`, so the ordinary operator flow — edit the
-delivery config, which republishes a revision — keeps working after a grandfathered save. The
-revision path's flat refusal therefore strands only the case #157 already accepted and pinned: hand
--editing a draft bundle that predates enforcement.
+delivery config, which republishes a revision — keeps working after a grandfathered save.
+
+Those four bypasses are what makes the **create** leg safe to refuse flat: no already-live bundle
+reaches it. They are **not** what makes the update leg safe, because they are precisely how a draft
+acquires the header that the mapper then echoes back on every save (§3.4). Nothing pre-existing is
+stranded on the update leg either, but that is bought by grandfathering the echo, not by the bypass.
+
+What remains refused, on both legs, is a caller **introducing** a credential header: adding one that
+was not stored, or rotating the value of one that was. Rotation is the moment the refusal is meant
+to bite (§6).
 
 ### Placement
 
@@ -237,7 +280,11 @@ The new check needs `existing`, so it goes immediately after the fetch and **bef
 `if (existing is null)` block that reassigns `existing` to a fresh entity whose `ConfigJson` is
 `"{}"`. Before any mutation, matching the ordering comment `ApplyScalars` already carries.
 
-In `ApplyScalars` it joins the two existing validators, ahead of every assignment.
+In `ApplyScalars` it joins the two existing validators, ahead of every assignment. `ApplyScalars`
+takes a `string? storedConfigJson = null` parameter and hands it straight to the validator:
+`UpdateDraftAsync` passes the tracked draft's `DeliveryConfigJson`, captured **before** the call
+(the same statement assigns over it), and `ApplyInput` passes nothing, so the create leg keeps the
+default `null` and grandfathers nothing.
 
 ### Refusal shape
 
@@ -303,9 +350,34 @@ So this packet ships **two PRs**, backend first:
    is updated with it; a new case covers the header fault. The only files touched are
    `DeliveryConfigEditor.tsx` and its tests, so it stays file-disjoint from any other chip in flight.
 
-The backend change is safe to merge before the frontend one — a header-fault warning rendered under
-the old heading is imprecise, not false, and no secret is echoed either way — but the frontend PR is
-part of this packet and not a follow-up.
+**The backend must NOT ship ahead of the frontend banner change. They land in the same release.**
+
+An earlier draft of this section rated shipping backend-first as "imprecise, not false." That is
+wrong, and it contradicts this section's own sentence two paragraphs up. Check the shipped banner
+(`DeliveryConfigEditor.tsx:1479-1483`) against the case this packet actually creates — a
+credential-header fault on an `https://` endpoint, which is the **common** case precisely because
+the transport rule already refuses new cleartext ones:
+
+> **This supplier's saved endpoint is not secure.** *{warning}* Orders are still being delivered to
+> it, so nothing has stopped — but until **the address is corrected here**, every order and its
+> credentials cross the network in the clear.
+
+Three statements, all false for that config:
+
+1. **"This supplier's saved endpoint is not secure."** The endpoint is `https://` and passes the
+   transport policy. The heading asserts a fault that does not exist.
+2. **"until the address is corrected here."** The address is correct and needs no change; the fix is
+   to move a header value into the encrypted credentials. It points the operator at the wrong field —
+   and at the only field the editor exposes, since there is no headers field at all.
+3. **"every order and its credentials cross the network in the clear."** The order crosses over TLS.
+   Nothing is in the clear on the wire; the secret is at rest in `config_json`.
+
+That is not imprecision. It is an operator told to fix a URL that is already fine, while the real
+fault keeps its token in a cleartext column. The correct message is inside chrome that contradicts
+it on every line, which this section already names as worse than no message. Both cannot be true, so
+the risk rating goes, not the principle.
+
+The two PRs are ordered backend-then-frontend for review, but neither is released without the other.
 
 `HttpDeliveryDispatcher` gains `WarnIfCredentialHeaders(config)` beside the existing
 `WarnIfInsecureTransport(config, endpoint)` — once per delivery attempt, **header names only, never a
@@ -321,8 +393,11 @@ touched.
 1. **Every affected operator is told, immediately.** The frontend already renders
    `insecureTransportWarning` (`DeliveryConfigEditor.tsx:1474`, pinned by
    `DeliveryConfigEditor.tls.test.tsx`), so the composed message reaches the delivery editor the
-   moment the backend ships. It names the header and the destination, never the token. The banner's
-   surrounding copy is corrected by the companion frontend PR in §5.1.
+   moment the backend ships. It names the header and the destination, never the token.
+   **This only holds once the companion frontend PR (§5.1) ships with it.** Released on its own, the
+   backend puts a correct sentence inside a banner whose heading, instruction and consequence clause
+   are each false for an https endpoint with a header fault — so the release gate is both PRs
+   together, not the backend alone.
 2. **They are never blocked meanwhile.** Grandfathering means unrelated edits keep saving while they
    move the token.
 3. **The refusal bites at exactly the right moment.** Rotating the token requires changing the value,
@@ -345,7 +420,7 @@ repo.
 |---|---|
 | `ProcuLink.Infrastructure.Tests/Security/CredentialHeaderNamesTests.cs` | classifier table (both verdicts), extraction, duplicate-key, grandfather matrix, real-`JsonSerializer` cross-check |
 | `ProcuLink.Infrastructure.Tests/Services/DeliveryConfigCredentialHeaderTests.cs` | `UpsertAsync` refuse/allow/grandfather, DB re-read, `GET` warning |
-| `ProcuLink.Api.Tests/Services/ConnectionRevisionCredentialHeaderTests.cs` | `ApplyScalars` flat refusal; internal-copy paths still allowed |
+| `ProcuLink.Api.Tests/Services/ConnectionRevisionCredentialHeaderTests.cs` | `ApplyScalars`: update grandfathers the echo / refuses an add or a rotation, create refuses flat even when the header exists on another revision; and all five internal-copy paths (clone-from-active, rollback, republish-from-live, publish, V1 backfill) still allowed **with a credential-bearing bundle** |
 | `ProcuLink.Api.Tests/Controllers/ConnectionRevisionCredentialHeaderControllerTests.cs` | 400 body shape, revision DTO warning |
 | `ProcuLink.Api.Tests/Controllers/SuppliersControllerDeliveryConfigCredentialHeaderTests.cs` | `SuppliersController` 400 body shape (no existing delivery-config controller test file to extend) |
 | `ProcuLink.Infrastructure.Tests/Services/Dispatchers/HttpDeliveryDispatcherTests.cs` (extended) | log names the header, not the value |

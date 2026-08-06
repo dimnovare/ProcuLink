@@ -118,10 +118,17 @@ public class DeliveryConfigCredentialHeaderTests
         await using var db = CreateDb();
         var service = CreateService(db);
 
+        // X-Idempotency-Key and X-Auth-Email are the classifier's precision line, not decoration:
+        // they are the two headers the segment rule would refuse if it took bare `key` or bare
+        // `auth`, and a false refusal here is a save the operator cannot make and cannot work
+        // around. Every other test reaches them through the predicate only — this is the one place
+        // they travel the whole UpsertAsync write path.
         var saved = await SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(),
-            """{"url":"https://supplier.example/orders","headers":{"Content-Type":"application/xml","X-Correlation-Id":"abc","X-Supplier-Account":"ACME-4417"}}""");
+            """{"url":"https://supplier.example/orders","headers":{"Content-Type":"application/xml","X-Correlation-Id":"abc","X-Supplier-Account":"ACME-4417","X-Idempotency-Key":"9f2c","X-Auth-Email":"ops@supplier.example"}}""");
 
         saved.ConfigJson.Should().Contain("X-Supplier-Account");
+        saved.ConfigJson.Should().Contain("X-Idempotency-Key");
+        saved.ConfigJson.Should().Contain("X-Auth-Email");
         (await db.SupplierDeliveryConfigs.CountAsync()).Should().Be(1);
     }
 

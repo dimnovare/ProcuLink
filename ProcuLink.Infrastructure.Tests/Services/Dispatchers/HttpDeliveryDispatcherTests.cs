@@ -289,6 +289,11 @@ public class HttpDeliveryDispatcherTests
         result.Success.Should().BeTrue("delivery must continue — refusing mid-flight would strand orders");
 
         var warnings = string.Join("\n", logger.Warnings);
+        // Pinned to a phrase only the credential warning emits. "Authorization" alone is NOT
+        // attributable: the other LogWarning site in this method — "Skipping invalid delivery header
+        // name '{HeaderName}'" — can print the same literal, so a test asserting only that would
+        // stay green if the credential warning were deleted and the header merely rejected instead.
+        warnings.Should().Contain("credential-bearing delivery header");
         warnings.Should().Contain("Authorization");
         warnings.Should().NotContain(token);
     }

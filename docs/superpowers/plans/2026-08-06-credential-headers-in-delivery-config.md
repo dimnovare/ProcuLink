@@ -4,7 +4,7 @@
 
 **Goal:** Refuse, on the write paths only, a credential typed into a supplier delivery config's extra-headers map — which `config_json` stores in cleartext — while every pre-existing config keeps delivering and keeps being editable.
 
-**Architecture:** One primitive in `ProcuLink.Core/Services/Delivery/DeliveryConfigTransport.cs` (the file PR #157 established) classifies header names and extracts them from a config blob. Both write paths call it, both read paths surface it through the existing `InsecureTransportWarning` field, and the HTTP dispatcher logs it on every attempt. The live delivery-config path grandfathers an identical `(name, value)` pair already stored; the caller-supplied revision path refuses flat.
+**Architecture:** One primitive in `ProcuLink.Core/Services/Delivery/DeliveryConfigTransport.cs` (the file PR #157 established) classifies header names and extracts them from a config blob. Both write paths call it, both read paths surface it through the existing `InsecureTransportWarning` field, and the HTTP dispatcher logs it on every attempt. Grandfathering an identical `(name, value)` pair already stored applies to every UPDATE of an existing row — the live delivery-config upsert and the revision draft update, which the mapper echoes the whole bundle through on every autosave. Only revision CREATE refuses flat, because a create has no stored predecessor.
 
 **Tech Stack:** .NET 8, C# 12, EF Core (InMemory in tests), xUnit, FluentAssertions, Moq, `System.Text.Json`.
 
@@ -35,7 +35,7 @@
 | `ProcuLink.Core/Services/Delivery/DeliveryConfigTransport.cs` | **modify** — the classifier, the extraction, the messages, the composer, the exception | 1, 2, 5 |
 | `ProcuLink.Infrastructure/Services/DeliveryConfigService.cs` | **modify** — live write guard (grandfathered) + read surface | 3, 5 |
 | `ProcuLink.Api/Controllers/SuppliersController.cs` | **modify** — 400 shape for the live path | 3 |
-| `ProcuLink.Api/Services/SupplierConnectionService.cs` | **modify** — revision write guard (flat) | 4 |
+| `ProcuLink.Api/Services/SupplierConnectionService.cs` | **modify** — revision write guard (update grandfathered, create flat) | 4 |
 | `ProcuLink.Api/Controllers/ConnectionsController.cs` | **modify** — 400 shape + revision read surface | 4, 5 |
 | `ProcuLink.Api/Contracts/ConnectionDto.cs` | **modify** — widen the field's doc comment | 5 |
 | `ProcuLink.Infrastructure/Services/Dispatchers/HttpDeliveryDispatcher.cs` | **modify** — dispatch-time log | 6 |

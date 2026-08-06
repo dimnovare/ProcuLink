@@ -169,7 +169,7 @@ public static class DeliveryConfigTransport
     /// Every credential-bearing header name in the blob, in document order, deduped
     /// case-insensitively. Empty means there is nothing to refuse.
     ///
-    /// <para><strong>Every <c>headers</c>-keyed object is inspected, not the first.</strong> Same
+    /// <para><strong>Every root-level <c>headers</c>-keyed object is inspected, not the first.</strong> Same
     /// trap as <see cref="ExtractUrls"/>: a JSON object may repeat a key and System.Text.Json keeps
     /// both — <see cref="JsonDocument"/> enumerates them in document order while
     /// <c>JsonSerializer.Deserialize</c>, what the dispatcher uses, binds the LAST. Inspecting one
@@ -177,8 +177,10 @@ public static class DeliveryConfigTransport
     ///
     /// <para><strong>Not protocol-scoped.</strong> Only the http connector declares a headers map
     /// today, but a guard scoped to a protocol list goes stale in one direction — a protocol that
-    /// later grows one inherits no protection and nothing fails. Inspecting the key wherever it
-    /// appears costs nothing and cannot produce a false refusal.</para>
+    /// later grows one inherits no protection and nothing fails. Inspecting the key on every
+    /// protocol costs nothing and cannot produce a false refusal. Scope-free across PROTOCOLS; still
+    /// root-level within the blob, which is the only depth any dispatcher binds — see
+    /// <see cref="ReadHeaderEntries"/>.</para>
     ///
     /// <para><paramref name="storedConfigJson"/> grandfathers a header whose name AND value are
     /// already persisted, so an unchanged round-trip is not treated as a write of a secret. The
@@ -264,9 +266,20 @@ public static class DeliveryConfigTransport
     }
 
     /// <summary>
-    /// Every (name, comparable value) pair under EVERY <c>headers</c>-keyed object in the blob.
-    /// An unparseable blob yields nothing: <c>ValidateConfigJson</c> already refuses those on the
-    /// save path, and failing here as well would turn a parse error into a security refusal.
+    /// Every (name, comparable value) pair under EVERY <c>headers</c>-keyed object at the ROOT of the
+    /// blob. "Every" is about repeated keys at one level, not about depth.
+    ///
+    /// <para><b>Root-level by design, not by oversight.</b> This walks
+    /// <c>RootElement.EnumerateObject()</c> and does not recurse. That matches what can actually
+    /// reach the wire: <c>HttpDeliveryDispatcher</c>'s <c>HttpConfig</c> record is flat
+    /// (<c>Url</c>, <c>Method</c>, <c>Headers</c>, <c>TimeoutSeconds</c>), so a headers map nested
+    /// under some other key is not deserialized and not applied to any request — it is inert text,
+    /// and refusing it would be a false refusal on a path with no UI workaround. A protocol that
+    /// later reads a NESTED headers map would need this walk widened with it; the guard is scoped to
+    /// what the dispatchers bind, and nothing here claims deeper reach.</para>
+    ///
+    /// <para>An unparseable blob yields nothing: <c>ValidateConfigJson</c> already refuses those on
+    /// the save path, and failing here as well would turn a parse error into a security refusal.</para>
     /// </summary>
     private static List<(string Name, string Value)> ReadHeaderEntries(string? configJson)
     {

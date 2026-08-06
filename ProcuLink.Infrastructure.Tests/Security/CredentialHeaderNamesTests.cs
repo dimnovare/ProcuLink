@@ -83,12 +83,23 @@ public class CredentialHeaderNamesTests
         DeliveryConfigTransport.IsCredentialHeaderName("  Authorization  ").Should().BeTrue();
 
     /// <summary>
-    /// Walks the published list itself, so an entry added to it can never be added without being
-    /// covered. The count floor is the anti-vacuity guard: an emptied list would otherwise make
-    /// this test assert nothing at all and still pass.
+    /// Walks the published list, so an entry added to it cannot be added without being covered —
+    /// and walks it through <see cref="DeliveryConfigTransport.FindCredentialHeaders"/> on a real
+    /// config blob rather than through the predicate.
+    ///
+    /// <para><b>Why not the predicate.</b> Asserting <c>IsCredentialHeaderName(name)</c> over
+    /// <c>KnownCredentialHeaderNames</c> is tautological: the predicate's first act is to look the
+    /// trimmed name up in that same <c>HashSet</c> and return true, so no entry could ever fail and
+    /// the walk pinned nothing but its own construction. Going through the extractor makes it a real
+    /// behavioural pin — JSON parse, root-level <c>headers</c> match, case-insensitive
+    /// classification, and the returned name — the whole path a save actually runs.</para>
+    ///
+    /// <para>The count floor is the anti-vacuity guard: an emptied list would otherwise make this
+    /// walk assert nothing at all and still pass. The synthesised value is a placeholder, never a
+    /// credential, and only the NAME is ever asserted or printed.</para>
     /// </summary>
     [Fact]
-    public void EveryKnownCredentialHeaderName_IsRefusedByThePredicate()
+    public void EveryKnownCredentialHeaderName_IsFoundInARealConfigBlob()
     {
         var names = DeliveryConfigTransport.KnownCredentialHeaderNames;
 
@@ -96,8 +107,17 @@ public class CredentialHeaderNamesTests
             "an emptied or gutted list would make this walk assert nothing");
 
         foreach (var name in names)
-            DeliveryConfigTransport.IsCredentialHeaderName(name)
-                .Should().BeTrue($"'{name}' is on the published known-credential list");
+        {
+            var configJson = JsonSerializer.Serialize(new
+            {
+                url = "https://supplier.example/orders",
+                headers = new Dictionary<string, string> { [name] = "placeholder" },
+            });
+
+            DeliveryConfigTransport.FindCredentialHeaders(configJson)
+                .Should().ContainSingle($"'{name}' is on the published known-credential list")
+                .Which.Should().Be(name);
+        }
     }
 
     // ── Extraction ───────────────────────────────────────────────────────────
@@ -280,10 +300,17 @@ public class CredentialHeaderNamesTests
     // ── The exception ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The base type is load-bearing, not incidental. Every controller that already catches
-    /// ArgumentException answers 400; if this stopped deriving from it, an un-updated handler would
-    /// turn a caller's mistake into a 500. Nothing else covers this — the write-path tests catch the
-    /// concrete type.
+    /// The base type is load-bearing, not incidental: if this stopped deriving from
+    /// <see cref="ArgumentException"/>, a handler that was not updated would turn a caller's mistake
+    /// into a 500. Nothing else covers this — the write-path tests catch the concrete type.
+    ///
+    /// <para>Stated precisely, because the obvious universal is false. There are two
+    /// <c>catch (ArgumentException)</c> blocks in controllers and they do NOT agree:
+    /// <c>SuppliersController.cs:803</c> answers 400, while <c>DevFilesController.cs:41-43</c>
+    /// answers <c>NotFound()</c> — 404. The claim that holds is the narrower one: every controller
+    /// this exception can actually REACH answers 400 rather than 500. The DevFiles catch wraps
+    /// <c>LocalFileStorageService.GetFullPath</c> on a local-file dev endpoint, which never touches a
+    /// delivery config, so it cannot see this type at all.</para>
     /// </summary>
     [Fact]
     public void TheRefusalIsAnArgumentException_SoAnUnupdatedHandlerStillAnswers400()

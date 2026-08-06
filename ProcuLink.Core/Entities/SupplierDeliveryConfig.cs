@@ -56,19 +56,21 @@ public class SupplierDeliveryConfig
     /// revision draft input — now refuse one, through the single classifier
     /// <c>DeliveryConfigTransport.FindCredentialHeaders</c>.</para>
     ///
-    /// <para><b>Two deliberate limits, and an asymmetry between the write paths.</b> Enforcement is
-    /// on WRITE only: a config saved before it existed keeps delivering, because refusing at
-    /// dispatch would strand orders. The live delivery-config save grandfathers a header whose name
-    /// AND value are already stored, because the delivery editor has no headers field and
-    /// round-trips the stored map on every save — refusing that echo would lock an operator out of
-    /// every unrelated edit with no way to remove the header; adding one, or rotating its value, is
-    /// still refused. The connection revision draft input refuses FLAT, with no grandfathering: it
-    /// is caller-supplied input, and the paths that carry an already-live bundle forward
-    /// (clone-from-active, rollback, publish, republish-from-live) never reach the validator, so
-    /// nothing already live is stranded by the stricter rule. Both cases are surfaced by
-    /// <c>DeliveryConfigResponse.InsecureTransportWarning</c> (mirrored on <c>ConnectionRevisionDto</c>
-    /// so both editors report the same blob the same way) and by a dispatch-time log that names the
-    /// header and never its value.</para>
+    /// <para><b>Two deliberate limits, and a create/update asymmetry.</b> Enforcement is on WRITE
+    /// only: a config saved before it existed keeps delivering, because refusing at dispatch would
+    /// strand orders. Every UPDATE of an existing row grandfathers a header whose name AND value are
+    /// already stored — both the live delivery-config save and the connection revision draft update.
+    /// Neither editor has a headers field, and both round-trip the stored blob on every save (the
+    /// delivery editor carries <c>headers</c> through as an unmanaged key; the mapper echoes the
+    /// whole revision bundle back on every autosave, or a mapping save would wipe the draft's
+    /// delivery channel), so refusing that echo would lock an operator out of every unrelated edit
+    /// with no way to remove the header. Adding one, or rotating its value, is still refused on both.
+    /// Only revision CREATE refuses FLAT: it has no stored predecessor, and an identical header on
+    /// some other revision must not license one here. Both cases are surfaced by
+    /// <c>DeliveryConfigResponse.InsecureTransportWarning</c> and by a dispatch-time log that names
+    /// the header and never its value. <c>ConnectionRevisionDto</c> carries the same warning from the
+    /// same composer, so the two DTOs cannot describe one blob differently — though only the delivery
+    /// editor renders it today; the revision field has no frontend consumer yet.</para>
     /// </summary>
     public string ConfigJson { get; set; } = "{}";
 
