@@ -4,7 +4,9 @@ using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -155,6 +157,7 @@ public sealed class ConnectionsController : ControllerBase
 
     [HttpPost("{connectionId:guid}/revisions")]
     [ProducesResponseType(typeof(ConnectionRevisionDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> CreateDraft(
         Guid connectionId, [FromBody] CreateConnectionRevisionRequest? request, CancellationToken ct)
@@ -163,13 +166,25 @@ public sealed class ConnectionsController : ControllerBase
         if (await GateBundleAsync(request.Bundle, ct) is { } denied) return denied;
 
         var input = request.Bundle is null ? null : ToInput(request.Bundle);
-        var draft = await _service.CreateDraftAsync(
-            OrgId, connectionId, input, request.CloneFromActive, CurrentUser, ct);
-        return draft is null ? NotFound() : Ok(ToRevisionDto(draft));
+        try
+        {
+            var draft = await _service.CreateDraftAsync(
+                OrgId, connectionId, input, request.CloneFromActive, CurrentUser, ct);
+            return draft is null ? NotFound() : Ok(ToRevisionDto(draft));
+        }
+        catch (OutboundUrlPolicyException ex)
+        {
+            return InsecureEndpoint(ex);
+        }
+        catch (ClientSuppliedCredentialsRefException ex)
+        {
+            return RejectedCredentialsRef(ex);
+        }
     }
 
     [HttpPut("{connectionId:guid}/revisions/{revisionId:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> UpdateDraft(
@@ -177,7 +192,20 @@ public sealed class ConnectionsController : ControllerBase
     {
         if (await GateBundleAsync(request.Bundle, ct) is { } denied) return denied;
 
-        var result = await _service.UpdateDraftAsync(OrgId, connectionId, revisionId, ToInput(request.Bundle), ct);
+        bool? result;
+        try
+        {
+            result = await _service.UpdateDraftAsync(OrgId, connectionId, revisionId, ToInput(request.Bundle), ct);
+        }
+        catch (OutboundUrlPolicyException ex)
+        {
+            return InsecureEndpoint(ex);
+        }
+        catch (ClientSuppliedCredentialsRefException ex)
+        {
+            return RejectedCredentialsRef(ex);
+        }
+
         return result switch
         {
             null  => NotFound(),
@@ -185,6 +213,23 @@ public sealed class ConnectionsController : ControllerBase
             true  => NoContent(),
         };
     }
+
+    /// <summary>
+    /// A delivery endpoint the shared transport policy refuses is the caller's mistake, so it is a
+    /// 400 rather than the 500 an unhandled <see cref="OutboundUrlPolicyException"/> would produce.
+    /// Both the machine-readable code and the operator-facing message travel, matching the webhook
+    /// and catalog endpoints; the message comes from the policy and never quotes the URL back.
+    /// </summary>
+    private BadRequestObjectResult InsecureEndpoint(OutboundUrlPolicyException ex) =>
+        BadRequest(new { error = ex.ErrorCode, message = ex.PolicyMessage });
+
+    /// <summary>
+    /// A caller-supplied encrypted-credential reference is refused rather than silently dropped, so
+    /// that whatever made a client send it surfaces instead of failing quietly. Same body shape as
+    /// <see cref="InsecureEndpoint"/>; the message never quotes the submitted value.
+    /// </summary>
+    private BadRequestObjectResult RejectedCredentialsRef(ClientSuppliedCredentialsRefException ex) =>
+        BadRequest(new { error = ClientSuppliedCredentialsRefException.Code, message = ex.PolicyMessage });
 
     /// <summary>
     /// Launch batch 3 — runs the REAL test pack (replay over recent orders + conformance check;
@@ -332,7 +377,11 @@ public sealed class ConnectionsController : ControllerBase
         r.AcceptanceProfileId, r.AcceptanceVersionNo, r.CatalogMode,
         r.ItemMappings.Select(m => new ConnectionItemMappingDto(
             m.BuyerItemCode, m.SupplierItemCode, m.Confidence, m.Source)).ToList(),
-        r.TestPassed, r.TestedAt, r.TestResultJson);
+        r.TestPassed, r.TestedAt, r.TestResultJson,
+        // A revision written before enforcement reached this path keeps delivering, so the editor
+        // has to be able to show that its endpoint is one the policy now refuses. Same extraction
+        // and same policy as the save path and the dispatch-time log, so the three cannot disagree.
+        DeliveryConfigTransport.DescribeInsecureTransport(r.DeliveryProtocol, r.DeliveryConfigJson));
 
     private static ConnectionRevisionDraftInput ToInput(ConnectionRevisionBundleDto b) => new(
         b.InputMappingJson, b.OutputMappingJson, b.OutputFormat,

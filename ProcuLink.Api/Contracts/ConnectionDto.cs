@@ -29,7 +29,15 @@ public record ConnectionRevisionDto(
     Guid? AcceptanceProfileId, int? AcceptanceVersionNo, string CatalogMode,
     IReadOnlyList<ConnectionItemMappingDto> ItemMappings,
     // Launch batch 3 — test evidence (null on never-tested / legacy revisions).
-    bool? TestPassed = null, DateTime? TestedAt = null, string? TestResultJson = null);
+    bool? TestPassed = null, DateTime? TestedAt = null, string? TestResultJson = null,
+    // Set when this revision's SAVED delivery endpoint is one the transport policy now refuses — a
+    // revision written before TLS enforcement reached this path. Delivery continues (refusing a
+    // stored bundle mid-flight would turn a security weakness into an outage), so this is how the
+    // operator finds out. Null when fine. Never contains the URL: a stored userinfo URL is exactly
+    // the case where echoing it would copy the password into the editor. Mirrors
+    // DeliveryConfigResponse.InsecureTransportWarning so both editors report the same blob the
+    // same way.
+    string? InsecureTransportWarning = null);
 
 /// <summary>
 /// Launch batch 3 — evidence summary returned by POST .../test: the test pack ran (replay leg +

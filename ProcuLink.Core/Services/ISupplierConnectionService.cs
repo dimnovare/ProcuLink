@@ -24,6 +24,45 @@ public sealed record ConnectionItemMappingInput(
     string BuyerItemCode, string SupplierItemCode, float Confidence, string Source);
 
 /// <summary>
+/// Thrown when a caller puts a value in <see cref="ConnectionRevisionDraftInput.CredentialsRef"/>.
+///
+/// <para>That field holds the AES-GCM ciphertext of a supplier's delivery credentials, and the
+/// dispatchers decrypt it to authenticate the outbound request. The ciphertext is encrypted with no
+/// associated data, so it is bound to the deployment key and to nothing else — not to an org, not to
+/// a supplier — which means any blob that decrypts, decrypts for every tenant. Accepting one from a
+/// request body therefore let a caller nominate credentials they never proved they own.</para>
+///
+/// <para>Nothing legitimate is lost: the revision read path returns only <c>HasCredentials</c>, a
+/// bool, so a client cannot obtain its own ciphertext through this API and can only ever be echoing
+/// one it acquired elsewhere. Credentials reach a revision the way they always did in production —
+/// saved on the supplier delivery config, where the server encrypts them, then copied forward
+/// internally by clone-from-active, rollback and republish-from-live, none of which read this
+/// input.</para>
+///
+/// <para>Derives from <see cref="ArgumentException"/> so an unprepared handler still maps it to 400.
+/// <see cref="PolicyMessage"/> is the operator-facing text without ArgumentException's
+/// <c>(Parameter '…')</c> suffix, and it never quotes the submitted value.</para>
+/// </summary>
+public sealed class ClientSuppliedCredentialsRefException : ArgumentException
+{
+    /// <summary>Machine-readable code returned alongside the message.</summary>
+    public const string Code = "credentials_ref_not_accepted";
+
+    /// <summary>Operator-facing text, free of the ArgumentException parameter suffix.</summary>
+    public const string Explanation =
+        "Delivery credentials cannot be set on a connection revision directly. Save them on the " +
+        "supplier's delivery configuration, where they are encrypted, and they will be carried into " +
+        "the revision for you.";
+
+    public string PolicyMessage => Explanation;
+
+    public ClientSuppliedCredentialsRefException()
+        : base(Explanation, nameof(ConnectionRevisionDraftInput.CredentialsRef))
+    {
+    }
+}
+
+/// <summary>
 /// Evidence from one test-pack run over a revision (launch batch 3): the outcome, when it ran,
 /// and an honest summary JSON (replay leg + conformance leg + any execution error).
 /// </summary>
