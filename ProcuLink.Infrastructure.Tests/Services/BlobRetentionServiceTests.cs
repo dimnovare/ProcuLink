@@ -107,6 +107,72 @@ public class BlobRetentionServiceTests
 
     // ── Armed mode: opt-in + DryRun=false ───────────────────────────────────────
 
+    /// <summary>
+    /// A dead-lettered order's blobs are NEVER purged, however old the order is and however armed
+    /// the sweep. <c>delivery_dead_letter</c> looks terminal and is not: the ops requeue
+    /// (<c>OpsController.RequeueDelivery</c>, gated on
+    /// <see cref="OrderStatusMachine.RequeueableFrom"/>) is the ONLY way back from it —
+    /// <c>/api/orders/{id}/retry-delivery</c> deliberately refuses the status — and that requeue
+    /// re-dispatches the STORED artifact. Deleting the bytes would delete the single escape from the
+    /// single status that has only one, permanently: the requeue would rewrite the order to
+    /// <c>delivery_failed</c>, the dispatch would download by <c>FileKey</c>, and the order would
+    /// enter a retry ladder against a blob that is never coming back.
+    ///
+    /// <para>The sibling <c>delivery_failed</c> was excluded from the sweep's terminal set from the
+    /// start, with exactly this reasoning written above it. Only one of the two retryable-with-blob
+    /// statuses got the treatment; this test is the other one.</para>
+    ///
+    /// <para>Latent when fixed, which is why it was worth fixing then: per-org <c>retention_days</c>
+    /// is NULL by default and <c>BlobRetentionOptions.DryRun</c> defaults to true, so no production
+    /// org was purging anything yet. Both latches are turned OFF here on purpose — the test arms the
+    /// sweep fully and still expects the dead-letter to survive.</para>
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_DeleteMode_NeverPurgesADeadLetteredOrder_TheOpsRequeueStillNeedsTheBytes()
+    {
+        await using var db = CreateDb();
+        var storage = NewStorage(sizePerBlob: 10);
+        var org = await SeedOrgAsync(db, retentionDays: 30);
+
+        var deadLettered = await SeedOrderAsync(
+            db, org, OrderStatusConstants.DeliveryDeadLetter, ageDays: 400, withSource: true, artifactCount: 2);
+
+        var result = await CreateService(db, storage, DeleteModeOptions()).RunAsync(default);
+
+        storage.Verify(s => s.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never,
+            "the ops requeue is the ONLY way back from delivery_dead_letter, and it re-dispatches the stored artifact");
+
+        var order = await db.PurchaseOrders.Include(o => o.OutboundArtifacts).SingleAsync(o => o.Id == deadLettered);
+        order.SourceFilePurgedAt.Should().BeNull();
+        order.OutboundArtifacts.Should().HaveCount(2).And.OnlyContain(a => a.BlobPurgedAt == null);
+
+        result.Organisations.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new { SourceFilesPurged = 0, ArtifactBlobsPurged = 0, DeleteFailures = 0 });
+    }
+
+    /// <summary>
+    /// Anti-vacuity companion to the test above: the sweep is not simply inert. With the SAME armed
+    /// options and the SAME age, a <c>delivered</c> order IS purged — so "nothing was deleted" for a
+    /// dead-letter is a decision about the status, not a broken fixture.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_DeleteMode_StillPurgesADeliveredOrderOfTheSameAge()
+    {
+        await using var db = CreateDb();
+        var storage = NewStorage(sizePerBlob: 10);
+        var org = await SeedOrgAsync(db, retentionDays: 30);
+
+        var delivered = await SeedOrderAsync(
+            db, org, OrderStatusConstants.Delivered, ageDays: 400, withSource: true, artifactCount: 2);
+
+        await CreateService(db, storage, DeleteModeOptions()).RunAsync(default);
+
+        storage.Verify(s => s.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+        var order = await db.PurchaseOrders.Include(o => o.OutboundArtifacts).SingleAsync(o => o.Id == delivered);
+        order.SourceFilePurgedAt.Should().NotBeNull();
+        order.OutboundArtifacts.Should().OnlyContain(a => a.BlobPurgedAt != null);
+    }
+
     [Fact]
     public async Task RunAsync_DeleteMode_PurgesBlobsOnlyForTerminalAgedOrdersOfOptedInOrg()
     {
@@ -115,11 +181,14 @@ public class BlobRetentionServiceTests
         var optedIn = await SeedOrgAsync(db, retentionDays: 30);
         var notOpted = await SeedOrgAsync(db, retentionDays: null);
 
-        var purgeable  = await SeedOrderAsync(db, optedIn, OrderStatusConstants.Delivered,      ageDays: 60, withSource: true, artifactCount: 2);
-        var inFlight   = await SeedOrderAsync(db, optedIn, OrderStatusConstants.Delivering,     ageDays: 60, withSource: true, artifactCount: 1);
-        var young      = await SeedOrderAsync(db, optedIn, OrderStatusConstants.Delivered,      ageDays: 5,  withSource: true, artifactCount: 1);
-        var retryable  = await SeedOrderAsync(db, optedIn, OrderStatusConstants.DeliveryFailed, ageDays: 60, withSource: true, artifactCount: 1);
-        var otherOrgs  = await SeedOrderAsync(db, notOpted, OrderStatusConstants.Delivered,     ageDays: 60, withSource: true, artifactCount: 1);
+        var purgeable  = await SeedOrderAsync(db, optedIn, OrderStatusConstants.Delivered,          ageDays: 60, withSource: true, artifactCount: 2);
+        var inFlight   = await SeedOrderAsync(db, optedIn, OrderStatusConstants.Delivering,         ageDays: 60, withSource: true, artifactCount: 1);
+        var young      = await SeedOrderAsync(db, optedIn, OrderStatusConstants.Delivered,          ageDays: 5,  withSource: true, artifactCount: 1);
+        var retryable  = await SeedOrderAsync(db, optedIn, OrderStatusConstants.DeliveryFailed,     ageDays: 60, withSource: true, artifactCount: 1);
+        // The other half of the retryable pair: the ops requeue re-dispatches a dead-lettered order
+        // and needs the same bytes. See RunAsync_DeleteMode_NeverPurgesADeadLetteredOrder.
+        var deadLetter = await SeedOrderAsync(db, optedIn, OrderStatusConstants.DeliveryDeadLetter, ageDays: 60, withSource: true, artifactCount: 1);
+        var otherOrgs  = await SeedOrderAsync(db, notOpted, OrderStatusConstants.Delivered,         ageDays: 60, withSource: true, artifactCount: 1);
 
         var result = await CreateService(db, storage, DeleteModeOptions()).RunAsync(default);
 
@@ -134,8 +203,8 @@ public class BlobRetentionServiceTests
         purged.OutboundArtifacts.Should().HaveCount(2).And.OnlyContain(a =>
             a.BlobPurgedAt != null && a.FileKey != "" && a.ArtifactSha256 != null && a.ConnectionRevisionId != null);
 
-        // Every protected order is untouched: in-flight, young, retryable, other-org.
-        foreach (var id in new[] { inFlight, young, retryable, otherOrgs })
+        // Every protected order is untouched: in-flight, young, retryable, dead-lettered, other-org.
+        foreach (var id in new[] { inFlight, young, retryable, deadLetter, otherOrgs })
         {
             var o = await db.PurchaseOrders.Include(x => x.OutboundArtifacts).SingleAsync(x => x.Id == id);
             o.SourceFilePurgedAt.Should().BeNull($"order {id} must not be touched");

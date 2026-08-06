@@ -91,29 +91,17 @@ public sealed class OrderMappingOverrideService : IOrderMappingOverrideService
     }
 
     /// <summary>
-    /// True for the post-transform states whose persisted artifact a mapping edit would make stale (the
-    /// order has already been transformed at least once). <see cref="OrderStatusMachine"/> documents
-    /// <c>ready_to_deliver/transforming/delivered → ready</c> as the MV-1 re-transform path. The three
-    /// delivery-failure/parked states (<c>delivery_failed</c>, <c>delivery_dead_letter</c>,
-    /// <c>delivery_unconfirmed</c>) are included too: all three are post-artifact and
-    /// re-dispatchable/rescuable — Retry/Redeliver, the ops requeue, and Send again on a parked order
-    /// all ship the LATEST STORED artifact WITHOUT re-transforming, so a mapping edit after any of them
-    /// would otherwise deliver the pre-edit content invisibly (the MV-1 sibling bug).
-    /// <c>rejected_by_supplier</c> is deliberately excluded, and the reason is narrower than it used
-    /// to be. It read "it has no outgoing transitions (it never re-dispatches)"; WP-19 gave the
-    /// status exits, so state the fact that actually holds: no delivery claim set admits
-    /// <c>rejected_by_supplier</c> — not dispatch, not retry, not the ops requeue, not Redeliver —
-    /// so the refused artifact cannot be re-shipped IN PLACE. Its only exits are the correction loop
-    /// (resolve, or a re-transform that produces a fresh artifact), and both already invalidate the
-    /// old one. Resetting here would still be dead weight, not a fix.
+    /// True for the states whose persisted artifact a mapping edit would make stale — i.e. the order
+    /// already holds a built artifact that some path can ship WITHOUT re-transforming.
+    ///
+    /// <para>The membership decision, every status's reason for being in or out, and the totality
+    /// guard that stops the next status from being missed all live on
+    /// <see cref="OrderStatusMachine.MappingEditInvalidatesArtifactFrom"/>. This used to be a
+    /// hand-written <c>is … or …</c> chain here, and a hand-written list is exactly how
+    /// <c>delivery_held</c> came to be absent from it while six siblings were present: the chain had
+    /// no way to be asked "is every status accounted for?". Read that set's doc, not this method,
+    /// before changing what a mapping edit invalidates.</para>
     /// </summary>
     private static bool IsPastReady(string status) =>
-        status is OrderStatusConstants.ReadyToDeliver
-               or OrderStatusConstants.Transforming
-               or OrderStatusConstants.Delivered
-               or OrderStatusConstants.DeliveryFailed
-               or OrderStatusConstants.DeliveryDeadLetter
-               // A parked order is redeliverable and Send again ships the stored artifact
-               // without re-transforming — a mapping edit must invalidate it too.
-               or OrderStatusConstants.DeliveryUnconfirmed;
+        OrderStatusMachine.MappingEditInvalidatesArtifactFrom.Contains(status);
 }
