@@ -69,6 +69,14 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             .Where(x => x.OrgId == orgId && x.SupplierId == supplierId)
             .FirstOrDefaultAsync(ct);
 
+        // Before ANY mutation. config_json is cleartext by design, so a credential typed into the
+        // extra-headers map is refused here rather than at dispatch — refusing mid-flight would
+        // strand orders. Grandfathered against the STORED blob deliberately: the delivery editor has
+        // no headers field and carries the stored map through every save untouched, so refusing that
+        // identical echo would lock an operator out of changing a timeout with no UI anywhere to
+        // remove the header. Adding one, or rotating its value, is still refused.
+        ValidateCredentialHeaders(request.ConfigJson, existing?.ConfigJson);
+
         if (existing is null)
         {
             existing = new SupplierDeliveryConfig
@@ -260,5 +268,23 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         var verdict = DeliveryConfigTransport.InspectEndpoint(protocol, configJson);
         if (!verdict.Allowed)
             throw new OutboundUrlPolicyException(verdict, nameof(UpsertDeliveryConfigRequest.ConfigJson));
+    }
+
+    /// <summary>
+    /// Refuses a credential written into the delivery config's extra-headers map. Every entry of
+    /// that map is applied to the outbound request by <c>HttpDeliveryDispatcher</c>, so
+    /// <c>Authorization: Bearer …</c> typed there is a real credential stored in a cleartext column,
+    /// returned by GET, and copied into every connection-revision snapshot.
+    ///
+    /// <para>Deliberately the SAME primitive the revision write path runs
+    /// (<c>SupplierConnectionService.ValidateCredentialHeaders</c>): both reach
+    /// <see cref="DeliveryConfigTransport.FindCredentialHeaders"/>. Two copies of a security rule is
+    /// how the transport gap existed, and #157 exists to stop it happening twice.</para>
+    /// </summary>
+    private static void ValidateCredentialHeaders(string configJson, string? storedConfigJson)
+    {
+        var offending = DeliveryConfigTransport.FindCredentialHeaders(configJson, storedConfigJson);
+        if (offending.Count > 0)
+            throw new CredentialHeaderInConfigException(offending);
     }
 }
