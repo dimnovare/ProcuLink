@@ -48,6 +48,27 @@ public class SupplierDeliveryConfig
     /// write a credential/secret into ConfigJson — if a new delivery option needs a secret,
     /// add it to the encrypted credential payload instead. See
     /// docs/audit/2026-06-12-scale-gated-constraints.md.
+    ///
+    /// <para><b>Enforced, not merely documented, for the extra-headers map.</b> Every entry of
+    /// <c>headers</c> is applied to the outbound request by <c>HttpDeliveryDispatcher</c>, so an
+    /// operator typing <c>Authorization: Bearer …</c> there was writing a live credential into this
+    /// cleartext column. Both write paths — the live delivery-config upsert and the connection
+    /// revision draft input — now refuse one, through the single classifier
+    /// <c>DeliveryConfigTransport.FindCredentialHeaders</c>.</para>
+    ///
+    /// <para><b>Two deliberate limits, and an asymmetry between the write paths.</b> Enforcement is
+    /// on WRITE only: a config saved before it existed keeps delivering, because refusing at
+    /// dispatch would strand orders. The live delivery-config save grandfathers a header whose name
+    /// AND value are already stored, because the delivery editor has no headers field and
+    /// round-trips the stored map on every save — refusing that echo would lock an operator out of
+    /// every unrelated edit with no way to remove the header; adding one, or rotating its value, is
+    /// still refused. The connection revision draft input refuses FLAT, with no grandfathering: it
+    /// is caller-supplied input, and the paths that carry an already-live bundle forward
+    /// (clone-from-active, rollback, publish, republish-from-live) never reach the validator, so
+    /// nothing already live is stranded by the stricter rule. Both cases are surfaced by
+    /// <c>DeliveryConfigResponse.InsecureTransportWarning</c> (mirrored on <c>ConnectionRevisionDto</c>
+    /// so both editors report the same blob the same way) and by a dispatch-time log that names the
+    /// header and never its value.</para>
     /// </summary>
     public string ConfigJson { get; set; } = "{}";
 
