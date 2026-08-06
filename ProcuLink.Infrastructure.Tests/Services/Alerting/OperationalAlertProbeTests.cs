@@ -103,7 +103,7 @@ public class OperationalAlertProbeTests
     }
 
     [Fact]
-    public async Task PullChannels_Email_UsesTheNewestSuccessfulPollAcrossEnabledOrgs()
+    public async Task PullChannels_Email_UsesTheNewestSuccessfulPollAcrossEnabledSources()
     {
         await using var db = NewDb();
         await SeedEmailOrgAsync(db, enabled: true, lastPolledAt: Now.AddMinutes(-200));
@@ -111,7 +111,7 @@ public class OperationalAlertProbeTests
 
         var email = (await Probe(db).GetSignalsAsync(default)).PullChannels.Single(c => c.Channel == "email");
 
-        email.EnabledOrgs.Should().Be(2);
+        email.EnabledSources.Should().Be(2);
         email.MinutesSinceLastSuccess.Should().BeApproximately(9d, 0.01);
     }
 
@@ -124,7 +124,7 @@ public class OperationalAlertProbeTests
 
         var email = (await Probe(db).GetSignalsAsync(default)).PullChannels.Single(c => c.Channel == "email");
 
-        email.EnabledOrgs.Should().Be(1);
+        email.EnabledSources.Should().Be(1);
         email.MinutesSinceLastSuccess.Should().BeApproximately(500d, 0.01,
             "a switched-off org's fresh timestamp must not mask a live org's stalled channel");
     }
@@ -137,7 +137,7 @@ public class OperationalAlertProbeTests
 
         var email = (await Probe(db).GetSignalsAsync(default)).PullChannels.Single(c => c.Channel == "email");
 
-        email.EnabledOrgs.Should().Be(1);
+        email.EnabledSources.Should().Be(1);
         email.MinutesSinceLastSuccess.Should().BeNull(
             "a channel configured minutes ago has not polled yet — that is not an incident");
     }
@@ -161,22 +161,22 @@ public class OperationalAlertProbeTests
         var channels = (await Probe(db, executions: executions).GetSignalsAsync(default)).PullChannels;
 
         var sftp = channels.Single(c => c.Channel == "sftp");
-        sftp.EnabledOrgs.Should().Be(1);
+        sftp.EnabledSources.Should().Be(1);
         sftp.MinutesSinceLastSuccess.Should().BeApproximately(4d, 0.01);
 
         var s3 = channels.Single(c => c.Channel == "s3");
-        s3.EnabledOrgs.Should().Be(1);
+        s3.EnabledSources.Should().Be(1);
         s3.MinutesSinceLastSuccess.Should().BeApproximately(120d, 0.01);
     }
 
     [Fact]
-    public async Task PullChannels_NoConfigs_ReportZeroEnabledOrgs()
+    public async Task PullChannels_NoConfigs_ReportZeroEnabledSources()
     {
         await using var db = NewDb();
 
         var channels = (await Probe(db).GetSignalsAsync(default)).PullChannels;
 
-        channels.Should().OnlyContain(c => c.EnabledOrgs == 0);
+        channels.Should().OnlyContain(c => c.EnabledSources == 0);
     }
 
     // ── AI token-cap latch ───────────────────────────────────────────────────────

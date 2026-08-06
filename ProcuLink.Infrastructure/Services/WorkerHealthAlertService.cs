@@ -182,7 +182,7 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         // recorded a success has simply not run yet — paging on either would be a false alarm on
         // every fresh setup.
         var stale = channels
-            .Where(c => c.EnabledOrgs > 0
+            .Where(c => c.EnabledSources > 0
                      && c.MinutesSinceLastSuccess is { } age
                      && age >= staleMinutes)
             .OrderByDescending(c => c.MinutesSinceLastSuccess)
@@ -192,7 +192,7 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
             ? "none"
             : string.Join(", ", stale.Select(c =>
                 $"{c.Channel} (last success {c.MinutesSinceLastSuccess!.Value:F0} min ago, "
-              + $"{c.EnabledOrgs} org(s) enabled)"));
+              + $"{c.EnabledSources} enabled source(s))"));
 
         return (OperationalAlertKeys.PullChannelStalled, stale.Count > 0,
             $"ProcuLink inbound pull channel stalled: {detail}. Threshold {staleMinutes} min. "

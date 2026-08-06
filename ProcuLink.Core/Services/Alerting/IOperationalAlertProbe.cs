@@ -49,16 +49,19 @@ public sealed record DeliveryFailureRateSignal(int WindowMinutes, int Attempts, 
 /// Freshness of one inbound pull channel.
 /// </summary>
 /// <param name="Channel">Channel name as an operator knows it: <c>email</c>, <c>sftp</c>, <c>s3</c>.</param>
-/// <param name="EnabledOrgs">
-/// How many orgs currently have this channel switched on. Zero means nobody is using the channel,
-/// and a stale timestamp on an unused channel is not an incident.
+/// <param name="EnabledSources">
+/// How many enabled configurations this channel currently has — orgs for <c>email</c> (the setting
+/// lives on the organisation), ingress-config rows for <c>sftp</c> and <c>s3</c>, where one org may
+/// own several. It is deliberately a count of SOURCES rather than orgs so the number in an alert is
+/// literally what was counted. Zero means nobody is using the channel, and a stale timestamp on an
+/// unused channel is not an incident.
 /// </param>
 /// <param name="MinutesSinceLastSuccess">
 /// Age of the most recent observed success, or <c>null</c> when no success has ever been observed.
 /// Null is deliberately NOT alertable — a channel configured minutes ago has not polled yet, and
 /// paging on that would be a false alarm on every new setup.
 /// </param>
-public sealed record PullChannelSignal(string Channel, int EnabledOrgs, double? MinutesSinceLastSuccess);
+public sealed record PullChannelSignal(string Channel, int EnabledSources, double? MinutesSinceLastSuccess);
 
 /// <summary>
 /// Orgs whose monthly AI token budget is exhausted. A latched cap silently degrades PDF extraction

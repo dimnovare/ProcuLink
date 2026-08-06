@@ -117,6 +117,13 @@ public sealed class OperationalAlertProbe : IOperationalAlertProbe
     /// <c>EmailPollingConfig.LastPolledAt</c>, written by <c>EmailPollOrgJob</c> only after a
     /// successful disconnect. The freshest stamp across ENABLED orgs is used — a disabled org's
     /// fresh timestamp must never mask a live org's stalled channel.
+    /// <para>
+    /// The consequence, stated plainly because it limits what an alert off this can claim: taking
+    /// the NEWEST makes this a CHANNEL-level signal ("is anyone still polling successfully"), so one
+    /// org with broken IMAP credentials among several healthy ones will not raise it. That is the
+    /// deliberate trade — the alternative (oldest) pages the operator over a single customer's
+    /// misconfiguration, which is the false-page shape this whole design avoids.
+    /// </para>
     /// </summary>
     private async Task<PullChannelSignal> ReadEmailChannelAsync(DateTime now, CancellationToken ct)
     {

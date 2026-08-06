@@ -144,7 +144,7 @@ public class WorkerHealthAlertServiceTests
         var sink = new RecordingSink();
         var probe = ProbeReturning(Healthy() with
         {
-            PullChannels = new[] { new PullChannelSignal("email", EnabledOrgs: 2, MinutesSinceLastSuccess: 180) },
+            PullChannels = new[] { new PullChannelSignal("email", EnabledSources: 2, MinutesSinceLastSuccess: 180) },
         });
 
         var alerted = await CreateService(HealthOk(), sink, probe).RunAsync(default);
@@ -161,7 +161,7 @@ public class WorkerHealthAlertServiceTests
         var sink = new RecordingSink();
         var probe = ProbeReturning(Healthy() with
         {
-            PullChannels = new[] { new PullChannelSignal("sftp", EnabledOrgs: 0, MinutesSinceLastSuccess: 9_999) },
+            PullChannels = new[] { new PullChannelSignal("sftp", EnabledSources: 0, MinutesSinceLastSuccess: 9_999) },
         });
 
         var alerted = await CreateService(HealthOk(), sink, probe).RunAsync(default);
@@ -176,7 +176,7 @@ public class WorkerHealthAlertServiceTests
         var sink = new RecordingSink();
         var probe = ProbeReturning(Healthy() with
         {
-            PullChannels = new[] { new PullChannelSignal("s3", EnabledOrgs: 1, MinutesSinceLastSuccess: null) },
+            PullChannels = new[] { new PullChannelSignal("s3", EnabledSources: 1, MinutesSinceLastSuccess: null) },
         });
 
         var alerted = await CreateService(HealthOk(), sink, probe).RunAsync(default);
@@ -191,7 +191,7 @@ public class WorkerHealthAlertServiceTests
         var sink = new RecordingSink();
         var probe = ProbeReturning(Healthy() with
         {
-            PullChannels = new[] { new PullChannelSignal("email", EnabledOrgs: 3, MinutesSinceLastSuccess: 4) },
+            PullChannels = new[] { new PullChannelSignal("email", EnabledSources: 3, MinutesSinceLastSuccess: 4) },
         });
 
         (await CreateService(HealthOk(), sink, probe).RunAsync(default)).Should().BeFalse();
