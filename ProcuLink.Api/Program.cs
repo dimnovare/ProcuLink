@@ -713,7 +713,7 @@ builder.Services.AddSingleton<ITransformService, XmlTransformService>();
 builder.Services.AddSingleton<ITransformService, CsvTransformService>();
 builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
 builder.Services.AddSingleton<ITransformService, JsonTransformService>();
-builder.Services.AddSingleton<ITransformService, UblOrderTransformService>(); // Group M Phase 1 — UBL 2.1 Peppol BIS 3.0
+builder.Services.AddSingleton<ITransformService, UblOrderTransformService>(); // Group M Phase 1 — plain OASIS UBL 2.1 Order; no Peppol profile is declared
 builder.Services.AddSingleton<ITransformService, X12TransformService>(); // Group M — ANSI X12 850
 
 // ── Group V8: standards conformance reports ─────────────────────────────────

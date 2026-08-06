@@ -3,11 +3,23 @@ using System.Xml.Linq;
 namespace ProcuLink.Transform.Conformance;
 
 /// <summary>
-/// Validates a UBL 2.1 Order-2 document (the output of <c>UblOrderTransformService</c>,
-/// Peppol BIS Order-only 3.0 compatible) against
-/// the named UBL 2.1 Order profile. Pragmatic structural + mandatory-element +
-/// cardinality checks per OASIS UBL 2.1 Order and Peppol BIS 3.0 — not a full XSD
-/// validator.
+/// Checks a UBL 2.1 Order-2 document (the output of <c>UblOrderTransformService</c>) for the
+/// elements OASIS UBL 2.1 marks mandatory, plus the OrderLine/LineItem cardinalities.
+///
+/// <para><b>What this is, stated plainly.</b> Presence and structure only — is the root
+/// <c>&lt;Order&gt;</c>, is <c>cbc:UBLVersionID</c> 2.1, are the <c>minOccurs="1"</c> elements
+/// there and non-empty, is there at least one OrderLine with a LineItem carrying ID / Quantity /
+/// Item. It is NOT an XSD validation, NOT a business-rule engine, and NOT a conformance
+/// certification against any profile.</para>
+///
+/// <para><b>It says nothing about Peppol, and used to.</b> The profile was named "UBL 2.1 Order
+/// (Peppol BIS Order-only 3.0)" and two of its checks required <c>cbc:CustomizationID</c> and
+/// <c>cbc:ProfileID</c> to be non-empty. That was circular: the emitter had just written both,
+/// so on our own output the checks could not fail, and an always-passing result was rendered as
+/// "Matches the standard" with the Peppol name beside it and a Download button under it. Both
+/// checks are gone — UBL 2.1 declares those elements <c>minOccurs="0"</c>, so requiring them was
+/// never a UBL rule in the first place — and the emitter no longer writes them. ProcuLink does not
+/// verify Peppol BIS business rules anywhere; there is no Schematron in this repo.</para>
 /// </summary>
 internal sealed class UblProfileChecker : IProfileChecker
 {
@@ -15,7 +27,7 @@ internal sealed class UblProfileChecker : IProfileChecker
 
     public ConformanceReport Check(string documentText)
     {
-        var b = new ConformanceCheckBuilder(Profile, "UBL 2.1 Order (Peppol BIS Order-only 3.0)", "2.1");
+        var b = new ConformanceCheckBuilder(Profile, "OASIS UBL 2.1 Order — mandatory elements", "2.1");
 
         XDocument? doc = null;
         var wellFormed = false;
@@ -51,11 +63,10 @@ internal sealed class UblProfileChecker : IProfileChecker
             "cbc:UBLVersionID", "cbc:UBLVersionID is 2.1.",
             $"cbc:UBLVersionID must be 2.1 but was '{version ?? "(missing)"}'.");
 
-        // ── CustomizationID + ProfileID (Peppol BIS identifiers) ───────────────
-        b.Require("ubl.customizationID", HasNonEmpty(root, "CustomizationID"), "cbc:CustomizationID",
-            "cbc:CustomizationID present.", "Mandatory cbc:CustomizationID is missing.");
-        b.Require("ubl.profileID", HasNonEmpty(root, "ProfileID"), "cbc:ProfileID",
-            "cbc:ProfileID present.", "Mandatory cbc:ProfileID is missing.");
+        // cbc:CustomizationID and cbc:ProfileID are NOT checked. They are minOccurs="0" in the
+        // OASIS UBL 2.1 Order-2 schema, so their absence is not a defect; and the checks that used
+        // to be here asserted only that they were non-empty, on a document this codebase had just
+        // written them into. See the class summary.
 
         // ── ID (PO number) + IssueDate + DocumentCurrencyCode ──────────────────
         b.Require("ubl.id", HasNonEmpty(root, "ID"), "cbc:ID",
@@ -115,8 +126,6 @@ internal sealed class UblProfileChecker : IProfileChecker
                  {
                      ("ubl.root", "Order (root)"),
                      ("ubl.version", "cbc:UBLVersionID"),
-                     ("ubl.customizationID", "cbc:CustomizationID"),
-                     ("ubl.profileID", "cbc:ProfileID"),
                      ("ubl.id", "cbc:ID"),
                      ("ubl.issueDate", "cbc:IssueDate"),
                      ("ubl.currency", "cbc:DocumentCurrencyCode"),

@@ -85,8 +85,20 @@ public class UblOrderTransformServiceTests
         sellerParty.Should().NotBeNull("cac namespace must be wired and SellerSupplierParty must exist");
     }
 
+    /// <summary>
+    /// This test used to be <c>TransformAsync_IncludesPeppolBisCustomizationId</c>, and it asserted
+    /// the opposite: that the emitted order carried <c>cbc:CustomizationID</c> =
+    /// <c>urn:fdc:peppol.eu:poacc:trns:order:3</c> and <c>cbc:ProfileID</c> =
+    /// <c>urn:fdc:peppol.eu:poacc:bis:order_only:3</c>. It was pinning the defect — those two
+    /// elements declare the document a Peppol BIS Order-only 3.0 document to a receiving access
+    /// point, and ProcuLink does not produce or verify BIS-conformant output. It is inverted here
+    /// rather than deleted, so the change of intent is on the record.
+    ///
+    /// The full reasoning, the UBL 2.1 schema cardinalities, and the class-level guard live in
+    /// <see cref="UblOrderDeclaresNoPeppolProfileTests"/>.
+    /// </summary>
     [Fact]
-    public async Task TransformAsync_IncludesPeppolBisCustomizationId()
+    public async Task TransformAsync_DeclaresNoPeppolBisProfile()
     {
         var svc   = new UblOrderTransformService();
         var order = BuildOrder();
@@ -95,13 +107,10 @@ public class UblOrderTransformServiceTests
         var xml    = await ReadContentAsString(result);
         var doc    = XDocument.Parse(xml);
 
-        var customizationId = doc.Descendants(Cbc + "CustomizationID").FirstOrDefault();
-        customizationId.Should().NotBeNull();
-        customizationId!.Value.Should().Be(PeppolBisCustomizationId);
-
-        var profileId = doc.Descendants(Cbc + "ProfileID").FirstOrDefault();
-        profileId.Should().NotBeNull();
-        profileId!.Value.Should().Be("urn:fdc:peppol.eu:poacc:bis:order_only:3");
+        doc.Descendants(Cbc + "CustomizationID").Should().BeEmpty(
+            "cbc:CustomizationID is minOccurs=\"0\" in UBL 2.1 and ProcuLink applies no customization");
+        doc.Descendants(Cbc + "ProfileID").Should().BeEmpty();
+        xml.Should().NotContain("peppol");
     }
 
     [Fact]

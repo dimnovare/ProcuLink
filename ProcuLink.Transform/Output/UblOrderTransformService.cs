@@ -7,8 +7,29 @@ using ProcuLink.Core.Services;
 namespace ProcuLink.Transform.Output;
 
 /// <summary>
-/// Generates a UBL 2.1 Order-2 document (OASIS), compatible with the Peppol BIS
-/// Order-only 3.0 profile, from a fully-resolved purchase order entity.
+/// Generates a plain OASIS UBL 2.1 Order-2 document from a fully-resolved purchase order entity.
+///
+/// <para><b>No profile is declared, deliberately.</b> This document used to carry
+/// <c>cbc:CustomizationID</c> = <c>urn:fdc:peppol.eu:poacc:trns:order:3</c> and
+/// <c>cbc:ProfileID</c> = <c>urn:fdc:peppol.eu:poacc:bis:order_only:3</c>, which declared it a
+/// Peppol BIS Order-only 3.0 document. A receiving access point ROUTES AND VALIDATES on those two
+/// elements, so writing them asserted a conformance to the counterparty's software that nothing in
+/// this repo verifies: there is no Schematron, <see cref="PeppolBisInvoiceTransformService"/> and
+/// its validator are invoice-only, and no emitted order has been accepted by a live access point.
+/// The claim had already been withdrawn from the website and from the standards catalog
+/// (<c>src/lib/standards/catalog.ts</c>, <c>transform: "planned"</c>); the emitted document was
+/// missed.</para>
+///
+/// <para>Both elements are now absent, which is exactly what a plain, non-Peppol UBL 2.1 Order
+/// looks like. In the OASIS UBL 2.1 Order-2 schema both are <c>minOccurs="0" maxOccurs="1"</c>
+/// while <c>cbc:ID</c> and <c>cbc:IssueDate</c> are <c>minOccurs="1"</c>, so omitting them cannot
+/// make the document schema-invalid. Substituting some other identifier would not be neutral
+/// either — UBL defines CustomizationID as "a user-defined customization of UBL for a specific
+/// use", and ProcuLink applies no customization; it emits the base document. A receiver that needs
+/// a specific profile now learns that from its own validator rather than from a claim we invented.
+/// <c>cbc:UBLVersionID</c> stays: it names the UBL version the document really is, which is a
+/// checkable fact and not a profile assertion. Pinned by
+/// <c>UblOrderDeclaresNoPeppolProfileTests</c>.</para>
 ///
 /// Output skeleton:
 /// <code>
@@ -17,8 +38,6 @@ namespace ProcuLink.Transform.Output;
 ///         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
 ///         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"&gt;
 ///   &lt;cbc:UBLVersionID&gt;2.1&lt;/cbc:UBLVersionID&gt;
-///   &lt;cbc:CustomizationID&gt;urn:fdc:peppol.eu:poacc:trns:order:3&lt;/cbc:CustomizationID&gt;
-///   &lt;cbc:ProfileID&gt;urn:fdc:peppol.eu:poacc:bis:order_only:3&lt;/cbc:ProfileID&gt;
 ///   &lt;cbc:ID&gt;{poNumber}&lt;/cbc:ID&gt;
 ///   &lt;cbc:IssueDate&gt;{yyyy-MM-dd}&lt;/cbc:IssueDate&gt;
 ///   &lt;cbc:DocumentCurrencyCode&gt;{currency}&lt;/cbc:DocumentCurrencyCode&gt;
@@ -69,10 +88,6 @@ public sealed class UblOrderTransformService : ITransformService
     private static readonly XNamespace Cac      = "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2";
     private static readonly XNamespace Cbc      = "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2";
 
-    // ── Peppol BIS 3.0 (order-only) identifiers ──────────────────────────────
-    private const string PeppolBisCustomizationId = "urn:fdc:peppol.eu:poacc:trns:order:3";
-    private const string PeppolBisProfileId       = "urn:fdc:peppol.eu:poacc:bis:order_only:3";
-
     public bool CanTransform(OutputFormat format) => format == OutputFormat.Ubl;
 
     public Task<TransformResult> TransformAsync(
@@ -90,8 +105,9 @@ public sealed class UblOrderTransformService : ITransformService
         var currency = string.IsNullOrWhiteSpace(order.Currency) ? "EUR" : order.Currency;
 
         // Buyer name: the canonical buyer name, falling back to the legacy placeholder when blank so
-        // the document stays valid UBL (PartyName/Name is required by Peppol BIS 3.0 if
-        // PartyLegalEntity is absent). Supplier name remains the supplier id (placeholder).
+        // the document stays valid UBL: cac:PartyName is what identifies the party here, and its
+        // cbc:Name child is minOccurs="1" — an empty one would be schema-invalid, not merely thin.
+        // Supplier name remains the supplier id (placeholder).
         var resolvedBuyer = OrderHeaderReader.ExtractBuyerName(order);
         var buyerName     = string.IsNullOrWhiteSpace(resolvedBuyer) ? "ProcuLink Buyer" : resolvedBuyer;
         // Supplier name. This used to emit the supplier's GUID — so the party receiving the document
@@ -110,9 +126,10 @@ public sealed class UblOrderTransformService : ITransformService
             new XAttribute(XNamespace.Xmlns + "cac", Cac.NamespaceName),
             new XAttribute(XNamespace.Xmlns + "cbc", Cbc.NamespaceName),
 
+            // No cbc:CustomizationID and no cbc:ProfileID. Both are minOccurs="0" in the OASIS
+            // UBL 2.1 Order-2 schema, and declaring either asserts a profile ProcuLink does not
+            // validate against. See the class summary; pinned by UblOrderDeclaresNoPeppolProfileTests.
             new XElement(Cbc + "UBLVersionID",        "2.1"),
-            new XElement(Cbc + "CustomizationID",     PeppolBisCustomizationId),
-            new XElement(Cbc + "ProfileID",           PeppolBisProfileId),
             new XElement(Cbc + "ID",                  order.PoNumber),
             new XElement(Cbc + "IssueDate",           order.OrderDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
             new XElement(Cbc + "DocumentCurrencyCode", currency),
