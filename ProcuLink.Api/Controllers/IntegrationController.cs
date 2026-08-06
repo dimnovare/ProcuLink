@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
@@ -55,8 +56,11 @@ public sealed class IntegrationController : ControllerBase
         if (!validEvents.Contains(req.EventType))
             return BadRequest(new { error = $"EventType must be one of: {string.Join(", ", validEvents)}" });
 
-        if (!Uri.TryCreate(req.TargetUrl, UriKind.Absolute, out _))
-            return BadRequest(new { error = "TargetUrl must be a valid absolute URL." });
+        // Was: absolute-URI parse only. No scheme restriction at all, so file:// and gopher://
+        // were stored, and plain http shipped every order payload in the clear.
+        var urlPolicy = OutboundUrlPolicy.Inspect(req.TargetUrl, "Webhook target URL");
+        if (!urlPolicy.Allowed)
+            return BadRequest(new { error = urlPolicy.ErrorCode, message = urlPolicy.Message });
 
         var orgId = _tenant.OrganisationId;
         string? encSecret = !string.IsNullOrWhiteSpace(req.Secret)

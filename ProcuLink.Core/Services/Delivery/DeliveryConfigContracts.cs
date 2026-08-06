@@ -73,7 +73,13 @@ public sealed record DeliveryConfigResponse(
     CxmlCredentialsResponse? CxmlCredentials = null,
     // WP-33 — the per-supplier auto-send indicator. An operator must always be able to see which
     // suppliers are automatic, so this travels with every read of the delivery config.
-    bool AutoTransform = false);
+    bool AutoTransform = false,
+    // Set when the SAVED endpoint is one the transport policy now refuses — a config written
+    // before TLS enforcement existed. Delivery continues (refusing mid-flight would turn a
+    // security weakness into an outage), so this is how the operator finds out. Null when fine.
+    // Never contains the URL: a stored userinfo URL is precisely the case where echoing it would
+    // copy the password into the editor.
+    string? InsecureTransportWarning = null);
 
 /// <summary>
 /// cXML credentials returned to the editor: the cleartext identities plus a boolean flag for the

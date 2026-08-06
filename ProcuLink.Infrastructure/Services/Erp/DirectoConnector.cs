@@ -36,6 +36,19 @@ public sealed class DirectoConnector : IErpConnector
             if (!Uri.TryCreate(cfg.Url, UriKind.Absolute, out var endpoint))
                 return new ErpDeliveryResult(false, "Directo connector endpoint URL is invalid.");
 
+            // This request posts `user`, `password` and `key` as form fields. A config saved
+            // before TLS enforcement keeps delivering rather than stranding the order, but never
+            // silently. The URL is not logged whole — it may itself carry credentials.
+            if (DeliveryConfigTransport.DescribeInsecureTransport(
+                    request.Config.Protocol, request.Config.ConfigJson) is { } insecure)
+            {
+                _logger.LogWarning(
+                    "Directo delivery for supplier {SupplierId} uses a transport that no longer "
+                    + "passes policy (scheme '{Scheme}', host '{Host}'); the credentials in this "
+                    + "request are exposed on the network path. {Warning}",
+                    request.Config.SupplierId, endpoint.Scheme, endpoint.Host, insecure);
+            }
+
             var creds = ParseCredentials(request.DecryptedCredentials);
             var fields = new List<KeyValuePair<string, string>>
             {

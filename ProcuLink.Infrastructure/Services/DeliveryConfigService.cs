@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure.Services.Security;
 
@@ -19,6 +20,10 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
 
     private static readonly HashSet<string> AllowedProtocols = new(
         DeliveryProtocolConstants.All,
+        StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> UrlBasedProtocols = new(
+        DeliveryProtocolConstants.UrlBased,
         StringComparer.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> AllowedOutputFormats = new(
@@ -57,6 +62,7 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
     {
         var protocol = NormalizeProtocol(request.Protocol);
         ValidateConfigJson(request.ConfigJson);
+        ValidateTransportSecurity(protocol, request.ConfigJson);
 
         var now = DateTime.UtcNow;
         var existing = await _db.SupplierDeliveryConfigs
@@ -156,7 +162,9 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             config.UpdatedAt,
             config.OutputFormat,
             CxmlCredentials: BuildCxmlResponse(config),
-            AutoTransform: config.AutoTransform);
+            AutoTransform: config.AutoTransform,
+            InsecureTransportWarning: DeliveryConfigTransport.DescribeInsecureTransport(
+                config.Protocol, config.ConfigJson));
     }
 
     /// <summary>
@@ -221,5 +229,31 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         {
             throw new ArgumentException("Delivery config JSON must be valid JSON.", nameof(configJson), ex);
         }
+    }
+
+    /// <summary>
+    /// Refuses a delivery endpoint that would send the purchase order — and the credentials that
+    /// authenticate it — over plain http, or that carries a username/password in the URL itself.
+    ///
+    /// <para>Scoped deliberately to the transport <c>url</c> inside <c>config_json</c>. It must NOT
+    /// touch <c>CxmlCredentials.DtdSystemId</c>, which travels on the same request: that is a cXML
+    /// DOCTYPE SYSTEM identifier emitted into the output document and never fetched, and its
+    /// canonical published value is <c>http://xml.cxml.org/...</c>.</para>
+    ///
+    /// <para>The key lookup is case-insensitive because the dispatchers deserialize with
+    /// <c>PropertyNameCaseInsensitive = true</c> — <c>{"URL":...}</c> is delivered, so it must also
+    /// be inspected.</para>
+    /// </summary>
+    private static void ValidateTransportSecurity(string protocol, string configJson)
+    {
+        var url = DeliveryConfigTransport.ExtractUrl(protocol, configJson);
+
+        // No url key at all is left as-is: that config cannot deliver anything, and failing it here
+        // would be a separate behaviour change from the one this guard is for.
+        if (string.IsNullOrWhiteSpace(url)) return;
+
+        var verdict = OutboundUrlPolicy.Inspect(url, "Delivery endpoint");
+        if (!verdict.Allowed)
+            throw new OutboundUrlPolicyException(verdict, nameof(UpsertDeliveryConfigRequest.ConfigJson));
     }
 }

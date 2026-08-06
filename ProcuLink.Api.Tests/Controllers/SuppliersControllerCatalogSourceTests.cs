@@ -10,6 +10,7 @@ using Moq;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Core.Services.Delivery;
@@ -623,5 +624,91 @@ public class SuppliersControllerCatalogSourceTests
 
         result.Should().BeOfType<OkObjectResult>();
         (await h.Db.SupplierCatalogSources.AsNoTracking().SingleAsync()).FileFormat.Should().Be("json");
+    }
+
+    // ── Transport security (TLS) ──────────────────────────────────────────────
+
+    /// <summary>
+    /// A catalog pull sends the configured auth header — API key, bearer token, or Basic — on every
+    /// request. Over plain http that credential is readable on the wire along with the whole price
+    /// list.
+    /// </summary>
+    [Fact]
+    public async Task Put_Http_CleartextUrl_Returns400_RequiresTls()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(url: "http://supplier.example/catalog.json"),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        var bad = result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        ((string)((dynamic)bad.Value!).error).Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
+        ((string)((dynamic)bad.Value!).message).Should().Contain("https://");
+        (await h.Db.SupplierCatalogSources.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Put_Http_HttpsUrl_IsStillAccepted()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(url: "https://supplier.example/catalog.json"),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+    }
+
+    [Theory]
+    [InlineData("http://localhost:9000/catalog.json")]
+    [InlineData("http://127.0.0.1:53412/catalog.json")]
+    public async Task Put_Http_LoopbackCleartextUrl_IsAcceptedForLocalDevelopment(string url)
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(url: url),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+    }
+
+    /// <summary>
+    /// The OAuth2 client-credentials exchange POSTs the client id AND client secret to tokenUrl.
+    /// A cleartext tokenUrl therefore leaks the secret itself, not merely the catalog it protects.
+    /// It was never inspected at save — only at fetch time, and then only by the SSRF guard.
+    /// </summary>
+    [Fact]
+    public async Task Put_Http_CleartextOAuthTokenUrl_Returns400_RequiresTls()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(authMethod: "oauth2_client_credentials", authConfig: new CatalogHttpAuthConfig(
+                TokenUrl: "http://auth.supplier.example/oauth/token",
+                ClientId: "client-abc",
+                ClientSecret: "hunter2")),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        var bad = result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        ((string)((dynamic)bad.Value!).error).Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
+        ((string)((dynamic)bad.Value!).message).Should().NotContain("hunter2");
+        (await h.Db.SupplierCatalogSources.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Put_Http_HttpsOAuthTokenUrl_IsAccepted()
+    {
+        var h = Build();
+
+        var result = await h.Controller.UpsertCatalogSource(h.Supplier.Id,
+            HttpRequest(authMethod: "oauth2_client_credentials", authConfig: new CatalogHttpAuthConfig(
+                TokenUrl: "https://auth.supplier.example/oauth/token",
+                ClientId: "client-abc",
+                ClientSecret: "shh")),
+            h.Settings, h.Guard, CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
     }
 }

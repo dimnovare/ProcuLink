@@ -89,6 +89,11 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
             if (!Uri.TryCreate(httpCfg.Url, UriKind.Absolute, out var endpoint))
                 return new DeliveryResult(false, "HTTP delivery endpoint URL is invalid.");
 
+            // Configs saved before TLS enforcement existed keep delivering — refusing here would
+            // turn a security weakness into an outage — but never silently. The save path now
+            // rejects these, so this fires only for a pre-existing row that nobody has re-saved.
+            WarnIfInsecureTransport(config, endpoint);
+
             // ── SSRF guard — must pass before any outbound request ────────────
             var guardResult = await _guard.ValidateAsync(httpCfg.Url, ct);
             if (!guardResult.Allowed)
@@ -196,6 +201,23 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
         return summary.Quotable
             ? $"{opening} Response summary: {summary.Text}"
             : $"{opening} {summary.Text}";
+    }
+
+    /// <summary>
+    /// Logs — once per delivery attempt — that this supplier's saved endpoint is one the transport
+    /// policy now refuses. The URL is never logged whole: the refusal that most needs surfacing is
+    /// a userinfo URL, and logging it would put the password into the log line.
+    /// </summary>
+    private void WarnIfInsecureTransport(SupplierDeliveryConfig config, Uri endpoint)
+    {
+        var warning = DeliveryConfigTransport.DescribeInsecureTransport(config.Protocol, config.ConfigJson);
+        if (warning is null) return;
+
+        _logger.LogWarning(
+            "Delivering supplier {SupplierId} over a transport that no longer passes policy "
+            + "(scheme '{Scheme}', host '{Host}'). This config predates TLS enforcement and can no "
+            + "longer be saved; delivery continues so orders are not lost. {Warning}",
+            config.SupplierId, endpoint.Scheme, endpoint.Host, warning);
     }
 
     // ── Private config POCO ───────────────────────────────────────────────────
