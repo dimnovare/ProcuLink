@@ -562,6 +562,26 @@ public class UblOrderTransformServiceTests
     }
 
     /// <summary>
+    /// The nastiest shape, and the one a length-and-checksum test alone does NOT catch: a payload
+    /// that really is a check-digit-valid 13-digit number, registered under a scheme that is not
+    /// GLN. Finnish OVT (0037) and Norwegian organisation numbers (9908) are both plausible
+    /// contents of this field. Unwrapping the prefix and relabelling the payload 0088 would emit a
+    /// document whose endpoint is attributed to the wrong scheme — routable, and routed wrong.
+    /// The prefix is honoured only when the operator stated 0088.
+    /// </summary>
+    [Theory]
+    [InlineData("0037:7300010000001")]
+    [InlineData("9908:7300010000001")]
+    public async Task TransformAsync_ValidGlnPayloadUnderANonGlnScheme_IsRefused(string ediCode)
+    {
+        var (doc, _) = await Render(BuildOrderWithSupplier(ediCode: ediCode));
+
+        SellerParty(doc).Element(Cbc + "EndpointID").Should().BeNull(
+            "the payload passes the GS1 check digit, but the operator registered it under another "
+            + "scheme — relabelling it 0088 would be asserting a registration the supplier does not have");
+    }
+
+    /// <summary>
     /// Proves the check digit is genuinely computed rather than the value merely being
     /// length-checked. Under GS1 modulo-10 (weights 1 and 3) no single-digit change can ever
     /// preserve the checksum, so every mutation of a valid GLN must be refused.
