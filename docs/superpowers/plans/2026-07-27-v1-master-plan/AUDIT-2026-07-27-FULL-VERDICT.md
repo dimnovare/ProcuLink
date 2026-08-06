@@ -257,7 +257,17 @@ There are three separate output systems, and the discoverable one is the dead on
 - **Where does it pretend to be visual while needing a developer?** Conditionals, namespaces, and anything requiring a manipulator — all reachable only by dropping to Scriban.
 - **What is outright impossible?** Reusing a design. Emitting a delivery address. Emitting a typed JSON number. Controlling CSV quoting or line endings. Authoring a valid cXML/UBL/X12 envelope visually.
 - **What should stay visual?** The tree, the paste-to-infer, the live preview, the format presets. These work.
-- **What should be a structured property editor?** Conditionals ("include this when [field] [is/is not/is empty] [value]"). Namespaces (preset dropdown: UBL 2.1, cXML 1.2, Peppol BIS 3, custom). CSV dialect (delimiter, quote, encoding, line ending). X12 ISA/GS identity — the backend is already there.
+- **What should be a structured property editor?** Conditionals ("include this when [field] [is/is not/is empty] [value]"). Namespaces (preset dropdown: UBL 2.1, ~~cXML 1.2, Peppol BIS 3,~~ custom). CSV dialect (delimiter, quote, encoding, line ending). X12 ISA/GS identity — the backend is already there.
+
+  > **CORRECTION 2026-08-06 — the cXML 1.2 and Peppol BIS 3 presets are struck; the rest of this
+  > recommendation stands and shipped.** cXML is DTD-based and has no namespaces; a Peppol preset
+  > seeding only the namespaces would emit a document that looks like Peppol and is rejected by the
+  > network. **BE #155 / FE #109** then removed every Peppol identifier from the emitted document —
+  > `cbc:CustomizationID` and `cbc:ProfileID` are gone from `UblOrderTransformService.cs`. The refusal
+  > is pinned by `FE src/components/bridge/outputNamespacePresets.test.ts` (*"names neither Peppol nor
+  > cXML anywhere"*) and `OutputStructureDesigner.wp16.test.tsx` (*"offers neither a Peppol nor a cXML
+  > preset"*). Full reasoning in the B12 correction in §15 below. **Not live work.**
+
 - **Where does raw editing belong?** Exactly where it is: Scriban as a labelled advanced mode with a tester. That part is right.
 - **How should AI help without taking control?** It already has the correct posture for inference — deterministic, no egress, propose-then-confirm. Extend the same posture: given a pasted sample and a real order, propose per-node bindings with confidence, never auto-apply. Do not let AI author conditionals or namespaces.
 
@@ -476,8 +486,37 @@ AC: a missing env var makes the test skip visibly (the static-skip attribute the
 AC: residency copy names EU-region storage/DB explicitly and links the US subprocessor list; `/customers` either carries a real dated engagement or an honest "no public references yet".
 Tests: extend the existing DPA/subprocessor regression test to pin the residency wording.
 
-**B12 — Designer depth.** `OutputStructureDesigner.tsx` + `outputNamespaceModel.ts`: node move up/down; structured conditional builder emitting the same `IncludeWhen` predicate; namespace preset dropdown (UBL 2.1 / cXML 1.2 / Peppol BIS 3 / custom); CSV dialect panel (delimiter, quote, encoding, line ending) threaded to the emitter; typed JSON leaves; expose the 8 `MANIPULATOR_TYPES`; fix `designerFormat()` silently rewriting a cXML/UBL/X12 tree to xml; route the tree path through `OutputFieldValidator`.
+**B12 — Designer depth.** `OutputStructureDesigner.tsx` + `outputNamespaceModel.ts`: node move up/down; structured conditional builder emitting the same `IncludeWhen` predicate; namespace preset dropdown (UBL 2.1 / ~~cXML 1.2 / Peppol BIS 3~~ / custom); CSV dialect panel (delimiter, quote, encoding, line ending) threaded to the emitter; typed JSON leaves; expose the 8 `MANIPULATOR_TYPES`; fix `designerFormat()` silently rewriting a cXML/UBL/X12 tree to xml; route the tree path through `OutputFieldValidator`.
 AC: an operator with no code produces a nested XML doc with a namespace preset, a conditional section, a concatenated field, and CRLF CSV — and the preview equals the delivered bytes. Dep: B1, B3.
+
+> **CORRECTION 2026-08-06 — the cXML 1.2 and Peppol BIS 3 presets are struck out of B12. WP-16
+> shipped deliberately without them (FE #100), and adding either one now fails the build.**
+> `FE/src/components/bridge/outputNamespacePresets.ts` ships exactly three presets — `none` /
+> `ubl21` / `custom` — and its header states the reasons, which are not stylistic: **cXML is
+> DTD-based and has no namespaces at all**, so a "cXML namespace preset" would teach a coordinator
+> something false about the format they are trying to satisfy; and **Peppol BIS 3 is the UBL
+> namespaces plus three mandatory element values** (`UBLVersionID`, `CustomizationID`, `ProfileID`),
+> so a preset seeding only the namespaces would produce *"a document that looks like Peppol and is
+> rejected by the network"* — the exact failure mode `OutputTemplateEmitter.cs:62-71` exists to
+> prevent.
+>
+> **BE #155 / FE #109** then took ProcuLink to emitting **no Peppol identifier at all**:
+> `cbc:CustomizationID` and `cbc:ProfileID` are removed from
+> `BE/ProcuLink.Transform/Output/UblOrderTransformService.cs`, because a receiving access point routes
+> and validates on exactly those two elements and nothing in either repo can back a BIS conformance
+> claim. Both are `minOccurs="0"` in the OASIS UBL 2.1 Order-2 schema, so omitting them keeps the
+> document schema-valid UBL. That also retires the §6 capability-matrix row *"Stamps Peppol BIS 3
+> conformance IDs on a non-BIS-conformant document"* (`:174`) — the stamping is gone. See the
+> CORRECTION against open unknown #6 in `04-CAPABILITY-TRUTH-LEDGER.md`, and the merge-state note at
+> the 2026-08-06 correction in `05-PROGRESS.md` (FE #109 is on `main`; BE #155 was open when this was
+> written).
+>
+> The refusal is pinned by `FE/src/components/bridge/outputNamespacePresets.test.ts` (*"names neither
+> Peppol nor cXML anywhere — not in an id, a label, or a description"*) and
+> `FE/src/components/bridge/OutputStructureDesigner.wp16.test.tsx` (*"offers neither a Peppol nor a
+> cXML preset"*), and agreed by `DESIGN-DB-2-output-designer.md:645-647`. Both formats are produced by
+> their own dedicated transforms, configured on the supplier's Delivery tab. **The rest of B12 stands
+> as written; these two presets are not live work.**
 
 ## 16. What should not be built
 
