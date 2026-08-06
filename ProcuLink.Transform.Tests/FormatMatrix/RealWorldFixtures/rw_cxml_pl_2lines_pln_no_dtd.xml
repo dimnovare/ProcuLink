@@ -1,4 +1,4 @@
-<cXML payload="REDACTED" timestamp="2026-06-08T08:09:40+02:00">
+<cXML payload="5293137@supplier.example.com" timestamp="2026-06-08T08:09:40+02:00">
   <Header>
     <From>
       <Credential domain="NetworkId">
