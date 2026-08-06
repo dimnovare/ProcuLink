@@ -1164,12 +1164,51 @@ public class CatalogCredentialBindingTests
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+Then add the round-trip that actually exercises **this task's** call sites. The two tests above only
+pin Task 2's service; this one fails until `CatalogSourceSettingsService` encrypts under the right
+scope, so the task has a genuine red-then-green cycle. Append to the same file:
+
+```csharp
+    // Writes through the REAL production write path, then decrypts with the exact tuple
+    // CatalogPullService.cs:312 constructs. A wrong purpose or a wrong scope id on either side
+    // shows up here as an unreadable credential rather than as a broken catalog sync in production.
+    [Fact]
+    public async Task Upsert_ThenDecryptWithTheReadSideScope_RoundTrips()
+    {
+        await using var db = NewDb();
+        var enc = Encryption();
+        var service = new CatalogSourceSettingsService(db, enc);
+
+        await service.UpsertAsync(OrgA, SupplierId, new UpsertCatalogSourceRequest
+        {
+            Protocol = "sftp",
+            Password = "catalog-password",
+            IsEnabled = true,
+            // …plus whatever else the record requires for an sftp source
+        }, CancellationToken.None);
+
+        var source = await db.SupplierCatalogSources.AsNoTracking()
+            .SingleAsync(s => s.OrgId == OrgA && s.SupplierId == SupplierId);
+
+        enc.Decrypt(source.EncryptedPassword!, CredentialScope.ForSupplier(
+            source.OrgId, CredentialPurpose.SupplierCatalogPassword, source.Id))
+            .Should().Be("catalog-password");
+    }
+```
+
+Add the `NewDb()` and `SupplierId` members this test needs, mirroring
+`CxmlCredentialResolverBindingTests` from Task 3. Read `UpsertCatalogSourceRequest` and
+`CatalogSourceSettingsService`'s constructor before writing the call, and copy the request values a
+neighbouring catalog test uses for an sftp source.
+
+- [ ] **Step 2: Run the tests to verify the right ones fail**
 
 Run: `dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~CatalogCredentialBindingTests"`
 
-Expected: PASS already — these exercise Task 2's service directly and are the pinned contract for
-this task's scoping choice. If either FAILS, Task 2 is wrong; stop and fix Task 2.
+Expected: the two scoping tests PASS — they exercise Task 2's service directly and are the pinned
+contract for this task's scoping choice; if either FAILS, Task 2 is wrong, so stop and fix Task 2.
+`Upsert_ThenDecryptWithTheReadSideScope_RoundTrips` must FAIL, because
+`CatalogSourceSettingsService` still writes an unbound version-1 blob that no scope can read.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -1248,6 +1287,11 @@ Lines 496 and 556 (both auth-config reads) — apply this shape at each:
 Run: `dotnet build ProcuLink.slnx --configuration Release`
 
 Expected: build succeeds.
+
+Run: `dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~CatalogCredentialBindingTests"`
+
+Expected: PASS, 3 tests — including `Upsert_ThenDecryptWithTheReadSideScope_RoundTrips`, which was
+red before Step 3.
 
 Run: `dotnet test ProcuLink.slnx --configuration Release`
 
@@ -1721,11 +1765,82 @@ public class OrgScopedCredentialBindingTests
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+Then add the round-trips that exercise **this task's** write call sites. The tests above only pin
+Task 2's service; these fail until each settings service encrypts under the right scope, so the task
+has a genuine red-then-green cycle. Append to the same file:
+
+```csharp
+    // Each writes through the REAL production write path, then decrypts with the exact tuple the
+    // matching read site constructs (EmailPollOrgJob.cs:145, SftpIngressService.cs:103,
+    // S3IngressService.cs:109). A wrong purpose on either side shows up here rather than as a
+    // silently skipped poll in production.
+
+    [Fact]
+    public async Task SaveEmailSettings_ThenDecryptWithThePollerScope_RoundTrips()
+    {
+        await using var db = NewDb();
+        var enc = Encryption();
+        var orgId = await SeedOrgAsync(db);
+
+        await new EmailSettingsService(db, enc).UpdateAsync(
+            orgId, new UpdateEmailSettingsRequest { Password = "imap-password" /* …plus required fields */ },
+            CancellationToken.None);
+
+        var org = await db.Organisations.AsNoTracking().SingleAsync(o => o.Id == orgId);
+        var config = EmailPollingConfig.FromJson(org.EmailConfigJson);
+
+        enc.Decrypt(config.PasswordCiphertext!, CredentialScope.ForOrg(
+            orgId, CredentialPurpose.OrgEmailImapPassword)).Should().Be("imap-password");
+    }
+
+    [Fact]
+    public async Task SaveSftpIngress_ThenDecryptWithThePollerScope_RoundTrips()
+    {
+        await using var db = NewDb();
+        var enc = Encryption();
+        var orgId = await SeedOrgAsync(db);
+
+        await new PullIngressSettingsService(db, enc).SaveSftpAsync(
+            orgId, new UpdateSftpIngressRequest { Password = "sftp-password" /* …plus required fields */ },
+            CancellationToken.None);
+
+        var cfg = await db.SftpIngressConfigs.AsNoTracking().SingleAsync(c => c.OrgId == orgId);
+
+        enc.Decrypt(cfg.EncryptedPassword, CredentialScope.ForOrg(
+            orgId, CredentialPurpose.OrgIngressSftpPassword)).Should().Be("sftp-password");
+    }
+
+    [Fact]
+    public async Task SaveS3Ingress_ThenDecryptWithThePollerScope_RoundTrips()
+    {
+        await using var db = NewDb();
+        var enc = Encryption();
+        var orgId = await SeedOrgAsync(db);
+
+        await new PullIngressSettingsService(db, enc).SaveS3Async(
+            orgId, new UpdateS3IngressRequest { SecretKey = "s3-secret-key" /* …plus required fields */ },
+            CancellationToken.None);
+
+        var cfg = await db.S3IngressConfigs.AsNoTracking().SingleAsync(c => c.OrgId == orgId);
+
+        enc.Decrypt(cfg.EncryptedSecretKey, CredentialScope.ForOrg(
+            orgId, CredentialPurpose.OrgIngressS3SecretKey)).Should().Be("s3-secret-key");
+    }
+```
+
+Read each service's constructor and each request record before writing these — method names
+(`UpdateAsync`, `SaveSftpAsync`, `SaveS3Async`) and request property sets must match the real API,
+and `SettingsControllerPullIngressTests.cs:71` already constructs `PullIngressSettingsService` the
+way this needs. Add `NewDb()`, `Encryption()`, and a `SeedOrgAsync` helper that inserts the
+`Organisation` row (same field set as Task 8's seed).
+
+- [ ] **Step 2: Run the tests to verify the right ones fail**
 
 Run: `dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~OrgScopedCredentialBindingTests"`
 
-Expected: PASS (pinned contract, as in Task 4 Step 2).
+Expected: the cross-org and cross-purpose tests PASS (pinned contract, as in Task 4 Step 2), and all
+three round-trips FAIL — the settings services still write unbound version-1 blobs that no scope can
+read.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -1820,6 +1935,11 @@ Add `using ProcuLink.Core.Services.Security;` to each of the five files, then:
 Run: `dotnet build ProcuLink.slnx --configuration Release`
 
 Expected: build succeeds.
+
+Run: `dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~OrgScopedCredentialBindingTests"`
+
+Expected: PASS — the two pinned-contract theories plus the three round-trips that were red before
+Step 3.
 
 Run: `dotnet test ProcuLink.slnx --configuration Release`
 
