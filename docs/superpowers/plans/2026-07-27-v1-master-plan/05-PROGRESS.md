@@ -3841,3 +3841,63 @@ WP-22 dedupes documents, not POs.
 **Not covered, so absence is not a pass:** no upload→deliver write path was run this pass;
 `/library/mappings`, `/library/rules`, `/drafts`, `/operations/connectors`, `/operations/webhooks`
 unopened; tablet 768 px unchecked.
+
+---
+
+## 2026-08-06 — Wave 5: WP-16, WP-37, WP-41 merged; WP-33 and WP-35 in flight
+
+Twelve PRs merged across both repos. FE `f41123a` · BE `408fb2d` at the time of writing.
+
+### Master-plan packets
+
+| Packet | State |
+|---|---|
+| **WP-16** designer depth II | 🟢 merged (FE #100) — DB-2 unblocked it; the tracker's "blocked" row was stale |
+| **WP-37** page the founder | 🟢 merged (BE #144) |
+| **WP-41** a11y + visual-regression CI | 🟢 merged (FE #97) |
+| WP-33 stage 1 (auto-send dry run) | 🔵 in flight — holds the exclusive migration slot |
+| WP-35 replay that re-processes | 🔵 in flight — needs no migration; `PurchaseOrderEntity.OutboundArtifacts` is already a `List<>` |
+
+### Two "blocked" rows in this file were stale, and both cost nothing to unblock
+
+- **WP-16** was recorded as blocked on design brief DB-2. `DESIGN-DB-2-output-designer.md` had been sitting in this directory at 1115 lines.
+- **`cbc:EndpointID`** was recorded as needing "a supplier identifier field first". `Supplier.cs:27-43` has carried `VatNumber`, `RegistrationNumber`, `EdiCode` and `PrimaryDomain` since the 2026-07-25 identity columns landed, and `UblOrderTransformService.cs:99` already reached the navigation property.
+
+**Lesson: a blocker row is a claim like any other and decays like one.** Re-check the blocker before re-planning around it — both of these were unblocked by work that had already merged.
+
+### New traps
+
+**TRAP 31 — an over-claim can fall between two truth guards.** Growth was sold an "Audit log" bullet while `PlanConstants.cs:276` gates the only audit capability at Operations. `gatedCapabilityClaims.test.ts` needs a tier word to match and "Audit log" has none; `BillingFeatureGateCoverageTests` pins the ladder per **enum member** and a marketing bullet names none. Fixed by a bullet-first sweep where **silence fails**: every bullet must be explained by a `BillingFeature`, a verified quota, or a reasoned allowlist entry, plus a test that deletes dead allowlist entries so the allowlist cannot pre-authorise.
+
+**TRAP 32 — the claim and the storage layer must be checked together.** `/security` claimed an "append-only audit trail" in five places. `DeliveryService.cs:975-983` updates attempt rows in place, `OpsController.cs:251` stamps them, `DataErasureService.cs:136,139,140` hard-deletes with `RemoveRange`, and `IDataRetentionService` prunes. No DB-level immutability exists on any of those tables. A capability claim about *how records behave* needs the persistence code read, not the feature list.
+
+**TRAP 33 — `gh pr view` reports a pre-rebase `mergeStateStatus`.** After `gh pr update-branch --rebase`, `CLEAN` can mean "no checks have reported on the new head yet", not "passed". Twice this session a rebased PR read CLEAN with zero checks queued. **Confirm with `gh pr checks` or `gh run list --branch`, never merge on `mergeStateStatus` alone.** Related: CI genuinely fails to queue under runner saturation — FE #99 had no Actions run at all and needed an empty commit to trigger one.
+
+**TRAP 34 — worktree pruning by git ancestry is wrong in both directions.** Squash merges mean a merged branch's HEAD is never an ancestor of `main`, so ~40 merged trees read as "ahead". Worse, a chip that just ran `git worktree add -b x origin/main` and has not committed has `HEAD == origin/main`, which **is** an ancestor — so a live chip's worktree classifies as removable. Match merged-PR head branch names instead, require a clean tree, and keep an explicit protect-list of running chips. 46 removed safely this way.
+
+### The second authenticated production pass earned its keep
+
+Recorded in `docs/qa/2026-08-06-second-authenticated-production-pass.md`. Six findings, of which the two that mattered:
+
+- **F1 was a hole in the fix that shipped the day before.** FE #94 sanitised `rejectionReason`; production's markup arrived through `order.errorMessage`, rendered verbatim by design. Both of #94's tests set `errorMessage: null`, so the render test added specifically to pin the wiring pinned only one wire (TRAP 29).
+- **F2: the correct sentence already existed.** `passport.deliveryAttempts[*].errorMessage` carries operator copy written by WP-19, and the panel preferred the raw blob. The fix routes **all** operands through the sanitiser, because `attempt.ErrorMessage = DescribeFailure(result)` appends the supplier's own body — so that operand is equally untrusted.
+
+The fix chip's adversarial pass then found a **third** path: `api-client.ts` interpolates the raw response text into an error message, and a Railway/Vercel 502 answers HTML, so raw markup reaches `ApiHttpError.message` and six render sites. Root cause is `parseApiErrorBody`; a follow-up packet owns it.
+
+### Security findings opened this session — none are regressions, all are pre-existing
+
+Recorded here so they are not rediscovered:
+
+1. **Cleartext delivery is permitted.** `SuppliersController.cs:1047` is the only scheme check and explicitly allows `http://`; it is an **SSRF guard, not a TLS guard** (`OutboundRequestGuard.cs:52-57`). ERP connectors check no scheme. A cleartext OAuth `tokenUrl` leaks the client secret (`HttpAuthApplier.cs:115-120`). Ledger U-3, re-verified against code today. Being fixed by enforcing TLS so the `/security` claim becomes true rather than softening it.
+2. **Sixteen secret inputs have no `type="password"`**, including SSH private keys (`DeliveryConfigEditor.tsx:1398`, `DeliveryGuidedSetup.tsx:734`). `settings/page.tsx:1502` already does it correctly.
+3. **The credentials-in-URL guard covers catalog sources only** (`SuppliersController.cs:1049-1051`). A delivery config accepts a URL carrying `user:pass@`, stores it cleartext in `config_json`, returns it from GET, copies it into every attempt row, and **renders it** at `OrderPassport.tsx:387`.
+4. **The acceptance-gate override has no role gate.** `OrderAcceptanceGateController.cs:23` is a bare `[Authorize]` and `Program.cs:214` a bare `AddAuthorization()` — there are no roles anywhere in the repo, so any authenticated org member can override any blocking rule. It is scoped, audited and reason-required; there is no UI yet. **Founder decision, not an engineering one.**
+5. **A supplier with no *active* acceptance profile validates nothing** — profiles are created `draft`, the gate reads `active`. Invariants (missing PO number, missing currency, non-positive quantity) are advisory by design, and `MapperEnrichmentController.cs:139-141` records that such an order was transformed and delivered.
+
+### Verified live in production, not merely merged
+
+`/pricing` shows "Per-order audit trail"; `/security` no longer claims append-only; the dead-lettered order `b56ddb85` now shows "The supplier's endpoint was not found (HTTP 404)…" instead of raw markup. All five core app routes load with no console errors and no horizontal overflow at 1440px.
+
+### Also opened, not a packet
+
+**16 of 22 app routes have no browser-tab title** — eleven are client components that cannot export `metadata` and need sibling layouts. Titles must derive from `HUB_TABS`, the vocabulary-gated label registry, not be retyped.
