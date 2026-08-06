@@ -418,7 +418,9 @@ public class DeliveryConfigServiceTests
         fetched!.CxmlCredentials.Should().BeNull();
     }
 
-    private sealed class DeliveryConfigTestDbContext : ProcuLinkDbContext
+    // internal, not private: DeliveryConfigTransportSecurityTests needs the same trimmed model,
+    // and duplicating this Ignore list would drift the moment an entity is added.
+    internal sealed class DeliveryConfigTestDbContext : ProcuLinkDbContext
     {
         public DeliveryConfigTestDbContext(DbContextOptions<ProcuLinkDbContext> options)
             : base(options)

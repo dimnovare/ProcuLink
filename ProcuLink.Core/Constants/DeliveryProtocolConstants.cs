@@ -38,6 +38,23 @@ public static class DeliveryProtocolConstants
         ErpDirecto
     ];
 
+    /// <summary>
+    /// Protocols whose <c>config_json</c> carries an outbound URL under the <c>url</c> key, and are
+    /// therefore subject to <see cref="T:ProcuLink.Core.Security.OutboundUrlPolicy"/> at save time.
+    /// The remaining protocols are host+port based (sftp/ftp/ftps/smtp) or address a ProcuLink-owned
+    /// HTTPS email API (email), so there is no tenant-supplied URL scheme to police.
+    ///
+    /// <para>Declared here rather than restated at each call site: a new url-bearing protocol that
+    /// is not added to this list would ship without transport validation, and the delivery-config
+    /// transport tests walk this list precisely so that omission fails the build.</para>
+    /// </summary>
+    public static readonly string[] UrlBased =
+    [
+        Http,
+        ErpErply,
+        ErpDirecto
+    ];
+
     // Human-facing allowed list for validation messages: lists OFFERED protocols (smtp omitted —
     // it is accepted for legacy/self-host but no longer advertised).
     public static string AllowedListForMessage => "http, sftp, ftp, ftps, email, erp_erply, or erp_directo";
