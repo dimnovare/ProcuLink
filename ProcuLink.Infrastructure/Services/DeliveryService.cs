@@ -7,6 +7,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -166,12 +167,28 @@ public sealed class DeliveryService : IDeliveryService
         if (!_dispatchers.TryGetValue(config.Protocol, out var dispatcher))
             return await FailBeforeDispatchAsync(order, artifact, config, "No dispatcher registered for delivery protocol.", reconcileFailedAttempt, ct);
 
-        var credentials = string.IsNullOrWhiteSpace(config.EncryptedCredentials)
-            ? string.Empty
-            : _encryption.Decrypt(config.EncryptedCredentials);
-
-        if (credentials is null)
-            return await FailBeforeDispatchAsync(order, artifact, config, "Delivery credentials could not be decrypted.", reconcileFailedAttempt, ct);
+        // Scoped on SUPPLIER id, never the config row id: `config` may be a detached snapshot built
+        // from a pinned revision's CredentialsRef, whose row id differs from the live row that
+        // encrypted this blob. Both carry the same SupplierId.
+        string credentials;
+        try
+        {
+            credentials = string.IsNullOrWhiteSpace(config.EncryptedCredentials)
+                ? string.Empty
+                : _encryption.Decrypt(
+                    config.EncryptedCredentials,
+                    CredentialScope.ForSupplier(
+                        orgId, CredentialPurpose.SupplierDeliveryCredentials, config.SupplierId));
+        }
+        catch (CredentialUnbindableException ex)
+        {
+            _logger.LogError(ex,
+                "Order {OrderId}: delivery credentials for supplier {SupplierId} could not be decrypted ({Reason}).",
+                order.Id, config.SupplierId, ex.Reason);
+            return await FailBeforeDispatchAsync(
+                order, artifact, config, "Delivery credentials could not be decrypted.",
+                reconcileFailedAttempt, ct);
+        }
 
         // ── Concurrency claim (D-1) ───────────────────────────────────────────────
         // SLA timer: opening a fresh delivery attempt (re)starts the confirmation window
@@ -751,12 +768,23 @@ public sealed class DeliveryService : IDeliveryService
         if (!_dispatchers.TryGetValue(config.Protocol, out var dispatcher))
             return new DeliveryTestResult(false, "No dispatcher registered for delivery protocol.", null);
 
-        var credentials = string.IsNullOrWhiteSpace(config.EncryptedCredentials)
-            ? string.Empty
-            : _encryption.Decrypt(config.EncryptedCredentials);
-
-        if (credentials is null)
+        string credentials;
+        try
+        {
+            credentials = string.IsNullOrWhiteSpace(config.EncryptedCredentials)
+                ? string.Empty
+                : _encryption.Decrypt(
+                    config.EncryptedCredentials,
+                    CredentialScope.ForSupplier(
+                        orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId));
+        }
+        catch (CredentialUnbindableException ex)
+        {
+            _logger.LogError(ex,
+                "Delivery test for supplier {SupplierId}: credentials could not be decrypted ({Reason}).",
+                supplierId, ex.Reason);
             return new DeliveryTestResult(false, "Delivery credentials could not be decrypted.", null);
+        }
 
         // The fixed test document, named from the SHARED constant rather than a local literal: the
         // file-drop dispatchers recognise that name to tell an operator the truth when a repeat test

@@ -4,6 +4,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -97,7 +98,10 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         {
             existing.EncryptedCredentials = string.IsNullOrWhiteSpace(request.CredentialsJson)
                 ? string.Empty
-                : _encryption.Encrypt(request.CredentialsJson);
+                : _encryption.Encrypt(
+                    request.CredentialsJson,
+                    CredentialScope.ForSupplier(
+                        orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId));
         }
 
         ApplyCxmlCredentials(existing, request.CxmlCredentials);
@@ -130,7 +134,10 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         {
             existing.EncryptedCxmlSharedSecret = string.IsNullOrWhiteSpace(cxml.SenderSharedSecret)
                 ? null
-                : _encryption.Encrypt(cxml.SenderSharedSecret);
+                : _encryption.Encrypt(
+                    cxml.SenderSharedSecret,
+                    CredentialScope.ForSupplier(
+                        existing.OrgId, CredentialPurpose.SupplierDeliveryCxmlSecret, existing.SupplierId));
         }
     }
 
