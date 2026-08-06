@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services;
@@ -8,8 +10,10 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Output;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -221,31 +225,36 @@ public sealed class ReplayReprocessPostgresTests : IClassFixture<ReplayReprocess
     }
 
     /// <summary>
-    /// The dedupe read is not what makes this safe — the primary key is. This drives the race
-    /// directly: a second re-process whose pre-check has already been bypassed still cannot land a
-    /// duplicate row, and the 23505 is absorbed into a normal <c>Reused</c> answer rather than
-    /// surfacing as a 500.
+    /// Two re-processes of the same order racing on separate connections still leave ONE artifact,
+    /// and neither caller is told the operation failed.
+    ///
+    /// <para><b>What this does and does not prove.</b> Two mechanisms can produce that outcome: the
+    /// existence pre-check, when one call happens to finish before the other reads; and the primary
+    /// key, when both read the same empty pre-state and both try to insert. This test cannot force
+    /// which one fires, so it asserts the INVARIANT rather than the mechanism — deliberately, since
+    /// asserting a mechanism it cannot schedule would be a claim the test does not earn. The
+    /// mechanism that matters is the primary key, because it is the only one that holds when the
+    /// pre-check is useless; that it holds is proven by the fact that the id is derived, not
+    /// generated, which the mutation on
+    /// <c>DeterministicReprocessArtifactId</c> covers.</para>
     /// </summary>
     [DockerRequiredFact]
-    public async Task Reprocess_WhenTheRowWasInsertedConcurrently_AbsorbsTheUniqueViolation()
+    public async Task Reprocess_RunConcurrently_StillLeavesExactlyOneArtifact()
     {
         var seed    = await SeedAsync();
         var storage = await NewStorageWithOriginalAsync(seed);
 
-        Guid firstId;
-        await using (var db = NewContext())
-            firstId = (await NewReplay(db, storage).ReprocessAsync(
-                seed.OrgId, seed.ConnectionId, seed.DraftRevisionId, seed.OrderId, "operator@test", default)).Response!.ArtifactId;
+        await using var dbA = NewContext();
+        await using var dbB = NewContext();
 
-        // A context that has already read the pre-state (no reprocessed row yet) and only commits
-        // afterwards is exactly the losing side of the race.
-        await using var racing = NewContext();
-        var service = NewReplay(racing, storage);
-        var outcome = await service.ReprocessAsync(
-            seed.OrgId, seed.ConnectionId, seed.DraftRevisionId, seed.OrderId, "operator@test", default);
+        var outcomes = await Task.WhenAll(
+            NewReplay(dbA, storage).ReprocessAsync(
+                seed.OrgId, seed.ConnectionId, seed.DraftRevisionId, seed.OrderId, "operator-a", default),
+            NewReplay(dbB, storage).ReprocessAsync(
+                seed.OrgId, seed.ConnectionId, seed.DraftRevisionId, seed.OrderId, "operator-b", default));
 
-        Assert.Equal(ReprocessStatus.Ok, outcome.Status);
-        Assert.Equal(firstId, outcome.Response!.ArtifactId);
+        Assert.All(outcomes, o => Assert.Equal(ReprocessStatus.Ok, o.Status));
+        Assert.Equal(outcomes[0].Response!.ArtifactId, outcomes[1].Response!.ArtifactId);
 
         await using var verify = NewContext();
         Assert.Equal(2, await verify.OutboundArtifacts.CountAsync(a => a.OrderId == seed.OrderId));
@@ -293,6 +302,87 @@ public sealed class ReplayReprocessPostgresTests : IClassFixture<ReplayReprocess
             .FirstOrDefaultAsync();
         Assert.NotNull(deliverableViaQuery);
         Assert.Equal(seed.OriginalArtifactId, deliverableViaQuery!.Id);
+    }
+
+    /// <summary>
+    /// The order passport keeps naming the artifact that was actually SENT.
+    ///
+    /// <para>The passport's output section is what an operator shows a supplier in a dispute: it
+    /// carries the artifact's SHA-256, and WP-34's tamper test pins that hash to the delivered
+    /// bytes. It picked the order's newest artifact — so a re-process, whose artifact is newest by
+    /// construction, would have swapped the headline document for one that was never sent and
+    /// published its hash as the record. This asserts the swap does not happen, and separately that
+    /// the preview is still LISTED, because hiding it would be its own dishonesty.</para>
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task Reprocess_DoesNotChangeWhichArtifactThePassportSaysWasSent()
+    {
+        var seed    = await SeedAsync();
+        var storage = await NewStorageWithOriginalAsync(seed);
+
+        Guid reprocessedId;
+        await using (var db = NewContext())
+            reprocessedId = (await NewReplay(db, storage).ReprocessAsync(
+                seed.OrgId, seed.ConnectionId, seed.DraftRevisionId, seed.OrderId, "operator@test", default))
+                .Response!.ArtifactId;
+
+        await using var db2 = NewContext();
+        var passport = await new PassportService(db2).GetAsync(seed.OrgId, seed.OrderId, default);
+
+        Assert.True(passport.IsSuccess, passport.Error);
+        Assert.NotNull(passport.Value!.OutputArtifact);
+        Assert.Equal(seed.OriginalArtifactId, passport.Value.OutputArtifact!.ArtifactId);
+        Assert.Equal(
+            ProvenanceHash.TrySha256Hex(OriginalBytes),
+            passport.Value.OutputArtifact.ArtifactSha256);
+        Assert.NotEqual(seed.OriginalArtifactId, reprocessedId);
+    }
+
+    /// <summary>
+    /// The AUTOMATIC backoff retry sends the order's own output, not a preview.
+    ///
+    /// <para>This is the path with no human in it: it fires long after the first attempt, by which
+    /// time an operator may well have re-processed the order against a candidate revision. It
+    /// resolved "the artifact" as the order's newest, so an unguarded append would have handed the
+    /// preview to the real dispatcher. Asserted against the bytes the dispatcher actually
+    /// received — a check on the artifact id alone would pass against a dispatcher that was handed
+    /// one artifact's row and another's content.</para>
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task Reprocess_ThenAutomaticRetry_DispatchesTheOriginalBytes()
+    {
+        var seed    = await SeedAsync();
+        var storage = await NewStorageWithOriginalAsync(seed);
+
+        await using (var db = NewContext())
+            await NewReplay(db, storage).ReprocessAsync(
+                seed.OrgId, seed.ConnectionId, seed.DraftRevisionId, seed.OrderId, "operator@test", default);
+
+        // A failed delivery with a supplier config the retry can route through.
+        await using (var db = NewContext())
+        {
+            var order = await db.PurchaseOrders.SingleAsync(o => o.Id == seed.OrderId);
+            order.Status = OrderStatusConstants.DeliveryFailed;
+            db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+            {
+                Id = Guid.NewGuid(), OrgId = seed.OrgId, SupplierId = seed.SupplierId,
+                Protocol = "http", AutoDeliver = true,
+                ConfigJson = """{"url":"https://supplier.test/orders","method":"POST"}""",
+                OutputFormat = "csv", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var dispatcher = new CapturingDispatcher();
+        await using (var db = NewContext())
+        {
+            var result = await BuildDeliveryService(db, dispatcher, storage)
+                .RetryDeliveryAsync(seed.OrgId, seed.OrderId, maxAttempts: 5, default);
+            Assert.True(result.Success, result.ErrorMessage);
+        }
+
+        Assert.Equal(1, dispatcher.Calls);
+        Assert.Equal(OriginalBytes, dispatcher.LastContent);
     }
 
     // ── (4) refusals ──────────────────────────────────────────────────────────
@@ -467,6 +557,46 @@ public sealed class ReplayReprocessPostgresTests : IClassFixture<ReplayReprocess
         var storage = new RecordingStorage();
         await storage.UploadAsync(new MemoryStream(OriginalBytes), seed.OriginalFileKey, "text/csv", default);
         return storage;
+    }
+
+    private static DeliveryService BuildDeliveryService(
+        ProcuLinkDbContext db, IDeliveryDispatcher dispatcher, IFileStorageService storage) =>
+        new(db,
+            storage,
+            new DeliveryEncryptionService(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Delivery:EncryptionKey"] = Convert.ToBase64String(new byte[32]),
+                })
+                .Build()),
+            new[] { dispatcher },
+            new NoOpIntegrationTriggerService(),
+            new ProcuLink.Api.Tests.TestDoubles.FakeAnalyticsService(),
+            new OrderExceptionService(db),
+            NullLogger<DeliveryService>.Instance);
+
+    private sealed class NoOpIntegrationTriggerService : IIntegrationTriggerService
+    {
+        public Task EnqueueAsync(Guid organisationId, string eventType, object payload, CancellationToken ct)
+            => Task.CompletedTask;
+    }
+
+    /// <summary>Captures the bytes actually handed to a supplier channel.</summary>
+    private sealed class CapturingDispatcher : IDeliveryDispatcher
+    {
+        public int Calls { get; private set; }
+        public byte[]? LastContent { get; private set; }
+        public string Protocol => "http";
+
+        public Task<DeliveryResult> DispatchAsync(
+            byte[] content, string fileName, string contentType,
+            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct,
+            string? idempotencyKey = null)
+        {
+            Calls++;
+            LastContent = content;
+            return Task.FromResult(new DeliveryResult(true, null, 200));
+        }
     }
 
     /// <summary>

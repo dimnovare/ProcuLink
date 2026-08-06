@@ -367,7 +367,11 @@ public sealed class ReplayService : IReplayService
         {
             await _db.SaveChangesAsync(ct);
         }
-        catch (DbUpdateException)
+        // Narrowed to a UNIQUE violation on purpose. Catching every DbUpdateException would turn a
+        // genuine write failure — a broken audit-event insert, a constraint we did not anticipate —
+        // into a cheerful "reused" answer, which is the same class of lie this packet exists to
+        // prevent. Anything that is not 23505 propagates.
+        catch (DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException { SqlState: "23505" })
         {
             // Lost the race. The winner wrote the same bytes under the same key with the same id,
             // so the caller's answer is unchanged — this is a Reused, not a failure.

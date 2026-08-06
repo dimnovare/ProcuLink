@@ -168,7 +168,13 @@ public sealed class PassportService : IPassportService
                 + "resolution) is available at GET /api/orders/{id}/ai-decisions; a bulk-accept also appears in "
                 + "manual corrections as 'AiSuggestionsBulkAccepted'.");
 
-        var latestArtifact = artifacts.FirstOrDefault();
+        // WP-35: the passport's headline output artifact is the newest DELIVERABLE one, never a
+        // re-processed preview. This section answers "what did we send?" and carries the SHA-256 an
+        // operator uses to settle a supplier dispute; a preview produced afterwards is the newest
+        // artifact by construction, so an unfiltered pick would present a document that was never
+        // sent, under the hash of one that was not. The full `artifacts` list below is deliberately
+        // NOT narrowed — every attempt must still be able to resolve the artifact it dispatched.
+        var latestArtifact = OutboundArtifactSelection.NewestDeliverable(artifacts);
         var outputArtifact = latestArtifact is null
             ? null
             : new PassportOutputArtifact(

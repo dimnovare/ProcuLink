@@ -1296,8 +1296,15 @@ public sealed class DeliveryService : IDeliveryService
 
         // Resolve the artifact BEFORE the claim: a missing artifact is a side-effect-free
         // early return, so it must not first flip the order into 'delivering' and strand it.
+        //
+        // WP-35: newest DELIVERABLE, not newest. This is the AUTOMATIC backoff retry and it fires
+        // long after the first attempt — ample time for an operator to have re-processed the order
+        // against a candidate revision. That preview is the newest artifact by construction, and
+        // sending it here would put a document nobody approved in front of the supplier with no
+        // human in the loop at all.
         var artifact = await _db.OutboundArtifacts
             .Where(a => a.OrderId == orderId && a.OrgId == orgId)
+            .Deliverable()
             .OrderByDescending(a => a.CreatedAt)
             .FirstOrDefaultAsync(ct);
 
