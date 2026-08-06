@@ -34,20 +34,57 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         _utcNow = utcNow ?? (() => DateTime.UtcNow);
     }
 
+    /// <summary>
+    /// Runs one sweep.
+    /// <para>
+    /// <b>Fail closed, never all-clear.</b> Both inputs are read defensively and INDEPENDENTLY. A
+    /// source that cannot be read yields no conditions at all rather than zeroed ones: the
+    /// conditions it feeds are skipped as UNKNOWN, and the fact that the sweep was partially blind
+    /// is itself raised as <see cref="OperationalAlertKeys.AlertSweepDegraded"/> through the same
+    /// sink and the same per-condition cooldown as any other alert. The all-clear log is suppressed
+    /// in that run, because a sweep that could not evaluate something has no business reporting that
+    /// everything is fine.
+    /// </para>
+    /// <para>
+    /// The failure of one input costs only the conditions it feeds — a broken probe must not take
+    /// the heartbeat and backlog conditions with it, and a timed-out snapshot query must not take
+    /// the probe's three with it.
+    /// </para>
+    /// </summary>
     public async Task<bool> RunAsync(CancellationToken ct)
     {
         var now = _utcNow();
-        var snap = await _health.GetWorkerHealthSnapshotAsync(ct);
+
+        var snapshot = await ReadSnapshotAsync(ct);
         var signals = await ReadSignalsAsync(ct);
 
-        var conditions = new List<(string Key, bool IsBad, string Message)>(OperationalAlertKeys.All.Count)
+        var conditions = new List<(string Key, bool IsBad, string Message)>(OperationalAlertKeys.All.Count);
+        var blindSources = new List<string>();
+
+        if (snapshot is { } snap)
         {
-            EvaluateWorkerHeartbeat(snap),
-            EvaluateDeadLetterBacklog(snap),
-            EvaluateDeliveryFailureRate(signals.DeliveryFailureRate),
-            EvaluatePullChannels(signals.PullChannels),
-            EvaluateAiTokenLatch(signals.AiTokenLatch),
-        };
+            conditions.Add(EvaluateWorkerHeartbeat(snap));
+            conditions.Add(EvaluateDeadLetterBacklog(snap));
+        }
+        else
+        {
+            blindSources.Add(
+                "the worker health snapshot query (worker heartbeat, dead-letter backlog)");
+        }
+
+        if (signals is { } sig)
+        {
+            conditions.Add(EvaluateDeliveryFailureRate(sig.DeliveryFailureRate));
+            conditions.Add(EvaluatePullChannels(sig.PullChannels));
+            conditions.Add(EvaluateAiTokenLatch(sig.AiTokenLatch));
+        }
+        else
+        {
+            blindSources.Add(
+                "the operational probe (delivery failure rate, pull-channel freshness, AI token cap)");
+        }
+
+        conditions.Add(EvaluateSweepDegraded(blindSources));
 
         var anyBad = false;
         var alertedAny = false;
@@ -69,46 +106,100 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
             }
 
             _logger.LogError("WorkerHealthAlert [{AlertKey}]: {Message}", key, message);
-            alertedAny |= await TryAlertAsync(key, message, ct);
+
+            var delivered = await TryAlertAsync(key, message, ct);
+            alertedAny |= delivered;
+
+            if (!delivered)
+            {
+                // Every sink is a deliberate no-op when unconfigured, so an alert can be "raised"
+                // and reach nobody. This is the floor of what can be done about it from inside the
+                // process; StartupConfigurationValidator refuses to boot Production with no alert
+                // destination at all, which is the only place the gap can be closed rather than
+                // reported.
+                _logger.LogError(
+                    "WorkerHealthAlert [{AlertKey}]: the alert reached no configured transport — "
+                  + "NOBODY has been notified. Set Alerting:Email:To (with Email:Postmark:ServerToken) "
+                  + "or Sentry:Dsn on the Worker.", key);
+            }
         }
 
-        if (!anyBad)
+        if (!anyBad && snapshot is { } okSnap && signals is { } okSignals)
         {
             _logger.LogInformation(
                 "WorkerHealthAlert: healthy — workers={ActiveWorkers}, deadLetter+failed={DeadLetter}, "
               + "deliveryAttempts={Attempts}/failures={Failures}, latchedAiOrgs={Latched}.",
-                snap.ActiveWorkers, snap.DeadLetterOrFailed,
-                signals.DeliveryFailureRate.Attempts, signals.DeliveryFailureRate.Failures,
-                signals.AiTokenLatch.LatchedOrgs);
+                okSnap.ActiveWorkers, okSnap.DeadLetterOrFailed,
+                okSignals.DeliveryFailureRate.Attempts, okSignals.DeliveryFailureRate.Failures,
+                okSignals.AiTokenLatch.LatchedOrgs);
         }
 
         return alertedAny;
     }
 
     /// <summary>
-    /// Reads the extra signals, degrading to "all clear" if the probe fails. A broken probe must
-    /// cost the three conditions it feeds, never the worker-heartbeat and backlog conditions that
-    /// do not depend on it — and never the sweep itself.
+    /// Reads the worker-health snapshot, returning <c>null</c> when it cannot be read.
+    /// <para>
+    /// This was previously unguarded and ran FIRST, so with <c>[AutomaticRetry(Attempts = 0)]</c> on
+    /// the job a single Postgres timeout killed all five conditions for that cycle in silence — the
+    /// two oldest conditions could take down the three newest, guarded ones.
+    /// </para>
     /// </summary>
-    private async Task<OperationalAlertSignals> ReadSignalsAsync(CancellationToken ct)
+    private async Task<WorkerHealthSnapshot?> ReadSnapshotAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await _health.GetWorkerHealthSnapshotAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Host shutdown / job cancellation is not an incident. Swallowing it here would page
+            // the operator on every deploy, which is exactly the false alarm these thresholds
+            // were all designed to avoid.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "WorkerHealthAlert: worker health snapshot query failed — worker heartbeat and "
+              + "dead-letter backlog are NOT evaluated this run.");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads the extra signals, returning <c>null</c> when the probe cannot be read.
+    /// <para>
+    /// Deliberately NOT an all-clear fallback. A zeroed snapshot — no attempts, no channels, no
+    /// latched orgs — evaluates as "not bad" on all three conditions it feeds, so a permanently
+    /// broken probe query used to make three of the five conditions report healthy forever while
+    /// the same run logged "healthy". Unknown is not healthy.
+    /// </para>
+    /// </summary>
+    private async Task<OperationalAlertSignals?> ReadSignalsAsync(CancellationToken ct)
     {
         try
         {
             return await _probe.GetSignalsAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
                 "WorkerHealthAlert: operational alert probe failed — delivery failure rate, "
               + "pull-channel freshness and AI token-cap latch are NOT evaluated this run.");
-            return OperationalAlertSignals.Empty;
+            return null;
         }
     }
 
     /// <summary>
-    /// Hands one alert to the sink. Sinks are contractually non-throwing, but this is the last line
-    /// of defence: if one throws anyway, the remaining conditions in this sweep must still be
-    /// offered, or a single bad transport silently suppresses every other alert in the same run.
+    /// Hands one alert to the sink and reports whether any transport actually delivered it. Sinks
+    /// are contractually non-throwing, but this is the last line of defence: if one throws anyway,
+    /// the remaining conditions in this sweep must still be offered, or a single bad transport
+    /// silently suppresses every other alert in the same run.
     /// <para>
     /// The cooldown was already stamped before this call and is NOT rolled back on failure, so a
     /// throwing transport costs one condition up to one cooldown window rather than turning the
@@ -120,8 +211,11 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
     {
         try
         {
-            await _sink.AlertAsync(key, message, ct);
-            return true;
+            return await _sink.AlertAsync(key, message, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -204,4 +298,24 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
             $"ProcuLink AI token cap latched for {signal.LatchedOrgs} organisation(s) in good standing. "
           + "PDF extraction for them has silently degraded to the regex fallback until the month rolls "
           + "over or the limit is raised.");
+
+    /// <summary>
+    /// The meta-condition: the sweep could not read one or more of its own inputs, so the conditions
+    /// those inputs feed are UNKNOWN this run.
+    /// <para>
+    /// It runs through the same sink and the same per-condition cooldown as everything else, so a
+    /// permanently broken input pages once per window rather than every five minutes. When nothing
+    /// is blind it reports healthy, which re-arms the transition alert for the next outage.
+    /// </para>
+    /// <para>
+    /// ONE condition covers every input rather than one per input: the operator's action is the
+    /// same whichever failed, and the message names each blind source, so a single database outage
+    /// is one page carrying both names instead of two pages saying the same thing.
+    /// </para>
+    /// </summary>
+    private static (string, bool, string) EvaluateSweepDegraded(IReadOnlyList<string> blindSources) =>
+        (OperationalAlertKeys.AlertSweepDegraded, blindSources.Count > 0,
+            $"ProcuLink alert sweep is partially blind: {string.Join(" and ", blindSources)} could not "
+          + "be read this run, so the conditions they feed were NOT evaluated — unknown, not healthy. "
+          + "Monitoring is degraded until this clears; check Worker logs and database connectivity.");
 }

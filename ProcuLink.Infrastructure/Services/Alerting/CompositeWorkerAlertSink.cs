@@ -22,13 +22,35 @@ public sealed class CompositeWorkerAlertSink : IWorkerAlertSink
         _logger = logger;
     }
 
-    public async Task AlertAsync(string alertKey, string message, CancellationToken ct = default)
+    /// <summary>
+    /// The transports this composite was actually constructed with, in fan-out order.
+    /// <para>
+    /// Exposed so the host wiring can be verified against the CONSTRUCTED object graph. The previous
+    /// guard matched <c>Program.cs</c> source with a regex that stopped at the constructor name, so
+    /// deleting a transport from the argument list left every test green while removing the routing
+    /// the alerting packet exists to deliver.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<IWorkerAlertSink> Sinks => _sinks;
+
+    /// <summary>
+    /// Fans out to every transport and reports whether ANY of them actually delivered. One working
+    /// transport is enough to notify the operator; zero means the alert left the process through
+    /// nothing at all, which the caller must not mistake for a raised alert.
+    /// </summary>
+    public async Task<bool> AlertAsync(string alertKey, string message, CancellationToken ct = default)
     {
+        var deliveredByAny = false;
+
         foreach (var sink in _sinks)
         {
             try
             {
-                await sink.AlertAsync(alertKey, message, ct);
+                deliveredByAny |= await sink.AlertAsync(alertKey, message, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -38,5 +60,7 @@ public sealed class CompositeWorkerAlertSink : IWorkerAlertSink
                     sink.GetType().Name, alertKey);
             }
         }
+
+        return deliveredByAny;
     }
 }

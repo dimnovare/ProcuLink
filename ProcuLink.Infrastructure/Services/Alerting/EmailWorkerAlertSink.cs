@@ -16,6 +16,13 @@ namespace ProcuLink.Infrastructure.Services.Alerting;
 /// component that can crash the Worker is worse than no alerting, and a throw here would abort the
 /// sweep before the remaining conditions were evaluated.
 /// </para>
+/// <para>
+/// But silent is not the same as delivered. Every no-op path — no recipient, no provider token, a
+/// refusal from the provider, a transport throw — returns <c>false</c>, so the caller can tell the
+/// difference between "emailed" and "did nothing without complaining". The
+/// no-token case is the one this distinction was written for: <c>Alerting:Email:To</c> alone made
+/// the configuration LOOK complete while every alert died here behind one unread warning.
+/// </para>
 /// </summary>
 public sealed class EmailWorkerAlertSink : IWorkerAlertSink
 {
@@ -33,7 +40,7 @@ public sealed class EmailWorkerAlertSink : IWorkerAlertSink
         _logger = logger;
     }
 
-    public async Task AlertAsync(string alertKey, string message, CancellationToken ct = default)
+    public async Task<bool> AlertAsync(string alertKey, string message, CancellationToken ct = default)
     {
         var recipients = _options.Recipients;
         if (recipients.Count == 0)
@@ -42,7 +49,7 @@ public sealed class EmailWorkerAlertSink : IWorkerAlertSink
             _logger.LogDebug(
                 "EmailWorkerAlertSink: no Alerting:Email:To configured — alert {AlertKey} not emailed.",
                 alertKey);
-            return;
+            return false;
         }
 
         if (!_client.IsConfigured)
@@ -50,7 +57,7 @@ public sealed class EmailWorkerAlertSink : IWorkerAlertSink
             _logger.LogWarning(
                 "EmailWorkerAlertSink: a recipient is configured but the email provider is not — "
               + "alert {AlertKey} could NOT be emailed.", alertKey);
-            return;
+            return false;
         }
 
         try
@@ -67,12 +74,15 @@ public sealed class EmailWorkerAlertSink : IWorkerAlertSink
                     "EmailWorkerAlertSink: provider refused alert {AlertKey} — {Status} {Error}.",
                     alertKey, result.StatusCode, result.Error);
             }
+
+            return result.Success;
         }
         catch (Exception ex)
         {
             // IEmailApiClient's contract says it must not throw, but this sink is the last line of
             // defence: swallow anything so one bad transport cannot suppress the rest of the sweep.
             _logger.LogError(ex, "EmailWorkerAlertSink: failed to email alert {AlertKey}.", alertKey);
+            return false;
         }
     }
 
