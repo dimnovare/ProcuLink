@@ -26,7 +26,6 @@ using ProcuLink.Infrastructure.Services.Email;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
 using ProcuLink.Worker.Jobs;
-using Testcontainers.PostgreSql;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -150,9 +149,9 @@ internal sealed record CellActual(
 /// overload that makes these suites flake ("Timeout during reading attempt"). A class fixture is
 /// created once and shared by every case.
 /// </summary>
-public sealed class SupplierRoutingMatrixPostgresFixture : IAsyncLifetime
+public sealed class SupplierRoutingMatrixPostgresFixture(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
 
     /// <summary>Null when Docker is unavailable — the Docker-gated theory skips before touching it.</summary>
     public DbContextOptions<ProcuLinkDbContext>? Options { get; private set; }
@@ -162,16 +161,9 @@ public sealed class SupplierRoutingMatrixPostgresFixture : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_routing_matrix_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_routing_matrix");
 
-        await _pg.StartAsync();
-
-        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
@@ -179,15 +171,11 @@ public sealed class SupplierRoutingMatrixPostgresFixture : IAsyncLifetime
         Options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(connectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(Options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 }
 

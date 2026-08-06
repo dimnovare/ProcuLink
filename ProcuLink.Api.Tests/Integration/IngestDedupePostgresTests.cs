@@ -18,7 +18,6 @@ using ProcuLink.Core.Services.Email;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Email;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -30,9 +29,9 @@ namespace ProcuLink.Api.Tests.Integration;
 /// once for the whole class instead. Each test isolates itself by using a brand-new org id rather
 /// than a brand-new database.
 /// </summary>
-public sealed class IngestDedupeFixture : IAsyncLifetime
+public sealed class IngestDedupeFixture(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
 
     public DbContextOptions<ProcuLinkDbContext>? Options { get; private set; }
     public string ConnectionString { get; private set; } = string.Empty;
@@ -41,13 +40,7 @@ public sealed class IngestDedupeFixture : IAsyncLifetime
     {
         if (DockerProbe.UnavailableReason is not null) return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_ingest_dedupe_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
-        await _pg.StartAsync();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_ingest_dedupe");
 
         // These tests open many short-lived contexts on purpose — every seed, every assertion read,
         // and the racing "winner" all take their own. Pooling stays ON so those reuse connections
@@ -55,7 +48,7 @@ public sealed class IngestDedupeFixture : IAsyncLifetime
         // pooling off, a cold engine fails them at NpgsqlConnector.RawOpen (a CONNECTION timeout,
         // nothing to do with dedupe). The nested interceptor call is safe under pooling: the loser's
         // connection is busy, so the winner is handed a different one from the pool.
-        ConnectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        ConnectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = true,
             // Default is 15 s, which a freshly-restarted Docker Desktop can exceed on first connect.
@@ -63,14 +56,11 @@ public sealed class IngestDedupeFixture : IAsyncLifetime
         }.ConnectionString;
 
         Options = NpgsqlOptions(ConnectionString).Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(Options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null) await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     /// <summary>

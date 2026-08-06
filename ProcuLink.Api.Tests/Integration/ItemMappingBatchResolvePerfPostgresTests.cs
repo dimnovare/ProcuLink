@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
-using Testcontainers.PostgreSql;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -46,13 +45,15 @@ namespace ProcuLink.Api.Tests.Integration;
 /// <para>Docker-gated like every other <c>*PostgresTests</c>.</para>
 /// </summary>
 [Collection("postgres-container")]
-public sealed class ItemMappingBatchResolvePerfPostgresTests : IAsyncLifetime
+public sealed class ItemMappingBatchResolvePerfPostgresTests(
+    PostgresContainerFixture postgres,
+    ITestOutputHelper output) : IAsyncLifetime
 {
     private const int SmallSupplierCodes = 250;
     private const int LargeSupplierCodes = 5_000;
 
-    private readonly ITestOutputHelper _output;
-    private PostgreSqlContainer? _pg;
+    private readonly ITestOutputHelper _output = output;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
     private string? _connectionString;
 
@@ -60,23 +61,14 @@ public sealed class ItemMappingBatchResolvePerfPostgresTests : IAsyncLifetime
     private Guid _smallSupplier;
     private Guid _largeSupplier;
 
-    public ItemMappingBatchResolvePerfPostgresTests(ITestOutputHelper output) => _output = output;
-
     public async Task InitializeAsync()
     {
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_perf_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_perf");
 
-        await _pg.StartAsync();
-
-        _connectionString = new NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        _connectionString = new NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
@@ -85,16 +77,13 @@ public sealed class ItemMappingBatchResolvePerfPostgresTests : IAsyncLifetime
             .UseNpgsql(_connectionString)
             .Options;
 
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
 
         await SeedAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     private async Task SeedAsync()

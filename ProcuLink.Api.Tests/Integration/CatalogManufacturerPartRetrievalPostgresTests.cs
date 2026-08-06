@@ -10,7 +10,6 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -34,9 +33,9 @@ namespace ProcuLink.Api.Tests.Integration;
 /// Docker-gated; skips cleanly where Docker is absent.
 /// </summary>
 [Collection("postgres-container")]
-public sealed class CatalogManufacturerPartRetrievalPostgresTests : IAsyncLifetime
+public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
 
     // The supplier's own code shares no substring with the manufacturer part number, so a pass
@@ -51,22 +50,15 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests : IAsyncLifeti
     {
         if (DockerProbe.UnavailableReason is not null) return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_mpn_{Guid.NewGuid():N}")
-            .WithUsername("postgres").WithPassword("postgres").Build();
-        await _pg.StartAsync();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_mpn");
 
-        var cs = new NpgsqlConnectionStringBuilder(_pg.GetConnectionString()) { Pooling = false }.ConnectionString;
+        var cs = new NpgsqlConnectionStringBuilder(_databaseConnectionString) { Pooling = false }.ConnectionString;
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>().UseNpgsql(cs).Options;
-
-        await using var migrate = new ProcuLinkDbContext(_options);
-        await migrate.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null) await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     /// <summary>

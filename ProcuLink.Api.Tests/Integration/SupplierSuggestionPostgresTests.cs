@@ -12,7 +12,6 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Detection;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services.Detection;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -27,34 +26,28 @@ namespace ProcuLink.Api.Tests.Integration;
 /// <c>postgres-container</c> collection so it still does not run alongside the other container
 /// classes.</para>
 /// </summary>
-public sealed class SupplierSuggestionPostgresFixture : IAsyncLifetime
+public sealed class SupplierSuggestionPostgresFixture(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     public string? ConnectionString { get; private set; }
 
     public async Task InitializeAsync()
     {
         if (DockerProbe.UnavailableReason is not null) return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_supplier_detect_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
-        await _pg.StartAsync();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_supplier_detect");
 
-        var csb = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var csb = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
             Timeout = 10,
         };
 
-        // Two verified facts, not a diagnosis: `docker inspect` shows Testcontainers publishing the
-        // port on IPv4 only ("0.0.0.0:55267->5432/tcp", no "[::]" mapping), and on this Windows host
-        // Dns.GetHostAddresses("localhost") returns ::1 first. Pinning the loopback literal removes
-        // one variable from a connection that has no reason to depend on resolver order. Applied
-        // only when the host already IS loopback, so a remote DOCKER_HOST keeps working.
+        // Kept as a no-op guard. PostgresContainerFixture already pins the loopback literal on the
+        // one shared container, for the reason this class first discovered: `docker inspect` shows
+        // Testcontainers publishing the port on IPv4 only ("0.0.0.0:55267->5432/tcp", no "[::]"
+        // mapping), and on this Windows host Dns.GetHostAddresses("localhost") returns ::1 first.
+        // Applied only when the host already IS loopback, so a remote DOCKER_HOST keeps working.
         if (string.Equals(csb.Host, "localhost", StringComparison.OrdinalIgnoreCase))
             csb.Host = "127.0.0.1";
 
@@ -62,11 +55,10 @@ public sealed class SupplierSuggestionPostgresFixture : IAsyncLifetime
 
         await WaitUntilAcceptingTcpAsync();
 
-        // Runs the real AddSupplierAutoDetect migration — the new table, the four supplier identity
-        // columns, the two sender-domain columns, the (org_id, code) index and the partial unique
-        // index all have to actually apply for anything below to run at all.
-        await using var migrateDb = new ProcuLinkDbContext(Options());
-        await migrateDb.Database.MigrateAsync();
+        // The real AddSupplierAutoDetect migration still has to have applied — the new table, the
+        // four supplier identity columns, the two sender-domain columns, the (org_id, code) index
+        // and the partial unique index all have to exist for anything below to run at all. It runs
+        // once, against the fixture's template database, and this database is a clone of it.
     }
 
     /// <summary>
@@ -111,7 +103,7 @@ public sealed class SupplierSuggestionPostgresFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null) await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     public DbContextOptions<ProcuLinkDbContext> Options() =>

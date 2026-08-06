@@ -13,7 +13,6 @@ using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Detection;
 using ProcuLink.Transform.Parsing;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -35,13 +34,13 @@ namespace ProcuLink.Api.Tests.Integration;
 /// a retry re-parses it cleanly to completion. Docker-gated; skips where Docker is absent.
 /// </summary>
 [Collection("postgres-container")]
-public sealed class ParseAtomicityPostgresTests : IAsyncLifetime
+public sealed class ParseAtomicityPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
     private const string CsvContent =
         "po_number,sku,description,qty,price\r\n" +
         "PO-ATOM-1,BUY-1,Widget,3,4.25\r\n";
 
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private string? _connectionString;
 
     public async Task InitializeAsync()
@@ -49,28 +48,17 @@ public sealed class ParseAtomicityPostgresTests : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_atomicity_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_atomicity");
 
-        await _pg.StartAsync();
-
-        _connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        _connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
-
-        await using var migrateDb = new ProcuLinkDbContext(Options(interceptor: null));
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     // ── Atomicity: a crash during child-write leaves NO half-written order ──────

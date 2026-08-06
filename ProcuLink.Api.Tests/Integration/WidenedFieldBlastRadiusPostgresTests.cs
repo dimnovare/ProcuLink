@@ -6,7 +6,6 @@ using Npgsql;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Output;
-using Testcontainers.PostgreSql;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -45,40 +44,33 @@ namespace ProcuLink.Api.Tests.Integration;
 /// the SQL file is additionally asserted to contain no mutating keyword.</para>
 /// </summary>
 [Collection("postgres-container")]
-public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
+public sealed class WidenedFieldBlastRadiusPostgresTests(
+    PostgresContainerFixture postgres,
+    ITestOutputHelper output) : IAsyncLifetime
 {
     /// <summary>The committed report this run is checked against, and the name it is written under.</summary>
     private const string ReportFileName = "wp14-blast-radius-local-run.md";
 
     // Fixed, not fresh: they appear in the report, and a report with new GUIDs every run cannot be
-    // compared to anything. Each test method gets its own container, so these cannot collide.
+    // compared to anything. Each test method gets its own database, so these cannot collide.
     private static readonly Guid OrgId     = new("b1a57000-0000-4d14-8a00-000000000001");
     private static readonly Guid SupplierA = new("b1a57000-0000-4d14-8a00-00000000000a");
     private static readonly Guid SupplierB = new("b1a57000-0000-4d14-8a00-00000000000b");
     private static readonly Guid SupplierC = new("b1a57000-0000-4d14-8a00-00000000000c");
 
-    private readonly ITestOutputHelper _output;
-    private PostgreSqlContainer? _pg;
+    private readonly ITestOutputHelper _output = output;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
     private string? _connectionString;
-
-    public WidenedFieldBlastRadiusPostgresTests(ITestOutputHelper output) => _output = output;
 
     public async Task InitializeAsync()
     {
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_blast_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_blast");
 
-        await _pg.StartAsync();
-
-        _connectionString = new NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        _connectionString = new NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
@@ -86,15 +78,11 @@ public sealed class WidenedFieldBlastRadiusPostgresTests : IAsyncLifetime
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(_connectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     // ── Locating the shipped artefact ────────────────────────────────────────
