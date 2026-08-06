@@ -3792,3 +3792,52 @@ confused both. They are now free-standing and small.
 
 **Founder-owned, still open:** rotate the three keys (Clerk, R2, ElevenLabs — open since 2026-07-24),
 and WP-03 check 2 (one test email with the org default cleared).
+
+---
+
+## 2026-08-06 — second authenticated production pass, and six findings
+
+Full record: `docs/qa/2026-08-06-second-authenticated-production-pass.md`. Real Chrome, real
+production Clerk session, real org (26 orders, 25 suppliers, Growth plan). Read-only.
+
+This closes the gap the 2026-08-01 session close named: ~15 packets had landed after WP-39's run,
+so the composed product was unverified live. It now is.
+
+**Verified working live:** WP-36's failure panel (good copy, two real actions, honest caveat);
+mobile 390 px with zero horizontal overflow; status accounting internally consistent; the
+dashboard omits rather than fabricates a blocker count while loading.
+
+**Findings:** F1 the operator is still shown raw HTML as a failure reason — FE #94 guarded
+`rejectionReason` while production's markup came through `order.errorMessage`, rendered verbatim
+by design. F2 the correct operator sentence already exists in `passport.deliveryAttempts[*]`
+(WP-19 wrote it) and the panel ignores it. F3 three delivery numbers on one screen, one unlabelled
+all-time rate between two "last 30 days" cards. F4 Growth is sold an "Audit log" bullet while
+`PlanConstants.cs:276` gates the only audit capability at Operations. F5 three different "active
+supplier" counts (1 / 25 / 26). F6 nothing warns that three queue entries are the same PO.
+
+**Two new traps, both about guards that look complete.**
+
+**TRAP 29 — a render test that nulls the other inputs is the blind spot.** FE #94 added a
+render-level test precisely to pin the *wiring*, having learned that unit tests pin a function
+without pinning its use. It still missed, because its fixture set `errorMessage: null`
+(`supplierReasonRendered.test.tsx:56`, `unconfirmedFriction.test.tsx:65`) and production's markup
+arrived through exactly that field. *When a value can reach the screen through more than one
+field, pin every field that can carry it — otherwise the fixture, not the code, is what passes.*
+
+**TRAP 30 — the uncovered class between two billing guards.** `gatedCapabilityClaims.test.ts`
+catches a capability sold at the wrong *named tier* and needs a tier word to match;
+`BillingFeatureGateCoverageTests` pins the ladder per `BillingFeature` *enum member*. A plan-card
+bullet naming a capability that no `BillingFeature` grants at that tier has neither a tier word
+nor an enum member, so both are blind to it. "Audit log" on Growth lived there.
+
+**Dismissed after investigation — do not re-open.** The org's `orderLimit: 100000` /
+`supplierLimit: 30` on Growth is the designed admin override (`AdminDtos.cs:68-69`,
+`AdminController.cs:378-403`), not a billing failure. "Good morning, Dim" is a **founder-approved
+mock (2026-07)** per `DashboardContextLine.tsx:3` — CLAUDE.md §12's anti-pattern entry is stale
+and is being corrected; the greeting stays. `DXOH` twice in the supplier list is an initials
+avatar, not a supplier code. The duplicate-PO orders are correct two-format test ingests, and
+WP-22 dedupes documents, not POs.
+
+**Not covered, so absence is not a pass:** no upload→deliver write path was run this pass;
+`/library/mappings`, `/library/rules`, `/drafts`, `/operations/connectors`, `/operations/webhooks`
+unopened; tablet 768 px unchecked.
