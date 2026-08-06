@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -113,9 +114,14 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
             .Where(o => o.SupplierId != null)
             .Where(o => _db.SupplierDeliveryConfigs.Any(c =>
                 c.OrgId == o.OrgId && c.SupplierId == o.SupplierId && c.AutoDeliver))
+            // WP-35: the cutoff is the newest DELIVERABLE artifact. A re-processed preview is newer
+            // than every real artifact, so an unfiltered Max would move the cutoff past the last
+            // genuine attempt and make an already-delivered order look stranded — and this sweep
+            // re-drives delivery on a timer with no human in the loop.
             .Where(o => !_db.DeliveryAttempts.Any(a => a.OrderId == o.Id && a.OrgId == o.OrgId
                 && a.AttemptedAt >= _db.OutboundArtifacts
-                    .Where(art => art.OrderId == o.Id && art.OrgId == o.OrgId)
+                    .Where(art => art.OrderId == o.Id && art.OrgId == o.OrgId
+                               && !art.FileKey.Contains(OutboundArtifactSelection.ReprocessKeyMarker))
                     .Max(art => art.CreatedAt)))
             .OrderBy(o => o.UpdatedAt)
             .Take(maxBatch)
@@ -136,8 +142,11 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
             // ready_to_deliver is only ever set alongside an artifact, but guard defensively — an
             // order with no artifact has nothing to deliver. (The routed / auto-deliver / no-attempt
             // filters are already enforced in the query above.)
+            // WP-35: what this sweep dispatches must be the order's deliverable output, never a
+            // re-processed preview — this is the one send path with no operator behind it.
             var artifactId = await _db.OutboundArtifacts
                 .Where(a => a.OrderId == order.Id && a.OrgId == order.OrgId)
+                .Deliverable()
                 .OrderByDescending(a => a.CreatedAt)
                 .Select(a => (Guid?)a.Id)
                 .FirstOrDefaultAsync(ct);

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
@@ -218,6 +219,196 @@ public sealed class ReplayService : IReplayService
             connectionId, revisionId, revision.VersionNo, revision.Status, diffs.Count, diffs);
     }
 
+    // ── WP-35 — re-processing ONE order under a revision (the only writing path) ──
+
+    /// <inheritdoc />
+    public async Task<ReprocessOutcome> ReprocessAsync(
+        Guid orgId, Guid connectionId, Guid revisionId, Guid orderId, string? actor, CancellationToken ct)
+    {
+        // Same org-scoped resolution as ReplayAsync, and deliberately the same absence of a status
+        // gate: an operator evaluating a draft is the primary case, but re-producing an order's
+        // output under a published or archived revision is exactly how a disputed document gets
+        // reconstructed.
+        var revision = await _db.SupplierConnectionRevisions
+            .AsNoTracking()
+            .Include(r => r.ItemMappings)
+            .Where(r => r.OrgId == orgId && r.ConnectionId == connectionId && r.Id == revisionId)
+            .FirstOrDefaultAsync(ct);
+        if (revision is null)
+            return new ReprocessOutcome(ReprocessStatus.RevisionNotFound, null, "Connection revision not found.");
+
+        var connectionExists = await _db.SupplierConnections
+            .AsNoTracking()
+            .AnyAsync(c => c.OrgId == orgId && c.Id == connectionId, ct);
+        if (!connectionExists)
+            return new ReprocessOutcome(ReprocessStatus.RevisionNotFound, null, "Connection revision not found.");
+
+        // The order must belong to this org AND to the revision's supplier — a revision governs one
+        // supplier, so re-processing someone else's order through it would produce a document under
+        // a contract that was never theirs.
+        var order = await _db.PurchaseOrders
+            .AsNoTracking()
+            .Include(o => o.Lines)
+            .Include(o => o.Supplier)
+            .Include(o => o.Parties)
+            .Include(o => o.SourceCapture)
+            .Where(o => o.OrgId == orgId && o.Id == orderId && o.SupplierId == revision.SupplierId)
+            .FirstOrDefaultAsync(ct);
+        if (order is null)
+            return new ReprocessOutcome(
+                ReprocessStatus.OrderNotFound, null, "Order not found for this connection's supplier.");
+
+        if (_fileStorage is null)
+            return new ReprocessOutcome(
+                ReprocessStatus.StorageUnavailable, null, "File storage is not configured; no artifact can be stored.");
+
+        // ── Render through the EXACT path that produced the replay diff's DraftOutput ──────
+        // Not a parallel implementation: the same Render, fed the same revision-side override, at
+        // the same format. If these two could diverge, the operator would be approving one document
+        // and storing another — and the divergence would be invisible, because each side would look
+        // internally consistent.
+        var draftOverride = BuildRevisionOverride(
+            OrderMappingOverrideReader.Read(order.CanonicalJson),
+            DeserializeOutputConfig(revision.OutputMappingJson),
+            DeserializeSnapshotTree(revision.InputMappingJson));
+        var draftFormat   = ParseFormat(revision.OutputFormat) ?? DefaultFormat;
+        var catalogLookup = await OrderServiceShared.BuildCatalogLookupAsync(_db, orgId, revision.SupplierId, ct);
+        var sourceTokens  = SourceTokenSerialization.FromTokensJson(order.SourceCapture?.TokensJson);
+
+        var rendered = Render(order, draftOverride, draftFormat, sourceTokens, catalogLookup);
+        if (!rendered.Ok)
+            return new ReprocessOutcome(ReprocessStatus.RenderFailed, null, rendered.Error);
+
+        var bytes = Encoding.UTF8.GetBytes(rendered.Text!);
+        var sha   = ProvenanceHash.TrySha256Hex(bytes);
+
+        // ── Identity IS the idempotency ───────────────────────────────────────────────────
+        // Deriving the artifact id deterministically means a repeat cannot become a second row: the
+        // primary key refuses it. That matters more than a pre-check, because the repeat this must
+        // survive is a Hangfire refetch or a double-submitted request, where the read half of a
+        // read-then-write has already happened. The pre-check below is the fast path; the primary
+        // key is the guarantee.
+        //
+        // The identity is derived from the INPUTS, never from the rendered bytes. Output is not
+        // reproducible: JsonTransformService stamps `generatedAt` with UtcNow, so two renders of an
+        // unchanged order under an unchanged revision differ — key on the bytes and every retry
+        // mints a new artifact, which is the exact opposite of idempotent.
+        //
+        // The inputs named here are every one that can change the document: the order's own state
+        // (UpdatedAt moves on any edit to it, including its per-order mapping override) and the
+        // revision's config snapshot. So a Hangfire refetch resolves to the same row, while an
+        // operator who edits the draft and re-processes correctly gets a NEW artifact rather than
+        // the stale one.
+        var artifactId = DeterministicReprocessArtifactId(
+            orderId, order.UpdatedAt, revisionId,
+            $"{revision.OutputFormat}|{revision.OutputMappingJson}|{revision.InputMappingJson}");
+
+        var deliverableId = await _db.OutboundArtifacts
+            .AsNoTracking()
+            .Where(a => a.OrderId == orderId && a.OrgId == orgId)
+            .Deliverable()
+            .OrderByDescending(a => a.CreatedAt)
+            .Select(a => (Guid?)a.Id)
+            .FirstOrDefaultAsync(ct);
+
+        var existing = await _db.OutboundArtifacts
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.Id == artifactId && a.OrgId == orgId && a.OrderId == orderId, ct);
+        if (existing is not null)
+            return Reprocessed(order, revision, existing, reused: true, deliverableId);
+
+        var extension = string.IsNullOrWhiteSpace(rendered.FileExtension)
+            ? $".{draftFormat.ToString().ToLowerInvariant()}"
+            : rendered.FileExtension!;
+        var fileKey = OutboundArtifactSelection.BuildReprocessKey(orgId, orderId, artifactId, extension);
+
+        // Uploading before the row is committed is the safe ordering: the key is deterministic, so
+        // a retry overwrites the same object with identical bytes, and an orphaned blob whose row
+        // never landed is inert. The reverse order could commit a row pointing at nothing.
+        await _fileStorage.UploadAsync(
+            new MemoryStream(bytes, writable: false),
+            fileKey,
+            string.IsNullOrWhiteSpace(rendered.ContentType) ? "application/octet-stream" : rendered.ContentType!,
+            ct);
+
+        var artifact = new OutboundArtifact
+        {
+            Id                   = artifactId,
+            OrderId              = orderId,
+            OrgId                = orgId,
+            Format               = draftFormat.ToString().ToLowerInvariant(),
+            FileKey              = fileKey,
+            CreatedAt            = DateTime.UtcNow,
+            // Provenance is the WHOLE point here: this artifact's contract is the REPLAYED
+            // revision, which is generally NOT the order's pin.
+            ConnectionRevisionId = revisionId,
+            ConfigDigest         = ProvenanceHash.TrySha256HexUtf8(
+                $"reprocess:revision:{revisionId}:{revision.OutputMappingJson}:{revision.InputMappingJson}"),
+            ArtifactSha256       = sha,
+        };
+
+        _db.OutboundArtifacts.Add(artifact);
+
+        // "By whom" has no column on the artifact and does not get one — it belongs on the audit
+        // timeline the passport already reads, next to every other thing a human did to this order.
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(orgId, orderId, "Reprocessed", new
+        {
+            artifactId,
+            fileKey,
+            format          = artifact.Format,
+            revisionId,
+            revisionVersion = revision.VersionNo,
+            connectionId,
+            actor,
+            delivered       = false,
+        }));
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        // Narrowed to a UNIQUE violation on purpose. Catching every DbUpdateException would turn a
+        // genuine write failure — a broken audit-event insert, a constraint we did not anticipate —
+        // into a cheerful "reused" answer, which is the same class of lie this packet exists to
+        // prevent. Anything that is not 23505 propagates.
+        catch (DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException { SqlState: "23505" })
+        {
+            // Lost the race. The winner wrote the same bytes under the same key with the same id,
+            // so the caller's answer is unchanged — this is a Reused, not a failure.
+            _db.ChangeTracker.Clear();
+            var winner = await _db.OutboundArtifacts
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.Id == artifactId && a.OrgId == orgId && a.OrderId == orderId, ct);
+            if (winner is null) throw;
+            return Reprocessed(order, revision, winner, reused: true, deliverableId);
+        }
+
+        return Reprocessed(order, revision, artifact, reused: false, deliverableId);
+    }
+
+    private static ReprocessOutcome Reprocessed(
+        PurchaseOrderEntity order, SupplierConnectionRevision revision,
+        OutboundArtifact artifact, bool reused, Guid? deliverableArtifactId) =>
+        new(ReprocessStatus.Ok,
+            new ReprocessResponse(
+                order.Id, order.PoNumber, revision.Id, revision.VersionNo,
+                artifact.Id, artifact.Format, artifact.FileKey, artifact.ArtifactSha256,
+                artifact.CreatedAt, reused, deliverableArtifactId),
+            null);
+
+    /// <summary>
+    /// A GUID derived from the re-process's INPUTS — stable across calls, so the primary key itself
+    /// enforces "re-processing the same thing twice appends once", and unstable across a real change
+    /// to either the order or the revision, so a genuine re-run is not silently swallowed.
+    /// </summary>
+    private static Guid DeterministicReprocessArtifactId(
+        Guid orderId, DateTime orderUpdatedAt, Guid revisionId, string revisionConfig)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"reprocess:{orderId:N}:{orderUpdatedAt.Ticks}:{revisionId:N}:{revisionConfig}"));
+        return new Guid(hash.AsSpan(0, 16));
+    }
+
     // ── Order loading (bounded, org-scoped, no-tracking) ──────────────────────
 
     private async Task<List<PurchaseOrderEntity>> LoadOrdersAsync(
@@ -372,9 +563,18 @@ public sealed class ReplayService : IReplayService
 
     // ── Output rendering (in-memory; mirrors OrderTransformService precedence, never writes) ─────
 
-    private readonly record struct RenderResult(bool Ok, string? Text, string? Error)
+    /// <summary>
+    /// The rendered output plus the two pieces of metadata needed to STORE it. The diff path
+    /// ignores <paramref name="ContentType"/> / <paramref name="FileExtension"/>; WP-35's
+    /// re-process needs them, and takes them from the same <see cref="TransformResult"/> that
+    /// produced the text rather than re-deriving them, so a stored artifact can never be announced
+    /// as a different type than the bytes it holds.
+    /// </summary>
+    private readonly record struct RenderResult(
+        bool Ok, string? Text, string? Error, string? ContentType = null, string? FileExtension = null)
     {
-        public static RenderResult Success(string text) => new(true, text, null);
+        public static RenderResult Success(TransformResult result, string text) =>
+            new(true, text, null, result.ContentType, result.FileExtension);
         public static RenderResult Failure(string error) => new(false, null, error);
     }
 
@@ -441,7 +641,7 @@ public sealed class ReplayService : IReplayService
                 result = transformer!.TransformAsync(order, format, CancellationToken.None).GetAwaiter().GetResult();
             }
 
-            return RenderResult.Success(ReadToString(result.Content));
+            return RenderResult.Success(result, ReadToString(result.Content));
         }
         catch (TransformValidationException ex)
         {

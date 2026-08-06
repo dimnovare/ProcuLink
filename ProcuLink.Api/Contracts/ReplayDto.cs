@@ -139,6 +139,65 @@ public sealed record ReplayParseCodeChangeDto(
     /// <summary>The supplier item code the revision's snapshot would resolve (null = would be unresolved).</summary>
     string? ReParsedSupplierItemCode);
 
+// ── WP-35 — acting on a replay result ────────────────────────────────────────
+
+/// <summary>
+/// WP-35 — request body for re-processing ONE historical order under a connection revision. The
+/// order is named in the body; the revision is the route's. Re-processing PERSISTS an artifact
+/// (unlike replay) but never delivers it.
+/// </summary>
+public sealed record ReprocessRequest(Guid OrderId);
+
+/// <summary>WP-35 — why a re-process did or did not produce an artifact.</summary>
+public enum ReprocessStatus
+{
+    /// <summary>An artifact for this order under this revision exists (freshly written, or already there).</summary>
+    Ok,
+    /// <summary>No such connection/revision in this org.</summary>
+    RevisionNotFound,
+    /// <summary>No such order in this org, or the order does not belong to the revision's supplier.</summary>
+    OrderNotFound,
+    /// <summary>The revision's output could not be produced for this order — nothing was written.</summary>
+    RenderFailed,
+    /// <summary>The service was constructed without file storage, so no artifact can be persisted.</summary>
+    StorageUnavailable,
+}
+
+/// <summary>WP-35 — the result of a re-process attempt.</summary>
+public sealed record ReprocessOutcome(
+    ReprocessStatus Status,
+    ReprocessResponse? Response,
+    /// <summary>Operator-facing reason when <see cref="Status"/> is not <see cref="ReprocessStatus.Ok"/>.</summary>
+    string? Error);
+
+/// <summary>
+/// WP-35 — the artifact a re-process produced, plus the provenance that makes it distinguishable
+/// from the order's original output.
+/// </summary>
+public sealed record ReprocessResponse(
+    Guid OrderId,
+    string PoNumber,
+    /// <summary>The revision whose configuration produced these bytes.</summary>
+    Guid RevisionId,
+    int RevisionVersionNo,
+    Guid ArtifactId,
+    string Format,
+    string FileKey,
+    /// <summary>SHA-256 hex of the exact stored bytes.</summary>
+    string? ArtifactSha256,
+    DateTime CreatedAt,
+    /// <summary>
+    /// True when this exact output already existed for this order under this revision, so the call
+    /// returned the existing artifact instead of appending a second identical one.
+    /// </summary>
+    bool Reused,
+    /// <summary>
+    /// The artifact the order would still DELIVER — unchanged by this re-process, and null only
+    /// when the order never had one. Surfaced so an operator can see that re-processing did not
+    /// arm anything for sending.
+    /// </summary>
+    Guid? DeliverableArtifactId);
+
 /// <summary>One rule whose pass/fail status differs between the current and replayed validation.</summary>
 public sealed record ReplayValidationFlipDto(
     string Code,

@@ -385,8 +385,12 @@ internal sealed class OrderTransformService
             // Already transformed (or not in a transformable state): report the latest
             // existing artifact as a benign no-op so a duplicated job neither re-uploads
             // nor re-enqueues delivery.
+            // WP-35: DELIVERABLE only. This id is handed back to TransformOrderJob, which decides
+            // whether to enqueue a delivery for it — so reporting a re-processed preview here would
+            // turn a duplicated transform job into an unattended send of a document nobody approved.
             var existing = await _db.OutboundArtifacts.AsNoTracking()
                 .Where(a => a.OrderId == orderId && a.OrgId == organisationId)
+                .Deliverable()
                 .OrderByDescending(a => a.CreatedAt)
                 .FirstOrDefaultAsync(ct);
 
