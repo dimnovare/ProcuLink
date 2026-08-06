@@ -121,7 +121,59 @@ internal static class OutboundArtifactSelectionFixtures
             .Select(a => a.Id)
             .ToList();
 
+    /// <summary>
+    /// Two picks, one consultation of the rule — the shape that defeated the first version of this
+    /// guard. <c>StrandedReadyOrderDetectionService.RunAsync</c> is written exactly like this
+    /// (a <c>Max(CreatedAt)</c> cutoff and then the artifact it dispatches), and while the guard
+    /// asked only "does the method mention the rule anywhere", deleting the discriminator from
+    /// EITHER pick left the other one's evidence behind and the mutant survived.
+    /// </summary>
+    internal static (DateTime Cutoff, OutboundArtifact? Chosen) SelectsTwiceButRoutesOnce(
+        IQueryable<OutboundArtifact> artifacts, Guid orderId)
+    {
+        var cutoff = artifacts
+            .Where(a => a.OrderId == orderId)
+            .Max(a => a.CreatedAt);
+
+        var chosen = artifacts
+            .Where(a => a.OrderId == orderId)
+            .Deliverable()
+            .OrderByDescending(a => a.CreatedAt)
+            .FirstOrDefault();
+
+        return (cutoff, chosen);
+    }
+
     // ── Specimens that MUST NOT be reported as violations ─────────────────────
+
+    /// <summary>The same two picks, each with its own consultation. This is the production shape.</summary>
+    internal static (DateTime? Cutoff, OutboundArtifact? Chosen) SelectsTwiceAndRoutesTwice(
+        IQueryable<OutboundArtifact> artifacts, Guid orderId)
+    {
+        var cutoff = artifacts
+            .Where(a => a.OrderId == orderId
+                     && !a.FileKey.Contains(OutboundArtifactSelection.ReprocessKeyMarker))
+            .Max(a => (DateTime?)a.CreatedAt);
+
+        var chosen = artifacts
+            .Where(a => a.OrderId == orderId)
+            .Deliverable()
+            .OrderByDescending(a => a.CreatedAt)
+            .FirstOrDefault();
+
+        return (cutoff, chosen);
+    }
+
+    /// <summary>
+    /// One pick written with a tie-breaker. Two ordering operators, but <c>ThenBy</c> cannot start a
+    /// pick, so the floor stays at one and a single consultation clears it.
+    /// </summary>
+    internal static OutboundArtifact? OrdersOnceWithASecondaryThenBy(PurchaseOrderEntity order) =>
+        order.OutboundArtifacts
+            .Where(a => !OutboundArtifactSelection.IsReprocessed(a))
+            .OrderByDescending(a => a.CreatedAt)
+            .ThenBy(a => a.Id)
+            .FirstOrDefault();
 
     /// <summary>The in-memory rewrite: the whole question delegated to the rule.</summary>
     internal static OutboundArtifact? RoutedThroughNewestDeliverable(PurchaseOrderEntity order) =>

@@ -71,11 +71,34 @@ internal static class OutboundArtifactSelectionIlScanner
         string Key,
         string Display,
         IReadOnlySet<SelectionShape> Shapes,
+        int PickCount,
+        int EvidenceCount,
         IReadOnlyList<string> Operators,
         IReadOnlyList<string> RoutingEvidence)
     {
-        /// <summary>True when this method demonstrably consulted <see cref="OutboundArtifactSelection"/>.</summary>
-        public bool IsRouted => RoutingEvidence.Count > 0;
+        /// <summary>
+        /// True when this method consulted <see cref="OutboundArtifactSelection"/> at least once per
+        /// pick it makes.
+        ///
+        /// <para><b>Why a count and not a boolean.</b> "The method mentions the rule somewhere" was
+        /// the first version of this test and it had a measured hole:
+        /// <c>StrandedReadyOrderDetectionService.RunAsync</c> makes TWO picks — the candidate query's
+        /// <c>Max(CreatedAt)</c> cutoff and the artifact it then dispatches — and deleting the guard
+        /// from either one left the other's evidence sitting in the same method, so the guard read
+        /// the method as routed and passed. Both mutants survived. That is the site WP-35 calls the
+        /// sharpest of them all, because it re-drives delivery on a timer with no human in the loop,
+        /// so a guard that cannot see a regression there is missing its most important case. Under
+        /// the count both mutants die.</para>
+        ///
+        /// <para><b>What the count is and is not.</b> It is a floor: N picks demand N consultations.
+        /// It does not prove the pairing — it cannot tell which consultation belongs to which pick,
+        /// and it would clear a method that consulted the rule twice for one pick and not at all for
+        /// another. It also costs something honest: a method that narrows once with
+        /// <c>Deliverable()</c> and then orders that same narrowed query twice reads as one
+        /// consultation for two picks and would be reported. No such method exists today; if one is
+        /// written, the answer is a line in the allowlist with the reason, not a wider rule.</para>
+        /// </summary>
+        public bool IsRouted => EvidenceCount >= PickCount;
     }
 
     /// <summary>
@@ -152,6 +175,10 @@ internal static class OutboundArtifactSelectionIlScanner
     private static readonly HashSet<string> OrderingOperators =
         ["OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending"];
 
+    /// <summary>Orderings that can only follow another one, so they never start a new pick.</summary>
+    private static readonly HashSet<string> SecondaryOrderingOperators =
+        ["ThenBy", "ThenByDescending"];
+
     private static readonly HashSet<string> AggregateOperators =
         ["Max", "MaxBy", "Min", "MinBy", "MaxAsync", "MinAsync"];
 
@@ -206,9 +233,14 @@ internal static class OutboundArtifactSelectionIlScanner
                 {
                     acc.Shapes.Add(op.Shape);
                     acc.Operators.Add(op.Label);
+                    if (op.StartsAPick) acc.PickCount++;
                 }
 
-                foreach (var e in evidence) acc.Evidence.Add(e);
+                foreach (var e in evidence)
+                {
+                    acc.Evidence.Add(e);
+                    acc.EvidenceCount++;
+                }
             }
         }
 
@@ -218,6 +250,8 @@ internal static class OutboundArtifactSelectionIlScanner
                 a.Key,
                 a.Display,
                 a.Shapes,
+                a.PickCount,
+                a.EvidenceCount,
                 a.Operators.OrderBy(x => x, StringComparer.Ordinal).ToList(),
                 a.Evidence.OrderBy(x => x, StringComparer.Ordinal).ToList()))
             .OrderBy(s => s.Key, StringComparer.Ordinal)
@@ -231,11 +265,19 @@ internal static class OutboundArtifactSelectionIlScanner
         public HashSet<SelectionShape> Shapes { get; } = [];
         public HashSet<string> Operators { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Evidence { get; } = new(StringComparer.Ordinal);
+        public int PickCount { get; set; }
+        public int EvidenceCount { get; set; }
     }
 
     // ── Reading one compiled body ─────────────────────────────────────────────
 
-    private readonly record struct OperatorHit(SelectionShape Shape, string Label);
+    /// <param name="StartsAPick">
+    /// False for <c>ThenBy</c> / <c>ThenByDescending</c>. They cannot appear without an
+    /// <c>OrderBy</c> in front of them, so counting them would demand a second consultation of the
+    /// rule for a single pick written as <c>OrderByDescending(…).ThenBy(…)</c>. They are still
+    /// DETECTED and still reported in the operator list — they just do not increment the floor.
+    /// </param>
+    private readonly record struct OperatorHit(SelectionShape Shape, string Label, bool StartsAPick);
 
     /// <summary>
     /// The selection operators and the routing evidence in a single compiled body.
@@ -367,7 +409,8 @@ internal static class OutboundArtifactSelectionIlScanner
         var args = string.Join(", ", arguments.Select(a => a.Name));
         return new OperatorHit(
             ordering ? SelectionShape.RecencyOrdering : SelectionShape.AggregatePick,
-            $"{host}.{callee.Name}<{args}>");
+            $"{host}.{callee.Name}<{args}>",
+            StartsAPick: !SecondaryOrderingOperators.Contains(callee.Name));
     }
 
     /// <summary>

@@ -117,7 +117,8 @@ public sealed class DeliverableArtifactSelectionIsRoutedTests
             + $"{nameof(OutboundArtifactSelection)}, so a re-processed preview — which is the newest "
             + "artifact by construction — is what it would choose.\n\n"
             + string.Join("\n", violations.Select(v =>
-                $"  {v.Display}  [{string.Join(", ", v.Operators)}]"))
+                $"  {v.Display}  —  {v.PickCount} pick(s), {v.EvidenceCount} consultation(s) of the rule"
+                + $"\n      [{string.Join(", ", v.Operators)}]"))
             + "\n\nFix it by routing the selection through the rule:\n"
             + $"  in memory : {nameof(OutboundArtifactSelection)}.{nameof(OutboundArtifactSelection.NewestDeliverable)}(order.OutboundArtifacts)\n"
             + $"  on a query: .{nameof(OutboundArtifactSelection.Deliverable)}() before the OrderByDescending\n\n"
@@ -266,6 +267,7 @@ public sealed class DeliverableArtifactSelectionIsRoutedTests
     [InlineData(nameof(OutboundArtifactSelectionFixtures.TheDefectAsAnAggregate))]
     [InlineData(nameof(OutboundArtifactSelectionFixtures.TheDefectInsideALambda))]
     [InlineData(nameof(OutboundArtifactSelectionFixtures.ListsEveryArtifactNewestFirst))]
+    [InlineData(nameof(OutboundArtifactSelectionFixtures.SelectsTwiceButRoutesOnce))]
     public void TheScannerReportsAnUnroutedSelection(string method)
     {
         var site = Fixture(method);
@@ -340,6 +342,49 @@ public sealed class DeliverableArtifactSelectionIsRoutedTests
         site!.Shapes.Should().Contain(SelectionShape.AggregatePick);
         site.IsRouted.Should().BeTrue();
         site.RoutingEvidence.Should().Contain(e => e.Contains(ReprocessKeyMarker, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The measured hole that made this guard count instead of asking a yes/no question.
+    ///
+    /// <para>Both mutants of <c>StrandedReadyOrderDetectionService.RunAsync</c> — delete the marker
+    /// from the candidate query's cutoff, delete <c>Deliverable()</c> from the artifact it
+    /// dispatches — SURVIVED a boolean "does this method mention the rule" guard, because the
+    /// surviving half's evidence sat in the same method. That method is the one send path with no
+    /// operator in the loop.</para>
+    /// </summary>
+    [Fact]
+    public void TwoPicksNeedTwoConsultationsOfTheRule()
+    {
+        var underRouted = Fixture(nameof(OutboundArtifactSelectionFixtures.SelectsTwiceButRoutesOnce));
+        underRouted.Should().NotBeNull();
+        underRouted!.PickCount.Should().Be(2);
+        underRouted.EvidenceCount.Should().Be(1);
+        underRouted.IsRouted.Should().BeFalse(
+            "one Deliverable() call cannot answer for both the Max cutoff and the artifact pick");
+
+        var routed = Fixture(nameof(OutboundArtifactSelectionFixtures.SelectsTwiceAndRoutesTwice));
+        routed.Should().NotBeNull();
+        routed!.PickCount.Should().Be(2);
+        routed.IsRouted.Should().BeTrue("each pick carries its own discriminator, as production does");
+    }
+
+    /// <summary>
+    /// <c>ThenBy</c> cannot start a pick, so a tie-broken ordering is one pick and not two. Without
+    /// this, writing <c>OrderByDescending(…).ThenBy(…)</c> would demand a second, meaningless
+    /// consultation of the rule — the kind of false positive that gets a guard allowlisted into
+    /// uselessness.
+    /// </summary>
+    [Fact]
+    public void ATieBreakerDoesNotCountAsASecondPick()
+    {
+        var site = Fixture(nameof(OutboundArtifactSelectionFixtures.OrdersOnceWithASecondaryThenBy));
+
+        site.Should().NotBeNull();
+        site!.Operators.Should().HaveCount(2, "OrderByDescending and ThenBy are both detected");
+        site.PickCount.Should().Be(1, "only OrderByDescending starts a pick");
+        site.EvidenceCount.Should().Be(1);
+        site.IsRouted.Should().BeTrue();
     }
 
     [Fact]
