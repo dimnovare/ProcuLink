@@ -192,9 +192,18 @@ public sealed class OutboundUrlPolicyException : ArgumentException
 {
     public string ErrorCode { get; }
 
+    /// <summary>
+    /// The policy's verdict message on its own. <see cref="Exception.Message"/> is the same text with
+    /// ArgumentException's <c>(Parameter '…')</c> suffix appended, which is right for a log and wrong
+    /// for a response body an operator reads — so a handler returning this to the UI uses this
+    /// property and does not have to strip anything.
+    /// </summary>
+    public string PolicyMessage { get; }
+
     public OutboundUrlPolicyException(OutboundUrlVerdict verdict, string? paramName = null)
         : base(verdict.Message, paramName)
     {
         ErrorCode = verdict.ErrorCode ?? OutboundUrlPolicy.ErrorNotAbsolute;
+        PolicyMessage = verdict.Message ?? string.Empty;
     }
 }

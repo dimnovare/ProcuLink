@@ -242,17 +242,14 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
     ///
     /// <para>The key lookup is case-insensitive because the dispatchers deserialize with
     /// <c>PropertyNameCaseInsensitive = true</c> — <c>{"URL":...}</c> is delivered, so it must also
-    /// be inspected.</para>
+    /// be inspected — and EVERY url-keyed value is judged, not just the first: a repeated key kept
+    /// both, and the deserializer binds the last, so inspecting one of them was bypassable.</para>
     /// </summary>
     private static void ValidateTransportSecurity(string protocol, string configJson)
     {
-        var url = DeliveryConfigTransport.ExtractUrl(protocol, configJson);
-
-        // No url key at all is left as-is: that config cannot deliver anything, and failing it here
-        // would be a separate behaviour change from the one this guard is for.
-        if (string.IsNullOrWhiteSpace(url)) return;
-
-        var verdict = OutboundUrlPolicy.Inspect(url, "Delivery endpoint");
+        // Allow when the protocol carries no URL at all: that config cannot deliver anything, and
+        // failing it here would be a separate behaviour change from the one this guard is for.
+        var verdict = DeliveryConfigTransport.InspectEndpoint(protocol, configJson);
         if (!verdict.Allowed)
             throw new OutboundUrlPolicyException(verdict, nameof(UpsertDeliveryConfigRequest.ConfigJson));
     }

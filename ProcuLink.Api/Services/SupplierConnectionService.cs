@@ -4,7 +4,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Conformance;
@@ -699,25 +701,83 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
     private static OutputFormat? ParseFormat(string? format) =>
         Enum.TryParse<OutputFormat>(format, ignoreCase: true, out var f) ? f : null;
 
+    /// <summary>
+    /// Refuses a caller-supplied revision delivery endpoint that would send the purchase order — and
+    /// the credentials that authenticate it — over plain http, or that carries a username/password
+    /// in the URL itself.
+    ///
+    /// <para>Deliberately the SAME primitive the live delivery-config save path runs
+    /// (<c>DeliveryConfigService.ValidateTransportSecurity</c>): both reach the verdict through
+    /// <see cref="DeliveryConfigTransport.InspectEndpoint"/>, which judges every url-keyed value in
+    /// the blob with <see cref="OutboundUrlPolicy"/>. A published revision is what a pinned order actually
+    /// delivers through, so a second, hand-rolled check here would be a second security rule that
+    /// could drift from the first — which is precisely how this gap existed: the URL was refused on
+    /// one of the two write paths and unread on the other.</para>
+    ///
+    /// <para><b>Only caller-supplied input.</b> The clone-from-active, rollback, republish-from-live
+    /// and publish paths carry a bundle that is ALREADY live. Refusing those would turn a security
+    /// weakness into an outage — an operator could not publish a mapping fix for a supplier whose
+    /// endpoint predates enforcement, and rollback (whose whole purpose is restoring a version that
+    /// was live before) would fail. Those keep working; the read path reports
+    /// <c>InsecureTransportWarning</c> and the dispatchers log on every attempt, so no such config is
+    /// silent.</para>
+    /// </summary>
+    private static void ValidateTransportSecurity(string? protocol, string? configJson)
+    {
+        // InspectEndpoint judges EVERY url-keyed value in the blob, not just the one the
+        // deserializer happens to bind, and returns Allow when the protocol carries no URL at all.
+        var verdict = DeliveryConfigTransport.InspectEndpoint(protocol, configJson);
+        if (!verdict.Allowed)
+            throw new OutboundUrlPolicyException(
+                verdict, nameof(ConnectionRevisionDraftInput.DeliveryConfigJson));
+    }
+
+    /// <summary>
+    /// Refuses a caller-supplied encrypted-credential reference. See
+    /// <see cref="ClientSuppliedCredentialsRefException"/> for why a ciphertext taken off a request
+    /// body is a credential the caller never proved they own, and for the route that replaces it.
+    ///
+    /// <para>Null is NOT a refusal — it is "no change", which the partial-update contract depends
+    /// on.</para>
+    /// </summary>
+    private static void ValidateNoClientSuppliedCredentials(string? credentialsRef)
+    {
+        if (credentialsRef is not null)
+            throw new ClientSuppliedCredentialsRefException();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
     // Scalar-only assignment (used by both create and update); item mappings are handled
     // separately so the UPDATE path can mutate the TRACKED collection rather than reassign it
     // (reassigning while old children are marked Deleted trips an InMemory concurrency error).
     private static void ApplyScalars(SupplierConnectionRevision rev, ConnectionRevisionDraftInput input)
     {
+        // Before ANY assignment: this is the only place a caller-supplied delivery endpoint or
+        // credential blob enters a revision, and a half-applied bundle behind a refusal would be
+        // worse than the refusal.
+        ValidateTransportSecurity(input.DeliveryProtocol, input.DeliveryConfigJson);
+        ValidateNoClientSuppliedCredentials(input.CredentialsRef);
+
         rev.InputMappingJson    = input.InputMappingJson;
         rev.OutputMappingJson   = input.OutputMappingJson;
         rev.OutputFormat        = input.OutputFormat;
         rev.DeliveryProtocol    = input.DeliveryProtocol;
         rev.DeliveryConfigJson  = input.DeliveryConfigJson;
         rev.DeliveryAutoDeliver = input.DeliveryAutoDeliver;
-        // CredentialsRef is a write-once-ish reference to encrypted delivery credentials. The
-        // positional DTO cannot distinguish "omitted" from "explicit null", so a mapping-only
-        // partial update (which omits credentialsRef → deserializes to null) must NOT wipe an
-        // existing reference — that would silently lose the supplier's delivery credentials on the
-        // next publish. Null therefore means "no change"; a non-null value still overwrites.
-        if (input.CredentialsRef is not null)
-            rev.CredentialsRef = input.CredentialsRef;
+        // CredentialsRef is left ENTIRELY alone here, in both directions.
+        //
+        // Null still means "no change": the positional DTO cannot distinguish "omitted" from
+        // "explicit null", so a mapping-only partial update deserializes credentialsRef to null, and
+        // wiping on that would silently lose the supplier's delivery credentials at the next publish.
+        //
+        // Non-null is now REFUSED rather than written (see ValidateNoClientSuppliedCredentials).
+        // The value is the AES-GCM ciphertext the dispatchers decrypt to authenticate the outbound
+        // request, and it is encrypted with no associated data — bound to the deployment key and to
+        // nothing else — so any blob that decrypts, decrypts for every tenant. Taking one off a
+        // request body let a caller nominate credentials they never proved they own. Credentials
+        // still reach a revision the way they do in production: saved on the supplier delivery
+        // config, encrypted server-side, then copied forward by clone-from-active, rollback and
+        // republish-from-live — none of which pass through this input.
         rev.AcceptanceProfileId = input.AcceptanceProfileId;
         rev.AcceptanceVersionNo = input.AcceptanceVersionNo;
         rev.CatalogMode         = string.IsNullOrWhiteSpace(input.CatalogMode) ? "live" : input.CatalogMode;

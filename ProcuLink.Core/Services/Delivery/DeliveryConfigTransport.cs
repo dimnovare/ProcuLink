@@ -19,35 +19,70 @@ public static class DeliveryConfigTransport
         new(DeliveryProtocolConstants.UrlBased, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// The endpoint URL a url-bearing protocol will send to, or null when the protocol is
-    /// host-based, the blob is unparseable, or no <c>url</c> key is present.
+    /// EVERY url-keyed string in the blob, in document order — normally one, and deliberately not
+    /// "the first one".
+    ///
+    /// <para><strong>Why all of them.</strong> A JSON object may repeat a key, and System.Text.Json
+    /// keeps both: <see cref="JsonDocument"/> enumerates them in order, while
+    /// <c>JsonSerializer.Deserialize</c> — what the dispatchers use — binds the LAST. Returning the
+    /// first therefore let <c>{"url":"https://ok…","url":"http://evil…"}</c> be validated as the
+    /// https endpoint and delivered to the cleartext one: a complete bypass of the transport rule on
+    /// every path that shares this extraction. Inspecting all candidates removes the need to bet on
+    /// which one the deserializer picks, and stays correct if that ever changes.</para>
     ///
     /// <para>The key match is case-insensitive because the dispatchers deserialize with
     /// <c>PropertyNameCaseInsensitive = true</c>: <c>{"URL":...}</c> is delivered, so it must be
     /// found here too.</para>
     /// </summary>
-    public static string? ExtractUrl(string? protocol, string? configJson)
+    public static IReadOnlyList<string> ExtractUrls(string? protocol, string? configJson)
     {
-        if (string.IsNullOrWhiteSpace(protocol) || !UrlBasedProtocols.Contains(protocol)) return null;
-        if (string.IsNullOrWhiteSpace(configJson)) return null;
+        if (string.IsNullOrWhiteSpace(protocol) || !UrlBasedProtocols.Contains(protocol))
+            return Array.Empty<string>();
+        if (string.IsNullOrWhiteSpace(configJson)) return Array.Empty<string>();
 
         try
         {
             using var doc = JsonDocument.Parse(configJson);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return Array.Empty<string>();
 
+            List<string>? found = null;
             foreach (var property in doc.RootElement.EnumerateObject())
             {
                 if (!string.Equals(property.Name, "url", StringComparison.OrdinalIgnoreCase)) continue;
-                return property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null;
+                if (property.Value.ValueKind != JsonValueKind.String) continue;
+
+                var value = property.Value.GetString();
+                if (value is null) continue;
+
+                (found ??= new List<string>()).Add(value);
             }
+
+            return (IReadOnlyList<string>?)found ?? Array.Empty<string>();
         }
         catch (JsonException)
         {
-            return null;
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// The transport verdict for a delivery config: <see cref="OutboundUrlVerdict.Allow"/> when the
+    /// protocol carries no URL or every url-keyed value passes, otherwise the FIRST refusal.
+    ///
+    /// <para>This is the single decision the save paths and the read/dispatch warnings all run, so
+    /// "may this config send?" has exactly one answer no matter who asks. A config with no url key
+    /// is left alone deliberately — it cannot deliver anything, and failing it would be a different
+    /// behaviour change.</para>
+    /// </summary>
+    public static OutboundUrlVerdict InspectEndpoint(string? protocol, string? configJson)
+    {
+        foreach (var url in ExtractUrls(protocol, configJson))
+        {
+            var verdict = OutboundUrlPolicy.Inspect(url, "Delivery endpoint");
+            if (!verdict.Allowed) return verdict;
         }
 
-        return null;
+        return OutboundUrlVerdict.Allow();
     }
 
     /// <summary>
@@ -57,10 +92,7 @@ public static class DeliveryConfigTransport
     /// </summary>
     public static string? DescribeInsecureTransport(string? protocol, string? configJson)
     {
-        var url = ExtractUrl(protocol, configJson);
-        if (string.IsNullOrWhiteSpace(url)) return null;
-
-        var verdict = OutboundUrlPolicy.Inspect(url, "Delivery endpoint");
+        var verdict = InspectEndpoint(protocol, configJson);
         return verdict.Allowed ? null : verdict.Message;
     }
 }
