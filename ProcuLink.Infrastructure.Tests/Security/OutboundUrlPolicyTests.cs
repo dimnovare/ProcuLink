@@ -150,8 +150,16 @@ public class OutboundUrlPolicyTests
         verdict.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorSchemeNotAllowed);
     }
 
+    /// <summary>
+    /// <c>/orders</c> is the platform-dependence case. On Linux <c>Uri.TryCreate</c> accepts it as
+    /// an absolute <c>file:</c> URI (it is a valid Unix path) and on Windows it does not, so this
+    /// pinned "not absolute" locally and "scheme not allowed" in CI until the policy started
+    /// demanding an explicit RFC 3986 scheme of its own accord.
+    /// </summary>
     [Theory]
     [InlineData("/orders")]
+    [InlineData("C:\\orders\\out.xml")]
+    [InlineData("\\\\fileserver\\orders")]
     [InlineData("supplier.example.com/orders")]
     [InlineData("not a url at all")]
     public void Inspect_ARelativeOrMalformedUrl_IsRefused(string url)

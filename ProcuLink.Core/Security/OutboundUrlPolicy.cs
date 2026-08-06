@@ -71,7 +71,14 @@ public static class OutboundUrlPolicy
 
         var trimmed = url.Trim();
 
-        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        // Require an explicit RFC 3986 scheme BEFORE parsing, because Uri.TryCreate is not
+        // platform-agnostic here: on Linux "/orders" parses as an ABSOLUTE file: URI (it is a
+        // valid Unix path), while on Windows it does not. Without this the same input is
+        // "not absolute" on a developer's machine and "scheme not allowed" in CI — refused
+        // either way, but a security primitive should not have a platform-dependent verdict,
+        // and a path silently becoming file: is exactly what a URL validator must not do.
+        // It also makes this agree with the frontend mirror, where `new URL()` demands a scheme.
+        if (!HasExplicitScheme(trimmed) || !Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
             return OutboundUrlVerdict.Block(
                 ErrorNotAbsolute,
                 $"{subject} must be a complete address including the scheme, " +
@@ -132,6 +139,29 @@ public static class OutboundUrlPolicy
         if (host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)) return true;
 
         return IPAddress.TryParse(host.Trim('[', ']'), out var ip) && IPAddress.IsLoopback(ip);
+    }
+
+    /// <summary>
+    /// RFC 3986 <c>scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )</c> followed by ":".
+    ///
+    /// <para>At least TWO characters, deliberately: a one-letter "scheme" is a Windows drive
+    /// letter (<c>C:\orders\out.xml</c>), which .NET happily parses into an absolute <c>file:</c>
+    /// URI. No real scheme is one character, so requiring two keeps a local path from being
+    /// mistaken for a URL — the same class of confusion as the Unix path case above.</para>
+    /// </summary>
+    private static bool HasExplicitScheme(string value)
+    {
+        var colon = value.IndexOf(':');
+        if (colon < 2) return false;
+        if (!char.IsAsciiLetter(value[0])) return false;
+
+        for (var i = 1; i < colon; i++)
+        {
+            var c = value[i];
+            if (!char.IsAsciiLetterOrDigit(c) && c != '+' && c != '-' && c != '.') return false;
+        }
+
+        return true;
     }
 
     private static bool Contains(IReadOnlyList<string> schemes, string scheme)
