@@ -12,7 +12,7 @@ public sealed record ConformanceReportDto(
     string Format,
     /// <summary>The named profile enum value, e.g. "Ubl21Order".</summary>
     string Profile,
-    /// <summary>Human-readable profile name, e.g. "UBL 2.1 Order (Peppol BIS Order-only 3.0)".</summary>
+    /// <summary>Human-readable profile name, e.g. "OASIS UBL 2.1 Order — mandatory elements".</summary>
     string ProfileName,
     /// <summary>Profile version, e.g. "2.1" / "004010" / "D.96A".</summary>
     string ProfileVersion,

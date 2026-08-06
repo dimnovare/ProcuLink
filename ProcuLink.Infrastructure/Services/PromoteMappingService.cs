@@ -398,7 +398,10 @@ public sealed class PromoteMappingService : IPromoteMappingService
         OutputFormat.Csv           => "CSV",
         OutputFormat.CXml          => "cXML",
         OutputFormat.Ubl           => "UBL",
-        OutputFormat.UblOrder      => "Peppol UBL order",
+        // NOT "Peppol UBL order". The UBL emitter produces a plain OASIS UBL 2.1 Order and declares
+        // no Peppol profile; naming one in a message the operator reads sells BIS conformance the
+        // product does not offer.
+        OutputFormat.UblOrder      => "UBL 2.1 Order",
         OutputFormat.X12           => "X12",
         OutputFormat.X12_850       => "X12 850",
         OutputFormat.EdifactOrders => "EDIFACT ORDERS",

@@ -76,11 +76,18 @@ Package manager: bun · Framework: Next.js 15 (App Router)
 ## Key capabilities (verified; detail in the master prompt Appendix A)
 
 - **Input formats:** CSV, XLSX, PDF (text→LLM primary; vision fallback for scanned; regex +
-  self-hosted no-egress OCR fallbacks), UBL 2.1 / Peppol BIS 3 Order, cXML 1.2,
+  self-hosted no-egress OCR fallbacks), UBL 2.1 Order (a Peppol BIS Order 3 file IS a UBL 2.1
+  Order, so it parses on the same pipeline — `UblOrderParser` has no BIS-specific branch), cXML 1.2,
   EDIFACT ORDERS (D96A/D01B, hand-rolled), X12 850, SAP IDoc ORDERS05. UBL Invoice parses;
   EDIFACT INVOIC/DESADV are **stubs**.
-- **Output formats:** XML, CSV, JSON, cXML, UBL (Peppol BIS Order 3), X12 850 — plus the
+- **Output formats:** XML, CSV, JSON, cXML, UBL 2.1 Order, X12 850 — plus the
   `OutputNode` AST / output designer and Scriban escape hatch.
+  **Outbound Peppol BIS Order 3 is NOT offered and must not be advertised.** The UBL emitter
+  produces a plain OASIS UBL 2.1 Order and deliberately declares no `cbc:CustomizationID` and no
+  `cbc:ProfileID` — both are `minOccurs="0"` in the UBL 2.1 Order-2 schema, and a receiving access
+  point routes and validates on them, so writing the Peppol values claimed a conformance nothing
+  here verifies. There is no Schematron in this repo; `PeppolBisValidator` is invoice-only. Pinned
+  by `ProcuLink.Transform.Tests/Output/UblOrderDeclaresNoPeppolProfileTests.cs`.
 - **Delivery channels:** `http` (+OAuth2), `sftp`, `ftps`, `email` (Postmark HTTPS is the
   canonical email path; SMTP retired on Railway), `erp_erply`, `erp_directo` — all with
   AES-GCM credentials, SSRF guard (`OutboundRequestGuard`), test-fire, retry/dead-letter.
