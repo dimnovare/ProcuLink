@@ -13,6 +13,31 @@ public class SupplierDeliveryConfig
     public bool AutoDeliver { get; set; }
 
     /// <summary>
+    /// WP-33 — <b>auto-send when clean</b>. When true, a fully-resolved order for this supplier is
+    /// evaluated for unattended sending the moment parse completes, with no operator click.
+    ///
+    /// <para><b>Currently in DRY RUN (stage 1).</b> Turning this on records what WOULD have been
+    /// sent, in <see cref="AutoSendDryRun"/>, and sends nothing. Stage 2 makes the same decision
+    /// move a real order; until then this switch cannot transmit a purchase order.</para>
+    ///
+    /// <para><b>Why this is not <see cref="AutoDeliver"/>.</b> They gate different doors.
+    /// <see cref="AutoDeliver"/> decides whether dispatch follows a transform that a HUMAN already
+    /// asked for — it is the difference between one click and two, and every existing
+    /// <c>AutoDeliver = true</c> supplier chose it on that understanding. This flag decides whether
+    /// the transform happens at all without anyone asking: the difference between one click and
+    /// zero. Folding them together would silently promote every live <c>AutoDeliver</c> supplier to
+    /// unattended sending on deploy, which is precisely the outcome the staged rollout exists to
+    /// prevent.</para>
+    ///
+    /// <para>It lives on the delivery config, so a supplier with nowhere to send cannot be opted in
+    /// at all — the "must have a delivery config" precondition is structural rather than a check
+    /// someone has to remember. Read LIVE, never from a pinned connection revision: this is an
+    /// operator's standing instruction about automation, not part of the document contract an order
+    /// was ingested under, and turning it off must take effect now rather than on the next publish.</para>
+    /// </summary>
+    public bool AutoTransform { get; set; }
+
+    /// <summary>
     /// Non-secret JSONB: endpoint URL, host, remote path, extra headers, timeout, etc.
     ///
     /// SCALE-GATED / SECURITY NOTE: this column is stored in CLEARTEXT (no encryption).

@@ -221,6 +221,9 @@ builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
 // AcceptanceGateHostRegistrationTests pins both hosts.
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
 builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
+// WP-33 stage 1 — auto-send in dry run. This host runs ParseOrderJob, so this is where the
+// decision is actually made; AutoSendDryRunCannotSendTests.BothHosts_registerTheEvaluator pins both.
+builder.Services.AddScoped<IAutoSendDryRunEvaluator, AutoSendDryRunEvaluator>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 

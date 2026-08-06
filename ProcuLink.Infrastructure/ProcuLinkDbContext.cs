@@ -27,6 +27,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<OutboundArtifact> OutboundArtifacts => Set<OutboundArtifact>();
     public DbSet<DeliveryAttempt> DeliveryAttempts => Set<DeliveryAttempt>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<AutoSendDryRun> AutoSendDryRuns => Set<AutoSendDryRun>();
     public DbSet<SupplierPoMapping> SupplierPoMappings => Set<SupplierPoMapping>();
     public DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs => Set<SupplierDeliveryConfig>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
@@ -373,6 +374,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.SupplierId).HasColumnName("supplier_id");
             b.Property(x => x.Protocol).HasColumnName("protocol").IsRequired();
             b.Property(x => x.AutoDeliver).HasColumnName("auto_deliver").HasDefaultValue(false).ValueGeneratedNever();
+            b.Property(x => x.AutoTransform).HasColumnName("auto_transform").HasDefaultValue(false).ValueGeneratedNever();
             b.Property(x => x.ConfigJson).HasColumnName("config_json").HasColumnType("jsonb");
             b.Property(x => x.EncryptedCredentials).HasColumnName("encrypted_credentials").IsRequired();
             b.Property(x => x.OutputFormat).HasColumnName("output_format");
@@ -1131,6 +1133,52 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasForeignKey(x => x.UserId);
             b.HasIndex(x => new { x.OrgId, x.EntityType, x.EntityId, x.CreatedAt })
              .HasDatabaseName("IX_audit_events_org_id_entity_type_entity_id_created_at");
+        });
+
+        // ── auto_send_dry_runs (WP-33 stage 1) ─────────────────────────────
+        modelBuilder.Entity<AutoSendDryRun>(b =>
+        {
+            b.ToTable("auto_send_dry_runs");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.OrgId).HasColumnName("org_id");
+            b.Property(x => x.OrderId).HasColumnName("order_id");
+            b.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            b.Property(x => x.WouldHaveSent).HasColumnName("would_have_sent");
+            b.Property(x => x.Decision).HasColumnName("decision").IsRequired();
+            b.Property(x => x.Channel).HasColumnName("channel");
+            b.Property(x => x.OutputFormat).HasColumnName("output_format");
+            b.Property(x => x.DecisionDigest).HasColumnName("decision_digest");
+            b.Property(x => x.BlockerCount).HasColumnName("blocker_count");
+            // Serialized JSON held as a plain string, NOT a JsonDocument. The context's global
+            // Ignore<JsonDocument>() does not reach a newly added entity's JsonDocument property —
+            // adding one here put JsonDocument itself into the model as an entity type and broke
+            // model building for every provider ("No suitable constructor was found for entity type
+            // 'JsonDocument'"). A string round-trips through the same jsonb column with none of that.
+            b.Property(x => x.Evidence)
+             .HasColumnName("evidence")
+             .HasColumnType("jsonb");
+            b.Property(x => x.EvaluatedAt)
+             .HasColumnName("evaluated_at")
+             .HasColumnType("timestamptz");
+
+            // THE idempotency boundary. A Hangfire refetch re-runs the evaluation and this index —
+            // not the pre-check that usually avoids reaching it — is what refuses the second row.
+            b.HasIndex(x => new { x.OrgId, x.OrderId })
+             .IsUnique()
+             .HasDatabaseName("IX_auto_send_dry_runs_org_id_order_id");
+
+            // The founder's weekly read: "of the orders that opted in, how many would have gone,
+            // and what held the rest back?" — one index-backed scan per org.
+            b.HasIndex(x => new { x.OrgId, x.WouldHaveSent, x.EvaluatedAt })
+             .HasDatabaseName("IX_auto_send_dry_runs_org_id_would_have_sent_evaluated_at");
+
+            b.HasOne(x => x.Organisation)
+             .WithMany()
+             .HasForeignKey(x => x.OrgId);
+            b.HasOne(x => x.Order)
+             .WithMany()
+             .HasForeignKey(x => x.OrderId);
         });
 
         // ── order_exceptions ───────────────────────────────────────────

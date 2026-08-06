@@ -8,7 +8,12 @@ public sealed record UpsertDeliveryConfigRequest(
     string? OutputFormat = null,
     // Optional cXML network credentials (only meaningful when OutputFormat is cxml). Null/omitted
     // leaves any saved cXML credentials untouched (mirrors CredentialsJson = null = keep).
-    CxmlCredentialsInput? CxmlCredentials = null);
+    CxmlCredentialsInput? CxmlCredentials = null,
+    // WP-33 — "auto-send when clean". Distinct from AutoDeliver above: AutoDeliver decides whether
+    // dispatch follows a transform a human asked for; this decides whether the transform happens
+    // without anyone asking. Defaults false, and while auto-send is in its dry-run stage turning it
+    // on records what would have been sent and sends nothing.
+    bool AutoTransform = false);
 
 /// <summary>
 /// cXML network credentials sent to the supplier delivery-config upsert. Identities are cleartext;
@@ -65,7 +70,10 @@ public sealed record DeliveryConfigResponse(
     bool? LiveMatchesActiveRevisionDelivery = null,
     // Configured cXML network identities (cleartext) + whether a Sender SharedSecret is stored.
     // Null when the supplier has no cXML credentials configured. The secret itself is never returned.
-    CxmlCredentialsResponse? CxmlCredentials = null);
+    CxmlCredentialsResponse? CxmlCredentials = null,
+    // WP-33 — the per-supplier auto-send indicator. An operator must always be able to see which
+    // suppliers are automatic, so this travels with every read of the delivery config.
+    bool AutoTransform = false);
 
 /// <summary>
 /// cXML credentials returned to the editor: the cleartext identities plus a boolean flag for the
