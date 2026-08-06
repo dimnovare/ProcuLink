@@ -18,19 +18,22 @@ public class ParseOrderJob
     private readonly ProcuLinkDbContext        _db;
     private readonly IAnalyticsService         _analytics;
     private readonly ISchemaFingerprintService _fingerprints;
+    private readonly IAutoSendDryRunEvaluator? _autoSend;
 
     public ParseOrderJob(
         IOrderService orderService,
         ILogger<ParseOrderJob> logger,
         ProcuLinkDbContext db,
         IAnalyticsService analytics,
-        ISchemaFingerprintService fingerprints)
+        ISchemaFingerprintService fingerprints,
+        IAutoSendDryRunEvaluator? autoSend = null)
     {
         _orderService = orderService;
         _logger       = logger;
         _db           = db;
         _analytics    = analytics;
         _fingerprints = fingerprints;
+        _autoSend     = autoSend;
     }
 
     /// <summary>
@@ -150,6 +153,27 @@ public class ParseOrderJob
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Schema fingerprint recording failed for order {OrderId} (non-fatal)", orderId);
+        }
+
+        // ── WP-33 stage 1 — auto-send, in dry run ─────────────────────────────
+        // Parse completion is where an order first becomes sendable, so it is where an automatic
+        // send would begin. Stage 1 makes that whole decision and records it WITHOUT sending: the
+        // evaluator cannot reach a transform or a dispatch, which is pinned from IL by
+        // AutoSendDryRunCannotSendTests rather than promised here.
+        //
+        // Non-fatal, exactly like the fingerprint block above. This job throws to signal a failed
+        // PARSE — letting a dry-run bookkeeping failure throw would fail a parse that succeeded and
+        // send Hangfire round the retry loop for a reason that has nothing to do with parsing.
+        // Idempotent across those retries and across a Hangfire refetch: the unique index on
+        // (org_id, order_id) refuses a second row.
+        try
+        {
+            if (_autoSend is not null)
+                await _autoSend.EvaluateAsync(organisationId, orderId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Auto-send dry-run evaluation failed for order {OrderId} (non-fatal)", orderId);
         }
     }
 

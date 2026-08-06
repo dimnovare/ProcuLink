@@ -77,6 +77,7 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
 
         existing.Protocol = protocol;
         existing.AutoDeliver = request.AutoDeliver;
+        existing.AutoTransform = request.AutoTransform;
         // Whole-object replace, EXCEPT the recorded SSH host-key fingerprints: no client sends a
         // property it has never heard of, so a plain assignment would un-pin the supplier every time
         // an operator changed the timeout. Sending the property explicitly — including as an empty
@@ -154,7 +155,8 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             config.CreatedAt,
             config.UpdatedAt,
             config.OutputFormat,
-            CxmlCredentials: BuildCxmlResponse(config));
+            CxmlCredentials: BuildCxmlResponse(config),
+            AutoTransform: config.AutoTransform);
     }
 
     /// <summary>

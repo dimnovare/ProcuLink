@@ -539,6 +539,10 @@ builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService
 // Worker is where TransformOrderJob actually runs, so a gate registered only here would be
 // enforcement living in the API process and nowhere the transform happens.
 builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
+// WP-33 stage 1 — auto-send in dry run. Registered in BOTH hosts for the same reason as the gate
+// above: ParseOrderJob runs in the Worker, and that is where the decision is made. Registered here
+// too so the API's own in-process job execution is not a blind spot.
+builder.Services.AddScoped<IAutoSendDryRunEvaluator, AutoSendDryRunEvaluator>();
 // Group V4 — unified validation: reusable rule definitions + binding-aware read API + boot backfill.
 builder.Services.AddScoped<IRuleDefinitionService, RuleDefinitionService>();
 builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfillService>();
