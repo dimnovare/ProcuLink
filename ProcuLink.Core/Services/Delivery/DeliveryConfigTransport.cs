@@ -95,4 +95,73 @@ public static class DeliveryConfigTransport
         var verdict = InspectEndpoint(protocol, configJson);
         return verdict.Allowed ? null : verdict.Message;
     }
+
+    // ── Credential-bearing headers ───────────────────────────────────────────
+
+    /// <summary>
+    /// Header names that conventionally carry a credential, matched case-insensitively on the
+    /// trimmed name.
+    ///
+    /// <para>Published rather than private so a test can walk it — an entry added here must not be
+    /// addable without being covered — and so a UI could warn inline before a save is attempted.</para>
+    /// </summary>
+    public static IReadOnlyCollection<string> KnownCredentialHeaderNames => CredentialHeaderNames;
+
+    private static readonly HashSet<string> CredentialHeaderNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "authorization", "proxy-authorization", "authentication",
+        "cookie", "set-cookie",
+        "x-api-key", "api-key", "apikey", "x-apikey",
+        "x-auth-token", "x-authorization", "x-access-token", "x-auth-key",
+        "x-amz-security-token", "x-goog-api-key", "x-functions-key",
+        "ocp-apim-subscription-key", "private-token", "x-shopify-access-token",
+    };
+
+    /// <summary>
+    /// Words that make a header name credential-bearing on their own, matched per hyphen/underscore
+    /// segment.
+    ///
+    /// <para>Deliberately excludes bare <c>auth</c> and bare <c>key</c>. Including either would
+    /// refuse <c>X-Auth-Email</c> and <c>X-Idempotency-Key</c> — headers real tenants send — and the
+    /// delivery editor has no headers field, so a false refusal is a save an operator cannot make
+    /// and cannot work around.</para>
+    /// </summary>
+    private static readonly HashSet<string> CredentialSegments = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "token", "secret", "password", "passwd", "pwd", "credential", "credentials", "apikey",
+    };
+
+    /// <summary>
+    /// Adjacent segment pairs that are credential-bearing together though neither word is on its
+    /// own — the reason bare <c>key</c> does not need to be.
+    /// </summary>
+    private static readonly HashSet<string> CredentialSegmentPairs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "api-key", "access-key", "secret-key", "private-key", "signing-key", "session-key",
+    };
+
+    private static readonly char[] HeaderNameSeparators = ['-', '_'];
+
+    /// <summary>
+    /// True when this header name conventionally carries a credential, by exact match or by
+    /// segment. See <see cref="CredentialSegments"/> for why the segment rule is narrow.
+    /// </summary>
+    public static bool IsCredentialHeaderName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+
+        var trimmed = name.Trim();
+        if (CredentialHeaderNames.Contains(trimmed)) return true;
+
+        var segments = trimmed.Split(HeaderNameSeparators, StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (CredentialSegments.Contains(segments[i])) return true;
+            if (i + 1 < segments.Length
+                && CredentialSegmentPairs.Contains($"{segments[i]}-{segments[i + 1]}"))
+                return true;
+        }
+
+        return false;
+    }
 }
