@@ -11,9 +11,17 @@ public sealed record UpsertDeliveryConfigRequest(
     CxmlCredentialsInput? CxmlCredentials = null,
     // WP-33 — "auto-send when clean". Distinct from AutoDeliver above: AutoDeliver decides whether
     // dispatch follows a transform a human asked for; this decides whether the transform happens
-    // without anyone asking. Defaults false, and while auto-send is in its dry-run stage turning it
-    // on records what would have been sent and sends nothing.
-    bool AutoTransform = false);
+    // without anyone asking. While auto-send is in its dry-run stage, turning it on records what
+    // would have been sent and sends nothing.
+    //
+    // NULLABLE, and null/omitted = keep whatever is saved — the same rule as CredentialsJson and
+    // CxmlCredentials above, and the same rule the recorded SSH host-key fingerprints get inside
+    // UpsertAsync. It shipped as a non-nullable `bool` defaulting to false, which made "the client
+    // has never heard of this property" indistinguishable from "the operator switched it off": no
+    // caller sends it today, so every unrelated save — a changed timeout, a new URL — silently
+    // turned auto-send off. Sending it explicitly, including as `false`, still wins and is the
+    // deliberate way to switch it off.
+    bool? AutoTransform = null);
 
 /// <summary>
 /// cXML network credentials sent to the supplier delivery-config upsert. Identities are cleartext;

@@ -83,7 +83,15 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
 
         existing.Protocol = protocol;
         existing.AutoDeliver = request.AutoDeliver;
-        existing.AutoTransform = request.AutoTransform;
+        // Null = keep. Same argument as the host-key comment directly below, and as
+        // CredentialsJson further down: a client that has never heard of a property must not be
+        // able to clear it by omission. AutoTransform arrived as a non-nullable bool defaulting to
+        // false, so every save from a caller that does not know about it — which today is every
+        // caller — switched auto-send off. An explicit value, including false, still wins.
+        if (request.AutoTransform is not null)
+        {
+            existing.AutoTransform = request.AutoTransform.Value;
+        }
         // Whole-object replace, EXCEPT the recorded SSH host-key fingerprints: no client sends a
         // property it has never heard of, so a plain assignment would un-pin the supplier every time
         // an operator changed the timeout. Sending the property explicitly — including as an empty

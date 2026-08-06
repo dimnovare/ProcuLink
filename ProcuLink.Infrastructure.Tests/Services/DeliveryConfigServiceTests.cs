@@ -117,6 +117,89 @@ public class DeliveryConfigServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_OmittedAutoTransform_PreservesExistingAutoTransform()
+    {
+        // WP-33's switch used to be a non-nullable bool defaulting to false, so an unrelated save
+        // — a changed URL, a new timeout — silently turned auto-send off. No frontend sends the
+        // property, so EVERY save did it. Latent only until stage 2 gives someone a way to turn it
+        // on, and then the symptom is "auto-send stopped working" with nothing in the audit trail
+        // to explain it.
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest(
+                "http", false, "{\"url\":\"https://a.example\"}", null, AutoTransform: true),
+            default);
+
+        (await db.SupplierDeliveryConfigs.SingleAsync()).AutoTransform.Should().BeTrue();
+
+        // A save that says nothing about auto-send — the shape every caller sends today.
+        var response = await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest("http", false, "{\"url\":\"https://b.example\"}", null),
+            default);
+
+        var after = await db.SupplierDeliveryConfigs.SingleAsync();
+        after.AutoTransform.Should().BeTrue();
+        after.ConfigJson.Should().Contain("b.example");
+        // The read-back must agree with the row, or the UI shows a switch in the wrong position.
+        response.AutoTransform.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ExplicitFalseAutoTransform_TurnsItOff()
+    {
+        // The other half: null means keep, so switching auto-send OFF has to still work. Without
+        // this, "preserve on omit" is indistinguishable from "can never be turned off".
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest(
+                "http", false, "{\"url\":\"https://a.example\"}", null, AutoTransform: true),
+            default);
+
+        var response = await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest(
+                "http", false, "{\"url\":\"https://a.example\"}", null, AutoTransform: false),
+            default);
+
+        (await db.SupplierDeliveryConfigs.SingleAsync()).AutoTransform.Should().BeFalse();
+        response.AutoTransform.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_OmittedAutoTransform_OnACreate_DefaultsToOff()
+    {
+        // A brand-new config has nothing to keep, so "null = keep" must land on the entity default
+        // rather than on whatever a stale row held. Off is the safe default for a switch that
+        // sends orders without anyone asking.
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+
+        var response = await service.UpsertAsync(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            new UpsertDeliveryConfigRequest("http", false, "{\"url\":\"https://a.example\"}", null),
+            default);
+
+        (await db.SupplierDeliveryConfigs.SingleAsync()).AutoTransform.Should().BeFalse();
+        response.AutoTransform.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task UpsertAsync_EmptyCredentials_ClearsExistingCredentials()
     {
         await using var db = CreateDb();
