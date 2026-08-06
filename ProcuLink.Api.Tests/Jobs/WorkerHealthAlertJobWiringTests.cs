@@ -130,6 +130,29 @@ public sealed class WorkerHealthAlertJobWiringTests
         mail.Sent.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// The whole production graph with NO destination behind it — no recipient, and a Sentry SDK
+    /// that an empty DSN left disabled. The sweep must report that it raised nothing, because
+    /// nothing was received. Startup validation refuses this configuration in Production; this pins
+    /// that the runtime is honest about it wherever it does occur.
+    /// </summary>
+    [Fact]
+    public async Task Sweep_withNoDestinationBehindAnyTransport_reportsThatNoAlertWasRaised()
+    {
+        await using var provider = BuildAlertingGraph(
+            new RecordingEmailApiClient(),
+            health: new StubOpsHealth(new WorkerHealthSnapshot(false, 0, 900, 0, 0)),
+            alertEmailTo: null);
+
+        using var scope = provider.CreateScope();
+        var raised = await scope.ServiceProvider
+            .GetRequiredService<IWorkerHealthAlertService>().RunAsync(default);
+
+        raised.Should().BeFalse(
+            "the worker IS down, but no transport could tell anyone — 'raised an alert' must mean "
+          + "an operator was reachable, not that the code path executed");
+    }
+
     [Fact]
     public async Task Job_isIdempotent_repeatRunsInsideTheCooldownDoNotResend()
     {
