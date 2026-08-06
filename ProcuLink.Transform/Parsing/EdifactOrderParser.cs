@@ -43,8 +43,10 @@ namespace ProcuLink.Transform.Parsing;
 ///   CUX   — currency
 ///   LIN   — line item (buyer item code)
 ///   IMD   — item description (free-text)
-///   QTY   — quantity (21 = ordered qty)
-///   PRI   — price (AAA = net unit price)
+///   QTY   — quantity (DE 6063: 21 = ordered, 1 = discrete; any other qualifier is
+///           read but the line is flagged for review — never a silent 0)
+///   PRI   — price (DE 5125: AAA/AAB/CAL = calculation price; any other qualifier,
+///           e.g. the information price AAE, is read but the line is flagged)
 ///   UNS   — section control (skipped)
 ///   UNT   — message trailer (skipped)
 ///   UNZ   — interchange trailer (skipped)
@@ -228,10 +230,29 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
         var      lineCode      = string.Empty;
         var      qtyAmbiguous   = false;
         var      priceAmbiguous = false;
+        // Qualifier provenance for the current line. A quantity or price is only
+        // authoritative when it came from an accepted qualifier (see
+        // IsAcceptedQuantityQualifier / IsAcceptedPriceQualifier); anything else is a
+        // last-resort fallback that has to be flagged, and the *QualifierUsed fields
+        // carry the code so the review reason can name it.
+        var      qtyRead            = false;
+        var      qtyFromAccepted    = false;
+        var      qtyQualifierUsed   = (string?)null;
+        var      priceRead          = false;
+        var      priceFromAccepted  = false;
+        var      priceQualifierUsed = (string?)null;
 
         void Flush()
         {
             if (currentLin is null) return;
+            // A quantity that never came from an ordered-quantity qualifier is not the
+            // quantity ordered: it may be a pack size, a free-goods count, or — when the
+            // line carries no QTY at all — nothing but the 0 reset above. Either way the
+            // line must surface for review rather than be delivered as though it had been
+            // read. A price is only questionable once one was actually read under a
+            // non-calculation qualifier; a line with no PRI keeps an honest null.
+            var qtyUnconfirmed   = !qtyFromAccepted;
+            var priceUnconfirmed = priceRead && !priceFromAccepted;
             lines.Add(new ParsedOrderLine(
                 LineNumber:    lineNumber,
                 BuyerItemCode: lineCode,
@@ -240,11 +261,15 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
                 Unit:          NullIfEmpty(lineUnit),
                 UnitPrice:     linePrice,
                 // Refuse to deliver a silently-wrong number: a quantity or unit price the parser
-                // could not read unambiguously in the declared locale flags the line so it surfaces
-                // for human review instead of being delivered ~10×/100×/1000× wrong. Mirrors
+                // could not read unambiguously in the declared locale — or could read but cannot
+                // treat as authoritative — flags the line so it surfaces for human review instead
+                // of being delivered ~10×/100×/1000× wrong, or as a plausible 0. Mirrors
                 // CsvOrderParser's NeedsReview/ReviewReason contract.
-                NeedsReview:   qtyAmbiguous || priceAmbiguous,
-                ReviewReason:  BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous)));
+                NeedsReview:   qtyAmbiguous || priceAmbiguous || qtyUnconfirmed || priceUnconfirmed,
+                ReviewReason:  BuildLineReviewReason(
+                                   qtyAmbiguous, priceAmbiguous,
+                                   qtyUnconfirmed, qtyRead, qtyQualifierUsed,
+                                   priceUnconfirmed, priceQualifierUsed)));
         }
 
         foreach (var seg in segments)
@@ -260,6 +285,12 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
                     linePrice      = null;
                     qtyAmbiguous   = false;
                     priceAmbiguous = false;
+                    qtyRead            = false;
+                    qtyFromAccepted    = false;
+                    qtyQualifierUsed   = null;
+                    priceRead          = false;
+                    priceFromAccepted  = false;
+                    priceQualifierUsed = null;
 
                     // LIN+1++ITEM-CODE:IN
                     var lnNumRaw = seg.Element(1);
@@ -284,29 +315,46 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
                     break;
 
                 case "QTY" when currentLin is not null:
-                    // QTY+21:100:PCE → 21 = ordered quantity
+                {
+                    // QTY+21:100:PCE → DE 6063 qualifier 21 = ordered quantity.
                     var qtyQualifier = seg.Component(1, 0);
-                    if (string.Equals(qtyQualifier, "21", StringComparison.Ordinal)
-                        || string.Equals(qtyQualifier, "1",  StringComparison.Ordinal))
+                    var qtyAccepted  = IsAcceptedQuantityQualifier(qtyQualifier);
+                    // An accepted qualifier is authoritative wherever it appears and
+                    // overwrites a fallback already taken; an unrecognised one is read only
+                    // while nothing has supplied a quantity yet. So segment order never
+                    // decides the answer, and a second unrecognised QTY cannot displace the
+                    // first. Reading the unrecognised value (instead of dropping it, which
+                    // left a silent 0) gives the reviewer the candidate number — the flag
+                    // set in Flush is what stops it being delivered.
+                    if (qtyAccepted || !qtyRead)
                     {
                         var (qtyVal, qtyAmb) = ParseDecimal(seg.Component(1, 1), decimalMark);
                         lineQty      = qtyVal ?? 0m;
                         qtyAmbiguous = qtyAmb;
                         lineUnit = NullIfEmpty(seg.Component(1, 2)) ?? lineUnit;
+                        qtyRead          = true;
+                        qtyFromAccepted  = qtyAccepted;
+                        qtyQualifierUsed = qtyAccepted ? null : NullIfEmpty(qtyQualifier);
                     }
                     break;
+                }
 
                 case "PRI" when currentLin is not null:
-                    // PRI+AAA:25.00 → AAA = net unit price
+                {
+                    // PRI+AAA:25.00 → DE 5125 qualifier AAA = net calculation price.
                     var priQualifier = seg.Component(1, 0);
-                    if (string.Equals(priQualifier, "AAA", StringComparison.Ordinal)
-                        || string.Equals(priQualifier, "AAB", StringComparison.Ordinal))
+                    var priAccepted  = IsAcceptedPriceQualifier(priQualifier);
+                    if (priAccepted || !priceRead)
                     {
                         var (priceVal, priceAmb) = ParseDecimal(seg.Component(1, 1), decimalMark);
                         linePrice      = priceVal;
                         priceAmbiguous = priceAmb;
+                        priceRead          = true;
+                        priceFromAccepted  = priAccepted;
+                        priceQualifierUsed = priAccepted ? null : NullIfEmpty(priQualifier);
                     }
                     break;
+                }
 
                 case "UNS":
                 case "UNT":
@@ -607,6 +655,92 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
 
     private static string? BuildAmbiguityReason(bool qtyAmbiguous, bool priceAmbiguous) =>
         NumberParsing.BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous);
+
+    // ── Segment qualifier policy ─────────────────────────────────────────────
+    //
+    // EDIFACT qualifies every quantity and every price, and only some of those codes
+    // mean "this is what was ordered" / "this is the price the line is calculated
+    // with". Codes below are from the UN/EDIFACT D96A code lists — DE 6063 (quantity
+    // qualifier, composite C186) and DE 5125 (price qualifier, composite C509); D01B
+    // keeps the same values for all of them.
+    //
+    // Anything outside these two sets is still READ, but the line is flagged (see
+    // Flush). It is never accepted silently: a QTY qualified 52 is a pack size and a
+    // PRI qualified AAE is an information price, and delivering either as if it were
+    // the ordered quantity or the invoice price is precisely the silent corruption
+    // this parser must not produce.
+
+    /// <summary>
+    /// DE 6063 codes that ARE the ordered quantity of the line:
+    ///   21 = "Ordered quantity" — the quantity which has been ordered;
+    ///   1  = "Discrete quantity" — a single unqualified quantity.
+    /// Deliberately nothing else. Every other 6063 code that turns up on an ORDERS line
+    /// means a DIFFERENT quantity — 52 quantity per pack, 53/54 minimum/maximum order
+    /// quantity, 59 consumer units in the traded unit, 192 free goods quantity, 12
+    /// despatch quantity, 46 pieces delivered, 61 return quantity, 3 cumulative, 11
+    /// split — so accepting any of them outright would deliver a packaging, constraint
+    /// or free-goods number as the quantity ordered.
+    /// </summary>
+    private static bool IsAcceptedQuantityQualifier(string? qualifier) =>
+        string.Equals(qualifier, "21", StringComparison.Ordinal)
+        || string.Equals(qualifier, "1", StringComparison.Ordinal);
+
+    /// <summary>
+    /// DE 5125 codes that ARE the price the line is calculated with:
+    ///   AAA = "Calculation net"   — the net price including allowances/charges;
+    ///   AAB = "Calculation gross" — the gross price to which allowances/charges apply;
+    ///   CAL = "Calculation price" — "the price for the calculation of the line item amount".
+    /// Deliberately nothing else. AAE and AAF ("Information price, excluding allowances
+    /// or charges, including / and taxes") and INF are stated for information only, AAC
+    /// excludes allowances but includes tax, AAD is an average selling price and INV a
+    /// referenced invoice price. Each has a different magnitude from the calculation
+    /// price, so none may become the unit price unflagged.
+    /// </summary>
+    private static bool IsAcceptedPriceQualifier(string? qualifier) =>
+        string.Equals(qualifier, "AAA", StringComparison.Ordinal)
+        || string.Equals(qualifier, "AAB", StringComparison.Ordinal)
+        || string.Equals(qualifier, "CAL", StringComparison.Ordinal);
+
+    /// <summary>
+    /// One plain-language sentence per problem, joined. Covers both the locale-ambiguity
+    /// case shared with every other parser (via <see cref="NumberParsing"/>) and the
+    /// EDIFACT-specific "read, but under a qualifier we cannot treat as authoritative"
+    /// case. Null when the line is clean.
+    /// </summary>
+    private static string? BuildLineReviewReason(
+        bool    qtyAmbiguous,
+        bool    priceAmbiguous,
+        bool    qtyUnconfirmed,
+        bool    qtyRead,
+        string? qtyQualifier,
+        bool    priceUnconfirmed,
+        string? priceQualifier)
+    {
+        var reasons = new List<string>(3);
+
+        if (BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous) is { } ambiguity)
+            reasons.Add(ambiguity);
+
+        if (qtyUnconfirmed)
+        {
+            reasons.Add(
+                !qtyRead
+                    ? "This line has no quantity segment, so the quantity is 0 — check the order file and enter the quantity ordered."
+                : qtyQualifier is null
+                    ? "The quantity came from a QTY segment with no qualifier, so it may not be the amount ordered — check it against the order file."
+                    : $"The quantity came from QTY qualifier '{qtyQualifier}', not the ordered quantity (qualifier 21 or 1), so it may not be the amount ordered — check it against the order file.");
+        }
+
+        if (priceUnconfirmed)
+        {
+            reasons.Add(
+                priceQualifier is null
+                    ? "The unit price came from a PRI segment with no qualifier, so it may not be the price to invoice — check it against the order file."
+                    : $"The unit price came from PRI qualifier '{priceQualifier}', not a calculation price (AAA, AAB or CAL), so it may not be the price to invoice — check it against the order file.");
+        }
+
+        return reasons.Count == 0 ? null : string.Join(" ", reasons);
+    }
 
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
