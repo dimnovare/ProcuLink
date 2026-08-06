@@ -733,6 +733,31 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
     }
 
     /// <summary>
+    /// Refuses a credential written into a caller-supplied revision's extra-headers map. Every entry
+    /// of that map is applied to the outbound request by <c>HttpDeliveryDispatcher</c>, and
+    /// <c>config_json</c> is a cleartext column, so a token typed there is stored in the clear and
+    /// copied into the snapshot a pinned order delivers through.
+    ///
+    /// <para>Deliberately the SAME primitive the live delivery-config save path runs
+    /// (<c>DeliveryConfigService.ValidateCredentialHeaders</c>): both reach
+    /// <see cref="DeliveryConfigTransport.FindCredentialHeaders"/>. A second hand-rolled name check
+    /// here would be a second security rule free to drift from the first.</para>
+    ///
+    /// <para><b>Flat, with no grandfathering</b> — unlike the live path, which grandfathers an
+    /// identical stored pair because the delivery editor has no headers field to remove one with.
+    /// This is caller-supplied input, and the clone-from-active, rollback, republish-from-live and
+    /// publish paths never reach <c>ApplyScalars</c>, so nothing already live is stranded.
+    /// Republish-from-live is what the delivery-config editor triggers, so the ordinary operator
+    /// flow keeps working.</para>
+    /// </summary>
+    private static void ValidateCredentialHeaders(string? configJson)
+    {
+        var offending = DeliveryConfigTransport.FindCredentialHeaders(configJson);
+        if (offending.Count > 0)
+            throw new CredentialHeaderInConfigException(offending);
+    }
+
+    /// <summary>
     /// Refuses a caller-supplied encrypted-credential reference. See
     /// <see cref="ClientSuppliedCredentialsRefException"/> for why a ciphertext taken off a request
     /// body is a credential the caller never proved they own, and for the route that replaces it.
@@ -756,6 +781,7 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         // credential blob enters a revision, and a half-applied bundle behind a refusal would be
         // worse than the refusal.
         ValidateTransportSecurity(input.DeliveryProtocol, input.DeliveryConfigJson);
+        ValidateCredentialHeaders(input.DeliveryConfigJson);
         ValidateNoClientSuppliedCredentials(input.CredentialsRef);
 
         rev.InputMappingJson    = input.InputMappingJson;

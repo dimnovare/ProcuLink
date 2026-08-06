@@ -180,6 +180,10 @@ public sealed class ConnectionsController : ControllerBase
         {
             return RejectedCredentialsRef(ex);
         }
+        catch (CredentialHeaderInConfigException ex)
+        {
+            return RejectedCredentialHeader(ex);
+        }
     }
 
     [HttpPut("{connectionId:guid}/revisions/{revisionId:guid}")]
@@ -204,6 +208,10 @@ public sealed class ConnectionsController : ControllerBase
         catch (ClientSuppliedCredentialsRefException ex)
         {
             return RejectedCredentialsRef(ex);
+        }
+        catch (CredentialHeaderInConfigException ex)
+        {
+            return RejectedCredentialHeader(ex);
         }
 
         return result switch
@@ -230,6 +238,14 @@ public sealed class ConnectionsController : ControllerBase
     /// </summary>
     private BadRequestObjectResult RejectedCredentialsRef(ClientSuppliedCredentialsRefException ex) =>
         BadRequest(new { error = ClientSuppliedCredentialsRefException.Code, message = ex.PolicyMessage });
+
+    /// <summary>
+    /// A credential written into <c>config_json</c>'s extra-headers map is the caller's mistake, so
+    /// it is a 400 rather than the 500 an unhandled exception would produce. Same body shape as
+    /// <see cref="InsecureEndpoint"/>; the message names the header and never its value.
+    /// </summary>
+    private BadRequestObjectResult RejectedCredentialHeader(CredentialHeaderInConfigException ex) =>
+        BadRequest(new { error = CredentialHeaderInConfigException.Code, message = ex.PolicyMessage });
 
     /// <summary>
     /// Launch batch 3 — runs the REAL test pack (replay over recent orders + conformance check;

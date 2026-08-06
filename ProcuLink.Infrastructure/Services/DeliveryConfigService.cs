@@ -278,10 +278,9 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
     ///
     /// <para>The revision write path MUST reach this same primitive
     /// (<see cref="DeliveryConfigTransport.FindCredentialHeaders"/>) rather than hand-rolling its own
-    /// header check — see <c>SupplierConnectionService.ValidateCredentialHeaders</c>, which does not
-    /// exist on this branch yet (a later task adds it; this paragraph is the requirement, not a claim
-    /// that it is already covered). Two copies of a security rule is how the transport gap existed in
-    /// the first place, and #157 exists to stop it happening twice.</para>
+    /// header check — see <c>SupplierConnectionService.ValidateCredentialHeaders</c>. Two copies of a
+    /// security rule is how the transport gap existed in the first place, and #157 exists to stop it
+    /// happening twice.</para>
     /// </summary>
     private static void ValidateCredentialHeaders(string configJson, string? storedConfigJson)
     {
