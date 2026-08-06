@@ -276,4 +276,24 @@ public class CredentialHeaderNamesTests
         DeliveryConfigTransport.DescribeCredentialHeaders(
                 """{"url":"https://s.example/o","headers":{"Content-Type":"application/xml"}}""")
             .Should().BeNull();
+
+    // ── The exception ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The base type is load-bearing, not incidental. Every controller that already catches
+    /// ArgumentException answers 400; if this stopped deriving from it, an un-updated handler would
+    /// turn a caller's mistake into a 500. Nothing else covers this — the write-path tests catch the
+    /// concrete type.
+    /// </summary>
+    [Fact]
+    public void TheRefusalIsAnArgumentException_SoAnUnupdatedHandlerStillAnswers400()
+    {
+        var ex = new CredentialHeaderInConfigException(new[] { "Authorization" });
+
+        ex.Should().BeAssignableTo<ArgumentException>();
+        CredentialHeaderInConfigException.Code.Should().Be("credential_header_in_delivery_config");
+        ex.HeaderNames.Should().Equal("Authorization");
+        ex.PolicyMessage.Should().Contain("'Authorization'");
+        ex.Message.Should().NotContain("Parameter", "no paramName is passed — the suffix is wrong for a body an operator reads");
+    }
 }

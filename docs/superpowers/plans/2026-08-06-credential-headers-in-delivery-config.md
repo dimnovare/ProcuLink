@@ -22,7 +22,7 @@
 - **Any walk over a runtime collection carries an anti-vacuity floor**, so an emptied collection cannot make the walk assert nothing.
 - **No second copy of the rule.** Every consumer reaches `DeliveryConfigTransport.FindCredentialHeaders`. A hand-rolled name check anywhere else is the defect #157 exists to prevent.
 - Error code, verbatim: `credential_header_in_delivery_config`
-- Refusal message, verbatim (single header): `Delivery config header 'Authorization' holds a credential. This config is stored in cleartext, so credentials belong in this supplier's delivery credentials — set the auth type there to bearer, basic, apikey or oauth2 — where they are encrypted. Remove the header and save the token as a credential instead.`
+- Refusal message, verbatim (single header): `Delivery config header 'Authorization' holds a credential. This config is stored in cleartext, so credentials belong in this supplier's delivery credentials — set the auth type there to bearer, basic, apikey or oauth2_client_credentials — where they are encrypted. Remove the header and save the token as a credential instead.`
 - Plural form replaces the first sentence with: `Delivery config headers 'A', 'B' hold credentials.`
 - Run tests from the worktree root. Project paths: `ProcuLink.Infrastructure.Tests`, `ProcuLink.Api.Tests`.
 
@@ -326,7 +326,7 @@ Append to `ProcuLink.Infrastructure.Tests/Security/CredentialHeaderNamesTests.cs
     [InlineData("hEaDeRs")]
     public void TheHeadersKeyInAnyCasing_IsStillInspected(string key) =>
         DeliveryConfigTransport.FindCredentialHeaders(
-                $$"""{"{{key}}":{"Authorization":"Bearer t0ps3cret"}}""")
+                $$$"""{"{{{key}}}":{"Authorization":"Bearer t0ps3cret"}}""")
             .Should().ContainSingle();
 
     [Fact]
@@ -554,7 +554,7 @@ In `ProcuLink.Core/Services/Delivery/DeliveryConfigTransport.cs`, append inside 
 
         return subject
             + " This config is stored in cleartext, so credentials belong in this supplier's delivery"
-            + " credentials — set the auth type there to bearer, basic, apikey or oauth2 — where they"
+            + " credentials — set the auth type there to bearer, basic, apikey or oauth2_client_credentials — where they"
             + " are encrypted. Remove the header and save the token as a credential instead.";
     }
 

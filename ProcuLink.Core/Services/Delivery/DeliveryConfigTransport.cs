@@ -237,7 +237,7 @@ public static class DeliveryConfigTransport
 
         return subject
             + " This config is stored in cleartext, so credentials belong in this supplier's delivery"
-            + " credentials — set the auth type there to bearer, basic, apikey or oauth2 — where they"
+            + " credentials — set the auth type there to bearer, basic, apikey or oauth2_client_credentials — where they"
             + " are encrypted. Remove the header and save the token as a credential instead.";
     }
 

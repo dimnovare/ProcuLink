@@ -251,8 +251,8 @@ Carries `Code`, `PolicyMessage` and `HeaderNames`.
 
   > Delivery config header 'Authorization' holds a credential. This config is stored in cleartext, so
   > credentials belong in this supplier's delivery credentials — set the auth type there to bearer,
-  > basic, apikey or oauth2 — where they are encrypted. Remove the header and save the token as a
-  > credential instead.
+  > basic, apikey or oauth2_client_credentials — where they are encrypted. Remove the header and save
+  > the token as a credential instead.
 
 - multiple: `headers 'Authorization', 'X-Api-Key' hold credentials.` then the same guidance
 - **never** the value
