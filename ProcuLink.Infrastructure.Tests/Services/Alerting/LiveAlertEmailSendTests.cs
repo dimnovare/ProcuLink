@@ -68,20 +68,16 @@ public class LiveAlertEmailSendTests
 
         var stamp = DateTime.UtcNow.ToString("O");
 
-        await sink.AlertAsync(
+        var delivered = await sink.AlertAsync(
             OperationalAlertKeys.WorkerHeartbeatLost,
             $"STAGED TEST — this is not a real incident. Sent at {stamp} by LiveAlertEmailSendTests.");
 
-        // EmailWorkerAlertSink swallows provider failures by contract, so asserting on the sink
-        // alone would pass even if Postmark refused. Re-send the same message through the client
-        // directly and assert the provider's own verdict — that is the part that proves delivery.
-        var direct = await client.SendAsync(new Core.Services.Email.EmailApiMessage(
-            From:     client.DefaultFrom,
-            To:       new[] { recipient },
-            Subject:  "[ProcuLink alert · staged test] delivery receipt probe",
-            TextBody: $"Provider-verdict probe for the staged alert sent at {stamp}."));
-
-        direct.Success.Should().BeTrue(
-            $"Postmark refused the live send: {direct.StatusCode} {direct.Error}");
+        // The sink still swallows provider failures — it must, or one bad transport would abort the
+        // sweep — but it no longer HIDES them: its return value is the provider's own verdict. This
+        // test previously had to re-send the same message through the client directly to get at
+        // that verdict, which meant a live run cost two emails and asserted on a path production
+        // does not take. One assertion on the real path replaces both.
+        delivered.Should().BeTrue(
+            "Postmark refused the live send — the alert address is configured and does not work");
     }
 }
