@@ -78,12 +78,19 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
         if (textLines.Count == 0)
             return new ParsedOrder(null, null, null, null, Array.Empty<ParsedOrderLine>());
 
+        var orderDateRaw = FindFirstValue(textLines, OrderDateRegex);
+        var (orderDate, orderDateAmbiguous) = DateParsing.TryParseHeaderDate(orderDateRaw);
+
         return new ParsedOrder(
             PoNumber:  FindFirstValue(textLines, PoNumberRegex),
-            OrderDate: ParseDate(FindFirstValue(textLines, OrderDateRegex)),
+            OrderDate: orderDate,
             BuyerName: FindFirstValue(textLines, BuyerRegex),
             Currency:  FindFirstValue(textLines, CurrencyRegex)?.ToUpperInvariant(),
-            Lines:     ParseLines(textLines));
+            Lines:     ParseLines(textLines),
+            // A printed PDF declares nothing about its date ordering — the same reason this
+            // parser cannot assert a decimal locale either. "03/04/2026" is flagged, not guessed.
+            NeedsReview:  orderDateAmbiguous,
+            ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", orderDateRaw));
     }
 
     private static IReadOnlyList<ParsedOrderLine> ParseLines(IEnumerable<string> lines)
@@ -158,21 +165,6 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
 
             return NullIfEmpty(match.Groups["value"].Value);
         }
-
-        return null;
-    }
-
-    private static DateTime? ParseDate(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        string[] formats = { "yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-ddTHH:mm:ss", "M/d/yyyy", "d.M.yyyy" };
-        if (DateTime.TryParseExact(value.Trim(), formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-            return dt;
-
-        if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt))
-            return dt;
 
         return null;
     }

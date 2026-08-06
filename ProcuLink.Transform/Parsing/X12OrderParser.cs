@@ -167,7 +167,7 @@ public sealed class X12OrderParser : IPurchaseOrderParser
             throw new X12ParseException("Required BEG (beginning segment for purchase order) is missing.");
 
         var poNumber  = NullIfEmpty(beg.Element(3));
-        var orderDate = ParseX12Date(beg.Element(5));
+        var (orderDate, orderDateAmbiguous) = ParseX12Date(beg.Element(5));
 
         // ── Header-level scans (everything before the first PO1) ───────────────
         string? buyerName = null;
@@ -197,7 +197,11 @@ public sealed class X12OrderParser : IPurchaseOrderParser
             OrderDate: orderDate,
             BuyerName: buyerName,
             Currency:  currency,
-            Lines:     lines);
+            Lines:     lines,
+            // False for every conformant CCYYMMDD/YYMMDD date — only a non-conformant
+            // partner writing a free-text date into BEG05 can reach this.
+            NeedsReview:  orderDateAmbiguous,
+            ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", beg.Element(5)));
     }
 
     // ── Line parsing ───────────────────────────────────────────────────────────
@@ -395,18 +399,26 @@ public sealed class X12OrderParser : IPurchaseOrderParser
 
     // ── Field helpers ────────────────────────────────────────────────────────
 
-    private static DateTime? ParseX12Date(string? value)
+    /// <summary>
+    /// Reads an X12 date. The spec DECLARES the convention — 004010 uses CCYYMMDD, legacy
+    /// 003xxx used YYMMDD — so a conformant value has exactly one reading and is NEVER
+    /// flagged; flagging conformant EDI would flood review with noise. Only the free-text
+    /// fallback (a non-conformant partner sending "03/04/2026" in a date element) can be
+    /// ambiguous. That fallback used to be <c>DateTime.TryParse</c> with InvariantCulture,
+    /// which is month-first — silently the OPPOSITE reading from the day-first free-text
+    /// parsers, and unflagged. It now goes through the one shared reader and reports back.
+    /// </summary>
+    private static (DateTime? Value, bool Ambiguous) ParseX12Date(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (string.IsNullOrWhiteSpace(value)) return (null, false);
         var v = value.Trim();
 
         // 004010 uses CCYYMMDD (8); legacy 003xxx used YYMMDD (6).
         string[] formats = { "yyyyMMdd", "yyMMdd" };
         if (DateTime.TryParseExact(v, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-            return dt;
-        return DateTime.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt)
-            ? dt
-            : null;
+            return (dt, false);
+
+        return DateParsing.TryParseHeaderDate(v);
     }
 
     /// <summary>

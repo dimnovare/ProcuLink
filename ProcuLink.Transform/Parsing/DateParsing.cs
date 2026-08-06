@@ -108,6 +108,38 @@ public static class DateParsing
         return (null, false);
     }
 
+    /// <summary>
+    /// The free-text header-date reader every deterministic parser shares. Formats that do NOT
+    /// declare their date convention (CSV, XLSX, PDF, and the lenient fallbacks in UBL/cXML)
+    /// must go through here so one input yields one answer across all of them.
+    ///
+    /// <para>Day-first is the product default: this is an EU-first market, and every parser's
+    /// hand-rolled format array already put <c>dd/MM/yyyy</c> first — so the resolved VALUE is
+    /// unchanged. What changes is that the ≤12/≤12 case now reports that a choice was made.</para>
+    ///
+    /// <para>Returns <see cref="DateTime"/> at midnight because <see cref="ParsedOrder.OrderDate"/>
+    /// is a <c>DateTime?</c>; the time component was never meaningful — the persisted
+    /// <c>PurchaseOrderEntity.OrderDate</c> is a <see cref="DateOnly"/>.</para>
+    /// </summary>
+    public static (DateTime? Value, bool Ambiguous) TryParseHeaderDate(string? raw)
+    {
+        var (value, ambiguous) = TryParseFlexibleDate(raw, preferDayFirst: true);
+        return (value?.ToDateTime(TimeOnly.MinValue), ambiguous);
+    }
+
+    /// <summary>
+    /// Short "why was this flagged" string for the review UI — the date-side sibling of
+    /// <see cref="NumberParsing.BuildAmbiguityReason"/>. Null when nothing was ambiguous.
+    /// Shared so every parser produces the identical human-readable copy.
+    /// <paramref name="fieldLabel"/> is the plain-language name of the header field
+    /// ("order date", "invoice issue date") — never an internal identifier.
+    /// </summary>
+    public static string? BuildAmbiguityReason(bool ambiguous, string fieldLabel, string? raw) =>
+        ambiguous
+            ? $"The {fieldLabel} \"{raw?.Trim()}\" could be day-first or month-first; " +
+              "it was read as day-first and needs confirming."
+            : null;
+
     private static int? ExpandYear(string raw)
     {
         if (!int.TryParse(raw, out var y)) return null;

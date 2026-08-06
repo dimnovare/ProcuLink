@@ -156,6 +156,11 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
 
         // ── Header-level scans ────────────────────────────────────────────────
         DateTime? orderDate = null;
+        // Raw DTM+137 value + whether reading it needed a day-first/month-first policy call.
+        // Both stay at their defaults for conformant EDI — the format qualifier declares the
+        // ordering, so nothing is flagged.
+        string? orderDateRaw = null;
+        var orderDateAmbiguous = false;
         string? buyerName   = null;
         string? currency    = null;
 
@@ -171,7 +176,18 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
                     var dtmQualifier = seg.Component(1, 0);
                     if (string.Equals(dtmQualifier, "137", StringComparison.Ordinal))
                     {
-                        orderDate ??= ParseEdifactDate(seg.Component(1, 1), seg.Component(1, 2));
+                        if (orderDate is null)
+                        {
+                            var dtmRaw = seg.Component(1, 1);
+                            var (dtmValue, dtmAmbiguous) = ParseEdifactDate(dtmRaw, seg.Component(1, 2));
+                            // Only adopt the ambiguity of the DTM we actually kept.
+                            if (dtmValue is not null)
+                            {
+                                orderDate          = dtmValue;
+                                orderDateRaw       = dtmRaw;
+                                orderDateAmbiguous = dtmAmbiguous;
+                            }
+                        }
                     }
                     break;
 
@@ -209,7 +225,10 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
             OrderDate: orderDate,
             BuyerName: buyerName,
             Currency:  currency,
-            Lines:     lines);
+            Lines:     lines,
+            // False for every conformant DTM — the format qualifier declares the ordering.
+            NeedsReview:  orderDateAmbiguous,
+            ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", orderDateRaw));
     }
 
     // ── Line parsing ─────────────────────────────────────────────────────────
@@ -602,9 +621,18 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
         return NullIfEmpty(joined);
     }
 
-    private static DateTime? ParseEdifactDate(string? value, string? formatCode)
+    /// <summary>
+    /// Reads an EDIFACT DTM date. The segment carries an explicit format qualifier, so a
+    /// conformant value DECLARES its own convention and is NEVER flagged — flagging
+    /// conformant EDI would flood review with noise. Only the free-text fallback (a
+    /// non-conformant partner sending "03/04/2026") can be ambiguous. That fallback used to
+    /// be <c>DateTime.TryParse</c> with InvariantCulture, which is month-first — silently the
+    /// OPPOSITE reading from the day-first free-text parsers, and unflagged. It now goes
+    /// through the one shared reader and reports back.
+    /// </summary>
+    private static (DateTime? Value, bool Ambiguous) ParseEdifactDate(string? value, string? formatCode)
     {
-        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (string.IsNullOrWhiteSpace(value)) return (null, false);
         var v = value.Trim();
 
         // Common DTM format codes:
@@ -623,11 +651,9 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
 
         if (DateTime.TryParseExact(v, formats, CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var dt))
-            return dt;
+            return (dt, false);
 
-        return DateTime.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt)
-            ? dt
-            : null;
+        return DateParsing.TryParseHeaderDate(v);
     }
 
     /// <summary>

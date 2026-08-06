@@ -212,19 +212,28 @@ public sealed class UblInvoiceParser : IInvoiceParser
                 $"<{element}> could not be read as a date: '{raw.Trim()}'.");
     }
 
+    /// <summary>
+    /// The one shared reader, not a private copy.
+    ///
+    /// This method previously hand-rolled its own two-branch parse, and the lenient branch was
+    /// <c>DateTime.TryParse(raw)</c> with NO <see cref="System.Globalization.CultureInfo"/> at
+    /// all — so the same invoice meant different things on a German box and a US box, and
+    /// <c>12.06.2026</c> was two different months depending on the server. Routing it through
+    /// <see cref="DateParsing.TryParseFlexibleDate"/> makes it machine-independent and day-first
+    /// by policy, and keeps every parser reading a date the same way.
+    ///
+    /// <c>cbc:IssueDate</c> is <c>xsd:date</c>, so the shared reader's ISO branch — which is
+    /// tried first and is never ambiguous — handles every conformant document unchanged.
+    ///
+    /// Returning null on an unreadable value is what lets the two callers above keep the
+    /// ABSENT-vs-UNREADABLE distinction: they turn that null into an explicit
+    /// <c>InvoiceParseException</c> naming the element and the offending token, rather than
+    /// today's date.
+    /// </summary>
     private static DateOnly? ParseDateOrNull(string raw)
     {
-        var value = raw.Trim();
-        if (DateOnly.TryParseExact(value, "yyyy-MM-dd",
-                System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.None, out var d))
-            return d;
-        // InvariantCulture explicitly: the machine's locale must never decide how a
-        // supplier's invoice date is read.
-        if (DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.None, out var dt))
-            return DateOnly.FromDateTime(dt);
-        return null;
+        var (value, _) = DateParsing.TryParseFlexibleDate(raw, preferDayFirst: true);
+        return value;
     }
 
     private static decimal ParseDecimal(string? raw, string element)
