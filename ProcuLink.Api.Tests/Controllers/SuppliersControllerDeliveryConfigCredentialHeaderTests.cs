@@ -22,7 +22,7 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// The HTTP face of the credential-header rule on <c>PUT /api/suppliers/{id}/delivery-config</c>: an
 /// operator who types a credential into the extra-headers map of <c>config_json</c> gets a readable
 /// 400 with the machine-readable code — not the 500 an unhandled exception would give, and not the
-/// bare <c>{ error: "&lt;message&gt; (Parameter '…')" }</c> the generic
+/// bare <c>{ error: "&lt;message&gt;" }</c> with no machine-readable code at all that the generic
 /// <see cref="ArgumentException"/> catch produces — and the response never echoes the token.
 ///
 /// <para>Harness shape mirrors <c>ConnectionRevisionTransportSecurityControllerTests</c> (mocked
@@ -102,8 +102,8 @@ public sealed class SuppliersControllerDeliveryConfigCredentialHeaderTests
 
     /// <summary>
     /// The refusal must reach the caller as a 400 with the machine-readable code — not the 500 an
-    /// unhandled exception would give, and not the bare `{ error: "<message> (Parameter …)" }` the
-    /// generic ArgumentException catch produces.
+    /// unhandled exception would give, and not the bare `{ error: "<message>" }` with no
+    /// machine-readable code at all that the generic ArgumentException catch produces.
     /// </summary>
     [Fact]
     public async Task UpsertDeliveryConfig_WithACredentialHeader_Returns400WithTheCode_AndNeverEchoesTheToken()

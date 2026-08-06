@@ -795,8 +795,9 @@ public class SuppliersController : ControllerBase
         {
             // A credential typed into config_json's extra-headers map is the caller's mistake, so it
             // is a 400 — and it carries the machine-readable code rather than falling through to the
-            // generic ArgumentException catch, whose body is the message plus ArgumentException's
-            // "(Parameter '…')" suffix. The message names the header and never its value.
+            // generic ArgumentException catch, which puts the human-readable message straight into
+            // the `error` field and carries no machine-readable code at all. The message names the
+            // header and never its value.
             return BadRequest(new { error = CredentialHeaderInConfigException.Code, message = ex.PolicyMessage });
         }
         catch (ArgumentException ex)

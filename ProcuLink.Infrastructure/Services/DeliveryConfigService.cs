@@ -276,10 +276,12 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
     /// <c>Authorization: Bearer …</c> typed there is a real credential stored in a cleartext column,
     /// returned by GET, and copied into every connection-revision snapshot.
     ///
-    /// <para>Deliberately the SAME primitive the revision write path runs
-    /// (<c>SupplierConnectionService.ValidateCredentialHeaders</c>): both reach
-    /// <see cref="DeliveryConfigTransport.FindCredentialHeaders"/>. Two copies of a security rule is
-    /// how the transport gap existed, and #157 exists to stop it happening twice.</para>
+    /// <para>The revision write path MUST reach this same primitive
+    /// (<see cref="DeliveryConfigTransport.FindCredentialHeaders"/>) rather than hand-rolling its own
+    /// header check — see <c>SupplierConnectionService.ValidateCredentialHeaders</c>, which does not
+    /// exist on this branch yet (a later task adds it; this paragraph is the requirement, not a claim
+    /// that it is already covered). Two copies of a security rule is how the transport gap existed in
+    /// the first place, and #157 exists to stop it happening twice.</para>
     /// </summary>
     private static void ValidateCredentialHeaders(string configJson, string? storedConfigJson)
     {

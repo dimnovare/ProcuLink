@@ -171,6 +171,8 @@ public class DeliveryConfigCredentialHeaderTests
         var saved = await SaveAsync(service, orgId, supplierId, WithToken);
 
         saved.Should().NotBeNull();
+        // The name promises the header survived the round-trip, not just that nothing threw.
+        saved.ConfigJson.Should().Contain("Authorization");
     }
 
     /// <summary>
@@ -226,8 +228,8 @@ public class DeliveryConfigCredentialHeaderTests
 
     /// <summary>
     /// The documented invariant is that the token is not in the column. Read it back and check,
-    /// rather than trusting the refusal — with a positive control in the same test so this cannot
-    /// pass by refusing everything.
+    /// rather than trusting the refusal — with a positive control saved BEFORE that read, so the
+    /// table is non-empty and the check is not vacuous in either direction.
     /// </summary>
     [Fact]
     public async Task ARefusedCredentialHeader_IsNowhereInThePersistedConfigJson()
@@ -240,16 +242,17 @@ public class DeliveryConfigCredentialHeaderTests
         var act = () => SaveAsync(service, orgId, supplierId, WithToken);
         await act.Should().ThrowAsync<CredentialHeaderInConfigException>();
 
-        // NotContain rather than OnlyContain(!predicate): the refused save left zero rows, and
-        // FluentAssertions' OnlyContain deliberately fails on an empty collection (no vacuous pass)
-        // — which would fail this assertion for a reason unrelated to the invariant under test.
-        // NotContain has no such guard and checks exactly the same thing.
-        (await db.SupplierDeliveryConfigs.AsNoTracking().ToListAsync())
-            .Should().NotContain(c => c.ConfigJson.Contains(Token));
-
-        // Positive control: the same endpoint really does persist an ordinary header, so the
-        // assertion above is not passing because nothing can be saved at all.
+        // Positive control, saved BEFORE the read below: the same endpoint really does persist an
+        // ordinary header, so the table this test reads back is non-empty. The refused save above
+        // left zero rows on its own, and FluentAssertions' OnlyContain deliberately fails on an
+        // empty collection (no vacuous pass) — which is why this uses NotContain instead, but an
+        // empty table would still make the assertion below check nothing. Saving a real row first
+        // means it is genuinely exercised in both directions: it would catch the token leaking into
+        // this (or any other) row, not merely fail to find rows to inspect.
         var saved = await SaveAsync(service, orgId, supplierId, Clean);
         saved.ConfigJson.Should().Contain("Content-Type");
+
+        (await db.SupplierDeliveryConfigs.AsNoTracking().ToListAsync())
+            .Should().NotContain(c => c.ConfigJson.Contains(Token));
     }
 }
