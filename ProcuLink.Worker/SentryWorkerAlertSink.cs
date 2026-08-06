@@ -12,11 +12,12 @@ namespace ProcuLink.Worker;
 /// </summary>
 public sealed class SentryWorkerAlertSink : IWorkerAlertSink
 {
-    public void Alert(string message)
+    public Task AlertAsync(string alertKey, string message, CancellationToken ct = default)
     {
         if (!SentrySdk.IsEnabled)
-            return;
+            return Task.CompletedTask;
 
-        SentrySdk.CaptureMessage(message, SentryLevel.Error);
+        SentrySdk.CaptureMessage($"[{alertKey}] {message}", SentryLevel.Error);
+        return Task.CompletedTask;
     }
 }

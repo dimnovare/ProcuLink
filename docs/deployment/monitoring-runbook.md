@@ -24,9 +24,14 @@ default no Slack message. **The alert is exactly as good as this repo's GitHub A
 notification settings**, which are account-level and are not stored in the repo, so this
 document cannot tell you whether they are currently on. Verify them (§4) — do not assume.
 
-There is a **second, independent** alert path for the Worker-down condition only — a
-recurring Hangfire job that reports to Sentry (§3). It has its own blind spot, described
-there. The two paths are complementary, not redundant, and neither is a pager.
+There is a **second, independent** alert path — a recurring Hangfire job that now evaluates
+**five** conditions and reports to Sentry **and to an email address you choose** (§3). It has
+its own blind spot, described there. The two paths are complementary, not redundant, and
+neither is a pager.
+
+**One thing to set.** The email destination is off until `Alerting__Email__To` is set on the
+Worker service. Until then §3's conditions fire into Sentry only — and into nothing at all if
+`Sentry__Dsn` is also unset. See §3.1.
 
 ---
 
@@ -123,30 +128,111 @@ production until someone redeploys it.
 
 ---
 
-## 3. The second alert path: `WorkerHealthAlertJob` → Sentry
+## 3. The second alert path: `WorkerHealthAlertJob` → Sentry + email
 
 Independent of GitHub Actions, the Worker runs `worker-health-alert` **every 5 minutes**
-(`ProcuLink.Worker/Worker.cs`). It calls `WorkerHealthAlertService`, which alerts when
-**either**:
+(`ProcuLink.Worker/Worker.cs`). It calls `WorkerHealthAlertService`, which evaluates five
+conditions. Each has its own trip rule and its own independent 30-minute cooldown
+(`WorkerHealthAlertOptions.MinAlertIntervalMinutes`), so a long-running incident on one
+condition can never swallow the first notification of another.
 
-- no healthy Worker is beating (same 60 s freshness rule as `/health/ready`), **or**
-- all-org dead-letter + failed-delivery orders ≥ **25**
-  (`WorkerHealthAlertOptions.DeadLetterThreshold`, configurable under `WorkerHealthAlert`).
+| Alert key | Fires when | Tunable |
+|---|---|---|
+| `worker_heartbeat_lost` | no Hangfire server has beaten within 60 s (same rule as `/health/ready`) | — |
+| `dead_letter_backlog` | all-org `delivery_dead_letter` + `delivery_failed` orders ≥ **25** | `DeadLetterThreshold` |
+| `delivery_failure_rate` | ≥ **10** concluded delivery attempts in the last **60 min** and ≥ **50 %** of them failed | `DeliveryFailureMinAttempts`, `DeliveryFailureWindowMinutes`, `DeliveryFailurePercent` |
+| `pull_channel_stalled` | an inbound pull channel with ≥ 1 org enabled has no observed success for ≥ **60 min** | `PullChannelStaleMinutes` |
+| `ai_token_cap_latched` | ≥ 1 org **in good standing** is at/over its monthly OpenAI token budget | — |
 
-While the condition persists it re-alerts at most every **30 minutes**
-(`MinAlertIntervalMinutes`) so a long outage does not spam.
+All tunables live under the `WorkerHealthAlert` configuration section. None of them appears in
+any `appsettings.json` — the defaults above are what runs.
 
-The sink is `SentryWorkerAlertSink`. **Two blind spots, both load-bearing:**
+### Where each condition's evidence comes from
 
-1. **No DSN → no alert, silently.** Sentry initialises *disabled* when `Sentry:Dsn` is empty,
-   and the sink becomes a no-op. The checked-in `ProcuLink.Worker/appsettings.Production.json`
-   ships `"Dsn": ""` — the live value, if any, is a Railway variable (`Sentry__Dsn`) on the
-   `aware-amazement` service. **Verify it in the Railway dashboard before counting Sentry as
-   an alert path.** If it is unset, GitHub Actions is the *only* thing watching production.
+- **Heartbeat and dead-letter** — `OpsHealthService.GetWorkerHealthSnapshotAsync`, unchanged.
+- **Delivery failure rate** — `delivery_attempts` rows in the trailing window, all orgs.
+  `dispatching` (still in flight) and `unconfirmed` (outcome lost to a crash) are **excluded**,
+  so a send that has not resolved is never counted as a failure.
+- **Pull channels** — the condition is **channel-level, not per-org**, on purpose. For IMAP the
+  evidence is `EmailPollingConfig.LastPolledAt` (a real success stamp written by
+  `EmailPollOrgJob` after a clean disconnect), taken as the **newest across all enabled orgs** —
+  so it answers "is anyone still successfully polling this channel", and one org with broken
+  credentials among several healthy ones will **not** trip it. **SFTP and S3 persist no
+  last-success timestamp at all**, so their signal is the `sftp-polling` / `s3-polling` recurring
+  dispatcher's own last execution from Hangfire storage. That proves the channel is still being
+  polled; it does **not** prove any org's SFTP/S3 credentials still work. Closing the per-org gap
+  needs a schema change (a `last_successful_poll_at` column on the ingress configs) and is not
+  done here.
+- **AI token cap** — the verdict is `IAiUsageTracker.IsAtOrOverLimitAsync`, i.e. the exact
+  predicate production checks before every OpenAI call, so the `Ai:OpenAI:MonthlyTokenLimitPerOrg`
+  override and the delinquency clamp are honoured automatically.
+
+### Deliberate silences (these are not bugs)
+
+Each of these exists because a page that fires when nothing is wrong trains the one person who
+reads it to ignore all of them.
+
+- A **high failure rate on a tiny sample** does not trip — 1 failure of 1 attempt is 100 % and
+  means nothing. Ten concluded attempts is the floor.
+- A pull channel **nobody has switched on** never trips, however stale it looks.
+- A pull channel that has **never** recorded a success never trips — a channel configured
+  minutes ago has simply not polled yet.
+- **Delinquent orgs** (`read_only` / `cancelled` / `trial_expired` / `past_due`) are excluded
+  from the AI-latch count: their budget is clamped on purpose by the billing rules, so counting
+  them would be a permanent page nobody can action.
+- An org that **spent no tokens this month** is not a latch candidate, which is what stops a
+  zero-budget org from satisfying `0 >= 0` forever.
+
+### 3.1 Sinks — and the one variable to set
+
+`CompositeWorkerAlertSink` fans every alert out to both transports, each inside its own
+try/catch, so a dead Sentry cannot suppress the email and vice versa. Both are safe no-ops when
+unconfigured, and neither can throw into the Worker.
+
+| Sink | Configured by | Unset behaviour |
+|---|---|---|
+| `SentryWorkerAlertSink` | `Sentry__Dsn` on the Worker service | SDK initialises disabled → silent no-op |
+| `EmailWorkerAlertSink` | `Alerting__Email__To` (+ the Postmark token the Worker already uses) | logs at Debug, sends nothing |
+
+**Email is the destination this repo now expects you to use**, because the Worker already
+registers `IEmailApiClient`/Postmark — no new transport, package or credential is introduced,
+only the recipient address. Optional: `Alerting__Email__SubjectPrefix` (default
+`[ProcuLink alert]`); subjects are `<prefix> <alert_key>`, so one mail filter catches all five.
+
+To turn it on, set on the Worker Railway service (`aware-amazement`):
+
+```
+Alerting__Email__To=you@example.com
+```
+
+If a recipient is set but the Postmark token is missing, the sink logs a **Warning** naming the
+problem rather than failing silently — that asymmetry is deliberate: silence is fine when you
+never asked for alerts, and a bug when you did.
+
+**Prove it, do not assume it.** There is a gated live-send test that performs a real Postmark
+send to a real inbox:
+
+```
+PROCULINK_LIVE_ENDPOINT_TESTS=1 \
+PROCULINK_LIVE_POSTMARK_TOKEN=<server token> \
+PROCULINK_LIVE_ALERT_EMAIL_TO=you@example.com \
+PROCULINK_LIVE_ALERT_EMAIL_FROM=alerts@<verified domain> \
+dotnet test ProcuLink.Infrastructure.Tests --filter FullyQualifiedName~LiveAlertEmailSendTests
+```
+
+It is statically skipped (with a printed reason) when those are absent — never a green no-op.
+
+### Blind spots, both still load-bearing
+
+1. **Unconfigured means unheard.** With neither `Sentry__Dsn` nor `Alerting__Email__To` set,
+   every one of the five conditions evaluates correctly and reaches nobody. The checked-in
+   `ProcuLink.Worker/appsettings.Production.json` ships `"Dsn": ""`. **Verify both variables in
+   the Railway dashboard before counting this as an alert path.** If neither is set, GitHub
+   Actions is the *only* thing watching production.
 2. **The job runs *on* the Worker.** If the Worker is dead, the job that would report the
-   Worker dead is also dead. This path detects a *backlog spike* well and a *hung* Worker
-   sometimes; it cannot detect a *stopped* one. That asymmetry is precisely why `uptime.yml`
-   probes from outside.
+   Worker dead is also dead. This path detects a *backlog spike*, a *failure-rate spike*, a
+   *stalled channel* and a *latched cap* well, and a *hung* Worker sometimes; it cannot detect a
+   *stopped* one. That asymmetry is precisely why `uptime.yml` probes from outside.
 
 Also on the Worker: `worker-heartbeat` every 2 minutes writes a `WORKER-HEARTBEAT` log line
 (and a Sentry breadcrumb) proving the recurring-job **dispatcher** is firing, not merely that
@@ -278,6 +364,47 @@ during drift (the Cloudflare Worker refuses unknown sources with 503, Postmark r
 requires a **hand redeploy** of the Cloudflare Worker. Merging the allowlist change ships
 nothing.
 
+### `delivery_failure_rate` — over half of recent sends failed
+
+The alert carries the ratio and the window. Half the traffic failing is almost never one bad
+supplier — look for a shared cause first.
+
+1. `/api/ops/health` and the delivery log: is the failure concentrated on **one supplier**, or
+   spread across all of them?
+2. Spread across all → suspect the Worker's outbound path: expired credentials, a DNS/egress
+   change, or `OutboundRequestGuard` refusing a newly-resolved address.
+3. One supplier → their endpoint or their credentials. The attempt rows carry the response code
+   and body verbatim; a 401/403 is a credential rotation, a 5xx is theirs.
+4. Nothing is lost while you triage — failed attempts retry on the existing backoff, and orders
+   that exhaust it land in the dead-letter queue, which has its own alert.
+
+### `pull_channel_stalled` — inbound POs are not being picked up
+
+The alert names each stalled channel and the age of its last observed success.
+
+1. **email** — the stamp is real, and the alert means the *newest* success across every enabled
+   org has aged out, so this is normally all orgs at once, not one. Check the `EmailPollOrgJob`
+   logs first, then per-org IMAP settings; a single org's wrong password or moved folder stalls
+   that org silently and does **not** raise this alert.
+2. **sftp / s3** — the signal is the dispatcher's own last execution, so a stall here means the
+   *recurring job* stopped, not that one org's credentials broke. Confirm with the Worker logs
+   (`WORKER-HEARTBEAT` present but no `sftp-polling` line) and check the Hangfire `polling`
+   queue for a wedged job.
+3. Nothing is dropped: the source files/messages stay where they are and are picked up on the
+   next successful poll. The dedupe ledgers (`imported_sftp_files`, `imported_s3_objects`,
+   `email_import_records`) prevent a re-import of anything already ingested.
+
+### `ai_token_cap_latched` — an org's AI budget is exhausted
+
+Not an outage. PDF extraction for that org silently falls back to the regex path, which is
+worse but not broken, and the counter clears when the calendar month rolls over.
+
+1. Decide whether the spend is legitimate. The per-org counter is `ai_usage_monthly`; the plan
+   ceilings are `PlanConstants.AiMonthlyTokenLimits`.
+2. To lift it now: move the org up a plan, or set `Ai:OpenAI:MonthlyTokenLimitPerOrg` — that
+   config key overrides **every** plan value and is the emergency lever, so put it back after.
+3. If the same org latches every month, its plan is wrong for its volume, not its budget.
+
 ---
 
 ## 6. What is *not* monitored
@@ -285,14 +412,19 @@ nothing.
 Stated plainly so nobody mistakes a green Actions tab for coverage:
 
 - **No paging.** Failures produce a notification at best (§4). Overnight, expect hours of lag.
-- **Detection lag is real.** Up to 10 min for uptime, up to 7 days for Postmark IP drift (a
-  deliberate trade — the recovery window is far longer than the lag).
-- **Per-org symptoms are invisible here.** One supplier's endpoint refusing deliveries, one
-  org's AI budget latched, one connection's mapping silently producing empty fields — none of
-  these move `workerHealthy`. They surface in `/api/ops/health` and the in-app exceptions,
-  which nothing polls externally.
+- **Detection lag is real.** Up to 10 min for uptime, up to 5 min for the §3 conditions, up to
+  7 days for Postmark IP drift (a deliberate trade — the recovery window is far longer than the
+  lag).
+- **Some per-org symptoms are still invisible.** One supplier's endpoint refusing deliveries
+  and one connection's mapping silently producing empty fields do not move `workerHealthy` and
+  are not among the §3 conditions. They surface in `/api/ops/health` and the in-app exceptions,
+  which nothing polls externally. (A latched AI budget *is* now covered — see §3.)
+- **A broken SFTP/S3 credential per org is not detected.** §3's pull-channel condition proves
+  the channel is still being polled, not that any given org's poll succeeds. Only IMAP has a
+  real per-org success stamp.
 - **The dead-letter threshold is all-org and absolute** (25). A small org drowning while a
-  large one is healthy will not trip it.
+  large one is healthy will not trip it. The same is true of the delivery failure rate: it is a
+  system-wide ratio, so one supplier failing inside a lot of healthy traffic will not trip it.
 - **No synthetic end-to-end transaction.** Nothing uploads a test order every N minutes and
   asserts it was delivered. `workerHealthy` proves the Worker is *beating*, not that the
   pipeline is *correct*.

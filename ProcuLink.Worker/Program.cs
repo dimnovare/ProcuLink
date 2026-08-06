@@ -5,6 +5,7 @@ using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
+using ProcuLink.Core.Services.Alerting;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Erp;
@@ -15,6 +16,7 @@ using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ai;
+using ProcuLink.Infrastructure.Services.Alerting;
 using ProcuLink.Infrastructure.Services.Dispatchers;
 using ProcuLink.Infrastructure.Services.Email;
 using ProcuLink.Infrastructure.Services.Erp;
@@ -226,10 +228,32 @@ builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 // The recurring jobs are scheduled in Worker.cs; these are their DI deps.
 // Alert sink is Sentry-backed and a safe no-op when Sentry DSN is unset.
 builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
-builder.Services.AddSingleton<IWorkerAlertSink, SentryWorkerAlertSink>();
-builder.Services.AddSingleton<WorkerHealthAlertState>(); // singleton: cross-run rate-limit state (no scoped DbContext captured)
+builder.Services.AddSingleton<WorkerHealthAlertState>(); // singleton: per-condition rate-limit state (no scoped DbContext captured)
 builder.Services.AddScoped<IWorkerHealthAlertService, WorkerHealthAlertService>();
 builder.Services.AddScoped<WorkerHealthAlertJob>();
+// WP-37 "page the founder" — the extra alert conditions and the destination they route to.
+// The probe supplies delivery failure rate, pull-channel freshness and the AI token-cap latch;
+// the recurring-job source is Hangfire's own scheduler record, which is why SFTP/S3 need no new
+// column. Sinks are SCOPED because the email sink resolves the scoped IEmailApiClient — a
+// singleton sink would capture it. The composite fans out and isolates each transport, so a dead
+// Sentry cannot suppress the email and vice versa. Both are safe no-ops when unconfigured.
+builder.Services.AddSingleton<IRecurringJobLastExecutionSource, HangfireRecurringJobLastExecutionSource>();
+builder.Services.AddScoped<IOperationalAlertProbe, OperationalAlertProbe>();
+builder.Services.AddSingleton(_ =>
+{
+    var opts = new AlertingEmailOptions();
+    builder.Configuration.GetSection(AlertingEmailOptions.SectionName).Bind(opts);
+    return opts;
+});
+builder.Services.AddScoped<SentryWorkerAlertSink>();
+builder.Services.AddScoped<EmailWorkerAlertSink>();
+builder.Services.AddScoped<IWorkerAlertSink>(sp => new CompositeWorkerAlertSink(
+    new IWorkerAlertSink[]
+    {
+        sp.GetRequiredService<SentryWorkerAlertSink>(),
+        sp.GetRequiredService<EmailWorkerAlertSink>(),
+    },
+    sp.GetRequiredService<ILogger<CompositeWorkerAlertSink>>()));
 // Liveness beat: proves the recurring-job dispatcher is actually firing (a log
 // line + Sentry breadcrumb every 2 min), complementing Hangfire's server heartbeat.
 builder.Services.AddScoped<WorkerHeartbeatJob>();

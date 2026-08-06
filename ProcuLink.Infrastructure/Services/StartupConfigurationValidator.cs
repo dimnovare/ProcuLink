@@ -60,6 +60,10 @@ public static class StartupConfigurationValidator
     {
         "Ai:OpenAI:ApiKey",
         "Sentry:Dsn",
+        // Operator alert destination (WP-37). Unset is a valid deploy — the email alert sink
+        // becomes a silent no-op — but it is worth a startup warning, because with this AND
+        // Sentry:Dsn both unset the five alert conditions are evaluated and reach nobody.
+        "Alerting:Email:To",
         // Yearly price variants are optional until annual billing is exposed in the
         // pricing UI. (The MONTHLY Distributor price is required — see ApiRequiredKeys
         // above — because Distributor is a sold, self-serve tier.)
