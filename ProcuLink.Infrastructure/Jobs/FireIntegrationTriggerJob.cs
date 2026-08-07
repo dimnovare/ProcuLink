@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Security;
 
@@ -130,14 +131,30 @@ public class FireIntegrationTriggerJob
         string? sigHeader = null;
         if (!string.IsNullOrEmpty(sub.EncryptedSecret))
         {
-            var secret      = _enc.Decrypt(sub.EncryptedSecret);
-            if (secret is not null)
+            string secret;
+            try
             {
-                var secretBytes = Encoding.UTF8.GetBytes(secret);
-                var dataBytes   = Encoding.UTF8.GetBytes(payloadJson);
-                using var hmac  = new HMACSHA256(secretBytes);
-                sigHeader = $"sha256={Convert.ToHexString(hmac.ComputeHash(dataBytes)).ToLowerInvariant()}";
+                secret = _enc.Decrypt(sub.EncryptedSecret, CredentialScope.ForSupplier(
+                    sub.OrganisationId, CredentialPurpose.OrgIntegrationWebhookSecret, subscriptionId));
             }
+            catch (CredentialUnbindableException ex)
+            {
+                // A subscription that HAS a secret is a subscriber who asked for signed deliveries.
+                // Sending unsigned because the secret would not decrypt is the failure this whole
+                // change exists to remove. Same treatment as the SSRF guard below: record the
+                // failure, apply the retry/deactivate flow, send nothing.
+                _logger.LogError(ex,
+                    "FireIntegrationTriggerJob: signing secret for sub {SubId} could not be decrypted ({Reason}) — not sending.",
+                    subscriptionId, ex.Reason);
+                await RecordFailureAsync(sub, isFinalAttempt, ct);
+                throw new InvalidOperationException(
+                    $"Webhook signing secret for subscription {subscriptionId} could not be decrypted.", ex);
+            }
+
+            var secretBytes = Encoding.UTF8.GetBytes(secret);
+            var dataBytes   = Encoding.UTF8.GetBytes(payloadJson);
+            using var hmac  = new HMACSHA256(secretBytes);
+            sigHeader = $"sha256={Convert.ToHexString(hmac.ComputeHash(dataBytes)).ToLowerInvariant()}";
         }
 
         // ── SSRF guard — must pass before any outbound request ────────────────
