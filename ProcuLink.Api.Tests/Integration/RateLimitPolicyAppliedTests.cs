@@ -25,6 +25,7 @@ namespace ProcuLink.Api.Tests.Integration;
 //  429 before any 401).
 // ════════════════════════════════════════════════════════════════════════════
 
+[Collection("postgres-container")]
 public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFactory>
 {
     private readonly HardeningTestFactory _factory;

@@ -43,6 +43,23 @@ public sealed class PostgresContainerFixture : IAsyncLifetime
     /// <summary>Points at <see cref="MaintenanceDatabase"/>; the <c>Database</c> is swapped per caller.</summary>
     private string? _hostConnectionString;
 
+    /// <summary>
+    /// Starts the container EAGERLY, here, and not on the first
+    /// <see cref="CreateDatabaseAsync"/> call.
+    ///
+    /// <para>Deferring it was tried on this branch and measured, because the collection now also
+    /// holds classes that never ask for a database and a lazy start would have spared them. It
+    /// cost 30–44 s of assembly wall over two runs against a ±4 s run-to-run baseline: the
+    /// ~15 s startup stops overlapping the rest of the assembly and lands inside the first
+    /// Postgres class instead, where it is serialised behind the collection's one lane.
+    /// <c>WidenedFieldBlastRadiusPostgresTests</c> went from 0.5 s in each of two pre-change runs
+    /// to 17.2 s and 21.5 s in the two after it.</para>
+    ///
+    /// <para>The trade accepted instead: a <c>--filter</c> run selecting only a host-booting
+    /// member (say <c>HealthEndpointTests</c>) starts a container it never uses. That is a
+    /// developer-loop cost measured in seconds, paid by whoever filters; the lazy version charged
+    /// the full-suite CI run, which is the one #168 was about.</para>
+    /// </summary>
     public async Task InitializeAsync()
     {
         // Docker unreachable: every test in the collection is statically skipped by
@@ -96,6 +113,7 @@ public sealed class PostgresContainerFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        // _pg stays null when Docker is unavailable — InitializeAsync returns before building it.
         if (_pg is not null)
             await _pg.DisposeAsync();
     }
