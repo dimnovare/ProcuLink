@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure.Services.Dispatchers;
@@ -252,6 +253,77 @@ public class HttpDeliveryDispatcherTests
         result.ErrorMessage.Should().Contain("OAuth token request failed: HTTP 401");
         deliveryCalled.Should().BeFalse();
     }
+
+    /// <summary>
+    /// A config that predates enforcement keeps delivering, so the only thing that can surface it
+    /// for a supplier nobody opens in the editor is a log line on every attempt.
+    ///
+    /// <para>It must name the HEADER and never its value. Logging the value would copy the
+    /// credential out of one cleartext store into another, which is the defect this guard exists to
+    /// stop.</para>
+    /// </summary>
+    [Fact]
+    public async Task Dispatch_WithACredentialHeader_LogsTheHeaderNameAndNeverItsValue()
+    {
+        const string token = "t0ps3cret";
+        var logger = new CapturingLogger();
+        var client = new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, "OK"));
+        var factory = new Moq.Mock<IHttpClientFactory>();
+        factory.Setup(f => f.CreateClient("delivery"))
+               .Returns(() => new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, "OK")));
+        var dispatcher = new TestableHttpDeliveryDispatcher(
+            factory.Object, MakePermissiveGuard(), client, logger);
+
+        var config = MakeConfig("https://example.com/orders");
+        config.ConfigJson = JsonSerializer.Serialize(new
+        {
+            url = "https://example.com/orders",
+            method = "POST",
+            headers = new Dictionary<string, string> { ["Authorization"] = $"Bearer {token}" },
+        });
+
+        var result = await dispatcher.DispatchAsync(
+            Encoding.UTF8.GetBytes("data"), "order.csv", "text/csv", config,
+            JsonSerializer.Serialize(new { type = "none" }), default);
+
+        result.Success.Should().BeTrue("delivery must continue — refusing mid-flight would strand orders");
+
+        var warnings = string.Join("\n", logger.Warnings);
+        // Pinned to a phrase only the credential warning emits. "Authorization" alone is NOT
+        // attributable: the other LogWarning site in this method — "Skipping invalid delivery header
+        // name '{HeaderName}'" — can print the same literal, so a test asserting only that would
+        // stay green if the credential warning were deleted and the header merely rejected instead.
+        warnings.Should().Contain("credential-bearing delivery header");
+        warnings.Should().Contain("Authorization");
+        warnings.Should().NotContain(token);
+    }
+
+    [Fact]
+    public async Task Dispatch_WithOrdinaryHeaders_LogsNoCredentialWarning()
+    {
+        var logger = new CapturingLogger();
+        var client = new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, "OK"));
+        var factory = new Moq.Mock<IHttpClientFactory>();
+        factory.Setup(f => f.CreateClient("delivery"))
+               .Returns(() => new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, "OK")));
+        var dispatcher = new TestableHttpDeliveryDispatcher(
+            factory.Object, MakePermissiveGuard(), client, logger);
+
+        var config = MakeConfig("https://example.com/orders");
+        config.ConfigJson = JsonSerializer.Serialize(new
+        {
+            url = "https://example.com/orders",
+            method = "POST",
+            headers = new Dictionary<string, string> { ["X-Correlation-Id"] = "abc" },
+        });
+
+        var result = await dispatcher.DispatchAsync(
+            Encoding.UTF8.GetBytes("data"), "order.csv", "text/csv", config,
+            JsonSerializer.Serialize(new { type = "none" }), default);
+
+        result.Success.Should().BeTrue();
+        logger.Warnings.Should().BeEmpty("an ordinary header must never produce a credential warning");
+    }
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -316,11 +388,32 @@ file sealed class TestableHttpDeliveryDispatcher : HttpDeliveryDispatcher
     private readonly HttpClient _sendClient;
 
     public TestableHttpDeliveryDispatcher(
-        IHttpClientFactory factory, OutboundRequestGuard guard, HttpClient sendClient)
-        : base(factory, guard, Microsoft.Extensions.Logging.Abstractions.NullLogger<HttpDeliveryDispatcher>.Instance)
+        IHttpClientFactory factory, OutboundRequestGuard guard, HttpClient sendClient,
+        ILogger<HttpDeliveryDispatcher>? logger = null)
+        : base(factory, guard, logger ?? NullLogger<HttpDeliveryDispatcher>.Instance)
     {
         _sendClient = sendClient;
     }
 
     internal override HttpClient CreateSendClient() => _sendClient;
+}
+
+/// <summary>
+/// Captures warning-and-above log lines so a test can assert on their text. Only
+/// <see cref="LogLevel.Warning"/> and above are kept — matching what <see cref="HttpDeliveryDispatcher"/>
+/// actually emits — so a Debug/Information line elsewhere can never masquerade as a credential warning.
+/// </summary>
+file sealed class CapturingLogger : ILogger<HttpDeliveryDispatcher>
+{
+    public List<string> Warnings { get; } = new();
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        if (logLevel >= LogLevel.Warning) Warnings.Add(formatter(state, exception));
+    }
 }

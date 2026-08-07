@@ -82,11 +82,12 @@ public sealed record DeliveryConfigResponse(
     // WP-33 — the per-supplier auto-send indicator. An operator must always be able to see which
     // suppliers are automatic, so this travels with every read of the delivery config.
     bool AutoTransform = false,
-    // Set when the SAVED endpoint is one the transport policy now refuses — a config written
-    // before TLS enforcement existed. Delivery continues (refusing mid-flight would turn a
-    // security weakness into an outage), so this is how the operator finds out. Null when fine.
-    // Never contains the URL: a stored userinfo URL is precisely the case where echoing it would
-    // copy the password into the editor.
+    // Set when the SAVED config carries a fault the write path now refuses: an endpoint the
+    // transport policy rejects (written before TLS enforcement existed), a credential sitting in the
+    // extra-headers map, or both. Delivery continues — refusing mid-flight would turn a security
+    // weakness into an outage — so this is how the operator finds out. Null when fine. Never
+    // contains the URL or a header value: those are precisely the strings that would copy the secret
+    // into the editor.
     string? InsecureTransportWarning = null);
 
 /// <summary>

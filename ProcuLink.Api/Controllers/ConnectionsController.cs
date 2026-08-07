@@ -180,6 +180,10 @@ public sealed class ConnectionsController : ControllerBase
         {
             return RejectedCredentialsRef(ex);
         }
+        catch (CredentialHeaderInConfigException ex)
+        {
+            return RejectedCredentialHeader(ex);
+        }
     }
 
     [HttpPut("{connectionId:guid}/revisions/{revisionId:guid}")]
@@ -204,6 +208,10 @@ public sealed class ConnectionsController : ControllerBase
         catch (ClientSuppliedCredentialsRefException ex)
         {
             return RejectedCredentialsRef(ex);
+        }
+        catch (CredentialHeaderInConfigException ex)
+        {
+            return RejectedCredentialHeader(ex);
         }
 
         return result switch
@@ -230,6 +238,14 @@ public sealed class ConnectionsController : ControllerBase
     /// </summary>
     private BadRequestObjectResult RejectedCredentialsRef(ClientSuppliedCredentialsRefException ex) =>
         BadRequest(new { error = ClientSuppliedCredentialsRefException.Code, message = ex.PolicyMessage });
+
+    /// <summary>
+    /// A credential written into <c>config_json</c>'s extra-headers map is the caller's mistake, so
+    /// it is a 400 rather than the 500 an unhandled exception would produce. Same body shape as
+    /// <see cref="InsecureEndpoint"/>; the message names the header and never its value.
+    /// </summary>
+    private BadRequestObjectResult RejectedCredentialHeader(CredentialHeaderInConfigException ex) =>
+        BadRequest(new { error = CredentialHeaderInConfigException.Code, message = ex.PolicyMessage });
 
     /// <summary>
     /// Launch batch 3 — runs the REAL test pack (replay over recent orders + conformance check;
@@ -379,9 +395,10 @@ public sealed class ConnectionsController : ControllerBase
             m.BuyerItemCode, m.SupplierItemCode, m.Confidence, m.Source)).ToList(),
         r.TestPassed, r.TestedAt, r.TestResultJson,
         // A revision written before enforcement reached this path keeps delivering, so the editor
-        // has to be able to show that its endpoint is one the policy now refuses. Same extraction
-        // and same policy as the save path and the dispatch-time log, so the three cannot disagree.
-        DeliveryConfigTransport.DescribeInsecureTransport(r.DeliveryProtocol, r.DeliveryConfigJson));
+        // has to be able to show BOTH faults it can now carry: an endpoint the transport policy
+        // refuses, and a credential sitting in the extra-headers map. Same composer as the
+        // delivery-config editor, so the two cannot report the same blob differently.
+        DeliveryConfigTransport.DescribeConfigWarnings(r.DeliveryProtocol, r.DeliveryConfigJson));
 
     private static ConnectionRevisionDraftInput ToInput(ConnectionRevisionBundleDto b) => new(
         b.InputMappingJson, b.OutputMappingJson, b.OutputFormat,
