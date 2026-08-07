@@ -36,6 +36,10 @@
   <ItemGroup>
     <ProjectReference Include="..\ProcuLink.Infrastructure\ProcuLink.Infrastructure.csproj" />
     <ProjectReference Include="..\ProcuLink.Core\ProcuLink.Core.csproj" />
+    <!-- Task 9 (credential-AAD-binding): FailClosedCredentialSiteTests.cs needs EmailPollOrgJob,
+         which lives in ProcuLink.Worker (not Infrastructure). Non-circular: Worker references
+         Core/Infrastructure/Transform/Api, none of which reference this test project. -->
+    <ProjectReference Include="..\ProcuLink.Worker\ProcuLink.Worker.csproj" />
   </ItemGroup>
 
 </Project>
