@@ -329,7 +329,7 @@ In `ProcuLink.Api/Services/Orders/OrderTransformService.cs`, immediately after `
     /// Commits a transform failure from OUTSIDE the claim: moves the order to
     /// <see cref="OrderStatusConstants.TransformFailed"/> only while it is still one of
     /// <see cref="OrderStatusMachine.ClaimableForTransformFrom"/>, and writes the audit trail ONLY
-    /// when that guarded update actually won the row. Returns whether it won.
+    /// when that guarded update actually won the row.
     ///
     /// <para><b>Why guarded, when <see cref="FailTransformAsync"/> is not.</b> Every caller of
     /// <c>FailTransformAsync</c> sits behind the claim and therefore owns the row. This one does
