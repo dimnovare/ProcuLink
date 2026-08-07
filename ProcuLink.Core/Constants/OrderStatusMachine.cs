@@ -623,9 +623,52 @@ public static class OrderStatusMachine
     /// <para>Everything PAST transform (<c>ready_to_deliver</c> and beyond) must stay out: claiming
     /// one would upload a duplicate artifact and re-enqueue delivery, double-sending the same PO. A
     /// mapping edit resets such an order to <c>ready</c> first (the MV-1 edges).</para>
+    ///
+    /// <para><b>This set answers "may I START a transform from here?" and nothing else.</b> The
+    /// separate question "may I OVERWRITE this with a failure?" is
+    /// <see cref="TransformFailableFrom"/>, which is deliberately narrower — see its documentation
+    /// for why the two must not be the same list.</para>
     /// </summary>
     public static readonly IReadOnlySet<string> ClaimableForTransformFrom =
         Set(Ready, Transforming, TransformFailed, RejectedBySupplier);
+
+    /// <summary>
+    /// The statuses a transform failure may OVERWRITE — the guard on
+    /// <c>OrderTransformService.FailTransformFromClaimableAsync</c>, which records a failure from
+    /// OUTSIDE the claim (the wrapper's catch can fire before the claim was ever taken, or after a
+    /// completed transform released it). Written TWICE at that call site — a relational
+    /// <c>ExecuteUpdateAsync</c> predicate and its EF-InMemory emulation — so it is named here for
+    /// the same reason the claim's set is: two hand-written copies of one rule are exactly how the
+    /// five delivery-claim lists drifted apart four times, each time silently.
+    ///
+    /// <para><b>Why this is NOT <see cref="ClaimableForTransformFrom"/>.</b> The two sets answer
+    /// different questions, and the tempting one-sentence rule ("if we could have claimed it, we may
+    /// fail it") conflates them. This set is <see cref="ClaimableForTransformFrom"/> minus exactly
+    /// <c>rejected_by_supplier</c>:</para>
+    /// <list type="bullet">
+    /// <item>STARTING a transform from <c>rejected_by_supplier</c> is the correction workflow — the
+    ///   supplier read the document and refused it, and producing a corrected one is the cure. That
+    ///   is precisely why the claim admits it.</item>
+    /// <item>OVERWRITING <c>rejected_by_supplier</c> with <c>transform_failed</c> destroys a
+    ///   HUMAN'S VERDICT and replaces it with a generic machine failure. That status is load-bearing
+    ///   rather than decorative: it is the one status no delivery claim set admits, and it feeds the
+    ///   supplier acceptance-rate figures the dashboard reports.</item>
+    /// </list>
+    ///
+    /// <para>The interleaving is reachable, not theoretical.
+    /// <c>OrderResolutionService.MarkRejectedAsync</c> carries no from-status guard beyond "not
+    /// finished", and <c>transforming → rejected_by_supplier</c> is a documented edge in the map
+    /// above. So an operator can record a supplier rejection while a transform is still in flight;
+    /// when that transform then throws, the failure write must find the row NOT its to fail and
+    /// leave the verdict standing.</para>
+    ///
+    /// <para><b>Invariant:</b> a subset of <see cref="ClaimableForTransformFrom"/> differing from it
+    /// by exactly <c>rejected_by_supplier</c>. Pinned by
+    /// <c>OrderStatusMachineTests.TransformFailableFrom_IsClaimableMinus_RejectedBySupplier</c>, so
+    /// a later edit to either set has to confront the delta instead of silently erasing it.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> TransformFailableFrom =
+        Set(Ready, Transforming, TransformFailed);
 
     /// <summary>
     /// <c>OrdersController.Transform</c>'s admission guard — the statuses the ENDPOINT claims, and
