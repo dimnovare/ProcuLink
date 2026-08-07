@@ -69,7 +69,7 @@ So the catch calls `_db.ChangeTracker.Clear()` before failing. That discards the
 
 **Interfaces:**
 - Consumes: `OrderStatusMachine.ClaimableForTransformFrom` (`IReadOnlySet<string>`, = `{ready, transforming, transform_failed, rejected_by_supplier}`) from `ProcuLink.Core.Constants`; `OrderServiceShared.BuildAuditEvent(Guid orgId, Guid entityId, string action, object payload)`; `_shared.SafeReconcileExceptionsAsync(Guid, Guid, CancellationToken)`.
-- Produces: `private async Task<bool> FailTransformFromClaimableAsync(Guid organisationId, Guid orderId, string error, CancellationToken ct)` — returns `true` when it won the row and wrote the audit trail, `false` when the order was not in a claimable status and was therefore left untouched. Task 2 calls this exact signature.
+- Produces: `private async Task FailTransformFromClaimableAsync(Guid organisationId, Guid orderId, string error, CancellationToken ct)`. Returns plain `Task`, matching its sibling `FailTransformAsync` — no caller branches on whether the guarded write won the row, and the refusal is already logged inside the helper. Task 2 calls this exact signature.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -348,7 +348,7 @@ In `ProcuLink.Api/Services/Orders/OrderTransformService.cs`, immediately after `
     /// same status (it is in the claimable set) and adds one more audit row, producing no artifact
     /// and no delivery either way.</para>
     /// </summary>
-    private async Task<bool> FailTransformFromClaimableAsync(
+    private async Task FailTransformFromClaimableAsync(
         Guid              organisationId,
         Guid              orderId,
         string            error,
@@ -398,7 +398,7 @@ In `ProcuLink.Api/Services/Orders/OrderTransformService.cs`, immediately after `
                 "Order {OrderId} (org {OrgId}) transform failed, but the order is no longer in a claimable "
               + "status — leaving it untouched and recording nothing. Error was: {Error}",
                 orderId, organisationId, error);
-            return false;
+            return;
         }
 
         _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "TransformFailed", new
@@ -415,7 +415,6 @@ In `ProcuLink.Api/Services/Orders/OrderTransformService.cs`, immediately after `
             orderId, organisationId, error);
 
         await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
-        return true;
     }
 ```
 
@@ -642,7 +641,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Modify: `ProcuLink.Api.Tests/Services/TransformStrandNeverSilentTests.cs` — add two tests
 
 **Interfaces:**
-- Consumes: `FailTransformFromClaimableAsync(Guid organisationId, Guid orderId, string error, CancellationToken ct)` returning `Task<bool>`, from Task 1.
+- Consumes: `FailTransformFromClaimableAsync(Guid organisationId, Guid orderId, string error, CancellationToken ct)` returning `Task`, from Task 1.
 - Produces: nothing new.
 
 - [ ] **Step 1: Write the failing tests**
@@ -890,4 +889,4 @@ Two additions beyond the spec, both recorded above as deltas: the R2-upload test
 
 **Placeholder scan.** No TBD, no "add error handling", no "similar to Task N". Every code step carries the literal code. Every mutation step names the exact edit and the exact test that must fail.
 
-**Type consistency.** `FailTransformFromClaimableAsync(Guid, Guid, string, CancellationToken) → Task<bool>` is defined in Task 1 Step 3 and called with that exact shape in Task 1 Step 4 and twice in Task 2 Step 3. `TransformCoreAsync` has the same four parameters as `TransformAsync`. `ICxmlCredentialResolver.ResolveAsync(Guid, Guid, CancellationToken) → Task<CxmlCredentialConfig?>` matches `ProcuLink.Core/Services/CxmlCredentialConfig.cs:60`. The `OrderService` constructor call in the test matches `ProcuLink.Api/Services/OrderService.cs:28-49`, using the named `cxmlResolver:` argument exactly as `CxmlCredentialTransformTests.cs:70` does.
+**Type consistency.** `FailTransformFromClaimableAsync(Guid, Guid, string, CancellationToken) → Task` is defined in Task 1 Step 3 and called with that exact shape in Task 1 Step 4 and twice in Task 2 Step 3. `TransformCoreAsync` has the same four parameters as `TransformAsync`. `ICxmlCredentialResolver.ResolveAsync(Guid, Guid, CancellationToken) → Task<CxmlCredentialConfig?>` matches `ProcuLink.Core/Services/CxmlCredentialConfig.cs:60`. The `OrderService` constructor call in the test matches `ProcuLink.Api/Services/OrderService.cs:28-49`, using the named `cxmlResolver:` argument exactly as `CxmlCredentialTransformTests.cs:70` does.
