@@ -104,7 +104,7 @@ public sealed class OrdersListPagingPostgresTests(PostgresContainerFixture postg
                     orgId, skip, take, null, null, null, null, null, CancellationToken.None);
 
                 Assert.True(result.IsSuccess);
-                var (items, totalCount) = result.Value;
+                var (items, totalCount, _) = result.Value;
                 Assert.Equal(total, totalCount);             // count is the whole set, every page
                 collected.AddRange(items.Select(i => i.Id));
             }

@@ -49,6 +49,15 @@ public class DashboardController : ControllerBase
     // ── GET /api/orders/summary ───────────────────────────────────────────────
     // Per-status order counts — used by sidebar badge, notifications bell,
     // and dashboard "urgent exceptions" KPI. SQL GROUP BY, no line data loaded.
+    //
+    // ByStatus/Total EXCLUDE practice orders, matching billing quota
+    // (StripeBillingService.CountOrdersAsync) and the onboarding milestones. But
+    // GET /api/orders RETURNS practice-order rows — the user is sent to one to
+    // rehearse the review flow — so reporting only the excluded total left the two
+    // numbers describing different populations with nothing saying so: a first-run
+    // org whose only order was the promoted sample read "Received 0" beside a table
+    // listing that order. SampleTotal is the missing label, grouped in the SAME
+    // round trip so it can never be computed over a different set of predicates.
 
     [HttpGet("/api/orders/summary")]
     [ProducesResponseType(typeof(OrdersSummaryDto), StatusCodes.Status200OK)]
@@ -58,15 +67,18 @@ public class DashboardController : ControllerBase
 
         var rows = await _db.PurchaseOrders
             .AsNoTracking()
-            .Where(o => o.OrgId == orgId && !o.IsSample)
-            .GroupBy(o => o.Status)
-            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .Where(o => o.OrgId == orgId)
+            .GroupBy(o => new { o.IsSample, o.Status })
+            .Select(g => new { g.Key.IsSample, Status = g.Key.Status, Count = g.Count() })
             .ToListAsync(ct);
 
-        var byStatus = rows.ToDictionary(r => r.Status, r => r.Count);
-        var total    = rows.Sum(r => r.Count);
+        var real = rows.Where(r => !r.IsSample).ToList();
 
-        return Ok(new OrdersSummaryDto(byStatus, total));
+        var byStatus    = real.ToDictionary(r => r.Status, r => r.Count);
+        var total       = real.Sum(r => r.Count);
+        var sampleTotal = rows.Where(r => r.IsSample).Sum(r => r.Count);
+
+        return Ok(new OrdersSummaryDto(byStatus, total, sampleTotal));
     }
 
     // ── GET /api/dashboard/topology ──────────────────────────────────────────

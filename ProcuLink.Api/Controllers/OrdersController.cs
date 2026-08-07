@@ -460,13 +460,18 @@ public sealed class OrdersController : ControllerBase
         if (!result.IsSuccess)
             return BadRequest(new { error = result.Error });
 
-        var (items, totalCount) = result.Value;
+        var (items, totalCount, sampleCount) = result.Value;
 
         // Report the window back as page/pageSize so the envelope is identical regardless of
         // which paging style the caller used. With a non-page-aligned offset, page is the
         // 1-based index of the window that starts at `skip`.
+        //
+        // sampleCount rides along because this list RETURNS onboarding practice orders while
+        // every count reported beside it (GET /api/orders/summary, /api/dashboard/stats,
+        // /api/onboarding/status, billing quota) excludes them. totalCount - sampleCount is the
+        // metered population, so the caller can reconcile the two instead of contradicting itself.
         var effectivePage = take > 0 ? (skip / take) + 1 : 1;
-        return Ok(new PaginatedResult<PurchaseOrderSummary>(items, totalCount, effectivePage, take));
+        return Ok(new PaginatedResult<PurchaseOrderSummary>(items, totalCount, effectivePage, take, sampleCount));
     }
 
     // ── GET /api/orders/{id} ──────────────────────────────────────────────────

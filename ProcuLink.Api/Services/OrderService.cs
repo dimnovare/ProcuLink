@@ -162,12 +162,12 @@ public sealed class OrderService : IOrderService, IStubOrderCreator, IClaimedOrd
         Guid organisationId, Guid orderId, CancellationToken ct)
         => _query.GetByIdAsync(organisationId, orderId, ct);
 
-    public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(
+    public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListPagedAsync(
         Guid organisationId, int page, int pageSize, string? status, Guid? supplierId,
         string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
         => _query.ListPagedAsync(organisationId, page, pageSize, status, supplierId, search, dateFrom, dateTo, ct);
 
-    public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(
+    public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListWindowAsync(
         Guid organisationId, int skip, int take, string? status, Guid? supplierId,
         string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
         => _query.ListWindowAsync(organisationId, skip, take, status, supplierId, search, dateFrom, dateTo, ct);

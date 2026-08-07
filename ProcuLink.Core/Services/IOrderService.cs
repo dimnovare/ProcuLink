@@ -143,7 +143,7 @@ public interface IOrderService
     /// <param name="dateFrom">Inclusive lower bound on CreatedAt (UTC).</param>
     /// <param name="dateTo">Inclusive upper bound on CreatedAt (UTC).</param>
     /// <param name="ct">Cancellation token.</param>
-    Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(
+    Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListPagedAsync(
         Guid       organisationId,
         int        page,
         int        pageSize,
@@ -173,7 +173,7 @@ public interface IOrderService
     /// <param name="dateFrom">Inclusive lower bound on CreatedAt (UTC).</param>
     /// <param name="dateTo">Inclusive upper bound on CreatedAt (UTC).</param>
     /// <param name="ct">Cancellation token.</param>
-    Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(
+    Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListWindowAsync(
         Guid       organisationId,
         int        skip,
         int        take,
