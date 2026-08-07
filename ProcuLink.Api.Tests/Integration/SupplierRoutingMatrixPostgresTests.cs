@@ -19,6 +19,7 @@ using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Detection;
@@ -552,7 +553,9 @@ public sealed class SupplierRoutingMatrixPostgresTests
             seed.Set<SftpIngressConfig>().Add(new SftpIngressConfig
             {
                 Id = Guid.NewGuid(), OrgId = orgId, Host = "sftp.example.com", Port = 22, Username = "u",
-                EncryptedPassword = Enc().Encrypt("pw"), RemoteDirectory = remoteDir,
+                EncryptedPassword = Enc().Encrypt(
+                    "pw", CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressSftpPassword)),
+                RemoteDirectory = remoteDir,
                 DefaultSupplierId = configuredSupplierId, IsEnabled = true,
                 CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             });
@@ -586,7 +589,9 @@ public sealed class SupplierRoutingMatrixPostgresTests
             {
                 Id = Guid.NewGuid(), OrgId = orgId, BucketName = bucket, KeyPrefix = string.Empty,
                 Region = "eu-west-1", ServiceUrl = null, AccessKeyId = "AKIA",
-                EncryptedSecretKey = Enc().Encrypt("secret"), DefaultSupplierId = configuredSupplierId,
+                EncryptedSecretKey = Enc().Encrypt(
+                    "secret", CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressS3SecretKey)),
+                DefaultSupplierId = configuredSupplierId,
                 IsEnabled = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             });
             await seed.SaveChangesAsync();

@@ -1,11 +1,18 @@
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
 
 public class DeliveryEncryptionServiceTests
 {
+    private static readonly Guid OrgA = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    private static readonly Guid SupX = Guid.Parse("33333333-3333-3333-3333-333333333333");
+
+    private static CredentialScope Scope =>
+        CredentialScope.ForSupplier(OrgA, CredentialPurpose.SupplierDeliveryCredentials, SupX);
+
     private static DeliveryEncryptionService CreateService()
     {
         // 32 zero bytes encoded as base64 — valid test key only
@@ -25,8 +32,8 @@ public class DeliveryEncryptionServiceTests
         var svc = CreateService();
         var plaintext = "{ \"type\": \"apikey\", \"header\": \"X-Api-Key\", \"value\": \"sk-test\" }";
 
-        var encrypted = svc.Encrypt(plaintext);
-        var decrypted = svc.Decrypt(encrypted);
+        var encrypted = svc.Encrypt(plaintext, Scope);
+        var decrypted = svc.Decrypt(encrypted, Scope);
 
         decrypted.Should().Be(plaintext);
     }
@@ -35,13 +42,13 @@ public class DeliveryEncryptionServiceTests
     public void Encrypt_ProducesDifferentOutputEachCall()
     {
         var svc = CreateService();
-        var c1 = svc.Encrypt("same");
-        var c2 = svc.Encrypt("same");
+        var c1 = svc.Encrypt("same", Scope);
+        var c2 = svc.Encrypt("same", Scope);
         c1.Should().NotBe(c2); // different random IV each time
     }
 
     [Fact]
-    public void Decrypt_WrongKey_ReturnsNull()
+    public void Decrypt_WrongKey_Throws()
     {
         var svc1 = CreateService();
         var key2 = Convert.ToBase64String(new byte[] {
@@ -53,28 +60,34 @@ public class DeliveryEncryptionServiceTests
             .Build();
         var svc2 = new DeliveryEncryptionService(config2);
 
-        var encrypted = svc1.Encrypt("secret");
-        var result = svc2.Decrypt(encrypted);
+        var encrypted = svc1.Encrypt("secret", Scope);
+        var act = () => svc2.Decrypt(encrypted, Scope);
 
-        result.Should().BeNull();
+        act.Should().Throw<CredentialUnbindableException>()
+            .Which.Reason.Should().Be(CredentialFailureReason.AuthenticationFailed);
     }
 
     [Fact]
-    public void Decrypt_Garbage_ReturnsNull()
+    public void Decrypt_Garbage_Throws()
     {
         var svc = CreateService();
-        svc.Decrypt("not-valid-base64!!!").Should().BeNull();
+        var act = () => svc.Decrypt("not-valid-base64!!!", Scope);
+        act.Should().Throw<CredentialUnbindableException>()
+            .Which.Reason.Should().Be(CredentialFailureReason.MalformedEnvelope);
     }
 
     [Fact]
-    public void Decrypt_TamperedPayload_ReturnsNull()
+    public void Decrypt_TamperedPayload_Throws()
     {
         var svc = CreateService();
-        var encrypted = svc.Encrypt("{\"type\":\"apikey\",\"value\":\"secret\"}");
+        var encrypted = svc.Encrypt("{\"type\":\"apikey\",\"value\":\"secret\"}", Scope);
         var bytes = Convert.FromBase64String(encrypted);
         bytes[^1] ^= 0x01;
 
-        svc.Decrypt(Convert.ToBase64String(bytes)).Should().BeNull();
+        var act = () => svc.Decrypt(Convert.ToBase64String(bytes), Scope);
+
+        act.Should().Throw<CredentialUnbindableException>()
+            .Which.Reason.Should().Be(CredentialFailureReason.AuthenticationFailed);
     }
 
     [Fact]
@@ -86,9 +99,11 @@ public class DeliveryEncryptionServiceTests
     }
 
     [Fact]
-    public void Decrypt_TooShort_ReturnsNull()
+    public void Decrypt_TooShort_Throws()
     {
         var svc = CreateService();
-        svc.Decrypt(Convert.ToBase64String(new byte[20])).Should().BeNull();
+        var act = () => svc.Decrypt(Convert.ToBase64String(new byte[20]), Scope);
+        act.Should().Throw<CredentialUnbindableException>()
+            .Which.Reason.Should().Be(CredentialFailureReason.MalformedEnvelope);
     }
 }

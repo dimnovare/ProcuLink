@@ -402,13 +402,16 @@ public class SettingsControllerPullIngressTests
     {
         var h = Build();
         // Seed a config owned by a DIFFERENT org directly.
+        var otherOrgId = Guid.NewGuid();
         h.Db.SftpIngressConfigs.Add(new SftpIngressConfig
         {
             Id = Guid.NewGuid(),
-            OrgId = Guid.NewGuid(),
+            OrgId = otherOrgId,
             Host = "other-org.example",
             Username = "other",
-            EncryptedPassword = h.Encryption.Encrypt("other-secret"),
+            EncryptedPassword = h.Encryption.Encrypt(
+                "other-secret",
+                CredentialScope.ForOrg(otherOrgId, CredentialPurpose.OrgIngressSftpPassword)),
             IsEnabled = true,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,

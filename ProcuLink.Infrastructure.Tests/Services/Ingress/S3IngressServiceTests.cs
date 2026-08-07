@@ -11,6 +11,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
@@ -485,7 +486,9 @@ public class S3IngressServiceTests
             Region             = Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_REGION") ?? "auto",
             ServiceUrl         = Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_ENDPOINT"),
             AccessKeyId        = Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_ACCESS_KEY") ?? "",
-            EncryptedSecretKey = encryption.Encrypt(Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_SECRET") ?? ""),
+            EncryptedSecretKey = encryption.Encrypt(
+                Environment.GetEnvironmentVariable("PROCULINK_LIVE_S3_SECRET") ?? "",
+                CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressS3SecretKey)),
             DefaultSupplierId  = supplierId,
             IsEnabled          = true,
             CreatedAt          = DateTime.UtcNow,
@@ -613,7 +616,8 @@ public class S3IngressServiceTests
             Region           = "eu-west-1",
             ServiceUrl       = serviceUrl,
             AccessKeyId      = "AKIAFAKE",
-            EncryptedSecretKey = encryption.Encrypt("fake-secret"),
+            EncryptedSecretKey = encryption.Encrypt(
+                "fake-secret", CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressS3SecretKey)),
             DefaultSupplierId = supplierId,
             IsEnabled        = isEnabled,
             CreatedAt        = DateTime.UtcNow,

@@ -100,16 +100,19 @@ public class CatalogPullServiceTests
             DeletedAt = deleteSupplier ? DateTime.UtcNow : null,
         });
 
+        var sourceId = Guid.NewGuid();
         var source = new SupplierCatalogSource
         {
-            Id = Guid.NewGuid(),
+            Id = sourceId,
             OrgId = orgId,
             SupplierId = supplierId,
             Protocol = protocol,
             Host = host,
             Port = protocol == "sftp" ? 22 : 21,
             Username = "catalog",
-            EncryptedPassword = password is null ? null : encryption.Encrypt(password),
+            EncryptedPassword = password is null ? null : encryption.Encrypt(
+                password,
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierCatalogPassword, sourceId)),
             RemotePath = "/exports/catalog.csv",
             FileFormat = "auto",
             IsEnabled = true,

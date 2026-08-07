@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Catalog;
@@ -83,16 +84,19 @@ public class CatalogPullServiceHttpTests
             CreatedAt = DateTime.UtcNow,
         });
 
+        var sourceId = Guid.NewGuid();
         var source = new SupplierCatalogSource
         {
-            Id = Guid.NewGuid(),
+            Id = sourceId,
             OrgId = orgId,
             SupplierId = supplierId,
             Protocol = "https",
             Url = url,
             HttpMethod = "GET",
             AuthMethod = authConfigJson is null ? "none" : "configured",
-            AuthConfigEncrypted = authConfigJson is null ? null : encryption.Encrypt(authConfigJson),
+            AuthConfigEncrypted = authConfigJson is null ? null : encryption.Encrypt(
+                authConfigJson,
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierCatalogAuthConfig, sourceId)),
             FileFormat = "auto",
             IsEnabled = true,
             CreatedAt = DateTime.UtcNow,

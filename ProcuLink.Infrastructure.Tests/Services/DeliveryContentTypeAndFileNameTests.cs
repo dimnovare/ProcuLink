@@ -7,6 +7,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Dispatchers;
 
@@ -381,7 +382,9 @@ public class DeliveryContentTypeAndFileNameTests
             Protocol = protocol,
             AutoDeliver = true,
             ConfigJson = configJson,
-            EncryptedCredentials = encryption.Encrypt("{\"type\":\"none\"}"),
+            EncryptedCredentials = encryption.Encrypt(
+                "{\"type\":\"none\"}",
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId)),
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };

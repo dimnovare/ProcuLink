@@ -7,6 +7,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Conformance;
@@ -278,6 +279,15 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         var v1Id         = Guid.NewGuid();
         var now          = DateTime.UtcNow;
 
+        // Both the published revision's CredentialsRef and the live config's EncryptedCredentials
+        // represent the SAME credential — in production CredentialsRef is a verbatim byte-copy of
+        // the live row at publish time, so this is encrypted ONCE and assigned to both below. A
+        // second Encrypt call would use a fresh random nonce and diverge byte-for-byte even though
+        // the plaintext and scope are identical.
+        var v1CredentialsCiphertext = encryption.Encrypt(
+            """{"type":"v1"}""",
+            CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId));
+
         await using var db = NewContext();
         db.Organisations.Add(new Organisation
         {
@@ -305,7 +315,7 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
             DeliveryProtocol    = "http",
             DeliveryConfigJson  = OldUrlJson,
             DeliveryAutoDeliver = true,
-            CredentialsRef      = encryption.Encrypt("""{"type":"v1"}"""),
+            CredentialsRef      = v1CredentialsCiphertext,
         });
         await db.SaveChangesAsync();
 
@@ -318,7 +328,7 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         {
             Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
             Protocol = "http", AutoDeliver = true, ConfigJson = OldUrlJson,
-            EncryptedCredentials = encryption.Encrypt("""{"type":"v1"}"""),
+            EncryptedCredentials = v1CredentialsCiphertext,
             OutputFormat = "csv", CreatedAt = now, UpdatedAt = now,
         });
         await db.SaveChangesAsync();
@@ -357,7 +367,9 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         var live = await db.SupplierDeliveryConfigs
             .SingleAsync(x => x.OrgId == seed.OrgId && x.SupplierId == seed.SupplierId);
         live.ConfigJson           = configJson;
-        live.EncryptedCredentials = encryption.Encrypt("""{"type":"v2"}""");
+        live.EncryptedCredentials = encryption.Encrypt(
+            """{"type":"v2"}""",
+            CredentialScope.ForSupplier(seed.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seed.SupplierId));
         live.UpdatedAt            = DateTime.UtcNow;
         await db.SaveChangesAsync();
     }
