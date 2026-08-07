@@ -1263,6 +1263,76 @@ public class OrderStatusMachineTests
     }
 
     /// <summary>
+    /// The supplier-level reset set is the per-order one MINUS exactly <c>delivered</c>, asserted in
+    /// both directions. The subtraction is the whole product decision behind
+    /// <see cref="OrderStatusMachine.SupplierMappingEditInvalidatesArtifactFrom"/> — a supplier-wide
+    /// save must not resurrect every order that supplier ever completed — and stating it as a
+    /// difference rather than as a second literal is what stops the two from drifting: widening
+    /// either set without deciding about the other fails here.
+    ///
+    /// <para>Totality comes free from this: the per-order set is partitioned against
+    /// <see cref="OrderStatusMachine.AllStatuses"/> by
+    /// <see cref="EveryStatus_IsClassifiedForTheMappingEditReset"/>, so a set pinned as that one minus
+    /// a named member is classified for every status too. A status added tomorrow still fails the
+    /// build there, once, rather than in two places that could disagree.</para>
+    /// </summary>
+    [Fact]
+    public void SupplierMappingEditReset_DiffersFromThePerOrderResetByExactlyDelivered()
+    {
+        OrderStatusMachine.SupplierMappingEditInvalidatesArtifactFrom
+            .Should().HaveCountGreaterThan(3,
+                "if this set ever reads empty the difference assertion below would pass over nothing")
+            .And.BeSubsetOf(OrderStatusMachine.MappingEditInvalidatesArtifactFrom,
+                "a supplier-level mapping save invalidates a STRICT subset of what a per-order edit " +
+                "does — it may never reset a status the per-order path decided was artifact-free");
+
+        OrderStatusMachine.MappingEditInvalidatesArtifactFrom
+            .Except(OrderStatusMachine.SupplierMappingEditInvalidatesArtifactFrom, StringComparer.Ordinal)
+            .Should().ContainSingle().Which.Should().Be(Delivered,
+                "delivered is the ONLY status the supplier-level save deliberately leaves alone: a " +
+                "per-order edit is a statement about that order's document, a supplier save is a " +
+                "statement about future uploads, and flipping completed orders back to ready is not " +
+                "something an operator fixing a typo asked for");
+    }
+
+    /// <summary>
+    /// The union invariant survives the subtraction, which is the evidence that removing
+    /// <c>delivered</c> costs no delivery path anything: <c>delivered</c> is in NO claim set — not
+    /// dispatch, not retry, not the ops requeue, and not <see cref="OrderStatusMachine.RedeliverableFrom"/>
+    /// (which admits <c>delivery_failed</c> / <c>ready_to_deliver</c> / <c>delivery_unconfirmed</c>) —
+    /// so nothing can ship a delivered order's stored artifact IN PLACE. If a future change ever makes
+    /// <c>delivered</c> claimable, this fails and the subtraction has to be re-argued.
+    /// </summary>
+    [Fact]
+    public void SupplierMappingEditReset_StillCoversEveryStatusADeliveryPathCanClaimOrAdmit()
+    {
+        var claimable = new[]
+            {
+                OrderStatusMachine.ClaimableForDispatchFrom,
+                OrderStatusMachine.ClaimableForAutomaticDispatchFrom,
+                OrderStatusMachine.ClaimableForRetryFrom,
+                OrderStatusMachine.RedeliverableFrom,
+                OrderStatusMachine.RetryableFrom,
+                OrderStatusMachine.RequeueableFrom,
+                OrderStatusMachine.HoldableForBillingFrom,
+            }
+            .SelectMany(s => s)
+            .ToHashSet(StringComparer.Ordinal);
+
+        claimable.Should().HaveCountGreaterThan(3,
+            "if the claim sets ever read empty this must fail rather than assert over nothing");
+
+        OrderStatusMachine.SupplierMappingEditInvalidatesArtifactFrom.Should().Contain(claimable,
+            "every status a delivery path can claim ships the STORED artifact without re-transforming, " +
+            "so neither dropping delivered nor inheriting the MappingEditRefusedFrom residuals may " +
+            "have dropped any of them with it");
+
+        OrderStatusMachine.SupplierMappingEditInvalidatesArtifactFrom.Should().Contain(DeliveryHeld,
+            "delivery_held is in no claim set and must still be reset — the same counter-example that " +
+            "makes deriving either of these sets from the claim sets unsafe");
+    }
+
+    /// <summary>
     /// The residual is EMPTY. MV-2 closed its only member by refusing the edit at the endpoint, so
     /// every status that can hold a shippable artifact now either refuses the edit or invalidates
     /// the artifact. Any member added here is a real stale-artifact path being accepted rather than
