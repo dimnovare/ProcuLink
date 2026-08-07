@@ -6,6 +6,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Security;
 
@@ -164,6 +165,46 @@ public class RevisionAuthorityDeliveryTests
         (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.Delivered);
         var attempt = await db.DeliveryAttempts.SingleAsync();
         attempt.Destination.Should().Be("https://revision.example/orders"); // audit shows the real destination
+    }
+
+    // ── Credential AAD binding: the detached snapshot's Id is Guid.Empty, never a real row id ──
+    //
+    // Every OTHER test in this file seeds credentialsRef via the legacy single-argument
+    // Encrypt(string), which writes a version-1 envelope carrying no associated data at all — it
+    // decrypts under ANY CredentialScope, including one keyed on the wrong id. That makes every
+    // test above BLIND to which id DeliveryService actually scopes on: DeliveryService.cs's
+    // detached-snapshot branch sets Id = Guid.Empty (this config was never added to the
+    // DbContext) and SupplierId = the order's real supplier — so scoping on config.Id instead of
+    // config.SupplierId would silently pass every test above while breaking every pinned-order
+    // delivery in production. This test seeds a BOUND (version-2) envelope, so only the correct
+    // scope (org, purpose, SUPPLIER id) can read it back.
+    [Fact]
+    public async Task FlagOn_Pinned_BoundCredentials_DecryptSucceeds_ScopedOnSupplierId_NotTheDetachedSnapshotsEmptyId()
+    {
+        await using var db = NewDb();
+        var encryption = CreateEncryption();
+        var seeded = await SeedOrderWithArtifactAsync(db);
+        await AddLiveConfigAsync(db, seeded, encryption, url: "https://live-edited.example/orders");
+
+        var boundCredentialsRef = encryption.Encrypt(
+            "{\"type\":\"revision\"}",
+            CredentialScope.ForSupplier(seeded.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seeded.SupplierId));
+        await SeedRevisionAsync(db, seeded,
+            protocol: "http",
+            configJson: "{\"url\":\"https://revision.example/orders\"}",
+            credentialsRef: boundCredentialsRef);
+
+        var dispatcher = new CapturingDispatcher(new DeliveryResult(true, null, 200));
+        var service = CreateService(db, dispatcher, encryption, flagEnabled: true);
+
+        var result = await service.DispatchArtifactAsync(seeded.OrgId, seeded.OrderId, seeded.ArtifactId, true, default);
+
+        result.Success.Should().BeTrue();
+        dispatcher.Calls.Should().Be(1);
+        // The revision's snapshotted, AAD-bound credentials arrived at the dispatcher intact —
+        // not the live config's, and not refused as unbindable.
+        dispatcher.LastCredentials.Should().Be("{\"type\":\"revision\"}");
+        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.Delivered);
     }
 
     [Fact]
