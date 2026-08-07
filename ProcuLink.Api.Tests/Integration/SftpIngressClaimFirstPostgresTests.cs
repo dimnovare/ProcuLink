@@ -6,6 +6,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
@@ -84,7 +85,9 @@ public sealed class SftpIngressClaimFirstPostgresTests(PostgresContainerFixture 
         db.Set<SftpIngressConfig>().Add(new SftpIngressConfig
         {
             Id = Guid.NewGuid(), OrgId = orgId, Host = "sftp.example.com", Port = 22, Username = "u",
-            EncryptedPassword = Enc().Encrypt("pw"), RemoteDirectory = remoteDir, DefaultSupplierId = supplierId,
+            EncryptedPassword = Enc().Encrypt(
+                "pw", CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressSftpPassword)),
+            RemoteDirectory = remoteDir, DefaultSupplierId = supplierId,
             IsEnabled = true, CreatedAt = now, UpdatedAt = now,
         });
         await db.SaveChangesAsync();

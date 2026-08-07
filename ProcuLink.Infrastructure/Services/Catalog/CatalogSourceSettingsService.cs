@@ -100,7 +100,10 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
             // Write-only vendor creds: null = keep, no-usable-fields = clear, value = re-encrypt.
             var vendorJson = BuildVendorConfigJson(protocol, request.VendorConfig);
             if (vendorJson is not null)
-                source.AuthConfigEncrypted = vendorJson.Length == 0 ? null : _encryption.Encrypt(vendorJson);
+                source.AuthConfigEncrypted = vendorJson.Length == 0
+                    ? null
+                    : _encryption.Encrypt(vendorJson, CredentialScope.ForSupplier(
+                        source.OrgId, CredentialPurpose.SupplierCatalogAuthConfig, source.Id));
         }
         else if (isHttp)
         {
@@ -121,7 +124,10 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
             var authJson = BuildAuthConfigJson(source.AuthMethod, request.AuthConfig);
             if (authJson is not null)
             {
-                source.AuthConfigEncrypted = authJson.Length == 0 ? null : _encryption.Encrypt(authJson);
+                source.AuthConfigEncrypted = authJson.Length == 0
+                    ? null
+                    : _encryption.Encrypt(authJson, CredentialScope.ForSupplier(
+                        source.OrgId, CredentialPurpose.SupplierCatalogAuthConfig, source.Id));
             }
             // 'none' carries no secret — drop any previously stored config.
             if (source.AuthMethod == "none")
@@ -160,7 +166,8 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
             {
                 source.EncryptedPassword = string.IsNullOrWhiteSpace(request.Password)
                     ? null
-                    : _encryption.Encrypt(request.Password);
+                    : _encryption.Encrypt(request.Password, CredentialScope.ForSupplier(
+                        source.OrgId, CredentialPurpose.SupplierCatalogPassword, source.Id));
             }
 
             // Host-key pin: null = keep what the last successful sync recorded (a client that has

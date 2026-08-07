@@ -7,6 +7,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Ingress;
@@ -106,12 +107,18 @@ public sealed class S3IngressService : IS3IngressService
             }
         }
 
-        var secretKey = _encryption.Decrypt(config.EncryptedSecretKey);
-        if (secretKey is null)
+        string secretKey;
+        try
         {
-            _logger.LogWarning(
-                "S3 ingress: cannot decrypt secret key for org {OrgId}. Skipping poll.",
-                organisationId);
+            secretKey = _encryption.Decrypt(
+                config.EncryptedSecretKey,
+                CredentialScope.ForOrg(organisationId, CredentialPurpose.OrgIngressS3SecretKey));
+        }
+        catch (CredentialUnbindableException ex)
+        {
+            _logger.LogWarning(ex,
+                "S3 ingress: cannot decrypt secret key for org {OrgId} ({Reason}). Skipping poll.",
+                organisationId, ex.Reason);
             return 0;
         }
 

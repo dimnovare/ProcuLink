@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 
@@ -63,12 +64,19 @@ public sealed class IntegrationController : ControllerBase
             return BadRequest(new { error = urlPolicy.ErrorCode, message = urlPolicy.Message });
 
         var orgId = _tenant.OrganisationId;
+
+        // Id first: it is part of the credential's associated data, so it must exist before the
+        // secret is encrypted.
+        var subscriptionId = Guid.NewGuid();
+
         string? encSecret = !string.IsNullOrWhiteSpace(req.Secret)
-            ? _enc.Encrypt(req.Secret) : null;
+            ? _enc.Encrypt(req.Secret, CredentialScope.ForSupplier(
+                orgId, CredentialPurpose.OrgIntegrationWebhookSecret, subscriptionId))
+            : null;
 
         var sub = new IntegrationSubscription
         {
-            Id              = Guid.NewGuid(),
+            Id              = subscriptionId,
             OrganisationId  = orgId,
             Platform        = req.Platform ?? "custom",
             EventType       = req.EventType,

@@ -8,6 +8,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Security;
@@ -52,7 +53,8 @@ public class EmailPollOrgJobSsrfTests
             Username: "imapuser",
             Folder: "INBOX",
             DefaultSupplierId: supplierId,
-            PasswordCiphertext: enc.Encrypt("hunter2"),
+            PasswordCiphertext: enc.Encrypt(
+                "hunter2", CredentialScope.ForOrg(orgId, CredentialPurpose.OrgEmailImapPassword)),
             LastPolledAt: null,
             UpdatedAt: null);
 

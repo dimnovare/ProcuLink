@@ -5,6 +5,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Output;
 
@@ -239,7 +240,33 @@ internal sealed class OrderTransformService
         // LIVE delivery-config row, the same source the controller used to pick the cXML format.
         CxmlCredentialConfig? cxmlCredentials = null;
         if (effectiveFormat == OutputFormat.CXml && _cxmlResolver is not null)
-            cxmlCredentials = await _cxmlResolver.ResolveAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
+        {
+            try
+            {
+                cxmlCredentials = await _cxmlResolver.ResolveAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
+            }
+            catch (CredentialUnbindableException ex)
+            {
+                // This call sits before the idempotency claim below and outside every other
+                // try/catch in this method (the first one starts ~300 lines down, at the
+                // acceptance gate). Left unguarded, a throw here unwinds straight through
+                // TransformOrderJob, Hangfire retries it 3x identically (the AAD mismatch is not
+                // transient), then StuckOrderDetectionService — which by design NEVER fails a
+                // 'transforming' strand — quietly resets the order to 'ready' with no error message.
+                // That is a silent strand, not a fix. Route it through the SAME terminal-failure
+                // helper every other unrecoverable transform failure in this method uses, so it is
+                // visible (ops health, the exception row, the order's errorMessage) and recoverable
+                // (transform_failed is re-claimable, same as every other terminal failure here).
+                _logger.LogError(ex,
+                    "Order {OrderId}: cXML shared secret for supplier {SupplierId} could not be decrypted ({Reason}) — failing the transform.",
+                    orderId, entity.SupplierId, ex.Reason);
+
+                const string error =
+                    "The supplier's cXML shared secret could not be decrypted, so the order was not transformed.";
+                await FailTransformAsync(entity, organisationId, orderId, error, ct);
+                return Result<TransformResponse>.Fail(error);
+            }
+        }
 
         // heart-piece-flex flexible mapping: SIX transform modes, in precedence order.
         //   1. TEMPLATE MODE — order carries a non-blank whole-document OutputTemplate → render the

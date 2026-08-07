@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Catalog;
@@ -174,7 +175,9 @@ public class CatalogPullServiceRealFeedTests
                 s.Protocol = "logicom";
                 s.Url = "https://example.invalid/redacted";
                 s.FileFormat = "auto";
-                s.AuthConfigEncrypted = encryption.Encrypt(vendorCreds);
+                s.AuthConfigEncrypted = encryption.Encrypt(
+                    vendorCreds,
+                    CredentialScope.ForSupplier(s.OrgId, CredentialPurpose.SupplierCatalogAuthConfig, s.Id));
                 s.ColumnMappingJson = """{"SKU":"code","PriceExclVAT":"price"}""";
             },
             vendorFetchers: new[] { fetcher });

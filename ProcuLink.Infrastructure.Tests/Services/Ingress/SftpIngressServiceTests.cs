@@ -468,7 +468,9 @@ public class SftpIngressServiceTests
             Host = host,
             Port = int.TryParse(Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_PORT"), out var p) ? p : 22,
             Username = Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_USER") ?? "",
-            EncryptedPassword = encryption.Encrypt(Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_PASS") ?? ""),
+            EncryptedPassword = encryption.Encrypt(
+                Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_PASS") ?? "",
+                CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressSftpPassword)),
             RemoteDirectory = Environment.GetEnvironmentVariable("PROCULINK_LIVE_SFTP_INGEST_DIR") ?? "/upload",
             DefaultSupplierId = supplierId,
             IsEnabled = true,
@@ -575,7 +577,8 @@ public class SftpIngressServiceTests
             Host = host,
             Port = 22,
             Username = "testuser",
-            EncryptedPassword = encryption.Encrypt("hunter2"),
+            EncryptedPassword = encryption.Encrypt(
+                "hunter2", CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressSftpPassword)),
             RemoteDirectory = "/incoming",
             DefaultSupplierId = supplierId,
             IsEnabled = isEnabled,

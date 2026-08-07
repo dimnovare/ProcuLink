@@ -15,6 +15,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Infrastructure.Repositories;
@@ -178,7 +179,9 @@ public class SuppliersControllerCatalogSourceTests
         result.Should().BeOfType<OkObjectResult>();
         var stored = await h.Db.SupplierCatalogSources.AsNoTracking().SingleAsync();
         stored.EncryptedPassword.Should().Be(originalCipher, "null means keep");
-        h.Encryption.Decrypt(stored.EncryptedPassword!).Should().Be("original");
+        h.Encryption.Decrypt(stored.EncryptedPassword!, CredentialScope.ForSupplier(
+            stored.OrgId, CredentialPurpose.SupplierCatalogPassword, stored.Id))
+            .Should().Be("original");
     }
 
     [Fact]
@@ -208,7 +211,9 @@ public class SuppliersControllerCatalogSourceTests
             h.Settings, h.Guard, CancellationToken.None);
 
         var stored = await h.Db.SupplierCatalogSources.AsNoTracking().SingleAsync();
-        h.Encryption.Decrypt(stored.EncryptedPassword!).Should().Be("second");
+        h.Encryption.Decrypt(stored.EncryptedPassword!, CredentialScope.ForSupplier(
+            stored.OrgId, CredentialPurpose.SupplierCatalogPassword, stored.Id))
+            .Should().Be("second");
     }
 
     [Fact]
@@ -501,7 +506,9 @@ public class SuppliersControllerCatalogSourceTests
         stored.AuthConfigEncrypted.Should().NotBeNullOrEmpty();
         // The secret is encrypted, not stored as plaintext.
         stored.AuthConfigEncrypted.Should().NotContain("tok-abc");
-        h.Encryption.Decrypt(stored.AuthConfigEncrypted!).Should().Contain("tok-abc");
+        h.Encryption.Decrypt(stored.AuthConfigEncrypted!, CredentialScope.ForSupplier(
+            stored.OrgId, CredentialPurpose.SupplierCatalogAuthConfig, stored.Id))
+            .Should().Contain("tok-abc");
     }
 
     [Fact]
@@ -544,7 +551,9 @@ public class SuppliersControllerCatalogSourceTests
 
         var stored = await h.Db.SupplierCatalogSources.AsNoTracking().SingleAsync();
         stored.AuthConfigEncrypted.Should().Be(originalCipher, "null AuthConfig means keep");
-        h.Encryption.Decrypt(stored.AuthConfigEncrypted!).Should().Contain("original-token");
+        h.Encryption.Decrypt(stored.AuthConfigEncrypted!, CredentialScope.ForSupplier(
+            stored.OrgId, CredentialPurpose.SupplierCatalogAuthConfig, stored.Id))
+            .Should().Contain("original-token");
     }
 
     [Fact]

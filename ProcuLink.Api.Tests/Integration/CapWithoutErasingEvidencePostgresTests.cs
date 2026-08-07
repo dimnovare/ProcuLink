@@ -10,6 +10,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using Xunit;
@@ -442,7 +443,9 @@ public sealed class CapWithoutErasingEvidencePostgresTests(PostgresContainerFixt
             Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
             Protocol = "http", AutoDeliver = true,
             ConfigJson = "{\"url\":\"https://supplier.example/orders\"}",
-            EncryptedCredentials = encryption.Encrypt("{\"type\":\"none\"}"),
+            EncryptedCredentials = encryption.Encrypt(
+                "{\"type\":\"none\"}",
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId)),
             CreatedAt = aged, UpdatedAt = aged,
         });
         await db.SaveChangesAsync();

@@ -9,6 +9,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
@@ -79,7 +80,8 @@ public sealed class S3IngressClaimFirstPostgresTests(PostgresContainerFixture po
         db.Set<S3IngressConfig>().Add(new S3IngressConfig
         {
             Id = Guid.NewGuid(), OrgId = orgId, BucketName = Bucket, KeyPrefix = string.Empty, Region = "eu-west-1",
-            ServiceUrl = null, AccessKeyId = "AKIA", EncryptedSecretKey = Enc().Encrypt("secret"),
+            ServiceUrl = null, AccessKeyId = "AKIA", EncryptedSecretKey = Enc().Encrypt(
+                "secret", CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressS3SecretKey)),
             DefaultSupplierId = supplierId, IsEnabled = true, CreatedAt = now, UpdatedAt = now,
         });
         await db.SaveChangesAsync();

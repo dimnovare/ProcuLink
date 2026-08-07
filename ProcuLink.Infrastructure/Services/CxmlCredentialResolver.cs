@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services;
 
@@ -49,9 +50,14 @@ public sealed class CxmlCredentialResolver : ICxmlCredentialResolver
             catch (JsonException) { ids = null; } // malformed config must never break the transform
         }
 
+        // No catch: a secret that will not decrypt must NOT degrade into "no secret". The tolerance
+        // at line 49 is for unparseable identity JSON, which is not a credential.
         var sharedSecret = string.IsNullOrWhiteSpace(row.EncryptedCxmlSharedSecret)
             ? null
-            : _encryption.Decrypt(row.EncryptedCxmlSharedSecret);
+            : _encryption.Decrypt(
+                row.EncryptedCxmlSharedSecret,
+                CredentialScope.ForSupplier(
+                    organisationId, CredentialPurpose.SupplierDeliveryCxmlSecret, supplierId));
 
         // Nothing usable → legacy identities (null is the "unconfigured" signal the transform expects).
         // A configured DTD counts as "configured" too: a supplier may set ONLY a DOCTYPE (no network

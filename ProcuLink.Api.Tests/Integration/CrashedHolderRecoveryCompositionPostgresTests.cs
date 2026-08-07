@@ -10,6 +10,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Infrastructure.Services;
@@ -245,7 +246,9 @@ public sealed class CrashedHolderRecoveryCompositionPostgresTests(PostgresContai
             Protocol             = "http",
             AutoDeliver          = true,
             ConfigJson           = "{\"url\":\"https://supplier.example/orders\"}",
-            EncryptedCredentials = CreateEncryption().Encrypt("{\"type\":\"none\"}"),
+            EncryptedCredentials = CreateEncryption().Encrypt(
+                "{\"type\":\"none\"}",
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId)),
             CreatedAt            = now,
             UpdatedAt            = now,
         });

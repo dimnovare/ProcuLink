@@ -245,6 +245,25 @@ public static class MigrationBootstrap
             SentrySdk.CaptureException(rebackfillEx);
         }
 
+        // ── Credential binding backfill ──────────────────────────────
+        // Re-encrypt pre-binding (version 1) credential blobs into the bound envelope, so
+        // they gain the tenant + purpose + scope binding. Idempotent — a version-2 blob is
+        // skipped — so it is safe on every boot. Best-effort: dual read means a blob left
+        // on version 1 still works, so a failure here must NOT keep the app from serving.
+        try
+        {
+            var rebind = scopedServices.GetRequiredService<ICredentialBindingBackfillService>();
+            var reboundCount = await rebind.RebindLegacyCredentialsAsync(CancellationToken.None);
+            migLogger.LogInformation(
+                "Credential binding backfill complete: {Count} credential(s) rebound.", reboundCount);
+        }
+        catch (Exception rebindEx)
+        {
+            migLogger.LogError(rebindEx,
+                "Credential binding backfill failed (app stays up; unbound credentials still decrypt).");
+            SentrySdk.CaptureException(rebindEx);
+        }
+
         // ── Group V4: idempotent rule-definition seed + link ─────────
         // Seed the global rule catalog as org-scoped RuleDefinitions and link existing
         // free-floating acceptance rules to a matching definition. ZERO evaluation change

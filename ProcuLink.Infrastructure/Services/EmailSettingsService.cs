@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Services.Email;
+using ProcuLink.Core.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services;
 
@@ -44,7 +45,9 @@ public sealed class EmailSettingsService : IEmailSettingsService
         {
             passwordCiphertext = string.IsNullOrWhiteSpace(request.Password)
                 ? null
-                : _encryption.Encrypt(request.Password);
+                : _encryption.Encrypt(
+                    request.Password,
+                    CredentialScope.ForOrg(orgId, CredentialPurpose.OrgEmailImapPassword));
         }
 
         var updated = new EmailPollingConfig(

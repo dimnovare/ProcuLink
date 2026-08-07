@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
@@ -59,7 +60,10 @@ public class DeliveryConfigServiceTests
         row.OrgId.Should().Be(orgId);
         row.SupplierId.Should().Be(supplierId);
         row.EncryptedCredentials.Should().NotBe(credentials);
-        encryption.Decrypt(row.EncryptedCredentials).Should().Be(credentials);
+        encryption.Decrypt(
+            row.EncryptedCredentials,
+            CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId))
+            .Should().Be(credentials);
     }
 
     [Fact]
@@ -359,7 +363,10 @@ public class DeliveryConfigServiceTests
         // The secret is encrypted at rest and never echoed back in the response.
         var row = await db.SupplierDeliveryConfigs.SingleAsync();
         row.EncryptedCxmlSharedSecret.Should().NotBeNullOrEmpty().And.NotBe("top-secret");
-        encryption.Decrypt(row.EncryptedCxmlSharedSecret!).Should().Be("top-secret");
+        encryption.Decrypt(
+            row.EncryptedCxmlSharedSecret!,
+            CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCxmlSecret, supplierId))
+            .Should().Be("top-secret");
         saved.ToString().Should().NotContain("top-secret");
         row.CxmlConfigJson.Should().Contain("REDACTED-NETWORK-ID").And.NotContain("top-secret");
     }
@@ -441,7 +448,10 @@ public class DeliveryConfigServiceTests
 
         var after = await db.SupplierDeliveryConfigs.SingleAsync();
         after.EncryptedCxmlSharedSecret.Should().Be(before, "a null secret must keep the saved one");
-        encryption.Decrypt(after.EncryptedCxmlSharedSecret!).Should().Be("first-secret");
+        encryption.Decrypt(
+            after.EncryptedCxmlSharedSecret!,
+            CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCxmlSecret, supplierId))
+            .Should().Be("first-secret");
         after.CxmlConfigJson.Should().Contain("REDACTED-NETWORK-ID"); // identities still updated
     }
 

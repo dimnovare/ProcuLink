@@ -551,6 +551,10 @@ builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfil
 builder.Services.AddScoped<ISupplierConnectionService, SupplierConnectionService>();
 builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
 builder.Services.AddScoped<IConnectionBackfillService, ConnectionBackfillService>();
+// Task 8 (credential AAD binding) — idempotent boot backfill that re-encrypts pre-binding
+// (version-1) credential blobs into the bound (version-2) envelope. See
+// ICredentialBindingBackfillService for the columns covered and the delivery-credentials exclusion.
+builder.Services.AddScoped<ICredentialBindingBackfillService, CredentialBindingBackfillService>();
 // Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by
 // parse-mapping/item-codes, validation, transform, and delivery. Flag-gated by
 // Connections:RevisionAuthority. The CODE default is OFF (live tables, byte-identical behaviour),

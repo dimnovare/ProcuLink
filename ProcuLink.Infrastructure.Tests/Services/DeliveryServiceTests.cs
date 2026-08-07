@@ -6,6 +6,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
@@ -314,7 +315,9 @@ public class DeliveryServiceTests
             Protocol = "http",
             AutoDeliver = autoDeliver,
             ConfigJson = "{\"url\":\"https://supplier.example/orders\"}",
-            EncryptedCredentials = encryption.Encrypt("{\"type\":\"none\"}"),
+            EncryptedCredentials = encryption.Encrypt(
+                "{\"type\":\"none\"}",
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId)),
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
