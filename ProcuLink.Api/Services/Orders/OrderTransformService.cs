@@ -90,7 +90,79 @@ internal sealed class OrderTransformService
 
     // ── TransformAsync ────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// The single server-side transform door. A thin guard around <see cref="TransformCoreAsync"/>,
+    /// which holds the whole of the previous method body verbatim.
+    ///
+    /// <para><b>Why the guard exists.</b> The body had no exception handling at all between its
+    /// first line and the acceptance gate's try, and none again between the generation handler and
+    /// the end of the method — so the entity load, the cXML credential resolve, the override read,
+    /// the atomic claim, the R2 upload and the final commit could each throw straight out of this
+    /// method. <c>TransformOrderJob</c> turns that into a Hangfire retry and then a permanently
+    /// failed job, leaving the order at <c>transforming</c>, where
+    /// <c>StuckOrderDetectionService</c> recovers it to <c>ready</c> and deliberately never marks it
+    /// failed. A real, repeatable error therefore produced no status, no message, no ops-health
+    /// count and no exception row: it looked like nothing had happened.</para>
+    ///
+    /// <para><b>Why the catch is broad rather than per-operation.</b> The defect is regional, not
+    /// per-call — the mapping-read helpers below are each already defended by their own catch-all
+    /// (see <c>TryReadPinnedOutputConfig</c>, whose comment names this exact hazard), and it is the
+    /// gaps BETWEEN those narrow fixes that stayed open. A per-operation catch protects only today's
+    /// statements; the next line added to the method reopens the hole.</para>
+    ///
+    /// <para><b>Why turning a transient fault terminal is acceptable here.</b> Because of what
+    /// <c>transform_failed</c> costs, which is very little: it is in
+    /// <see cref="OrderStatusMachine.ClaimableForTransformFrom"/>, <c>TransformOrderJob</c> carries
+    /// <c>AutomaticRetry(3, [10, 60, 300])</c>, and the endpoint's <c>TransformableFrom</c> admits
+    /// it. So a DB blip becomes a VISIBLE transform_failed, a retry ten seconds later, a successful
+    /// re-claim, and a completed transform. This is the same trade the acceptance gate's catch
+    /// already makes and argues, twenty lines into the core.</para>
+    ///
+    /// <para>Cancellation is rethrown untouched: a cancelled request is not a failure.</para>
+    /// </summary>
     public async Task<Result<TransformResponse>> TransformAsync(
+        Guid organisationId,
+        Guid orderId,
+        OutputFormat format,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await TransformCoreAsync(organisationId, orderId, format, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Order {OrderId} (org {OrgId}): the transform failed unexpectedly. Recording it as transform_failed "
+              + "rather than letting it unwind into Hangfire and strand the order in 'transforming'.",
+                orderId, organisationId);
+
+            // Discard whatever the failed attempt left on the change tracker before writing the
+            // failure. A throw from the final SaveChanges leaves an Added OutboundArtifact and a
+            // modified Status = ready_to_deliver pending; without this, the helper's own SaveChanges
+            // would re-attempt that entire failed commit and write ready_to_deliver back over the
+            // transform_failed we are about to record. A Postgres SaveChanges is all-or-nothing, so a
+            // failed one committed nothing worth keeping.
+            _db.ChangeTracker.Clear();
+
+            // Plain language, and deliberately NOT ex.Message: this string becomes the order's
+            // errorMessage (OrdersController reads the audit payload's `error` key), and
+            // "Npgsql.PostgresException: 57P01" is not a sentence an operator can act on. The
+            // exception itself is in the log line above.
+            const string reason =
+                "Something went wrong preparing this order to send, so it wasn't sent. "
+              + "Try sending it again in a moment.";
+
+            await FailTransformFromClaimableAsync(organisationId, orderId, reason, ct);
+            return Result<TransformResponse>.Fail(reason);
+        }
+    }
+
+    private async Task<Result<TransformResponse>> TransformCoreAsync(
         Guid organisationId,
         Guid orderId,
         OutputFormat format,
@@ -798,6 +870,98 @@ internal sealed class OrderTransformService
         _logger.LogError(
             "Order {OrderId} (org {OrgId}) TRANSFORM FAILED terminally: {Error}. The order is marked transform_failed " +
             "(visible in ops health + exceptions) and needs a template/mapping fix before it can be re-transformed.",
+            orderId, organisationId, error);
+
+        await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
+    }
+
+    /// <summary>
+    /// Commits a transform failure from OUTSIDE the claim: moves the order to
+    /// <see cref="OrderStatusConstants.TransformFailed"/> only while it is still one of
+    /// <see cref="OrderStatusMachine.ClaimableForTransformFrom"/>, and writes the audit trail ONLY
+    /// when that guarded update actually won the row.
+    ///
+    /// <para><b>Why guarded, when <see cref="FailTransformAsync"/> is not.</b> Every caller of
+    /// <c>FailTransformAsync</c> sits behind the claim and therefore owns the row. This one does
+    /// not: it runs from the wrapper's catch, which can fire before the claim has been taken (or
+    /// after it has been released by a completed transform). An unguarded write there would land on
+    /// top of whatever else moved the order in the meantime — a <c>billing_held</c> park, an MV-1
+    /// <c>pending_review</c> reset, or a <c>ready_to_deliver</c> transform that had already
+    /// succeeded. The guard set is the CLAIM's own set, which makes the rule one sentence: if we
+    /// could have claimed it, we may fail it.</para>
+    ///
+    /// <para>The set comes from <see cref="OrderStatusMachine"/> rather than a literal for the same
+    /// reason the claim's does — this is the second hand-written copy of a status list, which is
+    /// exactly how the five delivery-claim lists drifted apart four times.</para>
+    ///
+    /// <para>Idempotent: a second pass over an order already in <c>transform_failed</c> re-writes the
+    /// same status (it is in the claimable set) and adds one more audit row, producing no artifact
+    /// and no delivery either way.</para>
+    /// </summary>
+    private async Task FailTransformFromClaimableAsync(
+        Guid              organisationId,
+        Guid              orderId,
+        string            error,
+        CancellationToken ct)
+    {
+        var failedAt = DateTime.UtcNow;
+
+        // Parameterised as `= ANY(@p)` rather than inlined, for the same reason the claim is: it
+        // keeps the SQL text (and therefore the Postgres plan) stable whatever the set contains.
+        var claimableStatuses = OrderStatusMachine.ClaimableForTransformFrom.ToArray();
+
+        int failed;
+        if (_db.Database.IsRelational())
+        {
+            failed = await _db.PurchaseOrders
+                .Where(x => x.Id == orderId && x.OrgId == organisationId
+                         && claimableStatuses.Contains(x.Status))
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(o => o.Status,    OrderStatusConstants.TransformFailed)
+                    .SetProperty(o => o.UpdatedAt, failedAt), ct);
+        }
+        else
+        {
+            // EF InMemory cannot translate ExecuteUpdateAsync — emulate the same guarded transition
+            // through the change tracker (tests are single-threaded there), mirroring the claim.
+            var row = await _db.PurchaseOrders
+                .Where(x => x.Id == orderId && x.OrgId == organisationId)
+                .FirstOrDefaultAsync(ct);
+
+            failed = row is not null
+                  && OrderStatusMachine.ClaimableForTransformFrom.Contains(row.Status) ? 1 : 0;
+
+            if (failed == 1)
+            {
+                row!.Status    = OrderStatusConstants.TransformFailed;
+                row.UpdatedAt  = failedAt;
+            }
+        }
+
+        if (failed == 0)
+        {
+            // Not ours to fail. Something else already moved the order — most often a transform that
+            // SUCCEEDED (ready_to_deliver and beyond), which must never be overwritten with a
+            // failure. Logged rather than silent, because "we could not record this" is itself worth
+            // seeing.
+            _logger.LogWarning(
+                "Order {OrderId} (org {OrgId}) transform failed, but the order is no longer in a claimable "
+              + "status — leaving it untouched and recording nothing. Error was: {Error}",
+                orderId, organisationId, error);
+            return;
+        }
+
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "TransformFailed", new
+        {
+            error,
+            stage = "transform",
+        }));
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogError(
+            "Order {OrderId} (org {OrgId}) TRANSFORM FAILED: {Error}. The order is marked transform_failed "
+          + "(visible in ops health + exceptions) and stays re-claimable, so a retry re-drives it.",
             orderId, organisationId, error);
 
         await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
