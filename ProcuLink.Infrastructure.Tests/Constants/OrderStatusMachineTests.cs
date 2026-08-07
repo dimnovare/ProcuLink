@@ -1049,6 +1049,45 @@ public class OrderStatusMachineTests
                 "widening or narrowing this delta changes whether a double-click can race a job");
 
     /// <summary>
+    /// The OTHER transform delta, and the one that costs an operator their finding if it collapses:
+    /// "may I START a transform from here?" (<see cref="OrderStatusMachine.ClaimableForTransformFrom"/>)
+    /// versus "may I OVERWRITE this with a failure?"
+    /// (<see cref="OrderStatusMachine.TransformFailableFrom"/>).
+    ///
+    /// <para><c>OrderTransformService.FailTransformFromClaimableAsync</c> first shipped guarding on
+    /// the CLAIM's set, under the one-sentence rule "if we could have claimed it, we may fail it".
+    /// That rule is wrong by exactly one status. <c>rejected_by_supplier</c> is a post-success
+    /// OPERATOR VERDICT, and it is reachable mid-transform:
+    /// <c>OrderResolutionService.MarkRejectedAsync</c> carries no from-status guard, and
+    /// <c>transforming → rejected_by_supplier</c> is a documented edge in the map. So an operator
+    /// records the supplier's refusal while a transform is in flight, that transform throws, and its
+    /// catch stamps <c>transform_failed</c> over the verdict — replacing "the supplier refused this
+    /// document" with "something went wrong". The status is load-bearing rather than decorative: it
+    /// is the one status no delivery claim set admits, and it feeds the supplier acceptance-rate
+    /// figures.</para>
+    ///
+    /// <para>Re-TRANSFORMING a rejected order stays correct — that is how a corrected document is
+    /// produced — so the delta runs in one direction only, and both directions are asserted here. A
+    /// future edit to either set has to confront this test rather than silently erase the
+    /// distinction.</para>
+    /// </summary>
+    [Fact]
+    public void TransformFailableFrom_IsClaimableMinus_RejectedBySupplier()
+    {
+        OrderStatusMachine.ClaimableForTransformFrom
+            .Except(OrderStatusMachine.TransformFailableFrom, StringComparer.Ordinal)
+            .Should().BeEquivalentTo(new[] { RejectedBySupplier },
+                "starting a transform from a supplier rejection is the correction workflow, but " +
+                "overwriting that rejection with transform_failed destroys a human's finding");
+
+        OrderStatusMachine.TransformFailableFrom
+            .Except(OrderStatusMachine.ClaimableForTransformFrom, StringComparer.Ordinal)
+            .Should().BeEmpty(
+                "a status a transform failure may overwrite but a transform could never have " +
+                "claimed is a status the failure write would stamp without ever owning the row");
+    }
+
+    /// <summary>
     /// Completeness: every <c>OrderStatusConstants</c> string is a node in the machine, so a future
     /// status cannot be silently absent from transition reasoning.
     ///
