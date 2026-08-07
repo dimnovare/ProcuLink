@@ -1,6 +1,5 @@
 using Amazon.S3;
 using FluentAssertions;
-using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -16,7 +15,6 @@ using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
 using ProcuLink.Infrastructure.Tests.TestDoubles;
-using ProcuLink.Worker.Jobs;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
 
@@ -28,27 +26,39 @@ namespace ProcuLink.Infrastructure.Tests.Services;
 /// Fail(msg)</c> into <c>try</c>/<c>catch (CredentialUnbindableException)</c>, because
 /// <see cref="DeliveryEncryptionService.Decrypt"/> now THROWS instead of returning null on a
 /// binding mismatch. Two things can silently regress in that conversion: the message can change, or
-/// the catch can be dropped so the exception escapes. The second is the dangerous one at the three
+/// the catch can be dropped so the exception escapes. The second is the dangerous one for the two
 /// pollers below — an escaping <see cref="CredentialUnbindableException"/> fails the WHOLE Hangfire
 /// polling job, so one organisation with a bad credential stops every OTHER organisation from being
 /// polled, instead of just skipping the one org.</para>
 ///
-/// <para><b>Why this is cheap to test.</b> At all three pollers the decrypt happens BEFORE the SSRF
-/// guard and before any network connect — <c>SftpIngressService.cs</c>, <c>S3IngressService.cs</c>,
-/// <c>EmailPollOrgJob.cs</c> (verified current as of this task; see the "must never connect"
-/// assertions below, which double as a guard against that ordering silently drifting). A credential
-/// that will not decrypt therefore short-circuits with NO network access at all, so none of these
-/// tests need an SSH or IMAP stub.</para>
+/// <para><b>Why this is cheap to test.</b> At both pollers here the decrypt happens BEFORE the SSRF
+/// guard and before any network connect — <c>SftpIngressService.cs</c>, <c>S3IngressService.cs</c>
+/// (verified current as of this task; see the "must never connect" assertions below, which double as
+/// a guard against that ordering silently drifting). A credential that will not decrypt therefore
+/// short-circuits with NO network access at all, so neither test here needs an SSH stub.</para>
+///
+/// <para><b>Where the third poller's test lives.</b> The same contract holds for the IMAP email
+/// poller, but that test is NOT in this file: <c>EmailPollOrgJob</c> is defined in
+/// <c>ProcuLink.Worker</c>, and this project (<c>ProcuLink.Infrastructure.Tests</c>) is deliberately
+/// scoped to reference only <c>ProcuLink.Infrastructure</c> + <c>ProcuLink.Core</c> — that narrow
+/// dependency graph is WHY <c>dotnet test ProcuLink.Infrastructure.Tests</c> can be the fast, scoped
+/// check nearly every task brief in this plan relies on. Pulling in <c>ProcuLink.Worker</c> would
+/// transitively pull in <c>ProcuLink.Api</c> and the Worker's own package set, compiling the entire
+/// application graph just to run this one project's tests. <c>ProcuLink.Api.Tests</c> already carries
+/// Api + Infrastructure + Core + Worker and is the designated home for cross-layer tests — see
+/// <c>ProcuLink.Api.Tests/Jobs/EmailPollOrgJobFailClosedCredentialTests.cs</c>, right next to
+/// <c>EmailPollOrgJobSsrfTests.cs</c>, which tests the same job for the same reason.</para>
 ///
 /// <para><b>Known adjacent issue (NOT fixed here, logged for the final review):</b>
 /// <see cref="CredentialScope.ToAssociatedData"/> throws a plain <see cref="ArgumentException"/>
 /// (not <see cref="CredentialUnbindableException"/>) when <c>OrgId</c> is <c>Guid.Empty</c> or the
-/// purpose string is malformed. None of the catches below cover that. It is unreachable at these
-/// four sites because the org id always comes from a real DB row and the purpose is always a
-/// compile-time <see cref="CredentialPurpose"/> constant — but it is a real gap in the fail-closed
-/// contract if a future call site ever passes a caller-supplied scope. Do not widen any catch here
-/// to <c>catch (Exception)</c> to "cover" it — that would defeat the point of this test file, which
-/// is proving each site fails closed on the SPECIFIC exception its production code actually catches.
+/// purpose string is malformed. None of the catches this task covers (here or in the companion
+/// Api.Tests file) handle that. It is unreachable at any of these sites because the org id always
+/// comes from a real DB row and the purpose is always a compile-time
+/// <see cref="CredentialPurpose"/> constant — but it is a real gap in the fail-closed contract if a
+/// future call site ever passes a caller-supplied scope. Do not widen any catch here to
+/// <c>catch (Exception)</c> to "cover" it — that would defeat the point of this test file, which is
+/// proving each site fails closed on the SPECIFIC exception its production code actually catches.
 /// </para>
 /// </summary>
 public class FailClosedCredentialSiteTests
@@ -159,71 +169,7 @@ public class FailClosedCredentialSiteTests
         (await service.PollAsync(orgA, default)).Should().Be(0);
     }
 
-    // ── 3. IMAP email poller ──────────────────────────────────────────────────
-
-    [Fact]
-    public async Task EmailPoll_MisboundPassword_ReturnsWithoutThrowing()
-    {
-        await using var db = CreateDb();
-        var orgA = Guid.NewGuid();
-        var orgB = Guid.NewGuid();
-        var encryption = MakeEncryption();
-
-        var cfg = new EmailPollingConfig(
-            Enabled: true,
-            Host: "imap.example.com",
-            Port: 993,
-            UseSsl: true,
-            Username: "imapuser",
-            Folder: "INBOX",
-            DefaultSupplierId: null,
-            // Bound to ORG B — org A's own scope can never decrypt this.
-            PasswordCiphertext: encryption.Encrypt(
-                "hunter2", CredentialScope.ForOrg(orgB, CredentialPurpose.OrgEmailImapPassword)),
-            LastPolledAt: null,
-            UpdatedAt: null);
-
-        db.Organisations.Add(new Organisation
-        {
-            Id = orgA,
-            ClerkOrgId = "fail-closed-email-org",
-            Name = "Fail Closed Email Org",
-            Slug = "fail-closed-email-org",
-            EmailConfigJson = cfg.ToJson(),
-        });
-        await db.SaveChangesAsync();
-
-        var orders = new Mock<IStubOrderCreator>(MockBehavior.Strict);
-
-        var billing = new Mock<IBillingService>();
-        billing.Setup(b => b.HasFeatureAsync(orgA, BillingFeature.EmailIngestion, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-
-        // Strict — MarkPolledAsync must NOT be called (it runs only after a real poll completes).
-        var emailSettings = new Mock<IEmailSettingsService>(MockBehavior.Strict);
-
-        // Strict — no parse job may be enqueued when nothing was imported.
-        var jobClient = new Mock<IBackgroundJobClient>(MockBehavior.Strict);
-
-        var job = new EmailPollOrgJob(
-            db,
-            encryption,
-            orders.Object,
-            jobClient.Object,
-            billing.Object,
-            emailSettings.Object,
-            AllowPrivateGuard(),
-            NullLogger<EmailPollOrgJob>.Instance);
-
-        // ExecuteAsync returns plain Task (no import count to assert) — the required content here
-        // is that it returns cleanly instead of throwing CredentialUnbindableException.
-        var act = async () => await job.ExecuteAsync(orgA, default);
-
-        await act.Should().NotThrowAsync(
-            "a credential that cannot be decrypted must be skipped, not allowed to fail the whole poll job");
-    }
-
-    // ── 4. Delivery test-fire (Step 4: confirm the honest message survives) ──────────────────
+    // ── 3. Delivery test-fire (Step 4: confirm the honest message survives) ──────────────────
     // No prior test asserted "Delivery credentials could not be decrypted." verbatim (confirmed by
     // `git grep -rn "Delivery credentials could not be decrypted" -- '*Tests*'` returning no hits
     // before this test was added). TestFireAsync needs no order fixture — the fixed test document
@@ -303,8 +249,8 @@ public class FailClosedCredentialSiteTests
 
     /// <summary>
     /// Guard with AllowPrivateNetworkTargets=true — skips range validation (no DNS lookup needed).
-    /// Never actually exercised by these tests: the decrypt failure returns before any of the three
-    /// pollers (or DeliveryService) ever reach their SSRF guard call.
+    /// Never actually exercised by these tests: the decrypt failure returns before either poller
+    /// (or DeliveryService) ever reaches its SSRF guard call.
     /// </summary>
     private static OutboundRequestGuard AllowPrivateGuard() =>
         new(new ConfigurationBuilder()
