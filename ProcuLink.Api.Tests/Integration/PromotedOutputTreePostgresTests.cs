@@ -14,7 +14,6 @@ using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -25,24 +24,18 @@ namespace ProcuLink.Api.Tests.Integration;
 /// and migrate a container each time. Mirrors <see cref="SupplierSuggestionPostgresFixture"/>,
 /// including the TCP readiness loop and the IPv4 pin.
 /// </summary>
-public sealed class PromotedOutputTreePostgresFixture : IAsyncLifetime
+public sealed class PromotedOutputTreePostgresFixture(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     public string? ConnectionString { get; private set; }
 
     public async Task InitializeAsync()
     {
         if (DockerProbe.UnavailableReason is not null) return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_output_tree_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
-        await _pg.StartAsync();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_output_tree");
 
-        var csb = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var csb = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
             Timeout = 10,
@@ -52,9 +45,6 @@ public sealed class PromotedOutputTreePostgresFixture : IAsyncLifetime
 
         ConnectionString = csb.ConnectionString;
         await WaitUntilAcceptingTcpAsync();
-
-        await using var migrateDb = new ProcuLinkDbContext(Options());
-        await migrateDb.Database.MigrateAsync();
     }
 
     private async Task WaitUntilAcceptingTcpAsync()
@@ -85,7 +75,7 @@ public sealed class PromotedOutputTreePostgresFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null) await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     public DbContextOptions<ProcuLinkDbContext> Options() =>

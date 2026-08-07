@@ -444,4 +444,267 @@ public class EdifactOrderParserTests
         await act.Should().ThrowAsync<EdifactParseException>()
                  .WithMessage("*BGM*");
     }
+
+    // ── Segment qualifiers outside the accepted set ───────────────────────────
+    //
+    // EDIFACT qualifies every quantity (QTY composite C186, D96A data element 6063)
+    // and every price (PRI composite C509, data element 5125). Only a subset of those
+    // codes means "this is the quantity ordered" / "this is the price the line is
+    // calculated with". A code outside that subset used to be dropped on the floor:
+    // the quantity stayed at its 0 reset and the price at null, with NeedsReview
+    // false and nothing logged — a zero-quantity purchase order handed downstream as
+    // though it had been read correctly. Same policy as the locale/decimal work: a
+    // parser must never emit a plausible-looking value where it means "I could not
+    // read this".
+
+    [Theory]
+    [InlineData("52")]   // 6063 = Quantity per pack
+    [InlineData("192")]  // 6063 = Free goods quantity
+    [InlineData("12")]   // 6063 = Despatch quantity
+    public async Task ParseAsync_UnacceptedQtyQualifier_IsOnlyQuantityOnLine_FlagsAndCarriesTheValue(
+        string qualifier)
+    {
+        // The dangerous case: the ONLY QTY on the line carries a qualifier that does not
+        // mean "ordered quantity". Previously → Quantity 0, NeedsReview false, no log.
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-Q:IN'" + NL +
+            $"QTY+{qualifier}:24:PCE'" + NL +
+            "PRI+AAA:10.00'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.NeedsReview.Should().BeTrue();
+        line.ReviewReason.Should().Contain(qualifier);
+        // The number itself is readable — only its MEANING is unconfirmed. Carrying it
+        // (flagged) lets the reviewer judge it without opening the raw interchange; the
+        // flag is what stops it being delivered.
+        line.Quantity.Should().Be(24m);
+        line.Unit.Should().Be("PCE");
+    }
+
+    [Fact]
+    public async Task ParseAsync_LineWithNoQtySegmentAtAll_FlagsTheZeroQuantity()
+    {
+        // Same invariant from the other direction: a line that ends up with quantity 0
+        // must be flagged, never delivered silently.
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-NOQTY:IN'" + NL +
+            "PRI+AAA:10.00'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.Quantity.Should().Be(0m);
+        line.NeedsReview.Should().BeTrue();
+        line.ReviewReason.Should().NotBeNullOrEmpty();
+    }
+
+    [Theory]
+    [InlineData("21")]  // 6063 = Ordered quantity
+    [InlineData("1")]   // 6063 = Discrete quantity
+    public async Task ParseAsync_AcceptedQtyQualifier_ReadsQuantityWithoutFlagging(string qualifier)
+    {
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-Q:IN'" + NL +
+            $"QTY+{qualifier}:24:PCE'" + NL +
+            "PRI+AAA:10.00'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.Quantity.Should().Be(24m);
+        line.Unit.Should().Be("PCE");
+        line.NeedsReview.Should().BeFalse();
+        line.ReviewReason.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("AAE")]  // 5125 = Information price, excluding allowances or charges, including taxes
+    [InlineData("AAF")]  // 5125 = Information price, excluding allowances or charges, and taxes
+    [InlineData("AAC")]  // 5125 = Allowances and charges not included, tax included
+    [InlineData("INF")]  // 5125 = Information
+    public async Task ParseAsync_UnacceptedPriQualifier_FlagsAndCarriesThePrice(string qualifier)
+    {
+        // AAE is the one real feeds actually send. It is an information-only,
+        // tax-inclusive price, so its magnitude differs from the net calculation price —
+        // delivering it as THE unit price, unflagged, is the silent corruption.
+        // Previously → UnitPrice null, NeedsReview false.
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-P:IN'" + NL +
+            "QTY+21:24:PCE'" + NL +
+            $"PRI+{qualifier}:25.00'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.NeedsReview.Should().BeTrue();
+        line.ReviewReason.Should().Contain(qualifier);
+        line.UnitPrice.Should().Be(25.00m);
+    }
+
+    [Theory]
+    [InlineData("AAA")]  // 5125 = Calculation net
+    [InlineData("AAB")]  // 5125 = Calculation gross
+    [InlineData("CAL")]  // 5125 = Calculation price ("the price for the calculation of the line item amount")
+    public async Task ParseAsync_AcceptedPriQualifier_ReadsPriceWithoutFlagging(string qualifier)
+    {
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-P:IN'" + NL +
+            "QTY+21:24:PCE'" + NL +
+            $"PRI+{qualifier}:25.00'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.UnitPrice.Should().Be(25.00m);
+        line.NeedsReview.Should().BeFalse();
+        line.ReviewReason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ParseAsync_LineWithNoPriSegment_LeavesPriceNullWithoutFlagging()
+    {
+        // A missing price is an honest "absent" (UnitPrice is nullable), not a
+        // plausible-but-wrong value — it must NOT be flagged, or every price-less
+        // order line lands in the exception queue.
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-NOPRICE:IN'" + NL +
+            "QTY+21:24:PCE'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.UnitPrice.Should().BeNull();
+        line.NeedsReview.Should().BeFalse();
+        line.ReviewReason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ParseAsync_OrderedQuantityWins_WhenAPackQuantityPrecedesIt()
+    {
+        // Segment order must not decide the answer: an accepted qualifier is
+        // authoritative wherever it appears, and clears the fallback's flag.
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-BOTH:IN'" + NL +
+            "QTY+52:1000:CT'" + NL +
+            "QTY+21:5:PCE'" + NL +
+            "PRI+AAA:10.00'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.Quantity.Should().Be(5m);
+        line.Unit.Should().Be("PCE");
+        line.NeedsReview.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ParseAsync_OrderedQuantityWins_WhenAPackQuantityFollowsIt()
+    {
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-BOTH:IN'" + NL +
+            "QTY+21:5:PCE'" + NL +
+            "QTY+52:1000:CT'" + NL +
+            "PRI+AAA:10.00'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.Quantity.Should().Be(5m);
+        line.Unit.Should().Be("PCE");
+        line.NeedsReview.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ParseAsync_CalculationPriceWins_WhenAnInformationPricePrecedesIt()
+    {
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-BOTH:IN'" + NL +
+            "QTY+21:5:PCE'" + NL +
+            "PRI+AAE:99.00'" + NL +
+            "PRI+AAA:12.50'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.UnitPrice.Should().Be(12.50m);
+        line.NeedsReview.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ParseAsync_UnacceptedQtyAndPriQualifiers_ExplainBothInOneReason()
+    {
+        var edi =
+            MinimalHeader() +
+            "LIN+1++ITEM-BOTHBAD:IN'" + NL +
+            "QTY+52:24:PCE'" + NL +
+            "PRI+AAE:25.00'" + NL +
+            Trailer;
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.NeedsReview.Should().BeTrue();
+        line.ReviewReason.Should().Contain("52").And.Contain("AAE");
+    }
+
+    [Fact]
+    public async Task ParseAsync_UnacceptedQtyQualifier_UnderEuDecimalMark_StillReadsTheNumber()
+    {
+        // The qualifier gate and the UNA-declared decimal mark have to compose: the
+        // fallback value is read with the same locale rules as an accepted one, so the
+        // reviewer sees 1000 rather than 1.0 (or 0).
+        var edi =
+            "UNA:+,? '" +
+            "UNB+UNOC:3+SENDER:14+RECEIVER:14+240115:0900+1'" +
+            "UNH+1+ORDERS:D:96A:UN'" +
+            "BGM+220+PO-EU-QUAL+9'" +
+            "DTM+137:20240115:102'" +
+            "CUX+2:EUR:9'" +
+            "NAD+BY+5412345678901::9++Acme Buyer Ltd'" +
+            "LIN+1++ITEM-EU-QUAL:IN'" +
+            "QTY+52:1.000:PCE'" +
+            "PRI+AAA:73,22'" +
+            "UNS+S'" +
+            "UNT+10+1'" +
+            "UNZ+1+1'";
+
+        var parser = new EdifactOrderParser();
+        var result = await parser.ParseAsync(ToStream(edi), CancellationToken.None);
+
+        var line = result.Lines.Should().ContainSingle().Subject;
+        line.Quantity.Should().Be(1000m);
+        line.UnitPrice.Should().Be(73.22m);
+        line.NeedsReview.Should().BeTrue();
+        line.ReviewReason.Should().Contain("52");
+    }
 }

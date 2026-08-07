@@ -521,6 +521,14 @@ public class CatalogPullService : ICatalogPullService
         var client = CreateHttpClient();
         using var request = new HttpRequestMessage(new HttpMethod(method), url);
 
+        // The catalog file is the one outbound response in the system that legitimately exceeds
+        // the guarded transport's default ceiling (OutboundResponseLimits.DefaultMaxResponseBytes,
+        // sized for acknowledgements and 10 MB objects). Opt THIS request up to the same cap the
+        // bounded read below already enforces, so the transport limit and the stream limit agree
+        // instead of the transport silently refusing a legitimate 174 MB feed.
+        request.Options.Set(
+            ResponseSizeLimitingHandler.MaxResponseBytesOption, CatalogLimits.MaxCatalogFileBytes);
+
         // (2) Apply auth via the shared applier (oauth2 fetches a fresh token, SSRF-guarded).
         var authError = await _auth.ApplyAsync(request, creds, client, token);
         if (authError is not null)

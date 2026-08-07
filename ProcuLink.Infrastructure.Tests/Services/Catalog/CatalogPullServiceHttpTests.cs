@@ -212,6 +212,35 @@ public class CatalogPullServiceHttpTests
         h.Sink.UpsertCalls.Should().Be(0);
     }
 
+    // ── transport response cap must not refuse a legitimate catalog ───────────
+
+    [Fact]
+    public async Task Pull_RealGuardedHandler_LargeCatalog_OptsUpPastTheTransportResponseCap()
+    {
+        // A REAL guarded handler whose default response ceiling is deliberately 1 KB. The catalog
+        // download is the one call in the system that legitimately exceeds the transport default,
+        // so it opts itself up to CatalogLimits.MaxCatalogFileBytes per request. Remove that opt-up
+        // in CatalogPullService and this body — an ordinary 2-product feed padded past 1 KB —
+        // stops arriving at all.
+        var json = "{ \"products\": [ { \"sku\": \"A-1\", \"description\": \""
+                   + new string('w', 4096)
+                   + "\", \"unit_price\": 9.50, \"currency\": \"EUR\" } ] }";
+        json.Length.Should().BeGreaterThan(1024, "the body must actually exceed the transport default under test");
+
+        using var server = ProcuLink.Infrastructure.Tests.Services.Security.StubHttpServer.Start(
+            ProcuLink.Infrastructure.Tests.Services.Security.StubHttpServer.Ok(json, "application/json"));
+
+        var guard = new OutboundRequestGuard(Config(allowPrivate: true), NullLogger<OutboundRequestGuard>.Instance);
+        using var guardedClient = new HttpClient(guard.CreateGuardedHttpHandler(maxResponseBytes: 1024));
+
+        var h = await BuildAsync(guardedClient, allowPrivate: true, url: $"{server.BaseUrl}/catalog.json");
+
+        var result = await h.Service.PullAsync(h.OrgId, h.SourceId, CancellationToken.None);
+
+        result.Status.Should().Be("ok");
+        result.Created.Should().Be(1);
+    }
+
     // ── non-2xx response → safe message, no import ────────────────────────────
 
     [Fact]

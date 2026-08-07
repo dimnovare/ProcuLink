@@ -37,7 +37,7 @@ Frontend repo: https://github.com/dimnovare/project-proculink
 - Auth: Clerk JWT validation, plus `plk_` API-key scheme for machine-to-machine ingress
 - Billing: Stripe
 - AI mapping: provider-neutral interface, OpenAI structured outputs first
-- Standards: cXML 1.2, UBL 2.1 (Peppol BIS 3.0-compatible), EDIFACT, ANSI X12 850
+- Standards: cXML 1.2, UBL 2.1 Order, EDIFACT, ANSI X12 850 (a Peppol BIS Order 3 file parses inbound — it is a UBL 2.1 Order — but BIS-conformant output is not offered)
 - Delivery channels: HTTP/webhook, SFTP, FTPS, SMTP, Erply/Directo ERP
 - Frontend: Next.js 15 App Router, TypeScript, Tailwind, shadcn/ui, TanStack Query
 - Package manager: bun only for frontend
@@ -166,7 +166,7 @@ Implemented baseline:
 - Input parsers: CSV/XLSX, text-based PDF (text→LLM extraction via PdfPig + OpenAI, with number-vs-source validation; deterministic column-parser fallback when no key/offline), scanned/image-only PDF (AI vision fallback — rasterize via PDFtoImage + SkiaSharp → vision-capable OpenAI model; every line flagged for human review), cXML 1.2, UBL 2.1, EDIFACT, ANSI X12 850
 - Self-hosted no-egress OCR (opt-in, enterprise/operator-enabled): RapidOcrNet (PP-OCRv5 via ONNX Runtime, Apache-2.0 code + weights, in-process, no GPU, no external network calls) implementing the `IDocumentOcrService` seam. Requires global `NoEgressOcr:Enabled=true` on the API + Worker AND per-org `Organisation.SelfHostedOcr=true`. For a no-egress org the whole ingest/parse pipeline avoids OpenAI: PDFs route to the deterministic parser with scanned pages OCR'd locally, while AI mapping (line-SKU suggestions + the magic auto-map field suggester), email-body NLP, and AI schema inference are all gated → human review / manual mapping. Default prod deploy ships dormant (no-op OCR) until an operator enables it; scanned lines are still assisted/review-flagged and illegible scans still fail. Non-no-egress orgs keep the OpenAI text/vision PDF path (EU-residency project + DPA + zero-retention still required).
 - Smart file-format auto-detect (`POST /api/upload/detect-format`)
-- Output transforms: CSV/XLSX, cXML, UBL 2.1 (Peppol BIS 3.0-compatible), X12 850
+- Output transforms: CSV/XLSX, cXML, UBL 2.1 Order (plain OASIS UBL — no Peppol profile is declared), X12 850
 - Supplier delivery channels: HTTP/webhook, SFTP, FTPS, SMTP, Erply/Directo ERP
 - HMAC-verified inbound webhook ingress with replay protection
 - IMAP email polling for CSV/XLSX/PDF order attachments

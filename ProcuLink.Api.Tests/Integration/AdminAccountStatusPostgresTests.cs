@@ -11,7 +11,6 @@ using ProcuLink.Api.Tests.TestDoubles;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -44,9 +43,9 @@ namespace ProcuLink.Api.Tests.Integration;
 /// it once. Sharing is safe here because every test seeds its OWN organisation under a fresh
 /// <see cref="Guid"/> and filters on it — no test can observe another's rows.</para>
 /// </summary>
-public sealed class AdminAccountStatusPostgresFixture : IAsyncLifetime
+public sealed class AdminAccountStatusPostgresFixture(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
 
     /// <summary>Null when Docker is unavailable — the Docker-gated facts skip before touching it.</summary>
     public DbContextOptions<ProcuLinkDbContext>? Options { get; private set; }
@@ -56,16 +55,9 @@ public sealed class AdminAccountStatusPostgresFixture : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_acctstatus_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_acctstatus");
 
-        await _pg.StartAsync();
-
-        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
             // Both timeouts are about the Docker HOST's load, never about anything under test:
@@ -81,15 +73,11 @@ public sealed class AdminAccountStatusPostgresFixture : IAsyncLifetime
             // about anything this test measures.
             .UseNpgsql(connectionString, npgsql => npgsql.CommandTimeout(180))
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(Options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 }
 

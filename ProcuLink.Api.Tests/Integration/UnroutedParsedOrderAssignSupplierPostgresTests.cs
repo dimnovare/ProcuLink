@@ -15,7 +15,6 @@ using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Detection;
 using ProcuLink.Transform.Parsing;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -38,35 +37,26 @@ namespace ProcuLink.Api.Tests.Integration;
 /// do. Docker-gated; skips cleanly where Docker is absent.</para>
 /// </summary>
 [Collection("postgres-container")]
-public sealed class UnroutedParsedOrderAssignSupplierPostgresTests : IAsyncLifetime
+public sealed class UnroutedParsedOrderAssignSupplierPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private string? _connectionString;
 
     public async Task InitializeAsync()
     {
         if (DockerProbe.UnavailableReason is not null) return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_unrouted_body_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
-        await _pg.StartAsync();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_unrouted_body");
 
-        _connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        _connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
-
-        await using var migrateDb = new ProcuLinkDbContext(Options());
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null) await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     // ── 1. The prose-only order exists, parked and unpinned ─────────────────

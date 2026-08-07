@@ -48,6 +48,29 @@ public class SupplierDeliveryConfig
     /// write a credential/secret into ConfigJson — if a new delivery option needs a secret,
     /// add it to the encrypted credential payload instead. See
     /// docs/audit/2026-06-12-scale-gated-constraints.md.
+    ///
+    /// <para><b>Enforced, not merely documented, for the extra-headers map.</b> Every entry of
+    /// <c>headers</c> is applied to the outbound request by <c>HttpDeliveryDispatcher</c>, so an
+    /// operator typing <c>Authorization: Bearer …</c> there was writing a live credential into this
+    /// cleartext column. Both write paths — the live delivery-config upsert and the connection
+    /// revision draft input — now refuse one, through the single classifier
+    /// <c>DeliveryConfigTransport.FindCredentialHeaders</c>.</para>
+    ///
+    /// <para><b>Two deliberate limits, and a create/update asymmetry.</b> Enforcement is on WRITE
+    /// only: a config saved before it existed keeps delivering, because refusing at dispatch would
+    /// strand orders. Every UPDATE of an existing row grandfathers a header whose name AND value are
+    /// already stored — both the live delivery-config save and the connection revision draft update.
+    /// Neither editor has a headers field, and both round-trip the stored blob on every save (the
+    /// delivery editor carries <c>headers</c> through as an unmanaged key; the mapper echoes the
+    /// whole revision bundle back on every autosave, or a mapping save would wipe the draft's
+    /// delivery channel), so refusing that echo would lock an operator out of every unrelated edit
+    /// with no way to remove the header. Adding one, or rotating its value, is still refused on both.
+    /// Only revision CREATE refuses FLAT: it has no stored predecessor, and an identical header on
+    /// some other revision must not license one here. Both cases are surfaced by
+    /// <c>DeliveryConfigResponse.InsecureTransportWarning</c> and by a dispatch-time log that names
+    /// the header and never its value. <c>ConnectionRevisionDto</c> carries the same warning from the
+    /// same composer, so the two DTOs cannot describe one blob differently — though only the delivery
+    /// editor renders it today; the revision field has no frontend consumer yet.</para>
     /// </summary>
     public string ConfigJson { get; set; } = "{}";
 

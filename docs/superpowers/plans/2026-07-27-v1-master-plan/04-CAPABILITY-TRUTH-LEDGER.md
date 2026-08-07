@@ -148,7 +148,7 @@ CI runs `dotnet test ProcuLink.slnx` with **no `--filter`** (**BE** `ci.yml:70`)
 | `emit-csv` | ✓ | ✓ | ✓ | ✓ | `CsvTransformService.cs:32`; dialect + CRLF ruling shipped (BE #125) |
 | `emit-json` | ✓ | ✓ | ✓ | ✓ | `JsonTransformService.cs:28`; typed leaves shipped |
 | `emit-cxml` | ✓ | ✓ | ✓ | ✓ | `CxmlTransformService.cs:70`. **Now `application/xml` / `.xml`** |
-| `emit-ubl-peppol` | ✓ | ✓ | ✓ | ~ | `UblOrderTransformService.cs:71`. **Conformance unproven — see below** |
+| `emit-ubl` | ✓ | ✓ | ✓ | ~ | `UblOrderTransformService.cs`. Plain OASIS UBL 2.1 Order — **no Peppol profile is declared; see below** |
 | `emit-x12-850` | ✓ | ✓ | ✓ | ~ | `X12TransformService.cs:68`; envelope `:119-128`. **Zero authoring UI** |
 | `emit-custom-tree` | ✓ | ✓ | ✓ | ~ | **Reusable across orders now** — `OrderTransformService.cs:262-283` |
 | `emit-scriban` | ✓ | ✓ | ✓ | ~ | `ScribanTemplateTransformService.cs:65`; sandbox `ScribanFieldEvaluator.cs:221-258` |
@@ -177,9 +177,25 @@ CI runs `dotnet test ProcuLink.slnx` with **no `--filter`** (**BE** `ci.yml:70`)
   > emitted document still contains no `EndpointID` — the change is that the omission is now correct by
   > construction rather than by absence of the feature. The Peppol BIS 3 claim remains withdrawn from
   > the site (FE #91) and must not be reinstated on the strength of this.
+
+  > **CORRECTION 2026-08-06 — the conformance ids are GONE from the emitted document.** BE #155 /
+  > FE #109. Everything above about `UblProfileChecker` asserting the ids are non-empty is now
+  > HISTORY, not current state: the emitter writes neither `cbc:CustomizationID` nor
+  > `cbc:ProfileID`, and the two checks that required them are deleted. Both elements are
+  > `minOccurs="0"` in the OASIS UBL 2.1 Order-2 schema, so omitting them keeps the document
+  > schema-valid UBL — and a receiving access point ROUTES AND VALIDATES on exactly those two
+  > elements, which is why writing them was a conformance claim rather than metadata. The profile is
+  > renamed `OASIS UBL 2.1 Order — mandatory elements`, and the panel and the downloadable report
+  > now say a pass means presence + cardinality, not schema validation and not certification.
+  >
+  > **The conformance verdict is still NO, and the remedy is not to put the ids back.** Anything
+  > reinstating `urn:fdc:peppol.eu:poacc:bis:order_only:3` as an emitted value fails
+  > `ProcuLink.Transform.Tests/Output/UblOrderDeclaresNoPeppolProfileTests.cs`, and naming a Peppol
+  > BIS profile on any frontend surface fails the standards-conformance block in
+  > `src/test/gatedCapabilityClaims.test.ts`.
 - **`emit-x12-850` has a real envelope and no authoring UI.** ISA/GS at `X12TransformService.cs:119-128`, per-connection identity at `:84-103`, SE/CTT balance asserted at `X12TransformServiceTests.cs:132-156`. The TypeScript types exist (`src/lib/api/types.ts:165-183`) and **nothing reads or writes them** — grepping all of `src/` for a component touching `EnvelopeConfig` returns only the type definition. Backend capability, no user-reachable surface.
 - **`emit-scriban` is genuinely sandboxed.** `TemplateLoader = null` kills `include`/`import` (`ScribanFieldEvaluator.cs:234`), builtins are a curated whitelist with **no `regex` and no `html`** (`:245-252`), `LoopLimit`/`RecursiveLimit` at `:231-232`, output cap 20 MB (`ScribanTemplateTransformService.cs:45`), and it never throws to the pipeline (`:93-134`). In-product tester: `POST /api/orders/{id}/mapping-override/preview` (`OrdersController.cs:1014`, template branch `:1103-1116`) returns 200 with `{ok:false, error}` so the editor shows failures inline, never mutating or delivering (`:962-964`).
-- **The FE outbound catalog over-claims Peppol.** `format-catalog.ts:98` hardcodes `{ name: "UBL 2.1 / Peppol BIS", status: "live" }` while `standards/catalog.ts:107` says `transform: "partial"` — *"full BIS 3.0 business-rule conformance … still hardening"*. The two files contradict each other, and the module header at `format-catalog.ts:10-14` promises a derivation (*"so the marketing surface can never over-claim"*) that is implemented for `IMPORT_FORMATS` only. **Given the finding above, `partial` is the honest value.**
+- **The FE outbound catalog over-claims Peppol.** `format-catalog.ts:98` hardcodes `{ name: "UBL 2.1 / Peppol BIS", status: "live" }` while `standards/catalog.ts:107` says `transform: "partial"` — *"full BIS 3.0 business-rule conformance … still hardening"*. The two files contradict each other, and the module header at `format-catalog.ts:10-14` promises a derivation (*"so the marketing surface can never over-claim"*) that is implemented for `IMPORT_FORMATS` only. **Given the finding above, `partial` is the honest value.** *(Superseded 2026-08-06: `standards/catalog.ts` now reads `transform: "planned"`, the two `/formats` rows are derived through `standardRow()`, and the emitted document declares no Peppol profile at all. `planned` is the honest value — do not soften it back up.)*
 - `OutputTemplateEmitter.cs:76-80` hardcodes its own media types instead of reading `DeliveryMediaTypes`. Values agree today, so no live drift — but it is a second uncontrolled copy of the table WP-20 exists to eliminate.
 
 ### Feature systems
@@ -329,7 +345,7 @@ These were investigated and settled. Re-opening any of them costs a session and 
 | 3 | ~~Do SFTP / FTPS / ERP delivery work **at all**?~~ | **PARTLY ANSWERED 2026-08-01 by WP-38's proof half (BE #136/#137).** SFTP delivery, SFTP ingress polling, all four SFTP key formats and FTPS explicit-TLS delivery each got a **first live proof** against throwaway loopback containers, byte-identical at the receiver (`docs/ops/2026-08-01-wp38-delivery-channel-proof.md:13-25`). That is a container proof, not a supplier proof — **the `live` column above still says ✗ for production.** **Still open:** the ERP connectors were assessed read-only, not exercised; and SFTP host-key verification is unbuilt (U-1/P1) | WP-38 |
 | 4 | Does the authenticated production UI behave as the code suggests? | Recorded pass through all 12 journeys, both viewports. Frontend CI runs Playwright in **mock mode only** — the flag is `playwright.config.ts:92` (`NEXT_PUBLIC_USE_MOCK: isLive ? "false" : "true"`), not the workflow, which sets only `PROCULINK_QA_BYPASS_AUTH` (**FE** `ci.yml:162`) and names the step at `:193`. So green CI is not evidence | WP-39 |
 | 5 | ~~Is the ICP outbound or inbound?~~ | **SETTLED by founder decision 2026-07-30 — BUYERS FIRST.** Inbound stays supported, not marketed. Nothing rescopes | done |
-| 6 | ~~Does UBL output actually satisfy Peppol BIS 3?~~ | **ANSWERED 2026-08-01 — NO PROOF EXISTS, and two mandatory-field violations are visible in the emitter.** No Schematron in the repo; `PeppolBisValidator` is invoice-only; `UblProfileChecker` only asserts the ids are non-empty. **Action: soften `format-catalog.ts:98` to `partial` to match `standards/catalog.ts:107`, or validate an emitted doc against a real BIS 3 validator and keep the ids** | answered, action open |
+| 6 | ~~Does UBL output actually satisfy Peppol BIS 3?~~ | **ANSWERED 2026-08-01 — NO PROOF EXISTS.** No Schematron in the repo; `PeppolBisValidator` is invoice-only. ~~Action: soften `format-catalog.ts:98` … or validate an emitted doc against a real BIS 3 validator and keep the ids~~ — **CLOSED 2026-08-06 by BE #155 / FE #109, and by the OTHER branch than the one this action offered.** The ids were not kept and not validated: `cbc:CustomizationID` and `cbc:ProfileID` are no longer emitted at all (both are `minOccurs="0"` in the OASIS UBL 2.1 Order-2 schema, so a plain non-Peppol UBL 2.1 Order omits them), the two circular non-empty checks are deleted, and the profile is renamed `OASIS UBL 2.1 Order — mandatory elements`. `standards/catalog.ts` already reads `transform: "planned"`. **Do not reinstate the ids** — pinned by `UblOrderDeclaresNoPeppolProfileTests` | done |
 | 7 | Where does outbound traffic actually egress from? | The single Durham NC sample is 13 months old and was never re-taken. Nothing in the codebase can pin it. **No residency sentence naming an egress region can be written honestly until this is measured** | founder |
 | 8 | Are Railway, Neon and R2 actually in EU regions? | Three vendor-dashboard reads, named at `subprocessors.ts:70-72`. Three of the five EU claims the site rests on are UNSOURCED | founder |
 | 9 | Were three leaked secrets ever rotated? | OpenAI API key, PostHog project key, Neon Postgres password, leaked by an unfiltered `railway variables` call on 2026-07-27 and recorded as **still live** on 2026-07-31 (`05-PROGRESS.md:2341-2342`) | founder |

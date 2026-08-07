@@ -20,7 +20,11 @@ public enum StandardsProfile
     /// <summary>cXML 1.2 — Request/OrderRequest envelope (<see cref="OutputFormat.CXml"/>).</summary>
     CXml12OrderRequest,
 
-    /// <summary>UBL 2.1 Order-2 / Peppol BIS Order-only 3.0 (<see cref="OutputFormat.Ubl"/> / <see cref="OutputFormat.UblOrder"/>).</summary>
+    /// <summary>
+    /// OASIS UBL 2.1 Order-2 (<see cref="OutputFormat.Ubl"/> / <see cref="OutputFormat.UblOrder"/>).
+    /// Base UBL only — no Peppol BIS profile is declared, emitted or checked. See
+    /// <c>UblProfileChecker</c>.
+    /// </summary>
     Ubl21Order,
 
     /// <summary>ANSI ASC X12 850 Purchase Order, version 004010 (<see cref="OutputFormat.X12"/> / <see cref="OutputFormat.X12_850"/>).</summary>
@@ -85,6 +89,12 @@ public sealed record ConformanceReport(
     /// <summary>
     /// Renders the report as a downloadable Markdown document. Deterministic — the
     /// same report always renders byte-identically (no timestamps inside).
+    ///
+    /// <para>This file leaves the product: a customer can forward it to a supplier or an access
+    /// point as evidence. So it states its own scope. The checkers are presence + cardinality
+    /// checks against a named profile's mandatory elements — not schema validation, and not
+    /// certification — and a PASS that does not say so reads as a conformance guarantee ProcuLink
+    /// cannot give.</para>
     /// </summary>
     public string ToMarkdown()
     {
@@ -93,7 +103,10 @@ public sealed record ConformanceReport(
         sb.Append($"- **Profile:** {ProfileName}\n");
         sb.Append($"- **Version:** {ProfileVersion}\n");
         sb.Append($"- **Result:** {(OverallPass ? "PASS" : "FAIL")}\n");
-        sb.Append($"- **Checks:** {Checks.Count} total · {ErrorCount} error(s) · {WarningCount} warning(s)\n\n");
+        sb.Append($"- **Checks:** {Checks.Count} total · {ErrorCount} error(s) · {WarningCount} warning(s)\n");
+        sb.Append("- **Scope:** presence and cardinality of this profile's mandatory elements. " +
+                  "Not a schema validation and not a certification — validate with the receiving " +
+                  "party before relying on this result.\n\n");
 
         sb.Append("| Result | Severity | Check | Profile reference | Detail |\n");
         sb.Append("|---|---|---|---|---|\n");

@@ -144,14 +144,25 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
             {
                 // ── Requeue cap exceeded, but a 'transforming' strand is NOT a genuine
                 //    failure → recover to 'ready', never terminal Failed ───────────────
-                // The order is already fully resolved, and a transform job that actually RAN
-                // and failed reverts ITSELF to 'ready' (+ Hangfire AutomaticRetry) — so a strand
-                // this sweep still sees only ever means "claimed but no job ran": the rare crash
-                // window between the controller's claim commit and its synchronous enqueue. That
-                // must never become a permanent false-failure. Recover it to the healthy,
+                // The order is already fully resolved. A transform job that actually RAN and failed
+                // records ITSELF as transform_failed — OrderTransformService's wrapper catches
+                // anything that escapes the whole method and routes it through the same guarded
+                // write the acceptance gate and the template/mapping failures use. So a strand this
+                // sweep still sees means one of exactly two things, and 'ready' is right for both:
+                //   • CLAIMED BUT NO JOB EVER RAN — the rare crash window between the controller's
+                //     claim commit and its synchronous enqueue.
+                //   • THE PROCESS DIED MID-TRANSFORM — OOM, eviction, a hard kill. No catch runs, so
+                //     nothing could have been recorded. That is a transient infrastructure fault,
+                //     not an order-level one, and retrying is the correct answer to it.
+                // Neither must ever become a permanent false-failure. Recover to the healthy,
                 // re-sendable 'ready' state (mirrors how a stuck DELIVERY dead-letters to the
-                // RECOVERABLE delivery_dead_letter, never terminal Failed). RequeueCount is reset
-                // so a future genuine stall gets a fresh requeue budget.
+                // RECOVERABLE delivery_dead_letter, never terminal Failed). RequeueCount is reset so
+                // a future genuine stall gets a fresh requeue budget.
+                //
+                // NOTE: the premise here used to read "a transform job that actually RAN and failed
+                // reverts ITSELF to 'ready'". That was stale twice over — such a job lands in
+                // transform_failed, not ready, and the pre-fix code had two unguarded regions from
+                // which a job that ran could strand here with nothing recorded at all.
                 var stalledRequeueCount = order.RequeueCount;
                 order.Status = OrderStatusConstants.Ready;
                 order.RequeueCount = 0;

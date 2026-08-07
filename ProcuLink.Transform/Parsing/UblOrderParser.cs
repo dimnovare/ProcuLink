@@ -112,7 +112,7 @@ public sealed class UblOrderParser : IPurchaseOrderParser
 
         // ── Header: IssueDate (recommended) ────────────────────────────────
         var issueDateStr = GetChild(root, "IssueDate")?.Value?.Trim();
-        var orderDate    = ParseDate(issueDateStr);
+        var (orderDate, orderDateAmbiguous) = ParseDate(issueDateStr);
 
         // ── Header: DocumentCurrencyCode (recommended) ─────────────────────
         var currency = GetChild(root, "DocumentCurrencyCode")?.Value?.Trim();
@@ -232,7 +232,11 @@ public sealed class UblOrderParser : IPurchaseOrderParser
             OrderDate: orderDate,
             BuyerName: NullIfEmpty(buyerName),
             Currency:  NullIfEmpty(currency?.ToUpperInvariant()),
-            Lines:     lines);
+            Lines:     lines,
+            // Only reachable via the non-conformant leniency path below — a conformant
+            // xsd:date is ISO and can never be ambiguous.
+            NeedsReview:  orderDateAmbiguous,
+            ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", issueDateStr));
     }
 
     // ── Public static helpers (factory-friendly) ─────────────────────────────
@@ -337,17 +341,20 @@ public sealed class UblOrderParser : IPurchaseOrderParser
         parent.Descendants().Where(e =>
             string.Equals(e.Name.LocalName, localName, StringComparison.OrdinalIgnoreCase));
 
-    private static DateTime? ParseDate(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        string[] formats = { "yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-ddTHH:mm:ss", "M/d/yyyy" };
-        if (DateTime.TryParseExact(value.Trim(), formats, CultureInfo.InvariantCulture,
-                DateTimeStyles.None, out var dt))
-            return dt;
-        if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt))
-            return dt;
-        return null;
-    }
+    /// <summary>
+    /// Parse a UBL date via the shared locale-aware reader. <c>cbc:IssueDate</c> is
+    /// <c>xsd:date</c>, so a CONFORMANT document is ISO and resolves unambiguously.
+    /// Non-conformant senders do arrive, though, and the hand-rolled format array this
+    /// replaced handled them badly in two distinct ways: it omitted <c>d.M.yyyy</c>, so a
+    /// German "12.06.2026" fell through to <c>DateTime.TryParse</c> and came back as
+    /// <b>6 December</b> — a silent six-month error, and the OPPOSITE of what the same
+    /// input yielded in CSV/XLSX/PDF; and it listed <c>dd/MM/yyyy</c> before
+    /// <c>MM/dd/yyyy</c>, committing to day-first on any ≤12/≤12 date with nothing
+    /// recording that a choice had been made. Returns <c>(value, ambiguous)</c>; the
+    /// caller flags the order when ambiguous.
+    /// </summary>
+    private static (DateTime? Value, bool Ambiguous) ParseDate(string? value) =>
+        DateParsing.TryParseHeaderDate(value);
 
     /// <summary>
     /// Parse a UBL numeric value via the shared locale-aware reader. UBL 2.1 / Peppol BIS

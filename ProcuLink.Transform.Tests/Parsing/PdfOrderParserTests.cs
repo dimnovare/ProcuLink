@@ -46,6 +46,85 @@ public class PdfOrderParserTests
         result.Lines[0].UnitPrice.Should().Be(12.50m);
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // Locale fidelity — a grouped European price used to drop its whole line
+    // ════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task ParseAsync_GroupedEuropeanPrice_LineIsNotSilentlyDropped()
+    {
+        // THE DEFECT, VERBATIM: the price group was `-?\d+(?:[.,]\d+)?` — a single
+        // separator only — so "1.234,56" did not match the line regex at all and the
+        // ENTIRE ORDER LINE vanished with no error and no review flag.
+        var parser = new PdfOrderParser();
+        await using var stream = new MemoryStream(CreatePdf(
+            "PO Number: PO-EU-PDF",
+            "Currency: EUR",
+            "1 HEI-PLT-09 Mounting plate 4 PCS 1.234,56",
+            "2 HEI-BRK-40 Steel bracket 8 PCS 73,22"));
+
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.Lines.Should().HaveCount(2,
+            "a grouped European price must not make the parser drop the line on the floor");
+        result.Lines[0].UnitPrice.Should().Be(1234.56m, "EU '1.234,56' is 1234.56");
+        result.Lines[1].UnitPrice.Should().Be(73.22m, "EU '73,22' is 73.22, never 7322");
+        result.Lines.Should().AllSatisfy(l => l.NeedsReview.Should().BeFalse());
+    }
+
+    [Fact]
+    public async Task ParseAsync_GroupedEuropeanQuantity_LineIsNotSilentlyDropped()
+    {
+        var parser = new PdfOrderParser();
+        await using var stream = new MemoryStream(CreatePdf(
+            "PO Number: PO-EU-QTY",
+            "Currency: EUR",
+            "1 HEI-PLT-09 Mounting plate 1.000 PCS 73,22"));
+
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.Lines.Should().ContainSingle("a grouped quantity must not drop the line either");
+        result.Lines[0].Quantity.Should().Be(1000m,
+            "'1.000' is a thousands group once '73,22' has settled the convention");
+        result.Lines[0].UnitPrice.Should().Be(73.22m);
+    }
+
+    [Fact]
+    public async Task ParseAsync_UsGroupedPrice_ParsedCorrectly()
+    {
+        // DO NOT REGRESS THE WORKING CASE: the US convention must survive the widened regex.
+        var parser = new PdfOrderParser();
+        await using var stream = new MemoryStream(CreatePdf(
+            "PO Number: PO-US-PDF",
+            "Currency: USD",
+            "1 ACM-BLT-01 Hex bolt 2 PCS 1,234.56"));
+
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.Lines.Should().ContainSingle();
+        result.Lines[0].UnitPrice.Should().Be(1234.56m, "US '1,234.56' is 1234.56");
+        result.Lines[0].NeedsReview.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ParseAsync_UndecidableGroupedPrice_IsFlagged_NotGuessed()
+    {
+        // "1.000" is the only numeric evidence in the document, and a PDF declares no
+        // locale. Undecidable — so it is flagged rather than guessed at.
+        var parser = new PdfOrderParser();
+        await using var stream = new MemoryStream(CreatePdf(
+            "PO Number: PO-AMBIG",
+            "Currency: EUR",
+            "1 ACM-BLT-01 Hex bolt 2 PCS 1.000"));
+
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.Lines.Should().ContainSingle("an undecidable price still must not drop the line");
+        result.Lines[0].UnitPrice.Should().BeNull();
+        result.Lines[0].NeedsReview.Should().BeTrue();
+        result.Lines[0].ReviewReason.Should().NotBeNullOrWhiteSpace();
+    }
+
     [Fact]
     public async Task ParseAsync_TextWithoutLineRows_ReturnsHeaderAndEmptyLines()
     {
