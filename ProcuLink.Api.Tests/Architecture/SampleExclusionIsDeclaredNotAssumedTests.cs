@@ -87,11 +87,15 @@ public class SampleExclusionIsDeclaredNotAssumedTests
     /// moves the projects, or breaks the statement splitter, this floor fails loudly instead of
     /// letting the whole guard pass for free. Raise it when the codebase genuinely grows; never
     /// lower it to make a red build green.
+    ///
+    /// <para>Measured, not guessed: 22 aggregate sites today — 13 sample-aware, 9 declared
+    /// sample-inclusive below. The floors sit just under those so ordinary churn does not trip
+    /// them but a scanner that stops matching does.</para>
     /// </summary>
-    private const int MinimumAggregateSitesExpected = 12;
+    private const int MinimumAggregateSitesExpected = 20;
 
     /// <summary>Companion floor: the convention must be visibly PRESENT, not merely unviolated.</summary>
-    private const int MinimumSampleAwareSitesExpected = 8;
+    private const int MinimumSampleAwareSitesExpected = 11;
 
     [Fact]
     public void EveryAggregateOverPurchaseOrders_DeclaresWhichPopulationItCounts()
@@ -159,52 +163,123 @@ public class SampleExclusionIsDeclaredNotAssumedTests
 
     private static readonly Regex SampleAware = new(@"\bIsSample\b", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Captures the local a query is assigned to, so the scan can follow it:
+    /// <c>var baseQuery = _db.PurchaseOrders…</c> / <c>IQueryable&lt;X&gt; orders = …</c>.
+    /// </summary>
+    private static readonly Regex QueryAssignedToLocal =
+        new(@"(?:^|[\s(])(?:var|IQueryable\s*<[^>]*>)\s+(\w+)\s*=", RegexOptions.Compiled);
+
+    /// <summary>
+    /// How far after the assignment to keep looking for the terminal operator. Generous enough to
+    /// span a heavily-commented query body, short enough that a same-named local in a later method
+    /// is not mistaken for this one.
+    /// </summary>
+    private const int FollowLocalWindowChars = 8_000;
+
     private static (List<Site> SampleAware, List<Site> SampleInclusive) ScanProductionSources()
     {
-        var root        = RepoRoot();
-        var aware       = new List<Site>();
-        var inclusive   = new List<Site>();
+        var root      = RepoRoot();
+        var aware     = new List<Site>();
+        var inclusive = new List<Site>();
 
         foreach (var file in ProductionSourceFiles())
         {
-            var text = File.ReadAllText(file);
-            var rel  = Path.GetRelativePath(root, file).Replace('\\', '/');
+            var text       = File.ReadAllText(file);
+            var rel        = Path.GetRelativePath(root, file).Replace('\\', '/');
+            var statements = AllStatements(text);
 
-            foreach (var stmt in StatementsMentioningDbSet(text))
+            var claimed = new HashSet<int>();
+
+            foreach (var owner in statements.Where(s => DbSetMention.IsMatch(s.Text)))
             {
-                if (!AggregateTerminal.IsMatch(stmt.Text)) continue;
+                // Case A — the query and its terminal are one statement.
+                if (AggregateTerminal.IsMatch(owner.Text))
+                {
+                    if (claimed.Add(owner.Start))
+                        Classify(rel, owner.Line, owner.Text, owner.Text);
+                    continue;
+                }
 
-                var site = new Site(rel, stmt.Line, Collapse(stmt.Text));
-                (SampleAware.IsMatch(stmt.Text) ? aware : inclusive).Add(site);
+                // Case B — the query is parked in a local and aggregated further down.
+                //
+                // This is NOT a hypothetical shape: it is the very defect this guard exists for.
+                // OrderQueryService assigns `baseQuery = _db.PurchaseOrders.Where(...)` and counts
+                // it ~50 lines later, and StripeBillingService's metered count does the same with
+                // `pilotOrders` / `monthOrders`. A scanner that only read the statement containing
+                // the DbSet saw no terminal in either, called them non-aggregates, and waved the
+                // original defect straight through — verified by mutation, which is how this
+                // branch came to exist.
+                var local = QueryAssignedToLocal.Match(owner.Text);
+                if (!local.Success) continue;
+
+                var name  = local.Groups[1].Value;
+                var usage = new Regex($@"\b{Regex.Escape(name)}\b", RegexOptions.Compiled);
+
+                foreach (var s in statements.Where(s =>
+                             s.Start > owner.Start &&
+                             s.Start - owner.Start <= FollowLocalWindowChars &&
+                             AggregateTerminal.IsMatch(s.Text) &&
+                             usage.IsMatch(s.Text)))
+                {
+                    if (!claimed.Add(s.Start)) continue;
+
+                    // The predicate lives in the assignment, the terminal in the usage — judge
+                    // sample-awareness over BOTH, and report the line where the count happens.
+                    Classify(rel, s.Line, owner.Text + "\n" + s.Text, s.Text);
+                }
             }
         }
 
         return (aware, inclusive);
+
+        void Classify(string file, int line, string judgeOver, string display) =>
+            (SampleAware.IsMatch(judgeOver) ? aware : inclusive)
+                .Add(new Site(file, line, Collapse(display)));
     }
 
     /// <summary>
-    /// Splits out each C# statement that mentions the DbSet. A statement runs from the previous
-    /// statement/block boundary to its terminating semicolon, which is what makes a multi-line
-    /// LINQ chain one unit — the predicate and its terminal operator are usually many lines apart,
-    /// so a line-by-line scan would see neither in the company of the other.
+    /// Splits a file into C# statements at <c>;</c> / <c>}</c> boundaries. Statement granularity —
+    /// not line granularity — is what makes a multi-line LINQ chain one unit: the predicate and
+    /// its terminal operator are usually many lines apart, so a line-by-line scan would never see
+    /// the two in each other's company.
+    ///
+    /// <para><b><c>{</c> is deliberately NOT a boundary.</b> It was, briefly, and it silently
+    /// truncated <c>.GroupBy(o =&gt; new { o.IsSample, o.Status })</c> right before the word that
+    /// decides the classification — reporting the freshly-fixed <c>GET /api/orders/summary</c> as
+    /// sample-inclusive. An opening brace in this codebase almost always starts an anonymous
+    /// object or a lambda body, i.e. the MIDDLE of a query, not the end of one.</para>
     /// </summary>
-    private static IEnumerable<(int Line, string Text)> StatementsMentioningDbSet(string text)
+    private static List<(int Start, int Line, string Text)> AllStatements(string text)
     {
-        var seen = new HashSet<int>();
+        var result   = new List<(int, int, string)>();
+        var segStart = -1;
+        var segLine  = 1;
+        var line     = 1;
 
-        foreach (Match m in DbSetMention.Matches(text))
+        for (var i = 0; i < text.Length; i++)
         {
-            var start = m.Index;
-            while (start > 0 && text[start - 1] is not (';' or '{' or '}')) start--;
+            var c = text[i];
 
-            if (!seen.Add(start)) continue; // several mentions inside one statement
+            if (segStart < 0 && !char.IsWhiteSpace(c))
+            {
+                segStart = i;
+                segLine  = line;
+            }
 
-            var end = text.IndexOf(';', m.Index);
-            if (end < 0) end = text.Length - 1;
+            if (c == '\n') line++;
 
-            var line = text.Take(start).Count(c => c == '\n') + 1;
-            yield return (line, text[start..(end + 1)]);
+            if (c is ';' or '}' && segStart >= 0)
+            {
+                result.Add((segStart, segLine, text[segStart..(i + 1)]));
+                segStart = -1;
+            }
         }
+
+        if (segStart >= 0)
+            result.Add((segStart, segLine, text[segStart..]));
+
+        return result;
     }
 
     private static string Collapse(string statement) =>
