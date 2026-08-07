@@ -51,6 +51,29 @@ public static class MigrationBootstrap
         // call is needed here — the field initialises to Pending at process
         // start, which is the desired semantics.
 
+        // ── Only a relational provider has a schema to migrate ────────────
+        // MigrateAsync() throws unconditionally on a non-relational provider
+        // ("Relational-specific methods can only be used when the context is using a
+        // relational database provider"), so without this the loop below runs its full
+        // 6 attempts and 45 s of backoff to arrive at a MarkFailed() that says nothing
+        // about any database. That is not a hypothetical: six test files boot a
+        // WebApplicationFactory<Program> over EF InMemory, and each one left a task
+        // running past the end of the class that started it, writing the process-global
+        // readiness flag at t≈45 s into whatever class happened to be asserting on it.
+        //
+        // Deployment is unaffected — Railway/Neon boot Npgsql, which IS relational, so
+        // production still migrates and still fails loud below when it cannot. Readiness
+        // is deliberately left untouched rather than marked Succeeded: nothing has been
+        // proven about a schema here, and a Pending /health/ready is the honest answer.
+        if (!db.Database.IsRelational())
+        {
+            migLogger.LogInformation(
+                "Startup migration skipped: provider {Provider} is not relational, so there is no schema " +
+                "to migrate. Readiness left as {State}.",
+                db.Database.ProviderName, MigrationReadiness.State);
+            return;
+        }
+
         // ── Phantom-migration reconciliation ─────────────────────────────
         // Some Wave 3/4 migrations had their SQL applied to the prod DB
         // out-of-band (or via a previous deploy that crashed mid-migration),
@@ -91,8 +114,18 @@ public static class MigrationBootstrap
         Exception? lastError = null;
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
+            if (ct.IsCancellationRequested)
+            {
+                LogAbandoned(migLogger, attempt);
+                return;
+            }
+
             try
             {
+                // Deliberately NOT passed ct: cancelling mid-MigrateAsync would abort a DDL batch
+                // that is part-way through the migration chain, and a half-applied schema is worse
+                // than a shutdown that waits. The token guards the WAITING — the loop entry above
+                // and the backoff below — which is where a stopping host spends ~45 of every 45 s.
                 await db.Database.MigrateAsync();
                 migLogger.LogInformation("Database migrations applied (attempt {Attempt}).", attempt);
                 // P2: transition to Succeeded — /health/ready becomes Healthy.
@@ -111,7 +144,16 @@ public static class MigrationBootstrap
                 migLogger.LogWarning(
                     "Migration attempt {Attempt}/{MaxAttempts} failed ({Message}). Retrying in {Delay}s…",
                     attempt, MaxAttempts, ex.Message, delay.TotalSeconds);
-                await Task.Delay(delay);
+
+                try
+                {
+                    await Task.Delay(delay, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    LogAbandoned(migLogger, attempt + 1);
+                    return;
+                }
             }
         }
 
@@ -139,6 +181,18 @@ public static class MigrationBootstrap
 
         MigrationReadiness.MarkFailed();
     }
+
+    /// <summary>
+    /// The host is stopping mid-retry. Readiness is deliberately NOT marked failed: a shutdown is
+    /// not a migration failure, nothing has been proven about the schema, and marking it would page
+    /// on every ordinary deploy. Leaving the flag alone also means the task cannot outlive the host
+    /// that owns it and write into another process's — or another test class's — assertions.
+    /// </summary>
+    private static void LogAbandoned(ILogger migLogger, int nextAttempt) =>
+        migLogger.LogInformation(
+            "Startup migration abandoned before attempt {Attempt}/{MaxAttempts}: the host is shutting " +
+            "down. Readiness left as {State}.",
+            nextAttempt, MaxAttempts, MigrationReadiness.State);
 
     /// <summary>
     /// The idempotent, best-effort backfills that run once migrations have applied. Every one of
