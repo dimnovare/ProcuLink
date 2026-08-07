@@ -1757,9 +1757,20 @@ public class OrgScopedCredentialBindingTests
 }
 ```
 
-Then add the round-trips that exercise **this task's** write call sites. The tests above only pin
-Task 2's service; these fail until each settings service encrypts under the right scope, so the task
-has a genuine red-then-green cycle. Append to the same file:
+Then add tests that exercise **this task's** write call sites. Two kinds, and the distinction is
+load-bearing — Task 4 proved it the hard way:
+
+- The **round-trips** below document that each settings service writes something the matching read
+  site can read. They are useful, but they do **not** go red before the change, so they are not the
+  red-green driver. A version-1 envelope never passes `scope` into `AesGcm.Decrypt` at all — the
+  legacy branch omits the parameter — so scope is cryptographically **inert** for v1. Before the
+  change each settings service writes v1, which decrypts under any scope, and a positive plaintext
+  assertion cannot tell bound from unbound.
+- The **negative wrong-scope tests** are the red-green driver. Before the change the credential is
+  v1, so decrypting under a deliberately wrong scope *succeeds* and the expected throw never
+  happens — red. After the change it is v2 and bound, so the wrong scope throws — green.
+
+Write both. Append to the same file:
 
 ```csharp
     // Each writes through the REAL production write path, then decrypts with the exact tuple the
@@ -1818,6 +1829,69 @@ has a genuine red-then-green cycle. Append to the same file:
         enc.Decrypt(cfg.EncryptedSecretKey, CredentialScope.ForOrg(
             orgId, CredentialPurpose.OrgIngressS3SecretKey)).Should().Be("s3-secret-key");
     }
+
+    // ── the red-green drivers ────────────────────────────────────────────────
+    // These are what actually fail before the change. A v1 blob decrypts under ANY scope, so
+    // "decrypting under the wrong org succeeds" is exactly the pre-change state, and the expected
+    // throw never arrives. After the change the blob is v2 and bound, so the wrong org is refused.
+
+    [Fact]
+    public async Task SaveEmailSettings_ThenDecryptUnderAWrongOrg_Throws()
+    {
+        await using var db = NewDb();
+        var enc = Encryption();
+        var orgId = await SeedOrgAsync(db);
+
+        await new EmailSettingsService(db, enc).UpdateAsync(
+            orgId, new UpdateEmailSettingsRequest { Password = "imap-password" /* …plus required fields */ },
+            CancellationToken.None);
+
+        var org = await db.Organisations.AsNoTracking().SingleAsync(o => o.Id == orgId);
+        var config = EmailPollingConfig.FromJson(org.EmailConfigJson);
+
+        var act = () => enc.Decrypt(config.PasswordCiphertext!, CredentialScope.ForOrg(
+            Guid.NewGuid(), CredentialPurpose.OrgEmailImapPassword));
+
+        act.Should().Throw<CredentialUnbindableException>();
+    }
+
+    [Fact]
+    public async Task SaveSftpIngress_ThenDecryptUnderAWrongOrg_Throws()
+    {
+        await using var db = NewDb();
+        var enc = Encryption();
+        var orgId = await SeedOrgAsync(db);
+
+        await new PullIngressSettingsService(db, enc).SaveSftpAsync(
+            orgId, new UpdateSftpIngressRequest { Password = "sftp-password" /* …plus required fields */ },
+            CancellationToken.None);
+
+        var cfg = await db.SftpIngressConfigs.AsNoTracking().SingleAsync(c => c.OrgId == orgId);
+
+        var act = () => enc.Decrypt(cfg.EncryptedPassword, CredentialScope.ForOrg(
+            Guid.NewGuid(), CredentialPurpose.OrgIngressSftpPassword));
+
+        act.Should().Throw<CredentialUnbindableException>();
+    }
+
+    [Fact]
+    public async Task SaveS3Ingress_ThenDecryptUnderAWrongOrg_Throws()
+    {
+        await using var db = NewDb();
+        var enc = Encryption();
+        var orgId = await SeedOrgAsync(db);
+
+        await new PullIngressSettingsService(db, enc).SaveS3Async(
+            orgId, new UpdateS3IngressRequest { SecretKey = "s3-secret-key" /* …plus required fields */ },
+            CancellationToken.None);
+
+        var cfg = await db.S3IngressConfigs.AsNoTracking().SingleAsync(c => c.OrgId == orgId);
+
+        var act = () => enc.Decrypt(cfg.EncryptedSecretKey, CredentialScope.ForOrg(
+            Guid.NewGuid(), CredentialPurpose.OrgIngressS3SecretKey));
+
+        act.Should().Throw<CredentialUnbindableException>();
+    }
 ```
 
 Read each service's constructor and each request record before writing these — method names
@@ -1830,9 +1904,15 @@ way this needs. Add `NewDb()`, `Encryption()`, and a `SeedOrgAsync` helper that 
 
 Run: `dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~OrgScopedCredentialBindingTests"`
 
-Expected: the cross-org and cross-purpose tests PASS (pinned contract, as in Task 4 Step 2), and all
-three round-trips FAIL — the settings services still write unbound version-1 blobs that no scope can
-read.
+Expected, and check this precisely — the counts are the point:
+- the two cross-org / cross-purpose theories PASS (pinned contract, as in Task 4 Step 2)
+- the three **round-trips PASS** even before the change. That is not a mistake in your setup. A
+  version-1 blob decrypts under any scope, so the positive assertion is satisfied either way.
+- the three **`..._ThenDecryptUnderAWrongOrg_Throws` tests FAIL**, each reporting that no exception
+  was thrown. Those three are this task's red-green cycle.
+
+If the wrong-org tests pass before you touch the settings services, stop and tell me — it would mean
+the credential is already being written bound, and something is not as expected.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -1930,8 +2010,8 @@ Expected: build succeeds.
 
 Run: `dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~OrgScopedCredentialBindingTests"`
 
-Expected: PASS — the two pinned-contract theories plus the three round-trips that were red before
-Step 3.
+Expected: PASS — the two pinned-contract theories, the three round-trips, and the three wrong-org
+tests that were red before Step 3.
 
 Run: `dotnet test ProcuLink.slnx --configuration Release`
 
