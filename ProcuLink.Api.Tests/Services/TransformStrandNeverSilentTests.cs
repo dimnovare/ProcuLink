@@ -309,4 +309,49 @@ public sealed class TransformStrandNeverSilentTests
         // leave the same empty-artifacts result, and the control would not actually distinguish them.
         Assert.Single(await db.OutboundArtifacts.AsNoTracking().Where(a => a.OrderId == seed.OrderId).ToListAsync());
     }
+
+    // ── 6. A Fail return is as invisible as a throw ───────────────────────────
+
+    /// <summary>
+    /// TransformOrderJob turns a Fail into a throw (<c>TransformOrderJob.cs:71</c>), so a Fail that
+    /// writes no status strands the order in exactly the same way an unhandled exception did.
+    /// </summary>
+    [Fact]
+    public async Task NoRegisteredTransformer_isRecordedAsTransformFailed_notASilentFail()
+    {
+        await using var db = NewDb();
+        var seed = await SeedAsync(db);
+        var svc = Build(db, registerTransformers: false);
+
+        var result = await svc.TransformAsync(seed.OrgId, seed.OrderId, OutputFormat.CXml, CancellationToken.None);
+
+        var events = await TransformFailedEventsAsync(db, seed.OrderId);
+        Assert.Single(events);
+        Assert.Contains("No transform service registered",
+            events[0].Payload.RootElement.GetProperty("error").GetString());
+
+        Assert.Equal(OrderStatusConstants.TransformFailed, await StatusOfAsync(db, seed.OrderId));
+        Assert.False(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task UnresolvedLines_areRecordedAsTransformFailed_notASilentFail()
+    {
+        await using var db = NewDb();
+        var seed = await SeedAsync(db, resolved: false);
+        var svc = Build(db);
+
+        var result = await svc.TransformAsync(seed.OrgId, seed.OrderId, OutputFormat.CXml, CancellationToken.None);
+
+        var events = await TransformFailedEventsAsync(db, seed.OrderId);
+        Assert.Single(events);
+
+        // The existing sentence is already written for a user and names the exact lines, so it is
+        // passed through unaltered rather than replaced with the generic one.
+        Assert.Equal("Resolve all lines before transforming. Unresolved: 1.",
+            events[0].Payload.RootElement.GetProperty("error").GetString());
+
+        Assert.Equal(OrderStatusConstants.TransformFailed, await StatusOfAsync(db, seed.OrderId));
+        Assert.False(result.IsSuccess);
+    }
 }

@@ -184,10 +184,22 @@ internal sealed class OrderTransformService
             return Result<TransformResponse>.Fail("Order not found.");
 
         // Pre-flight check: all lines must be resolved
+        //
+        // Recorded, not merely returned. TransformOrderJob turns a Fail into a throw, so a Fail that
+        // writes no status leaves the order at 'transforming' exactly as an unhandled exception did —
+        // and the controller has ALREADY flipped ready → transforming before enqueueing this job. The
+        // sentence is already written for a user and names the exact lines, so it is passed through
+        // unaltered. This does move such an order out of 'ready' and into the exceptions list, which
+        // is the point: the strand it replaces is invisible, and transform_failed keeps the retry
+        // door open on both ClaimableForTransformFrom and TransformableFrom.
         var unresolved = entity.Lines.Where(l => l.NeedsReview).Select(l => l.LineNumber).ToList();
         if (unresolved.Count > 0)
-            return Result<TransformResponse>.Fail(
-                $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolved)}.");
+        {
+            var unresolvedError =
+                $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolved)}.";
+            await FailTransformFromClaimableAsync(organisationId, orderId, unresolvedError, ct);
+            return Result<TransformResponse>.Fail(unresolvedError);
+        }
 
         // ── Launch batch 7 — revision authority ────────────────────────────────
         // Resolve the pinned revision's effective bundle ONCE per transform. Live bundle when
@@ -359,13 +371,21 @@ internal sealed class OrderTransformService
         }
 
         // Locate the fixed transformer (Xml/Csv/Json/...). Required EXCEPT for template mode and the
-        // native CSV/JSON override path; resolved up-front so a missing transformer fails before status
-        // mutation. NOTE: the revision-pinned and supplier-promoted paths deliberately do NOT relax
-        // this requirement — the fixed transformer must exist so the defensive fallback below is
-        // always possible.
+        // native CSV/JSON override path. NOTE: the revision-pinned and supplier-promoted paths
+        // deliberately do NOT relax this requirement — the fixed transformer must exist so the
+        // defensive fallback below is always possible.
+        //
+        // This comment used to end "resolved up-front so a missing transformer fails before status
+        // mutation", which was the bug stated as a feature: failing before the status mutation is
+        // precisely what made it invisible. A missing transformer is an unambiguously terminal,
+        // order-level failure — no retry of the same inputs can cure it — so it is RECORDED as one.
         var transformer = _transformers.FirstOrDefault(t => t.CanTransform(effectiveFormat));
         if (!useOutputNode && !useTemplate && !useNativeOverride && transformer is null)
-            return Result<TransformResponse>.Fail($"No transform service registered for format '{effectiveFormat}'.");
+        {
+            var noTransformerError = $"No transform service registered for format '{effectiveFormat}'.";
+            await FailTransformFromClaimableAsync(organisationId, orderId, noTransformerError, ct);
+            return Result<TransformResponse>.Fail(noTransformerError);
+        }
 
         // ── WS-12 — per-connection EDI/cXML envelope identity ───────────────────
         // The supplier's required X12 ISA/GS identity (sender/receiver qualifier+id, version, usage,
